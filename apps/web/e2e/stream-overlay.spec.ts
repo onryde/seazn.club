@@ -37,6 +37,7 @@ import {
   STREAM_URL,
   clearStreamingOverride,
   denyOverlay,
+  grantRigPackCredits,
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
@@ -819,6 +820,8 @@ const en = (key: string, vars: Record<string, number> = {}): string => {
 };
 
 test.describe("the Phone tab on a community org (V426)", () => {
+  // Single-sport (hockey) by design: the plan gate, the monthly grant and the credit lines are org-level and read no
+  // sport; the overlay kit's seed is a rostered hockey fixture, and nothing on this path branches on it.
   // A rig of its own: this block moves its org's PLAN and writes an org-wide
   // `streaming.relay` override, neither of which may reach `rig` above.
   let community: OverlayRig;
@@ -878,8 +881,20 @@ test.describe("the Phone tab on a community org (V426)", () => {
       await expect(page.locator('[data-testid="stream-balance"]')).toHaveText(
         rate === 1 ? en("stream.phone.credits.one") : en("stream.phone.credits.other", { n: rate }),
       );
+      // No bought credits yet, so there is nothing to SPLIT: the line is hidden (review M2 — "1 free this month · 0
+      // bought" read as a nudge, not information), and the chip alone says it.
+      await expect(page.locator('[data-testid="stream-credits-split"]')).toHaveCount(0);
+
+      // The positive half: with credits in BOTH buckets the same line appears, summing to the chip.
+      const bought = 2;
+      expect(await grantRigPackCredits(community.orgId, bought), "the org total after the bought credits").toBe(rate + bought);
+      await openPhoneTab(page);
+      await expect(page.locator('[data-testid="stream-balance"]')).toHaveText(
+        en("stream.phone.credits.other", { n: rate + bought }),
+        { timeout: 30_000 },
+      );
       await expect(page.locator('[data-testid="stream-credits-split"]')).toHaveText(
-        en("stream.credits.split", { m: rate, p: 0 }),
+        en("stream.credits.split", { m: rate, p: bought }),
       );
 
       await page.locator('[data-testid="stream-buy-more"]').click();
@@ -915,7 +930,7 @@ test.describe("the Phone tab on a community org (V426)", () => {
     }
   });
 
-  test("the sibling negative: an override switches streaming.relay off, and the same tab is the UpgradeGate", async ({
+  test("the sibling negative: an override switches streaming.relay off, and the same tab says streaming is SWITCHED OFF — never a price", async ({
     browser,
   }) => {
     test.setTimeout(120_000);
@@ -930,8 +945,15 @@ test.describe("the Phone tab on a community org (V426)", () => {
       await page.setViewportSize({ width: 1280, height: 900 });
       await openPhoneTab(page);
       const gate = page.locator('[data-testid="stream-phone-gate"]');
-      await expect(gate.locator(":scope > a"), "the relay's UpgradeGate pill").toHaveCount(1, { timeout: 30_000 });
-      await expect(gate.locator("[data-phone-body]")).toHaveCount(0);
+      // Review I4: every plan streams (V426), so the only way here is a staff override — an org that no plan can
+      // buy its way out of. The tab says so and names who to contact; it never shows a plan, a price or an upgrade.
+      await expect(gate.locator('[data-testid="stream-switched-off"]'), "the switched-off state").toHaveCount(1, {
+        timeout: 30_000,
+      });
+      await expect(gate.locator('[data-testid="stream-switched-off"]')).toContainText(en("stream.phone.switchedOff"));
+      await expect(gate.locator("[data-phone-body]"), "no Phone tab body behind the override").toHaveCount(0);
+      await expect(gate.locator(":scope > a"), "no UpgradeGate pill").toHaveCount(0);
+      await expect(gate.locator('a[href*="/billing"], a[href*="upgrade"]'), "no billing or upgrade link").toHaveCount(0);
     } finally {
       await owner.close();
     }

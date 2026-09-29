@@ -582,6 +582,23 @@ export async function clearStreamingOverride(
   }
 }
 
+/** Give this rig's org `n` BOUGHT-bucket match credits — one 'grant' row in the
+ *  never-expiring 'pack' bucket, the shape a staff grant writes (V426) — so a
+ *  test can reach the Phone tab's split line, which shows only while BOTH the
+ *  free monthly and the bought bucket hold credits (Task 14b review M2).
+ *  `balance_after` is the org total after the row, as every ledger writer keeps
+ *  it. Returns that total. */
+export async function grantRigPackCredits(orgId: string, n: number): Promise<number> {
+  return withDb(async (sql) => {
+    const [row] = await sql<{ total: number }[]>`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+      select ${orgId}, ${n}, 'grant', 'pack', coalesce(sum(delta), 0)::int + ${n}, 'e2e: bought credits for the split line'
+        from org_stream_credits where org_id = ${orgId}
+      returning balance_after as total`;
+    return row!.total;
+  });
+}
+
 /** Move this rig's org onto `planKey` — the SQL-flip convention the kit's own
  *  seed uses (`subscriptions.plan_key`), for a caller that needs the fixture
  *  seeded on `pro` and then viewed on another plan. Same invalidation
