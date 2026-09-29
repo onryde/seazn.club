@@ -196,6 +196,15 @@ const click = (el: ReactElement | undefined): void => {
   onClick();
 };
 
+/** A click event whose `currentTarget` resolves `closest(root marker)` → a root whose `querySelector(opener)` → `found`,
+ *  recording every selector asked — so a handler that looks up the wrong element reads null, not a lucky match. */
+function fakeClick(found: { focus: () => void } | null) {
+  const selectors: string[] = [];
+  const root = { querySelector: (sel: string) => { selectors.push(sel); return sel === '[data-testid="stream-buy-more"]' ? found : null; } };
+  const event = { currentTarget: { closest: (sel: string) => { selectors.push(sel); return sel === "[data-phone-body]" ? root : null; } } };
+  return { event, selectors };
+}
+
 const stageOf = (tree: ReactElement[]): ReactElement => {
   const stage = tree.find((el) => el.type === OverlayStage);
   if (!stage) throw new Error("no <OverlayStage> in the panel — the preview is not the real stage");
@@ -1073,13 +1082,31 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(cls).toContain("btn-ghost");
     expect(cls).toContain("min-h-11");
     expect(byTestId(opened, "stream-go-live"), "the chooser replaces the idle controls while open").toBeUndefined();
-    click(close);
+    (attr(close, "onClick") as (e: unknown) => void)(fakeClick(null).event);
     expect(toggled, "Close is the chooser's own toggle").toBe(1);
     // Closed (the container flips showBuy): the idle controls are back.
     expect(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", showBuy: false }), "stream-go-live")).toBeDefined();
     // Forced: nothing to go back to — no Close.
     expect(byTestId(body({ view: null, balance: 0, showBuy: true }), "stream-credits-close")).toBeUndefined();
     expect(byTestId(body({ view: null, balance: 0 }), "stream-credits-close")).toBeUndefined();
+  });
+
+  it("P5: closing the chooser hands focus back to Buy more — the Close unmounts with it, and focus must not fall to <body>", () => {
+    let toggled = 0;
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", showBuy: true, onShowBuy: () => { toggled++; } });
+    // The handler finds Buy more from the body's own root marker — which must BE on the rendered root.
+    expect(attr(tree[0]!, "data-phone-body"), "the root carries the marker the Close looks up").toBe(true);
+    expect(byTestId(tree, "stream-buy-more"), "the opener is on screen while the chooser is open").toBeDefined();
+    const buyMore = { focus: vi.fn() };
+    const { event, selectors } = fakeClick(buyMore);
+    (attr(byTestId(tree, "stream-credits-close")!, "onClick") as (e: unknown) => void)(event);
+    expect(toggled).toBe(1);
+    expect(buyMore.focus, "focus went back to Buy more").toHaveBeenCalledTimes(1);
+    expect(selectors).toEqual(["[data-phone-body]", '[data-testid="stream-buy-more"]']);
+    // No opener to return to (a mid-session balance that fell to 0): the close still closes, and throws nothing.
+    const { event: orphan } = fakeClick(null);
+    expect(() => (attr(byTestId(tree, "stream-credits-close")!, "onClick") as (e: unknown) => void)(orphan)).not.toThrow();
+    expect(toggled).toBe(2);
   });
 
   it("B8: every credit tile top-aligns its lines, so the three tiles' baselines line up", () => {

@@ -1302,7 +1302,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   };
 
   return (
-    <div>
+    // P5: the root marker the chooser's Close looks Buy more up from.
+    <div data-phone-body>
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
           <Smartphone aria-hidden className="h-4 w-4 text-purple-500" strokeWidth={1.75} />
@@ -1429,7 +1430,15 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               type="button"
               data-testid="stream-credits-close"
               disabled={frozen}
-              onClick={p.onShowBuy}
+              onClick={(e) => {
+                p.onShowBuy();
+                // P5: this button unmounts with the chooser, which would drop focus to <body>. Hand it back to the
+                // control that opened the chooser — still on screen above it.
+                e.currentTarget
+                  .closest("[data-phone-body]")
+                  ?.querySelector<HTMLButtonElement>('[data-testid="stream-buy-more"]')
+                  ?.focus();
+              }}
               className="btn btn-ghost mt-2 min-h-11 w-full md:min-h-10 md:w-auto"
             >
               {msg("stream.credits.close")}
