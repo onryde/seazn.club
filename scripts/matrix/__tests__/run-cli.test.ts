@@ -12,7 +12,8 @@ import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-g
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
-import { LOCAL_BASE, findLocalBases } from "../lib/redact.ts";
+import { LOCAL_BASE } from "../lib/redact.ts";
+import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
@@ -124,6 +125,19 @@ describe("runSlice — refusals first", () => {
     expect(await runSlice(d, ["--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
     expect(io.err()).toMatch(/BENCH_EXPECTED_DATA_DIR is unset/);
+  });
+  it("FB-1: a base that is not an http(s) URL: exit 2 before preflight, DB or sign-in, naming it", async () => {
+    let checked = 0;
+    for (const bad of ["localhost:3999", "not a url", "ftp://localhost:3999"]) {
+      const io = capture();
+      const d = deps();
+      expect(await runSlice(d, ["--report-dir", dirFor(), "--base", bad]), bad).toBe(2);
+      expect(d.order, bad).toEqual([]);
+      expect(io.err(), bad).toMatch(/BaseNotUrl/);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
   it("a failed preflight: exit 2, no DB, no sign-in", async () => {
     const io = capture();
@@ -462,15 +476,16 @@ describe("runSlice — a run", () => {
     expect(io.err()).not.toMatch(/SecretInResults/);
   });
 
-  it("T15 fix round 3, M-7: a loopback origin in a check's evidence or a case's error is written as LOCAL_BASE — in results.json and in MATRIX.md", async () => {
+  it("M-7 then FB-1: the run's base in a check's evidence or a case's error is written as LOCAL_BASE — in results.json and in MATRIX.md; another port is kept", async () => {
     capture();
-    const local: CheckResult = { id: "local", kind: "assertion", verdict: "pass", checked: 1, reason: "GET http://localhost:3999/api/v1/x answered", evidence: ["from 127.0.0.1:5433"] };
+    // SMOKE_BASE is http://localhost:3999 (deps). 127.0.0.1:5433 is a database, not the base.
+    const local: CheckResult = { id: "local", kind: "assertion", verdict: "pass", checked: 1, reason: "GET http://localhost:3999/api/v1/x answered", evidence: ["from 127.0.0.1:5433", "then ::1:3999"] };
     wrapScenario("LIFECYCLE", (out) => ({ ...out, assertions: [...out.assertions, local] }));
     const dir = dirFor();
     expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t5l", "--report-dir", dir])).toBe(0);
     const k = resultsIn(dir, "t5l").cases[0]!.checks.find((x) => x.id === "local")!;
     expect(k.reason).toBe(`GET ${LOCAL_BASE}/api/v1/x answered`);
-    expect(k.evidence).toEqual([`from ${LOCAL_BASE}`]);
+    expect(k.evidence).toEqual(["from 127.0.0.1:5433", `then ${LOCAL_BASE}`]);
     // A case's error is the reason MATRIX.md renders.
     const driverFor = () => new (class extends FakeLeagueDriver { override async createCompetition(): Promise<never> { throw new Error("fetch http://localhost:3999/api/v1/competitions failed"); } })("org-fake");
     const dir2 = dirFor();
@@ -481,7 +496,7 @@ describe("runSlice — a run", () => {
       for (const f of ["results.json", "MATRIX.md"]) {
         const text = readFileSync(join(d, id, f), "utf8");
         expect(text.length, `${id}/${f}`).toBeGreaterThan(0);
-        expect(findLocalBases(text), `${id}/${f}`).toEqual([]);
+        expect(baseLiteralsIn(text, 3999), `${id}/${f}`).toEqual([]);
         checked++;
       }
     }

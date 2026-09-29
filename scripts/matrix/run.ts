@@ -20,7 +20,8 @@
 //      bound variant case the engine cannot score, BoundVariantUnscorable; a
 //      row whose stages cannot be derived, ProbeRowUnderivable);
 //      a planner that plants entitlement denies while REDIS_URL is set
-//      (RedisHidesDeny, Review Focus 4); no base URL; no own-DB proof
+//      (RedisHidesDeny, Review Focus 4); no base URL, or one that is not an
+//      http(s) URL (BaseNotUrl, FB-1); no own-DB proof
 //      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at ANY
 //      point of the run — an environment fault is never recorded as a
 //      product red); a failed preflight; a live builder default that differs
@@ -55,7 +56,7 @@ import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
-import { redact, scrubLocalBases } from "./lib/redact.ts";
+import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { decideState, writeResults, type CaseResult, type CheckResult, type RunResults } from "./lib/results.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
@@ -432,17 +433,17 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // The grid is snapshotted into the results (T11 review M4), so MATRIX.md
   // renders from results.json alone however the catalogue moves later.
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
-  // Loopback origins as LOCAL_BASE here too, so MATRIX.md renders what
-  // results.json holds (T15 fix round 3, M-7).
-  const results: RunResults = scrubLocalBases({ schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases });
-  const resultsPath = writeResults(dir, results);
+  // writeResults scans, THEN writes the run's base as LOCAL_BASE (final batch
+  // FB-1); MATRIX.md renders what it wrote, so the two files agree.
+  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases };
+  const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
   // The summary is printed before MATRIX.md is rendered, so a render failure
   // (renderMatrix refuses a case off the run's grid) cannot lose it.
   printSummary(summariseRun(cases, refusals));
   try {
-    writeFileSync(join(dir, "MATRIX.md"), deps.render(results));
+    writeFileSync(join(dir, "MATRIX.md"), deps.render(written));
   } catch (e) {
     warn(`matrix: results.json kept at ${resultsPath}; MATRIX.md failed — ${errText(e)}`);
     return EXIT.ABORTED;
@@ -477,6 +478,8 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   if (planner.deniesFeatures && (deps.env.REDIS_URL ?? "").trim() !== "") { warn(errText(new RedisHidesDeny())); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("matrix: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
+  // FB-1: the committed writers scrub this base; one that is no URL is refused before anything runs.
+  try { baseScrubber(base); } catch (e) { if (!(e instanceof BaseNotUrl)) throw e; warn(`matrix: ${errText(e)}`); return EXIT.REFUSED; }
   // RF3: the own-DB proof is mandatory, and comes before the preflight.
   try { requireOwnDataDir(deps.env); } catch (e) { warn(`matrix: ${errText(e)}`); return EXIT.REFUSED; }
   let pf: Awaited<ReturnType<RunDeps["preflight"]>>;

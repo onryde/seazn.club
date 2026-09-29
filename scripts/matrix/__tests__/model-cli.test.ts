@@ -29,13 +29,14 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { DIVISION_CAP_KEY, MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
-import { LOCAL_BASE, findLocalBases } from "../lib/redact.ts";
+import { LOCAL_BASE } from "../lib/redact.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { MODEL_ERROR } from "../lib/model/run-cell.ts";
 import { REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
 import { MATCH_REQUIRED_CHECKS, parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
+import { baseLiteralsIn } from "./loopback-literals.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -631,18 +632,35 @@ describe("model.ts", () => {
     expect(io.out() + io.err()).not.toContain("hunter2");
   });
 
-  it("T15 fix round 3, M-7: a loopback origin in a failure's evidence reaches the report as LOCAL_BASE, never as this machine's address", async () => {
-    capture();
+  it("M-7 then FB-1: the run's base in a failure's evidence reaches the report as LOCAL_BASE, in any loopback spelling — and nothing else is rewritten", async () => {
+    const io = capture();
+    // SMOKE_BASE is http://localhost:3999 (deps): node names that server
+    // 127.0.0.1:3999 too. 127.0.0.1:5433 is a database, not the base: kept,
+    // port and all, so the outage is not misattributed to the app server.
     class LocalAnswer extends ModelFakeDriver {
       override generate(): ReturnType<ModelFakeDriver["generate"]> {
-        return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, null, "upstream http://localhost:3313/api/v1/stages/s1/generate and 127.0.0.1:5433 refused"));
+        return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, null, "upstream http://localhost:3999/api/v1/stages/s1/generate, 127.0.0.1:3999 and 127.0.0.1:5433 refused"));
       }
     }
     const dir = reportDir();
     expect(await runModel(deps({ driverFor: () => new LocalAnswer() }), ["--run-id", "rl", "--report-dir", dir, ...ONE])).toBe(1);
     const text = readFileSync(join(dir, "rl", "model-report.json"), "utf8");
-    expect(text).toContain(`upstream ${LOCAL_BASE}/api/v1/stages/s1/generate and ${LOCAL_BASE} refused`);
-    expect(findLocalBases(text)).toEqual([]);
+    expect(text).toContain(`upstream ${LOCAL_BASE}/api/v1/stages/s1/generate, ${LOCAL_BASE} and 127.0.0.1:5433 refused`);
+    expect(baseLiteralsIn(text, 3999), "no spelling of the run's base is left").toEqual([]);
+    // The terminal is not committed: the operator reads the base as it is.
+    expect(io.out()).toContain("upstream http://localhost:3999/api/v1/stages/s1/generate");
+  });
+
+  it("FB-1: a base that is not an http(s) URL is refused (exit 2) before the DB, naming it", async () => {
+    let checked = 0;
+    for (const bad of ["localhost:3999", "not a url", "ftp://localhost:3999"]) {
+      const io = capture();
+      expect(await runModel(deps({ openDb: noDb() }), ["--run-id", "rb", "--report-dir", reportDir(), "--base", bad, ...ONE]), bad).toBe(2);
+      expect(io.err(), bad).toMatch(/BaseNotUrl/);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("aborts (exit 3): a case org that cannot be prepared, and a report that cannot be written; a DB that stops proving it is ours is refused (exit 2)", async () => {

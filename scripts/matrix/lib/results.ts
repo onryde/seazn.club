@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { findSecrets, scrubLocalBases } from "./redact.ts";
+import { baseScrubber, findSecrets, mapStrings } from "./redact.ts";
 
 export const CASE_STATES = ["works", "refused", "red", "later", "needs_ruling", "no_path", "not_run"] as const;
 export type CaseState = (typeof CASE_STATES)[number];
@@ -152,15 +152,19 @@ export function stringsIn(value: unknown, out: string[] = []): string[] {
   return out;
 }
 
-export function writeResults(dir: string, results: RunResults): string {
+/** Writes results.json: the secret scan over the RAW strings first, then the
+ *  run's own base as LOCAL_BASE (final batch FB-1: never the other way round —
+ *  a credential whose userinfo starts with the base loses its shape once
+ *  scrubbed, and would be laundered). Answers the path and exactly what it
+ *  wrote, so MATRIX.md renders the committed text, not a second scrub of it. */
+export function writeResults(dir: string, results: RunResults, base: string): { path: string; written: RunResults } {
+  const scrub = baseScrubber(base);
   const parsed = RunResultsSchema.parse(results);
   const hits = stringsIn(parsed).flatMap((s) => findSecrets(s));
   if (hits.length > 0) throw new SecretInResults(hits.length);
-  // After the scan, so a secret on a loopback origin is refused, never
-  // laundered (T15 fix round 3, M-7: results.json is committed evidence).
-  const body = `${JSON.stringify(scrubLocalBases(parsed), null, 2)}\n`;
+  const written = mapStrings(parsed, scrub);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "results.json");
-  writeFileSync(path, body);
-  return path;
+  writeFileSync(path, `${JSON.stringify(written, null, 2)}\n`);
+  return { path, written };
 }

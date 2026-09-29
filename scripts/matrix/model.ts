@@ -27,7 +27,8 @@
 //      the cells — decided before the DB, nothing written).
 //   2  refused, nothing written: a usage error; a regressions.json the loader
 //      refuses (a case on a generic check without its `match`, T15 fix round 2
-//      — read first, before the base); no base URL; no own-DB proof
+//      — read first, before the base); no base URL, or one that is not an
+//      http(s) URL (BaseNotUrl, FB-1); no own-DB proof
 //      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at any
 //      point); a failed preflight; a committed regression whose variant is not
 //      its sport's (carry G-2); a live builder default that is not the offline
@@ -47,7 +48,7 @@ import { isMainModule } from "./lib/main-module.ts";
 import type { OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
-import { findSecrets, redact, scrubLocalBase } from "./lib/redact.ts";
+import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
 import { MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
 import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
@@ -221,9 +222,9 @@ function verdictOf(rep: CellReport, replay: RegressionCase | null): Verdict {
 }
 
 /** Every string in a value, redacted (R14a) — before it is kept, so one
- *  secret-shaped string cannot throw away a whole report — and any loopback
- *  origin written as LOCAL_BASE (T15 fix round 3, M-7: the report is committed). */
-const redactAll = <T>(v: T): T => JSON.parse(JSON.stringify(v), (_k, x: unknown) => (typeof x === "string" ? scrubLocalBase(redact(x)) : x)) as T;
+ *  secret-shaped string cannot throw away a whole report. The run's base is
+ *  scrubbed only when the report is written, after its secret scan (FB-1). */
+const redactAll = <T>(v: T): T => mapStrings(v, redact);
 
 function printCell(c: ModelCell): void {
   const f = c.failure;
@@ -290,6 +291,9 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   } catch (e) { warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("model: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
+  // FB-1: the report is written with this base as LOCAL_BASE; one that is no URL is refused before anything runs.
+  let scrubBase: (text: string) => string;
+  try { scrubBase = baseScrubber(base); } catch (e) { if (!(e instanceof BaseNotUrl)) throw e; warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
   // RF3: the own-DB proof is mandatory, and comes before the preflight.
   try { requireOwnDataDir(deps.env); } catch (e) { warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
   let pf: Awaited<ReturnType<ModelDeps["preflight"]>>;
@@ -355,13 +359,14 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   }
 
   const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells };
+  // The secret scan reads the report BEFORE the base is scrubbed (FB-1).
   const secrets = stringsIn(out).flatMap((s) => findSecrets(s));
   if (secrets.length > 0) { warn(`model: ${new SecretInResults(secrets.length).message}`); return EXIT.ABORTED; }
   const dir = join(cli.reportDir, cli.runId);
   const file = join(dir, "model-report.json");
   try {
     mkdirSync(dir, { recursive: true });
-    writeFileSync(file, `${JSON.stringify(out, null, 2)}\n`);
+    writeFileSync(file, `${JSON.stringify(mapStrings(out, scrubBase), null, 2)}\n`);
   } catch (e) { warn(`model: the report could not be written — ${errText(e)}`); return EXIT.ABORTED; }
   say(`model report → ${file}`);
   for (const c of cells) if (c.verdict === "new-failure") printStub(c, cli.runId);
