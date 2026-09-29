@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
@@ -110,7 +111,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     // read @seazn/engine/core types (tsc, and the type-aware lint), so each
     // must depend on a task whose inputs hold the engine core sources.
     const r = spawnSync(resolve(REPO, "node_modules", ".bin", "turbo"), ["run", "lint", "typecheck", "--filter=@seazn/reference", "--dry=json"], {
-      cwd: REPO, encoding: "utf8", timeout: 60_000,
+      cwd: REPO, encoding: "utf8", timeout: SPAWN_MS,
       env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TURBO_TELEMETRY_DISABLED: "1" },
     });
     expect(r.status, r.stderr).toBe(0);
@@ -132,5 +133,5 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
       judged++;
     }
     expect(judged).toBe(2);
-  });
+  }, spawnBudget(1));
 });
