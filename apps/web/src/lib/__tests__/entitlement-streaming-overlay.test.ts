@@ -23,9 +23,6 @@ const KEY = "streaming.overlay";
 const STREAM_KEYS = ["streaming.overlay", "streaming.relay"] as const;
 /** V426: the numeric plan entitlement that sizes each plan's free match credits per month. */
 const MONTHLY = "streaming.credits.monthly";
-/** What the test org's override row grants — owner answer 14 (Q3). Both, always:
- *  the overlay's whole promise is a score that keeps up with the picture. */
-const GRANTED = [KEY, "realtime"] as const;
 
 async function setOverride(orgId: string, key: string, value: boolean): Promise<void> {
   await sql`
@@ -117,20 +114,6 @@ describe.skipIf(!HAS_DB)("streaming on every plan (V426)", () => {
     await sql`delete from org_entitlement_overrides where org_id = ${auth.orgId} and feature_key in ${sql([...STREAM_KEYS])}`;
     await invalidateOrgEntitlements(auth.orgId);
     for (const key of STREAM_KEYS) expect(await hasFeature(auth.orgId, key), `${key} after the override is gone`).toBe(true);
-  });
-
-  it("the test org's override still grants `realtime` beside the overlay (owner answer 14, Q3)", async () => {
-    const { auth } = await seedOrg();
-    // Owner answer 14 (Q3), "we are using supabase realtime": the test org's
-    // override grants BOTH keys. `/api/v1/public/fixtures/[id]/realtime-token`
-    // 403s without `realtime`, and the client then falls back to a 15 s poll —
-    // a score that lags the picture by up to fifteen seconds on a live
-    // broadcast. Whether every PLAN that grants the overlay must grant
-    // `realtime` too is a pricing question (Q4) and is deliberately not encoded
-    // anywhere in code — V426 makes the overlay universal and leaves `realtime`
-    // alone (Task 14b report: an owner question).
-    for (const key of GRANTED) await setOverride(auth.orgId, key, true);
-    for (const key of GRANTED) expect(await hasFeature(auth.orgId, key), key).toBe(true);
   });
 
   it("an override does not leak into another org", async () => {

@@ -78,15 +78,29 @@ describe("STREAM_CREDIT_PACKS", () => {
 
   // P1 (Task 14 fix round 2): the tiles quoted GBP while the checkout charged the buyer's preferredCurrency — capture
   // pass 2 saw a £25 tile open a $33.25 checkout. The tile's number and the Stripe price's number are now one function.
-  it("P1: every pack × every platform currency is quoted at EXACTLY the amount its Stripe price charges", () => {
+  // m10 (lane-close review): the check this replaces compared streamPackAmountMinor with streamPackPriceAmounts — but the
+  // first CALLS the second, so it could not fail. The oracle now comes from outside the code under test: the owner's GBP
+  // prices as literals (§8b sandbox £6 / £25 / £80), and every other currency derived from THOSE literals and the
+  // declared FX table — never from either function.
+  it("P1 (m10): the tile and the Stripe price both charge the owner's GBP literals, and every other currency is that literal × its declared FX rate", () => {
+    const OWNER_GBP_PENCE: Readonly<Record<number, number>> = { 1: 600, 5: 2500, 20: 8000 };
+    expect(STREAM_CREDIT_PACKS.map((p) => p.size).sort((x, y) => x - y), "one owner price per pack").toEqual(Object.keys(OWNER_GBP_PENCE).map(Number).sort((x, y) => x - y));
+    const others = SUPPORTED_CURRENCIES.filter((c) => c !== "gbp");
+    expect(Object.keys(STREAM_PACK_FX).sort(), "an FX rate for every other platform currency, and no stray one").toEqual([...others].sort());
     let checked = 0;
     for (const pack of STREAM_CREDIT_PACKS) {
+      const gbp = OWNER_GBP_PENCE[pack.size]!;
       const price = streamPackPriceAmounts(pack);
-      for (const c of SUPPORTED_CURRENCIES) {
-        const charged = c === price.currency ? price.unit_amount : price.currency_options[c]?.unit_amount;
-        expect(charged, `${pack.size} ${c}: the Stripe price carries no amount`).toBeTypeOf("number");
-        expect(streamPackAmountMinor(pack, c), `${pack.size} ${c}`).toBe(charged);
-        expect(streamPackPerMatchMinor(pack, c), `${pack.size} ${c} per match`).toBe(Math.round(charged! / pack.credits));
+      expect(price.currency, `${pack.size}: the price's base currency`).toBe("gbp");
+      expect(price.unit_amount, `${pack.size} gbp: the Stripe price`).toBe(gbp);
+      expect(streamPackAmountMinor(pack, "gbp"), `${pack.size} gbp: the tile`).toBe(gbp);
+      expect(streamPackPerMatchMinor(pack, "gbp"), `${pack.size} gbp per match`).toBe(Math.round(gbp / pack.credits));
+      checked++;
+      for (const c of others) {
+        const want = Math.round(gbp * STREAM_PACK_FX[c]!);
+        expect(price.currency_options[c]?.unit_amount, `${pack.size} ${c}: the Stripe price's option`).toBe(want);
+        expect(streamPackAmountMinor(pack, c), `${pack.size} ${c}: the tile`).toBe(want);
+        expect(streamPackPerMatchMinor(pack, c), `${pack.size} ${c} per match`).toBe(Math.round(want / pack.credits));
         checked++;
       }
     }

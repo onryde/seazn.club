@@ -121,6 +121,7 @@ import { StagesPanel } from "@/components/v2/stages-panel";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { verifyOverlayKey } from "@/server/overlay/overlay-key";
+import { SUPPORTED_CURRENCIES } from "@/lib/currency";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -405,8 +406,12 @@ describe("P1: the Phone tab is handed the currency the checkout will charge", ()
   });
 
   it("resolves preferredCurrency for THIS org and passes it through — every non-GBP currency, not just one", async () => {
+    // m10: the house list, not a typed copy — a currency added to SUPPORTED_CURRENCIES is swept here without an edit.
+    // GBP is left out because it is the tiles' old default: a GBP case passes whether or not the page passes anything.
+    const nonGbp = SUPPORTED_CURRENCIES.filter((c) => c !== "gbp");
+    expect(nonGbp.length, "premise: the house sells in more than GBP").toBeGreaterThan(0);
     let checked = 0;
-    for (const currency of ["usd", "eur", "inr"]) {
+    for (const currency of nonGbp) {
       money.preferredCurrency.mockClear().mockResolvedValue(currency);
       const panel = find(await render({ tab: "fixtures" }), StagesPanel);
       expect((panel!.props as { stream?: { currency?: unknown } }).stream?.currency, currency).toBe(currency);
@@ -414,7 +419,7 @@ describe("P1: the Phone tab is handed the currency the checkout will charge", ()
       expect(money.preferredCurrency.mock.calls[0]![0]).toBe(PAGE.auth.orgId);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(nonGbp.length);
   });
 
   // M4 (fix round 4): the balance and the currency were awaited one after the other inside the object literal — one extra
