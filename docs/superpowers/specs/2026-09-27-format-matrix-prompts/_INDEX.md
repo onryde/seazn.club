@@ -11,7 +11,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | Wave | Scope | State |
 | --- | --- | --- |
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28: ready to merge (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251).** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
-| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **in progress** — plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md` (rulings 25–30), executing subagent-driven on `feat/format-matrix-w1b` |
+| W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok, knockout\|badminton known MB-005, swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`; at the default 20 it is honestly vacuous), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | not started |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | not started (ruling 28) |
@@ -125,6 +125,127 @@ PostHog and Sentry keys blanked; `show data_directory` equal to
     controller as owner-verified by driving the product, 2026-09-28. The slice
     does not cover it.
   - The live slice found no product red.
+
+## W1b counts (design §6.2)
+
+Every value is quoted from `scripts/matrix/catalogue/counts.json` (schema v1)
+as committed at `7c42d0ec2`, and each formula is that file's own text,
+verbatim. The drop split is quoted from `drop-list.json` and the floors from
+`floors.json`, beside it. `gen-catalogue.ts --check` keeps all five generated
+files equal to the code (`committed-catalogue.test.ts`).
+
+- **Grid:** 21 rows × 11 sports = 231 cells.
+- **Scenario catalogue:** 70 design parents → 94 atomic cases; 87 of them run
+  in L3 and 93 in L2.
+
+| Layer | Formula (verbatim from `counts.json`) | Value |
+| --- | --- | --- |
+| L1 | cells × 2 widths (1280, 320) | **462** |
+| L2 | runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs | **1,732** runs; 2,594 pair targets; 1 run marked `l3Gap` |
+| L3 | Σ cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases | lifecycle 231 + applicable atomic 15,240 (of which 118 variant-bound) + scorable variant cases 1,001 + denied 7 + regressions 5 = **16,484** |
+
+- **Drops:** 4,857 (cell, scenario) pairs = 4,840 inapplicable + 14 harness
+  gap + 3 unscorable-only (`drop-list.json` `total`, `inapplicable`,
+  `harnessGap`, `unscorableOnly`). Each drop group carries its reason.
+- **Floors:** planned L3 cases per row (LIFECYCLE + atomic), from 640
+  (`stepladder_only`) to 838 (`groups_ko`, `swiss_knockout`,
+  `group_group_ko`); the 21 rows sum to 15,471 = 231 + 15,240.
+  `gen-catalogue.ts --write` refuses to lower a floor without
+  `--accept-lower-floors`, and refuses a zero floor always.
+- **Variants:** 1,065 cases = 1,001 scorable + 64 unscorable. The 64 are not
+  run and are not in the L3 total:
+  - 40 engine-unscorable (volleyball and table tennis sets to 1 point at
+    win-by-2; the engine refuses the cfg or its stream) → W2 (ruling 31);
+  - 24 generator-unsupported (cricket's two-innings `test` preset) →
+    W1-driving.
+
+  38 factor-level pairs have no valid case (`uncoverablePairs`, proven by brute
+  force in Task 5), and 35 cases are no-ops at their sport's builder-default
+  preset (listed, not removed). Cases per sport:
+
+| football | cricket | boardgame | carrom | generic | volleyball | badminton | tabletennis | tennis | icehockey | hockey |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 92 | 107 | 90 | 95 | 64 | 127 | 97 | 109 | 108 | 90 | 86 |
+
+## W1b session status
+
+**2026-09-29 — Task 15, the live walkthrough, and its three fix rounds.** Run
+ids ending `0928` keep the names the plan gave them; every run happened on
+2026-09-29. Each environment was a fresh `seazn-local-env` stand-up (labels
+`w1bt15`, `w1bt15b`, `w1bt15c`, `w1bt15d`): fresh Postgres at v420,
+`db:apply` + `sync:sports`, a standalone prod server built at `d8186ae24` (for
+every later run `git diff d8186ae24 HEAD -- apps packages` was empty),
+`AUTH_DEV_LINKS=1`, no `REDIS_URL`, PostHog and Sentry keys blanked, and
+`show data_directory` equal to `BENCH_EXPECTED_DATA_DIR`. Redis's absence was
+witnessed by the three commands under "Found during W1b planning and
+execution", not by `ps`. The SDD ledger and task reports are gitignored, so
+this section, "W1b counts" above, the W1b false premises and "Findings routed
+(W1b)" are the lasting record. Rulings applied in W1b: 24 and 26–33; rulings
+34–36 were made during it.
+
+| Run | What it drove | Verdict | Evidence (`truth-runs/`) |
+| --- | --- | --- | --- |
+| `w1b-slice-0928a` | the 24 W1a slice cases, harness `d8186ae24` | 24/24 ✅. Every W1a check keeps its verdict; W1b adds I8 (pass ×24) and I7 (pass ×8 league cases, abstain ×16 knockout and swiss) | `w1b-slice/` |
+| `w1b-probe-0928a` | `--set w1b-probe`: 4 API-only LIFECYCLE rows, 7 DENIED rows, 2 variant cases | 5 ✅, 8 ❌: 7 DENIED red on `denied-put-keeps-stages` (product → W9), `page_playoff_only` LIFECYCLE red on the harness's fixed 8 entrants (→ W1-driving). `knockout_third_place` ✅: its third-place fixture is judged inside `life-built-as-posted`, which passed | `w1b-probe/` |
+| `w1b-abandon-0928a` | ST-G1, four legs | CONFIRMED, judged 4/4, control `void-correct` | `w1b-abandon/abandon-probe.json` |
+| `w1b-tie-ko-0928b` | CD-T6, a tied t20 knockout semi (ruling 32) | CONFIRMED, control seated. `0928a` was a probe bug (it read the wrong seat keys), re-run under a new id | `w1b-tie-ko/tie-ko-probe.json` |
+| `w1b-withdraw-0928a`, `w1b-withdraw-0928b` | CD-T13, a boardgame withdraw after Start | CONFIRMED on the walkover shape (the briefed shape reaches only expunge: REFUTED), and half-applied when one fixture had started | `w1b-withdraw-boardgame/` |
+| `w1b-cricket001-0929a` | the Task 8 carry: cricket#001 at run time | config accepted as posted; M4b voided (as ST-G1); M6 stays `in_play` (super over on, consistent with the engine); ball-by-ball refused without rosters | `w1b-cricket-001/cricket-001-probe.json` |
+
+**The model, final run at HEAD** (harness `e9cda4a38`, clean tree; 30 commands
+per run, fences on; `truth-runs/w1b-model-final/`, whose `README.md` records
+why swiss\|badminton runs at 40). Every cell: 0 unexpected refusals, `masked`
+and `maskedNew` empty, no vacuity, no timeout.
+
+| Cell | Variant | Seed | Runs | Verdict | Step-check items | CD-T13b |
+| --- | --- | --- | --- | --- | --- | --- |
+| league\|generic | score | -396057224 | 20 | ok | I7 1,236 · I8 165 | 8 |
+| league\|badminton | bwf | -1248422361 | 20 | ok (fence `late-entry-then-generate` blocked a command 2×) | I7 1,296 · I8 191 | 11 |
+| knockout\|generic | score | 894875997 | 20 | ok | I8 241 | 18 |
+| knockout\|badminton | bwf | -1682490066 | 20 | known MB-005, matched on the product's answer ("…would strand home_slot_label…") | I8 54 | 1 |
+| swiss\|generic | score | 1377112074 | 20 | ok | I6 175 · I8 232 | 19 |
+| swiss\|badminton | bwf | -2002771143 | 40 | ok, every command kind ran | I6 288 · I8 371 | 26 |
+
+- **Why swiss\|badminton runs at 40.** At the default 20 runs, fix round 1's
+  seed for this cell never drew a Correct, so the cell was vacuous on coverage
+  and exited 1 (`w1b-model-fr1/model-report-0929b.json`). That verdict was
+  correct. The same seed at 40 runs was ok
+  (`model-report-0929g-swiss-badminton-40.json`). A Swiss
+  result needs Start, then a pairing Generate, then a Score, so a Correct comes
+  late. The final run pins the seed `w1b-model-final` derives for the cell, so
+  only the run count differs.
+- **`--regressions`** (run `w1b-model-final-regressions`): 5 known, 0 NEW,
+  0 not reproduced; every case replays its committed path, `replayPath` and
+  command list.
+- **Earlier model runs, superseded** (kept as evidence):
+  - `w1b-model/` — Step 4 (`w1b-model-0928a`, pre-fix): 2 ok and 4 NEW. The
+    knockout pair was a product finding (MB-002/003). The swiss pair was a
+    MODEL bug: step-level R25 failed I6 on Start's unpaired shells (fixed
+    `15b811792`). Shrinks were also cut short by the case org's plan cap of
+    20 divisions per competition (fixed `125573b93`). Step 5 (`w1b-model-0928b`, fences off) reproduced #879
+    before Start.
+  - `w1b-model-fr1/` — fix round 1 (`0929b`–`0929g`, plus two hand-driven
+    knockout probes): the knockout Generate 500 found by two routes.
+  - `w1b-model-fr2/` — fix round 2: `0929h` replays 5 known, each exactly;
+    `0929i` finds only known failures on both knockout cells.
+
+**Regressions committed** (`scripts/matrix/catalogue/regressions.json`, all
+`open`, found 2026-09-29). A replay is known only when the cell, the check and
+`match` (tested against the product's own answer) all agree.
+
+| Id | Cell | Check | `match` | Seed · path | Found by | Finding → owner |
+| --- | --- | --- | --- | --- | --- | --- |
+| MB-001 | league\|generic (score) | `I7-rr-no-pair-over-legs` | `null` (I7 owes no match); fence `late-entry-then-generate` | 752674687 · `1:2:3:3:3:3:3:3` | `w1b-model-0929f` | #879: Generate → AddEntrant → Generate before Start duplicates round-robin pairs → **W5** (`W5-round-robin.md`, #879 all parts; part 3's wipe is W3's #840) |
+| MB-002 | knockout\|generic (score) | `model-unexpected-refusal` | "fixture has an unassigned entrant" | -1372716623 · `8:4:3:3` | `w1b-model-0929b` | withdrawing a knockout entrant who waits for a TBD opponent → 422 WRONG_PHASE → **W9 + W4** |
+| MB-003 | knockout\|badminton (bwf) | `model-unexpected-refusal` | "fixture has an unassigned entrant" | -355591138 · `14:6:10:8:11:9:9:9:4:10` | `w1b-model-0929c` | as MB-002 → **W9 + W4** |
+| MB-004 | knockout\|generic (score) | `model-refusal-named` | "would strand home_slot_label" | 63878783 · `3:2:3:3:3:5:6:6` | `w1b-model-0929d` | knockout Generate after the roster changes → 500 "bye-award bulk UPDATE would strand home_slot_label" → **W4 + W9** |
+| MB-005 | knockout\|badminton (bwf) | `model-refusal-named` | "would strand home_slot_label" | 180087602 · `0:3:3:3:3:3:3` | `w1b-model-0929b` | as MB-004 → **W4 + W9** |
+
+MB-001 was re-pointed from `w1b-model-0928b`'s path `1:2:3:3:3` to its full
+shrink (`3d20959f8`): the Step 5 shrink was cut short by the division cap.
+`stages.ts:2672` holds a twin assertion for `away_slot_label`. No run has hit
+it yet, and a run that does will read NEW against MB-004/005's `match` — a
+correct over-report; the W4 fix should cover both.
 
 ## Session prompts
 
@@ -302,6 +423,22 @@ a peer session as the other.
       them centrally. A loss on time is recorded as the result method `time`,
       which already exists. A per-board clock returns as its own feature only
       if clubs without clocks ask for it (#421 stays parked).
+34. **Freeing the Pro formats for Community is parked** (2026-09-28). The
+    owner said "let's do pro plan later on".
+    - **The question.** The owner wanted every format free on Community,
+      with a multi-stage restriction. The controller asked whether to
+      free everything or keep some multi-stage formats Pro, and recommended
+      granting `formats.double_elim` and `formats.advanced` to Community in
+      the plan catalogue, in a PR of its own.
+    - **Effect on W1b: none.** The seven DENIED cases stay as built. Their gate
+      map is derived from the product (`format-gates.ts`), so a later plan
+      change moves them with it.
+35. **The PUT-stages data loss stays in W9** (2026-09-29): it is not an early
+    fix. A refused format change deletes the division's existing stage (false
+    premise 8, confirmed live; evidence `truth-runs/w1b-probe/results.json`).
+    W9 (operational) owns the fix.
+36. **No browser or visual check of the W1b findings in W1b** (2026-09-29).
+    Visuals are left to W1c.
 
 ## Recommendations (mine — not rulings)
 
@@ -317,6 +454,18 @@ a peer session as the other.
 - L1 at 1280 + 320 per cell; L2 rotates the seven widths (design §11 O3).
 - The bench's repeated-`completeStage` finding is fixed in W5; the harness
   avoids repeat calls until then.
+- A W1d re-size gate — **declined** by the owner (2026-09-28): waves keep
+  their audit-derived scope. Recorded as a declined recommendation, not a
+  ruling.
+- **For W1c (from W1b Task 7):** slice a wave's L2 runs by filtering the
+  committed `l2-pairs.json`. Never re-plan with `only`: a re-plan assigns
+  different widths from the committed rotation.
+- **For W1d (from W1b Task 10's review):** exit code 1 means different things
+  per CLI — drift for `gen-catalogue.ts`, zero cases for `run.ts`. A CI
+  wrapper must key on which CLI it ran.
+- **For W1-driving:** run the model's Swiss cells at 40 runs or more, or bias
+  the command generator toward Start → Generate → Score. At the default 20
+  runs a Swiss cell can draw no Correct and read vacuous (W1b Task 15).
 
 ## Decision log
 
@@ -413,6 +562,48 @@ a peer session as the other.
   (re-draw after timing) is L3-excluded; D5a (re-draw after an untimed board
   is published) runs in L3 — `publishSchedule` accepts an untimed board
   (`schedule.ts:3650-3656`). Design §4 updated to say so (Task 4 review I-1).
+- **2026-09-28** — W1a carry 3, the fake's engine statuses aligned
+  (`fb3741634`, review fix `f0c851c32`). The fake answers an engine refusal
+  with the product's status from `lib/driver/engine-http.ts`, a copy of
+  `ENGINE_HTTP` pinned entry for entry to `api-v1/http.ts` (422 for
+  INVALID_EVENT, WRONG_PHASE and ALREADY_DECIDED).
+- **2026-09-28** — W1a carry 4, the planner seam (`fb3741634`). `run.ts` takes
+  a planner, so the zero-cases test no longer empties `SLICE_ROWS` in place.
+- **2026-09-28** — W1a carry 1, the I1 multi-stage guard (`d6a1252b9`; review
+  fix `ba141019a` gives I2 the same guard). A later stage judged on a
+  division-wide field reds by name instead of judging the wrong field.
+- **2026-09-28** — ruling 24 applied: the denied state via an
+  entitlement-override deny, one per gated row, with a mandated ⛔
+  (`971bb79a4`; review fix `8003ce823` confines the deny in SQL to case orgs).
+- **2026-09-28** — ruling 26 applied: E is its own scenarios (E1, E2, E3, E4a,
+  E4b; only E2 in L3), in the atomic catalogue (`63673948d`, Task 4).
+- **2026-09-29** — ruling 27 applied: the statement-form `import type`
+  boundary gate on `packages/reference` (`d539edf04`, Task 12). The review fix
+  `ddcf36095` moved its judge onto the TypeScript syntax tree and lints the
+  inline `{ type X }` form.
+- **2026-09-28** — ruling 28 applied: the `W1-driving` status row
+  (`f8a9d8955`), W1a's deferrals renamed to `W1-driving` (`24907c0f8`), and
+  the Q-A guard in `scenario-catalogue.test.ts` (`63673948d`; widened to the
+  catalogue's owing waves in `346719cf3`; fails closed on a parse error in
+  `df7dcca1c`).
+- **2026-09-28** — ruling 29 applied: variant cases run LIFECYCLE only. They
+  are counted that way in `counts.json` (`6278a37fd`) and planned that way by
+  `--set w1b-probe` (`881055b22`, 2026-09-29).
+- **2026-09-28** — ruling 30 applied: M4a/M4b and M12a/b/c in the catalogue,
+  with M12b's `l2NoPath` (`63673948d`, Task 4). Their applicability
+  predicates and `ABANDON_RESULTS` are `e49c20a76` (Task 6).
+- **2026-09-28** — ruling 31's cricket half applied: the cricket stream
+  generator clamps wickets to the engine's all-out for the side's
+  `playersPerSide` (`39134e112`), so 38 short-side cases became scorable.
+- **2026-09-29** — R26: `forEachSport` in the engine testkit and a CI ratchet
+  over unreasoned single-sport tests (`6b689c227`; review fixes `f17ba485d`,
+  `f420977d9`, `421997d13`).
+- **2026-09-29** — the fast-check model (design §7.5): core `30e6c36d0`,
+  runner `2f9bd556f`. Fixes from the live run: a step invariant with nothing
+  to judge yet abstains for that step (`15b811792`); the model moves to a fresh
+  competition before the plan's per-competition division cap (`125573b93`); a
+  regression case names its failure by cell, check and `match` (`d860d74f2`),
+  and `match` is tested against the product's answer only (`0c07b9abf`).
 
 ## False premises found
 
@@ -483,3 +674,278 @@ Record each audit gap that fails to hold, with who found it.
     `rolbypassrls` role.
   - REFUTED: the worry that knockout standings come back `[]`. They return
     all 8 rows, equal to the public table.
+
+### Found during W1b planning and execution
+
+**The plan's eleven** (`docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`,
+"False premises found in planning"). Each was found by reading, and 8 and 11
+were hypotheses that Task 15 then drove live.
+
+1. **"fast-check is already a dependency — no setup is owed"**
+   (`docs/superpowers/TEST-STRATEGY.md:93-97`). True for `apps/web`
+   (`package.json:75`) and `packages/engine` (`package.json:56`), false for
+   `scripts/`. The root `package.json` has no fast-check, and pnpm links a
+   package only into the importer that declares it. It resolved locally only
+   because the main checkout's root `node_modules/fast-check` is a real
+   directory, which no CI job has. Closed by a root devDependency
+   (`30e6c36d0`, with `fast-check-resolution.test.ts`).
+2. **Design §5: boundary classes come from the module's declared settings.**
+   The engine's `configSchema` declares no finite bounds (`badminton.schema.json`
+   `setTo` is `{exclusiveMinimum:0, maximum:9007199254740991}`). The
+   organiser-facing bounds live only in `apps/web/src/lib/match-rules.ts`
+   `SPORT_RULES` (badminton `setTo` 11–30, `:227-233`). Task 5 takes its
+   classes from `SPORT_RULES` and validates each through the engine.
+3. **Design §7.5: checking every invariant after every step would catch
+   #879.** I1 abstains on `late_entry` (`scripts/matrix/lib/invariants.ts:32`;
+   the plan said `:31`), I4 fails by construction mid-sequence, and I2 needs a
+   completed stage. Task 2 added I7 (no pair over `legs`) and the `stepSafe`
+   subset.
+4. **W1b prompt: "Routed gaps: none".** W1a routed four deferrals to "W1b":
+   `scripts/matrix/lib/scenarios/common.ts:90`, `:92` and `:94`, and
+   `scripts/matrix/lib/catalogue.ts:101`. Task 3 closed the last (API-only row
+   bodies), and ruling 28 re-routed the other three to W1-driving.
+5. **A "⛔ refused" state exists in the harness.** `CASE_STATES` listed it
+   (`scripts/matrix/lib/results.ts:16`), but `decideState` could never return
+   it (`:126-137`). Task 9 gave it a producer, a mandated refusal.
+6. **"Order is not significant"** (`packages/engine/src/sports/index.ts:22`).
+   The registry order is the grid's column order and the wave order (AGENTS.md
+   class 18). `forEachSport`'s tests pin it (Task 11). The engine comment
+   still stands; see "Findings routed (W1b)".
+7. **"The double_elim denied state" is one case** (ruling 24's wording). The
+   product gates `formats.double_elim` on double_elim AND page_playoff
+   (`format-gates.ts:39`), and `formats.advanced` on americano and ladder
+   (`:46-47`). Seven offered rows are therefore gated, and Task 9 builds all
+   seven.
+8. **Hypothesis: "a refused format change leaves the format as it was."**
+   `replaceStages` deletes every stage in its own committed transaction
+   (`apps/web/src/server/usecases/stages.ts:543`) and only then calls
+   `createStages` (`:546`), which gates (`:373-382`). **CONFIRMED live: the
+   premise is false.** The refused PUT leaves the division with no stage, on
+   all 7 DENIED rows. See "Findings routed (W1b)".
+9. **Design §4 names "chess tiebreak" as an M6 decider.** boardgame declares
+   no decider (`boardgame.schema.json`), and `supportsDraws` is true for every
+   kind (`boardgame.ts:767-771`). Task 6 drops M6 on boardgame with this
+   reason, routed to W4.
+10. **Ruling 30 cites "a football award-policy abandon" as an M4b example.**
+    The engine has `abandonPolicy` `replay|award` (`football.ts:173`,
+    `period/kernel.ts:219`), but `SPORT_RULES` has no field for it, so no
+    organiser screen can choose it. W1b drops football, hockey and icehockey
+    M4b with this reason. Live side reading (Task 15 Step 3b): the API
+    ACCEPTED `config.abandonPolicy: "award"` on a football division, so only
+    the editor lacks it.
+11. **Hypothesis (ST-G1): "an abandon that the engine scores reaches the
+    table."** A `core.abandon` sets the fixture `abandoned`
+    (`append-event.ts:146`), which maps to the engine's `void`
+    (`fixture-engine-status.ts:17-19`), which `COUNTS_FOR_STANDINGS` excludes
+    (`packages/engine/src/competition/stage.ts:24`). **CONFIRMED live: the
+    premise is false.** The product stores the scored outcome and the table
+    counts none of it. See "Findings routed (W1b)".
+
+**Found while executing:**
+
+- **The Redis check `ps eww -p $PID | grep -c REDIS_URL` is vacuous against
+  next-server** (Task 15 Step 1, a run). next-server rewrites its process
+  title, which erases `ps`'s view of its environment. The positive control
+  `grep -c DATABASE_URL` on the same process also read 0, while the same check
+  on a plain `node` child with a planted variable read 1. The witnesses used
+  instead, in every Task 15 environment:
+  1. **A replica launch:** the environment script's own composition and shell
+     preamble, with `node -e` printing each of `REDIS_URL`, the PostHog keys,
+     the Sentry keys and `RESEND_API_KEY` as absent, empty or SET. It read
+     `REDIS_URL` absent and the rest empty. The positive control, without the
+     blanks, read `NEXT_PUBLIC_POSTHOG_KEY` SET.
+  2. **The key lists:** `cut -d= -f1 apps/web/.env.local | grep -c
+     '^REDIS_URL$'` → 0, and `env | grep -c "REDIS\|POSTHOG_KEY=.\|SENTRY_DSN=."`
+     → 0 in the launching shell.
+  3. **The runtime:** `lsof -nP -a -p $SERVER_PID -iTCP` after the runs showed
+     the LISTEN socket and Postgres connections only. `lib/cache.ts` connects
+     eagerly (`lazyConnect: false`) whenever `REDIS_URL` is set.
+
+  `denied-refused-named` passing on all 7 DENIED cases is a further witness,
+  because a Redis entitlement cache would have hidden the SQL deny.
+- **#879's trigger is before Start, not after it** (Task 13 review C-1, a
+  read; later reproduced live). The roster locks at Start
+  (`apps/web/src/server/usecases/entrants.ts:307-318`, a 422 with no code), so
+  the plan's Start-first shape could never add the late entrant. The real
+  sequence is Generate → AddEntrant → Generate before Start. Generate has no
+  division-status gate and flips only the stage, and the league reconcile
+  inserts every missing positional `ext_key` (`stages.ts:2509`,
+  `packages/engine/src/scheduling/roundrobin.ts:140`). The model found it live
+  with no Start in the shrunk path (MB-001).
+- **Task 15 Step 3d's briefed shape reached only the expunge path.** With 3
+  fixtures each, withdrawing an entrant with 2 or more unplayed always means
+  one who played under half, and `withdrawTableEntrant` expunges below half (a
+  `core.abandon` on each pending fixture). The walkover path CD-T13 is about
+  was unreachable. A walkover shape was added (6 entrants, the target has
+  played 3 of 5): the briefed shape is REFUTED, the walkover shape CONFIRMED.
+- **`strip-types-loadable.test.ts` needs no edit per new module.** It walks
+  `scripts/matrix/` for every shipped `.ts` and has no module list. Task 1
+  found it; the briefs of Tasks 4, 6 and 14 repeated the premise, and each task
+  ran the test unedited.
+- **`single-sport.test.ts` was red from Task 14 (`2f9bd556f`) until Task 15
+  fix round 2 (`d860d74f2`).** Three column-0 `// single-sport:` comments (two
+  Task 14 test-file headers and one fix-round-1 comment) failed its grammar
+  test, and no scoped gate ran it. **Scoped-gate rule:** whenever a change
+  touches a `// single-sport:` header, its scoped gate includes
+  `single-sport.test.ts`.
+- **"A pair invalid with every other factor at its default can never be
+  covered"** (Task 5 brief): FALSE. Pass 1 listed 252 such pairs, and 214 of
+  them are covered once one or two more factors change level. Only 38 have no
+  valid completion, proven by brute force.
+- **The 38 cricket "unscorable" cases at 3–5 a side were a harness generator
+  bug** (Task 8 re-review RR-1), not a product item. Ruling 31 records it.
+- **Refusal evidence carried no product text** (Task 15 fix round 2), so a
+  `match` on the product's message could never hit. `RefusedCall.message`
+  became an evidence line (`d860d74f2`), and `match` is now tested against that
+  answer alone (`0c07b9abf`).
+- **"A replayed regression prints its finding run's command list"** — false
+  while the finding run's shrink was cut short (Task 15 Step 6). The case
+  org's plan caps a competition at 20 divisions
+  (`divisions.per_competition.max`), so shrink candidates past the 20th
+  division failed in setup with a 402. They were masked, read as passing, and
+  ended the shrink early. The model now moves to a fresh competition before
+  the cap (`125573b93`), and MB-001 was re-pointed to its full shrink
+  (`3d20959f8`).
+- **"A step invariant has something to judge at every step"** — false for
+  Swiss (Task 15 Step 4, a run). A Swiss Start mints unpaired shells, so R25
+  turned I6's zero-item pass into a failure at step 1 of every Swiss run, and
+  both Swiss cells were in effect vacuous. A step invariant with nothing to
+  judge yet now abstains for that step (`15b811792`); R25 stays per cell.
+- **TypeScript 7 refuses an `include` of `src/**`** (Task 12, TS5010), so the
+  reference package uses `src/**/*.ts`, as the engine does.
+
+## Findings routed (W1b)
+
+Every live ❌ and every confirmed hypothesis from W1b, with its case or leg,
+its evidence and its owning wave. Evidence paths are under `truth-runs/`.
+"Read, not run" marks a finding no run has driven yet. Runs checked:
+`w1b-slice-0928a`, `w1b-probe-0928a`, `w1b-abandon-0928a`,
+`w1b-tie-ko-0928a`/`0928b`, `w1b-withdraw-0928a`/`0928b`,
+`w1b-cricket001-0929a`, the model runs `w1b-model-0928a`/`0928b` and
+`w1b-model-0929b` to `0929i`, the knockout probes `w1b-fr1-ko-0929a`/`0929b`,
+and `w1b-model-final` (with `-sb40` and `-regressions`).
+
+**Product findings, confirmed live:**
+
+- **Data loss on a refused format change (false premise 8).**
+  `PUT /api/v1/divisions/:id/stages` with a gated format answers 402 with the
+  gate's `feature_key`, but `replaceStages` has already deleted the division's
+  stage (`stages.ts:543`, before the gate at `:373-382`). Red on all 7 DENIED
+  cases (`group_playoffs`, `swiss_playoff`, `double_elim`, `americano`,
+  `mexicano`, `ladder` and `page_playoff_only`, each `…|generic|score|DENIED`)
+  on check `denied-put-keeps-stages`. Evidence `w1b-probe/results.json` (run
+  `w1b-probe-0928a`). → **W9** (ruling 35).
+- **ST-G1 (false premise 11).** Legs `cricket-no-result`, `cricket-test-draw`
+  and `football-award` are `voided`: the product stores the engine's scored
+  outcome (`no_result`, `draw`, an `award` 1–0) on a fixture it marks
+  `abandoned`, and the table counts neither the game nor its declared points.
+  The control `badminton-control` is `void-correct`; judged 4/4. cricket#001's
+  M4b leg reads the same. Evidence `w1b-abandon/abandon-probe.json` (run
+  `w1b-abandon-0928a`) and `w1b-cricket-001/cricket-001-probe.json`. →
+  **W5 (standings) + W2 (what an abandon is worth)**.
+- **CD-T6 (ruling 32).** At cricket's builder default (t20, super over off), a
+  tied knockout semi posts with no refusal, completes `decided` with
+  `{kind:"tie"}`, and never feeds the final. The final keeps an empty seat and
+  the stage stays `active`: the bracket stalls. The control (a win) seats its
+  winner at once. Evidence `w1b-tie-ko/tie-ko-probe.json` (run
+  `w1b-tie-ko-0928b`). → **W4 + W2 (what a tie is worth in a knockout)**.
+- **CD-T13.** On the walkover path, `POST /entrants/:id/withdraw` for a
+  boardgame entrant after Start answers 422 WRONG_PHASE ("forfeit not allowed
+  in phase \"pre\""). The product posts a bare `core.forfeit`, which boardgame
+  refuses before `core.start`. Nothing is written, and the organiser cannot
+  withdraw the entrant at all. The generic control is clean. It also
+  half-applies: when one of the two unplayed fixtures had already started, its
+  walkover landed and the next forfeit was refused, so an opponent holds a
+  walkover win against an entrant who is still registered. Evidence
+  `w1b-withdraw-boardgame/withdraw-probe.json` (run `w1b-withdraw-0928a`) and
+  `withdraw-live-probe.json` (run `w1b-withdraw-0928b`). → **W2 (does a
+  boardgame forfeit before start count, and what is it worth) + W9 (a withdraw
+  must be all-or-nothing)**.
+- **CD-T13b.** The roster lock after Start answers a bare 422 with no code
+  (`entrants.ts:307-318`; the wire reads `ERROR`). The model counts it per
+  cell and goes on. In the final run it was counted on all six cells:
+  league\|generic 8, league\|badminton 11, knockout\|generic 18,
+  knockout\|badminton 1, swiss\|generic 19 and swiss\|badminton 26 (at 40
+  runs), 83 in all. Evidence `w1b-model-final/model-report.json` and
+  `model-report-swiss-badminton-40.json` (`findings.CD-T13b`). → **W9**.
+- **MB-002 / MB-003: a knockout entrant waiting for a TBD opponent cannot be
+  withdrawn.** The withdraw turns the missing walkover into a `core.abandon`
+  on the next-round fixture, and the append guard refuses any event on a
+  fixture with an unassigned seat: 422 WRONG_PHASE "fixture has an unassigned
+  entrant (bye/TBD)" (`engine-db/append-event.ts:189`). The entrant stays
+  registered; a round-1 entrant in a two-sided match withdraws cleanly.
+  Evidence `w1b-model-fr1/ko-findings-probe.json` (run `w1b-fr1-ko-0929a`) and
+  the regression replays. → **W9 + W4**.
+- **MB-004 / MB-005: knockout Generate answers 500 after the roster changes.**
+  Two routes: Generate → AddEntrant → Generate before Start, and Start →
+  Withdraw seed 2 or 3 → Generate. The server's own assertion fires:
+  "generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label"
+  (`stages.ts:2656`), and the transaction rolls back. It is the knockout
+  counterpart of #879, on both sports. The `away_slot_label` twin
+  (`stages.ts:2672`) has not been seen live. Evidence
+  `w1b-model-fr1/ko-findings-probe.json` and `ko-500-after-start-probe.json`
+  (runs `w1b-fr1-ko-0929a`, `0929b`). → **W4 + W9**.
+- **MB-001 (#879)** reproduced live by the model before Start (see the
+  regression table under "W1b session status"). → **W5**.
+
+**Recorded from W1b runs, not product defects:**
+
+- **cricket#001, what the product did** (run `w1b-cricket001-0929a`,
+  `w1b-cricket-001/cricket-001-probe.json`). `createDivision` ACCEPTED a
+  3-a-side config with a 600-ball innings, 5-ball overs, a 1-over bowler quota,
+  super over on and DLS on, and stores it as posted, although at most 3 overs
+  (15 balls) can ever be bowled against that innings. M4b voided, as ST-G1. M6
+  (level runs) folds to null in the engine (super over on), and the fixture
+  stays `in_play`: consistent, and not the CD-T6 stall. The first
+  ball-by-ball `cricket.ball` was refused 422 INVALID_EVENT ("batting order …
+  needs at least 2 players"), because the harness sends no team roster. →
+  **W2** (should the editor accept this config) and **W1-driving** (team
+  rosters).
+- **`page_playoff_only` LIFECYCLE red is a HARNESS defect, not a product ❌.**
+  LIFECYCLE seeds a fixed 8 entrants
+  (`scripts/matrix/lib/scenarios/lifecycle.ts:9`); a page playoff needs
+  exactly 4, and the product refuses Start with a named 422 CONFIG_INVALID
+  ("page playoffs need exactly 4 entrants, got 8"). The committed
+  `w1b-probe/MATRIX.md` shows the page_playoff_only × generic cell as ❌: read
+  that cell as a harness red. A first-stage page playoff's allowed path is
+  therefore still undriven live. → **W1-driving** (a per-format field size).
+- **Variant cases the harness cannot run** (`counts.json` `variants`): 40
+  engine-unscorable (volleyball and table tennis sets to 1 at win-by-2) →
+  **W2** (ruling 31); 24 generator-unsupported (cricket's two-innings `test`
+  preset) → **W1-driving**.
+
+**Found by reading, not run:**
+
+- **Chess tiebreak (false premise 9).** boardgame has no M6 decider, so M6 is
+  dropped on boardgame with that reason. → **W4**.
+- **M12b's missing play-short control, and no minimum-players rule.**
+  `core.lineup.retirement` has an API route, but no pad or console control
+  sends it (design "Known UI-only 🚫"; the catalogue's M12b `l2NoPath` = W2).
+  → **W2**.
+- **No organiser control for `abandonPolicy` (false premise 10).** Football,
+  hockey and icehockey M4b are dropped for it. Task 15 Step 3b's
+  `football-award` leg was NOT refused: the API accepted
+  `config.abandonPolicy: "award"`, so only the editor lacks the control. →
+  **W2**.
+- **CD-T8: the boardgame time control is inert** (ruling 33). → **W2**
+  (editor and display); no pad clock.
+- **P7: the rank-override route has no stage-kind guard.** `overrideStandings`
+  (`usecases/stages.ts:4644`) accepts an override on any stage, but
+  `rank_overrides` is read only by the table path
+  (`engine-db/competition.ts:410`), so an override on a ladder or bracket stage
+  is accepted and ignored. → **W5**.
+- **The engine comment "Order is not significant"**
+  (`packages/engine/src/sports/index.ts:22`, false premise 6). → the next
+  engine-touching wave, as a one-line comment fix.
+- **`requireFamily` takes the first match silently**
+  (`packages/reference/src/index.ts:33`, Task 12 review M-6). → the first wave
+  that adds a reference family (W3): a named refusal on an ambiguous match, or
+  a documented precedence, plus a keep witness per `familiesFor` arm.
+- **I7's orientation residual at legs ≥ 3** (Task 13). A duplicate of the
+  minority orientation paired with a missing majority meeting passes both I7
+  and the orientation check. The builder offers legs 1 and 2 only, so it is
+  unreachable today. → whichever wave first offers legs ≥ 3.
+- **`TEST-STRATEGY.md` still says `forEachSport` does not exist** (`:77`,
+  `:118`). It shipped in `6b689c227`
+  (`packages/engine/src/testkit/for-each-sport.ts`). A one-line docs fix, not
+  made in W1b: Task 16 edits this index only.
