@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { HttpError } from "@/lib/errors";
@@ -141,6 +142,34 @@ export async function resolveCreditPackPriceId(packKey: string): Promise<string>
   return price.id;
 }
 
+/** Key-sorted JSON (arrays keep their order), so two equal requests hash equal whatever order their fields were built
+ *  in. Mirrors `relay-checkout.ts`'s helper of the same name (kept private there, with its own key prefix). */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, val: unknown) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
+      : val,
+  );
+}
+
+/**
+ * R5b (Streaming R1 lane D, Task 14 fix round 5): the idempotency key for ONE
+ * credit-pack Checkout Session request — a digest of every parameter the
+ * Session is created with, plus the 30-second bucket.
+ *
+ * It was `credit-pack-checkout-<org>-<pack>-<bucket>`, and Stripe answers a
+ * reused key whose parameters DIFFER with StripeIdempotencyError: the same pack
+ * inside one bucket in another currency, for another billing owner's email,
+ * from another host, or against a price re-minted in between was a failed
+ * checkout — the collision the relay pack's key had (D-A). Hashing the params
+ * makes the key vary exactly when the request does, and a field added to the
+ * params later is covered without an edit here.
+ */
+export function creditPackCheckoutIdempotencyKey(params: Stripe.Checkout.SessionCreateParams, bucket: number): string {
+  const digest = createHash("sha256").update(canonicalJson(params)).digest("hex").slice(0, 32);
+  return `credit-pack-checkout-${digest}-${bucket}`;
+}
+
 /**
  * Open a one-time Checkout Session for a credit pack (v17 Phase 3 Task 1).
  * The API route resolves the caller/org/currency and calls this; kept here
@@ -148,10 +177,11 @@ export async function resolveCreditPackPriceId(packKey: string): Promise<string>
  * matching `buildEmbeddedCheckoutParams`/`buildPassCheckoutParams`'s split
  * between a pure builder and an impure caller.
  *
- * The idempotency key is scoped to a 30-second bucket per (org, pack): enough
- * to dedupe a double-click/retry of the SAME purchase attempt, but short
- * enough that a genuine second pack purchase moments later is never blocked
- * by Stripe replaying the first (completed, one-time) session back.
+ * The idempotency key (`creditPackCheckoutIdempotencyKey`) is a digest of the
+ * request plus a 30-second bucket: enough to dedupe a double-click/retry of the
+ * SAME purchase attempt, but short enough that a genuine second pack purchase
+ * moments later is never blocked by Stripe replaying the first (completed,
+ * one-time) session back.
  */
 export async function createCreditPackCheckout(args: {
   orgId: string;
@@ -165,17 +195,17 @@ export async function createCreditPackCheckout(args: {
   if (!pack) throw new HttpError(400, `Unknown credit pack: ${args.packKey}`);
   const priceId = await resolveCreditPackPriceId(args.packKey);
   const bucket = Math.floor(Date.now() / 30_000);
-  return getStripe().checkout.sessions.create(
-    buildCreditPackCheckoutParams({
-      priceId,
-      orgId: args.orgId,
-      packKey: args.packKey,
-      credits: pack.credits,
-      returnUrl: args.returnUrl,
-      currency: args.currency,
-      customerId: args.customerId ?? undefined,
-      customerEmail: args.customerEmail,
-    }),
-    { idempotencyKey: `credit-pack-checkout-${args.orgId}-${args.packKey}-${bucket}` },
-  );
+  const params = buildCreditPackCheckoutParams({
+    priceId,
+    orgId: args.orgId,
+    packKey: args.packKey,
+    credits: pack.credits,
+    returnUrl: args.returnUrl,
+    currency: args.currency,
+    customerId: args.customerId ?? undefined,
+    customerEmail: args.customerEmail,
+  });
+  return getStripe().checkout.sessions.create(params, {
+    idempotencyKey: creditPackCheckoutIdempotencyKey(params, bucket),
+  });
 }

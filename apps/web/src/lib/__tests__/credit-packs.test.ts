@@ -7,8 +7,20 @@
 // creation time (P3 T1 review fix) so the webhook grants exactly what was
 // sold even if the live CREDIT_PACKS catalog changes or drops the `pack_key`
 // before the session is paid — see credit-packs.ts and billing-events.ts.
-import { describe, expect, it } from "vitest";
-import { buildCreditPackCheckoutParams, CREDIT_PACKS } from "@/lib/credit-packs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Only `createCreditPackCheckout` reaches Stripe; every pure-builder claim below is untouched by this mock.
+const stripeMock = vi.hoisted(() => ({ pricesList: vi.fn(), sessionsCreate: vi.fn() }));
+vi.mock("@/lib/stripe", () => ({
+  getStripe: () => ({
+    prices: { list: stripeMock.pricesList },
+    checkout: { sessions: { create: stripeMock.sessionsCreate } },
+  }),
+}));
+
+import {
+  buildCreditPackCheckoutParams, CREDIT_PACKS, createCreditPackCheckout, creditPackCheckoutIdempotencyKey,
+} from "@/lib/credit-packs";
 import seed from "@/config/stripe-plans.json";
 import { SUPPORTED_CURRENCIES, creditPackOptions, type Currency } from "@/lib/currency";
 
@@ -167,5 +179,114 @@ describe("buildCreditPackCheckoutParams", () => {
     });
     expect(p.automatic_tax).toEqual({ enabled: true });
     expect(p.tax_id_collection).toEqual({ enabled: true });
+  });
+});
+
+// R5b (Streaming R1 lane D, Task 14 fix round 5) — the same collision class as the relay pack's D-A. The key was
+// `credit-pack-checkout-<org>-<pack>-<bucket>`, so two requests for the same pack inside one 30 s bucket that differ
+// anywhere else — another currency (`preferredCurrency` reads the request), another billing owner's email, another
+// host in the return URL, a customer id that appeared in between, a re-minted price — reused one key with DIFFERENT
+// parameters, which Stripe refuses (StripeIdempotencyError) and the route turns into a failed checkout. The key is now
+// a digest of every parameter the Session is created with, plus the bucket.
+describe("R5b: createCreditPackCheckout's idempotency key", () => {
+  type Args = Parameters<typeof createCreditPackCheckout>[0];
+  // Every argument, spelled out (`Required` makes the compiler demand a new one here the day it is added). The
+  // first-purchase shape — no Stripe customer yet, so the email is what Stripe is sent.
+  const BASE: Required<Args> = {
+    orgId: "org-abc",
+    packKey: "credits_10",
+    returnUrl: base.returnUrl,
+    currency: "usd",
+    customerId: null,
+    customerEmail: "a@b.com",
+  };
+  /** One call, the price id Stripe resolves the pack's lookup key to, and the key and params it was sent with. */
+  async function keyFor(args: Args, priceId = "price_pack_10"): Promise<{ key: string; sent: Record<string, unknown> }> {
+    stripeMock.pricesList.mockResolvedValueOnce({ data: [{ id: priceId }] });
+    stripeMock.sessionsCreate.mockResolvedValueOnce({ id: "cs", client_secret: "cs_secret" });
+    await createCreditPackCheckout(args);
+    const [sent, opts] = stripeMock.sessionsCreate.mock.calls.at(-1)!;
+    return { key: opts.idempotencyKey as string, sent };
+  }
+
+  beforeEach(() => {
+    stripeMock.pricesList.mockReset();
+    stripeMock.sessionsCreate.mockReset();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-29T12:00:07.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("the same request twice reuses the key; every argument that changes the Session, ALONE, changes it", async () => {
+    const first = await keyFor(BASE);
+    expect((await keyFor({ ...BASE })).key, "a double click must dedupe").toBe(first.key);
+    // Each row moves ONE argument.
+    const VARIANTS: { [K in keyof Args]-?: Args[K] } = {
+      orgId: "org-def",
+      packKey: "credits_25",
+      returnUrl: base.returnUrl.replace("https://app.test", "https://www.app.test"),
+      currency: "gbp",
+      customerId: "cus_existing",
+      customerEmail: "treasurer@example.com",
+    };
+    expect(Object.keys(VARIANTS).sort(), "a createCreditPackCheckout argument with no row").toEqual(Object.keys(BASE).sort());
+    let checked = 0;
+    const seen = new Set([first.key]);
+    for (const k of Object.keys(VARIANTS) as (keyof Args)[]) {
+      const moved = await keyFor({ ...BASE, [k]: VARIANTS[k] });
+      expect(moved.sent, `premise: ${k} changes what Stripe is sent`).not.toEqual(first.sent);
+      expect(moved.key, `${k} alone collided with the base key`).not.toBe(first.key);
+      seen.add(moved.key);
+      checked++;
+    }
+    // The Stripe price the pack's lookup key resolves to is a parameter too (a re-minted price inside one bucket).
+    const repriced = await keyFor(BASE, "price_pack_10_v2");
+    expect(repriced.key, "priceId alone collided").not.toBe(first.key);
+    seen.add(repriced.key);
+    checked++;
+    expect(checked, "anti-vacuity: every argument plus the price id").toBe(Object.keys(BASE).length + 1);
+    expect(seen.size, "two different requests shared a key").toBe(checked + 1);
+    // The bucket is computed HERE, never read back from the code under test; Stripe caps a key at 255 characters.
+    expect(first.key).toMatch(new RegExp(`^credit-pack-checkout-[0-9a-f]{32}-${Math.floor(Date.now() / 30_000)}$`));
+    expect(first.key.length).toBeLessThanOrEqual(255);
+  });
+
+  it("the key follows what Stripe is SENT: an argument that does not change the request does not change the key", async () => {
+    // A returning buyer is sent `customer`, never `customer_email` (the two are exclusive), so the email is not part
+    // of the request — two clicks that differ only there are the same request and must dedupe.
+    const a = await keyFor({ ...BASE, customerId: "cus_existing", customerEmail: "a@b.com" });
+    const b = await keyFor({ ...BASE, customerId: "cus_existing", customerEmail: "someone-else@example.com" });
+    expect(b.sent, "premise: Stripe is sent the same thing").toEqual(a.sent);
+    expect(b.key).toBe(a.key);
+  });
+
+  it("equal params hash equal whatever order their fields were built in — nested objects included", () => {
+    const params = buildCreditPackCheckoutParams({ ...base, currency: "usd", customerEmail: "a@b.com" });
+    const again = buildCreditPackCheckoutParams({ ...base, currency: "usd", customerEmail: "a@b.com" });
+    expect(again, "premise: two builds of one request are distinct objects").not.toBe(params);
+    expect(creditPackCheckoutIdempotencyKey(again, 7)).toBe(creditPackCheckoutIdempotencyKey(params, 7));
+    const reversed = (o: unknown): unknown =>
+      o && typeof o === "object" && !Array.isArray(o)
+        ? Object.fromEntries(Object.entries(o).reverse().map(([k, v]) => [k, reversed(v)]))
+        : o;
+    const flipped = reversed(params) as typeof params;
+    expect(Object.keys(flipped), "premise: the field order really differs").not.toEqual(Object.keys(params));
+    expect(Object.keys(flipped.metadata!), "premise: nested too").not.toEqual(Object.keys(params.metadata!));
+    expect(creditPackCheckoutIdempotencyKey(flipped, 7)).toBe(creditPackCheckoutIdempotencyKey(params, 7));
+    // …and the positive pair: one nested value moved is another key.
+    expect(
+      creditPackCheckoutIdempotencyKey({ ...params, metadata: { ...params.metadata, credits: "105" } }, 7),
+    ).not.toBe(creditPackCheckoutIdempotencyKey(params, 7));
+  });
+
+  it("the bucket still ends a key: the same request 30 s later is a new purchase attempt", async () => {
+    const now = await keyFor(BASE);
+    vi.setSystemTime(Date.now() + 30_000);
+    const later = await keyFor(BASE);
+    expect(later.sent).toEqual(now.sent);
+    expect(later.key).not.toBe(now.key);
+    expect(later.key.endsWith(`-${Math.floor(Date.now() / 30_000)}`)).toBe(true);
   });
 });
