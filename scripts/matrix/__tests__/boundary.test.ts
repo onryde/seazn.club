@@ -160,10 +160,11 @@ describe("ruling 38: what the matrix may take from the bench", () => {
     expect(importersOf(files, "scripts/bench/lib/simulate.ts")).toContain("scripts/bench/lib/drivers/scorer.ts");
   });
 
-  // So the L3 path never loads a browser: only the browser layer may import
-  // playwright — directly, or through a bench module that imports it at its
-  // top (tap-play.ts). Type-only imports count too: they are refused here
-  // because nothing outside the browser layer has a reason to name a Page.
+  // So the L3 path never loads a browser. Two checks. This one is DIRECT and
+  // covers every .ts under scripts/matrix, tests included: only the browser
+  // layer names playwright in its own imports. Type-only imports count too:
+  // nothing outside the browser layer has a reason to name a Page. The two
+  // closure tests below carry the transitive half.
   const BROWSER_LAYER = (rel: string) => rel.startsWith("lib/browser/") || rel.startsWith("lib/pads/") || rel === "lib/driver/browser-driver.ts";
   function everyTs(dir: string, out: string[] = []): string[] {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -181,19 +182,76 @@ describe("ruling 38: what the matrix may take from the bench", () => {
     // Positive pair: the scan does see the browser layer's own import.
     expect(importsOf(join(MATRIX, "lib/browser/session.ts")).some((i) => i.spec === "playwright")).toBe(true);
   });
-  // Found by this test (Task 4), pre-existing since W1a: bench env.ts imports
-  // playwright's `chromium` at its top (its preflight resolves the Chromium
-  // executable), and run.ts imports env.ts for runPreflight — so the L3 entry
-  // point already loads the playwright LIBRARY (it never launches a browser).
-  // Pinned exactly, so a new path reds; routed to the controller.
-  const KNOWN_PLAYWRIGHT_LOADS = ["run.ts -> ../bench/lib/env.ts"];
-  it("no shipped module outside the browser layer imports a bench module that loads playwright, beyond the one known preflight import", () => {
-    const loadsPlaywright = [...ALLOWED_BENCH].filter((rel) => importsOf(resolve(REPO, rel)).some((i) => i.spec === "playwright" && !i.typeOnly)).sort();
-    expect(loadsPlaywright).toEqual(["scripts/bench/lib/env.ts", "scripts/bench/lib/tap-play.ts"]);
-    const bad = MODULES.filter((f) => !BROWSER_LAYER(relative(MATRIX, f))).flatMap((f) => importsOf(f)
-      .filter((i) => !i.typeOnly && i.spec.startsWith(".") && loadsPlaywright.includes(relative(REPO, resolve(dirname(f), i.spec))))
-      .map((i) => `${relative(MATRIX, f)} -> ${i.spec}`));
-    expect(bad).toEqual(KNOWN_PLAYWRIGHT_LOADS);
+  // The scan above reads each file's OWN imports. A module that loads
+  // playwright two hops away passes it, so the L3 guarantee is proven over each
+  // non-browser module's whole value-import closure (Task 4 review, I-1).
+  const OUTSIDE = MODULES.filter((f) => !BROWSER_LAYER(relative(MATRIX, f)));
+  const SESSION = join(MATRIX, "lib/browser/session.ts");
+  /** The files in `files` that VALUE-import playwright (a type import is erased and loads nothing). */
+  const playwrightLoaders = (files: Iterable<string>) => [...files].filter((f) => importsOf(f).some((i) => i.spec === "playwright" && !i.typeOnly));
+  /** The shortest value-import chain from `root` to `target`, over the same edges closure() walks. */
+  function chain(root: string, target: string): string {
+    const parent = new Map<string, string | null>([[root, null]]);
+    const queue = [root];
+    while (queue.length > 0) {
+      const file = queue.shift()!;
+      if (file === target) break;
+      for (const { spec, typeOnly } of importsOf(file)) {
+        if (typeOnly || !spec.startsWith(".")) continue;
+        const next = resolve(dirname(file), spec);
+        if (!next.endsWith(".ts") || !existsSync(next) || parent.has(next)) continue;
+        parent.set(next, file);
+        queue.push(next);
+      }
+    }
+    expect(parent.has(target), `${relative(MATRIX, target)} is not reachable from ${relative(MATRIX, root)}`).toBe(true);
+    const hops: string[] = [];
+    for (let f: string | null = target; f !== null; f = parent.get(f) ?? null) hops.unshift(relative(MATRIX, f));
+    return hops.join(" -> ");
+  }
+
+  // Found by these tests (Task 4 and its review), pre-existing since W1a: bench
+  // env.ts imports playwright's `chromium` at its top (its preflight resolves
+  // the Chromium executable; it launches nothing), run.ts imports env.ts for
+  // runPreflight, and model.ts imports run.ts for its deps and exit codes. So
+  // both L3 entry points already load the playwright LIBRARY. Each is pinned
+  // with the chain that reaches it: a new module that loads playwright, by any
+  // number of hops, reds here. Routed to the controller.
+  const KNOWN_PLAYWRIGHT_LOADS: Readonly<Record<string, readonly string[]>> = {
+    "model.ts": ["model.ts -> run.ts -> ../bench/lib/env.ts"],
+    "run.ts": ["run.ts -> ../bench/lib/env.ts"],
+  };
+  it("exactly the known non-browser modules load playwright anywhere in their value-import closure, each by its recorded chain", () => {
+    let checked = 0;
+    const found: Record<string, string[]> = {};
+    for (const m of OUTSIDE) {
+      const files = closure([m]);
+      checked += files.size;
+      const loaders = playwrightLoaders(files);
+      if (loaders.length > 0) found[relative(MATRIX, m)] = loaders.map((l) => chain(m, l)).sort();
+    }
+    console.info(`boundary: ${OUTSIDE.length} non-browser modules, ${checked} closure files read for a playwright load`);
+    // Non-vacuity: the two L3 entry points are among the modules checked, and the walks read files.
+    expect(OUTSIDE.map((f) => relative(MATRIX, f))).toEqual(expect.arrayContaining(["run.ts", "model.ts"]));
+    expect(checked).toBeGreaterThan(OUTSIDE.length);
+    expect(found).toEqual(KNOWN_PLAYWRIGHT_LOADS);
+    // Positive pair: the same walk sees the browser layer's own load.
+    expect(playwrightLoaders(closure([SESSION])).map((f) => relative(MATRIX, f))).toContain("lib/browser/session.ts");
+  });
+
+  it("no shipped module outside the browser layer reaches lib/browser/ or lib/pads/ in its value-import closure", () => {
+    let checked = 0;
+    const bad = OUTSIDE.flatMap((m) => {
+      const files = [...closure([m])];
+      checked += files.length;
+      return files.filter((f) => /^lib\/(browser|pads)\//.test(relative(MATRIX, f))).map((f) => chain(m, f));
+    });
+    console.info(`boundary: ${OUTSIDE.length} non-browser modules, ${checked} closure files read for a browser-layer module`);
+    expect(OUTSIDE.map((f) => relative(MATRIX, f))).toEqual(expect.arrayContaining(["run.ts", "model.ts"]));
+    expect(checked).toBeGreaterThan(OUTSIDE.length);
+    expect(bad).toEqual([]);
+    // Positive pair: session.ts's own closure does reach another browser-layer module.
+    expect([...closure([SESSION])].map((f) => relative(MATRIX, f))).toContain("lib/browser/viewports.ts");
   });
 });
 
