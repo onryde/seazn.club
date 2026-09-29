@@ -1368,19 +1368,69 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
     expect(n).toBe(0);
   });
 
-  it("I1 guard: an ingest that cannot be OBSERVED is not expired — the provider read failing at +11 min fails that read and leaves the session warming (never a false no_inbound_timeout); the next read, provider back, finds it live and charges once (mutant: swallow the observation's failure → failed no_inbound_timeout)", async () => {
+  // N1 (lane C re-review; orchestrator ruling): an ingest read that THROWS — a 5xx, the network, a revoked token's 401 —
+  // is an unknown, and an unknown blocks exactly ONE expiry: `warming_timeout`, because a phone that may be connected must
+  // not be failed `no_inbound_timeout` on it. Every other expiry — `wall_clock` above all — still applies: before N1 the
+  // throw escaped before the expiry, so during an outage a warming session past its deadline was never ended, held its
+  // destination (V421), and 500'd every organiser poll and another court's start. The failure is REPORTED, never thrown.
+  const ingestDown = (r: { ingest: FakeIngest; deps: SessionDeps }, err: Error) => {
+    const down = Object.assign(Object.create(r.ingest) as FakeIngest, { inputStatus: async () => { throw err; } });
+    return { ...r.deps, drivers: { ...r.deps.drivers, ingest: down } } satisfies SessionDeps;
+  };
+  const readAlarms = () => sentry.captureError.mock.calls
+    .filter(([, ctx]) => (ctx as { route?: string }).route === "relay.ingest_status")
+    .map(([e, ctx]) => ({ err: String(e), site: (ctx as { extra?: { site?: string } }).extra?.site }));
+  const PAST_WALL_CLOCK_MS = (MAX_DURATION_MINUTES + 1) * 60_000;
+
+  it("N1: an ingest read that THROWS holds back only warming_timeout — at +11 min the organiser's poll answers (no 500), the session stays warming with no false reason, each failed read is reported once; the next read, provider back, finds it live and charges once (mutant: the unknown holds nothing → failed no_inbound_timeout)", async () => {
     const r = await rig({ credits: 1, connectAfterMs: I1_CONNECT_MS });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect(I1_PAST_TIMEOUT_MS, "the premise: only the warming timeout is due").toBeLessThan(MAX_DURATION_MINUTES * 60_000);
     r.tick(I1_PAST_TIMEOUT_MS);
-    const down = Object.assign(Object.create(r.ingest) as FakeIngest, {
-      inputStatus: async () => { throw new Error("cloudflare input status: HTTP 503"); },
-    });
-    const downDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, ingest: down } };
-    await expect(currentSession(r.auth, r.fixtureId, downDeps)).rejects.toThrow("HTTP 503");
+    sentry.captureError.mockClear();
+    const cur = (await currentSession(r.auth, r.fixtureId, ingestDown(r, new Error("cloudflare input status: HTTP 503"))))!;
+    expect(cur).toMatchObject({ state: "warming", failReason: null, ingest: null });
     expect(await r.row(sessionId)).toMatchObject({ state: "warming", fail_reason: null });
+    // Two reads failed in this request — the expiry's observation and the poll's own — and each is reported ONCE.
+    expect(readAlarms()).toEqual([
+      { err: "Error: cloudflare input status: HTTP 503", site: "expiry" },
+      { err: "Error: cloudflare input status: HTTP 503", site: "poll" },
+    ]);
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
     expect(await consumesOf(sessionId)).toBe(1);
     expect(await falseTimeoutRows(sessionId)).toBe(0);
+  });
+
+  it("N1: an ingest read that THROWS does not hold back wall_clock — a warming passthrough past its deadline during an outage is ENDED by the organiser's poll (max_duration, 200), freeing its destination; the failed read is reported once and nothing is thrown (mutant: the unknown holds every expiry → still warming)", async () => {
+    const r = await rig({ credits: 1, connectAfterMs: 24 * 3_600_000 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(PAST_WALL_CLOCK_MS);
+    sentry.captureError.mockClear();
+    const revoked = Object.assign(new Error("cloudflare input status: HTTP 401"), { status: 401 });
+    const cur = (await currentSession(r.auth, r.fixtureId, ingestDown(r, revoked)))!;
+    expect(cur).toMatchObject({ state: "completed", endReason: "max_duration", failReason: null });
+    expect(readAlarms()).toEqual([{ err: "Error: cloudflare input status: HTTP 401", site: "expiry" }]);   // the poll is skipped: it ended
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
+    expect(n, "the destination is free").toBe(0);
+    expect(await falseTimeoutRows(sessionId)).toBe(0);
+  });
+
+  it("N1 via ANOTHER court's create: with the holder's ingest read throwing, only warming_timeout due → B is refused 409 target_in_use (never a 500) and the holder stays warming; past the holder's wall clock → the holder is ended max_duration and B STARTS on the destination (mutants: holds nothing → B admitted over a maybe-live phone; holds everything → B refused forever)", async () => {
+    const r = await rig({ credits: 2, fixtures: 2, connectAfterMs: 24 * 3_600_000 });
+    const [a, b] = r.fixtureIds;
+    const held = await createSession(r.auth, a!, body(r.target.id), r.deps);
+    const down = ingestDown(r, new Error("fetch failed"));
+    r.tick(I1_PAST_TIMEOUT_MS);
+    sentry.captureError.mockClear();
+    await expect(createSession(r.auth, b!, body(r.target.id), down)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+    expect(await r.row(held.sessionId)).toMatchObject({ state: "warming", fail_reason: null });
+    expect(readAlarms()).toEqual([{ err: "Error: fetch failed", site: "expiry" }]);
+    r.tick(PAST_WALL_CLOCK_MS - I1_PAST_TIMEOUT_MS);
+    const made = await createSession(r.auth, b!, body(r.target.id), down);
+    expect(made.sessionId).toBeDefined();
+    expect(await r.row(held.sessionId)).toMatchObject({ state: "completed", end_reason: "max_duration", fail_reason: null });
+    expect(await falseTimeoutRows(held.sessionId)).toBe(0);
   });
 
   it("I1 negative pair: a phone that NEVER connected is still failed no_inbound_timeout at +11 min after one observation — and a session with no input row to observe falls through to the same expiry without asking the provider", async () => {

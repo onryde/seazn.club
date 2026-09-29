@@ -30,7 +30,7 @@ import {
   type Command, type Decision, type Effect, type Session,
 } from "@/server/relay/domain/session";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
-import { evaluate, runnerDeadlineOf } from "@/server/relay/domain/expiry";
+import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
@@ -474,21 +474,46 @@ export async function destroyListedMachine(
  *  the ordinary `ingest_connected` decision (which consumes the credit, or refuses it) — the expiry then finds nothing due.
  *
  *  Only when an expiry is DUE: a read with nothing to expire still asks no provider anything (G-T1's zero-call refusal).
- *  An ingest that cannot be observed — the provider read throws — is NOT expired: the error propagates, nothing is
- *  written, and the next read retries; failing it would be exactly the false reason this exists to stop. A session with no
- *  input row has nothing to observe and falls through to the expiry as before. Same input reader as the poll (one
- *  authority for which input a session has). */
-async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): Promise<void> {
+ *  A session with no input row has nothing to observe and falls through to the expiry as before. Same input reader as
+ *  the poll (one authority for which input a session has).
+ *
+ *  N1 (lane C re-review; orchestrator ruling): a read that THROWS — a 5xx, the network, a revoked token's 401 — is
+ *  reported once and answered `true` ("the ingest is unknown"), never thrown: before N1 it escaped ahead of the expiry,
+ *  so during an outage a warming session past its WALL CLOCK was never ended, kept its destination (V421), and every
+ *  organiser poll and another court's start 500'd. What an unknown blocks is `heldByUnknownIngest`'s to say. */
+async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): Promise<boolean> {
   const row = await readRow(sessionId);
-  if (!row || row.mode !== "passthrough" || row.state !== "warming") return;
-  if (evaluate(toSession(row), deps.now()).kind === "none") return;
+  if (!row || row.mode !== "passthrough" || row.state !== "warming") return false;
+  if (evaluate(toSession(row), deps.now()).kind === "none") return false;
   const input = (await sql.begin((tx) => readFirstInput(tx, sessionId))) as Awaited<ReturnType<typeof readFirstInput>>;
   const inputId = input?.ingestInputId ?? null;
-  if (!inputId) return;
-  const status = await deps.drivers.ingest.inputStatus(inputId);
-  if (status.state !== "connected") return;
+  if (!inputId) return false;
+  let status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>;
+  try {
+    status = await deps.drivers.ingest.inputStatus(inputId);
+  } catch (err) {
+    reportIngestReadFailure(err, { sessionId, orgId: row.org_id, inputUid: inputId, site: "expiry" });
+    return true;
+  }
+  if (status.state !== "connected") return false;
   await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${sessionId}`;
   await apply(sessionId, connectIfWarming, deps);
+  return false;
+}
+
+/** N1: the ONE rule for what an unobservable ingest holds back — `warming_timeout` and nothing else. That expiry's claim
+ *  is "no inbound video", which an unknown cannot support: the phone may be connected. `wall_clock` and every other
+ *  expiry are claims about time or about the runner, true whatever the ingest is doing, so they still apply. */
+function heldByUnknownIngest(expiry: Expiry, ingestUnknown: boolean): boolean {
+  return ingestUnknown && expiry.kind === "warming_timeout";
+}
+
+/** N1: an ingest status read that threw — reported ONCE per failed read (Sentry + a log line), never thrown at the reader.
+ *  Names the session and the input uid (not a secret, Dg); never a URL or key. `site` says which read: the expiry's
+ *  observation or the organiser's poll. */
+function reportIngestReadFailure(err: unknown, extra: { sessionId: string; orgId: string; inputUid: string; site: "expiry" | "poll" }): void {
+  captureError(err, { orgId: extra.orgId, route: "relay.ingest_status", extra: { sessionId: extra.sessionId, inputUid: extra.inputUid, site: extra.site } });
+  log.warn({ ...extra, err: String(err) }, "stream session: the ingest status read failed — reported; the read answers without it and the next one retries (a warming timeout is held until the ingest can be seen)");
 }
 
 /** `ingest_connected` as a T5-a command function: only a passthrough session still `warming` on the LOCKED row goes live
@@ -500,7 +525,7 @@ function connectIfWarming(s: Session): Command | null {
 
 /** The lazy expiry path (recommendation B). I1: a passthrough warming session's ingest is observed first. */
 export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise<Session | null> {
-  await observeIngestBeforeExpiry(sessionId, deps);
+  const ingestUnknown = await observeIngestBeforeExpiry(sessionId, deps);
   // `none` is the T5-a null command — write nothing, run nothing (post-2C-post plan sync). The committed domain REFUSES
   // `expire none` on a TERMINAL session (C27's negative pair: only `grace_expired` passes its guard), and `reconcileSession`
   // runs this on terminal rows by design — the sweep's backstop selects every terminal row whose runner is still alive, and
@@ -508,7 +533,7 @@ export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise
   // reconcile and the whole daily sweep. On a non-terminal row `none` is `identity`, so dropping it moves nothing.
   return apply(sessionId, (s) => {
     const expiry = evaluate(s, deps.now());
-    return expiry.kind === "none" ? null : { type: "expire", expiry };
+    return expiry.kind === "none" || heldByUnknownIngest(expiry, ingestUnknown) ? null : { type: "expire", expiry };
   }, deps);
 }
 
@@ -1125,9 +1150,18 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
+    // N1: a provider read that throws is reported once and the projection answers without it (`ingest: null`) — never a
+    // 500 on every organiser poll through an outage. Nothing is decided on an unknown; the next poll reads again.
+    let read: { status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>; output: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["outputState"]>> } | null = null;
     if (inputId) {
-      const status = await deps.drivers.ingest.inputStatus(inputId);
-      const output = await deps.drivers.ingest.outputState(inputId);
+      try {
+        read = { status: await deps.drivers.ingest.inputStatus(inputId), output: await deps.drivers.ingest.outputState(inputId) };
+      } catch (err) {
+        reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
+      }
+    }
+    if (read) {
+      const { status, output } = read;
       ingestState = { state: status.state, protocol: status.protocol };
       // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed.
       const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
