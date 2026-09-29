@@ -1096,6 +1096,25 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(body({ view: ended, balance: 1, stopFailed: true }), "stream-stop-error")).toBeUndefined();
   });
 
+  it("N1/N3: the failure copy names the control ON SCREEN — Cancel before live, Stop once live — and nothing while it ends", () => {
+    expect(m("stream.error.cancel"), "premise: the two sentences differ").not.toBe(m("stream.error.stop"));
+    const EXPECTED: [string, StreamSessionView, string | null][] = [
+      ["provisioning", session({ state: "provisioning", qr: null }), m("stream.error.cancel")],
+      ["warming", session({ state: "warming" }), m("stream.error.cancel")],
+      ["live", session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), m("stream.error.stop")],
+      ["ending", session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" }), null],
+      ["failed", session({ state: "failed", qr: null, failReason: "machine_crash" }), null],
+    ];
+    let checked = 0;
+    for (const [name, view, copy] of EXPECTED) {
+      const tree = body({ view, balance: 1, stopFailed: true });
+      if (copy === null) expect(byTestId(tree, "stream-stop-error"), name).toBeUndefined();
+      else expect(textAt(tree, "stream-stop-error"), name).toBe(copy);
+      checked++;
+    }
+    expect(checked).toBe(EXPECTED.length);
+  });
+
   it("m9: the state pill announces a change politely", () => {
     let checked = 0;
     for (const [name, tree] of bodyStates()) {
@@ -1747,7 +1766,25 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       click(byTestId(island.tree(), "stream-cancel"));
       await settle();
       expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
-      expect(textAt(island.tree(), "stream-stop-error")).toBe(m("stream.error.stop"));
+      // N1: a failed CANCEL says so, and names the Cancel button still on screen — never "tap Stop stream again".
+      expect(textAt(island.tree(), "stream-stop-error")).toBe(m("stream.error.cancel"));
+      expect(byTestId(island.tree(), "stream-cancel"), "the control the copy names").toBeDefined();
+    });
+
+    it("N3: a stop that LANDED behind a lost response says nothing once a read finds it ending", async () => {
+      const s = { current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS } as Server;
+      s.stop = () => { s.failCurrent = true; throw new TypeError("Failed to fetch"); };
+      const island = await probe(s);
+      click(byTestId(island.tree(), "stream-stop"));
+      await settle();
+      expect(textAt(island.tree(), "stream-stop-error"), "premise: the stop could not be confirmed").toBe(m("stream.error.stop"));
+      // The network comes back and the stop had in fact landed.
+      s.failCurrent = false;
+      s.current = session({ id: "s1", state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(byTestId(island.tree(), "stream-ending")).toBeDefined();
+      expect(byTestId(island.tree(), "stream-stop-error"), "'did not stop' beside 'ending'").toBeUndefined();
     });
   });
 

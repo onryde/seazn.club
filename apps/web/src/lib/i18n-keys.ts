@@ -6188,6 +6188,7 @@ export type DictionaryKey =
   | "stream.credits.popular"
   | "stream.credits.title"
   | "stream.error.active_session"
+  | "stream.error.cancel"
   | "stream.error.destination_not_allowed"
   | "stream.error.failed"
   | "stream.error.ingest_unavailable"

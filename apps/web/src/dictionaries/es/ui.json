@@ -5415,6 +5415,7 @@
   "stream.error.ingest_unavailable": "El servicio de emisión no está disponible. Inténtalo en un minuto.",
   "stream.error.unknown": "No se pudo iniciar. Inténtalo de nuevo.",
   "stream.error.stop": "La emisión no se detuvo. Revisa tu conexión y vuelve a pulsar Detener emisión.",
+  "stream.error.cancel": "La emisión no se canceló. Revisa tu conexión y vuelve a pulsar Cancelar.",
   "stream.error.target_in_use": "{destination} ya está en directo en {court}.",
   "stream.error.target_in_use.unknown": "Ese destino ya está en directo en otro partido.",
   "stream.error.destination_not_allowed": "Este destino ya no se admite. Vuelve a añadirlo o elige otro.",

@@ -5415,6 +5415,7 @@
   "stream.error.ingest_unavailable": "Le service de diffusion est indisponible. Réessayez dans une minute.",
   "stream.error.unknown": "Le démarrage a échoué. Réessayez.",
   "stream.error.stop": "La diffusion ne s'est pas arrêtée. Vérifiez votre connexion et touchez à nouveau Arrêter la diffusion.",
+  "stream.error.cancel": "La diffusion n'a pas été annulée. Vérifiez votre connexion et touchez à nouveau Annuler.",
   "stream.error.target_in_use": "{destination} est déjà en direct sur {court}.",
   "stream.error.target_in_use.unknown": "Cette destination est déjà en direct sur un autre match.",
   "stream.error.destination_not_allowed": "Cette destination n'est plus prise en charge. Ajoutez-la à nouveau ou choisissez-en une autre.",

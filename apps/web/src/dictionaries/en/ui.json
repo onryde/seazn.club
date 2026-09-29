@@ -5415,6 +5415,7 @@
   "stream.error.ingest_unavailable": "The streaming service is unavailable. Try again in a minute.",
   "stream.error.unknown": "That did not start. Try again.",
   "stream.error.stop": "The stream did not stop. Check your connection and tap Stop stream again.",
+  "stream.error.cancel": "The stream was not cancelled. Check your connection and tap Cancel again.",
   "stream.error.target_in_use": "{destination} is already live on {court}.",
   "stream.error.target_in_use.unknown": "That destination is already live on another match.",
   "stream.error.destination_not_allowed": "This destination is no longer supported. Add it again or pick another.",

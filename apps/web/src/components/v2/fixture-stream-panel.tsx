@@ -874,7 +874,7 @@ export function PhoneStopProbe({ fixtureId }: { fixtureId: string }) {
           {msg("stream.phone.ending", { destination: v.target.label })}
         </p>
       )}
-      {s.stopFailed && stopError(msg)}
+      {s.stopFailed && stopError(msg, s.state)}
     </div>
   );
 }
@@ -1204,11 +1204,23 @@ function recAndElapsed(msg: Msg, startedAt: string | null, now: Date) {
   );
 }
 
-/** m1: a stop nobody could confirm. */
-function stopError(msg: Msg) {
+/**
+ * m1: a stop nobody could confirm — worded by the STATE the card is in, because the copy tells the organiser which
+ * button to tap again. Before live the only control on screen is Cancel (N1: "tap Stop stream again" named a button
+ * that is not there); once live it is Stop. While ending, or once a read finds it over, "did not stop" is false, so
+ * nothing (N3: the tab and the stop probe share this one guard, so neither can show it beside "ending").
+ */
+function stopError(msg: Msg, state: PhoneTabState) {
+  const key: MessageKey | null =
+    state === "live"
+      ? "stream.error.stop"
+      : state === "provisioning" || state === "warming"
+        ? "stream.error.cancel"
+        : null;
+  if (key === null) return null;
   return (
     <p data-testid="stream-stop-error" role="alert" className="text-xs text-red-600">
-      {msg("stream.error.stop")}
+      {msg(key)}
     </p>
   );
 }
@@ -1231,6 +1243,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const creditsOnly = forced && !p.planGate;
   // m12: §8a's ending row — "every control disabled" while the last seconds flush.
   const frozen = state === "ending";
+  const stopFailure = p.stopFailed ? stopError(msg, state) : null;
   const selectedLabel =
     p.targets.find((t) => t.id === p.selectedTargetId)?.label ??
     (p.targets.length === 0 ? msg("stream.phone.destination.none") : undefined);
@@ -1606,11 +1619,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         </div>
       )}
 
-      {/* m1: D14's unreadable stop — only while the session is still up; a later read that finds it ended makes "did not
-          stop" false. */}
-      {p.stopFailed && (state === "live" || state === "provisioning" || state === "warming") && (
-        <div className="mt-3">{stopError(msg)}</div>
-      )}
+      {/* m1: D14's unreadable stop or cancel — only while the session is still up (the guard is `stopError`'s own). */}
+      {stopFailure && <div className="mt-3">{stopFailure}</div>}
 
       {/* A refused create — in whatever state the refusal left the tab. */}
       {p.createError && (

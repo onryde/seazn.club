@@ -5415,6 +5415,7 @@
   "stream.error.ingest_unavailable": "De streamdienst is niet beschikbaar. Probeer het over een minuut.",
   "stream.error.unknown": "Starten is mislukt. Probeer het opnieuw.",
   "stream.error.stop": "De stream is niet gestopt. Controleer je verbinding en tik opnieuw op Stream stoppen.",
+  "stream.error.cancel": "De stream is niet geannuleerd. Controleer je verbinding en tik opnieuw op Annuleren.",
   "stream.error.target_in_use": "{destination} is al live op {court}.",
   "stream.error.target_in_use.unknown": "Die bestemming is al live bij een andere wedstrijd.",
   "stream.error.destination_not_allowed": "Deze bestemming wordt niet meer ondersteund. Voeg deze opnieuw toe of kies een andere.",
