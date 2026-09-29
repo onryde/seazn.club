@@ -35,11 +35,13 @@
 //   k21 the rollover runs AFTER the breakdown the consume reads   → the same test (it draws pack)
 //   k22 a failed rollover fails the consume (no savepoint catch)  → "M6: a rollover that fails inside the consume"
 //   k23 … is swallowed without a report                            → the same test
+//   p9 streamMonthlyRate reads a pass key as a monthly rate      → "addendum P: a PASS key on the subscription is never read"
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { sql, statementCount } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
+import { PASS_KEYS } from "@/lib/currency";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant,
   grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundCredits, revokeCredits, streamMonthlyDeltaKey,
@@ -129,16 +131,19 @@ describe("the monthly period and its key (pure)", () => {
 });
 
 describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
-  it("every plan's grant equals ITS V426 row, read from the DB (a sweep over the plans table)", async () => {
-    // A pass key is swept too: V426 declares a row for it, and this proves the grant READS that row. Production never
-    // resolves an org's plan to a pass key (passes live in competition_passes, per competition) — recorded in the report.
+  it("every SUBSCRIPTION plan's grant equals ITS V426 row, read from the DB (a sweep over the plans table)", async () => {
+    // Every plan has a V426 row (the catalogue half of the sweep). The two pass keys' rows are ONE-OFF amounts granted
+    // when a pass is bought (addendum P, lib/__tests__/billing-pass-stream-credits.test.ts), so they are swept for the
+    // row and then skipped here — the monthly path refusing to read them is "addendum P: a PASS key … (p9)" below.
     const plans = await sql<{ key: string }[]>`select key from plans order by key`;
     const rates = await ratesByPlan();
     let checked = 0;
+    let passKeys = 0;
     for (const { key: plan } of plans) {
-      const r = await rig(plan, 1);
       const want = rates.get(plan);
       expect(want, `${plan} has a V426 row`).toBeGreaterThanOrEqual(1);
+      if ((PASS_KEYS as readonly string[]).includes(plan)) { passKeys++; continue; }
+      const r = await rig(plan, 1);
       expect(await streamMonthlyRate(r.orgId), plan).toBe(want);
       expect(await ensureMonthlyStreamGrant(r.orgId, JAN), plan).toBe(want);
       expect(await creditBreakdown(sql, r.orgId), plan).toEqual({ monthly: want, pack: 0, total: want });
@@ -148,7 +153,8 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
       checked++;
     }
     expect(checked, "no plan was checked").toBeGreaterThan(0);
-    expect(checked).toBe(plans.length);
+    expect(passKeys, "the pass keys are in the plans table").toBe(PASS_KEYS.length);
+    expect(checked).toBe(plans.length - PASS_KEYS.length);
   });
 
   it("an org with NO subscription row (a fresh signup) is community, and grants community's row", async () => {
@@ -351,6 +357,27 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
     const before = await rowCount(r.orgId);
     await expect(ensureMonthlyStreamGrant(r.orgId, FEB)).rejects.toMatchObject({ status: 500, code: "ledger_negative" });
     expect(await rowCount(r.orgId)).toBe(before);
+  });
+
+  it("addendum P: a PASS key on the subscription is never read as a monthly rate — nothing granted, and it is REPORTED (p9)", async () => {
+    // "Cannot happen" as a guard: no writer puts a pass key on subscriptions.plan_key, and V426's pass rows are one-off
+    // amounts (grantPassStreamCredits). Read as a monthly rate they would be granted again every month.
+    let checked = 0;
+    for (const passKey of PASS_KEYS) {
+      const passRate = await rateOf(passKey);
+      expect(passRate, `${passKey}: premise — a rate that would be granted if read`).toBeGreaterThan(0);
+      const r = await rig(passKey);
+      sentry.captureError.mockClear();
+      expect(await streamMonthlyRate(r.orgId), passKey).toBe(0);
+      expect(await ensureMonthlyStreamGrant(r.orgId, JAN), passKey).toBe(0);
+      expect(await rowCount(r.orgId), passKey).toBe(0);
+      const reports = sentry.captureError.mock.calls.filter(([, ctx]) => ctx?.route === "relay.credits.monthly_rate_pass_plan");
+      expect(reports.length, passKey).toBeGreaterThanOrEqual(2);
+      expect(reports.every(([, ctx]) => ctx?.orgId === r.orgId), passKey).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(PASS_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 

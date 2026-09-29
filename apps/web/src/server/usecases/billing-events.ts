@@ -31,7 +31,7 @@ import {
 // table and its own writer. Kept adjacent deliberately so the next reader sees
 // that the two are distinct rather than duplicated. The PURCHASE grant lives in
 // stream-credits-checkout.ts, shared with reconcile-on-return (Task 14 G1).
-import { findStreamPurchase, recordStreamPackRefund } from "@/server/usecases/stream-credits";
+import { findStreamPurchase, recordStreamPackRefund, revokePassStreamCredits } from "@/server/usecases/stream-credits";
 import { fulfilStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { isPassKey, type PassKey } from "@/lib/currency";
 import { SEAT_ADDON, isSeatAddonItem } from "@/lib/seat-addons";
@@ -2306,6 +2306,9 @@ async function handlePlatformDispute(
         // dispute after a refund (or a redelivered event) won't double-claw, and
         // it reads the immutable `pass_grant` ledger row, not the pass row.
         await recordPassRefund(intent);
+        // …and its MATCH credits (streaming R1 addendum P), on the same terms and
+        // the same per-pass key as the refund arm, so the two collapse onto one row.
+        await revokePassStreamCredits(intent);
         await sql`delete from competition_passes where stripe_payment_intent = ${intent}`;
         await invalidateOrgEntitlements(pass.org_id);
       }

@@ -36,6 +36,7 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { utcMonthStart } from "@/lib/credits";
 import { orgPlanKey } from "@/lib/entitlements";
+import { isPassKey, type PassKey } from "@/lib/currency";
 import { InsufficientCredits, credit, debit, withinReuseWindow } from "@/server/relay/domain/credits";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
@@ -706,9 +707,21 @@ export async function streamMonthlyRateByPlan(planKeys: readonly string[]): Prom
 /** One org's monthly rate on its RESOLVED plan — `orgPlanKey`, the seven-arm read-time resolver every
  *  other entitlement read uses (lapsed comp, dunning grace, trial backstop, suspension …), so a churned
  *  org is granted community's rate, not its stale row's. Plans are group-scoped; the org's own id is
- *  what the resolver takes. */
+ *  what the resolver takes.
+ *
+ *  NEVER a pass key (addendum P): V426's rows for event_pass / event_pass_l are ONE-OFF amounts granted when a pass is
+ *  bought (`grantPassStreamCredits`), and reading one here would grant it again every month. The resolver reads the
+ *  org's SUBSCRIPTION, and no writer puts a pass key there — a pass is a competition_passes row, and a staff comp writes
+ *  'pro' — so a pass key here is a corrupt subscription row. It grants nothing monthly and is REPORTED, rather than
+ *  refused: this read sits on the go-live path (stream-sessions.ts `apply`), and going live must never hinge on the
+ *  month's bookkeeping (M6). */
 export async function streamMonthlyRate(orgId: string): Promise<number> {
   const plan = await orgPlanKey(orgId);
+  if (isPassKey(plan)) {
+    log.error({ orgId, plan }, "stream credits: the org's subscription resolves to an Event Pass key; no monthly grant");
+    captureError(new Error(`subscription plan_key is the pass key ${plan}`), { orgId, route: "relay.credits.monthly_rate_pass_plan" });
+    return 0;
+  }
   return (await streamMonthlyRateByPlan([plan])).get(plan) ?? 0;
 }
 
@@ -836,4 +849,127 @@ async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date)
     values (${orgId}, ${rate}, 'grant', 'monthly', ${balanceAfter},
             ${`Free match credits for ${period}`}, ${streamMonthlyGrantKey(orgId, period)})`;
   return rate;
+}
+
+// ---------------------------------------------------------------------------
+// Event Pass match credits (Task 14b fix round 1, addendum P — owner decision 2026-09-29)
+// ---------------------------------------------------------------------------
+
+/** The pass grant's idempotency key — ONE authority for its spelling, shared with the claw-back that finds it. The
+ *  ANCHOR is lib/credits.ts `recordPassGrant`'s: the pass's payment intent, else its competition id. competition_passes
+ *  (V271) has no id of its own — the competition is its primary key — and keying on the competition alone would
+ *  suppress the grant on a genuine re-purchase after a refund (a NEW intent), the donor's review MINOR-2. A promotion-code
+ *  pass settles with no intent at all, and falls back to the competition, which V271 makes unique per pass. */
+export function streamPassGrantKey(anchor: string): string {
+  return `stream-pass:${anchor}`;
+}
+
+/** The pass claw-back's idempotency key: one per pass, so a refund and a lost dispute of the same charge collapse onto
+ *  the row the first of them wrote (lib/credits.ts `pass_refund:${anchor}`'s shape). */
+export function streamPassRevokeKey(anchor: string): string {
+  return `stream-pass-revoke:${anchor}`;
+}
+
+/** An Event Pass rung's match credits. V426's `streaming.credits.monthly` row for the PASS key — for a pass key that
+ *  value is a ONE-OFF amount granted when the pass is bought, never a monthly rate (owner, 2026-09-29: "event passes
+ *  grant their stream credits ONCE, when bought"). Read through `streamMonthlyRateByPlan`, so V426's rows keep one
+ *  reader and its NULL→0 reading. */
+export async function streamPassCredits(passKey: PassKey): Promise<number> {
+  return (await streamMonthlyRateByPlan([passKey])).get(passKey) ?? 0;
+}
+
+/**
+ * Grant a bought Event Pass its match credits: ONE row to the pass's ORG — reason 'grant', bucket 'pack' (they never
+ * expire, and the monthly rollover never sweeps them), idempotency key `stream-pass:{anchor}`. Called by
+ * lib/billing.ts `recordPassPurchase`, the only production insert of a pass, beside the AI credit grant: on the winning
+ * insert and on a same-intent replay (which heals a first attempt that died between the two), never for a duplicate
+ * second charge.
+ *
+ * Replay-safe: the key is looked up under the org's money lock, so a webhook and the buyer's return render racing on
+ * one payment write one row. The same key already held by a DIFFERENT org cannot happen — a payment intent belongs to
+ * one checkout of one org, and a competition to one org — so it is a GUARD, not a comment: nothing is written for the
+ * second org and it is REPORTED (log + Sentry), then answered 0. Reported rather than thrown, unlike recordPurchase's
+ * `stripe_event_org_mismatch`: there the credits ARE the purchase, here they ride on a pass that is already recorded,
+ * and a throw would fail the pass webhook's ACK (and its entitlement-cache bust) on every Stripe retry for days.
+ *
+ * The amount is read BEFORE the transaction: it is a pooled read, and lib/db.ts refuses one nested inside a
+ * transaction. A rung that grants 0 writes nothing (V410: delta <> 0). Returns the credits granted by THIS call.
+ */
+export async function grantPassStreamCredits(args: { orgId: string; passKey: PassKey; anchor: string }): Promise<number> {
+  const amount = await streamPassCredits(args.passKey);
+  // 0 (a rung with no row, or a NULL one) grants nothing. A negative catalogue value is NOT folded into that: it reaches
+  // credit(), whose positiveInt refuses it by name inside the transaction, before any row is written.
+  if (amount === 0) return 0;
+  const key = streamPassGrantKey(args.anchor);
+  return sql.begin(async (tx) => {
+    await lockOrg(tx, args.orgId);
+    const [prior] = await tx<{ org_id: string }[]>`
+      select org_id from org_stream_credits where idempotency_key = ${key}`;
+    if (prior) {
+      if (prior.org_id !== args.orgId.toLowerCase()) {
+        log.error({ orgId: args.orgId, holder: prior.org_id, key }, "stream credits: an Event Pass grant key is held by another org; nothing granted");
+        captureError(new Error(`stream pass grant key ${key} is held by another org`), {
+          orgId: args.orgId, route: "relay.credits.pass_grant_org_mismatch", extra: { holder: prior.org_id, key },
+        });
+      }
+      return 0;
+    }
+    const { total } = await creditBreakdown(tx, args.orgId);
+    const { balanceAfter } = credit(total, amount);
+    await tx`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
+      values (${args.orgId}, ${amount}, 'grant', 'pack', ${balanceAfter},
+              ${`Event Pass (${args.passKey}): ${amount} match credits, granted once, never expire`}, ${key})`;
+    return amount;
+  }) as Promise<number>;
+}
+
+export interface PassStreamRevokeResult {
+  /** A pass grant exists for this anchor. */
+  matched: boolean;
+  /** Credits revoked against this pass IN TOTAL, by this call or an earlier one. */
+  clawedBack: number;
+  /** Did THIS call write the revoke row? */
+  applied: boolean;
+}
+
+/**
+ * Take a refunded (or lost-disputed) Event Pass's match credits back: `min(grant, current PACK balance)` (owner,
+ * 2026-09-29), mirroring lib/credits.ts `recordPassRefund` — the pass's AI claw-back — which is `min(originalGrant,
+ * packBalance)`. Credits already spent streamed and cannot be un-delivered; the free monthly credits were never part of
+ * the pass, so the cap is the pack, not the total. Called beside `recordPassRefund` by both arms that revoke a pass (a
+ * full refund, lib/billing.ts `revokePassForRefundedCharge`; a lost dispute, billing-events.ts `handlePlatformDispute`),
+ * BEFORE the pass row is deleted — though it reads only the ledger, so it works after too.
+ *
+ * Reads the GRANT row first, unlocked, to learn which org to lock (the donor's ordering): a charge that was not a pass
+ * leaves with no lock and nothing written. Then, under the lock, the revoke key BEFORE the cap (recordStreamPackRefund's
+ * order): an org that has bought a pack since would otherwise lose that pack's credits to a replay. A pack below zero is
+ * refused by name, as recordStreamPackRefund refuses it. A zero claw-back writes no row (V410: delta <> 0).
+ */
+export async function revokePassStreamCredits(anchor: string): Promise<PassStreamRevokeResult> {
+  const grantKey = streamPassGrantKey(anchor);
+  const key = streamPassRevokeKey(anchor);
+  return sql.begin(async (tx) => {
+    const [grant] = await tx<{ org_id: string; delta: number }[]>`
+      select org_id, delta from org_stream_credits where idempotency_key = ${grantKey}`;
+    if (!grant) return { matched: false, clawedBack: 0, applied: false };
+
+    await lockOrg(tx, grant.org_id);
+    const [prior] = await tx<{ delta: number }[]>`
+      select delta from org_stream_credits where idempotency_key = ${key}`;
+    if (prior) return { matched: true, clawedBack: -prior.delta, applied: false };
+
+    const split = await creditBreakdown(tx, grant.org_id);
+    if (split.pack < 0) {
+      throw new HttpError(500, `This organisation's bought match-credit balance is ${split.pack}; refusing to claw back against a negative ledger`, "ledger_negative");
+    }
+    const clawback = Math.min(grant.delta, split.pack);
+    if (clawback <= 0) return { matched: true, clawedBack: 0, applied: false };
+    debit(split.pack, clawback);
+    await tx`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
+      values (${grant.org_id}, ${-clawback}, 'revoke', 'pack', ${split.total - clawback},
+              ${`Event Pass refunded or disputed (${anchor}): its match credits taken back`}, ${key})`;
+    return { matched: true, clawedBack: clawback, applied: true };
+  }) as Promise<PassStreamRevokeResult>;
 }

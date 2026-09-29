@@ -22,6 +22,11 @@
 --    Read by server/usecases/stream-credits.ts `streamMonthlyRateByPlan`, the
 --    ONE place the rate is read. Monthly credits EXPIRE at month end; bought
 --    packs and staff grants never do. 1 credit = 1 match (≤ 5 h), unchanged.
+--    FOR THE TWO PASS KEYS the value is NOT monthly: it is a ONE-OFF amount,
+--    granted once when the pass is bought, as a never-expiring pack grant
+--    (owner, 2026-09-29, Task 14b fix round 1 addendum P —
+--    `grantPassStreamCredits`). The monthly grant resolves the org's
+--    SUBSCRIPTION plan and never reads a pass key (`streamMonthlyRate`).
 --    Like the two keys above, it is NOT added to ENTITLEMENT_DOMAINS
 --    (lib/entitlement-domains.ts), so /pricing does not list it — /pricing is an
 --    owner question, out of this task's scope.
@@ -42,6 +47,7 @@
 --      expire           → 'monthly' (the month's leftover, before the new grant)
 --      consume          → 'monthly' while the monthly balance is above 0, else 'pack'
 --      refund (linked)  → the bucket of the consume it reverses
+--      Event Pass grant → 'pack', idempotency_key stream-pass:{intent|competition}
 --      refund (goodwill), purchase, staff grant, revoke → 'pack'
 --    `balance_after` keeps its meaning: the ORG total, ≥ 0 (V410's CHECK).
 -- =============================================================================
@@ -86,5 +92,6 @@ alter table org_stream_credits
 comment on column org_stream_credits.bucket is
   'Which pool the row moves (V426): monthly = the plan''s free match credits for one UTC calendar month '
   '(grant rows keyed stream-monthly:{org}:{YYYY-MM}; the leftover expires before the next month''s grant); '
-  'pack = bought packs and staff grants, which never expire. A consume draws monthly first; a linked refund '
+  'pack = bought packs, Event Pass grants (once per pass, keyed stream-pass:{intent|competition}) and staff grants, '
+  'which never expire. A consume draws monthly first; a linked refund '
   'returns to its consume''s bucket; a revoke is pack. balance_after is still the ORG total.';

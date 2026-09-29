@@ -16,6 +16,7 @@ import stripePlans from "@/config/stripe-plans.json";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { planItem } from "@/lib/subscription-items";
 import { creditPassTowardSubscription } from "@/server/usecases/pass-credit";
+import { grantPassStreamCredits, revokePassStreamCredits } from "@/server/usecases/stream-credits";
 import {
   sendPassRungMismatchAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
@@ -923,6 +924,14 @@ function isUnknownCompetitionFk(err: unknown): boolean {
  * would now short an L buyer 25 credits as well as capping their competition at
  * M's size. Read straight off the required argument, with no default: a rung
  * this map does not know is a compile error rather than a quiet 25.
+ *
+ * Streaming R1 (Task 14b fix round 1, addendum P; owner decision 2026-09-29): the
+ * pass also grants the org its MATCH credits, once — `grantPassStreamCredits`,
+ * sized by the same rung (V426's `streaming.credits.monthly` row for the pass
+ * key, a one-off amount for a pass), on exactly the arms the AI grant runs on:
+ * the winning insert and a same-intent replay, never a duplicate second charge.
+ * Keyed on the same anchor (`paymentIntent ?? competitionId`), so a replay is a
+ * no-op and a re-purchase after a refund grants again.
  */
 export async function recordPassPurchase(args: {
   orgId: string;
@@ -938,10 +947,15 @@ export async function recordPassPurchase(args: {
   passKey: PassKey;
 }): Promise<PassPurchaseOutcome> {
   const { passKey } = args;
-  const grantPassCredits = () =>
-    walletIdFor(args.orgId).then((walletId) =>
-      recordPassGrant(walletId, PASS_CREDIT_GRANT[passKey], args.competitionId, args.paymentIntent),
-    );
+  const grantPassCredits = async () => {
+    const walletId = await walletIdFor(args.orgId);
+    await recordPassGrant(walletId, PASS_CREDIT_GRANT[passKey], args.competitionId, args.paymentIntent);
+    await grantPassStreamCredits({
+      orgId: args.orgId,
+      passKey,
+      anchor: args.paymentIntent ?? args.competitionId,
+    });
+  };
 
   let inserted: { competition_id: string } | undefined;
   try {
@@ -1021,12 +1035,17 @@ export async function refundDuplicatePassPayment(intent: string): Promise<void> 
  * landed) and re-deletes. It reads the immutable `pass_grant` ledger row, not
  * the `competition_passes` row, so it works even once the pass is deleted. A
  * non-pass refund (no `pass_grant` for this intent) is a harmless no-op.
+ *
+ * Streaming R1 addendum P: the pass's MATCH credits come back the same way —
+ * `revokePassStreamCredits`, `min(grant, pack balance)`, idempotent on
+ * `stream-pass-revoke:${intent}`, beside the AI claw-back and before the delete.
  */
 export async function revokePassForRefundedCharge(charge: Stripe.Charge): Promise<boolean> {
   const intent =
     typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
   if (!intent || !charge.refunded) return false;
   await recordPassRefund(intent);
+  await revokePassStreamCredits(intent);
   const [revoked] = await sql<{ org_id: string; competition_id: string }[]>`
     delete from competition_passes where stripe_payment_intent = ${intent}
     returning org_id, competition_id`;
