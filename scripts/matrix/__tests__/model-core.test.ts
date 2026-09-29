@@ -1001,6 +1001,27 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
   });
 
+  it("final batch FB-11: the started candidate need not be listed FIRST — the chain listed final-first, so the unstarted f3 is judged before the played f2, and the take-back is still expected", async () => {
+    // single-sport: as above. Task 13 review M-R3-1: with the started
+    // candidate always first, judging `candidates.slice(0, 1)` stayed green.
+    let ids: string[] = [];
+    const { m, d } = await bracket("knockout", 4, (dd, [e1, e2, e3, e4]) => {
+      const f1 = dd.seat(1, e1, e2);
+      const f3 = dd.seat(3, null, e4);
+      const f2 = dd.seat(2, null, e3);
+      dd.feed(f1.id, f2.id, 1);
+      dd.feed(f2.id, f3.id, 1);
+      ids = [f1.id, f2.id, f3.id];
+    });
+    await play(m, d, [["Score", 0, 0], ["Score", 0, 0]]);
+    const [f1, f2, f3] = ids.map((id) => m.fixtures.get(id));
+    if (f1 === undefined || f2 === undefined || f3 === undefined) throw new Error("test: the chain has three fixtures");
+    expect(fedCandidates(m, f1).map((x) => x.id), "the premise: f3 is listed before f2").toEqual([f3.id, f2.id]);
+    expect([f2.status, f3.status], "the premise: the first-listed candidate never started").toEqual(["decided", next.notStarted]);
+    await play(m, d, [["Void", 0]]);
+    expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
+  });
+
   it("a fed match whose events the model cannot see (scheduled, no outcome, last_seq > 0) → counted under unknowns: the refusal is neither expected nor a violation, and the step is not informative", async () => {
     // single-sport: as above.
     const { m, d } = await bracket("knockout", 4, semis);
