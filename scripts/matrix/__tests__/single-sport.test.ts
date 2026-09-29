@@ -22,7 +22,9 @@ import {
   parseBaseline,
   pinsIn,
   raisedAbove,
+  RATCHET_SCRIPT,
   Refusal,
+  SCANNER_PATH,
   scanSingleSport,
   SCOPE_DIRS,
   SCOPE_NAME,
@@ -774,6 +776,41 @@ describe("single-sport scanner (R26)", () => {
     const c = run("--check", "--against", "HEAD");
     expect(c.status).toBe(2);
     expect(c.stderr).toContain(`HEAD has scripts/matrix/single-sport.ts but no ${BASELINE_PATH}`);
+  });
+
+  it("final batch FB-8: the bootstrap keys on REF's package.json, not on the PR's own constants — a base that RUNS the ratchet (its package.json names the script) with the scanner renamed and the baseline moved is refused (task 11 review RR-3b, G1/G2)", () => {
+    // The key is the product's: the real package.json runs the scanner under it.
+    const realPkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    expect(realPkg.scripts[RATCHET_SCRIPT]).toBe(`node --experimental-strip-types ${SCANNER_PATH}`);
+    const pkg = (scripts: Record<string, string>) => `${JSON.stringify({ name: "scratch", scripts }, null, 2)}\n`;
+    let checked = 0;
+    // G1: the scanner file renamed; G2: left in place under a typo'd constant — at REF neither sits at SCANNER_PATH.
+    for (const scanner of ["scripts/matrix/single-sport-v2.ts", "scripts/matrix/single_sport.ts"]) {
+      const root = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, [scanner]: "// the scanner\n", "package.json": pkg({ [RATCHET_SCRIPT]: `node --experimental-strip-types ${scanner}` }), "scripts/matrix/catalogue/old-baseline.json": "{}\n" });
+      commitAll(root, "base that runs the ratchet, baseline elsewhere");
+      const run = (...args: string[]) => cli([...args, "--root", root]);
+      expect(run("--init").status).toBe(0);
+      const c = run("--check", "--against", "HEAD");
+      expect({ scanner, status: c.status }).toEqual({ scanner, status: 2 });
+      expect(c.stderr, scanner).toContain(`HEAD's package.json runs "${RATCHET_SCRIPT}" but HEAD has no ${BASELINE_PATH}`);
+      expect(c.stdout, scanner).not.toContain("::notice::");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // A REF package.json that cannot be read is refused by name, never taken for "no ratchet yet".
+    const broken = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, "package.json": "{ not json\n" });
+    commitAll(broken, "base with a broken package.json");
+    expect(cli(["--init", "--root", broken]).status).toBe(0);
+    const b = cli(["--check", "--against", "HEAD", "--root", broken]);
+    expect(b.status).toBe(2);
+    expect(b.stderr).toContain("HEAD:package.json is not JSON");
+    // The pair: a base whose package.json does NOT name the script is the introducing PR — a notice, exit 0.
+    const before = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, "package.json": pkg({ build: "tsc" }) });
+    commitAll(before, "before the ratchet, with other scripts");
+    expect(cli(["--init", "--root", before]).status).toBe(0);
+    const intro = cli(["--check", "--against", "HEAD", "--root", before]);
+    expect(intro.status, intro.stderr).toBe(0);
+    expect(intro.stdout).toMatch(/::notice::.*has no .* yet/);
   });
 
   it("--against a base with no baseline yet (the introducing PR) passes with a notice; --against applies to --check only (the CLI, run for real)", () => {

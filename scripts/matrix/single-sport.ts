@@ -51,9 +51,11 @@
 //              PR cannot raise the ceiling it is checked against. Every move
 //              the baseline records that REF's does not must be a real rename
 //              since REF: NEW absent at REF, OLD present at REF, OLD gone here
-//              (review RR-2). REF with neither the baseline nor this scanner
-//              (the introducing PR) is a notice; REF with the scanner but no
-//              baseline is refused (review RR-3);
+//              (review RR-2). REF with no baseline, no scanner and no
+//              "matrix:single-sport" script in its package.json (the
+//              introducing PR) is a notice; REF that runs the ratchet (the
+//              script, or the scanner) but has no baseline is refused (review
+//              RR-3, RR-3b);
 //   --write    record today's counts. Only lowers: any count above the
 //              baseline (a new entry included) is refused;
 //   --init     write the first baseline; refused when one already exists;
@@ -68,8 +70,8 @@
 //      REF's;
 //   2  refused: bad arguments; a scope root that scanned ZERO files (a scope
 //      that finds nothing is wrong, not clean); a missing or malformed
-//      baseline (here or at REF); an unknown REF; REF with the scanner but no
-//      baseline; a recorded move that is not a rename since REF; --write that
+//      baseline (here or at REF); an unknown REF; REF that runs the ratchet
+//      but has no baseline, or whose package.json is not JSON; a recorded move that is not a rename since REF; --write that
 //      would raise a count; --init over an existing baseline; an invalid --move;
 //   3  the scanner crashed — never 1, which would read as a ratchet verdict.
 // Deterministic: files in codepoint order, pins in source order, keys sorted.
@@ -104,6 +106,10 @@ export const REASON = /^\/\/\s*single-sport:\s*\S/;
 const ENGINE_SPORTS = "@seazn/engine/sports";
 /** This scanner, repo-relative: its presence at REF says the ratchet already exists there. */
 export const SCANNER_PATH = "scripts/matrix/single-sport.ts";
+/** The package.json script that runs this ratchet (ci.yml's pinned step calls
+ *  it). A base whose package.json names it already runs the ratchet, so it
+ *  owes a baseline — whatever this PR's own constants say (final batch FB-8). */
+export const RATCHET_SCRIPT = "matrix:single-sport";
 const GENERATED_BY = SCANNER_PATH;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const USAGE = "usage: single-sport.ts [--check [--against REF] | --write | --init | --move OLD NEW] [--root DIR]";
@@ -463,11 +469,27 @@ function git(root: string, args: string[]): { status: number | null; stdout: str
 
 const existsAt = (root: string, ref: string, path: string): boolean => git(root, ["cat-file", "-e", `${ref}:${path}`]).status === 0;
 
-/** REF's committed baseline, or null when REF predates the ratchet (neither the
- *  baseline nor this scanner). REF with the scanner but no baseline — the
- *  baseline moved or deleted by the PR under check — is a Refusal (review
- *  RR-3), as are an unknown REF and a root that is not a git checkout's top
- *  level. */
+/** Does REF's package.json name RATCHET_SCRIPT? No package.json at REF is
+ *  "no"; one that is not JSON is a Refusal, never taken for "no ratchet yet". */
+function runsRatchetAt(root: string, ref: string): boolean {
+  if (!existsAt(root, ref, "package.json")) return false;
+  const shown = git(root, ["show", `${ref}:package.json`]);
+  if (shown.status !== 0) throw new Error(`git show ${ref}:package.json failed`);
+  let pkg: unknown;
+  try {
+    pkg = JSON.parse(shown.stdout);
+  } catch {
+    throw new Refusal(`${ref}:package.json is not JSON — cannot tell whether ${ref} already runs the ratchet`);
+  }
+  const scripts: unknown = (pkg as { scripts?: unknown } | null)?.scripts;
+  return typeof scripts === "object" && scripts !== null && Object.hasOwn(scripts, RATCHET_SCRIPT);
+}
+
+/** REF's committed baseline, or null when REF predates the ratchet (no
+ *  baseline, no RATCHET_SCRIPT in its package.json, no scanner). REF that runs
+ *  the ratchet but has no baseline — the baseline moved or deleted by the PR
+ *  under check — is a Refusal (review RR-3, RR-3b), as are an unknown REF and a
+ *  root that is not a git checkout's top level. */
 export function baselineAt(root: string, ref: string): Baseline | null {
   if (ref === "" || ref.startsWith("-")) throw new Refusal(`--against: "${ref}" is not a ref`);
   const top = git(root, ["rev-parse", "--show-toplevel"]);
@@ -476,6 +498,11 @@ export function baselineAt(root: string, ref: string): Baseline | null {
     throw new Refusal(`--against ${ref}: no such commit here (in CI the gates job checks out with fetch-depth: 2 so the base, HEAD^1, is present)`);
   }
   if (!existsAt(root, ref, BASELINE_PATH)) {
+    // Final batch FB-8: keyed on REF's own package.json, which no constant in
+    // this PR's scanner can move (task 11 review RR-3b).
+    if (runsRatchetAt(root, ref)) {
+      throw new Refusal(`${ref}'s package.json runs "${RATCHET_SCRIPT}" but ${ref} has no ${BASELINE_PATH} — the baseline cannot be moved or dropped in a PR; restore it at that path`);
+    }
     if (existsAt(root, ref, SCANNER_PATH)) {
       throw new Refusal(`${ref} has ${SCANNER_PATH} but no ${BASELINE_PATH} — the baseline cannot be moved or dropped in a PR; restore it at that path`);
     }
