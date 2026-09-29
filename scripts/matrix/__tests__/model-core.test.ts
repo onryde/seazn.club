@@ -23,6 +23,7 @@ import { RefusedCall, RequestTimedOut, type FixtureRow, type GenerateOut, type P
 import { foldStream } from "../lib/fold.ts";
 import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
+import { vacuityOf } from "../lib/model/run-cell.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import {
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
@@ -32,7 +33,7 @@ import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObs
 import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
-import { FakeLeagueDriver } from "./fake-driver.ts";
+import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 import { ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
 import { bracketRoundNoText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalReason } from "./product-text.ts";
 
@@ -461,6 +462,69 @@ describe("model commands — each fault is caught at the step that causes it", (
   it("FENCES is non-empty and each names an open issue", () => {
     expect(FENCES.length).toBeGreaterThan(0);
     for (const f of FENCES) expect(f.issue).toMatch(/^#\d+$/);
+  });
+});
+
+// W1b Task 15, fix round 1 (a): live, both swiss cells died at their first
+// step — Start mints the swiss stage's rounds as UNPAIRED shells (stages.ts),
+// so I6 had no two-sided fixture to judge and R25 turned its pass into a
+// failure. A step invariant with nothing to judge yet abstains for that step;
+// the per-cell R25 (vacuityOf) still fails a cell where it abstained every time.
+// single-sport: nothing is posted here — shells and pairings are sport-blind.
+describe("swiss: a step invariant with nothing to judge yet abstains for that step (T15 fix round 1)", () => {
+  const I6 = "I6-swiss-no-rematch";
+  const swiss = async (d: FakeSwissDriver) => ({ m: await newModelState({ driver: d, row: "swiss", sport: "generic", variant: "score", entrants: 4, tag: "t" }), d });
+  const step = async (m: ModelState, d: FakeSwissDriver, kind: CommandKind): Promise<void> => {
+    const c = commandOf(kind, 0, 0, true);
+    expect(c.check(m), `${kind} should be runnable`).toBe(true);
+    await c.run(m, d);
+  };
+  const vacuity = (m: ModelState) => vacuityOf({ counts: m.counts, stepChecks: Object.fromEntries(m.stepChecks), foldParity: m.foldParity, informative: informativeSteps(m).checked, stageKind: m.stageKind });
+  const i6Line = `step invariant ${I6} checked zero items`;
+  /** 4 entrants → 2 boards a round, no bye (stages.ts: floor(n/2) boards, a bye shell when n is odd). */
+  const BOARDS = 2;
+
+  it("empty case first: Start mints unpaired shells — I6 has nothing to judge, so the step abstains with 0 items, never fails", async () => {
+    const { m, d } = await swiss(new FakeSwissDriver());
+    await step(m, d, "Start");
+    const shells = [...m.fixtures.values()];
+    expect(shells.length).toBe(Number(m.stageConfig.rounds) * BOARDS);
+    expect(shells.every((f) => f.home === null && f.away === null)).toBe(true);
+    expect(m.stepChecks.get(I6)).toBe(0);
+    expect(m.steps).toEqual([{ cmd: "Start(0,0)", verdict: "accepted" }]);
+  });
+
+  it("the next step judges: Generate pairs round 1 and I6 checks its boards; a second Generate (round 1 undecided, refused by name) judges them again", async () => {
+    const { m, d } = await swiss(new FakeSwissDriver());
+    await step(m, d, "Start");
+    await step(m, d, "Generate");
+    expect(m.stepChecks.get(I6)).toBe(BOARDS);
+    await step(m, d, "Generate");
+    expect(m.generates.at(-1)).toMatchObject({ status: 422, code: "STAGE_NOT_READY" });
+    expect(m.stepChecks.get(I6)).toBe(2 * BOARDS);
+  });
+
+  it("a real rematch still FAILS I6 with items judged — the abstain covers nothing-to-judge only", async () => {
+    /** Pairs round 2 as round 1 again, and pairs whether or not round 1 is decided. */
+    class Rematching extends FakeSwissDriver {
+      override start(): Promise<StartOut> { return super.start().then((o) => { this.schedule[1] = this.schedule[0]!; return o; }); }
+      override generate(): Promise<GenerateOut> { this.pairNext(); return Promise.resolve({ created: 0, existing: this.fixtures.length, fixtures: this.rows() }); }
+    }
+    const { m, d } = await swiss(new Rematching());
+    await step(m, d, "Start");
+    await step(m, d, "Generate");
+    const e = await violation(step(m, d, "Generate"));
+    expect(e.check).toBe(I6);
+    expect(e.evidence.join(" ")).toMatch(/rematched in rounds 1 and 2/);
+    expect(m.stepChecks.get(I6)).toBe(BOARDS + 2 * BOARDS);
+  });
+
+  it("per-cell R25 still catches a swiss cell where I6 abstained on every step — and clears once a step judged", async () => {
+    const { m, d } = await swiss(new FakeSwissDriver());
+    await step(m, d, "Start");
+    expect(vacuity(m)).toContain(i6Line);
+    await step(m, d, "Generate");
+    expect(vacuity(m)).not.toContain(i6Line);
   });
 });
 

@@ -276,6 +276,12 @@ const toObserved = (r: FixtureRow): ObservedFixture => ({
 
 const add = (m: ModelState, id: string, n: number) => m.stepChecks.set(id, (m.stepChecks.get(id) ?? 0) + n);
 
+/** evaluateInvariant's R25 line (invariants.ts): a spec that PASSED on zero
+ *  items. Only that line reads as nothing-to-judge; any other zero-item
+ *  failure (no stage observed at all) still fails — fail closed. */
+export const R25_ZERO_ITEMS = "checked 0 items (vacuous, R25)";
+const nothingToJudgeYet = (c: CheckResult): boolean => c.verdict === "fail" && c.checked === 0 && c.evidence[0] === R25_ZERO_ITEMS;
+
 /** Carry (c): I7 counts meetings per pair, so at legs ≥ 2 a duplicate that
  *  coincides with a missing meeting of the same pair nets to `legs` and
  *  passes. Counting per orientation sees both — the duplicate and the
@@ -329,6 +335,11 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
   };
   for (const c of evaluateStepInvariants(run)) {
     add(m, c.id, c.checked);
+    // Nothing to judge YET is an abstain for this step, never a failure: a
+    // swiss Start mints its rounds as unpaired shells, so I6 sees no pair
+    // until a Generate seats one. The cell's own R25 (vacuityOf) still fails
+    // a cell where a step invariant it owes abstained on every step.
+    if (nothingToJudgeYet(c)) continue;
     if (c.verdict === "fail") throw new ModelViolation(c.id, c.evidence.length > 0 ? c.evidence : [c.reason]);
   }
   const o = orientationCheck(m, meetings);
