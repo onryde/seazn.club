@@ -2299,6 +2299,24 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(await failedTransitions(sessionId)).toBe(1);
   });
 
+  it("N5: a Stop under disabled drivers records the organiser's TAP — one action row naming her, on the decision it made (relay_disabled) — while a poll that ends the same kind of session records none, and a second Stop on the ended session adds none (mutant: drop the actor → no row)", async () => {
+    const actions = async (sid: string) => sql<{ type: string; actor_user_id: string | null; source: string; payload: { state?: string } }[]>`
+      select type, actor_user_id, source, payload from fixture_stream_events where session_id = ${sid} and kind = 'action' and type <> 'create' order by seq`;
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(sessionId)).state, "premise: still up").toBe("warming");
+    expect(await actions(sessionId), "premise: no tap yet").toEqual([]);
+    for (let i = 0; i < 2; i++) {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, offDeps(r)), `stop ${i + 1}`).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    }
+    expect(await actions(sessionId)).toEqual([{ type: "relay_disabled", actor_user_id: r.auth.userId, source: "client", payload: { state: "warming" } }]);
+    // The differential: the same leftover ended by the organiser's POLL has no actor — nobody pressed anything.
+    const polled = await rig({ credits: 1 });
+    const p = await createSession(polled.auth, polled.fixtureId, body(polled.target.id), polled.deps);
+    expect(await currentSession(polled.auth, polled.fixtureId, offDeps(polled))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await actions(p.sessionId)).toEqual([]);
+  });
+
   it("V426 (R3b): relayCredits grants this month's free credits on the page's read, splits the balance by bucket beside the plan's allowance, a second read writes nothing, and another org's is 404", async () => {
     const r = await rig({ credits: 2, monthly: true });
     const rate = await monthlyRate("community");

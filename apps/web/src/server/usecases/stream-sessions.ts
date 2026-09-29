@@ -1363,10 +1363,13 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
     }
     return (await currentSession(auth, fixtureId, deps))!;
   }
-  // M10: with no relay there is no provider to stop through — the reconcile ends the session (failed, relay_disabled),
-  // and the projection answers. Never the `stop` below, whose composed arm asks the runner and would throw.
+  // M10: with no relay there is no provider to stop through — the session is ended failed(relay_disabled), the
+  // reconcile's own decision, and the projection answers. Never the `stop` below, whose composed arm asks the runner and
+  // would throw. N5 (Task 14b re-review): it goes through `apply` WITH the actor, so the tap is still the organiser's
+  // recorded action (Task 10 n5) — the row names her and the decision her Stop made. A session another writer finished
+  // first decides nothing and records nothing, as below.
   if (deps.drivers.disabled) {
-    await reconcileSession(sessionId, deps);
+    await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "relay_disabled" }), deps, { userId: auth.userId ?? null, source: "client" });
     return (await currentSession(auth, fixtureId, deps))!;
   }
   // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)
