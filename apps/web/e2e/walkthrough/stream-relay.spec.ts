@@ -38,6 +38,8 @@ import {
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_DESTINATION_HOSTS } from "../../src/lib/stream-destinations";
+import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
+import { StreamTargetKind } from "../../src/server/api-v1/schemas";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
@@ -66,10 +68,14 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 // Clocks. Every wait is DERIVED from the constants that set the pace — the fake ingest's connect delay and the Phone
 // tab's poll — never a flat literal (AGENTS.md class 20): a change to either moves every budget with it.
 /** The fake ingest reads "connected" this long after its input was created (server/relay/fakes.ts). A server started
- *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it; the test process is told the same value through the same name. */
-const FAKE_CONNECT_MS = Number(process.env.FAKE_INGEST_CONNECT_AFTER_MS ?? FAKE_CONNECT_AFTER_MS_DEFAULT);
-/** The tab flips warming → live only on a server read (`current`), made every STREAM_POLL_MS: the connect, then up to
- *  two polls (one may land a hair before the connect), plus one request's slack. */
+ *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it (CI sets it on the server AND this process, e2e.yml); parsed as
+ *  strictly as fakes.ts parses it, so a junk value fails here rather than budgeting from NaN. */
+const FAKE_CONNECT_MS = ((): number => {
+  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
+  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
+  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
+  return Number(raw);
+})();
 const LIVE_WAIT_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
 /** One poll plus slack — a state the next read must already show. */
 const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
@@ -84,26 +90,33 @@ const CYCLE_MS = LIVE_WAIT_MS + 3 * POLL_WAIT_MS;
 // maxDurationMinutes → storage_exhausted). Reservations are counted across the WHOLE deployment, so parallel workers
 // going live at once are refused as a storage fault ("Recording storage is full"), not a product one — the first run
 // of this file at 4 workers lost A1@320 exactly that way. The capacity is DERIVED from the fake's own storage limit and
-// the config's max duration; this file takes all but one slot (one left for any other spec streaming on the same
-// server) through Postgres advisory locks held for the test, and every test stops its streams in teardown so a red
+// the config's max duration, and handed out as Postgres advisory locks held for the test: keys [BASE, BASE + CAPACITY).
+// This file takes ONLY the first CAPACITY − 1 keys, one per case (A5 included); the last key is the credits
+// walkthrough's (stream-credits.spec.ts, SLOT_LOCK_BASE + 2 at the fake's capacity of 3 — controller allocation
+// 2026-09-29) and is never taken here: streamSlot cannot reach it. Every test stops its streams in teardown, so a red
 // case cannot hold a reservation for five hours.
 // ---------------------------------------------------------------------------
 const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
-const STREAM_SLOTS = STREAM_CAPACITY - 1;
-const SLOT_LOCK_BASE = 7_301_130_000; // this file's advisory-lock key range: [BASE, BASE + STREAM_SLOTS)
+const FILE_SLOTS = STREAM_CAPACITY - 1;
+const SLOT_LOCK_BASE = 7_301_130_000;
 /** Waiting for a slot: every other holder finishing at most one test's streaming (A3 streams twice). */
 const SLOT_WAIT_MS = 3 * CYCLE_MS;
 
 let lease: (() => Promise<void>) | null = null;
+/** How many keys the current lease holds — checked on reuse, so a second ask for more than was leased throws. */
+let leaseHeld = 0;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
-/** Take `n` of this file's stream slots before the test's first go-live; held until teardown. A test whose REFUSED
- *  start is the point (A5) takes two: admission weighs storage before `active_session` / `target_in_use`, so the
- *  refusal it is about only happens while one more stream would still fit. Hold-and-wait is deadlock-free because A5
- *  is the only two-slot taker. */
+/** Take `n` of this file's FILE_SLOTS keys before the test's first go-live; held until teardown. Every case takes one;
+ *  `n` exists so a case that needs more fails loudly on reuse rather than streaming unleased. Keys are only ever
+ *  [BASE, BASE + FILE_SLOTS): the last capacity key is never taken here. */
 async function streamSlot(n = 1): Promise<void> {
-  if (STREAM_SLOTS < n) throw new Error(`the fake ingest holds ${STREAM_CAPACITY} stream(s) — no ${n} slot(s) to share`);
-  if (lease) return;
+  const keys = FILE_SLOTS;
+  if (n < 1 || n > keys) throw new Error(`this file leases ${keys} stream slot(s) — cannot take ${n}`);
+  if (lease) {
+    if (leaseHeld < n) throw new Error(`the lease holds ${leaseHeld} slot(s); ${n} asked`);
+    return;
+  }
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
   const { default: postgres } = await import("postgres");
@@ -116,18 +129,19 @@ async function streamSlot(n = 1): Promise<void> {
   const deadline = Date.now() + SLOT_WAIT_MS;
   const held = new Set<number>();
   for (;;) {
-    for (let i = 0; i < STREAM_SLOTS && held.size < n; i++) {
+    for (let i = 0; i < keys && held.size < n; i++) {
       if (held.has(i)) continue;
       const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
       if (row?.ok) held.add(i);
     }
     if (held.size === n) {
+      leaseHeld = held.size;
       lease = () => sql.end(); // a session-level advisory lock is released with its connection
       return;
     }
     if (Date.now() > deadline) {
       await sql.end();
-      throw new Error(`no stream slot free after ${SLOT_WAIT_MS} ms`);
+      throw new Error(`only ${held.size} of ${n} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -155,6 +169,7 @@ async function teardownStreams(): Promise<void> {
   } finally {
     const release = lease;
     lease = null;
+    leaseHeld = 0;
     await release?.();
   }
 }
@@ -488,9 +503,13 @@ for (const width of WIDTHS) {
     const payload = JSON.parse(await body.getByTestId("stream-qr-text").inputValue()) as { v?: number; sid?: string };
     expect(payload.sid, "the paste code IS the QR payload, for THIS session").toBe(session.id);
     await expect(body.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/png;base64,/);
-    await expectNoHorizontalScroll(page);
-    if (width === 320) expect(await expectTapTargets(body), "QR-state controls hit-tested").toBeGreaterThan(0);
+    // Everything that reads the QR state goes first — it lasts only until the server's first read after the connect.
     await shot(panel, `A1-${width}-2-qr.png`);
+    await expectNoHorizontalScroll(page);
+    if (width === 320) {
+      expect(await expectTapTargets(body), "QR-state controls hit-tested").toBeGreaterThan(0);
+      await expect(body.getByTestId("stream-qr"), "the hit-test measured the QR state, not what came after it").toBeVisible({ timeout: 1 });
+    }
 
     // LIVE — decided by the server on the tab's own poll.
     await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
@@ -582,64 +601,84 @@ test("A2: monthly + 2 bought → Go live draws the MONTHLY credit (monthly − 1
 });
 
 // ===========================================================================
-// A3 — the free restart (§5.2): stopped, restarted within the window, nothing more spent — at balance 0
+// A3 — the free restart (§5.2): stopped, restarted within the window, nothing more spent — at balance 0 AND with
+// credits left (the window must waive the spend, not merely the balance gate)
 // ===========================================================================
-test("A3: a stopped match restarts FREE inside the reuse window — at balance 0 the restart line shows and Go live stays (no forced chooser), it goes live again, and the ledger still holds ONE consume", async ({
-  page,
-}) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + 2 * CYCLE_MS + 30_000);
-  await page.setViewportSize({ width: 1280, height: 900 });
-  const rig = await seedRelayRig(page, { plan: "community" });
-  const target = await addTargetApi(page, rig.orgId, { label: "A3 destination" });
-  const f = rig.fixtures[0]!;
-  await openFixturesTab(page, rig); // the page read grants the month
-  await drainMonthlyTo(rig.orgId, 1); // exactly one credit to spend, whatever the rate
-  expect((await ledger(rig.orgId)).total, "premise: one credit held").toBe(1);
-  const row = await openPhoneTab(page, rig, f);
-  const body = row.locator("[data-phone-body]");
-  const pill = body.getByTestId("stream-state-pill");
-  await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(1));
-  await expect(body.getByTestId("stream-restart-free"), "nothing consumed yet → no reuse window, no restart line").toHaveCount(0);
-  await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
+const A3_BALANCES = [
+  // One credit to spend (SQL setup drains the month to 1), so the restart happens at balance 0.
+  { id: "at balance 0", plan: "community", drainTo: 1 },
+  // The plan's whole month, so the restart happens with credits left — a restart that consumed would show it here.
+  { id: "with credits left", plan: "pro", drainTo: null },
+] as const;
 
-  // First run: go live (the one credit), stop.
-  await streamSlot(); // this test's share of the deployment's stream capacity
-  await body.getByTestId("stream-go-live").click();
-  await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
-  await expect(body.getByTestId("stream-balance"), "balance 0: no chip").toHaveCount(0);
-  await body.getByTestId("stream-stop").click();
-  await confirmStop(page);
-  await expect(pill).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
-  await expect(body.getByTestId("stream-credit-used"), "the first run spent the credit").toHaveText(en("stream.phone.ended.credits"));
-  const firstSession = await latestSession(f.id);
-  expect((await ledger(rig.orgId)).total, "premise: balance 0 now").toBe(0);
+for (const v of A3_BALANCES) {
+  test(`A3 (${v.id}): a stopped match restarts FREE inside the reuse window — the restart line shows and Go live stays (no forced chooser), it goes live again, the balance chip does not move, and the ledger still holds ONE consume`, async ({
+    page,
+  }) => {
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + 2 * CYCLE_MS + 30_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const rig = await seedRelayRig(page, { plan: v.plan });
+    const target = await addTargetApi(page, rig.orgId, { label: "A3 destination" });
+    const f = rig.fixtures[0]!;
+    await openFixturesTab(page, rig); // the page read grants the month
+    if (v.drainTo !== null) await drainMonthlyTo(rig.orgId, v.drainTo);
+    const start = v.drainTo ?? rig.monthlyRate;
+    const left = start - 1; // after the first run's one consume
+    if (v.drainTo === null) expect(left, "premise: the plan's month leaves credits after one match").toBeGreaterThanOrEqual(1);
+    expect((await ledger(rig.orgId)).total, "premise: the credits held before the first run").toBe(start);
+    const row = await openPhoneTab(page, rig, f);
+    const body = row.locator("[data-phone-body]");
+    const pill = body.getByTestId("stream-state-pill");
+    const chip = body.getByTestId("stream-balance");
+    const expectChip = async (n: number, why: string) => {
+      if (n >= 1) await expect(chip, why).toHaveText(creditsChip(n));
+      else await expect(chip, `${why} (balance 0: no chip)`).toHaveCount(0);
+    };
+    await expectChip(start, "before the first run");
+    await expect(body.getByTestId("stream-restart-free"), "nothing consumed yet → no reuse window, no restart line").toHaveCount(0);
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
 
-  // Start another → idle at balance 0 INSIDE the window: the restart line, and Go live — not the forced chooser.
-  await body.getByTestId("stream-again").click();
-  await expect(pill).toHaveText(en("stream.phone.state.idle"));
-  await expect(body.getByTestId("stream-restart-free")).toHaveText(en("stream.phone.restartFree"));
-  await expect(body.locator('[data-testid^="stream-buy-pack-"]'), "no forced chooser inside the reuse window").toHaveCount(0);
-  const goLive = body.getByTestId("stream-go-live");
-  await expect(goLive).toBeEnabled();
-  await shot(row.getByTestId("stream-panel"), "A3-restart-free-at-0.png");
+    // First run: go live (one credit), stop.
+    await streamSlot(); // this test's share of the deployment's stream capacity
+    await body.getByTestId("stream-go-live").click();
+    await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+    await expectChip(left, "the first run spent one credit");
+    await body.getByTestId("stream-stop").click();
+    await confirmStop(page);
+    await expect(pill).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+    await expect(body.getByTestId("stream-credit-used"), "the first run spent the credit").toHaveText(en("stream.phone.ended.credits"));
+    const firstSession = await latestSession(f.id);
+    expect((await ledger(rig.orgId)).total, "premise: one credit spent").toBe(left);
 
-  // Second run: live again, free.
-  await goLive.click();
-  await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
-  const second = await latestSession(f.id);
-  expect(second.id, "the restart is a NEW session on the same fixture").not.toBe(firstSession.id);
-  const l = await ledger(rig.orgId);
-  expect(l.rows.filter((r) => r.reason === "consume"), "still ONE consume — the first run's").toEqual([
-    expect.objectContaining({ session_id: firstSession.id, delta: -1 }),
-  ]);
-  expect(l.total, "the restart spent nothing").toBe(0);
-  await body.getByTestId("stream-stop").click();
-  await confirmStop(page);
-  await expect(pill).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
-  // D3: a restart used nothing, so its ended card claims no credit (the first card's chip above is the positive half).
-  await expect(body.getByTestId("stream-ended-duration")).toBeVisible();
-  await expect(body.getByTestId("stream-credit-used")).toHaveCount(0);
-});
+    // Start another → idle INSIDE the window: the restart line, and Go live — not the forced chooser.
+    await body.getByTestId("stream-again").click();
+    await expect(pill).toHaveText(en("stream.phone.state.idle"));
+    await expect(body.getByTestId("stream-restart-free")).toHaveText(en("stream.phone.restartFree"));
+    await expect(body.locator('[data-testid^="stream-buy-pack-"]'), "no forced chooser inside the reuse window").toHaveCount(0);
+    const goLive = body.getByTestId("stream-go-live");
+    await expect(goLive).toBeEnabled();
+    await expectChip(left, "idle again, nothing more spent");
+    await shot(row.getByTestId("stream-panel"), `A3-restart-free-${left === 0 ? "at-0" : "credits-left"}.png`);
+
+    // Second run: live again, free.
+    await goLive.click();
+    await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+    await expectChip(left, "the restart is live and the chip has not moved");
+    const second = await latestSession(f.id);
+    expect(second.id, "the restart is a NEW session on the same fixture").not.toBe(firstSession.id);
+    const l = await ledger(rig.orgId);
+    expect(l.rows.filter((r) => r.reason === "consume"), "still ONE consume — the first run's").toEqual([
+      expect.objectContaining({ session_id: firstSession.id, delta: -1 }),
+    ]);
+    expect(l.total, "the restart spent nothing").toBe(left);
+    await body.getByTestId("stream-stop").click();
+    await confirmStop(page);
+    await expect(pill).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+    // D3: a restart used nothing, so its ended card claims no credit (the first card's chip above is the positive half).
+    await expect(body.getByTestId("stream-ended-duration")).toBeVisible();
+    await expect(body.getByTestId("stream-credit-used")).toHaveCount(0);
+  });
+}
 
 // ===========================================================================
 // A4 — no credits and no window: the chooser, and no way to Go live
@@ -647,7 +686,7 @@ test("A3: a stopped match restarts FREE inside the reuse window — at balance 0
 test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser and no Go live; the same org's fixture that just streamed (window open) still offers Go live", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + POLL_WAIT_MS + 30_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page, { plan: "community", entrants: 3 });
   const target = await addTargetApi(page, rig.orgId, { label: "A4 destination" });
@@ -664,7 +703,13 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
   const row = await openPhoneTab(page, rig, fresh);
   const body = row.locator("[data-phone-body]");
   const tiles = body.locator('[data-testid^="stream-buy-pack-"]');
-  await expect(tiles, "the chooser's three packs").toHaveCount(3);
+  // The tiles are the pack catalogue's own (lib/stream-credit-packs.ts), in its order — never a count typed here.
+  expect(STREAM_CREDIT_PACKS.length, "the catalogue sells packs").toBeGreaterThan(0);
+  await expect(tiles).toHaveCount(STREAM_CREDIT_PACKS.length);
+  expect(
+    await tiles.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid"))),
+    "one tile per catalogue pack, in the catalogue's order",
+  ).toEqual(STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`));
   await expect(body.getByTestId("stream-credits-monthly")).toHaveText(
     rig.monthlyRate === 1 ? en("stream.credits.monthlyNote.one") : en("stream.credits.monthlyNote.other", { n: rig.monthlyRate }),
   );
@@ -684,6 +729,20 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
   await expect(playedBody.getByTestId("stream-go-live")).toBeEnabled();
   await expect(playedBody.getByTestId("stream-restart-free")).toBeVisible();
   await expect(playedBody.locator('[data-testid^="stream-buy-pack-"]')).toHaveCount(0);
+
+  // Close's positive half: with a credit the chooser is not forced — Buy more opens it, and an OPENED chooser has Close.
+  await grantRigPackCredits(rig.orgId, 1);
+  const again = (await openPhoneTab(page, rig, fresh)).locator("[data-phone-body]");
+  await expect(again.getByTestId("stream-balance"), "a bought credit: balance 1").toHaveText(creditsChip(1));
+  await expect(again.getByTestId("stream-go-live"), "not forced: Go live is back").toBeEnabled();
+  await expect(again.locator('[data-testid^="stream-buy-pack-"]'), "not forced: no chooser until asked").toHaveCount(0);
+  await again.getByTestId("stream-buy-more").click();
+  await expect(again.locator('[data-testid^="stream-buy-pack-"]')).toHaveCount(STREAM_CREDIT_PACKS.length);
+  const close = again.getByTestId("stream-credits-close");
+  await expect(close, "an opened chooser says how to put it away").toHaveText(en("stream.credits.close"));
+  await close.click();
+  await expect(again.locator('[data-testid^="stream-buy-pack-"]'), "Close hands the controls back").toHaveCount(0);
+  await expect(again.getByTestId("stream-go-live")).toBeEnabled();
 });
 
 // ===========================================================================
@@ -709,7 +768,12 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
   const body2 = (await openPhoneTab(tab2, rig, f1)).locator("[data-phone-body]");
   await expect(body2.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
 
-  await streamSlot(2); // its own stream + the room the refused starts are admitted into (see streamSlot)
+  // ONE slot, like every other case: the refused starts need no room. Since F-A5 (owner ruling 2026-09-29) admission
+  // answers a fixture's own running stream straight after the plan gates, so the double start below reads "already
+  // running" however full the deployment is; target_in_use is decided before admission altogether. (The order itself
+  // is pinned by domain/__tests__/session.test.ts — reaching storage_exhausted here would mean filling the deployment,
+  // which needs stream-credits.spec.ts's key too.)
+  await streamSlot();
   await body1.getByTestId("stream-go-live").click();
   // Any running state will do — the double start is the subject, not the QR. (Under heavy load the create plus the
   // tab's first read can outlast FAKE_CONNECT_MS, and the tab then shows LIVE without ever drawing the QR.)
@@ -814,7 +878,7 @@ const A7_SWITCHES = [
 ] as const;
 
 for (const sw of A7_SWITCHES) {
-  test(`A7(${sw.id}): a LIVE stream, then ${sw.name} → the stop probe still shows it live → Stop → ended`, async ({ page }) => {
+  test(`A7(${sw.id}): a LIVE stream, then ${sw.name} → the stop probe still shows it live, and fits and is tappable at 1280 and 320 → Stop (at 320) → ended`, async ({ page }) => {
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
     await page.setViewportSize({ width: 1280, height: 900 });
     const rig = await seedRelayRig(page);
@@ -834,6 +898,7 @@ for (const sw of A7_SWITCHES) {
       probe = row.getByTestId("stream-stop-probe");
     } else {
       await openFixturesTab(page, rig);
+      await expect(rowOf(page, f), "the match's row is still on the run sheet").toHaveCount(1);
       await expect(rowOf(page, f).getByTestId("fixture-stream-toggle"), "the panel is gone").toHaveCount(0);
       probe = page.getByTestId("frozen-stream-probes").getByTestId("stream-stop-probe");
       const probeLabel = probe.getByTestId("stream-stop-probe-label");
@@ -844,6 +909,12 @@ for (const sw of A7_SWITCHES) {
     await expect(probe.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
     await expectNoHorizontalScroll(page);
     await shot(probe, `A7${sw.id}-probe.png`);
+    // The phone the organiser actually holds: the probe fits, and its Stop is a real 44-px target there.
+    await page.setViewportSize({ width: 320, height: 900 });
+    await expect(probe.getByTestId("stream-stop")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    expect(await expectTapTargets(probe), "the probe's controls hit-tested at 320").toBeGreaterThan(0);
+    await shot(probe, `A7${sw.id}-probe-320.png`);
     await probe.getByTestId("stream-stop").click();
     await confirmStop(page);
     // The probe renders nothing once nothing is up.
@@ -859,7 +930,10 @@ for (const sw of A7_SWITCHES) {
 test("A8: the platform list has no LinkedIn; an off-list RTMP host is refused with the host rule's copy and never sent (the server refuses it by the same rule); one destination per allowlisted provider saves", async ({
   page,
 }) => {
-  test.setTimeout(SEED_MS + 120_000);
+  // The providers are the allowlist's own (lib/stream-destinations.ts), never a list typed here.
+  const providers = [...new Set(STREAM_DESTINATION_HOSTS.map((h) => h.provider))];
+  // The budget is the saves': one form round trip per provider, on top of the seed and the refused-host half.
+  test.setTimeout(SEED_MS + providers.length * POLL_WAIT_MS + 60_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
@@ -868,8 +942,6 @@ test("A8: the platform list has no LinkedIn; an off-list RTMP host is refused wi
   const form = body.getByTestId("stream-target-form");
   const kind = form.getByTestId("stream-target-kind");
 
-  // The providers are the allowlist's own (lib/stream-destinations.ts), never a list typed here.
-  const providers = [...new Set(STREAM_DESTINATION_HOSTS.map((h) => h.provider))];
   expect(providers.length, "the allowlist names providers").toBeGreaterThan(0);
   expect(providers, "LinkedIn is off the allowlist (orchestrator ruling 2026-09-28)").not.toContain("linkedin");
   const options = await kind
@@ -877,9 +949,14 @@ test("A8: the platform list has no LinkedIn; an off-list RTMP host is refused wi
     .evaluateAll((os) => os.map((o) => ({ value: (o as HTMLOptionElement).value, text: o.textContent ?? "" })));
   expect(options.length, "the platform list has options").toBeGreaterThan(1);
   expect(options.filter((o) => /linkedin/i.test(o.value) || /linkedin/i.test(o.text)), "no LinkedIn option").toEqual([]);
-  // Every platform option names an allowlisted provider; the rest are reached through "Other".
+  // The brand options are EXACTLY the allowlisted providers the server's kind enum names (schemas.ts StreamTargetKind);
+  // every other provider is reached through "Other".
   const own = options.filter((o) => o.value !== "custom_rtmp").map((o) => o.value);
-  for (const v of own) expect(providers, `option ${v} is an allowlisted provider`).toContain(v);
+  const serverKinds: readonly string[] = StreamTargetKind.options;
+  const branded = providers.filter((p) => serverKinds.includes(p));
+  expect(branded.length, "the allowlist and the server's kinds share providers").toBeGreaterThan(0);
+  expect([...own].sort(), "brand options = allowlisted providers ∩ the server's kinds").toEqual([...branded].sort());
+  expect(serverKinds, "the form's Other is a kind the server accepts").toContain("custom_rtmp");
   await expect(kind.locator('option[value="custom_rtmp"]')).toHaveText(en("stream.target.kind.other"));
 
   // An off-list host: refused in the form with the HOST rule's sentence, and nothing is POSTed.
@@ -922,6 +999,7 @@ test("A8: the platform list has no LinkedIn; an off-list RTMP host is refused wi
     saved++;
   }
   expect(saved, "one save per allowlisted provider").toBe(providers.length);
+  expect(posts, "the positive half: every accepted save WAS sent — one POST each").toBe(providers.length);
   const rows = await withDb((sql) => sql<{ label: string }[]>`
     select label from org_stream_targets where org_id = ${rig.orgId} order by created_at`);
   expect(rows.map((r) => r.label), "every save is a row; the refused one is not").toEqual(providers.map((p) => `Dest ${p}`));
@@ -967,14 +1045,11 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
 test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live → ended — no English string from the stream dictionary leaks", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + POLL_WAIT_MS + 30_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   await addTargetApi(page, rig.orgId, { label: "Destino A10" });
-  await page.context().addCookies([{ name: "seazn_locale", value: "es", url: new URL(page.url()).origin }]);
   const f = rig.fixtures[0]!;
-  const row = await openPhoneTab(page, rig, f);
-  const body = row.locator("[data-phone-body]");
 
   // The English that must NOT appear: every stream.* string whose Spanish differs, by its literal pieces.
   const english = Object.keys(EN_UI)
@@ -986,10 +1061,20 @@ test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live →
         .map((s) => ({ k, s })),
     );
   expect(english.length, "English stream strings to scan for").toBeGreaterThan(20);
+  const hits = (text: string) => english.filter(({ s }) => text.includes(s));
+
+  // The scan's positive half: the SAME tab in English is caught by it — so an empty result below means Spanish, not a
+  // scan that can find nothing.
+  const enText = await (await openPhoneTab(page, rig, f)).locator("[data-phone-body]").innerText();
+  expect(hits(enText).length, "the scan finds the English tab's own strings").toBeGreaterThanOrEqual(1);
+
+  await page.context().addCookies([{ name: "seazn_locale", value: "es", url: new URL(page.url()).origin }]);
+  const row = await openPhoneTab(page, rig, f);
+  const body = row.locator("[data-phone-body]");
   const leaks = async (state: string) => {
     const text = await body.innerText();
     expect(text.length, `${state}: the tab has text to scan`).toBeGreaterThan(0);
-    expect(english.filter(({ s }) => text.includes(s)), `${state}: English leaked into the Spanish tab`).toEqual([]);
+    expect(hits(text), `${state}: English leaked into the Spanish tab`).toEqual([]);
   };
 
   await expect(body.getByTestId("stream-state-pill")).toHaveText(es("stream.phone.state.idle"));
@@ -1056,39 +1141,46 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
     expect(fit.field.l, "the paste code starts inside the viewport").toBeGreaterThanOrEqual(-0.5);
     expect(fit.field.r, "the paste code ends inside the viewport").toBeLessThanOrEqual(fit.vw + 0.5);
     // No box of the stream panel reaches past the viewport (the page-wide check, scoped to what this walkthrough
-    // owns). The page-level scan below is RECORDED, not asserted: at 256 CSS px the app header's icon row overflows
-    // (walkthrough-report.md defect D-A11 — the site header, not the Phone tab; A1 @320 proves the page clean at
-    // 100%). Every overflowing box is listed with whether it sits inside the panel, and the panel's share must be none.
+    // owns). The page-level scan below is RECORDED, not asserted: at 256 CSS px the app header's icon row overflows —
+    // D-A11, the site header, not the Phone tab, ACCEPTED by the owner 2026-09-29 (not to be fixed; A1 @320 proves the
+    // page clean at 100%). Every overflowing box is listed with whether it sits inside the panel, and the panel's share
+    // must be none. Only ELIGIBLE boxes count — painted, and not inside a scroll/clip container (whose overflow is
+    // reachable or clipped, never page overflow) — so the panel count below is the number the verdict really covered.
     const scan = await page.evaluate(() => {
       const vw = document.documentElement.clientWidth;
       const panel = document.querySelector('[data-testid="stream-panel"]');
-      let panelBoxes = 0;
+      let panelEligible = 0;
       const over: { el: string; right: number; inPanel: boolean }[] = [];
       for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
         const r = el.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) continue;
-        const inPanel = !!panel && panel.contains(el);
-        if (inPanel) panelBoxes++;
         let contained = false;
         for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
           const ox = getComputedStyle(n).overflowX;
           if (ox === "auto" || ox === "scroll" || ox === "hidden") { contained = true; break; }
         }
-        if (!contained && r.right > vw + 1) {
+        if (contained) continue;
+        const inPanel = !!panel && panel.contains(el);
+        if (inPanel) panelEligible++;
+        if (r.right > vw + 1) {
           over.push({ el: `${el.tagName.toLowerCase()}.${String(el.className).trim().split(/\s+/).slice(0, 3).join(".")}`, right: Math.round(r.right), inPanel });
         }
       }
-      return { vw, panelBoxes, over };
+      return { vw, panelEligible, over };
     });
-    expect(scan.panelBoxes, "the panel's boxes were scanned").toBeGreaterThan(10);
+    test.info().annotations.push({ type: "A11", description: `${scan.panelEligible} eligible panel box(es) scanned` });
+    expect(scan.panelEligible, "the panel's eligible boxes were scanned").toBeGreaterThan(10);
     expect(scan.over.filter((o) => o.inPanel), "nothing in the stream panel reaches past the zoomed viewport").toEqual([]);
     if (scan.over.length > 0) {
-      test.info().annotations.push({ type: "defect D-A11 (page chrome, not the Phone tab)", description: JSON.stringify(scan.over.slice(0, 5)) });
+      test.info().annotations.push({ type: "D-A11 accepted by owner 2026-09-29", description: JSON.stringify(scan.over.slice(0, 5)) });
     }
     await shot(row.getByTestId("stream-panel"), "A11-320-at-125pct-qr.png");
     await page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), "A11-320-at-125pct-page.png") });
   } finally {
-    await teardownStreams(); // before the context goes: the stop is made as this context's signed-in owner
-    await ctx.close();
+    try {
+      await teardownStreams(); // before the context goes: the stop is made as this context's signed-in owner
+    } finally {
+      await ctx.close(); // even when the teardown throws
+    }
   }
 });
