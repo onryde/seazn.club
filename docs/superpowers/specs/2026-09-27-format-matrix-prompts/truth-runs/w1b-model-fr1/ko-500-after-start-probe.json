@@ -1,0 +1,576 @@
+{
+  "runId": "w1b-fr1-ko-0929b",
+  "harness": "299df5b32",
+  "base": "http://localhost:3313",
+  "plan": "pro",
+  "verdicts": [
+    {
+      "sport": "generic",
+      "control": "clean",
+      "C": [
+        "Start -> Withdraw seed 1 -> Generate: ok, ok, ok",
+        "Start -> Withdraw seed 2 -> Generate: ok, ok, 500 INTERNAL",
+        "Start -> Withdraw seed 3 -> Generate: ok, ok, 500 INTERNAL",
+        "Start -> Withdraw seed 4 -> Generate: ok, ok, ok"
+      ]
+    },
+    {
+      "sport": "badminton",
+      "control": "clean",
+      "C": [
+        "Start -> Withdraw seed 1 -> Generate: ok, ok, ok",
+        "Start -> Withdraw seed 2 -> Generate: ok, ok, 500 INTERNAL",
+        "Start -> Withdraw seed 3 -> Generate: ok, ok, 500 INTERNAL",
+        "Start -> Withdraw seed 4 -> Generate: ok, ok, ok"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "sport": "generic",
+      "case": "C control: Start -> Generate (nothing withdrawn)",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "1c5f0d87-058d-4382-80c8-15fe6106f45a",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": true,
+          "answer": {
+            "created": 0,
+            "existing": 3,
+            "fixtures": 3
+          }
+        }
+      ]
+    },
+    {
+      "sport": "generic",
+      "case": "C: Start -> Withdraw seed 1 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "c2a410f9-57f1-4a8a-9496-c1c17a2e5304",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 1",
+          "ok": true,
+          "answer": {
+            "entrant_id": "db959558-67cd-4de2-9be8-a0370f818c8f",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": true,
+          "answer": {
+            "created": 0,
+            "existing": 3,
+            "fixtures": 3
+          }
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "3a8c0e32-db98-4851-b9f4-9d0dcdede1e0",
+          "round": 1,
+          "home": "db959558-67cd-4de2-9be8-a0370f818c8f",
+          "away": "a5cef762-89de-4573-8003-bd939d598fb8",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "8c41f80d-2244-432c-b89d-f7df1132a3f7",
+          "round": 1,
+          "home": "6df04f6c-d45c-452e-89cc-c05715d58f63",
+          "away": "41a5b919-50e0-4b05-8329-a9da8ac35944",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "381a26b9-c77b-459e-aaa2-daac49bd01ce",
+          "round": 2,
+          "home": "a5cef762-89de-4573-8003-bd939d598fb8",
+          "away": null,
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "generic",
+      "case": "C: Start -> Withdraw seed 2 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "c2fec8af-7a0f-4fda-b0cd-06eda2d5ba94",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 2",
+          "ok": true,
+          "answer": {
+            "entrant_id": "c50e649b-7e2f-4806-8fd8-c758fdce0cea",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": false,
+          "status": 500,
+          "code": "INTERNAL",
+          "message": "POST /api/v1/stages/fade2325-b1bc-47a6-8480-cd84876e0b63/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) e15be8a9-4840-4191-a640-db52166ca1a0 instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present"
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "42adeba8-c829-4f02-9b4d-2c66648a73a1",
+          "round": 1,
+          "home": "1056649e-59ec-45b8-8d0a-ef52eecd2d6e",
+          "away": "c50e649b-7e2f-4806-8fd8-c758fdce0cea",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "717e3fcb-ea65-46f2-aa08-8114a7514e2e",
+          "round": 1,
+          "home": "23c9eb1f-4a1a-46b9-b005-c42e76eb68b3",
+          "away": "35f27694-a42f-4534-9a63-a18e6fad168e",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "e15be8a9-4840-4191-a640-db52166ca1a0",
+          "round": 2,
+          "home": null,
+          "away": "1056649e-59ec-45b8-8d0a-ef52eecd2d6e",
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "generic",
+      "case": "C: Start -> Withdraw seed 3 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "14f3951e-1bce-4e37-accb-11f92dc42a82",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 3",
+          "ok": true,
+          "answer": {
+            "entrant_id": "585f4ff0-0d1f-42d2-a432-441159c4d291",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": false,
+          "status": 500,
+          "code": "INTERNAL",
+          "message": "POST /api/v1/stages/0587a354-6e60-49e2-baf9-841d8118b2bf/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) 9cb394c0-328d-4096-a9e8-2b7f1526d89a instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present"
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "0dc46b7c-a9df-4261-b4b2-30c364647c0d",
+          "round": 1,
+          "home": "dc3ef5d6-563b-4f2c-8e0b-f2c946880980",
+          "away": "f5be51da-8c4b-4f6a-9df7-42e4f6edc5a2",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "ff0d7b4b-aa67-450b-bb68-dcc877e74ada",
+          "round": 1,
+          "home": "585f4ff0-0d1f-42d2-a432-441159c4d291",
+          "away": "96f443d7-18a2-459c-9f5c-ae4227d82bb9",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "9cb394c0-328d-4096-a9e8-2b7f1526d89a",
+          "round": 2,
+          "home": null,
+          "away": "96f443d7-18a2-459c-9f5c-ae4227d82bb9",
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "generic",
+      "case": "C: Start -> Withdraw seed 4 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "d3626c62-bd49-41ad-a6fd-5a2927b00f2d",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 4",
+          "ok": true,
+          "answer": {
+            "entrant_id": "c2e3d321-4ba1-4cc9-b0c9-c3d17cbbb9c0",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": true,
+          "answer": {
+            "created": 0,
+            "existing": 3,
+            "fixtures": 3
+          }
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "60094e9d-f12b-44ba-9468-0fd4f1b33887",
+          "round": 1,
+          "home": "4800a87b-dfbc-42b7-a2cc-f078395eee61",
+          "away": "66612c85-1594-44ba-8615-72716819cc73",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "ac857da3-5b3e-487c-958c-5377d82ecf97",
+          "round": 1,
+          "home": "82674244-818b-4b3c-ad36-3a4ec579996d",
+          "away": "c2e3d321-4ba1-4cc9-b0c9-c3d17cbbb9c0",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "f8c49d16-8f48-4d57-8388-715892c3e81d",
+          "round": 2,
+          "home": "82674244-818b-4b3c-ad36-3a4ec579996d",
+          "away": null,
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "badminton",
+      "case": "C control: Start -> Generate (nothing withdrawn)",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "b3775189-969a-447a-bac0-c33cc9ca9325",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": true,
+          "answer": {
+            "created": 0,
+            "existing": 3,
+            "fixtures": 3
+          }
+        }
+      ]
+    },
+    {
+      "sport": "badminton",
+      "case": "C: Start -> Withdraw seed 1 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "966872c5-c8e3-4b3d-80c2-9114b02389cf",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 1",
+          "ok": true,
+          "answer": {
+            "entrant_id": "c4ed969b-cf07-4ef2-b24d-d21e1850f039",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": true,
+          "answer": {
+            "created": 0,
+            "existing": 3,
+            "fixtures": 3
+          }
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "10649e5d-c001-49e7-ab2d-053f414be79e",
+          "round": 1,
+          "home": "af3a910e-d4a1-4d4d-a8eb-6c0a26a3e74f",
+          "away": "bcb1a5f6-fde4-48ac-89ce-a8db630aaf16",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "5a499560-55f4-413b-bcad-aef05e0bf3f2",
+          "round": 1,
+          "home": "c4ed969b-cf07-4ef2-b24d-d21e1850f039",
+          "away": "923fd50b-cb5a-4bed-a3e4-affd676b4326",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "39d022b6-d2a7-4e21-b0fe-01e7350adc59",
+          "round": 2,
+          "home": "923fd50b-cb5a-4bed-a3e4-affd676b4326",
+          "away": null,
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "badminton",
+      "case": "C: Start -> Withdraw seed 2 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "ef27e55d-8129-441d-b1e4-9db1047336f3",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 2",
+          "ok": true,
+          "answer": {
+            "entrant_id": "1c072bbd-c363-422f-9cfc-4a585ee67fc8",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": false,
+          "status": 500,
+          "code": "INTERNAL",
+          "message": "POST /api/v1/stages/5cc0b828-5b2b-4917-967d-c1fd794811cc/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) c1200d38-78a1-4e3b-8623-91bd332b2949 instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present"
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "793536cf-7d29-4724-b13d-4119fc9ad385",
+          "round": 1,
+          "home": "12c46aa8-32bb-4cbd-b5a8-901f85e750e4",
+          "away": "1c072bbd-c363-422f-9cfc-4a585ee67fc8",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "b1775e36-8440-44c8-b9a3-770ef9473304",
+          "round": 1,
+          "home": "3a37f7f4-a42b-4323-a0d2-cd01c532bfab",
+          "away": "950e2ef2-7613-4d7a-8cd7-25a13f93d93a",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "c1200d38-78a1-4e3b-8623-91bd332b2949",
+          "round": 2,
+          "home": null,
+          "away": "12c46aa8-32bb-4cbd-b5a8-901f85e750e4",
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "badminton",
+      "case": "C: Start -> Withdraw seed 3 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "af69f8c1-51f8-4b4b-ae53-c74aac059264",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 3",
+          "ok": true,
+          "answer": {
+            "entrant_id": "a198308d-b53a-4bd6-9be1-2f1c5ec21d78",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": false,
+          "status": 500,
+          "code": "INTERNAL",
+          "message": "POST /api/v1/stages/52c2cc19-84b9-418a-a355-aeefed48f3a0/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) cc5266fa-cc91-4904-b9db-2c337a6cfd2e instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present"
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "7da3c925-d72a-4f15-b312-7393f8684e49",
+          "round": 1,
+          "home": "a198308d-b53a-4bd6-9be1-2f1c5ec21d78",
+          "away": "02d54c0f-da20-4d8b-a94e-b10528a3b905",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "d245d18a-5b73-4ca1-953a-a27d94be4822",
+          "round": 1,
+          "home": "7d72187f-8865-453b-a9ec-8aacf20b425f",
+          "away": "611f85ef-b22b-4610-89cd-8c2c554295ae",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "cc5266fa-cc91-4904-b9db-2c337a6cfd2e",
+          "round": 2,
+          "home": null,
+          "away": "02d54c0f-da20-4d8b-a94e-b10528a3b905",
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    },
+    {
+      "sport": "badminton",
+      "case": "C: Start -> Withdraw seed 4 -> Generate",
+      "calls": [
+        {
+          "step": "Start",
+          "ok": true,
+          "answer": {
+            "division_id": "2e979291-a25a-43d7-b2fb-9bf1baddb0f4",
+            "status": "active",
+            "started": true,
+            "generated": 3
+          }
+        },
+        {
+          "step": "Withdraw seed 4",
+          "ok": true,
+          "answer": {
+            "entrant_id": "2f4b06c3-abe5-4982-af63-83a80520895b",
+            "status": "withdrawn",
+            "policy": "walkover",
+            "walkovers": 1,
+            "voided": 0,
+            "skipped_finalized": 0
+          }
+        },
+        {
+          "step": "Generate",
+          "ok": true,
+          "answer": {
+            "created": 0,
+            "existing": 3,
+            "fixtures": 3
+          }
+        }
+      ],
+      "afterWithdraw": [
+        {
+          "id": "99773009-388d-4438-8f13-2721d050c21b",
+          "round": 1,
+          "home": "b0d5a87c-611d-4cdd-b5d8-d23c7c975b71",
+          "away": "2f4b06c3-abe5-4982-af63-83a80520895b",
+          "status": "forfeited",
+          "outcome": "award"
+        },
+        {
+          "id": "ebeb0731-7219-4256-abfa-fec069cab9b4",
+          "round": 1,
+          "home": "77d3e589-6d4c-44fb-9836-91eeeb5b95e9",
+          "away": "9efa5888-0d45-4f41-ab7a-504b62fc7554",
+          "status": "scheduled",
+          "outcome": null
+        },
+        {
+          "id": "280da953-19d1-4011-95af-f5ab8627bb0d",
+          "round": 2,
+          "home": "b0d5a87c-611d-4cdd-b5d8-d23c7c975b71",
+          "away": null,
+          "status": "scheduled",
+          "outcome": null
+        }
+      ]
+    }
+  ]
+}
