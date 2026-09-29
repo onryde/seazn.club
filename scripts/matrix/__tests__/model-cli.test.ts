@@ -8,14 +8,17 @@
 // State transitions under test: a clean fenced run; a run that finds a NEW
 // failure and prints its stub; the stub completed and replayed (--regressions)
 // as KNOWN; the same regression replayed against a fixed product (not
-// reproduced), and a fixed regression that comes back; an unexpected refusal.
+// reproduced), a replay failing on another open case's check, and a fixed
+// regression that comes back; an unexpected refusal; a known failure hiding a
+// new one; a failure the time box left unshrunk; two cells, --seed, a by-hand
+// replay.
 // Empty cases FIRST where they exist: --regressions with nothing committed on
 // the cells; a cell that ran one command. Refusals are proven by SPAWNING the
 // CLI (ruling R-h), through a symlink (isMainModule).
 //
-// single-sport: every run here is league|generic — the model fake is a
-// round-robin product and #879 is a league fault (the slice's sports are swept
-// in model-run-cell.test.ts).
+// single-sport: every run here is league|generic but the per-cell seed test
+// (which needs two cells) — the model fake is a round-robin product and #879
+// is a league fault (the slice's sports are swept in model-run-cell.test.ts).
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,6 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
+import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
 import { RefusedCall, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
 import { parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
@@ -34,6 +38,9 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const MODEL = resolve(REPO, "scripts/matrix/model.ts");
 const CELL = "league|generic";
 const I7 = "I7-rr-no-pair-over-legs";
+const FOLD = "model-fold-parity";
+/** An open committed regression on CELL for `check` (R29). */
+const openReg = (id: string, check: string): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, status: "open", found: "2026-09-29", runId: "t" });
 const scratch = mkdtempSync(join(tmpdir(), "w1b-model-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 afterEach(() => { vi.restoreAllMocks(); });
@@ -204,10 +211,32 @@ describe("model.ts", () => {
     expect(rep.cells.map((x) => [x.verdict, x.fences, x.maxCommands])).toEqual([["new-failure", false, MODEL_DEFAULTS.maxCommands]]);
   });
 
-  it("a stub for a failure found under other settings than --regressions replays with carries a caveat: fences on, another --max-commands", async () => {
+  it("fix round 1, M-6: a stub for a failure found at another --max-commands says how to replay it; a SHRUNK failure found with fences on carries no fences caveat", async () => {
     const io = capture();
     expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "mc", "--report-dir", reportDir(), ...ONE, "--max-commands", "12"])).toBe(1);
-    expect(io.out()).toMatch(/replay caveat: .*--max-commands 12.*fences on/);
+    const caveat = /replay caveat: [^\n]*/.exec(io.out())?.[0] ?? "";
+    expect(caveat).toMatch(/found at --max-commands 12, and the committed case does not record it: replay it with --regressions --max-commands 12/);
+    // The shrinker keeps only commands that ran, and a fence only ever stops
+    // one: a shrunk counterexample replays the same with fences off.
+    expect(caveat).not.toMatch(/fence/);
+  });
+
+  it("fix round 1, M-4/M-6: a failure the time box cut short says TIME BOX HIT on its own line and in the tally, and its unshrunk stub carries the fences caveat", async () => {
+    const io = capture();
+    let refused = false;
+    class RefusingThenLate extends RefusingPosts {
+      override postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> { refused = true; return super.postStream(id, events, prefix); }
+    }
+    // The clock stands still until the first refusal, then jumps past the box:
+    // the failing run completes, and the shrink never starts.
+    const d = deps({ driverFor: () => new RefusingThenLate(), now: () => (refused ? Number.MAX_SAFE_INTEGER : 0) });
+    const dir = reportDir();
+    expect(await runModel(d, ["--run-id", "tb", "--report-dir", dir, ...ONE])).toBe(1);
+    expect(io.out()).toMatch(/\n {4}seed=-?\d+ path=\d+ replayPath=\S+, TIME BOX HIT \(unshrunk\)\n/);
+    expect(io.out()).toMatch(/model: 1 cell\(s\) — [^\n]*, 1 TIME BOX HIT/);
+    expect(/replay caveat: [^\n]*/.exec(io.out())?.[0]).toMatch(/fences on/);
+    const rep = JSON.parse(readFileSync(join(dir, "tb", "model-report.json"), "utf8")) as { cells: { interrupted: boolean; verdict: string }[] };
+    expect(rep.cells.map((c) => [c.verdict, c.interrupted])).toEqual([["new-failure", true]]);
   });
 
   it("a failure an OPEN committed regression names is known: exit 0, and the run says which", async () => {
@@ -233,6 +262,67 @@ describe("model.ts", () => {
     const io = capture();
     expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "mu", "--report-dir", reportDir(), ...ONE])).toBe(1);
     expect(failureLine(io.out())).toMatch(new RegExp(`^FAILURE ${UNEXPECTED_REFUSAL} \\(NEW\\): `));
+    // Shrunk, at the defaults, fences on: the time box was not hit and no caveat applies (M-4, M-6).
+    expect(io.out()).not.toContain("TIME BOX HIT (unshrunk)");
+    expect(io.out()).toMatch(/model: 1 cell\(s\) — [^\n]*, 0 TIME BOX HIT/);
+    expect(io.out()).not.toContain("replay caveat");
+  });
+
+  it("fix round 1, I-1: a NEW failure met while shrinking toward a KNOWN one is reported NEW and exits 1 (the reviewer's probe)", async () => {
+    const io = capture();
+    const d = deps({ driverFor: () => new ModelFakeDriver({ fault879: true, lieOutcome: true }), regs: [openReg("MB-002", FOLD)] });
+    expect(await runModel(d, ["--run-id", "i1", "--report-dir", reportDir(), "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "62", "--no-fences"])).toBe(1);
+    expect(failureLine(io.out())).toMatch(/^FAILURE I7-rr-no-pair-over-legs \(NEW\): /);
+    expect(io.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 1 NEW/);
+  });
+
+  it("fix round 1, I-1: a NEW check passed over under a KNOWN unexpected refusal makes the cell NEW (exit 1): printed with what it ran, and no stub it could not replay", async () => {
+    const io = capture();
+    const dir = reportDir();
+    const d = deps({ driverFor: () => new RefusingPosts({ fault879: true }), regs: [openReg("MB-003", UNEXPECTED_REFUSAL)] });
+    expect(await runModel(d, ["--run-id", "i1b", "--report-dir", dir, "--cell", CELL, "--runs", "40", "--max-commands", "12", "--seed", "62", "--no-fences"])).toBe(1);
+    expect(failureLine(io.out())).toMatch(/\(known MB-003\)/);
+    expect(io.out()).toMatch(/\n {2}NEW I7-rr-no-pair-over-legs \(passed over while shrinking toward model-unexpected-refusal\): [^\n]*Generate\(/);
+    expect(io.out()).toMatch(/no stub for I7-rr-no-pair-over-legs/);
+    expect(io.out()).not.toContain("regression stub");
+    const rep = JSON.parse(readFileSync(join(dir, "i1b", "model-report.json"), "utf8")) as { cells: { verdict: string; maskedNew: Record<string, string[]> }[] };
+    expect(rep.cells.map((c) => [c.verdict, Object.keys(c.maskedNew)])).toEqual([["new-failure", [I7]]]);
+  });
+
+  it("fix round 1, M-2: every cell gets its own seed, FNV-1a of `${runId}|${cell}`", async () => {
+    capture();
+    const dir = reportDir();
+    const cells = [CELL, "league|badminton"];
+    expect(await runModel(deps(), ["--run-id", "two", "--report-dir", dir, ...cells.flatMap((c) => ["--cell", c]), "--runs", "40"])).toBe(0);
+    const rep = JSON.parse(readFileSync(join(dir, "two", "model-report.json"), "utf8")) as { cells: { cell: string; seed: number }[] };
+    expect(rep.cells.map((c) => [c.cell, c.seed])).toEqual(cells.map((c) => [c, seedFor("two", c)]));
+    expect(new Set(rep.cells.map((c) => c.seed)).size).toBe(cells.length);
+  });
+
+  it("fix round 1, M-2: --seed, --path and --replay-path are USED — a NEW failure's reported seed, path and replayPath replay it by hand to the same FAILURE line; --seed alone overrides the derived seed", async () => {
+    const io = capture();
+    const dir = reportDir();
+    expect(await runModel(deps({ fault879: true }), ["--run-id", "ms", "--report-dir", dir, ...ONE, "--no-fences"])).toBe(1);
+    type Rep = { cells: { seed: number; failure: { seed: number; path: string; replayPath: string | null } | null }[] };
+    const f = (JSON.parse(readFileSync(join(dir, "ms", "model-report.json"), "utf8")) as Rep).cells[0]?.failure;
+    if (f === null || f === undefined || f.replayPath === null) throw new Error("the fences-off cell found nothing to replay");
+    expect(f.path).toMatch(/:/);
+    const io2 = capture();
+    const dir2 = reportDir();
+    expect(await runModel(deps({ fault879: true }), ["--run-id", "ms2", "--report-dir", dir2, "--cell", CELL, "--runs", "1", "--no-fences", "--seed", String(f.seed), "--path", f.path, "--replay-path", f.replayPath])).toBe(1);
+    expect(failureLine(io2.out())).toBe(failureLine(io.out()));
+    const again = (JSON.parse(readFileSync(join(dir2, "ms2", "model-report.json"), "utf8")) as Rep).cells[0];
+    expect([again?.seed, again?.failure?.path, again?.failure?.replayPath]).toEqual([f.seed, f.path, f.replayPath]);
+    capture();
+    const dir3 = reportDir();
+    expect(await runModel(deps(), ["--run-id", "ms3", "--report-dir", dir3, ...ONE, "--seed", "12345"])).toBe(0);
+    expect((JSON.parse(readFileSync(join(dir3, "ms3", "model-report.json"), "utf8")) as Rep).cells.map((c) => c.seed)).toEqual([12345]);
+    expect(seedFor("ms3", CELL)).not.toBe(12345);
+  });
+
+  it("fix round 1, M-5: one request's timeout is shorter than a cell's time box, so a hung request cannot eat the box", () => {
+    expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(REQUEST_TIMEOUT_MS).toBeLessThan(MODEL_DEFAULTS.timeLimitMs);
   });
 
   describe("--regressions: replay every committed case on the cells", () => {
@@ -258,6 +348,23 @@ describe("model.ts", () => {
       const io3 = capture();
       expect(await runModel(deps({ fault879: false, regs: [reg] }), ["--run-id", "rr3", "--report-dir", reportDir(), "--regressions"])).toBe(1);
       expect(io3.out()).toMatch(/NOT REPRODUCED MB-001/);
+    });
+
+    it("fix round 1, M-3: a replay that fails on ANOTHER open case's check did not reproduce its own — NOT REPRODUCED (exit 1), never known", async () => {
+      const lies = () => new ModelFakeDriver({ lieOutcome: true });
+      const io = capture();
+      expect(await runModel(deps({ driverFor: lies }), ["--run-id", "k5", "--report-dir", reportDir(), ...ONE, "--no-fences"])).toBe(1);
+      // One failure, committed twice: as MB-001 on I7 (the check it was filed
+      // for), and as MB-002 on the check the product now trips at that path.
+      const other = completedStub(io.out(), { id: "MB-002", title: "an outcome nobody posted", issue: null, fence: null });
+      expect(other.check).toBe(FOLD);
+      const own = completedStub(io.out(), { check: I7 });
+      const io2 = capture();
+      const dir = reportDir();
+      expect(await runModel(deps({ driverFor: lies, regs: [own, other] }), ["--run-id", "k5r", "--report-dir", dir, "--regressions"])).toBe(1);
+      expect(io2.out()).toMatch(/NOT REPRODUCED MB-001: the replay failed on model-fold-parity instead/);
+      const rep = JSON.parse(readFileSync(join(dir, "k5r", "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string }[] };
+      expect(rep.cells.map((c) => [c.replayOf, c.verdict])).toEqual([["MB-001", "not-reproduced"], ["MB-002", "known-failure"]]);
     });
 
     it("a FIXED regression that comes back is a NEW failure (exit 1); one that stays fixed is ok (exit 0)", async () => {

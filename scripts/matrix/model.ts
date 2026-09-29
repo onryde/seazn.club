@@ -16,10 +16,10 @@
 //      failure an OPEN committed regression names (known). A known product
 //      finding met on the way (CD-T13b) never changes it.
 //   1  report written, and some cell is a verdict: a NEW failure (including
-//      any unexpected refusal), a vacuous cell (R25), or a replayed OPEN
-//      regression that no longer reproduces; or nothing to run (--regressions
-//      with no committed case on the cells — decided before the DB, nothing
-//      written).
+//      any unexpected refusal, and a NEW check the shrink passed over), a
+//      vacuous cell (R25), or a replayed OPEN regression that no longer
+//      reproduces; or nothing to run (--regressions with no committed case on
+//      the cells — decided before the DB, nothing written).
 //   2  refused, nothing written: a usage error; no base URL; no own-DB proof
 //      (BENCH_EXPECTED_DATA_DIR unset, or a data_directory mismatch at any
 //      point); a failed preflight; a committed regression whose variant is not
@@ -48,6 +48,8 @@ import { BuilderDefaultDrift, EXIT, RUN_ID_MAX, realDeps, type RunDeps } from ".
 export type ModelDeps = Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "openDb" | "signIn" | "prepareCaseOrg" | "driverFor"> & {
   /** The committed regressions (default: regressions.json). A seam for the unit suite. */
   loadRegressions?: () => RegressionCase[];
+  /** The time box's clock (default Date.now). A seam for the unit suite. */
+  now?: () => number;
 };
 
 export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences] [--regressions] [--time-limit MS] [--base URL]";
@@ -154,6 +156,8 @@ const FAILING: readonly Verdict[] = ["vacuous", "new-failure", "not-reproduced"]
 
 function verdictOf(rep: CellReport, replay: RegressionCase | null): Verdict {
   if (rep.failure !== null && rep.failure.known === null) return "new-failure";
+  // A NEW check the shrink passed over is a new failure too (fix round 1, I-1).
+  if (Object.keys(rep.maskedNew).length > 0) return "new-failure";
   // An OPEN case that no longer fails on its own check did not reproduce: fixed, or the replay drifted.
   if (replay !== null && replay.status === "open" && rep.failure?.check !== replay.check) return "not-reproduced";
   if (rep.failure !== null) return "known-failure";
@@ -170,8 +174,11 @@ function printCell(c: ModelCell): void {
   const f = c.failure;
   if (f !== null) {
     say(`  FAILURE ${f.check} ${f.known === null ? "(NEW)" : `(known ${f.known})`}: ${f.commands.length === 0 ? "(no command list)" : f.commands.join(" → ")}`);
-    say(`    seed=${f.seed} path=${f.path === "" ? "(none)" : f.path} replayPath=${f.replayPath ?? "(none)"}`);
+    say(`    seed=${f.seed} path=${f.path === "" ? "(none)" : f.path} replayPath=${f.replayPath ?? "(none)"}${c.interrupted ? ", TIME BOX HIT (unshrunk)" : ""}`);
     for (const e of f.evidence.slice(0, 3)) say(`    evidence: ${e}`);
+    for (const [check, cmds] of Object.entries(c.maskedNew)) {
+      say(`  NEW ${check} (passed over while shrinking toward ${f.check}): ${cmds.length === 0 ? "(no command list)" : cmds.join(" → ")}`);
+    }
   }
   if (c.verdict === "not-reproduced" && c.replayOf !== null) {
     say(`  NOT REPRODUCED ${c.replayOf}: the replay ${f === null ? "ran clean" : `failed on ${f.check} instead`} — fixed, or the replay no longer walks the committed path`);
@@ -190,15 +197,21 @@ function printCell(c: ModelCell): void {
 function printStub(c: ModelCell, runId: string): void {
   const f = c.failure;
   if (f === null) return;
+  // A NEW check passed over while shrinking has no path of its own to replay.
+  for (const check of Object.keys(c.maskedNew)) say(`  no stub for ${check}: it was passed over while shrinking toward ${f.check}, so it has no replay path — re-find it once ${f.check} is fixed or fenced`);
+  if (f.known !== null) return;
   say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
-  // A replay regenerates the counterexample from the seed under --regressions'
-  // own settings, which the committed case does not record.
+  // A replay regenerates the counterexample from the seed; the committed case
+  // records neither --max-commands nor the fences. --regressions honours
+  // --max-commands and always runs fences off, which replays a SHRUNK
+  // counterexample the same (it holds only commands that ran, and a fence
+  // only ever stops one) — not an unshrunk one the time box cut short.
   const caveats = [
-    ...(f.path === "" ? ["it has no replay path (reported by the unexpected-refusal backstop)"] : []),
-    ...(c.maxCommands === MODEL_DEFAULTS.maxCommands ? [] : [`it was found at --max-commands ${c.maxCommands}, and --regressions replays at ${MODEL_DEFAULTS.maxCommands}`]),
-    ...(c.fences ? ["it was found with fences on, and --regressions replays with fences off"] : []),
+    ...(f.path === "" ? ["it has no replay path"] : []),
+    ...(c.maxCommands === MODEL_DEFAULTS.maxCommands ? [] : [`it was found at --max-commands ${c.maxCommands}, and the committed case does not record it: replay it with --regressions --max-commands ${c.maxCommands}`]),
+    ...(c.fences && c.interrupted ? ["it was found with fences on and never shrunk (the time box), and --regressions replays with fences off"] : []),
   ];
-  if (caveats.length > 0) say(`  replay caveat: ${caveats.join("; ")} — re-find it that way before committing it, or check that --regressions reproduces it`);
+  if (caveats.length > 0) say(`  replay caveat: ${caveats.join("; ")} — check that --regressions reproduces it before committing it`);
 }
 
 export async function runModel(deps: ModelDeps, argv: string[]): Promise<number> {
@@ -255,6 +268,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         const rep = await runCell({
           cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: cli.maxCommands, seed: job.seed, fences: job.fences,
           timeLimitMs: cli.timeLimitMs, regressions,
+          ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),
           newDriverState: async (n) => ({ real, model: await newModelState({ driver: real, row: job.row, sport: job.sport, variant, entrants: 4, tag: `${cli.runId}-${i + 1}-${n}`, competitionId: comp.id }) }),
@@ -284,7 +298,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   say(`model report → ${file}`);
   for (const c of cells) if (c.verdict === "new-failure") printStub(c, cli.runId);
   const tally = (v: Verdict) => cells.filter((c) => c.verdict === v).length;
-  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced`);
+  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
   return cells.some((c) => FAILING.includes(c.verdict)) ? EXIT.NO_SIGNAL : EXIT.OK;
 }
 

@@ -3,30 +3,35 @@
 // cell), path-replayable, time-boxed. A shrunk failure reports its check,
 // seed, path, replayPath and the commands that RAN (R-PF9); it is KNOWN when
 // an open committed regression names the same cell and check (R29).
-// Anti-vacuity per cell, across runs (R25): every command kind ran, a Score
-// was accepted, each applicable step invariant and fold parity judged more
-// than zero items, and at least one step was informative.
+// Anti-vacuity per cell, across runs (R25, vacuityOf): every command kind ran,
+// a Score was accepted, each step check its stage kind owes and fold parity
+// judged more than zero items, and at least one step was informative.
 //
 // Two rules fast-check does not give on its own:
-//  - The shrink is LOCKED to the first failure's check (shrinkTarget):
-//    fast-check keeps any failing candidate while it shrinks, so a new bug
-//    could otherwise shrink into a KNOWN one and read as known. A candidate
-//    that fails on another check is passed over and counted in `masked`. An
-//    unexpected refusal outranks every other check (T14 amendment: it is a
-//    NEW failure, never merely counted), and a backstop after the check holds
-//    to that even if the lock were bypassed.
+//  - The shrink is LOCKED by rank (shrinkTarget): fast-check keeps any
+//    failing candidate while it shrinks, so a new bug could otherwise shrink
+//    into a KNOWN one and read as known. Ranks: an unexpected refusal (T14
+//    amendment: a NEW failure, never merely counted) > a NEW check (no open
+//    regression on the cell) > a KNOWN one. A candidate failing a higher rank
+//    moves the shrink to it; one failing an equal or lower rank is passed
+//    over and counted in `masked`. A NEW check passed over (under a target
+//    that outranks it) is kept in `maskedNew`, with the commands it ran: the
+//    cell is still a new failure (fix round 1, I-1). A backstop after the
+//    check reports an unexpected refusal even if the lock were bypassed.
 //  - The time box is checked before each property run STARTS (fc.pre), never
 //    raced against one in flight: fast-check's interruptAfterTimeLimit races
 //    an async run (SkipAfterProperty: Promise.race with a timer) and abandons
 //    it still writing to the product and to this report after runCell has
-//    returned. The clock is injectable (`now`); the seed never touches it.
+//    returned. The clock is injectable (`now`); the seed never touches it. It
+//    is a start gate, not a cap: a run in flight finishes. A hung live request
+//    is bounded by HttpDriver's per-request timeout (REQUEST_TIMEOUT_MS).
 import fc from "fast-check";
 import type { RowKey } from "../catalogue.ts";
 import type { OrganiserDriver } from "../driver/types.ts";
 import { STEP_INVARIANTS } from "../invariants.ts";
 import type { RegressionCase } from "../scenario-catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, modelCommands } from "./commands.ts";
-import { UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type CommandKind, type ModelState, type UnknownLedger } from "./state.ts";
+import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type CommandKind, type ModelState, type UnknownLedger } from "./state.ts";
 
 export interface RunCellInput {
   cell: string;
@@ -81,19 +86,27 @@ export interface CellReport {
   informativeSteps: number;
   /** Failures on other checks passed over while shrinking toward `failure` (shrinkTarget). */
   masked: Record<string, number>;
+  /** The masked checks no open regression names — NEW failures the shrink
+   *  passed over — each with the commands its first candidate ran. */
+  maskedNew: Record<string, string[]>;
   vacuous: string[];
   failure: CellFailure | null;
 }
 
+/** An unexpected refusal, then a NEW check, then a KNOWN one (fix round 1, I-1). */
+const rankOf = (check: string, isKnown: (check: string) => boolean): number => (check === UNEXPECTED_REFUSAL ? 2 : isKnown(check) ? 0 : 1);
+
 /** The shrink lock: given the check the shrink follows (null before any
  *  failure) and the check a run just failed on, the check it follows now — or
- *  null when this failure is passed over. An unexpected refusal outranks. */
-export function shrinkTarget(current: string | null, thrown: string): string | null {
-  if (current === null || thrown === current || thrown === UNEXPECTED_REFUSAL) return thrown;
+ *  null when this failure is passed over. A check of a higher rank takes over. */
+export function shrinkTarget(current: string | null, thrown: string, isKnown: (check: string) => boolean): string | null {
+  if (current === null || thrown === current || rankOf(thrown, isKnown) > rankOf(current, isKnown)) return thrown;
   return null;
 }
 
-const checkOf = (e: unknown): string => (e instanceof ModelViolation ? e.check : "model-error");
+/** The fast-check failure a run reports when fast-check gave up on skips. */
+const MODEL_ERROR = "model-error";
+const checkOf = (e: unknown): string => (e instanceof ModelViolation ? e.check : MODEL_ERROR);
 const evidenceOf = (e: unknown): string[] => (e instanceof ModelViolation ? [...e.evidence] : [e instanceof Error ? `${e.name}: ${e.message}` : String(e)]);
 
 /** The shape fast-check 3.23 hands back as `counterexample[0]` for
@@ -111,6 +124,35 @@ const zeroCounts = (): CommandCounts => ({ ran: 0, accepted: 0, refused: 0, expe
 const zeroUnknowns = (): Record<UnknownCause, number> => ({ retried: 0, "tip-moved": 0, "next-match-unverified": 0 });
 const EVIDENCE_KEPT = 3;
 
+export interface VacuityInput {
+  counts: Record<CommandKind, CommandCounts>;
+  stepChecks: Record<string, number>;
+  foldParity: number;
+  informative: number;
+  /** The stage kind the cell built; null when no run started. */
+  stageKind: string | null;
+}
+
+/** R25 for one cell, summed across its runs: every line is a zero count the
+ *  cell owed. A step check is owed only on the stage kinds it declares
+ *  (STEP_INVARIANTS' stageKinds; ORIENTATION_STAGE_KINDS): I6 on a swiss, I7
+ *  and the orientation check on a round robin, I8 on any. With no stage kind
+ *  known, only the any-stage ones are owed. */
+export function vacuityOf(v: VacuityInput): string[] {
+  const out: string[] = [];
+  for (const k of COMMAND_KINDS) if (v.counts[k].ran === 0) out.push(`command ${k} never ran`);
+  if (v.counts.Score.accepted === 0) out.push("no Score was accepted");
+  const kind = v.stageKind;
+  for (const s of STEP_INVARIANTS) {
+    const applies = s.stageKinds === "any" || (kind !== null && s.stageKinds.includes(kind));
+    if (applies && (v.stepChecks[s.id] ?? 0) === 0) out.push(`step invariant ${s.id} checked zero items`);
+  }
+  if (kind !== null && ORIENTATION_STAGE_KINDS.includes(kind) && (v.stepChecks[ORIENTATION_CHECK] ?? 0) === 0) out.push(`step check ${ORIENTATION_CHECK} checked zero items`);
+  if (v.foldParity === 0) out.push("fold parity compared zero fixtures");
+  if (v.informative === 0) out.push(`no informative step (${VACUITY_CHECK})`);
+  return out;
+}
+
 export async function runCell(input: RunCellInput): Promise<CellReport> {
   const counts = Object.fromEntries(COMMAND_KINDS.map((k) => [k, zeroCounts()])) as Record<CommandKind, CommandCounts>;
   const stepChecks: Record<string, number> = {};
@@ -118,6 +160,10 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const unknowns = zeroUnknowns();
   const findings: Record<string, { count: number; evidence: string[] }> = {};
   const masked: Record<string, number> = {};
+  const maskedNew: Record<string, string[]> = {};
+  const knownFor = (check: string): string | null =>
+    input.regressions.find((r) => r.status === "open" && r.cell === input.cell && r.check === check)?.id ?? null;
+  const isKnown = (check: string): boolean => knownFor(check) !== null;
   const seen = { stageKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false };
   const absorb = (m: ModelState): void => {
     for (const k of COMMAND_KINDS) {
@@ -154,10 +200,13 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
       seen.stageKind = setup.model.stageKind;
       await fc.asyncModelRun(() => setup, cmds);
     } catch (e) {
+      // A skip (fc.pre) is fast-check's, never a failure: it must not become the target.
+      if (fc.PreconditionFailure.isFailure(e)) throw e;
       const check = checkOf(e);
-      const next = shrinkTarget(target, check);
+      const next = shrinkTarget(target, check, isKnown);
       if (next === null) {
         masked[check] = (masked[check] ?? 0) + 1;
+        if (!isKnown(check) && maskedNew[check] === undefined) maskedNew[check] = [...(model?.history ?? [])];
         return;
       }
       target = next;
@@ -171,12 +220,18 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     ...(input.path === undefined ? {} : { path: input.path }),
   });
 
-  const knownFor = (check: string): string | null =>
-    input.regressions.find((r) => r.status === "open" && r.cell === input.cell && r.check === check)?.id ?? null;
   let failure: CellFailure | null = null;
-  // A failed check with no counterexample is fast-check giving up on skips —
-  // here only the time box skips a run — not a product failure.
   const shrunk = details.failed ? (details.counterexample?.[0] as RanCommands | undefined) : undefined;
+  // A failed check with no counterexample is fast-check giving up on skips.
+  // The time box is the one skip that is not a failure; any other (a future
+  // fc.pre in a command) would otherwise read as a clean cell (fix round 1, M-7).
+  if (details.failed && shrunk === undefined && !seen.timeBoxed) {
+    failure = {
+      check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [],
+      evidence: [`fast-check gave up after ${details.numSkips} skipped run(s) (${details.numRuns} ran) — only the time box may skip a run`],
+      known: knownFor(MODEL_ERROR),
+    };
+  }
   if (details.failed && shrunk !== undefined) {
     const err: unknown = details.errorInstance;
     const check = checkOf(err);
@@ -204,22 +259,12 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     };
   }
 
-  const vacuous: string[] = [];
-  if (failure === null) {
-    for (const k of COMMAND_KINDS) if (counts[k].ran === 0) vacuous.push(`command ${k} never ran`);
-    if (counts.Score.accepted === 0) vacuous.push("no Score was accepted");
-    // I6 is swiss-only: a league cell owes it no count; a swiss cell does.
-    const kind = seen.stageKind;
-    for (const s of STEP_INVARIANTS) {
-      const applies = s.stageKinds === "any" || (kind !== null && s.stageKinds.includes(kind));
-      if (applies && (stepChecks[s.id] ?? 0) === 0) vacuous.push(`step invariant ${s.id} checked zero items`);
-    }
-    if (seen.foldParity === 0) vacuous.push("fold parity compared zero fixtures");
-    if (seen.informative === 0) vacuous.push(`no informative step (${VACUITY_CHECK})`);
-  }
+  const vacuous = failure === null
+    ? vacuityOf({ counts, stepChecks, foldParity: seen.foldParity, informative: seen.informative, stageKind: seen.stageKind })
+    : [];
   return {
     cell: input.cell, variant: input.variant, seed: input.seed, runs: input.runs, maxCommands: input.maxCommands, fences: input.fences,
     numRuns: details.numRuns, executions: seen.executions, interrupted: seen.timeBoxed,
-    counts, stepChecks, foldParity: seen.foldParity, fenced, unknowns, findings, informativeSteps: seen.informative, masked, vacuous, failure,
+    counts, stepChecks, foldParity: seen.foldParity, fenced, unknowns, findings, informativeSteps: seen.informative, masked, maskedNew, vacuous, failure,
   };
 }

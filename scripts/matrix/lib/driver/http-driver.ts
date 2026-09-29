@@ -26,6 +26,32 @@ export interface HttpDriverOptions {
   session: Session;
   expectedOrgId: string;
   transport?: Transport;
+  /** How long one request may go unanswered (default REQUEST_TIMEOUT_MS). */
+  requestTimeoutMs?: number;
+}
+
+/** How long one request may go unanswered before the driver stops waiting
+ *  (T14 fix round 1, M-5). The model's time box only gates a property run's
+ *  START (run-cell.ts), so without this one hung request holds a live cell
+ *  forever. A minute: far above any single call the harness makes, far below a
+ *  cell's time box (model.ts MODEL_DEFAULTS, pinned by model-cli.test.ts).
+ *  The request is not aborted — bench's raw() takes no signal — only no longer
+ *  awaited: it may still land, which is why a timed-out /complete is recorded
+ *  as an unknown outcome (completeStage). */
+export const REQUEST_TIMEOUT_MS = 60_000;
+
+/** A request that did not answer within the driver's bound. Its outcome is unknown. */
+export class RequestTimedOut extends Error {
+  readonly method: string;
+  readonly path: string;
+  readonly ms: number;
+  constructor(method: string, path: string, ms: number) {
+    super(`driver: ${method} ${path} did not answer within ${ms} ms — its outcome is unknown`);
+    this.name = "RequestTimedOut";
+    this.method = method;
+    this.path = path;
+    this.ms = ms;
+  }
 }
 
 /** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
@@ -51,6 +77,7 @@ export class HttpDriver implements OrganiserDriver {
   readonly #expectedOrgId: string;
   readonly #t: Transport;
   readonly #completed = new Set<string>();
+  readonly #timeoutMs: number;
   #calls = 0;
 
   constructor(opts: HttpDriverOptions) {
@@ -58,6 +85,10 @@ export class HttpDriver implements OrganiserDriver {
     this.#session = opts.session;
     this.#expectedOrgId = opts.expectedOrgId;
     this.#t = opts.transport ?? { raw: benchRaw };
+    const ms = opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+    // A zero, negative or NaN bound would fire at once; an infinite one never.
+    if (!(Number.isFinite(ms) && ms > 0)) throw new DriverMisuse(`driver: requestTimeoutMs must be a positive finite number of ms, got ${ms}`);
+    this.#timeoutMs = ms;
   }
 
   get callCount(): number { return this.#calls; }
@@ -67,7 +98,16 @@ export class HttpDriver implements OrganiserDriver {
    *  anonymous after the first public answer that set a cookie. */
   async #send(path: string, method = "GET", body?: unknown, anonymous = false): Promise<RawResult> {
     this.#calls++;
-    return this.#t.raw(this.#base, anonymous ? newSession() : this.#session, path, method, body);
+    const answer = this.#t.raw(this.#base, anonymous ? newSession() : this.#session, path, method, body);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new RequestTimedOut(method, path, this.#timeoutMs)), this.#timeoutMs);
+    });
+    try {
+      return await Promise.race([answer, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   #unwrap<T>(method: string, path: string, r: RawResult): T {

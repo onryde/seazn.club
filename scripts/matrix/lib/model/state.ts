@@ -98,6 +98,8 @@ export const VOID_STATUSES: readonly string[] = Object.freeze(["abandoned", "can
 
 /** The model's own step check beside I7 (carry c). */
 export const ORIENTATION_CHECK = "model-rr-orientation";
+/** The stage kinds ORIENTATION_CHECK judges (round robins); on any other it counts nothing. */
+export const ORIENTATION_STAGE_KINDS: readonly string[] = Object.freeze(["league", "group"]);
 /** A named refusal of a command the model holds legal (ruling I-1). */
 export const UNEXPECTED_REFUSAL = "model-unexpected-refusal";
 /** The roster lock: a latecomer accepted after Start, or a refusal that still changed the roster. */
@@ -279,7 +281,7 @@ const add = (m: ModelState, id: string, n: number) => m.stepChecks.set(id, (m.st
  *  passes. Counting per orientation sees both — the duplicate and the
  *  missing mirror — in one line. League and group stages only. */
 function orientationCheck(m: ModelState, meetings: readonly FixtureRow[]): { checked: number; fails: string[] } {
-  if (m.stageKind !== "league" && m.stageKind !== "group") return { checked: 0, fails: [] };
+  if (!ORIENTATION_STAGE_KINDS.includes(m.stageKind)) return { checked: 0, fails: [] };
   const legs = typeof m.stageConfig.legs === "number" ? m.stageConfig.legs : 1;
   const bound = orientationBound(legs);
   const seen = new Map<string, string[]>();

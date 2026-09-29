@@ -25,7 +25,7 @@ import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, new
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import {
-  NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
+  NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
   absorbFixtures, fedCandidates, fedMatchStarted, informativeSteps, orientationBound, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
@@ -1043,6 +1043,19 @@ describe("carry (c): at legs ≥ 2 a duplicate masked by a missing meeting is st
     expect(m.stepChecks.get(I7)).toBe(pairs(4));
     expect(m.stepChecks.get(ORIENTATION_CHECK)).toBe(pairs(4));
     expect(m.fixtures.size).toBe(2 * pairs(4));
+  });
+  it("T14 fix round 1: the orientation check judges only the kinds it declares (ORIENTATION_STAGE_KINDS) — on a swiss it counts nothing, so vacuity never owes it there", async () => {
+    // single-sport: the schedule is sport-blind. The fake always schedules a
+    // round robin, so the stage is relabelled: only the kind differs between the two.
+    expect(ORIENTATION_STAGE_KINDS).not.toContain("swiss");
+    const swiss = await fresh();
+    (swiss.m as { stageKind: string }).stageKind = "swiss";
+    const league = await fresh();
+    await play(swiss.m, swiss.d, [["Start", 0]]);
+    await play(league.m, league.d, [["Start", 0]]);
+    expect(swiss.m.fixtures.size).toBe(pairs(4));
+    expect(swiss.m.stepChecks.get(ORIENTATION_CHECK) ?? 0).toBe(0);
+    expect(league.m.stepChecks.get(ORIENTATION_CHECK)).toBe(pairs(4));
   });
   it("an unmirrored second leg meets `legs` times per pair — I7 passes it — and the orientation check fails, naming the duplicate AND the missing mirror", async () => {
     // single-sport: as above.

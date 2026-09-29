@@ -9,18 +9,21 @@
 // replayed from its seed, path and replayPath; a failure matched by an OPEN
 // regression, then by a FIXED one; an unexpected refusal (the check that
 // outranks every other); other checks met while shrinking; the time box
-// before, during and after a failure. Empty cases FIRST: one run of one
-// command; a cell whose every step was refused; a time box already spent.
+// before, during and after a failure; a KNOWN first failure meeting a NEW one
+// while shrinking; fast-check giving up on skips; vacuity per stage kind
+// (vacuityOf). Empty cases FIRST: one run of one command; a cell whose every
+// step was refused; a time box already spent; every count covered.
 //
 // single-sport: the model fake is a round-robin (league) product, and #879 —
 // the one fault these tests drive — is a league fault; the correct-product
 // test sweeps the model's own sports (SLICE_SPORTS) instead.
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { RefusedCall, type PostedEvent } from "../lib/driver/types.ts";
 import { COMMAND_KINDS, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { FENCES } from "../lib/model/fences.ts";
-import { runCell, shrinkTarget, type RunCellInput } from "../lib/model/run-cell.ts";
-import { ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
+import { runCell, shrinkTarget, vacuityOf, type RunCellInput } from "../lib/model/run-cell.ts";
+import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
 import { STEP_INVARIANTS } from "../lib/invariants.ts";
 import { SLICE_SPORTS } from "../lib/slice.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -45,6 +48,16 @@ const input = (over: Over = {}): RunCellInput => {
   };
 };
 
+/** #879's shape (pre-Start): an entrant added after a Generate, then a Generate that ran last. */
+function expectLateEntryShape(commands: readonly string[]): void {
+  const kinds = commands.map((c) => c.split("(")[0]);
+  expect(kinds.length, "no command list").toBeGreaterThan(0);
+  expect(kinds.at(-1), kinds.join(",")).toBe("Generate");
+  const added = kinds.indexOf("AddEntrant");
+  expect(added, kinds.join(",")).toBeGreaterThan(kinds.indexOf("Generate"));
+  expect(kinds.indexOf("Generate"), kinds.join(",")).toBeGreaterThan(-1);
+}
+
 /** Every post refused by NAME — a product that will not take a result. */
 class RefusingPosts extends ModelFakeDriver {
   override postStream(id: string, _events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
@@ -60,20 +73,37 @@ class RefusingEverything extends ModelFakeDriver {
   override addEntrants(d: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]) { return this.built ? this.#no("/entrants") : super.addEntrants(d, es); }
 }
 
+const FOLD = "model-fold-parity";
+const none = (): boolean => false;
+const knownOnly = (...checks: string[]) => (c: string): boolean => checks.includes(c);
+/** An open committed regression on CELL for `check` (R29). */
+const openReg = (id: string, check: string) => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, status: "open" as const, found: "2026-09-29", runId: "t" });
+
 describe("shrinkTarget — which check a cell's shrink is locked to", () => {
-  it("empty case first: before any failure, the first check thrown is the target", () => {
-    expect(shrinkTarget(null, I7)).toBe(I7);
-    expect(shrinkTarget(null, UNEXPECTED_REFUSAL)).toBe(UNEXPECTED_REFUSAL);
+  it("empty case first: before any failure, the first check thrown is the target, known or not", () => {
+    expect(shrinkTarget(null, I7, none)).toBe(I7);
+    expect(shrinkTarget(null, UNEXPECTED_REFUSAL, none)).toBe(UNEXPECTED_REFUSAL);
+    expect(shrinkTarget(null, FOLD, knownOnly(FOLD))).toBe(FOLD);
   });
-  it("the target's own check stays the failure; any other check is masked (null)", () => {
-    expect(shrinkTarget(I7, I7)).toBe(I7);
-    expect(shrinkTarget(I7, "model-fold-parity")).toBeNull();
-    expect(shrinkTarget(UNEXPECTED_REFUSAL, I7)).toBeNull();
+  it("the target's own check stays the failure; a check of the same rank is masked (null)", () => {
+    expect(shrinkTarget(I7, I7, none)).toBe(I7);
+    // Both NEW: the first found is kept.
+    expect(shrinkTarget(I7, FOLD, none)).toBeNull();
+    // Both KNOWN: likewise.
+    expect(shrinkTarget(I7, FOLD, knownOnly(I7, FOLD))).toBeNull();
+    expect(shrinkTarget(UNEXPECTED_REFUSAL, I7, none)).toBeNull();
   });
   it("an unexpected refusal outranks every other target and is never masked (T14 amendment: a NEW failure, not merely counted)", () => {
-    expect(shrinkTarget(I7, UNEXPECTED_REFUSAL)).toBe(UNEXPECTED_REFUSAL);
-    expect(shrinkTarget("model-error", UNEXPECTED_REFUSAL)).toBe(UNEXPECTED_REFUSAL);
-    expect(shrinkTarget(UNEXPECTED_REFUSAL, UNEXPECTED_REFUSAL)).toBe(UNEXPECTED_REFUSAL);
+    expect(shrinkTarget(I7, UNEXPECTED_REFUSAL, none)).toBe(UNEXPECTED_REFUSAL);
+    expect(shrinkTarget("model-error", UNEXPECTED_REFUSAL, none)).toBe(UNEXPECTED_REFUSAL);
+    expect(shrinkTarget(UNEXPECTED_REFUSAL, UNEXPECTED_REFUSAL, none)).toBe(UNEXPECTED_REFUSAL);
+    // Even a KNOWN unexpected refusal outranks a NEW check (ruling: unexpected > new > known)…
+    expect(shrinkTarget(I7, UNEXPECTED_REFUSAL, knownOnly(UNEXPECTED_REFUSAL))).toBe(UNEXPECTED_REFUSAL);
+    expect(shrinkTarget(UNEXPECTED_REFUSAL, I7, knownOnly(UNEXPECTED_REFUSAL))).toBeNull();
+  });
+  it("fix round 1, I-1: a NEW check outranks a KNOWN target — a known failure never hides a new one; a known check never displaces a new target", () => {
+    expect(shrinkTarget(FOLD, I7, knownOnly(FOLD))).toBe(I7);
+    expect(shrinkTarget(I7, FOLD, knownOnly(FOLD))).toBeNull();
   });
 });
 
@@ -262,9 +292,40 @@ describe("runCell", () => {
     // seed of the 150 where that happens. Without the lock that candidate
     // would be taken and the cell would report I7 (killed by mutation).
     const r = await runCell(input({ opts: { lieOutcome: true }, fault879: true, fences: false, runs: 40, maxCommands: 12, seed: 62 }));
-    expect(r.failure?.check).toBe("model-fold-parity");
+    expect(r.failure?.check).toBe(FOLD);
     expect(r.masked).toEqual({ [I7]: 1 });
     expect(r.failure?.commands.map((c) => c.split("(")[0])).toEqual(["Start", "Score"]);
+    // Nothing committed: the check passed over is NEW too, and says what it ran (#879's shape).
+    expect(Object.keys(r.maskedNew)).toEqual([I7]);
+    expectLateEntryShape(r.maskedNew[I7] ?? []);
+  });
+
+  it("fix round 1, I-1: a KNOWN first failure never hides a NEW one met while shrinking — the shrink moves to the new check and the cell reports it NEW", async () => {
+    // The reviewer's probe: seed 62, whose first failure is fold parity, now
+    // with an OPEN regression on fold parity. #879's I7, met while shrinking,
+    // has none: before the fix it was only counted in `masked` and the cell read known.
+    const r = await runCell(input({ opts: { lieOutcome: true }, fault879: true, fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-002", FOLD)] }));
+    expect(r.failure?.check).toBe(I7);
+    expect(r.failure?.known).toBeNull();
+    expectLateEntryShape(r.failure?.commands ?? []);
+    // Whatever was passed over after the move is known, so nothing NEW is left behind.
+    expect(Object.keys(r.maskedNew)).toEqual([]);
+    for (const c of Object.keys(r.masked)) expect(c, "masked while shrinking toward a NEW target").toBe(FOLD);
+  });
+
+  it("fix round 1, I-1: a NEW check passed over under a target that outranks it (a KNOWN unexpected refusal) is still reported, with the commands it ran", async () => {
+    // Seed 62 at 12 commands, probed over seeds 1-200 (the only hit): the shrink
+    // follows an unexpected refusal and passes over #879's I7 on the way.
+    const r = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL)] }));
+    expect(r.failure?.check).toBe(UNEXPECTED_REFUSAL);
+    expect(r.failure?.known).toBe("MB-003");
+    expect(r.masked[I7]).toBeGreaterThan(0);
+    expect(Object.keys(r.maskedNew)).toEqual([I7]);
+    expectLateEntryShape(r.maskedNew[I7] ?? []);
+    // With I7 committed too, nothing passed over is new.
+    const both = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL), openReg("MB-001", I7)] }));
+    expect(both.masked[I7]).toBeGreaterThan(0);
+    expect(both.maskedNew).toEqual({});
   });
 
   it("time box: once the clock passes the limit no further run starts — reported interrupted, numRuns short, never a failure", async () => {
@@ -325,7 +386,79 @@ describe("runCell", () => {
     expect(ran.at(-1)?.split("(")[0]).toBe("Generate");
   });
 
+  it("fix round 1, M-7: fast-check giving up on skips the time box did not cause is a model-error failure, never a clean cell", async () => {
+    // A future fc.pre inside a command (or here, the division set-up) skips
+    // every run; fast-check then fails with no counterexample.
+    const r = await runCell(input({ runs: 5, newDriverState: async () => { fc.pre(false); throw new Error("fc.pre(false) returned"); } }));
+    expect(r.interrupted).toBe(false);
+    expect(r.failure?.check).toBe("model-error");
+    expect(r.failure?.evidence.join(" ")).toMatch(/gave up after \d+ skipped run/);
+    expect(r.failure?.known).toBeNull();
+    expect(r.failure?.path).toBe("");
+    // The time box is the one skip that is not a failure (tested above: interrupted, failure null).
+  });
+
+  it("fix round 1, M-7: a skipped run never becomes the shrink target — a real failure after it is still found and reported", async () => {
+    let n = 0;
+    const r = await runCell(input({
+      fault879: true, fences: false,
+      newDriverState: async (k) => {
+        if (++n === 1) fc.pre(false);
+        const real = new ModelFakeDriver({ fault879: true });
+        return { real, model: await newModelState({ driver: real, row: "league", sport: "generic", variant: "score", entrants: 4, tag: `t${k}` }) };
+      },
+    }));
+    expect(n).toBeGreaterThan(1);
+    expect(r.failure?.check).toBe(I7);
+    expect(r.masked).toEqual({});
+  });
+
   it("deterministic: the same seed gives the same report", async () => {
     expect(await runCell(input({ runs: 15 }))).toEqual(await runCell(input({ runs: 15 })));
+  });
+});
+
+describe("vacuityOf — which zero counts make a cell vacuous, by stage kind (fix round 1, I-2 and M-1)", () => {
+  const byId = (id: string) => STEP_INVARIANTS.find((s) => s.id === id);
+  const I6 = "I6-swiss-no-rematch";
+  const one = (): CommandCounts => ({ ran: 1, accepted: 1, refused: 0, expected: 0, unexpected: 0 });
+  /** Every count non-zero: nothing is vacuous on any kind. */
+  const covered = (stageKind: string | null, zero: readonly string[] = []) => ({
+    counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, one()])) as Record<(typeof COMMAND_KINDS)[number], CommandCounts>,
+    stepChecks: Object.fromEntries([...STEP_INVARIANTS.map((s) => s.id), ORIENTATION_CHECK].map((id) => [id, zero.includes(id) ? 0 : 3])),
+    foldParity: 2, informative: 4, stageKind,
+  });
+  const line = (id: string) => `step invariant ${id} checked zero items`;
+  const orientationLine = `step check ${ORIENTATION_CHECK} checked zero items`;
+
+  it("the premises the table rests on, read from the declarations: I6 swiss only, I7 league and group, I8 any stage, the orientation check league and group", () => {
+    expect(byId(I6)?.stageKinds).toEqual(["swiss"]);
+    expect(byId(I7)?.stageKinds).toEqual(["league", "group"]);
+    expect(byId(I8)?.stageKinds).toBe("any");
+    expect(ORIENTATION_STAGE_KINDS).toEqual(["league", "group"]);
+  });
+
+  it("empty case first: every count covered is vacuous on no stage kind", () => {
+    const kinds = [null, "league", "group", "swiss", "knockout"];
+    for (const k of kinds) expect(vacuityOf(covered(k)), String(k)).toEqual([]);
+    expect(kinds.length).toBe(5);
+  });
+
+  const TABLE: readonly (readonly [string, string | null, readonly string[], readonly string[]])[] = [
+    ["a league with zero I7 items", "league", [I7], [line(I7)]],
+    ["a group with zero I7 items", "group", [I7], [line(I7)]],
+    ["a swiss with zero I6 items", "swiss", [I6], [line(I6)]],
+    ["a league owes no I6", "league", [I6], []],
+    ["a swiss owes no I7", "swiss", [I7], []],
+    ["a knockout owes neither I6 nor I7", "knockout", [I6, I7], []],
+    ["a knockout still owes I8 (any stage)", "knockout", [I8], [line(I8)]],
+    ["no stage kind known: only the any-stage invariants are owed", null, [I6, I7, I8, ORIENTATION_CHECK], [line(I8)]],
+    ["M-1: a league whose orientation check judged zero pairs", "league", [ORIENTATION_CHECK], [orientationLine]],
+    ["M-1: a group whose orientation check judged zero pairs", "group", [ORIENTATION_CHECK], [orientationLine]],
+    ["M-1: a swiss owes no orientation count", "swiss", [ORIENTATION_CHECK], []],
+    ["M-1: a knockout owes no orientation count", "knockout", [ORIENTATION_CHECK], []],
+  ];
+  it.each(TABLE)("%s", (_why, kind, zero, want) => {
+    expect(vacuityOf(covered(kind, zero))).toEqual(want);
   });
 });

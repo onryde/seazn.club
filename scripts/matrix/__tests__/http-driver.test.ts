@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
-import { HttpDriver, type Transport } from "../lib/driver/http-driver.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS, RequestTimedOut, type Transport } from "../lib/driver/http-driver.ts";
 import { DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 
@@ -336,5 +336,60 @@ describe("HttpDriver — rebuild (Task 13)", () => {
     await d.rebuild("s1");
     await d.rebuild("s1");
     expect(posts(calls).length).toBe(2);
+  });
+});
+
+describe("HttpDriver — a request that never answers (T14 fix round 1, M-5)", () => {
+  // The model's time box gates a property run's START, never one in flight
+  // (run-cell.ts); a hung request would hold a live cell forever without this.
+  const hanging = (): { t: Transport; calls: string[] } => {
+    const calls: string[] = [];
+    return { t: { raw: (_b, _s, path, method = "GET") => { calls.push(`${method} ${path}`); return new Promise<RawResult>(() => {}); } }, calls };
+  };
+  const settle = <T>(p: Promise<T>) => {
+    const box: { v: unknown } = { v: "pending" };
+    p.then(() => { box.v = "answered"; }, (e: unknown) => { box.v = e; });
+    return box;
+  };
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("the DEFAULT bound is REQUEST_TIMEOUT_MS: no option given, a silent request is refused by name at that bound and not a millisecond before", async () => {
+    vi.useFakeTimers();
+    const { t } = hanging();
+    const box = settle(drv(t).listFixtures("d1"));
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1);
+    expect(box.v).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(box.v).toBeInstanceOf(RequestTimedOut);
+    expect((box.v as Error).message).toContain(`GET /api/v1/divisions/d1/fixtures did not answer within ${REQUEST_TIMEOUT_MS} ms`);
+  });
+
+  it("an answer in time clears its timer: nothing is left pending after the call", async () => {
+    vi.useFakeTimers();
+    const { t } = fake([() => ok([])]);
+    expect(await drv(t).listFixtures("d1")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("requestTimeoutMs overrides the default; a bound that is not a positive finite number is refused when the driver is built", async () => {
+    vi.useFakeTimers();
+    const { t } = hanging();
+    const box = settle(new HttpDriver({ base: "http://localhost:3999", session, expectedOrgId: "org-1", transport: t, requestTimeoutMs: 50 }).generate("s1"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(box.v).toBeInstanceOf(RequestTimedOut);
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new HttpDriver({ base: "http://localhost:3999", session, expectedOrgId: "org-1", transport: t, requestTimeoutMs: bad }), String(bad)).toThrow(DriverMisuse);
+    }
+  });
+
+  it("a /complete that timed out may have committed: it is recorded like one that never answered, and never sent again", async () => {
+    vi.useFakeTimers();
+    const { t, calls } = hanging();
+    const d = drv(t);
+    const box = settle(d.completeStage("s1"));
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    expect(box.v).toBeInstanceOf(RequestTimedOut);
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls).toEqual(["POST /api/v1/stages/s1/complete"]);
   });
 });
