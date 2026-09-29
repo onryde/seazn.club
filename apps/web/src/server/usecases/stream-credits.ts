@@ -747,10 +747,13 @@ async function monthlyGrantedThisPeriod(exec: Executor, orgId: string, period: s
 
 /**
  * This month's free match credits for one org — the lazy path (R3, as amended by the Task 14b review M4: the ONLY
- * path — no cron sweeps it). Every reader of the balance calls it before it reads: the division page (`relayCredits`)
- * and createSession's balance check; the go-live consume runs the same body under its own lock (`consumeForSession`'s
- * `monthly`, review M6), so a session that goes live after the month turns draws the new month's grant. There is deliberately no eager call on org creation and no cron: an org that
- * never streams never needs a row.
+ * path — no cron sweeps it). The readers that act on the balance call it before they read: the division page
+ * (`relayCredits`) and createSession's balance check; the go-live consume runs the same body under its own lock
+ * (`consumeForSession`'s `monthly`, review M6), so a session that goes live after the month turns draws the new month's
+ * grant. Two display readers do NOT (lane-close m7): the session projection's `balance` (stream-sessions.ts
+ * `currentSession`) and the /admin credits panel (admin-stream-credits.ts) read the ledger as it stands, so across a
+ * month turn they show last month's unexpired free credits until an acting reader rolls it. There is deliberately no
+ * eager call on org creation and no cron: an org that never streams never needs a row.
  *
  * Owed, per UTC month: the base grant at the first call of the period (after expiring last month's leftover), and —
  * review I3 — a TOP-UP when the org's CURRENT plan grants more than this period has granted so far (a mid-month
