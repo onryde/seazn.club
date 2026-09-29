@@ -29,8 +29,8 @@
 // One sport, on purpose: the Phone tab reads no sport (the relay is
 // sport-agnostic); the W1 style-strip describes above sweep three.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { ReactElement } from "react";
 import { EmbeddedCheckoutProvider } from "@stripe/react-stripe-js";
 import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/components/__tests__/_hook-harness";
@@ -42,7 +42,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
 import { STREAM_CREDIT_PACKS } from "@/lib/stream-credit-packs";
-import { DESTINATION_NOT_ALLOWED, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
 import {
   DESTINATION_REFUSAL_KEYS,
   END_REASON_KEYS,
@@ -55,6 +55,7 @@ import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import {
   FixtureStreamPanel,
   FixtureStreamToggle,
+  PhoneStopProbe,
   PhoneTab,
   PhoneTabBody,
   QR_RENDER_OPTIONS,
@@ -84,12 +85,29 @@ const searchParamsMock = vi.hoisted(() => {
   let p = new URLSearchParams("");
   return { set: (n: URLSearchParams) => { p = n; }, get: () => p };
 });
+// G5: the panel strips the consumed return params with `router.replace` — the spy is what the tests read.
+const router = vi.hoisted(() => ({ replace: vi.fn<(href: string, opts?: { scroll?: boolean }) => void>() }));
+const PATHNAME = "/o/org/c/comp/d/div";
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: router.replace }),
+  usePathname: () => PATHNAME,
   useSearchParams: () => searchParamsMock.get(),
 }));
 
-// D17: the embedded-checkout trio, doubled the way pass-checkout-parity.test.tsx does it.
+// I2: the checkout sheet is a `next/dynamic` import, so Stripe.js loads only once a checkout opens. The double records
+// each loader and its options and returns a marker component, so a test can (a) find the lazy element the panel
+// renders and read its props, and (b) run the panel's OWN loader and render the module it resolves to.
+const lazy = vi.hoisted(() => ({ made: [] as { loader: () => Promise<unknown>; opts: unknown; C: (props: Record<string, unknown>) => null }[] }));
+vi.mock("next/dynamic", () => ({
+  default: (loader: () => Promise<unknown>, opts: unknown) => {
+    const C: (props: Record<string, unknown>) => null = () => null;
+    lazy.made.push({ loader, opts, C });
+    return C;
+  },
+}));
+
+// D17: the embedded-checkout trio, doubled the way pass-checkout-parity.test.tsx does it. Read only by the LAZY module
+// (stream-checkout-modal.tsx) since I2 — the panel itself no longer imports any of it.
 const stripe = vi.hoisted(() => ({ promise: Promise.resolve(null) }));
 vi.mock("@stripe/react-stripe-js", () => ({
   EmbeddedCheckoutProvider: (props: { children?: unknown }) => props.children,
@@ -198,6 +216,7 @@ beforeEach(() => {
   apiV1.mockImplementation(async () => ({}));
   fetchOverlayFixture.mockClear();
   searchParamsMock.set(new URLSearchParams(""));
+  router.replace.mockReset();
 });
 
 describe("the style strip is built from the registry", () => {
@@ -484,13 +503,40 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     return island;
   };
 
-  it("without streaming.relay it is the UpgradeGate for THAT key, and no session control", () => {
+  it("without streaming.relay it is the UpgradeGate for THAT key — plus the stop-only probe ABOVE it (G2), never the full tab", () => {
     const tree = phone({ relayEntitled: false }).tree();
     expect(byTestId(tree, "stream-phone-gate"), "the gate card").toBeDefined();
     const gate = tree.find((el) => el.type === UpgradeGate);
     expect(gate, "no <UpgradeGate>").toBeDefined();
     expect(propsOf(gate!).feature).toBe("streaming.relay");
     expect(tree.find((el) => el.type === PhoneTab), "no container behind the gate").toBeUndefined();
+    // G2: a stream started while the org HAD the relay must stay stoppable after it lost it (lane C C1: "Stop not
+    // stopping a youth broadcast is a safety defect"). The probe reads THIS row's fixture, and it comes first.
+    const probe = tree.find((el) => el.type === PhoneStopProbe);
+    expect(probe, "nothing can stop a live stream on an unentitled org").toBeDefined();
+    expect(propsOf(probe!).fixtureId).toBe(FIXTURE.id);
+    expect(tree.indexOf(probe!), "the probe renders above the gate").toBeLessThan(tree.indexOf(gate!));
+    // …and an entitled tab has no probe: the container owns the session there.
+    expect(phone({ relayEntitled: true }).tree().find((el) => el.type === PhoneStopProbe)).toBeUndefined();
+  });
+
+  it("B4: the gate's wrapper lets the compact pill wrap inside it — the overflow is the pill's own inline-flex row, fixed from OUTSIDE the shared component", () => {
+    // The browser pass measured the compact UpgradeGate at 233 px inside a 220 px box at 320. The pill is
+    // upgrade-gate.tsx's `inline-flex` <a>, which never wraps; restyling that shared component is out of bounds, so the
+    // wrapper sets the pill's wrap and cap through a direct-child variant. A class assertion is all a node harness can
+    // pin; the browser pass re-measures.
+    const cls = String(attr(byTestId(phone({ relayEntitled: false }).tree(), "stream-phone-gate")!, "className")).split(/\s+/);
+    for (const c of ["min-w-0", "[&>a]:flex-wrap", "[&>a]:max-w-full"]) expect(cls, c).toContain(c);
+  });
+
+  it("B1: the W1 lead line is the OBS tab's — the Phone tab has no scorebug and nothing to paste back (§8a's frame has no lead)", () => {
+    const island = open({ relayEntitled: true });
+    expect(textAt(island.tree(), "stream-lead")).toBe(m("stream.line"));
+    click(byTestId(island.tree(), "stream-tab-phone"));
+    expect(byTestId(island.tree(), "stream-lead"), "the OBS promise shows above the Phone tab").toBeUndefined();
+    expect(textOf(island.tree()[0]!)).not.toContain(m("stream.line"));
+    click(byTestId(island.tree(), "stream-tab-obs"));
+    expect(byTestId(island.tree(), "stream-lead"), "…and comes back with OBS").toBeDefined();
   });
 
   it("with streaming.relay it mounts the container with THIS row's fixture and the page's org, balance and plan", () => {
@@ -504,21 +550,74 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
 
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
     // The behaviour is driven below (PhoneTab — checkout). This pins the negative the node harness cannot drive: no
-    // hosted-checkout hop anywhere in the module.
+    // hosted-checkout hop anywhere in the module — nor in the lazily loaded checkout sheet (I2).
     const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
-    expect(src).toMatch(/EmbeddedCheckoutProvider/);
-    expect(src).toMatch(/data-testid="stream-checkout-modal"/);
+    const sheet = readFileSync(join(__dirname, "..", "stream-checkout-modal.tsx"), "utf8");
+    // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel.
+    expect(src).toMatch(/dynamic\(\(\) => import\("\.\/stream-checkout-modal"\), \{ ssr: false \}\)/);
+    expect(sheet).toMatch(/EmbeddedCheckoutProvider/);
+    expect(sheet).toMatch(/data-testid="stream-checkout-modal"/);
     expect(src).toMatch(/fetchRelayCheckoutClientSecret/);
-    expect(src).not.toMatch(/window\.location\.assign|checkout\.stripe\.com/);
+    for (const text of [src, sheet]) expect(text).not.toMatch(/window\.location\.assign|checkout\.stripe\.com/);
     // C22: the 402 gate is read off STATUS — `CheckoutSecretResult` has no code field.
     expect(src).toMatch(/result\.status === 402/);
     expect(src).not.toMatch(/result\.code/);
-    // C1: the idle tab's balance has a source when there is no session.
-    expect(src).toMatch(/view \? view\.balance : streamBalance/);
+    // C1: the idle tab's balance has a source when there is no session (m2: a no_credits refusal reads it as 0).
+    expect(src).toMatch(/view \? view\.balance : noCredits \? 0 : streamBalance/);
     // De: the reveal flag exists.
     expect(src).toMatch(/\?reveal=1/);
     // The legacy transport prefixes nothing and drops the extras (404s here) — v1 only.
     expect(src).not.toMatch(/from "@\/lib\/client"/);
+  });
+
+  it("I2: Stripe.js is NOT in the panel's static import graph — the fixtures tab never loads js.stripe.com until a checkout opens", () => {
+    // `@stripe/stripe-js`'s main entry injects js.stripe.com as an IMPORT side effect, and the panel ships on every
+    // organiser fixtures tab (run-sheet-row.tsx imports it). So the whole static graph is walked, not just the panel's
+    // own import lines: a Stripe import re-introduced two modules away reds here too. `import type` is erased and a
+    // dynamic `import()` is a separate chunk, so neither is an edge.
+    const SRC = join(__dirname, "..", "..", "..");
+    const resolve = (from: string, spec: string): string | null => {
+      const base = spec.startsWith("@/") ? join(SRC, spec.slice(2)) : spec.startsWith(".") ? join(dirname(from), spec) : null;
+      if (!base) return null;
+      for (const cand of [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts"), join(base, "index.tsx")]) {
+        if (/\.(ts|tsx)$/.test(cand) && existsSync(cand)) return cand;
+      }
+      return null;
+    };
+    const graph = (entry: string) => {
+      const seen = new Set<string>();
+      const bare = new Set<string>();
+      const queue = [entry];
+      while (queue.length) {
+        const file = queue.pop()!;
+        if (seen.has(file)) continue;
+        seen.add(file);
+        const text = readFileSync(file, "utf8");
+        const specs = [
+          ...[...text.matchAll(/^\s*(?:import|export)\s+(?!type\s)(?:[\s\S]*?)\sfrom\s+"([^"]+)"/gm)].map((mm) => mm[1]!),
+          ...[...text.matchAll(/^\s*import\s+"([^"]+)"/gm)].map((mm) => mm[1]!),
+        ];
+        for (const spec of specs) {
+          const next = resolve(file, spec);
+          if (next) queue.push(next);
+          else bare.add(spec);
+        }
+      }
+      return { files: seen, bare };
+    };
+    const panel = graph(join(__dirname, "..", "fixture-stream-panel.tsx"));
+    const stripeish = (g: ReturnType<typeof graph>) => [
+      ...[...g.bare].filter((b) => b.startsWith("@stripe/")),
+      ...[...g.files].filter((f) => f.endsWith("stripe-browser.ts")),
+    ];
+    expect(stripeish(panel), "a static path from the panel reaches Stripe.js").toEqual([]);
+    // Anti-vacuity: the walk really followed the panel's imports (it reaches the view model and the upgrade gate)…
+    expect(panel.files.size, "the walk read no modules").toBeGreaterThan(10);
+    expect([...panel.files].some((f) => f.endsWith("stream-session-view.ts"))).toBe(true);
+    // …and the positive pair: the SAME walk finds Stripe from the lazily loaded sheet, so it can see one when it is there.
+    const sheet = graph(join(__dirname, "..", "stream-checkout-modal.tsx"));
+    expect(stripeish(sheet).sort()).toEqual(expect.arrayContaining(["@stripe/react-stripe-js"]));
+    expect([...sheet.files].some((f) => f.endsWith("stripe-browser.ts")), "the sheet's own stripePromise").toBe(true);
   });
 
   it("the OBS tab's own body is gone while Phone is selected, and comes back", () => {
@@ -594,8 +693,16 @@ describe("one DOM, branched — never a second phone tree", () => {
     const MD_HIDDEN = /(^|\s)md:hidden(\s|$)/; // anchored: `max-md:hidden` must not satisfy it (AGENTS.md)
     const MAX_MD_HIDDEN = /(^|\s)max-md:hidden(\s|$)/;
     let states = 0;
+    let stepped = 0;
     for (const [name, tree] of bodyStates()) {
       const hidden = tree.filter((el) => /(^|\s)(max-)?md:hidden(\s|$)/.test(String(propsOf(el).className ?? "")));
+      // B3: the credits-only state has no stepper at all — so nothing in it is hidden by width either.
+      if (CREDITS_ONLY.has(name)) {
+        expect(hidden, name).toEqual([]);
+        states++;
+        continue;
+      }
+      stepped++;
       expect(hidden.map((el) => attr(el, "data-testid")).sort(), name).toEqual(["stream-step", "stream-steps"]);
       expect(String(attr(byTestId(tree, "stream-step")!, "className")), name).toMatch(MD_HIDDEN);
       expect(String(attr(byTestId(tree, "stream-step")!, "className")), name).not.toMatch(MAX_MD_HIDDEN);
@@ -607,6 +714,7 @@ describe("one DOM, branched — never a second phone tree", () => {
     }
     expect(states).toBe(bodyStates().length);
     expect(states).toBeGreaterThanOrEqual(8);
+    expect(stepped, "every state skipped the stepper check").toBe(states - CREDITS_ONLY.size);
   });
 });
 
@@ -663,6 +771,58 @@ describe("the checkout return opens THIS row's panel on the Phone tab", () => {
     searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}`));
     expect(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-tab-obs")!, "aria-selected"), "no flag, no Phone tab").toBe(true);
   });
+
+  it("G5: once THIS row has consumed the return, its params are stripped with router.replace — every other param kept, once", () => {
+    // A reload or a shared link must not re-open the panel (or re-run the reconcile) on a URL whose purchase is done.
+    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}&stream=open&checkout=success&session_id=cs_test_1&court=2`));
+    const island = open({ relayEntitled: true });
+    expect(router.replace).toHaveBeenCalledTimes(1);
+    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?tab=fixtures&court=2`, { scroll: false });
+    island.rerender({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }) });
+    expect(router.replace, "a re-render stripped again").toHaveBeenCalledTimes(1);
+    // The empty cases: another row's return, and an ordinary visit, touch nothing.
+    router.replace.mockReset();
+    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", "fixture=some-other-row")));
+    open({ relayEntitled: true });
+    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}`));
+    open({ relayEntitled: true });
+    expect(router.replace).not.toHaveBeenCalled();
+    // …and a return with nothing else on the URL lands on the bare path.
+    searchParamsMock.set(new URLSearchParams(`fixture=${FIXTURE.id}&stream=open`));
+    open({ relayEntitled: false });
+    expect(router.replace).toHaveBeenCalledWith(PATHNAME, { scroll: false });
+  });
+
+  it("B2: the return scrolls the opened panel into view ONCE — smooth, instant under reduced motion; an ordinary open never scrolls", () => {
+    const REDUCE = "(prefers-reduced-motion: reduce)";
+    const attach = (reduce: boolean, query: string) => {
+      vi.stubGlobal("matchMedia", (q: string) => ({ matches: reduce && q === REDUCE, media: q }));
+      searchParamsMock.set(new URLSearchParams(query));
+      const section = byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!;
+      const el = { scrollIntoView: vi.fn() };
+      const ref = attr(section, "ref");
+      if (typeof ref === "function") {
+        ref(el);
+        ref(el); // React re-attaches a callback ref; the scroll must not repeat
+      }
+      return el.scrollIntoView;
+    };
+    const RETURN_HERE = RETURN.replace("fixture=f1", `fixture=${FIXTURE.id}`);
+    try {
+      const smooth = attach(false, RETURN_HERE);
+      expect(smooth).toHaveBeenCalledTimes(1);
+      expect(smooth).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+      const still = attach(true, RETURN_HERE);
+      expect(still).toHaveBeenCalledWith({ block: "start", behavior: "auto" });
+      expect(attach(false, `tab=fixtures&fixture=${FIXTURE.id}`), "an ordinary open scrolled").not.toHaveBeenCalled();
+      expect(attach(false, RETURN.replace("fixture=f1", "fixture=some-other-row")), "another row's return scrolled this one").not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    // The landing clears the console's sticky bars rather than tucking the panel's heading under them.
+    const cls = String(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!, "className")).split(/\s+/);
+    expect(cls.some((c) => /^scroll-mt-/.test(c)), "no scroll margin").toBe(true);
+  });
 });
 
 // ─── PhoneTabBody: every §8a / §8b state from the projection alone ──────────────────────────────────────────────────
@@ -670,6 +830,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
+  planGate: false, viewerPlan: "pro", stopFailed: false,
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {},
 };
@@ -679,6 +840,9 @@ const textAt = (tree: ReactElement[], id: string): string => {
   if (!el) throw new Error(`no ${id} in the tree`);
   return textOf(el).replace(/\s+/g, " ").trim();
 };
+
+/** B3: the states that are the heading and the credits card ONLY — no stepper, no pill (idle, balance < 1). */
+const CREDITS_ONLY = new Set(["idle, balance 0 (the credits card)"]);
 
 /** Every state the body renders, named — the sweeps below iterate THIS list and assert they read all of it. */
 function bodyStates(): [string, ReactElement[]][] {
@@ -859,6 +1023,113 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
   });
 
+  it("B3: balance < 1 and no session is the heading and the credits card ONLY — no 'Ready' pill, no stepper; a credit brings both back", () => {
+    const tree = body({ view: null, balance: 0 });
+    expect(textOf(tree.find((el) => el.type === "h4")!)).toContain(m("stream.phone.title"));
+    expect(byTestId(tree, "stream-buy-pack-5"), "the credits card").toBeDefined();
+    for (const id of ["stream-state-pill", "stream-step", "stream-steps"]) expect(byTestId(tree, id), id).toBeUndefined();
+    // The positive pair, one credit up: the pill and the stepper are back (and the tiles are not).
+    const funded = body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1" });
+    for (const id of ["stream-state-pill", "stream-step", "stream-steps", "stream-go-live"]) expect(byTestId(funded, id), id).toBeDefined();
+    expect(byTestId(funded, "stream-buy-pack-5")).toBeUndefined();
+    // …and a FAILED session at balance 0 is not idle: it keeps its pill and stepper (the no_credits failure explains itself).
+    const failed = body({ view: session({ state: "failed", qr: null, failReason: "no_credits" }), balance: 0 });
+    expect(byTestId(failed, "stream-state-pill")).toBeDefined();
+  });
+
+  it("B6: an OPENED chooser has a visible Close that hands back the idle controls; a FORCED one (balance 0) has none", () => {
+    let toggled = 0;
+    const opened = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", showBuy: true, onShowBuy: () => { toggled++; } });
+    const close = byTestId(opened, "stream-credits-close")!;
+    expect(close, "no close on an opened chooser").toBeDefined();
+    expect(textOf(close)).toBe(m("stream.credits.close"));
+    const cls = String(attr(close, "className")).split(/\s+/);
+    expect(cls).toContain("btn-ghost");
+    expect(cls).toContain("min-h-11");
+    expect(byTestId(opened, "stream-go-live"), "the chooser replaces the idle controls while open").toBeUndefined();
+    click(close);
+    expect(toggled, "Close is the chooser's own toggle").toBe(1);
+    // Closed (the container flips showBuy): the idle controls are back.
+    expect(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", showBuy: false }), "stream-go-live")).toBeDefined();
+    // Forced: nothing to go back to — no Close.
+    expect(byTestId(body({ view: null, balance: 0, showBuy: true }), "stream-credits-close")).toBeUndefined();
+    expect(byTestId(body({ view: null, balance: 0 }), "stream-credits-close")).toBeUndefined();
+  });
+
+  it("B8: every credit tile top-aligns its lines, so the three tiles' baselines line up", () => {
+    let checked = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      const cls = String(attr(byTestId(body({ view: null, balance: 0 }), `stream-buy-pack-${pack.size}`)!, "className")).split(/\s+/);
+      for (const c of ["flex", "flex-col", "items-start", "justify-start"]) expect(cls, `${pack.size}: ${c}`).toContain(c);
+      checked++;
+    }
+    expect(checked).toBe(STREAM_CREDIT_PACKS.length);
+  });
+
+  it("I1: a plan refusal mid-session renders the gate in the BUY slot and keeps every session control — Stop above all", () => {
+    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const tree = body({ view: live, balance: 2, planGate: true, showBuy: true });
+    expect(byTestId(tree, "stream-stop"), "a plan refusal took Stop away from a live stream").toBeDefined();
+    expect(byTestId(tree, "stream-rec")).toBeDefined();
+    const slot = byTestId(tree, "stream-plan-gate")!;
+    expect(slot, "no gate in the buy slot").toBeDefined();
+    const gate = tree.find((el) => el.type === UpgradeGate)!;
+    expect(propsOf(gate)).toMatchObject({ feature: "streaming.relay", compact: true, viewerPlan: "pro" });
+    // B4's wrapper: the compact pill may wrap inside the slot.
+    for (const c of ["min-w-0", "[&>a]:flex-wrap", "[&>a]:max-w-full"]) expect(String(attr(slot, "className")).split(/\s+/)).toContain(c);
+    // The tiles and Buy more are gone: buying is exactly what the plan refused.
+    expect(byTestId(tree, "stream-buy-pack-5")).toBeUndefined();
+    expect(byTestId(tree, "stream-buy-more")).toBeUndefined();
+    // The empty case: no refusal, no gate slot.
+    expect(byTestId(body({ view: live, balance: 2 }), "stream-plan-gate")).toBeUndefined();
+  });
+
+  it("m1: a failed stop has its OWN copy while the session is still up — never the create copy, and gone once it has ended", () => {
+    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const tree = body({ view: live, balance: 1, stopFailed: true });
+    expect(textAt(tree, "stream-stop-error")).toBe(m("stream.error.stop"));
+    expect(attr(byTestId(tree, "stream-stop-error")!, "role")).toBe("alert");
+    expect(byTestId(tree, "stream-create-error")).toBeUndefined();
+    expect(byTestId(body({ view: live, balance: 1 }), "stream-stop-error"), "the empty case").toBeUndefined();
+    // A later read that finds it ended makes "did not stop" false — the card must not keep saying it.
+    const ended = session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z" });
+    expect(byTestId(body({ view: ended, balance: 1, stopFailed: true }), "stream-stop-error")).toBeUndefined();
+  });
+
+  it("m9: the state pill announces a change politely", () => {
+    let checked = 0;
+    for (const [name, tree] of bodyStates()) {
+      const pill = byTestId(tree, "stream-state-pill");
+      if (!pill) continue;
+      expect(attr(pill, "aria-live"), name).toBe("polite");
+      checked++;
+    }
+    expect(checked).toBe(bodyStates().length - CREDITS_ONLY.size);
+  });
+
+  it("m11: a failed row with NO reason (V410's fail_reason is nullable, unchecked) has its own copy — not a machine crash", () => {
+    const tree = body({ view: session({ state: "failed", qr: null, failReason: null }), balance: 1 });
+    expect(textAt(tree, "stream-fail-reason")).toBe(m("stream.fail.unknown"));
+    expect(m("stream.fail.unknown"), "the premise: the two sentences differ").not.toBe(m(FAIL_REASON_KEYS.machine_crash));
+  });
+
+  it("m12: ending disables EVERY control — Buy more and an open chooser's tiles and Close included", () => {
+    const ending = session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const tree = body({ view: ending, balance: 2, showBuy: true });
+    const ids = ["stream-buy-more", "stream-credits-close", ...STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`)];
+    for (const id of ids) expect(attr(byTestId(tree, id)!, "disabled"), id).toBe(true);
+    // The positive pair: live, the same controls are live.
+    const live = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true });
+    for (const id of ids) expect(attr(byTestId(live, id)!, "disabled"), id).toBeFalsy();
+  });
+
+  it("B7: each native select names its selection in a title, so a clipped option is still readable", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
+    expect(attr(byTestId(tree, "stream-target")!, "title")).toBe("Alt");
+    expect(attr(byTestId(body({ view: null, balance: 2, targets: [] }), "stream-target")!, "title")).toBe(m("stream.phone.destination.none"));
+    expect(String(attr(byTestId(tree, "stream-target")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "min-w-0"]));
+  });
+
   it("the state pill: its copy and §8a's colour per state, the live dot only when live", () => {
     const PILL_CLASS: Record<string, string> = {
       "idle, balance 2": "bg-slate-100", provisioning: "bg-amber-100", "warming, the QR": "bg-amber-100", live: "bg-red-100",
@@ -939,15 +1210,21 @@ describe("TargetForm — the platform is labelled, the ingest URL is checked BEF
     for (const l of labels) expect(l).not.toMatch(/custom_rtmp|linkedin/i);
   });
 
-  it("an ingest URL the allowlist refuses is refused INLINE, by its rule, and never sent (D10)", async () => {
-    // The rulebook is lane C's validator: each URL's premise is asserted against it, then the FORM must show that rule's copy.
-    const ROWS: [string, DestinationRefusal][] = [
-      ["rtmps://evil.example/live2", "host"],
-      ["https://a.rtmps.youtube.com/live2", "scheme"],
-      ["rtmps://a.rtmps.youtube.com", "path"],
-    ];
+  it("an ingest URL the allowlist refuses is refused INLINE, by its rule, and never sent (D10) — one URL per rule", async () => {
+    // The rulebook is lane C's validator: each URL's premise is asserted against it, then the FORM must show that rule's
+    // copy. Keyed by EVERY DestinationRefusal (a Record, so a rule added to lane C's list is a type error here until it
+    // gets a URL) and counted against DESTINATION_REFUSALS itself.
+    const URL_FOR: Record<DestinationRefusal, string> = {
+      scheme: "https://a.rtmps.youtube.com/live2",
+      userinfo: "rtmps://user:pass@a.rtmps.youtube.com/live2",
+      ip_literal: "rtmps://203.0.113.7/live2",
+      host: "rtmps://evil.example/live2",
+      port: "rtmps://a.rtmps.youtube.com:8443/live2",
+      path: "rtmps://a.rtmps.youtube.com",
+    };
     let checked = 0;
-    for (const [url, rule] of ROWS) {
+    for (const rule of DESTINATION_REFUSALS) {
+      const url = URL_FOR[rule];
       expect(destinationRefusal(url), `premise: ${url}`).toBe(rule);
       const onSave = vi.fn<Save>(async () => {});
       const island = form(onSave);
@@ -957,7 +1234,16 @@ describe("TargetForm — the platform is labelled, the ingest URL is checked BEF
       expect(textAt(island.tree(), "stream-target-error"), url).toBe(m(DESTINATION_REFUSAL_KEYS[rule]));
       checked++;
     }
-    expect(checked).toBe(ROWS.length);
+    expect(checked).toBe(DESTINATION_REFUSALS.length);
+    expect(checked).toBeGreaterThanOrEqual(6);
+  });
+
+  it("m8: the stream KEY field keeps password managers out — never autofilled with a login, never offered for saving", () => {
+    const key = byTestId(form().tree(), "stream-target-key")!;
+    expect(attr(key, "type")).toBe("password");
+    expect(attr(key, "autoComplete")).toBe("new-password");
+    expect(attr(key, "data-1p-ignore")).toBe(true);
+    expect(attr(key, "data-lpignore")).toBe("true");
   });
 
   it("an allowed URL is sent — with surrounding whitespace too, which the server trims (it is not a refusal)", async () => {
@@ -1046,6 +1332,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     if (!el) throw new Error("no PhoneTabBody in the container's tree");
     return propsOf(el) as unknown as PhoneTabBodyProps;
   };
+  /** The lazily loaded checkout sheet, if the container rendered it — found by the `next/dynamic` double's own marker. */
+  const lazySheet = (tree: ReactElement[]) => tree.find((el) => lazy.made.some((d) => d.C === el.type));
   let islands: { unmount: () => void }[] = [];
   const track = <T extends { unmount: () => void }>(i: T): T => { islands.push(i); return i; };
 
@@ -1067,6 +1355,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     serve({ current: null, targets: TARGETS });
     const island = track(renderIsland(PhoneTab, TAB));
     expect(byTestId(island.tree(), "stream-loading"), "the pre-fetch placeholder").toBeDefined();
+    // m9: announced, not a bare ellipsis — a status region with real text for a screen reader.
+    expect(attr(byTestId(island.tree(), "stream-loading")!, "role")).toBe("status");
+    expect(textOf(byTestId(island.tree(), "stream-loading")!)).toContain(m("stream.phone.loading"));
     expect(island.tree().find((el) => el.type === PhoneTabBody)).toBeUndefined();
     expect([...calls()].sort()).toEqual([CURRENT, "GET /api/v1/orgs/o-1/stream-targets"]);
     await settle();
@@ -1116,8 +1407,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(plainPolls() - before, "three polls ran").toBe(3);
     expect(reveals(), "polls are not reveals").toBe(1);
-    // The QR is encoded CLIENT-side from the payload itself, with §7.6's settings.
+    // The QR is encoded CLIENT-side from the payload itself, with §7.6's settings — ONCE per payload (m10): every poll is
+    // a fresh object off the wire, and an effect keyed on the object re-encoded the same symbol on each.
     expect(qrcode.toDataURL).toHaveBeenCalledWith(qrText(QR), QR_RENDER_OPTIONS);
+    expect(qrcode.toDataURL, "the same payload was re-encoded per poll").toHaveBeenCalledTimes(1);
     expect(bodyOf(island).qrDataUrl).toBe(`data:image/png;base64,len${qrText(QR).length}`);
     const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
@@ -1126,10 +1419,33 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(writeText).toHaveBeenCalledWith(qrText(QR));
     expect(bodyOf(island).copied).toBe(true);
     expect(reveals(), "taking the paste code IS a reveal").toBe(2);
-    s.current = session({ id: "s2" });
+    // m4: the next session carries a DIFFERENT payload. Until the encoder answers for it, there is no image — never the
+    // previous session's symbol under the new session's paste code.
+    const QR2: CaptureQrV1 = { ...QR, sid: "7d1e2f3a-4b5c-4d6e-8f70-819203a4b5c6" };
+    expect(qrText(QR2), "premise: the two payloads differ").not.toBe(qrText(QR));
+    let answer: (url: string) => void = () => {};
+    qrcode.toDataURL.mockImplementationOnce(() => new Promise<string>((resolve) => { answer = resolve; }));
+    s.current = session({ id: "s2", qr: QR2 });
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
     await settle();
     expect(reveals(), "a new session's QR is a new disclosure").toBe(3);
+    expect(qrcode.toDataURL).toHaveBeenLastCalledWith(qrText(QR2), QR_RENDER_OPTIONS);
+    expect(bodyOf(island).qrDataUrl, "s1's symbol was painted over s2's payload").toBeNull();
+    answer("data:image/png;base64,S2");
+    await settle();
+    expect(bodyOf(island).qrDataUrl).toBe("data:image/png;base64,S2");
+  });
+
+  it("m5: a clipboard that REFUSES is neither a reveal nor 'Copied'", async () => {
+    const island = track(await mount({ current: session(), targets: TARGETS }));
+    expect(reveals()).toBe(1);
+    const writeText = vi.fn<(text: string) => Promise<void>>(async () => { throw new Error("NotAllowedError"); });
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    bodyOf(island).onCopy();
+    await settle();
+    expect(writeText, "the copy was attempted").toHaveBeenCalledTimes(1);
+    expect(reveals(), "nothing was taken, so nothing was disclosed").toBe(1);
+    expect(bodyOf(island).copied).toBe(false);
   });
 
   it("§7.6's encoding settings are the sheet's: EC-M and a 4-module quiet zone", () => {
@@ -1192,6 +1508,58 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(other).view?.id).toBe("s9");
   });
 
+  it("m2: a no_credits refusal opens the chooser and reads the balance as 0 here — the page's stale number is not believed", async () => {
+    const s = serve({ current: null, targets: TARGETS });
+    s.create = () => { throw new ApiV1Error("no credits", 402, "no_credits", { featureKey: "streaming.relay" }); };
+    const island = track(await mount(s));
+    expect(bodyOf(island).balance, "premise: the page said 3").toBe(TAB.streamBalance);
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).balance).toBe(0);
+    expect(bodyOf(island).showBuy).toBe(true);
+    expect(bodyOf(island).createError).toEqual({ code: "no_credits", holder: null });
+    // Any OTHER refusal leaves both alone.
+    const other = serve({ current: null, targets: TARGETS });
+    other.create = () => { throw new ApiV1Error("full", 409, "storage_exhausted"); };
+    const kept = track(await mount(other));
+    bodyOf(kept).onGoLive();
+    await settle();
+    expect(bodyOf(kept).balance).toBe(TAB.streamBalance);
+    expect(bodyOf(kept).showBuy).toBe(false);
+  });
+
+  it("I1: a 402 at checkout while a session is UP never replaces the tab — the body keeps Stop and shows the gate; at idle it still does", async () => {
+    checkout.fetch.mockResolvedValueOnce({ ok: false, error: "plan_lacks_relay", status: 402 });
+    const island = track(await mount({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS }));
+    bodyOf(island).onShowBuy();
+    bodyOf(island).onBuy(5);
+    await settle();
+    expect(island.tree().find((el) => el.type === UpgradeGate), "the refusal replaced a live tab").toBeUndefined();
+    const b = bodyOf(island);
+    expect(b.planGate).toBe(true);
+    expect(b.view?.state).toBe("live");
+    // Folded through the REAL body: what the container handed it renders Stop and the gate together.
+    const rendered = walk(expandWithHooks(PhoneTabBody, b));
+    expect(byTestId(rendered, "stream-stop"), "Stop is gone").toBeDefined();
+    expect(byTestId(rendered, "stream-plan-gate")).toBeDefined();
+    // …and once the session ends and the organiser starts another, idle has nothing to protect: the gate IS the tab.
+    bodyOf(island).onAgain();
+    expect(island.tree().find((el) => el.type === UpgradeGate), "idle + a plan refusal is the gate").toBeDefined();
+  });
+
+  it("B6: Buy more and Close are one toggle, and closing drops a stale checkout refusal", async () => {
+    checkout.fetch.mockResolvedValueOnce({ ok: false, error: "no", status: 403 });
+    const island = track(await mount({ current: null, targets: TARGETS }));
+    bodyOf(island).onShowBuy();
+    expect(bodyOf(island).showBuy).toBe(true);
+    bodyOf(island).onBuy(5);
+    await settle();
+    expect(bodyOf(island).checkoutError).toBe("owner");
+    bodyOf(island).onShowBuy();
+    expect(bodyOf(island).showBuy).toBe(false);
+    expect(bodyOf(island).checkoutError, "a closed chooser's refusal came back with the next one").toBeNull();
+  });
+
   it("Stop asks the repo's confirm dialog (danger) and POSTs THIS session's stop; a declined confirm sends nothing", async () => {
     const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
     s.stop = () => session({ id: "s1", state: "ending", qr: null });
@@ -1207,14 +1575,59 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).view?.state).toBe("ending");
   });
 
-  it("Cancel on the QR stops the session WITHOUT the on-air confirm — nothing is broadcasting yet", async () => {
+  it("m3: Cancel re-reads FIRST — still warming stops with no confirm; already LIVE is the confirming stop; ended does nothing", async () => {
+    const STOP = "POST /api/v1/fixtures/f-1/stream-sessions/s1/stop";
+    // Every branch below shares the transport double, so each counts ITS OWN stops from a baseline.
+    const stops = () => calls().filter((c) => c === STOP).length;
+    // Still warming: nothing is on air, so no confirm — but the read came before the stop.
     const s = serve({ current: session({ id: "s1" }), targets: TARGETS });
     s.stop = () => session({ id: "s1", state: "completed", qr: null });
-    const island = track(await mount(s));
-    bodyOf(island).onCancel();
+    const warm = track(await mount(s));
+    const before = calls().length;
+    bodyOf(warm).onCancel();
     await settle();
     expect(confirmMock).not.toHaveBeenCalled();
-    expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
+    const after = calls().slice(before);
+    expect(after, "no stop was sent").toContain(STOP);
+    expect(after.filter((c) => c === CURRENT).length, "Cancel did not re-read").toBeGreaterThanOrEqual(1);
+    expect(after.indexOf(CURRENT), "the read came after the stop").toBeLessThan(after.indexOf(STOP));
+
+    // The phone connected while the QR was on screen: the SAME tap is now a live stop, and asks.
+    const went = serve({ current: session({ id: "s1" }), targets: TARGETS });
+    went.stop = () => session({ id: "s1", state: "ending", qr: null });
+    const live = track(await mount(went));
+    went.current = session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:59:00Z" });
+    confirmMock.mockResolvedValueOnce(false);
+    let base = stops();
+    bodyOf(live).onCancel();
+    await settle();
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger", title: m("stream.phone.stop.title") }));
+    expect(stops() - base, "a declined confirm still stopped a live stream").toBe(0);
+    expect(bodyOf(live).view?.state, "the card shows what the read found").toBe("live");
+
+    // The read fails: nobody knows whether it is on air, so it is the confirming stop.
+    const blind = serve({ current: session({ id: "s1" }), targets: TARGETS });
+    blind.stop = () => session({ id: "s1", state: "ending", qr: null });
+    const unknown = track(await mount(blind));
+    blind.failCurrent = true;
+    confirmMock.mockClear();
+    base = stops();
+    bodyOf(unknown).onCancel();
+    await settle();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(stops() - base).toBe(1);
+
+    // It already ended (it timed out): nothing to stop, nothing asked.
+    const gone = serve({ current: session({ id: "s1" }), targets: TARGETS });
+    const done = track(await mount(gone));
+    gone.current = session({ id: "s1", state: "failed", qr: null, failReason: "admission_timeout" });
+    confirmMock.mockClear();
+    base = stops();
+    bodyOf(done).onCancel();
+    await settle();
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(stops() - base).toBe(0);
+    expect(bodyOf(done).view?.state).toBe("failed");
   });
 
   it("D14: a refused stop reads the server again (it may already have ended); only a failed read says so", async () => {
@@ -1231,27 +1644,38 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const offline = track(await mount(down));
     bodyOf(offline).onStop();
     await settle();
-    expect(bodyOf(offline).createError).toEqual({ code: "unknown", holder: null });
+    expect(bodyOf(offline).stopFailed, "m1: a stop that could not be confirmed has its own state").toBe(true);
+    expect(bodyOf(offline).createError, "…never the create copy").toBeNull();
+    expect(bodyOf(ended).stopFailed).toBe(false);
   });
 
   it("checkout (owner ruling 8): the secret up front, then the EMBEDDED checkout in the repo's Modal; 402 → the gate; 403 → owner copy; anything else → checkout copy (D13)", async () => {
     checkout.fetch.mockResolvedValueOnce({ ok: true, clientSecret: "cs_test_secret_1" });
     const island = track(await mount({ current: null, targets: TARGETS }));
+    expect(lazySheet(island.tree()), "the sheet (and Stripe.js with it) mounted before any checkout").toBeUndefined();
     bodyOf(island).onShowBuy();
     bodyOf(island).onBuy(5);
     await settle();
     expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "o-1", fixtureId: "f-1", pack: 5 });
-    const tree = island.tree();
-    expect(tree.find((el) => el.type === Modal), "no Modal").toBeDefined();
-    expect(propsOf(tree.find((el) => el.type === Modal)!).title).toBe(m("stream.credits.title"));
-    expect(byTestId(tree, "stream-checkout-modal")).toBeDefined();
-    const provider = tree.find((el) => el.type === EmbeddedCheckoutProvider);
+    // I2: the sheet is the `next/dynamic` component, mounted only now — and its loader is the real module.
+    const sheet = lazySheet(island.tree());
+    expect(sheet, "no checkout sheet").toBeDefined();
+    expect(propsOf(sheet!).clientSecret).toBe("cs_test_secret_1");
+    const made = lazy.made.find((d) => d.C === sheet!.type)!;
+    expect(made.opts, "the sheet must never render on the server").toEqual({ ssr: false });
+    const mod = (await made.loader()) as { default: (p: Record<string, unknown>) => ReactElement };
+    const inner = walk(expandWithHooks(mod.default, propsOf(sheet!)));
+    const modal = inner.find((el) => el.type === Modal);
+    expect(modal, "no Modal").toBeDefined();
+    expect(propsOf(modal!).title).toBe(m("stream.credits.title"));
+    expect(byTestId(inner, "stream-checkout-modal")).toBeDefined();
+    const provider = inner.find((el) => el.type === EmbeddedCheckoutProvider);
     expect(propsOf(provider!).options).toEqual({ clientSecret: "cs_test_secret_1" });
     expect(propsOf(provider!).stripe).toBe(stripe.promise);
     expect(bodyOf(island).showBuy, "the chooser closes behind the sheet").toBe(false);
-    // closing the sheet unmounts it
-    (propsOf(tree.find((el) => el.type === Modal)!).onClose as () => void)();
-    expect(island.tree().find((el) => el.type === Modal)).toBeUndefined();
+    // closing the sheet (the Modal's own close, wired through the lazy component's prop) unmounts it
+    (propsOf(modal!).onClose as () => void)();
+    expect(lazySheet(island.tree())).toBeUndefined();
 
     let checked = 0;
     for (const [status, expected] of [[403, "owner"], [400, "unknown"], [503, "unknown"], [null, "unknown"]] as const) {
@@ -1261,7 +1685,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       await settle();
       expect(bodyOf(refused).checkoutError, String(status)).toBe(expected);
       expect(bodyOf(refused).createError, "never the create copy").toBeNull();
-      expect(refused.tree().find((el) => el.type === Modal)).toBeUndefined();
+      expect(lazySheet(refused.tree())).toBeUndefined();
       checked++;
     }
     expect(checked).toBe(4);
@@ -1271,6 +1695,60 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(gated).onBuy(20);
     await settle();
     expect(propsOf(gated.tree().find((el) => el.type === UpgradeGate)!)).toMatchObject({ feature: "streaming.relay", viewerPlan: "pro" });
+  });
+
+  describe("PhoneStopProbe — an org without the relay can still stop what is on air (G2)", () => {
+    async function probe(s: Server) {
+      serve(s);
+      const island = track(renderIsland(PhoneStopProbe, { fixtureId: "f-1" }));
+      await settle();
+      return island;
+    }
+
+    it("no session, or a finished one: renders NOTHING, and reads only `current` — never the org's destinations", async () => {
+      let checked = 0;
+      for (const current of [null, session({ state: "completed", qr: null }), session({ state: "failed", qr: null })]) {
+        apiV1.mockClear();
+        const island = await probe({ current, targets: TARGETS });
+        expect(island.tree(), String(current?.state)).toEqual([]);
+        expect(calls(), String(current?.state)).toEqual([CURRENT]);
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it("live: the pill (announced), REC + elapsed and a confirming Stop that POSTs THIS session's stop", async () => {
+      const s = { current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS } as Server;
+      s.stop = () => { s.current = session({ id: "s1", state: "ending", qr: null }); return s.current; };
+      const island = await probe(s);
+      const tree = island.tree();
+      expect(byTestId(tree, "stream-stop-probe")).toBeDefined();
+      expect(attr(byTestId(tree, "stream-state-pill")!, "aria-live")).toBe("polite");
+      expect(byTestId(tree, "stream-rec")).toBeDefined();
+      expect(String(attr(byTestId(tree, "stream-stop")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["bg-red-600", "min-h-11"]));
+      click(byTestId(tree, "stream-stop"));
+      await settle();
+      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger" }));
+      expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
+      expect(textAt(island.tree(), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club" }));
+      expect(byTestId(island.tree(), "stream-stop"), "no Stop while it ends").toBeUndefined();
+      // It keeps polling while not terminal, and gets out of the way once the stream is done.
+      s.current = session({ id: "s1", state: "completed", qr: null });
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(island.tree()).toEqual([]);
+    });
+
+    it("warming: Cancel — through the same re-read — and a stop nobody could confirm says so", async () => {
+      const s = { current: session({ id: "s1" }), targets: TARGETS } as Server;
+      s.stop = () => { s.failCurrent = true; throw new TypeError("Failed to fetch"); };
+      const island = await probe(s);
+      expect(byTestId(island.tree(), "stream-qr"), "the probe never shows the credentials").toBeUndefined();
+      click(byTestId(island.tree(), "stream-cancel"));
+      await settle();
+      expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
+      expect(textAt(island.tree(), "stream-stop-error")).toBe(m("stream.error.stop"));
+    });
   });
 
   it("D11: re-saving the SAME destination replaces its row (A19 answers with the existing one); a new one is appended and selected", async () => {
