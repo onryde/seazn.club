@@ -19,14 +19,14 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
 import { BUILDER_DEFAULT_KNOBS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { RefusedCall, RequestTimedOut, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldStream } from "../lib/fold.ts";
 import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
 import { regressionFor, vacuityOf } from "../lib/model/run-cell.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import {
-  NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
+  NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, NEXT_MATCH_UNHELD_FINDING, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
   absorbFixtures, fedCandidates, fedMatchStarted, informativeSteps, orientationBound, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
@@ -34,7 +34,7 @@ import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../li
 import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
-import { ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
+import { FOREIGN_NEXT_MATCH, ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
 import { bracketRoundNoText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalPendingText, withdrawalReason } from "./product-text.ts";
 
 const I7 = "I7-rr-no-pair-over-legs";
@@ -1020,6 +1020,82 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     expect([f2.status, f3.status], "the premise: the first-listed candidate never started").toEqual(["decided", next.notStarted]);
     await play(m, d, [["Void", 0]]);
     expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
+  });
+
+  describe("W1c Task 2, ruling Q2: the refusal names its fed match, and the judge narrows to it", () => {
+    // single-sport: as above — the lock is the stage kind's, not the sport's.
+    /** The FB-11 chain, listed final-first: f1 → f2 → f3, f1 and f2 played,
+     *  f3 not. Every id the driver's fixtureState is asked for is logged. */
+    async function chain(opts: ModelFakeOpts = {}) {
+      let ids: string[] = [];
+      const reads: string[] = [];
+      class Reads extends ModelFakeDriver {
+        override fixtureState(id: string) { reads.push(id); return super.fixtureState(id); }
+      }
+      const { m, d } = await bracket("knockout", 4, (dd, [e1, e2, e3, e4]) => {
+        const f1 = dd.seat(1, e1, e2);
+        const f3 = dd.seat(3, null, e4);
+        const f2 = dd.seat(2, null, e3);
+        dd.feed(f1.id, f2.id, 1);
+        dd.feed(f2.id, f3.id, 1);
+        ids = [f1.id, f2.id, f3.id];
+      }, opts, new Reads(opts));
+      await play(m, d, [["Score", 0, 0], ["Score", 0, 0]]);
+      const [f1, f2, f3] = ids.map((id) => m.fixtures.get(id));
+      if (f1 === undefined || f2 === undefined || f3 === undefined) throw new Error("test: the chain has three fixtures");
+      expect(fedCandidates(m, f1).map((x) => x.id), "the premise: the superset lists the unstarted f3 before the fed f2").toEqual([f3.id, f2.id]);
+      expect([f2.status, f3.status], "the premise: f2 started, f3 did not").toEqual(["decided", next.notStarted]);
+      reads.length = 0;
+      return { m, d, f1, f2, f3, reads };
+    }
+
+    it("the brief's \"exactly f-9\": the fake's refusal of f1's take-back names its fed match f2 in the product's wire shape, and fedCandidates narrows to exactly f2 — the superset without it", async () => {
+      const { m, d, f1, f2, f3 } = await chain();
+      const last = f1.ledger?.at(-1);
+      if (last === undefined) throw new Error("test: f1 was scored");
+      const e = await d.postStream(f1.id, [{ type: "core.void", payload: { event_id: last.id } }]).then(() => null, (x: unknown) => x);
+      if (!(e instanceof RefusedCall)) throw new Error(`test: the take-back was not refused: ${String(e)}`);
+      expect([e.status, e.code]).toEqual([next.status, next.code]);
+      // The product's shape, from its own text: error[key][idField] is the fed fixture (f1 feeds f2).
+      expect(e.extra).toEqual({ [next.wire.key]: { [next.wire.idField]: f2.id } });
+      expect(nextMatchFixtureId(e)).toBe(f2.id);
+      expect(fedCandidates(m, f1, e).map((x) => x.id)).toEqual([f2.id]);
+      expect(fedCandidates(m, f1).map((x) => x.id), "no refusal: the structural superset, unchanged").toEqual([f3.id, f2.id]);
+      expect(m.findings.size).toBe(0);
+    });
+
+    it("through commands.ts: the judge reads the tip, then ONLY the fed match the refusal names — expected, no finding; a second take-back is judged afresh the same way", async () => {
+      const { m, d, f1, f2, reads } = await chain();
+      await play(m, d, [["Void", 0]]);
+      expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
+      expect(reads, "the tip, then the named fed match alone").toEqual([f1.id, f2.id]);
+      await play(m, d, [["Void", 0]]);
+      expect(m.counts.Void).toEqual(counts(2, { expected: 2 }));
+      expect(reads).toEqual([f1.id, f2.id, f1.id, f2.id]);
+      expect(m.findings.size).toBe(0);
+    });
+
+    it("no next_match on the refusal: unchanged — the judge reads the whole superset in its order, expected, no finding", async () => {
+      const { m, d, f1, f2, f3, reads } = await chain({ nextMatchRef: "absent" });
+      await play(m, d, [["Void", 0]]);
+      expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
+      expect(reads).toEqual([f1.id, f3.id, f2.id]);
+      expect(m.findings.size).toBe(0);
+    });
+
+    it("a next match the model does not hold: the judge falls back to the superset and records the finding, once per refusal", async () => {
+      const { m, d, f1, f2, f3, reads } = await chain({ nextMatchRef: "foreign" });
+      expect(m.fixtures.has(FOREIGN_NEXT_MATCH), "the premise: the named fixture is not the model's").toBe(false);
+      await play(m, d, [["Void", 0]]);
+      expect(m.counts.Void).toEqual(counts(1, { expected: 1 }));
+      expect(reads, "the fallback: the whole superset").toEqual([f1.id, f3.id, f2.id]);
+      const found = m.findings.get(NEXT_MATCH_UNHELD_FINDING);
+      expect(found?.count).toBe(1);
+      expect(found?.evidence[0]).toContain(`product named next match ${FOREIGN_NEXT_MATCH}, which the model does not hold`);
+      await play(m, d, [["Void", 0]]);
+      expect(m.findings.get(NEXT_MATCH_UNHELD_FINDING)?.count).toBe(2);
+      expect(m.counts.Void).toEqual(counts(2, { expected: 2 }));
+    });
   });
 
   it("a fed match whose events the model cannot see (scheduled, no outcome, last_seq > 0) → counted under unknowns: the refusal is neither expected nor a violation, and the step is not informative", async () => {
