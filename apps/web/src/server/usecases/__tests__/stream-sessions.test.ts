@@ -674,6 +674,27 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect((await r.row(made.sessionId)).state).toBe("warming");
   });
 
+  // Task 13 review m4: `ingest_unavailable` is one of CREATE_ERROR_KEYS' refusals, and until now nothing drove the path
+  // that produces it. A provider that refuses the live-input create is a 503 with that code — and the E5 shape: the row
+  // it inserted is deleted (no dead row), and a passthrough create consumes nothing, so the balance stands.
+  it("m4: an ingest whose create_live_input REJECTS refuses 503 ingest_unavailable — no session row, balance unchanged — and the next create starts", async () => {
+    const r = await rig({ credits: 1 });
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput").mockRejectedValueOnce(new Error("provider 500"));
+    try {
+      const err = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+      expect(ingestSpy, "the refusal came from the ingest call, not before it").toHaveBeenCalledTimes(1);
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n, "a refused start leaves no row").toBe(0);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    // The positive pair: the same org, fixture and target, with the ingest answering again.
+    const made = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(made.sessionId)).state).toBe("warming");
+  });
+
   it("composed: the Machine lifecycle end to end — create persisted BEFORE the create call (invariant 4), booting → playing on the callback (consumes one), stop = SIGINT + grace (R0 :279), observed destroyed → completed(stopped); facts carry the decrypted target and a page token; wrong scope 401; terminal 410", async () => {
     const r = await rig({ credits: 1 });
     // Invariant 4 as it is TITLED — the intent is COMMITTED before the create call goes out. The row is read from the
