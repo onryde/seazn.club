@@ -812,6 +812,8 @@ the envelope if the project's tier has it (§12).
 Every route under `v1()`/`handler()`, zod at `server/api-v1/schemas.ts`,
 OpenAPI `ROUTES` entries in the same change.
 
+**Admission order amended by owner ruling 2026-09-29 (F-A5):** `active_session` is checked right after `plan_lacks_relay` — before `no_credits`, `target_not_found` and `storage_exhausted` (`server/relay/domain/session.ts` `admit`).
+
 **E5 (resolved 2026-09-10) — `storage_exhausted` is a REFUSAL, never a
 state.** The headroom check runs with the other create gates, before the
 insert and in the same transaction, so an exhausted block yields
