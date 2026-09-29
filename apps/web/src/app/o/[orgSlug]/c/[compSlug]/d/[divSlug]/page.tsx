@@ -31,7 +31,9 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
-import { relayBalance } from "@/server/usecases/stream-sessions";
+import { openStreamFixtureIds, relayBalance } from "@/server/usecases/stream-sessions";
+import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
+import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
@@ -549,6 +551,18 @@ export default async function DivisionPage({
         viewerPlan,
       }
     : undefined;
+  // F1 (Task 14 fix round 2): a BILLING freeze takes the stream panel away with everything else editable, but it must not
+  // strand a stream already on air — the stop route still serves a frozen org's organiser. So a frozen competition's
+  // fixtures tab mounts the stop-only probe for each fixture with a session still up, named by its entrants. Never
+  // alongside the live panel (not frozen ⇒ the row's own Phone tab owns Stop), and never for a viewer who cannot edit.
+  const frozenOnAir =
+    tab === "fixtures" && canEdit && billingFrozen
+      ? await openStreamFixtureIds(auth, fixtures.map((f) => f.id))
+      : [];
+  // An unfilled side reads as its slot ("Winner of R1·2") or TBD — the one resolver every fixture renderer uses.
+  const sideName = (entrantId: string | null, slotLabel: SlotLabel | null) =>
+    (entrantId ? entrantNames[entrantId] : undefined) ??
+    resolveSlotLabel(slotLabel, (key, vars) => t(dict, key, vars), "schedule.tbd");
 
   return (
     <>
@@ -731,6 +745,19 @@ export default async function DivisionPage({
 
         {tab === "fixtures" && (
           <>
+            {frozenOnAir.length > 0 && (
+              <div data-testid="frozen-stream-probes" className="mb-6">
+                {fixtures
+                  .filter((f) => frozenOnAir.includes(f.id))
+                  .map((f) => (
+                    <PhoneStopProbe
+                      key={f.id}
+                      fixtureId={f.id}
+                      label={`${sideName(f.home_entrant_id, f.home_slot_label)} ${t(dict, "schedule.vs")} ${sideName(f.away_entrant_id, f.away_slot_label)}`}
+                    />
+                  ))}
+              </div>
+            )}
             {/* PROMPT-62: two-sided tree for each knockout stage, above the
                 flat list (which keeps scheduling + Documents). Renders nothing
                 until the bracket is generated or for non-single-elim shapes. */}

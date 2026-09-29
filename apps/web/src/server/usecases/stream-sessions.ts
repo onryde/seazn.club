@@ -1136,6 +1136,19 @@ export async function relayBalance(auth: AuthCtx, orgId: string): Promise<number
   return creditBalance(sql, orgId);
 }
 
+/** F1: which of `fixtureIds` have a session still UP (an ACTIVE state) — THIS org's only. A billing-frozen competition
+ *  renders no stream panel (the division page gates it on `editable`), yet the stop route still serves a frozen org's
+ *  organiser, so the page mounts a stop probe for exactly these fixtures: a freeze never strands a stream on air. */
+export async function openStreamFixtureIds(auth: AuthCtx, fixtureIds: readonly string[]): Promise<string[]> {
+  if (fixtureIds.length === 0) return [];
+  const rows = await sql<{ fixture_id: string }[]>`
+    select distinct fixture_id from fixture_stream_sessions
+     where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}`;
+  // In the caller's order (the division's fixture order), so the probes stack the way the run sheet lists them.
+  const open = new Set(rows.map((r) => r.fixture_id));
+  return fixtureIds.filter((id) => open.has(id));
+}
+
 export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
   const { orgId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");

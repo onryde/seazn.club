@@ -50,7 +50,7 @@ import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  openStreamFixtureIds, reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -2072,6 +2072,38 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(await relayBalance(r.auth, r.auth.orgId)).toBe(2);
     const other = await rig({ credits: 1 });
     await expect(relayBalance(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });   // 404 ≡ missing, never 403
+  });
+
+  it("F1: openStreamFixtureIds names exactly the fixtures with a session still UP — every active state in, every terminal state out, another org's never", async () => {
+    // The billing-frozen division page mounts a stop probe for each id this returns, so an org whose competition froze
+    // mid-stream can still stop it. The states come from the engine's own ACTIVE_STATES / TERMINAL_STATES.
+    const r = await rig({ fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    expect(await openStreamFixtureIds(r.auth, []), "the empty case asks nothing").toEqual([]);
+    expect(await openStreamFixtureIds(r.auth, [a, b]), "no session at all").toEqual([]);
+    const [row] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      select ${a}, ${r.auth.orgId}, 'passthrough', 'completed', ${r.target.id}, ${r.auth.userId}, now(),
+             d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${a}
+      returning id`;
+    let checked = 0;
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
+      await sql`update fixture_stream_sessions set state = ${state} where id = ${row!.id}`;
+      const open = ACTIVE_STATES.includes(state);
+      expect(await openStreamFixtureIds(r.auth, [a, b]), state).toEqual(open ? [a] : []);
+      // Tenancy: another org naming the same fixture ids reads nothing.
+      const other = await seedOrg();
+      expect(await openStreamFixtureIds(other.auth, [a, b]), `${state}, another org`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
+    expect(checked).toBeGreaterThan(0);
+    // An id outside the list is never reported, even while it is up.
+    await sql`update fixture_stream_sessions set state = 'live' where id = ${row!.id}`;
+    expect(await openStreamFixtureIds(r.auth, [b])).toEqual([]);
+    await sql`update fixture_stream_sessions set state = 'completed' where id = ${row!.id}`;
   });
 
   it("F18: a `requested` row nobody admitted is failed with admission_timeout on the next read (the net for a crash between the insert and provisioning)", async () => {

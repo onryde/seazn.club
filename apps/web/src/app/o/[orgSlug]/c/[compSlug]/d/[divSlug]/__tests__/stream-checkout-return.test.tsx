@@ -11,6 +11,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
+// F1: the scene a billing-frozen page renders — the competition's freeze, the division's fixtures and entrants.
+const scene = vi.hoisted(() => ({ frozen: false, fixtures: [] as unknown[], entrants: [] as unknown[] }));
 const stagesSpies = vi.hoisted(() => ({
   listStages: vi.fn(),
   getStandings: vi.fn(async () => ({ rows: [] })),
@@ -49,16 +51,19 @@ vi.mock("@/server/usecases/division-slots", () => ({
 vi.mock("@/server/usecases/competitions", () => ({
   getCompetition: vi.fn(async () => ({
     id: "comp-1",
-    frozen: false,
+    frozen: scene.frozen,
     visibility: "private",
     slug: "comp-one",
   })),
 }));
 vi.mock("@/server/usecases/fixtures", () => ({
-  listDivisionFixtures: vi.fn(async () => []),
+  listDivisionFixtures: vi.fn(async () => scene.fixtures),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+vi.mock("@/server/usecases/entrants", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/entrants")>()),
+  listEntrants: vi.fn(async () => scene.entrants),
+}));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
 }));
@@ -91,16 +96,19 @@ vi.mock("@/lib/db", () => ({
 const relay = vi.hoisted(() => ({
   reconcile: vi.fn<(orgId: string, sessionId: string) => Promise<boolean>>(async () => true),
   balance: vi.fn<(auth: unknown, orgId: string) => Promise<number>>(async () => 0),
+  open: vi.fn<(auth: unknown, fixtureIds: readonly string[]) => Promise<string[]>>(async () => []),
 }));
 vi.mock("@/server/usecases/stream-credits-checkout", () => ({
   reconcileStreamCreditsCheckout: (orgId: string, sessionId: string) => relay.reconcile(orgId, sessionId),
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
   relayBalance: (auth: unknown, orgId: string) => relay.balance(auth, orgId),
+  openStreamFixtureIds: (auth: unknown, fixtureIds: readonly string[]) => relay.open(auth, fixtureIds),
 }));
 
 import DivisionPage from "../page";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -113,6 +121,17 @@ function find(node: ReactNode, type: unknown): ReactElement | null {
   if (!isValidElement(node)) return null;
   if (node.type === type) return node;
   return find((node.props as { children?: ReactNode }).children, type);
+}
+
+function findAll(node: ReactNode, type: unknown, out: ReactElement[] = []): ReactElement[] {
+  if (Array.isArray(node)) {
+    for (const child of node) findAll(child as ReactNode, type, out);
+    return out;
+  }
+  if (!isValidElement(node)) return out;
+  if (node.type === type) out.push(node);
+  findAll((node.props as { children?: ReactNode }).children, type, out);
+  return out;
 }
 
 const PAGE = {
@@ -140,6 +159,10 @@ describe("the checkout return reconciles the session BEFORE the Phone tab's bala
     stagesSpies.listStages.mockReset().mockResolvedValue([]);
     relay.reconcile.mockClear();
     relay.balance.mockReset();
+    relay.open.mockReset().mockResolvedValue([]);
+    scene.frozen = false;
+    scene.fixtures = [];
+    scene.entrants = [];
   });
 
   it("?checkout=success&session_id=… reconciles THAT session for THIS page's org, then reads the balance — and hands the tab the post-reconcile number", async () => {
@@ -171,5 +194,71 @@ describe("the checkout return reconciles the session BEFORE the Phone tab's bala
     }
     expect(checked).toBe(3);
     expect(relay.reconcile).not.toHaveBeenCalled();
+  });
+});
+
+// F1 (Task 14 fix round 2): a billing freeze makes the page read-only (`editable = canEdit && !billingFrozen`), and the
+// stream panel is gated on `editable` — so a competition that froze MID-STREAM had no Stop anywhere, while the stop route
+// itself still serves the frozen org's organiser. The page now mounts the stop-only probe for each fixture with a session
+// still up, and only on the fixtures tab of a frozen competition, for a viewer who could otherwise edit.
+describe("F1: a billing-frozen competition still offers Stop for every stream on air", () => {
+  const NAMES: Record<string, string> = { e1: "Red Rovers", e2: "Blue Jays", e3: "Green Giants", e4: "Gold Geese" };
+  const fx = (id: string, home: string | null, away: string | null, no: number) => ({
+    id, stage_id: "st-1", pool_id: null, round_no: 1, seq_in_round: no, fixture_no: no,
+    home_entrant_id: home, away_entrant_id: away, home_slot_label: null, away_slot_label: null,
+    scheduled_at: null, status: "scheduled", outcome: null,
+  });
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    relay.open.mockReset().mockResolvedValue([]);
+    scene.frozen = true;
+    scene.fixtures = [fx("fx-1", "e1", "e2", 1), fx("fx-2", "e3", "e4", 2), fx("fx-3", null, "e1", 3)];
+    scene.entrants = Object.entries(NAMES).map(([id, display_name], i) => ({ id, display_name, status: "confirmed", seed: i + 1 }));
+  });
+
+  it("frozen, fixtures tab, an organiser: asks for THIS division's fixtures and mounts one labelled probe per open stream", async () => {
+    relay.open.mockResolvedValue(["fx-3", "fx-2"]);
+    const tree = await render({ tab: "fixtures" });
+    expect(relay.open).toHaveBeenCalledTimes(1);
+    expect(relay.open.mock.calls[0]![0]).toBe(PAGE.auth);
+    expect(relay.open.mock.calls[0]![1]).toEqual(["fx-1", "fx-2", "fx-3"]);
+    const probes = findAll(tree, PhoneStopProbe);
+    // In the division's fixture order, whatever order the read answered in.
+    expect(probes.map((p) => (p.props as { fixtureId: string }).fixtureId)).toEqual(["fx-2", "fx-3"]);
+    // Named by the fixture's own entrants and the dictionary's "vs" — the `t` double answers with the key — and an
+    // unfilled side by the slot resolver's TBD.
+    expect(probes.map((p) => (p.props as { label?: string }).label)).toEqual([
+      "Green Giants schedule.vs Gold Geese",
+      "schedule.tbd schedule.vs Red Rovers",
+    ]);
+    // The panel stays gated: the probe is the ONLY stream control a frozen page offers.
+    expect((find(tree, StagesPanel)!.props as { stream?: unknown }).stream).toBeUndefined();
+  });
+
+  it("nothing on air: no probe", async () => {
+    const tree = await render({ tab: "fixtures" });
+    expect(relay.open).toHaveBeenCalledTimes(1);
+    expect(findAll(tree, PhoneStopProbe)).toEqual([]);
+  });
+
+  it("NOT frozen, a viewer who cannot edit, or another tab: no query and no probe — the live panel (or nothing) owns Stop there", async () => {
+    relay.open.mockResolvedValue(["fx-1"]);
+    let checked = 0;
+    for (const [name, setup, sp] of [
+      ["not frozen", () => { scene.frozen = false; }, { tab: "fixtures" }],
+      ["cannot edit", () => { pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false }); }, { tab: "fixtures" }],
+      ["standings tab", () => {}, { tab: "standings" }],
+    ] as const) {
+      relay.open.mockClear();
+      scene.frozen = true;
+      pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
+      setup();
+      const tree = await render(sp as Record<string, string>);
+      expect(relay.open, name).not.toHaveBeenCalled();
+      expect(findAll(tree, PhoneStopProbe), name).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });

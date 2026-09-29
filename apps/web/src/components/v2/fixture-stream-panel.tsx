@@ -837,14 +837,23 @@ function usePhoneSession(fixtureId: string) {
  * air stoppable. Nothing but the session's own state and its way out: no QR (no credentials), no destinations, no
  * buying. Renders nothing at all without a session that is still up, so an unentitled org with nothing running sees
  * the gate alone.
+ *
+ * F1: also mounted by the division page itself, once per fixture still on air, when a BILLING freeze has taken the
+ * whole stream panel away (the panel is gated on `editable`). Several can stack there, so each names its fixture
+ * (`label`); inside a row's own panel the row already says which fixture it is, and no label is passed.
  */
-export function PhoneStopProbe({ fixtureId }: { fixtureId: string }) {
+export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?: string }) {
   const msg = useMsg();
   const s = usePhoneSession(fixtureId);
   const v = s.shown;
   if (!v || s.state === "idle" || s.state === "ended" || s.state === "failed") return null;
   return (
-    <div data-testid="stream-stop-probe" className="mb-3 space-y-2 rounded-lg border border-slate-200 p-3">
+    <div data-testid="stream-stop-probe" className="mb-3 min-w-0 space-y-2 rounded-lg border border-slate-200 p-3">
+      {label && (
+        <p data-testid="stream-stop-probe-label" className="truncate text-sm font-medium text-slate-800" title={label}>
+          {label}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {statePill(msg, s.state)}
         {s.state === "live" && recAndElapsed(msg, v.startedAt, s.now)}

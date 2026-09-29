@@ -1835,6 +1835,22 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(island.tree()).toEqual([]);
     });
 
+    it("F1: a probe the frozen division page mounts NAMES its fixture; a row's own probe (no label) adds no line", async () => {
+      const live = () => ({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS }) as Server;
+      serve(live());
+      const labelled = track(renderIsland(PhoneStopProbe, { fixtureId: "f-1", label: "Green Giants vs Gold Geese" }));
+      await settle();
+      const el = byTestId(labelled.tree(), "stream-stop-probe-label");
+      expect(el && textOf(el)).toBe("Green Giants vs Gold Geese");
+      // A long pair of names truncates inside the card instead of widening the page; the title keeps it readable.
+      expect(String(attr(el!, "className")).split(/\s+/)).toContain("truncate");
+      expect(attr(el!, "title")).toBe("Green Giants vs Gold Geese");
+      expect(byTestId(labelled.tree(), "stream-stop"), "the label never costs the Stop").toBeDefined();
+      const bare = await probe(live());
+      expect(byTestId(bare.tree(), "stream-stop-probe")).toBeDefined();
+      expect(byTestId(bare.tree(), "stream-stop-probe-label")).toBeUndefined();
+    });
+
     it("warming: Cancel — through the same re-read — and a stop nobody could confirm says so", async () => {
       const s = { current: session({ id: "s1" }), targets: TARGETS } as Server;
       s.stop = () => { s.failCurrent = true; throw new TypeError("Failed to fetch"); };
