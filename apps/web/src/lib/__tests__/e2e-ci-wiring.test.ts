@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sitemapWindowOverride } from "../sitemap-window";
+import { FakeIngest } from "../../server/relay/fakes";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -902,5 +903,55 @@ describe("sitemap.spec.ts's cache window", () => {
     expect(body, "no e2e_env() in ci-local.sh").not.toBe("");
     const local = /^\s*export SITEMAP_REVALIDATE_SECONDS=(\S+)\s*$/m.exec(strip(body))?.[1];
     expect(local, "ci-local.sh's e2e_env does not export SITEMAP_REVALIDATE_SECONDS").toBe(parallelJobWindow());
+  });
+});
+
+// stream-relay.spec.ts (Streaming R1 lane D) asserts the QR the Phone tab draws
+// while the phone "connects", which the FAKE ingest reports
+// FAKE_INGEST_CONNECT_AFTER_MS after a stream's input is made — and it derives
+// every stream wait from the same variable. Both processes need the SAME value:
+// the server so the QR state lasts long enough to be seen, the Playwright
+// runner so its budgets match the server's pace. The walkthrough project runs
+// only in e2e-parallel, whose Start-server and Playwright steps each carry it
+// (fix round 1, I4). A lost line reds only on a push to main, after the merge.
+describe("the walkthrough's fake phone-connect delay", () => {
+  const strip = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+  const connectMs = (body: string) =>
+    /^\s+FAKE_INGEST_CONNECT_AFTER_MS: *"?([^"\s]*)"?\s*$/m.exec(body)?.[1];
+
+  it("is set to the SAME value on e2e-parallel's Start server step and its Playwright step, and the fake accepts it", async () => {
+    const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
+    const start = yml.indexOf("\n  e2e-parallel:\n");
+    const end = yml.indexOf("\n  e2e-serial:\n");
+    expect(start, "no e2e-parallel job").toBeGreaterThan(-1);
+    expect(end, "no e2e-serial job after it").toBeGreaterThan(start);
+    const job = yml.slice(start, end);
+    // Premise: the walkthrough project, which selects the spec, runs in THIS job and no other.
+    const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
+    expect(selects(walkthrough, "walkthrough/stream-relay.spec.ts"), "premise: the walkthrough project selects stream-relay.spec.ts").toBe(true);
+    expect(job, "premise: e2e-parallel runs the walkthrough project").toMatch(/^\s+project: walkthrough\s*$/m);
+    expect(yml.slice(end), "premise: no later job runs the walkthrough project").not.toMatch(/^\s+project: walkthrough\s*$/m);
+
+    const servers = [...job.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)].map((m) => m[1]!);
+    const runs = [...job.matchAll(/- name: Run Playwright e2e[^\n]*\n([\s\S]*?)(?=\n      - name: )/g)].map((m) => m[1]!);
+    expect(servers.length, "e2e-parallel starts one server").toBe(1);
+    expect(runs.length, "e2e-parallel has one Playwright step").toBe(1);
+    const server = connectMs(servers[0]!);
+    const runner = connectMs(runs[0]!);
+    expect(server, "Start server does not set FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    expect(runner, "the Playwright step does not set FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    expect(runner, "the Playwright runner budgets from a different delay than the server runs").toBe(server);
+
+    // The server's own parse (server/relay/fakes.ts) refuses a junk value at construction — so would every stream start.
+    vi.stubEnv("FAKE_INGEST_CONNECT_AFTER_MS", server!);
+    try {
+      expect(() => new FakeIngest(), `FAKE_INGEST_CONNECT_AFTER_MS=${server} is refused by the fake ingest`).not.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
