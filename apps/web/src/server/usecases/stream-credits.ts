@@ -76,7 +76,15 @@ export async function lockOrg(tx: Tx, orgId: string): Promise<void> {
  *  A17: ledger ids are random uuids, so the LATEST consume is found by `created_at` alone. A tie between
  *  two consumes of one fixture is harmless here — both carry the same instant, so either answers the
  *  same window. Unlocked when admission reads it (advisory there: consumeForSession re-asks under
- *  `lockOrg` at go-live, and a window that closed in between refuses the credit then). */
+ *  `lockOrg` at go-live, and a window that closed in between refuses the credit then).
+ *
+ *  D2 (lane C final review): only a consume that still STANDS opens a window. A staff refund linked to
+ *  the consuming session returned that credit, so counting its consume handed the org the credit back
+ *  AND a free 24 h restart. A consume stands while its session's linked refunds sum to less than what
+ *  the session consumed — the refund cap's own arithmetic (`refundCredits`: refunded + delta ≤
+ *  consumed), compared per session so no "one consume per session" assumption is needed. An unlinked
+ *  (goodwill) refund names no session and returns nothing of any fixture's; a refund linked to an
+ *  EARLIER session leaves a later, unrefunded consume standing. */
 export async function reuseWindowOpen(
   exec: Executor,
   args: { orgId: string; fixtureId: string | null },
@@ -87,6 +95,10 @@ export async function reuseWindowOpen(
     select c.created_at from org_stream_credits c
       join fixture_stream_sessions s on s.id = c.session_id
      where c.org_id = ${args.orgId} and c.reason = 'consume' and s.fixture_id = ${args.fixtureId}
+       and (select coalesce(sum(r.delta), 0) from org_stream_credits r
+             where r.org_id = c.org_id and r.session_id = c.session_id and r.reason = 'refund')
+         < (select coalesce(-sum(k.delta), 0) from org_stream_credits k
+             where k.org_id = c.org_id and k.session_id = c.session_id and k.reason = 'consume')
      order by c.created_at desc limit 1`;
   return withinReuseWindow(last ? new Date(last.created_at) : null, now);   // the pure 24 h rule (domain/credits.ts)
 }
