@@ -6265,6 +6265,7 @@ export type DictionaryKey =
   | "stream.phone.stepOf"
   | "stream.phone.stop"
   | "stream.phone.stop.body"
+  | "stream.phone.stop.keep"
   | "stream.phone.stop.title"
   | "stream.phone.title"
   | "stream.save"

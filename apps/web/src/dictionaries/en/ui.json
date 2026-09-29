@@ -5456,6 +5456,7 @@
   "stream.phone.stop": "Stop stream",
   "stream.phone.stop.title": "Stop the stream?",
   "stream.phone.stop.body": "The broadcast ends for everyone watching.",
+  "stream.phone.stop.keep": "Keep streaming",
   "stream.phone.ending": "Flushing the last seconds to {destination}",
   "stream.phone.ended.duration": "Duration {duration}",
   "stream.phone.ended.neverLive": "Ended before going live",

@@ -799,6 +799,10 @@ function usePhoneSession(fixtureId: string) {
       body: msg("stream.phone.stop.body"),
       confirmLabel: msg("stream.phone.stop"),
       tone: "danger",
+      // P3: the cancel says what it does, in the PAGE's locale — the provider's default reads the `seazn_locale` cookie.
+      cancelLabel: msg("stream.phone.stop.keep"),
+      // P4: the most consequential button in the flow gets the 44-px phone floor.
+      size: "touch",
     });
     if (ok) await stopNow(target);
   };

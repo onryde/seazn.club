@@ -489,6 +489,9 @@ describe("the stream-link field refuses a bad link before it sends", () => {
 const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
   Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), messages[k] as string);
 
+/** P3/P4 (fix round 3): what every Stop confirm must carry — its cancel from the PAGE's dictionary, and the touch size. */
+const STOP_CONFIRM_EXTRAS = { cancelLabel: m("stream.phone.stop.keep"), size: "touch" } as const;
+
 /** The checksummed contract's own valid payload (docs/contracts) — a real QR, not one typed here. */
 const QR = JSON.parse(
   readFileSync(join(__dirname, "../../../../../..", "docs/contracts/fixtures/capture-qr.v1/valid.json"), "utf8"),
@@ -1699,6 +1702,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onStop();
     await settle();
     expect(confirmMock).toHaveBeenLastCalledWith(expect.objectContaining({ title: m("stream.phone.stop.title"), body: m("stream.phone.stop.body"), confirmLabel: m("stream.phone.stop"), tone: "danger" }));
+    // P3/P4 (fix round 3): the page-locale "Keep streaming" (never the cookie's English "Cancel") and 44-px buttons.
+    expect(confirmMock).toHaveBeenLastCalledWith(expect.objectContaining(STOP_CONFIRM_EXTRAS));
+    expect((confirmMock.mock.lastCall![0] as { cancelLabel?: unknown }).cancelLabel, "the key exists and is not the confirm's own label").toBe("Keep streaming");
     expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
     expect(bodyOf(island).view?.state).toBe("ending");
   });
@@ -1729,7 +1735,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     let base = stops();
     bodyOf(live).onCancel();
     await settle();
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger", title: m("stream.phone.stop.title") }));
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger", title: m("stream.phone.stop.title"), ...STOP_CONFIRM_EXTRAS }));
     expect(stops() - base, "a declined confirm still stopped a live stream").toBe(0);
     expect(bodyOf(live).view?.state, "the card shows what the read found").toBe("live");
 
@@ -1912,7 +1918,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(String(attr(byTestId(tree, "stream-stop")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["bg-red-600", "min-h-11"]));
       click(byTestId(tree, "stream-stop"));
       await settle();
-      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger" }));
+      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "danger", ...STOP_CONFIRM_EXTRAS }));
       expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
       expect(textAt(island.tree(), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club" }));
       expect(byTestId(island.tree(), "stream-stop"), "no Stop while it ends").toBeUndefined();

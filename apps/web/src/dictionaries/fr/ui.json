@@ -5456,6 +5456,7 @@
   "stream.phone.stop": "Arrêter la diffusion",
   "stream.phone.stop.title": "Arrêter la diffusion ?",
   "stream.phone.stop.body": "La diffusion s'arrête pour tous les spectateurs.",
+  "stream.phone.stop.keep": "Continuer la diffusion",
   "stream.phone.ending": "Envoi des dernières secondes vers {destination}",
   "stream.phone.ended.duration": "Durée {duration}",
   "stream.phone.ended.neverLive": "Terminée avant le direct",

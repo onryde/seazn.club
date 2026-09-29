@@ -5456,6 +5456,7 @@
   "stream.phone.stop": "Stream stoppen",
   "stream.phone.stop.title": "Stream stoppen?",
   "stream.phone.stop.body": "De uitzending stopt voor iedereen die kijkt.",
+  "stream.phone.stop.keep": "Doorgaan met streamen",
   "stream.phone.ending": "De laatste seconden gaan naar {destination}",
   "stream.phone.ended.duration": "Duur {duration}",
   "stream.phone.ended.neverLive": "Beëindigd voordat de stream live ging",
