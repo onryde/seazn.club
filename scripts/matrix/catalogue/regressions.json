@@ -9,13 +9,13 @@
       "variant": "score",
       "check": "I7-rr-no-pair-over-legs",
       "seed": 752674687,
-      "path": "1:2:3:3:3",
-      "replayPath": "BAABABCL:qC",
+      "path": "1:2:3:3:3:3:3:3",
+      "replayPath": "BAABABCU:qC",
       "fence": "late-entry-then-generate",
       "match": null,
       "status": "open",
       "found": "2026-09-29",
-      "runId": "w1b-model-0928b"
+      "runId": "w1b-model-0929f"
     },
     {
       "id": "MB-002",
