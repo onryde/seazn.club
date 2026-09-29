@@ -543,6 +543,43 @@ describe("model.ts", () => {
     expect(rep.cells.map((c) => [c.cell, c.verdict, c.timeout !== null, c.failure === null])).toEqual([[CELL, "aborted", true, true], ["league|badminton", "new-failure", false, false]]);
   });
 
+  it("final batch FB-12: a NEW failure found before a timeout cut its shrink is printed on its FAILURE line and counted in the tally — no stub, exit 3", async () => {
+    // The T1 shape (task 14 review, M-R2-1): the unfenced #879 product fails
+    // I7, then the first shrink candidate's division hangs while it is built.
+    capture();
+    const full = reportDir();
+    expect(await runModel(deps({ fault879: true }), ["--run-id", "fb12", "--report-dir", full, ...ONE, "--no-fences"])).toBe(1);
+    const found = (JSON.parse(readFileSync(join(full, "fb12", "model-report.json"), "utf8")) as { cells: { numRuns: number; executions: number; failure: { check: string } | null }[] }).cells[0];
+    expect(found?.failure?.check).toBe(I7);
+    const numRuns = found?.numRuns ?? 0;
+    expect(found?.executions ?? 0, "the premise: the failure was shrunk, so a candidate exists to time out in").toBeGreaterThan(numRuns);
+    class HangsAfter extends ModelFakeDriver {
+      #built = 0;
+      constructor() { super({ fault879: true }); }
+      override createDivision(...a: Parameters<ModelFakeDriver["createDivision"]>) {
+        if (++this.#built > numRuns) return Promise.reject(new RequestTimedOut("POST", "/api/v1/competitions/c/divisions", 60_000));
+        return super.createDivision(...a);
+      }
+    }
+    const io = capture();
+    const dir = reportDir();
+    expect(await runModel(deps({ driverFor: () => new HangsAfter() }), ["--run-id", "fb12", "--report-dir", dir, ...ONE, "--no-fences"])).toBe(3);
+    const out = io.out();
+    expect(failureLine(out)).toMatch(new RegExp(`^FAILURE ${I7} \\(NEW\\): `));
+    expect(out).toMatch(/\n {2}TIMEOUT: driver: POST [^\n]* did not answer/);
+    expect(out).toContain(`\n  the NEW ${I7} above was found before the timeout cut its shrink — no stub: re-run the cell to shrink and stub it\n`);
+    expect(out).not.toContain("regression stub for");
+    expect(out).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 0 NEW, 0 vacuous, 0 not reproduced, 1 aborted \(1 with a NEW failure found before its timeout\),/);
+    const rep = JSON.parse(readFileSync(join(dir, "fb12", "model-report.json"), "utf8")) as { cells: { verdict: string; timeout: string | null; failure: { check: string; known: string | null } | null }[] };
+    expect(rep.cells.map((c) => [c.verdict, c.timeout !== null, c.failure?.check, c.failure?.known])).toEqual([["aborted", true, I7, null]]);
+    // The pair: the same cut shrink on a KNOWN failure owes no such line, and the tally adds nothing.
+    const known = capture();
+    expect(await runModel(deps({ driverFor: () => new HangsAfter(), regs: [openReg("MB-001", I7)] }), ["--run-id", "fb12", "--report-dir", reportDir(), ...ONE, "--no-fences"])).toBe(3);
+    expect(failureLine(known.out())).toMatch(new RegExp(`^FAILURE ${I7} \\(known MB-001\\): `));
+    expect(known.out()).not.toContain("was found before the timeout");
+    expect(known.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 0 NEW, 0 vacuous, 0 not reproduced, 1 aborted, /);
+  });
+
   it("fix round 1, M-2: every cell gets its own seed, FNV-1a of `${runId}|${cell}`", async () => {
     capture();
     const dir = reportDir();

@@ -238,6 +238,9 @@ function printCell(c: ModelCell): void {
     }
   }
   if (c.timeout !== null) say(`  TIMEOUT: ${c.timeout} — environmental, not a regression: no stub; re-run the cell`);
+  // Final batch FB-12: an aborted cell is not tallied NEW, so a NEW failure
+  // found before its timeout says so here, under the FAILURE line above.
+  if (c.verdict === "aborted" && f !== null && f.known === null) say(`  the NEW ${f.check} above was found before the timeout cut its shrink — no stub: re-run the cell to shrink and stub it`);
   if (c.verdict === "not-reproduced" && c.replayOf !== null) {
     say(`  NOT REPRODUCED ${c.replayOf}: the replay ${f === null ? "ran clean" : `failed on ${f.check}${f.known === null ? "" : ` (known ${f.known})`} instead`} — fixed, or the replay no longer walks the committed path`);
   }
@@ -377,7 +380,8 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   say(`model report → ${file}`);
   for (const c of cells) if (c.verdict === "new-failure") printStub(c, cli.runId);
   const tally = (v: Verdict) => cells.filter((c) => c.verdict === v).length;
-  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
+  const abortedNew = cells.filter((c) => c.verdict === "aborted" && c.failure !== null && c.failure.known === null).length;
+  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted${abortedNew === 0 ? "" : ` (${abortedNew} with a NEW failure found before its timeout)`}, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
   if (cells.some((c) => c.verdict === "aborted")) return EXIT.ABORTED;
   return cells.some((c) => FAILING.includes(c.verdict)) ? EXIT.NO_SIGNAL : EXIT.OK;
 }
