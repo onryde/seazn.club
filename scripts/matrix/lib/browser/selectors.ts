@@ -16,7 +16,10 @@ export type TestidPin = { readonly id: string } & Pin & { readonly via?: Pin };
  *  dictionary label the component decorates in a template literal carries
  *  `rendered`, that literal verbatim, and its `text` is derived from it (see
  *  `decorated` below). */
-export type NamePin = { readonly text: string } & ({ readonly dictKey: string; readonly file: string; readonly rendered?: string } | Pin);
+export type NamePin = { readonly text: string } & ({ readonly dictKey: string; readonly file: string; readonly rendered?: string; readonly dict?: Dictionary } | Pin);
+/** Which en dictionary a label lives in: the organiser UI's (`ui.json`, the
+ *  default) or the public site's (`public.json`). */
+export type Dictionary = "ui" | "public";
 /** An attribute selector with no testid (data-role, data-tile-id, …). */
 export type DataPin = { readonly selector: string } & Pin;
 
@@ -28,6 +31,9 @@ function table<T extends Record<string, object>>(t: T): Readonly<T> {
 }
 
 const V2 = "apps/web/src/components/v2";
+const STANDINGS_TABLE = "apps/web/src/components/public-site/standings-table.tsx";
+const ORG_DIVISION_PAGE = "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx";
+const PUBLIC_DIVISION_PAGE = "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
 /** confirm-dialog.tsx derives both buttons from its `testId` prop. */
 const CONFIRM_DIALOG: Pin = Object.freeze({ file: `${V2}/confirm-dialog.tsx`, needle: "`${testId}-confirm`" });
 
@@ -36,6 +42,19 @@ const CONFIRM_DIALOG: Pin = Object.freeze({ file: `${V2}/confirm-dialog.tsx`, ne
  *  retyped, so a dictionary edit moves it. Read lazily, like templateLabel. */
 function decorated(dictKey: string, file: string, rendered: string): { readonly text: string; readonly dictKey: string; readonly file: string; readonly rendered: string } {
   return { dictKey, file, rendered, get text(): string { return renderedName(dictKey, rendered); } };
+}
+
+/** A dictionary label the component renders as is. Its name is DERIVED on
+ *  read — the value in `dict`'s en file — never retyped (Task 5). */
+function dictionary(dictKey: string, file: string, dict: Dictionary = "ui"): { readonly text: string; readonly dictKey: string; readonly file: string; readonly dict: Dictionary } {
+  return { dictKey, file, dict, get text(): string { return enLabel(dictKey, dict); } };
+}
+
+/** A hardcoded English label (no dictionary key to pin). Its name is DERIVED
+ *  from `needle`, the product's own literal — a quoted string or an element's
+ *  text — never retyped (Task 5). */
+function hardcoded(file: string, needle: string): { readonly text: string } & Pin {
+  return { file, needle, get text(): string { return literalText(needle); } };
 }
 
 const testids = <T extends Record<string, TestidPin>>(t: T): Readonly<T> => table(t);
@@ -58,6 +77,9 @@ export const TESTID = testids({
   // desk/run-sheet.tsx, not stages-panel.tsx (the brief's file; re-pinned at Step 0).
   runSheetFilter: { id: "run-sheet-filter", file: `${V2}/desk/run-sheet.tsx`, needle: 'data-testid="run-sheet-filter"' },
   scorePad: { id: "score-pad", file: `${V2}/fixture-console.tsx`, needle: 'data-testid="score-pad"' },
+  // Task 5: the entrant row's name button, and the builder's refusal line.
+  entrantDisclosure: { id: "entrant-row-disclosure", file: `${V2}/entrants-panel.tsx`, needle: 'data-testid="entrant-row-disclosure"' },
+  builderError: { id: "division-builder-error", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-error"' },
   // Pad and console chassis testids are NOT restated here (ruling 38): they are the bench's
   // START_MATCH_TESTID, SEND_NOW_TESTID, FINALIZE_TESTID, FORFEIT_TESTID, FORFEIT_SIDE_TESTID_PREFIX,
   // PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, DOCK_CHIP_TESTID_PREFIX (scorer.ts:165-176), and the
@@ -99,6 +121,14 @@ export const NAME = names({
   competitionNamePlaceholder: { text: "Summer Championship 2026", dictKey: "comp.wizard.name.placeholder", file: `${V2}/competition-wizard.tsx` },
   // The unlisted option renders as "Link only" (visibility-picker.tsx OPTIONS).
   visibilityUnlisted: { text: "Link only", dictKey: "visibility.unlisted.label", file: "apps/web/src/components/ui/visibility-picker.tsx" },
+  // Task 5. The add-entrant form's two field labels are hardcoded English
+  // (entrants-panel.tsx NewEntrantFields) — a concern routed, not fixed here.
+  entrantName: hardcoded(`${V2}/entrants-panel.tsx`, '<span className="label">Name</span>'),
+  entrantSeed: hardcoded(`${V2}/entrants-panel.tsx`, '<span className="label">Seed</span>'),
+  // The organiser standings tab's no-table note (d/[divSlug]/page.tsx), and the
+  // public page's champion banner label (public dictionary).
+  standingsEmpty: dictionary("div.detail.standings.empty", ORG_DIVISION_PAGE),
+  championLabel: dictionary("table.champion", PUBLIC_DIVISION_PAGE, "public"),
 });
 
 export const DATA = data({
@@ -107,6 +137,14 @@ export const DATA = data({
   choiceOption: { selector: "[data-choice-option-id]", file: `${V2}/scorepad/v3/guided-sheet.tsx`, needle: "data-choice-option-id={" },
   rowAction: { selector: "[data-row-action]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "data-row-action={action.kind}" },
   fixtureRow: { selector: "li[data-fixture-no]", file: `${V2}/desk/run-sheet-row.tsx`, needle: "<li data-fixture-no={" },
+  // Task 5.
+  templateRadio: { selector: '[name="template"]', file: `${V2}/division-builder.tsx`, needle: 'name="template"' },
+  entrantKind: { selector: "[data-kind]", file: `${V2}/entrants-panel.tsx`, needle: "data-kind={k}" },
+  entrantStatus: { selector: "[data-entrant-status]", file: `${V2}/entrants-panel.tsx`, needle: "data-entrant-status={entrant.status}" },
+  runSheetFilterOption: { selector: "[data-filter]", file: `${V2}/desk/run-sheet.tsx`, needle: "data-filter={f.value}" },
+  standingsRegion: { selector: '[role="region"]', file: STANDINGS_TABLE, needle: 'role="region"' },
+  standingsRowHeader: { selector: '[scope="row"]', file: STANDINGS_TABLE, needle: 'scope="row"' },
+  standingsRowName: { selector: "[title]", file: STANDINGS_TABLE, needle: "title={entrantNames[row.entrantId] ?? row.entrantId}" },
 });
 
 export class MissingLabel extends Error {
@@ -129,16 +167,38 @@ export class UnrenderableName extends Error {
   }
 }
 
-/** apps/web/src/dictionaries/en/ui.json, read once, as text. */
-let enUi: Readonly<Record<string, unknown>> | null = null;
-function en(): Readonly<Record<string, unknown>> {
-  enUi ??= JSON.parse(readFileSync(new URL("../../../../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8")) as Record<string, unknown>;
-  return enUi;
+export class UnreadableLiteral extends Error {
+  readonly needle: string;
+  constructor(needle: string) {
+    super(`selectors: cannot read a label out of ${needle} — a hardcoded name's needle must be one quoted string or one element's text`);
+    this.name = "UnreadableLiteral";
+    this.needle = needle;
+  }
 }
-function enLabel(key: string): string {
-  const v = en()[key];
+
+/** apps/web/src/dictionaries/en/<dict>.json, each read once, as text. */
+const enDicts = new Map<Dictionary, Readonly<Record<string, unknown>>>();
+function en(dict: Dictionary): Readonly<Record<string, unknown>> {
+  let d = enDicts.get(dict);
+  if (d === undefined) {
+    d = JSON.parse(readFileSync(new URL(`../../../../apps/web/src/dictionaries/en/${dict}.json`, import.meta.url), "utf8")) as Record<string, unknown>;
+    enDicts.set(dict, d);
+  }
+  return d;
+}
+function enLabel(key: string, dict: Dictionary = "ui"): string {
+  const v = en(dict)[key];
   if (typeof v !== "string" || v === "") throw new MissingLabel(key);
   return v;
+}
+
+/** The label a hardcoded needle carries: the whole of a quoted string
+ *  (`"Add entrant"`), or the text of one element (`<span …>Seed</span>`).
+ *  Refuses anything else rather than guess which words are the name. */
+export function literalText(needle: string): string {
+  const text = /^"([^"]+)"$/.exec(needle)?.[1] ?? /^<(\w+)[^<>]*>([^<>{}]+)<\/\1>$/.exec(needle)?.[2];
+  if (text === undefined || text.trim() !== text) throw new UnreadableLiteral(needle);
+  return text;
 }
 
 /** The builder's label for a template row (division-builder.tsx renders

@@ -8,12 +8,15 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
-import { MissingLabel, DATA, NAME, PAD_PINS, TESTID, UnrenderableName, renderedName, templateLabel } from "../lib/browser/selectors.ts";
+import { MissingLabel, DATA, NAME, PAD_PINS, TESTID, UnreadableLiteral, UnrenderableName, literalText, renderedName, templateLabel } from "../lib/browser/selectors.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const src = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
 const enUi = () => JSON.parse(src("apps/web/src/dictionaries/en/ui.json")) as Record<string, string>;
+/** The en dictionary a pin names (ui.json unless it says otherwise), read here — never through selectors.ts. */
+const enDict = (dict: "ui" | "public" | undefined) => JSON.parse(src(`apps/web/src/dictionaries/en/${dict ?? "ui"}.json`)) as Record<string, string>;
+const dictOf = (n: object): "ui" | "public" | undefined => ("dict" in n && (n.dict === "ui" || n.dict === "public") ? n.dict : undefined);
 
 describe("selectors are pinned to the product's text", () => {
   it("empty case first: every table is non-empty", () => {
@@ -57,7 +60,7 @@ describe("selectors are pinned to the product's text", () => {
       if (tag !== undefined && !d.needle.includes(`<${tag} `)) out.push(`${k}: element ${tag} not in needle ${d.needle}`);
       return out;
     });
-    expect(Object.keys(DATA).length).toBe(5);
+    expect(Object.keys(DATA).length).toBe(12);
     expect(wrong).toEqual([]);
   });
 
@@ -77,14 +80,32 @@ describe("selectors are pinned to the product's text", () => {
   });
 
   it("every dictionary-pinned name is the en dictionary's value, and no key is a placeholder", () => {
-    const ui = enUi();
     let plain = 0;
+    let publicDict = 0;
     const wrong = Object.entries(NAME).filter(([, n]) => "dictKey" in n && !("rendered" in n && n.rendered !== undefined)).filter(([, n]) => {
       plain++;
-      return "dictKey" in n && (n.dictKey.startsWith("<") || ui[n.dictKey] !== n.text);
-    }).map(([k, n]) => `${k}: ${"dictKey" in n ? n.dictKey : ""} → ${"dictKey" in n ? ui[n.dictKey] : ""}`);
+      if (!("dictKey" in n)) return false;
+      if (dictOf(n) === "public") publicDict++;
+      return n.dictKey.startsWith("<") || enDict(dictOf(n))[n.dictKey] !== n.text;
+    }).map(([k, n]) => `${k}: ${"dictKey" in n ? n.dictKey : ""} → ${"dictKey" in n ? enDict(dictOf(n))[n.dictKey] : ""}`);
     expect(plain).toBeGreaterThan(0);
+    // Task 5: the champion banner's label is the PUBLIC dictionary's (the ui one has no table.champion).
+    expect(publicDict).toBe(1);
+    expect(enUi()["table.champion"]).toBeUndefined();
+    expect(NAME.championLabel.text).toBe(enDict("public")["table.champion"]);
     expect(wrong).toEqual([]);
+  });
+
+  it("a hardcoded name is read out of its needle — a quoted string or one element's text — and anything else is refused by name", () => {
+    expect(literalText('"Add entrant"')).toBe("Add entrant");
+    expect(literalText('<span className="label">Seed</span>')).toBe("Seed");
+    const cannot = ['Add entrant', '"Add entrant', '<span className="label">{msg("x")}</span>', '<span>Seed</div>', '<span className="label"> Seed</span>', '""'];
+    for (const n of cannot) expect(() => literalText(n), n).toThrow(UnreadableLiteral);
+    expect(cannot.length).toBe(6);
+    // Every hardcoded NAME derives its text so (the literal pins below check the file carries the needle).
+    let literal = 0;
+    for (const n of Object.values(NAME)) if (!("dictKey" in n)) { literal++; expect(n.text).toBe(literalText(n.needle)); }
+    expect(literal).toBe(3);
   });
 
   // M-4: a label the component decorates in a template literal —

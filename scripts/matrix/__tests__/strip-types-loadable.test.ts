@@ -68,6 +68,40 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1c Task 5's page objects, named for the same reason. Their loads also
+  // prove the bench's scorer.ts and execute.ts resolve from lib/browser/pages,
+  // and that the functions evaluateAll serialises (standingsCellsOf,
+  // championFrom) survive strip-only mode as plain JS.
+  const W1C_T5 = [
+    "lib/browser/pages/ctx.ts", "lib/browser/pages/paths.ts", "lib/browser/pages/competition.ts",
+    "lib/browser/pages/division-builder.ts", "lib/browser/pages/entrants.ts", "lib/browser/pages/launch.ts",
+    "lib/browser/pages/stage-rail.ts", "lib/browser/pages/run-sheet.ts", "lib/browser/pages/fixture-console.ts",
+    "lib/browser/pages/standings.ts", "lib/browser/pages/public-division.ts",
+  ];
+  it("W1c Task 5's page objects are all in the walk", () => {
+    const missing = W1C_T5.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T5.length).toBe(11);
+    expect(missing).toEqual([]);
+  });
+
+  // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
+  // strip-only mode that text is the stripped source, so it must compile as
+  // plain JS on its own, outside its module — rebuilt here from toString().
+  it("the functions evaluateAll ships to the page compile and run from their own source, outside their module", () => {
+    const mod = (rel: string) => JSON.stringify(pathToFileURL(join(MATRIX, rel)).href);
+    const code = [
+      `const s = await import(${mod("lib/browser/pages/standings.ts")});`,
+      `const p = await import(${mod("lib/browser/pages/public-division.ts")});`,
+      "const rebuilt = (f) => new Function(`return (${f.toString()})`)();",
+      "const cells = rebuilt(s.standingsCellsOf)([], s.CELL_SELECTORS);",
+      "const champion = rebuilt(p.championFrom)([], 'Champion');",
+      "console.log(JSON.stringify({ cells, champion }));",
+    ].join("\n");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { cwd: resolve(MATRIX, "..", ".."), encoding: "utf8", timeout: 25_000 });
+    expect(r.stderr).toBe("");
+    expect(r.stdout.trim()).toBe(JSON.stringify({ cells: [], champion: null }));
+  });
+
   it.each(MODULES)("%s", (file) => {
     const r = spawnSync(
       process.execPath,
