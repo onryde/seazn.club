@@ -85,7 +85,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
 ## Global Constraints
 
 - **Worktree and branch.**
-  - Execution gets its own worktree off `origin/main`: `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1c-exec`, branch `feat/format-matrix-w1c` (Task 1 Step 0). The planning worktree `format-matrix-w1c` (branch `docs/format-matrix-w1c-plan`) is not used for execution; its commits (ruling 37, this plan) are cherry-picked onto the exec branch in Task 1 Step 0.
+  - Execution gets its own worktree off `origin/main`: `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1c-exec`, branch `feat/format-matrix-w1c` (Task 1 Step 0). The exec branch was created from the tip of the planning branch (`b71819b86`, which is `origin/main` `fce1ccdbf` plus four docs commits), so no cherry-pick is owed. Task 1 Step 0 only confirms `git log --oneline -5` shows them.
   - Every shell command starts `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1c-exec && …`, because cwd resets between calls.
   - Cherry-pick, never rebase. Never edit the main checkout. Never `git stash`: the stash stack is shared.
   - No heredocs. Write commit messages with the editor tool into `$TMPDIR/w1c-msg.txt`, then `git commit -F "$TMPDIR/w1c-msg.txt" -- <paths>`.
@@ -126,7 +126,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
 - **Phone folds** (class 22). Open a fold only when its toggle is visible; wait on `toBeAttached`-style `state: "attached"`, never on visibility; open every instance.
 - **Public repo** (R14a). Synthetic identities only (`delivered+matrix-<runId>@resend.dev`, "Matrix Player N", "Matrix Person N"). Screenshots show only synthetic data; the report directory stays under `matrix-report/` (gitignored) until Task 14 copies chosen evidence into `truth-runs/`. Every text writer goes through `redact()`; results still refuse on `findSecrets()`.
 - **Live runs** (Tasks 7, 11, 14) follow `~/.claude/skills/seazn-local-env/SKILL.md`: fresh DB via `db:apply` + `sync:sports`; `BENCH_EXPECTED_DATA_DIR` = `show data_directory`; **no `REDIS_URL`**; PostHog and Sentry blanked; `AUTH_DEV_LINKS=1`; the prod build baked with `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000` and the harness shell exporting the same value; `SMOKE_BASE=http://localhost:<port>` (never 127.0.0.1); a fresh run id; a clean tree before evidence runs.
-- **Owner rulings are binding:** 15 (mixed driver), 19 (wave done), 23 as extended by 38, 28 (W1-driving), 29 (variants LIFECYCLE only), 36 (no browser check of the five W1b findings), 37 (runner-hosted `BrowserDriver`), 38 (bench tap helpers imported). The Decisions section's D1–D9 are the controller's RECOMMENDATIONS until the owner rules on them at plan review; never label them rulings (AGENTS class 17).
+- **Owner rulings are binding:** 15 (mixed driver), 19 (wave done), 23 as extended by 38, 28 (W1-driving), 29 (variants LIFECYCLE only), 36 (no browser check of the five W1b findings), 37 (runner-hosted `BrowserDriver`), 38 (bench tap helpers imported), 39 (L1 at 1280 only; the phone path is proven by L2, the 7-width sweep and pad proof at 320), 40 (D2–D9 accepted as written).
 
 ### The four test types, as they apply here
 
