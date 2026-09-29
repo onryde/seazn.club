@@ -43,6 +43,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
+import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
@@ -77,12 +78,12 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 
-// I2: the embedded-checkout sheet, and Stripe.js with it, is its own chunk — fetched the first time a checkout opens,
-// never with the fixtures tab. `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships
-// on every organiser fixtures tab, so nothing below may import `@stripe/*` or `@/lib/stripe-browser` statically
-// (fixture-stream-panel.test.tsx walks the whole static graph to hold that). N2: the ONE loader, shared by `dynamic()`
-// and the preload the container fires when the chooser opens — so the chunk is usually in hand before a tile is tapped.
-const loadCheckoutSheet = () => import("./stream-checkout-modal");
+// I2: the embedded-checkout sheet, and Stripe.js with it, is its own chunk — never fetched with the fixtures tab.
+// `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships on every organiser fixtures
+// tab, so nothing below may import `@stripe/*` or `@/lib/stripe-browser` statically (fixture-stream-panel.test.tsx walks
+// the whole static graph to hold that). The chunk is fetched on the FIRST sign of a hand on a credit tile (M2: a
+// pointerenter, a focus or a touchstart — never the chooser merely being open), or else when a checkout's secret mounts
+// the sheet. N2: both go through the ONE loader in `stream-checkout-sheet-loader.ts`, so they name one chunk.
 const StreamCheckoutModal = dynamic(loadCheckoutSheet, { ssr: false });
 
 /**
@@ -964,6 +965,16 @@ export function PhoneTab({
   // N2: one Checkout Session per sheet. Held from the tap until the sheet closes or the attempt is refused — a ref, so a
   // double tap landing on ONE render's handler (before `busy` has disabled anything) is refused too.
   const buying = useRef(false);
+  // M2 / D-B: the sheet's chunk (and Stripe.js with it) is warmed on the first hand on a tile — once, not on every
+  // hover. A warm-up that FAILED is forgotten, so the next intent tries again; the tap itself loads it regardless.
+  const warmed = useRef(false);
+  const onTileIntent = () => {
+    if (warmed.current) return;
+    warmed.current = true;
+    void loadCheckoutSheet().catch(() => {
+      warmed.current = false;
+    });
+  };
 
   useEffect(() => {
     void (async () => {
@@ -1010,11 +1021,6 @@ export function PhoneTab({
   // C1: with a session, the projection's `balance` is the fresher number. With NO session there is no projection at
   // all, so the server-resolved one is the only source — unless the server has since refused for want of credits (m2).
   const balance = view ? view.balance : noCredits ? 0 : streamBalance;
-  // N2: the body's own `buyCard` rule, read here only to warm the sheet's chunk while the organiser picks a pack.
-  const chooserOpen = !planGate && (showBuy || (state === "idle" && balance < 1));
-  useEffect(() => {
-    if (chooserOpen) void loadCheckoutSheet().catch(() => {});
-  }, [chooserOpen]);
 
   const onGoLive = async () => {
     if (!selectedTargetId) return;
@@ -1164,6 +1170,7 @@ export function PhoneTab({
           setCheckoutError(null);
         }}
         onSaveTarget={onSaveTarget}
+        onTileIntent={onTileIntent}
       />
       {checkoutSecret && (
         // M1: a sheet that cannot load is the same outcome as a refused checkout — the lock freed, the chooser back
@@ -1223,6 +1230,8 @@ export interface PhoneTabBodyProps {
   onCopy: () => void;
   onShowBuy: () => void;
   onSaveTarget: (form: TargetFormValues) => Promise<void>;
+  /** M2: a hand is on a credit tile (pointerenter, focus, touchstart) — warm the checkout sheet's chunk now. */
+  onTileIntent: () => void;
 }
 
 const PILL: Record<PhoneTabState, string> = {
@@ -1435,6 +1444,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 disabled={p.busy || frozen || p.checkoutOpen}
                 data-testid={`stream-buy-pack-${pack.size}`}
                 onClick={() => p.onBuy(pack.size)}
+                onPointerEnter={p.onTileIntent}
+                onFocus={p.onTileIntent}
+                onTouchStart={p.onTileIntent}
                 // B8: top-aligned, so the three tiles' first lines share a baseline however their text wraps.
                 className={`flex min-h-11 w-full flex-col items-start justify-start rounded-lg border p-3 text-left hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50 ${
                   pack.popular ? "border-purple-500" : "border-purple-200"

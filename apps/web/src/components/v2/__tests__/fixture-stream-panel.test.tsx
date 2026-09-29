@@ -108,6 +108,16 @@ vi.mock("next/dynamic", () => ({
   },
 }));
 
+// M2 / D-B (fix round 4): the sheet's ONE loader lives in its own module so a test can COUNT calls to it — `dynamic()` and
+// the tile-intent warm-up both go through it. Delegates to the real `import()`, so the sheet a test loads is the real one.
+const sheetLoader = vi.hoisted(() => ({
+  load: vi.fn<() => Promise<unknown>>(),
+  real: () => import("@/components/v2/stream-checkout-modal"),
+}));
+vi.mock("@/components/v2/stream-checkout-sheet-loader", () => ({
+  loadCheckoutSheet: () => sheetLoader.load(),
+}));
+
 // D17: the embedded-checkout trio, doubled the way pass-checkout-parity.test.tsx does it. Read only by the LAZY module
 // (stream-checkout-modal.tsx) since I2 — the panel itself no longer imports any of it.
 const stripe = vi.hoisted(() => ({ promise: Promise.resolve(null) }));
@@ -224,6 +234,8 @@ const uiDict = (locale: string): Record<string, string> =>
   JSON.parse(readFileSync(join(DICT_DIR, locale, "ui.json"), "utf8"));
 
 beforeEach(() => {
+  sheetLoader.load.mockReset();
+  sheetLoader.load.mockImplementation(sheetLoader.real);
   apiV1.mockReset();
   apiV1.mockImplementation(async () => ({}));
   fetchOverlayFixture.mockClear();
@@ -568,8 +580,11 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     // hosted-checkout hop anywhere in the module — nor in the lazily loaded checkout sheet (I2).
     const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
     const sheet = readFileSync(join(__dirname, "..", "stream-checkout-modal.tsx"), "utf8");
-    // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel.
-    expect(src).toMatch(/const loadCheckoutSheet = \(\) => import\("\.\/stream-checkout-modal"\);/);
+    // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel. M2: its one loader
+    // is its own module (so the warm-up is countable), and the panel hands that loader to dynamic().
+    const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
+    expect(loaderSrc).toMatch(/export const loadCheckoutSheet = \(\) => import\("\.\/stream-checkout-modal"\);/);
+    expect(src).toMatch(/import \{ loadCheckoutSheet \} from "\.\/stream-checkout-sheet-loader";/);
     expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
     expect(sheet).toMatch(/EmbeddedCheckoutProvider/);
     expect(sheet).toMatch(/data-testid="stream-checkout-modal"/);
@@ -848,7 +863,7 @@ const BODY: PhoneTabBodyProps = {
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
   planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false, currency: "gbp",
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
-  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {},
+  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {}, onTileIntent: () => {},
 };
 const body = (p: Partial<PhoneTabBodyProps> = {}): ReactElement[] => walk(expandWithHooks(PhoneTabBody, { ...BODY, ...p }));
 const textAt = (tree: ReactElement[], id: string): string => {
@@ -1244,6 +1259,34 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       }
     }
     expect(checked).toBe(6);
+  });
+
+  it("M2: every tile says a hand is reaching for it — pointerenter, focus and touchstart — and a click still buys that pack", () => {
+    let checked = 0;
+    for (const [name, props] of [
+      ["forced, balance 0", { view: null, balance: 0 }],
+      ["Buy more opened, live", { view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true }],
+    ] as const) {
+      const intent = vi.fn();
+      const bought: number[] = [];
+      const tree = body({ ...props, onTileIntent: intent, onBuy: (s) => bought.push(s) });
+      for (const pack of STREAM_CREDIT_PACKS) {
+        const tile = byTestId(tree, `stream-buy-pack-${pack.size}`)!;
+        for (const event of ["onPointerEnter", "onFocus", "onTouchStart"] as const) {
+          const before = intent.mock.calls.length;
+          (attr(tile, event) as (() => void) | undefined)?.();
+          expect(intent.mock.calls.length, `${name}: ${pack.size} ${event}`).toBe(before + 1);
+          checked++;
+        }
+        click(tile);
+      }
+      expect(bought, `${name}: a click is still the purchase`).toEqual(STREAM_CREDIT_PACKS.map((p) => p.size));
+    }
+    expect(checked).toBe(2 * STREAM_CREDIT_PACKS.length * 3);
+    // Nothing but a tile warms the sheet: the chooser's other controls carry no intent handler.
+    const tree = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true, onTileIntent: () => {} });
+    const warmers = tree.filter((el) => typeof attr(el, "onPointerEnter") === "function");
+    expect(warmers.map((el) => attr(el, "data-testid")).sort()).toEqual(STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`).sort());
   });
 
   it("B7: each native select names its selection in a title, so a clipped option is still readable", () => {
@@ -1948,14 +1991,56 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(onFail).toHaveBeenCalledTimes(1);
   });
 
-  it("N2: the sheet's chunk is fetched when the chooser OPENS, from the same module the sheet loads — not on the tile tap", () => {
+  // M2 / D-B (fix round 4): N2 warmed the sheet's chunk when the chooser OPENED, and the chunk's import side effect is
+  // js.stripe.com — so an organiser with no credits who merely looked at the Phone tab (the forced chooser) loaded
+  // Stripe.js: capture pass 3 counted 13 stripe.com requests before any tap. The warm-up now waits for a hand on a tile.
+  it("M2: opening the chooser loads NOTHING — forced or opened; the first tile intent loads the sheet ONCE, and a failed warm-up retries", async () => {
+    // TAB's balance is 3, so this one's chooser opens only on Buy more; balance 0 at idle is the FORCED chooser.
+    const opened = track(await mount({ current: null, targets: TARGETS }));
+    const forced = track(renderIsland(PhoneTab, { ...TAB, streamBalance: 0 }));
+    await settle();
+    expect(bodyOf(forced).balance, "premise: the forced chooser").toBe(0);
+    expect(bodyOf(forced).view).toBeNull();
+    bodyOf(opened).onShowBuy();
+    await settle();
+    expect(bodyOf(opened).showBuy, "premise: Buy more opened the chooser").toBe(true);
+    expect(sheetLoader.load, "an OPEN chooser fetched the sheet (and Stripe.js with it)").toHaveBeenCalledTimes(0);
+
+    // A hand on a tile: pointerenter, then the focus a press brings, then — on a phone — touchstart. One fetch.
+    bodyOf(forced).onTileIntent();
+    bodyOf(forced).onTileIntent();
+    bodyOf(forced).onTileIntent();
+    await settle();
+    expect(sheetLoader.load, "tile intent warms the sheet exactly once").toHaveBeenCalledTimes(1);
+    // …through the SAME loader the sheet itself mounts with (N2: one specifier, one chunk).
+    const made = lazy.made.filter((d) => (d.opts as { ssr?: boolean } | undefined)?.ssr === false);
+    expect(made, "the panel's one dynamic() sheet").toHaveLength(1);
+    await made[0]!.loader();
+    expect(sheetLoader.load, "dynamic() and the warm-up are one loader").toHaveBeenCalledTimes(2);
+
+    // A warm-up that FAILED (a network blip) must not block the next intent from trying again (class 13).
+    sheetLoader.load.mockClear();
+    sheetLoader.load.mockRejectedValueOnce(new Error("Loading chunk failed"));
+    const retry = track(renderIsland(PhoneTab, { ...TAB, streamBalance: 0 }));
+    await settle();
+    bodyOf(retry).onTileIntent();
+    await settle();
+    bodyOf(retry).onTileIntent();
+    await settle();
+    expect(sheetLoader.load, "a failed warm-up, then a retry").toHaveBeenCalledTimes(2);
+    bodyOf(retry).onTileIntent();
+    await settle();
+    expect(sheetLoader.load, "…and once it succeeded, no more").toHaveBeenCalledTimes(2);
+  });
+
+  it("M2: the ONE loader module — the only specifier of the sheet anywhere in the panel, and no warm-up on the chooser", () => {
     const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
-    const loaders = src.match(/import\("\.\/stream-checkout-modal"\)/g) ?? [];
-    expect(loaders.length, "one specifier, shared by dynamic() and the preload").toBe(1);
-    expect(src).toMatch(/const loadCheckoutSheet = \(\) => import\("\.\/stream-checkout-modal"\);/);
-    expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
-    // The preload runs in an effect keyed on the chooser being open.
-    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(chooserOpen\) void loadCheckoutSheet\(\)\.catch\(\(\) => \{\}\);\s*\}, \[chooserOpen\]\);/);
+    const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
+    expect(src.match(/import\("\.\/stream-checkout-modal"\)/g) ?? [], "the panel imports the sheet itself").toHaveLength(0);
+    expect(loaderSrc.match(/import\("\.\/stream-checkout-modal"\)/g) ?? []).toHaveLength(1);
+    // The loader module is in the panel's STATIC graph, so it must carry nothing but the dynamic import.
+    expect(loaderSrc).not.toMatch(/^\s*import\s/m);
+    expect(src, "the chooser-open warm-up is gone").not.toMatch(/chooserOpen/);
   });
 
   describe("PhoneStopProbe — an org without the relay can still stop what is on air (G2)", () => {
