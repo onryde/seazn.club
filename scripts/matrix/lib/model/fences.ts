@@ -14,8 +14,12 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "late-entry-then-generate",
     issue: "#879",
     blocks: "Generate",
-    // Round-robin stages only: an entrant added after Start, then Generate,
-    // seats every existing pair again (#879's trigger, pre-flight ruling R-PF8).
+    // Round-robin stages only (schedule.ts roundRobinStageIds). An entrant
+    // added while the stage already has fixtures — before Start, since the
+    // roster locks at Start — then Generate: the reconcile keys on POSITION
+    // (rr-r{round}-c{court}), so it duplicates pairs and misses others (issue
+    // #879; ruling C-1 supersedes R-PF8's post-Start add). Lifted once an
+    // accepted Rebuild or Generate re-seats the grown field.
     applies: (m: ModelState) => m.lateEntry && (m.stageKind === "league" || m.stageKind === "group"),
   },
 ]);

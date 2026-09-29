@@ -4,10 +4,16 @@
 //    over what the product shows now, reused unchanged;
 //  - the orientation check, which sees the duplicate I7 cannot at legs ≥ 2;
 //  - fold parity for every fixture whose whole ledger the model knows;
-//  - and, in the commands, every refusal named.
+//  - and, in the commands, every refusal named, every refusal of a command
+//    the model holds legal a violation, and the roster lock an EXPECTED
+//    refusal.
+// Every ledger that goes unknown is counted (`unknowns`), every step is
+// classed (`steps`), and informativeSteps() fails a cell with none that told
+// the model anything (R25).
 import type { FixtureRow, OrganiserDriver } from "../driver/types.ts";
 import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
+import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
 import { foldLedger, type LedgerEntry } from "./ledger-fold.ts";
@@ -32,6 +38,17 @@ export class ModelViolation extends Error {
   }
 }
 
+/** How a step ended. Only an accepted step whose ledgers stayed known is
+ *  informative: a refusal (ordinary or expected) changed nothing, and an
+ *  "unknown" step left a ledger the model can no longer fold. */
+export type StepVerdict = "accepted" | "refused" | "expected-refusal" | "unknown";
+export interface StepRecord { cmd: string; verdict: StepVerdict }
+/** A ledger that went unknown because the product's event count stopped
+ *  matching the model's: a post answered on the SEQ_CONFLICT retry, or a tip
+ *  that moved under the model (a second writer). */
+export interface UnknownLedger { cause: "retried" | "tip-moved"; fixture: string; detail: string }
+export interface CommandCounts { ran: number; accepted: number; refused: number; expected: number; unexpected: number }
+
 export interface ModelState {
   readonly sport: string;
   readonly variant: string;
@@ -46,19 +63,26 @@ export interface ModelState {
   withdrawn: Set<string>;
   started: boolean;
   completed: boolean;
-  /** An entrant was added after Start (#879's trigger). */
+  /** An entrant arrived while the stage already had fixtures (#879's trigger —
+   *  pre-Start: Generate, AddEntrant, Generate). Cleared by the event that
+   *  re-seats the grown field: an accepted Generate or Rebuild. */
   lateEntry: boolean;
   /** Posts made, for idempotency prefixes unique within the run. */
   posts: number;
   fixtures: Map<string, FixtureModel>;
   generates: GenerateObs[];
-  counts: Record<CommandKind, { ran: number; accepted: number; refused: number }>;
+  counts: Record<CommandKind, CommandCounts>;
   /** Items each step check judged, summed over steps (R25: a cell owes > 0). */
   stepChecks: Map<string, number>;
   /** Fixtures whose product outcome matched the engine's fold of the known ledger, summed over steps. */
   foldParity: number;
   fenced: Map<string, number>;
   history: string[];
+  /** One per step that completed its check, in order. */
+  steps: StepRecord[];
+  unknowns: UnknownLedger[];
+  /** Known product findings met on the way, by id: counted, never a stop. */
+  findings: Map<string, { count: number; evidence: string[] }>;
 }
 
 /** The fixture statuses the product reads as VOID — not a meeting, dropped
@@ -69,6 +93,55 @@ export const VOID_STATUSES: readonly string[] = Object.freeze(["abandoned", "can
 
 /** The model's own step check beside I7 (carry c). */
 export const ORIENTATION_CHECK = "model-rr-orientation";
+/** A named refusal of a command the model holds legal (ruling I-1). */
+export const UNEXPECTED_REFUSAL = "model-unexpected-refusal";
+/** The roster lock: a latecomer accepted after Start, or a refusal that still changed the roster. */
+export const ROSTER_LOCK_CHECK = "model-roster-lock";
+/** The roster lock's refusal carries no domain code (entrants.ts: a bare
+ *  HttpError(422), which api-v1 stamps "ERROR"). Routed to W9. */
+export const ROSTER_LOCK_FINDING = "CD-T13b";
+export const VACUITY_CHECK = "model-informative-steps";
+
+/** entrants.ts createEntrants: once the division is `active` or `completed`
+ *  (Start, then completion) the entrant list is locked with a 422, unless a
+ *  stage is an open-window format. Pinned against entrants.ts's text by
+ *  model-core.test.ts, so a product change turns the pin red. */
+export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[] } = Object.freeze({
+  status: 422,
+  openKinds: Object.freeze(["ladder", "americano"]),
+});
+
+/** The product refuses an entrant here. The model's single stage is the
+ *  division's only stage, and Start is what moves the division to `active`. */
+export function rosterLocked(m: ModelState): boolean {
+  return m.started && !ROSTER_LOCK.openKinds.includes(m.stageKind);
+}
+
+export function recordFinding(m: ModelState, id: string, line: string): void {
+  const f = m.findings.get(id) ?? { count: 0, evidence: [] };
+  f.count++;
+  if (f.evidence.length < 3) f.evidence.push(line);
+  m.findings.set(id, f);
+}
+
+/** A ledger the model can no longer fold: counted with its cause, then dropped. */
+export function markUnknown(m: ModelState, f: FixtureModel, cause: UnknownLedger["cause"], detail: string): void {
+  m.unknowns.push({ cause, fixture: f.id, detail });
+  f.ledger = null;
+}
+
+/** R25 for a model cell: the number of informative steps, and zero is a
+ *  failure — a cell whose every step was refused, expected to be refused, or
+ *  left a ledger unknown proved nothing. */
+export function informativeSteps(m: ModelState): CheckResult {
+  const n = (v: StepVerdict) => m.steps.filter((s) => s.verdict === v).length;
+  const informative = n("accepted");
+  const reason = `${informative} of ${m.steps.length} steps informative (${n("refused")} refused, ${n("expected-refusal")} expected refusals, ${n("unknown")} unknown)`;
+  return {
+    id: VACUITY_CHECK, kind: "assertion", verdict: informative > 0 ? "pass" : "fail", checked: informative, reason,
+    evidence: informative > 0 ? [] : [`vacuous (R25): ${reason}`, ...m.steps.slice(0, 11).map((s) => `${s.cmd}: ${s.verdict}`)],
+  };
+}
 
 /** How often one orientation (home→away) of a round-robin pair may meet: each
  *  leg seats the pair once and even legs mirror (engine scheduling/
@@ -99,14 +172,14 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
   const [stage] = await d.postStages(division.id, bodies);
   if (stage === undefined) throw new Error("model: postStages answered no stage");
   const added = await d.addEntrants(division.id, Array.from({ length: input.entrants }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1, kind })));
-  const zero = () => ({ ran: 0, accepted: 0, refused: 0 });
+  const zero = (): CommandCounts => ({ ran: 0, accepted: 0, refused: 0, expected: 0, unexpected: 0 });
   return {
     sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config,
     divisionId: division.id, stageId: stage.id, tag: input.tag,
     entrants: added.map((e) => e.id), withdrawn: new Set(), started: false, completed: false, lateEntry: false, posts: 0,
     fixtures: new Map(), generates: [],
     counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, zero()])) as ModelState["counts"],
-    stepChecks: new Map(), foldParity: 0, fenced: new Map(), history: [],
+    stepChecks: new Map(), foldParity: 0, fenced: new Map(), history: [], steps: [], unknowns: [], findings: new Map(),
   };
 }
 
@@ -203,9 +276,9 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
     const got = toObservedOutcome(r.outcome);
     if (want.refused === null && sameOutcome(want.out, got)) { m.foldParity++; continue; }
     // Events the model did not post (a retry, a cascade) make the ledger
-    // unknown, not wrong: re-read the tip before calling it a lie.
+    // unknown, not wrong: re-read the tip before calling it a lie — and count it.
     const st = await d.fixtureState(r.id);
-    if (st.last_seq !== f.ledger.length) { f.ledger = null; continue; }
+    if (st.last_seq !== f.ledger.length) { markUnknown(m, f, "tip-moved", `product last_seq ${st.last_seq}, model ledger ${f.ledger.length}`); continue; }
     const engine = want.refused === null ? JSON.stringify(want.out) : `a refusal (${want.refused})`;
     throw new ModelViolation("model-fold-parity", [`fixture ${r.id}: product ${JSON.stringify(got)}, engine fold of the ledger ${engine} (${f.ledger.length} events)`]);
   }

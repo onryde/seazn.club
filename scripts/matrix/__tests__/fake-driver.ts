@@ -205,12 +205,18 @@ export class FakeLeagueDriver implements OrganiserDriver {
     for (const f of touched) {
       if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
-      if (policy === "walkover" && opponent !== null) { await this.forfeit(f.id, entrantId, "walkover"); walkovers++; continue; }
+      if (policy === "walkover" && opponent !== null) { await this.walkoverFixture(f, entrantId); walkovers++; continue; }
       await this.abandonFixture(f);
       voided++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
     return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
+  }
+  /** The walkover of one pending fixture. This table fake composes it as
+   *  HttpDriver.forfeit does (START first on a scheduled fixture);
+   *  ModelFakeDriver posts withdrawal.ts's bare forfeit instead. */
+  async walkoverFixture(f: FakeFixture, by: string): Promise<void> {
+    await this.forfeit(f.id, by, "walkover");
   }
   /** The expunge's void of one fixture. This table fake writes the status
    *  directly, with no event, so a later post would fold over it (Task 1

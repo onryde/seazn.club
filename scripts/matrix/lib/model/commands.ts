@@ -4,7 +4,10 @@
 // replays exactly, and a hand-written sequence (commandOf) runs the same code
 // as a generated one (modelCommands). After every command: checkStep. Every
 // product refusal must be named (observed.ts isNamedRefusal), or it is a
-// violation, never a skip.
+// violation, never a skip — except the one known code-less refusal the model
+// EXPECTS (the roster lock after Start, finding CD-T13b), which is recorded
+// and walked past. A named refusal of a command the model holds legal is a
+// violation too (ruling I-1): an ordinary refusal is one the product may give.
 import fc from "fast-check";
 import { RefusedCall, type OrganiserDriver, type PostedEvent } from "../driver/types.ts";
 import { isNamedRefusal, isTerminal } from "../observed.ts";
@@ -12,7 +15,11 @@ import { generateStream } from "../streams/index.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { fenceBlocking } from "./fences.ts";
 import { liveEntries, type LedgerEntry } from "./ledger-fold.ts";
-import { COMMAND_KINDS, ModelViolation, absorbFixtures, checkStep, type CommandKind, type FixtureModel, type ModelState } from "./state.ts";
+import {
+  COMMAND_KINDS, ModelViolation, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
+  absorbFixtures, checkStep, markUnknown, recordFinding, rosterLocked,
+  type CommandKind, type FixtureModel, type ModelState, type StepVerdict,
+} from "./state.ts";
 
 export { COMMAND_KINDS, ModelViolation, checkStep, newModelState, type CommandKind, type FixtureModel, type ModelState } from "./state.ts";
 
@@ -51,6 +58,16 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
   }
   protected abstract ready(m: ModelState): boolean;
   protected abstract act(m: ModelState, d: OrganiserDriver): Promise<void>;
+  /** The model holds this command legal here: a named refusal is a product
+   *  defect, not an ordinary refusal (ruling I-1). */
+  protected mustAccept(_m: ModelState): boolean { return false; }
+  /** The model knows the product refuses this command here. */
+  protected expectsRefusal(_m: ModelState): boolean { return false; }
+  /** The check an acceptance violates when a refusal was expected. */
+  protected expectedCheck(): string { return "model-expected-refusal"; }
+  /** A known code-less refusal: the finding it is recorded under, or null. */
+  protected knownUnnamed(_e: RefusedCall): string | null { return null; }
+  protected async afterExpectedRefusal(_m: ModelState, _d: OrganiserDriver): Promise<void> {}
   check(m: Readonly<ModelState>): boolean {
     if (!this.ready(m)) return false;
     const fence = fenceBlocking(m, this.kind, this.fences);
@@ -61,18 +78,45 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
     return true;
   }
   async run(m: ModelState, d: OrganiserDriver): Promise<void> {
-    m.counts[this.kind].ran++;
+    const c = m.counts[this.kind];
+    c.ran++;
     m.history.push(this.toString());
+    // Judged on the state the command was drawn in, before it acts.
+    const must = this.mustAccept(m);
+    const expected = this.expectsRefusal(m);
+    const unknownsBefore = m.unknowns.length;
+    let verdict: StepVerdict = "accepted";
     try {
       await this.act(m, d);
-      m.counts[this.kind].accepted++;
+      if (expected) throw new ModelViolation(this.expectedCheck(), [`${this.toString()}: the product accepted a command the model expected it to refuse`]);
+      c.accepted++;
     } catch (e) {
       if (!(e instanceof RefusedCall)) throw e;
-      if (!isNamedRefusal(e.status, e.code)) throw new ModelViolation("model-refusal-named", [`${this.toString()}: ${e.method} ${e.path} → ${e.status} ${e.code ?? "(no code)"}`]);
-      m.counts[this.kind].refused++;
-      this.onRefused(m, e);
+      const line = `${this.toString()}: ${e.method} ${e.path} → ${e.status} ${e.code ?? "(no code)"}`;
+      const named = isNamedRefusal(e.status, e.code);
+      if (expected) {
+        if (!named) {
+          const finding = this.knownUnnamed(e);
+          if (finding === null) throw new ModelViolation("model-refusal-named", [line]);
+          recordFinding(m, finding, line);
+        }
+        c.expected++;
+        verdict = "expected-refusal";
+        await this.afterExpectedRefusal(m, d);
+      } else {
+        if (!named) throw new ModelViolation("model-refusal-named", [line]);
+        if (must) {
+          c.unexpected++;
+          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — the model holds ${this.kind} legal here`]);
+        }
+        c.refused++;
+        verdict = "refused";
+        this.onRefused(m, e);
+      }
     }
     await checkStep(m, d);
+    if (verdict === "accepted" && m.unknowns.length > unknownsBefore) verdict = "unknown";
+    m.steps.push({ cmd: this.toString(), verdict });
   }
   protected onRefused(_m: ModelState, _e: RefusedCall): void {}
   toString(): string { return `${this.kind}(${this.k},${this.w})`; }
@@ -81,7 +125,8 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
 /** Posts events and records them in the fixture's ledger. A core.void's
  *  target is the payload's event_id, as the product lifts it (scoring.ts). A
  *  refusal part-way leaves the ledger unknown: the posted prefix is not
- *  reported back. */
+ *  reported back. So does an answer the driver marks `retried` (HttpDriver's
+ *  one SEQ_CONFLICT retry): the product's count moved under the post. */
 async function post(m: ModelState, d: OrganiserDriver, f: FixtureModel, events: readonly StreamEvent[]): Promise<PostedEvent[]> {
   const prefix = `${m.tag}:${f.id}:p${++m.posts}`;
   let out: PostedEvent[];
@@ -101,6 +146,8 @@ async function post(m: ModelState, d: OrganiserDriver, f: FixtureModel, events: 
   });
   const last = out.at(-1);
   if (last !== undefined) f.status = last.status;
+  const retried = out.filter((p) => p.retried === true).map((p) => p.seq);
+  if (retried.length > 0 && f.ledger !== null) markUnknown(m, f, "retried", `seq ${retried.join(", ")} retried`);
   return out;
 }
 
@@ -121,17 +168,32 @@ class Start extends Cmd {
 class AddEntrant extends Cmd {
   readonly kind = "AddEntrant" as const;
   protected ready(m: ModelState) { return m.entrants.length < MAX_ENTRANTS && !m.completed; }
+  // After Start the product locks the roster (entrants.ts): offered, EXPECTED
+  // to be refused, the roster judged unchanged.
+  protected override expectsRefusal(m: ModelState) { return rosterLocked(m); }
+  protected override expectedCheck() { return ROSTER_LOCK_CHECK; }
+  protected override knownUnnamed(e: RefusedCall) { return e.status === ROSTER_LOCK.status ? ROSTER_LOCK_FINDING : null; }
+  protected override async afterExpectedRefusal(m: ModelState, d: OrganiserDriver) {
+    const now = (await d.listEntrants(m.divisionId)).map((e) => e.id);
+    const had = new Set(m.entrants);
+    if (now.length !== had.size || now.some((id) => !had.has(id))) {
+      throw new ModelViolation(ROSTER_LOCK_CHECK, [`${this.toString()}: refused, yet the roster went from ${had.size} to ${now.length} entrants`]);
+    }
+  }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const n = m.entrants.length + 1;
     const [e] = await d.addEntrants(m.divisionId, [{ displayName: `Matrix Player ${n}`, seed: n, kind: m.kind }]);
     if (e === undefined) throw new Error("model: addEntrants answered no entrant");
     m.entrants.push(e.id);
-    if (m.started) m.lateEntry = true;
+    // #879's trigger: the roster grew while the stage already had fixtures.
+    if (m.fixtures.size > 0) m.lateEntry = true;
   }
 }
 class Withdraw extends Cmd {
   readonly kind = "Withdraw" as const;
   protected ready(m: ModelState) { return m.started && m.withdrawn.size === 0 && m.entrants.length > 2; }
+  /** The first withdrawal of an active entrant is always the organiser's to make. */
+  protected override mustAccept(m: ModelState) { return m.withdrawn.size === 0; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const id = pick(m.entrants, this.k, "entrant");
     // The cascade posts events the model does not write (walkover forfeits,
@@ -144,6 +206,7 @@ class Withdraw extends Cmd {
 class Score extends Cmd {
   readonly kind = "Score" as const;
   protected ready(m: ModelState) { return m.started && open(m).length > 0; }
+  protected override mustAccept() { return true; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const f = pick(open(m), this.k, "open fixture");
     await post(m, d, f, winStream(m, f, this.w % 2 === 0 ? "home" : "away"));
@@ -152,6 +215,7 @@ class Score extends Cmd {
 class Walkover extends Cmd {
   readonly kind = "Walkover" as const;
   protected ready(m: ModelState) { return m.started && open(m).length > 0; }
+  protected override mustAccept() { return true; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const f = pick(open(m), this.k, "open fixture");
     const [home, away] = seatsOf(f);
@@ -162,6 +226,7 @@ class Walkover extends Cmd {
 class Void extends Cmd {
   readonly kind = "Void" as const;
   protected ready(m: ModelState) { return m.started && withLive(m).length > 0; }
+  protected override mustAccept() { return true; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const f = pick(withLive(m), this.k, "fixture with a live event");
     const target = pick(liveEntries(knownLedger(f)).reverse(), 0, "live event");
@@ -171,6 +236,7 @@ class Void extends Cmd {
 class Correct extends Cmd {
   readonly kind = "Correct" as const;
   protected ready(m: ModelState) { return m.started && decided(m).length > 0; }
+  protected override mustAccept() { return true; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const f = pick(decided(m), this.k, "decided fixture");
     // Void every live event newest first, then record the result again.
@@ -181,21 +247,30 @@ class Correct extends Cmd {
 }
 class Generate extends Cmd {
   readonly kind = "Generate" as const;
-  protected ready(m: ModelState) { return m.started && !m.completed; }
+  // Before Start too: POST /stages/:id/generate refuses only a frozen schedule
+  // (stages.ts generateStageFixturesWrite), and it is how fixtures come to
+  // exist before Start — the first half of #879's sequence.
+  protected ready(m: ModelState) { return !m.completed; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     const g = await d.generate(m.stageId);
     // I8 judges what is recorded here: `total` is the stage's full list, so a
     // 2xx answering zero fixtures is an empty generate (R13, carry b).
     m.generates.push({ status: 200, code: null, total: g.fixtures.length, created: g.created });
+    // The reconcile ran over the grown roster: the late entry is spent.
+    m.lateEntry = false;
     absorbFixtures(m, await d.listFixtures(m.divisionId));
   }
   protected override onRefused(m: ModelState, e: RefusedCall) { m.generates.push({ status: e.status, code: e.code, total: 0, created: 0 }); }
 }
 class Rebuild extends Cmd {
   readonly kind = "Rebuild" as const;
-  protected ready(m: ModelState) { return m.started && !m.completed; }
+  // Whenever the stage has fixtures, before Start too: rebuildStageFixtures
+  // has no division-status gate, and it is the organiser's fix for #879.
+  protected ready(m: ModelState) { return !m.completed && m.fixtures.size > 0; }
   protected async act(m: ModelState, d: OrganiserDriver) {
     await d.rebuild(m.stageId);
+    // Every fixture re-seated from the current roster: the late entry is resolved.
+    m.lateEntry = false;
     absorbFixtures(m, await d.listFixtures(m.divisionId));
   }
 }

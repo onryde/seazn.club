@@ -1,30 +1,39 @@
 // The fast-check model core (W1b Task 13): the void-aware ledger fold, the ten
 // organiser commands, the step check run after every command, and the #879
 // fence. Driven DB-free through ModelFakeDriver, whose outcomes come from the
-// engine's own fold and whose schedule is the engine's own round robin.
+// engine's own fold, whose schedule is the engine's own round robin, and whose
+// roster lock is read from the product's own text (entrants.ts).
 //
-// State transitions under test (TEST-STRATEGY rule 1): not started → started
-// (Start); roster growth before and after start (AddEntrant); a withdrawal
-// (Withdraw, its cascade riding the ledger); a result, a walkover, a void and
-// a correction on one fixture; a second Generate; a Rebuild after results; a
-// Complete. Empty cases: an empty ledger, a model with nothing to judge, a
-// command with no candidate.
+// State transitions under test (TEST-STRATEGY rule 1): the pre-Start path
+// (roster growth before and after fixtures exist, a pre-Start Generate and
+// Rebuild); not started → started (Start); the roster lock after Start
+// (AddEntrant, an EXPECTED refusal); a withdrawal (Withdraw, its cascade riding
+// the ledger); a result, a walkover, a void and a correction on one fixture; a
+// second Generate; a Rebuild after results; a Complete. Empty cases: an empty
+// ledger, a model with nothing to judge, a command with no candidate, a cell
+// with no informative step.
+import { EngineError } from "@seazn/engine/core";
 import { generateRoundRobin } from "@seazn/engine/scheduling";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
 import { BUILDER_DEFAULT_KNOBS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { RefusedCall, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
+import { RefusedCall, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { foldStream } from "../lib/fold.ts";
 import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
-import { ORIENTATION_CHECK, VOID_STATUSES, absorbFixtures, orientationBound } from "../lib/model/state.ts";
+import {
+  ORIENTATION_CHECK, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
+  absorbFixtures, informativeSteps, orientationBound,
+} from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
-import { entrantKindFor, resolveSportCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 import { ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
+import { rosterLockText, roundRobinKindsText, withdrawalReason } from "./product-text.ts";
 
 const I7 = "I7-rr-no-pair-over-legs";
 const I8 = "I8-generate-named";
@@ -39,10 +48,14 @@ const seatsOf = (f: { home_entrant_id: string | null; away_entrant_id: string | 
 };
 /** The builder's "Home and away" legs option (division-builder.tsx legs select). */
 const HOME_AWAY = { ...BUILDER_DEFAULT_KNOBS, legs: 2 };
+/** C(n,2): one leg of a round robin over n entrants — the engine's pairing count, never read from the fake. */
+const pairs = (n: number) => (n * (n - 1)) / 2;
+const counts = (ran: number, o: Partial<{ accepted: number; refused: number; expected: number; unexpected: number }>) =>
+  ({ ran, accepted: 0, refused: 0, expected: 0, unexpected: 0, ...o });
 
 type Setup = { sport?: string; variant?: string; entrants?: number; knobs?: typeof HOME_AWAY };
-async function fresh(opts: ModelFakeOpts = {}, over: Setup = {}): Promise<{ m: ModelState; d: ModelFakeDriver }> {
-  const d = new ModelFakeDriver(opts);
+async function fresh(opts: ModelFakeOpts = {}, over: Setup = {}, driver?: ModelFakeDriver): Promise<{ m: ModelState; d: ModelFakeDriver }> {
+  const d = driver ?? new ModelFakeDriver(opts);
   const m = await newModelState({ driver: d, row: "league", sport: over.sport ?? "generic", variant: over.variant ?? "score", entrants: over.entrants ?? 4, tag: "t", ...(over.knobs === undefined ? {} : { knobs: over.knobs }) });
   return { m, d };
 }
@@ -59,13 +72,26 @@ const violation = async (p: Promise<unknown>): Promise<ModelViolation> => {
   expect(e).toBeInstanceOf(ModelViolation);
   return e as ModelViolation;
 };
+const lock = rosterLockText();
 
-// Order matters: Correct needs a decided fixture, so it runs before any void.
-// Fences off: the late-entry fence would withhold Generate.
-const EVERY_KIND: [CommandKind, number, number?][] = [
-  ["Start", 0], ["Score", 0, 0], ["Score", 0, 1], ["Correct", 0], ["Walkover", 0, 1], ["Void", 0],
-  ["AddEntrant", 0], ["Generate", 0], ["Rebuild", 0], ["Withdraw", 0], ["Complete", 0],
-];
+/** Every command kind, fences off, each runnable where it stands: the pre-Start
+ *  path (growth before fixtures exist, a pre-Start Generate and Rebuild), Start,
+ *  the roster lock, play, a correction, a void, a second Generate, a refused
+ *  Rebuild, then Withdraw of the entrant with the fewest results (under half
+ *  played: the expunge, which posts no forfeit — the walkover leg is the F1
+ *  case below) and Complete. */
+async function everyKind(m: ModelState, d: ModelFakeDriver): Promise<void> {
+  await play(m, d, [
+    ["AddEntrant", 0], ["Generate", 0], ["Rebuild", 0], ["Start", 0], ["AddEntrant", 0],
+    ["Score", 0, 0], ["Score", 0, 1], ["Correct", 0], ["Walkover", 0, 1], ["Void", 0], ["Generate", 0], ["Rebuild", 0],
+  ], false);
+  const mine = (e: string) => [...m.fixtures.values()].filter((f) => f.home === e || f.away === e);
+  const played = (e: string) => mine(e).filter((f) => f.status === "decided" || f.status === "forfeited").length;
+  const least = [...m.entrants].sort((a, b) => played(a) - played(b))[0];
+  // lib/table-withdrawal + withdrawTableEntrant: under half played expunges.
+  if (least === undefined || played(least) * 2 >= mine(least).length) throw new Error("test: no entrant under half played");
+  await play(m, d, [["Withdraw", m.entrants.indexOf(least)], ["Complete", 0]], false);
+}
 
 describe("ledger fold (void-aware, the engine's own fold)", () => {
   it("empty case first: an empty ledger folds to no outcome", () => {
@@ -109,10 +135,10 @@ describe("ledger fold (void-aware, the engine's own fold)", () => {
 });
 
 describe("model commands — preconditions", () => {
-  it("empty case first: before Start, only Start and AddEntrant are runnable", async () => {
+  it("empty case first: before Start and before any fixture, only Start, AddEntrant and Generate are runnable", async () => {
     const { m } = await fresh();
     const runnable = COMMAND_KINDS.filter((k) => commandOf(k, 0, 0, true).check(m));
-    expect(runnable).toEqual(["Start", "AddEntrant"]);
+    expect(runnable).toEqual(["Start", "AddEntrant", "Generate"]);
   });
   it("one arbitrary per command kind, in COMMAND_KINDS order (the ten §7.5 names), each generating its own kind", () => {
     const arbs = modelCommands({ fences: true });
@@ -125,20 +151,28 @@ describe("model commands — preconditions", () => {
     const { m, d } = await fresh();
     await play(m, d, [["Start", 0], ["Generate", 0], ["Generate", 0]]);
     expect(commandOf("Start", 0, 0, true).check(m)).toBe(false);
-    // C(4,2) = 6 pairs, one leg — the engine's roundRobinFixtureCount, never read from the fake.
-    expect(m.generates).toEqual([{ status: 200, code: null, total: 6, created: 0 }, { status: 200, code: null, total: 6, created: 0 }]);
-    expect(m.fixtures.size).toBe(6);
+    expect(m.generates).toEqual([{ status: 200, code: null, total: pairs(4), created: 0 }, { status: 200, code: null, total: pairs(4), created: 0 }]);
+    expect(m.fixtures.size).toBe(pairs(4));
     // I8 judges every Generate at every step: 1 after the first, 2 after the second.
     expect(m.stepChecks.get(I8)).toBe(3);
   });
-  it("roster growth BEFORE Start is not a late entry: Generate stays offered with fences on, and Start seats the grown field", async () => {
+  it("a pre-Start Generate seats the field over the API; Start then seats nothing new (startDivision generates only an empty first stage)", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh();
+    await play(m, d, [["Generate", 0]]);
+    expect(m.started).toBe(false);
+    expect(m.generates).toEqual([{ status: 200, code: null, total: pairs(4), created: pairs(4) }]);
+    const before = [...m.fixtures.keys()];
+    await play(m, d, [["Start", 0]]);
+    expect([...m.fixtures.keys()]).toEqual(before);
+  });
+  it("roster growth BEFORE any fixture exists is not a late entry: Generate stays offered with fences on, and Start seats the grown field", async () => {
     // single-sport: as above.
     const { m, d } = await fresh();
     await play(m, d, [["AddEntrant", 0], ["Start", 0], ["Generate", 0]]);
     expect(m.lateEntry).toBe(false);
     expect(m.entrants.length).toBe(5);
-    // C(5,2) = 10 pairs, one leg.
-    expect(m.fixtures.size).toBe(10);
+    expect(m.fixtures.size).toBe(pairs(5));
   });
   it("Complete: with fixtures pending the answer is completed:false and the stage stays open; once every fixture is decided it completes and is not offered again", async () => {
     // single-sport: completion reads fixture statuses, not a sport.
@@ -149,7 +183,7 @@ describe("model commands — preconditions", () => {
     await play(m, d, [["Score", 0, 1], ["Score", 0, 0], ["Score", 0, 1], ["Score", 0, 0], ["Score", 0, 1], ["Complete", 0]]);
     expect(m.completed).toBe(true);
     expect(commandOf("Complete", 0, 0, true).check(m)).toBe(false);
-    expect(m.counts.Complete).toEqual({ ran: 2, accepted: 2, refused: 0 });
+    expect(m.counts.Complete).toEqual(counts(2, { accepted: 2 }));
   });
   it("Rebuild on an unplayed stage replaces every fixture (twice); after a result — even one since voided — it is refused by name", async () => {
     // single-sport: rebuild's guard reads the ledger, not a sport.
@@ -158,14 +192,175 @@ describe("model commands — preconditions", () => {
     const first = [...m.fixtures.keys()];
     await play(m, d, [["Rebuild", 0], ["Rebuild", 0]]);
     const now = [...m.fixtures.keys()];
-    expect(now.length).toBe(6);
+    expect(now.length).toBe(pairs(4));
     expect(now.filter((id) => first.includes(id))).toEqual([]);
     expect([...m.fixtures.values()].every((f) => f.ledger !== null && f.ledger.length === 0)).toBe(true);
-    expect(m.counts.Rebuild).toEqual({ ran: 2, accepted: 2, refused: 0 });
+    expect(m.counts.Rebuild).toEqual(counts(2, { accepted: 2 }));
     // stages.ts rebuildStageFixtures blocks on any score event (fixtureHasResultSql), not only on an outcome.
     await play(m, d, [["Score", 0, 0], ["Void", 0], ["Void", 0], ["Rebuild", 0]]);
     expect([...m.fixtures.values()].some((f) => f.status !== "scheduled")).toBe(false);
-    expect(m.counts.Rebuild).toEqual({ ran: 3, accepted: 2, refused: 1 });
+    expect(m.counts.Rebuild).toEqual(counts(3, { accepted: 2, refused: 1 }));
+  });
+});
+
+describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, never a stop", () => {
+  it("ROSTER_LOCK is the product's own: the statuses, the open-window kinds and the status are read from entrants.ts", () => {
+    expect(lock.statuses).toEqual(["active", "completed"]);
+    expect([...ROSTER_LOCK.openKinds]).toEqual(lock.openKinds);
+    expect(ROSTER_LOCK.status).toBe(lock.status);
+    expect(lock.openKinds.length).toBeGreaterThan(0);
+  });
+  it("after Start, AddEntrant is refused as expected: the roster is unchanged, the cell goes on, and a code-less refusal is recorded as finding CD-T13b", async () => {
+    // single-sport: the lock reads the division and stage kinds, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0], ["AddEntrant", 0], ["AddEntrant", 1], ["Score", 0, 0]]);
+    expect(m.counts.AddEntrant).toEqual(counts(2, { expected: 2 }));
+    expect(m.entrants.length).toBe(4);
+    expect((await d.listEntrants()).length).toBe(4);
+    expect(m.lateEntry).toBe(false);
+    expect(m.counts.Score.accepted).toBe(1);
+    // The finding exists exactly while the product's refusal carries no domain code (read from the text, so a fix moves it).
+    const unnamed = !isNamedRefusal(lock.status, lock.wireCode);
+    expect(m.findings.get(ROSTER_LOCK_FINDING)?.count ?? 0).toBe(unnamed ? 2 : 0);
+    if (unnamed) expect(m.findings.get(ROSTER_LOCK_FINDING)?.evidence[0]).toContain(`${lock.status} ${lock.wireCode}`);
+    expect(m.steps.map((s) => s.verdict)).toEqual(["accepted", "expected-refusal", "expected-refusal", "accepted"]);
+  });
+  it("a product that NAMES the lock records no finding, and the refusal is still expected", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh({ rosterLock: "named" });
+    await play(m, d, [["Start", 0], ["AddEntrant", 0]]);
+    expect(m.counts.AddEntrant).toEqual(counts(1, { expected: 1 }));
+    expect(m.findings.size).toBe(0);
+  });
+  it("only the lock's own status is the known finding: a code-less 5xx where the lock was expected is still model-refusal-named", async () => {
+    // single-sport: as above.
+    class Crashing extends ModelFakeDriver {
+      override addEntrants(dv: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]): ReturnType<ModelFakeDriver["addEntrants"]> {
+        return super.addEntrants(dv, es).catch(() => { throw new RefusedCall("POST", `/api/v1/divisions/${dv}/entrants`, 500, "INTERNAL", "boom"); });
+      }
+    }
+    const { m, d } = await fresh({}, {}, new Crashing());
+    await play(m, d, [["Start", 0]]);
+    expect((await violation(play(m, d, [["AddEntrant", 0]]))).check).toBe("model-refusal-named");
+    expect(m.findings.size).toBe(0);
+  });
+  it("a product that ACCEPTS a latecomer after Start on a closed format → model-roster-lock", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh({ rosterLock: "open" });
+    await play(m, d, [["Start", 0]]);
+    const e = await violation(play(m, d, [["AddEntrant", 0]]));
+    expect(e.check).toBe(ROSTER_LOCK_CHECK);
+  });
+  it("a refusal that nonetheless changed the roster → model-roster-lock", async () => {
+    // single-sport: as above.
+    class Leaky extends ModelFakeDriver {
+      override addEntrants(dv: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]): ReturnType<ModelFakeDriver["addEntrants"]> {
+        return super.addEntrants(dv, es).catch((e: unknown) => {
+          this.entrants = [...this.entrants, { id: "e99", display_name: "Leaked Player", seed: 99, status: "registered" }];
+          throw e;
+        });
+      }
+    }
+    const { m, d } = await fresh({}, {}, new Leaky());
+    await play(m, d, [["Start", 0]]);
+    const e = await violation(play(m, d, [["AddEntrant", 0]]));
+    expect(e.check).toBe(ROSTER_LOCK_CHECK);
+  });
+  it("an open-window stage keeps a started roster open (entrants.ts openFormat): AddEntrant is expected to be ACCEPTED there", async () => {
+    // single-sport: as above.
+    let checked = 0;
+    for (const kind of lock.openKinds) {
+      const { m, d } = await fresh();
+      await play(m, d, [["Start", 0]]);
+      if (d.stage === null) throw new Error("test: no stage");
+      // The fake reads its stage kind for the lock, as the product reads stages.kind.
+      d.stage.kind = kind;
+      const open: ModelState = { ...m, stageKind: kind };
+      await commandOf("AddEntrant", 0, 0, true).run(open, d);
+      expect(open.counts.AddEntrant, kind).toEqual(counts(1, { accepted: 1 }));
+      expect(open.entrants.length, kind).toBe(5);
+      checked++;
+    }
+    expect(checked).toBe(lock.openKinds.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879; ruling C-1 supersedes R-PF8)", () => {
+  it("the real sequence: Generate, AddEntrant, Generate → the second Generate duplicates pairs → I7 at that step (fences OFF)", async () => {
+    // single-sport: #879 is a pairing defect, sport-blind.
+    const { m, d } = await fresh({ fault879: true });
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0]], false);
+    expect(m.started).toBe(false);
+    expect(m.lateEntry).toBe(true);
+    const e = await violation(play(m, d, [["Generate", 0]], false));
+    expect(e.check).toBe(I7);
+  });
+  it("#879 needs fixtures to exist when the entrant arrives: AddEntrant first, then Generate twice, duplicates nothing (fault879 on)", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh({ fault879: true });
+    await play(m, d, [["AddEntrant", 0], ["Generate", 0], ["Generate", 0], ["Start", 0], ["Generate", 0]], false);
+    expect(m.lateEntry).toBe(false);
+    expect(m.fixtures.size).toBe(pairs(5));
+    expect(m.stepChecks.get(I7) ?? 0).toBeGreaterThan(0);
+  });
+  it("the fake's fault fires once, as the product's positional reconcile does: the duplicating Generate inserts, and the next — every key now present — inserts nothing", async () => {
+    // single-sport: as above. Driven on the fake directly: the model stops at the first I7.
+    const { m, d } = await fresh({ fault879: true });
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);
+    expect((await d.generate()).created).toBeGreaterThan(0);
+    expect((await d.generate()).created).toBe(0);
+  });
+  it("with fences ON, Generate is withheld after a late entry — through Start — and the fence is counted", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh({ fault879: true });
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);
+    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(false);
+    await play(m, d, [["Start", 0]]);
+    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(false);
+    expect(m.fenced.get("late-entry-then-generate")).toBe(2);
+    expect(fenceBlocking(m, "Generate", true)?.issue).toBe("#879");
+    expect(fenceBlocking(m, "Generate", false)).toBeNull();
+  });
+  it("the late entry clears on the event that resolves it: an accepted Rebuild re-seats the grown field, and Generate is offered again and duplicates nothing", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh({ fault879: true });
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0], ["Rebuild", 0]]);
+    expect(m.lateEntry).toBe(false);
+    expect(m.fixtures.size).toBe(pairs(5));
+    await play(m, d, [["Generate", 0]]);
+    expect(m.fixtures.size).toBe(pairs(5));
+  });
+  it("…and so does an accepted Generate on a product without #879 (fences off): it adds exactly the missing pairs", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh();
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0], ["Generate", 0]], false);
+    expect(m.lateEntry).toBe(false);
+    expect(m.generates.at(-1)).toEqual({ status: 200, code: null, total: pairs(5), created: pairs(5) - pairs(4) });
+  });
+  it("a refused Rebuild resolves nothing: the late entry stands", async () => {
+    // single-sport: as above.
+    class NoRebuild extends ModelFakeDriver {
+      override rebuild(): Promise<void> { return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/rebuild", 422, "SCHEDULE_LOCKED", "locked")); }
+    }
+    const { m, d } = await fresh({}, {}, new NoRebuild());
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0], ["Rebuild", 0]]);
+    expect(m.counts.Rebuild).toEqual(counts(1, { refused: 1 }));
+    expect(m.lateEntry).toBe(true);
+  });
+  it("the fence is for the product's round-robin kinds only (schedule.ts roundRobinStageIds): a late entry on a knockout or swiss stage leaves Generate offered", async () => {
+    // single-sport: the fence reads stage kinds.
+    const { m, d } = await fresh();
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);
+    const rr = roundRobinKindsText();
+    let checked = 0;
+    for (const stageKind of [...rr, "knockout", "swiss"]) {
+      const s: ModelState = { ...m, stageKind };
+      expect(fenceBlocking(s, "Generate", true) !== null, stageKind).toBe(rr.includes(stageKind));
+      checked++;
+    }
+    expect(checked).toBe(rr.length + 2);
+    expect(rr.length).toBeGreaterThan(0);
   });
 });
 
@@ -173,15 +368,18 @@ describe("model commands — a correct product passes every step", () => {
   it("each command kind runs once, every step is checked, fold parity compares > 0 fixtures", async () => {
     // single-sport: the registry sweep below runs the same sequence on every modelled sport.
     const { m, d } = await fresh();
-    await play(m, d, EVERY_KIND, false);
+    await everyKind(m, d);
     for (const k of COMMAND_KINDS) expect(m.counts[k].ran, k).toBeGreaterThan(0);
-    expect(m.counts.Score.accepted).toBeGreaterThan(0);
-    expect(m.counts.Rebuild.refused).toBe(1); // results exist → STAGE_HAS_RESULTS, named
+    expect(m.counts.Score.accepted).toBe(2);
+    expect(m.counts.AddEntrant).toEqual(counts(2, { accepted: 1, expected: 1 }));
+    expect(m.counts.Rebuild).toEqual(counts(2, { accepted: 1, refused: 1 })); // results exist → STAGE_HAS_RESULTS, named
+    expect(m.counts.Withdraw).toEqual(counts(1, { accepted: 1 }));
     expect(m.foldParity).toBeGreaterThan(0);
     expect(m.stepChecks.get(I8) ?? 0).toBeGreaterThan(0);
     expect(m.stepChecks.get(I7) ?? 0).toBeGreaterThan(0);
     expect(m.stepChecks.get(ORIENTATION_CHECK) ?? 0).toBeGreaterThan(0);
-    expect(m.history.length).toBe(EVERY_KIND.length);
+    expect(m.history.length).toBe(m.steps.length);
+    expect(informativeSteps(m)).toMatchObject({ id: VACUITY_CHECK, verdict: "pass" });
   });
   it("every registry sport: the same sequence runs clean on each non-team sport, and a team sport is refused by name", async () => {
     let modelled = 0;
@@ -194,9 +392,10 @@ describe("model commands — a correct product passes every step", () => {
         continue;
       }
       const { m, d } = await fresh({}, { sport, variant });
-      await play(m, d, EVERY_KIND, false);
+      await everyKind(m, d);
       for (const k of COMMAND_KINDS) expect(m.counts[k].ran, `${sport} ${k}`).toBeGreaterThan(0);
       expect(m.counts.Score.accepted, sport).toBe(2);
+      expect(m.counts.Withdraw.accepted, sport).toBe(1);
       expect(m.foldParity, sport).toBeGreaterThan(0);
       modelled++;
     }
@@ -208,36 +407,13 @@ describe("model commands — a correct product passes every step", () => {
     // single-sport: candidate selection reads the model, not the sport.
     const { m, d } = await fresh();
     await play(m, d, [["Start", 0], ["Score", 0, 0], ["Void", 0], ["Score", 0, 0]]);
-    expect(m.counts.Score).toEqual({ ran: 2, accepted: 2, refused: 0 });
+    expect(m.counts.Score).toEqual(counts(2, { accepted: 2 }));
     const scored = [...m.fixtures.values()].filter((f) => (f.ledger ?? []).some((e) => e.type === "generic.result"));
     expect(scored.length).toBe(2);
   });
 });
 
 describe("model commands — each fault is caught at the step that causes it", () => {
-  it("#879: a late entrant then Generate duplicates pairs → I7 at that step (fences OFF)", async () => {
-    // single-sport: #879 is a pairing defect, sport-blind.
-    const { m, d } = await fresh({ fault879: true });
-    await play(m, d, [["Start", 0], ["AddEntrant", 0]], false);
-    const e = await violation(play(m, d, [["Generate", 0]], false));
-    expect(e.check).toBe(I7);
-  });
-  it("#879 needs a late entrant: with fault879 on, Start then Generate (no AddEntrant) duplicates nothing (R-PF8)", async () => {
-    // single-sport: as above.
-    const { m, d } = await fresh({ fault879: true });
-    await play(m, d, [["Start", 0], ["Generate", 0]], false);
-    expect(m.counts.Generate.ran).toBe(1);
-    expect(m.stepChecks.get(I7) ?? 0).toBeGreaterThan(0);
-  });
-  it("…and with fences ON, Generate is not offered after a late entry on a league stage, and the fence is counted", async () => {
-    // single-sport: as above.
-    const { m, d } = await fresh({ fault879: true });
-    await play(m, d, [["Start", 0], ["AddEntrant", 0]]);
-    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(false);
-    expect(m.fenced.get("late-entry-then-generate")).toBe(1);
-    expect(fenceBlocking(m, "Generate", true)?.issue).toBe("#879");
-    expect(fenceBlocking(m, "Generate", false)).toBeNull();
-  });
   it("a product that lies about an outcome → model-fold-parity", async () => {
     // single-sport: parity compares the engine's fold with the product's answer, whatever the sport.
     const { m, d } = await fresh({ lieOutcome: true });
@@ -258,6 +434,18 @@ describe("model commands — each fault is caught at the step that causes it", (
     expect(e.check).toBe(I8);
     expect(m.generates).toEqual([{ status: 200, code: null, total: 0, created: 0 }]);
   });
+  it("a Generate refused BY NAME is recorded for I8 and judged there, and the cell goes on — an ordinary refusal", async () => {
+    // single-sport: as above.
+    class NotReady extends ModelFakeDriver {
+      override generate(): Promise<GenerateOut> { return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 422, "STAGE_NOT_READY", "not ready")); }
+    }
+    const { m, d } = await fresh({}, {}, new NotReady());
+    await play(m, d, [["Start", 0], ["Generate", 0]]);
+    expect(m.generates).toEqual([{ status: 422, code: "STAGE_NOT_READY", total: 0, created: 0 }]);
+    expect(m.counts.Generate).toEqual(counts(1, { refused: 1 }));
+    // I8 judged one record on the Generate step (none on Start's).
+    expect(m.stepChecks.get(I8)).toBe(1);
+  });
   it("checkStep on a model with nothing to judge reports zero, never a pass (R25)", async () => {
     // single-sport: nothing is posted, so no sport is exercised.
     const { m, d } = await fresh();
@@ -272,7 +460,104 @@ describe("model commands — each fault is caught at the step that causes it", (
   });
 });
 
-describe("model walkover uses the product's forfeit composition", () => {
+describe("I-1: a refusal of a command the model holds legal is an unexpected-refusal step failure, not an ordinary refusal", () => {
+  class Refusing extends ModelFakeDriver {
+    armed: "postStream" | "withdraw" | null = null;
+    override postStream(id: string, events: Parameters<ModelFakeDriver["postStream"]>[1], prefix = ""): Promise<PostedEvent[]> {
+      if (this.armed !== "postStream") return super.postStream(id, events, prefix);
+      this.armed = null;
+      return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 422, "INVALID_EVENT", "refused"));
+    }
+    override withdraw(id: string): Promise<WithdrawOut> {
+      if (this.armed !== "withdraw") return super.withdraw(id);
+      this.armed = null;
+      return Promise.reject(new RefusedCall("POST", `/api/v1/entrants/${id}/withdraw`, 422, "WRONG_PHASE", "refused"));
+    }
+  }
+  it("Score, Walkover, Void, Correct and the first Withdraw: each refused by name → model-unexpected-refusal, counted", async () => {
+    // single-sport: the rule reads the model's own legality, not a sport.
+    const CASES: { kind: CommandKind; setup: [CommandKind, number, number?][]; arm: "postStream" | "withdraw" }[] = [
+      { kind: "Score", setup: [["Start", 0]], arm: "postStream" },
+      { kind: "Walkover", setup: [["Start", 0]], arm: "postStream" },
+      { kind: "Void", setup: [["Start", 0], ["Score", 0, 0]], arm: "postStream" },
+      { kind: "Correct", setup: [["Start", 0], ["Score", 0, 0]], arm: "postStream" },
+      { kind: "Withdraw", setup: [["Start", 0]], arm: "withdraw" },
+    ];
+    let checked = 0;
+    for (const c of CASES) {
+      const d = new Refusing();
+      const { m } = await fresh({}, {}, d);
+      await play(m, d, c.setup);
+      d.armed = c.arm;
+      const e = await violation(play(m, d, [[c.kind, 0]]));
+      expect(e.check, c.kind).toBe(UNEXPECTED_REFUSAL);
+      expect(m.counts[c.kind], c.kind).toEqual(counts(1, { unexpected: 1 }));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("…while the same named refusal of Rebuild or Generate — commands the product may refuse — stays an ordinary refusal", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0], ["Score", 0, 0], ["Rebuild", 0]]);
+    expect(m.counts.Rebuild).toEqual(counts(1, { refused: 1 }));
+    expect(m.steps.at(-1)?.verdict).toBe("refused");
+  });
+});
+
+describe("I-2: every ledger that goes unknown is counted, and a cell with no informative step is vacuous", () => {
+  it("a post the driver marks `retried` leaves that ledger unknown, counted — the step is 'unknown', never a false parity", async () => {
+    // single-sport: the retry flag is the driver's.
+    const { m, d } = await fresh({ retriedPosts: true });
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    const f = [...m.fixtures.values()].find((x) => x.status === "decided");
+    if (f === undefined) throw new Error("test: nothing scored");
+    expect(f.ledger).toBeNull();
+    expect(m.unknowns).toEqual([{ cause: "retried", fixture: f.id, detail: expect.stringMatching(/retried/) }]);
+    expect(m.steps.map((s) => s.verdict)).toEqual(["accepted", "unknown"]);
+    expect(m.foldParity).toBe(0);
+  });
+  it("a tip that moved (a second writer) is counted with the fixture and both seqs", async () => {
+    // single-sport: void resolution is the kernel's.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    const f = [...m.fixtures.values()].find((x) => (x.ledger ?? []).length === 2);
+    const result = f?.ledger?.[1];
+    if (f === undefined || result === undefined) throw new Error("test: nothing scored");
+    await d.postStream(f.id, [{ type: "core.void", payload: { event_id: result.id } }], "someone-else");
+    const before = m.foldParity;
+    await play(m, d, [["Generate", 0]]);
+    expect(f.ledger).toBeNull();
+    expect(m.foldParity).toBe(before);
+    expect(m.unknowns).toEqual([{ cause: "tip-moved", fixture: f.id, detail: "product last_seq 3, model ledger 2" }]);
+    expect(m.steps.at(-1)?.verdict).toBe("unknown");
+  });
+  it("empty case first: a cell with no step is vacuous — zero informative steps is a FAILURE", async () => {
+    const { m } = await fresh();
+    expect(informativeSteps(m)).toMatchObject({ id: VACUITY_CHECK, verdict: "fail", checked: 0 });
+  });
+  it("a cell whose every step was refused is vacuous", async () => {
+    // single-sport: no event is posted.
+    class RefuseAll extends ModelFakeDriver {
+      override start(): Promise<StartOut> { return Promise.reject(new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "DIVISION_NOT_READY", "no")); }
+      override generate(): Promise<GenerateOut> { return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 422, "STAGE_NOT_READY", "no")); }
+    }
+    const { m, d } = await fresh({}, {}, new RefuseAll());
+    await play(m, d, [["Start", 0], ["Generate", 0]]);
+    expect(m.steps.map((s) => s.verdict)).toEqual(["refused", "refused"]);
+    expect(informativeSteps(m)).toMatchObject({ verdict: "fail", checked: 0 });
+  });
+  it("expected refusals and unknown steps are uninformative too; one accepted step makes the cell informative", async () => {
+    // single-sport: as above.
+    const { m, d } = await fresh({ retriedPosts: true });
+    await play(m, d, [["Start", 0], ["Score", 0, 0], ["AddEntrant", 0]]);
+    expect(m.steps.map((s) => s.verdict)).toEqual(["accepted", "unknown", "expected-refusal"]);
+    expect(informativeSteps(m)).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(informativeSteps({ ...m, steps: m.steps.slice(1) })).toMatchObject({ verdict: "fail", checked: 0 });
+  });
+});
+
+describe("model walkover uses the organiser's forfeit composition", () => {
   it("a scheduled fixture's walkover posts START then core.forfeit (as HttpDriver.forfeit does)", async () => {
     // single-sport: the composition is core events only.
     const { m, d } = await fresh();
@@ -281,6 +566,19 @@ describe("model walkover uses the product's forfeit composition", () => {
     expect(f?.ledger?.map((e) => e.type)).toEqual([START.type, "core.forfeit"]);
   });
 });
+
+/** Start and three results: the first open fixture each time, so one entrant
+ *  (round 1 then round 2) has two results and one scheduled match left — the
+ *  walkover policy (played ≥ half, withdrawTableEntrant). */
+async function twoOfThree(m: ModelState, d: ModelFakeDriver): Promise<{ who: string; pending: FixtureRow }> {
+  await play(m, d, [["Start", 0], ["Score", 0, 0], ["Score", 0, 0], ["Score", 0, 0]]);
+  const mine = (e: string) => [...m.fixtures.values()].filter((f) => f.home === e || f.away === e);
+  const who = m.entrants.find((e) => mine(e).filter((f) => f.status === "decided").length === 2);
+  if (who === undefined) throw new Error("test: no entrant with two results");
+  const pending = d.fixtures.filter((f) => (f.home_entrant_id === who || f.away_entrant_id === who) && f.status === "scheduled");
+  if (pending.length !== 1 || pending[0] === undefined) throw new Error(`test: ${who} has ${pending.length} scheduled matches, not 1`);
+  return { who, pending: pending[0] };
+}
 
 describe("carry (a): a withdrawal's cascade rides the ledger, and an abandoned fixture stays abandoned", () => {
   it("after an expunge, a post to the withdrawn entrant's fixture is refused by name and never overwrites 'abandoned'", async () => {
@@ -311,25 +609,49 @@ describe("carry (a): a withdrawal's cascade rides the ledger, and an abandoned f
     await play(m, d, [["Generate", 0], ["Complete", 0]], false);
     for (const f of touched) expect(m.fixtures.get(f.id), f.id).toMatchObject({ status: "abandoned", ledger: null });
   });
-  it("the walkover policy (played ≥ half): the pending fixture is forfeited by the cascade, and the model reads it without a false parity", async () => {
-    // single-sport: as above.
+  it("the walkover policy (played ≥ half): the pending fixture gets withdrawal.ts's BARE core.forfeit, and the model reads it without a false parity", async () => {
+    // single-sport: the F1 sweep below runs this on every modelled sport.
     const { m, d } = await fresh();
-    await play(m, d, [["Start", 0], ["Score", 0, 0], ["Score", 0, 0], ["Score", 0, 0]]);
-    const played = (e: string) => [...m.fixtures.values()].filter((f) => (f.home === e || f.away === e) && f.status === "decided").length;
-    // Two of three played is not under half: withdrawTableEntrant walks the rest over.
-    const who = m.entrants.find((e) => played(e) === 2);
-    if (who === undefined) throw new Error("test: no entrant with two results");
+    const { who, pending } = await twoOfThree(m, d);
     await play(m, d, [["Withdraw", m.entrants.indexOf(who)]]);
-    const pending = d.fixtures.filter((f) => (f.home_entrant_id === who || f.away_entrant_id === who) && f.status !== "decided");
-    expect(pending.length).toBe(1);
-    for (const f of pending) {
-      expect(f.status, f.id).toBe("forfeited");
-      expect(m.fixtures.get(f.id), f.id).toMatchObject({ status: "forfeited", ledger: null });
-    }
-    // The walked-over opponent's win is not the model's to judge, and the next steps still check clean.
+    expect(pending.status).toBe("forfeited");
+    // withdrawal.ts applyUpdate: no START first, the product's REASON.
+    expect((d.ledgers.get(pending.id) ?? []).map((e) => [e.type, e.payload])).toEqual([["core.forfeit", { by: who, reason: withdrawalReason() }]]);
+    expect(m.fixtures.get(pending.id)).toMatchObject({ status: "forfeited", ledger: null });
     const before = m.foldParity;
     await play(m, d, [["Score", 0, 1], ["Generate", 0]]);
     expect(m.foldParity).toBeGreaterThan(before);
+  });
+  it("F1 offline, every modelled sport: where the engine refuses a forfeit before core.start, the cascade's bare walkover is refused and the first Withdraw fails as an unexpected refusal", async () => {
+    let refusing = 0;
+    let accepting = 0;
+    for (const sport of SPORT_KEYS) {
+      const variant = variantKeys(sport)[0] ?? "";
+      const c = resolveSportCfg(sport, variant);
+      if (entrantKindFor(sport, c) === "team") continue;
+      // The engine's own answer (the harness fold, lib/fold.ts): does a bare forfeit fold on a fresh fixture?
+      let bare = true;
+      try {
+        foldStream(sportModule(sport), c, "h", "a", [{ type: "core.forfeit", payload: { by: "h", reason: withdrawalReason() } }]);
+      } catch (e) {
+        if (!EngineError.is(e)) throw e;
+        bare = false;
+      }
+      const { m, d } = await fresh({}, { sport, variant });
+      const { who, pending } = await twoOfThree(m, d);
+      if (bare) {
+        await play(m, d, [["Withdraw", m.entrants.indexOf(who)]]);
+        expect(pending.status, sport).toBe("forfeited");
+        accepting++;
+      } else {
+        const e = await violation(play(m, d, [["Withdraw", m.entrants.indexOf(who)]]));
+        expect(e.check, sport).toBe(UNEXPECTED_REFUSAL);
+        expect(m.counts.Withdraw, sport).toEqual(counts(1, { unexpected: 1 }));
+        refusing++;
+      }
+    }
+    expect(refusing).toBeGreaterThan(0);
+    expect(accepting).toBeGreaterThan(0);
   });
 });
 
@@ -340,9 +662,9 @@ describe("carry (c): at legs ≥ 2 a duplicate masked by a missing meeting is st
     expect(m.stageConfig.legs).toBe(2);
     await play(m, d, [["Start", 0]]);
     // C(4,2) pairs, each judged once by I7 and once by the orientation check.
-    expect(m.stepChecks.get(I7)).toBe(6);
-    expect(m.stepChecks.get(ORIENTATION_CHECK)).toBe(6);
-    expect(m.fixtures.size).toBe(12);
+    expect(m.stepChecks.get(I7)).toBe(pairs(4));
+    expect(m.stepChecks.get(ORIENTATION_CHECK)).toBe(pairs(4));
+    expect(m.fixtures.size).toBe(2 * pairs(4));
   });
   it("an unmirrored second leg meets `legs` times per pair — I7 passes it — and the orientation check fails, naming the duplicate AND the missing mirror", async () => {
     // single-sport: as above.
@@ -350,8 +672,8 @@ describe("carry (c): at legs ≥ 2 a duplicate masked by a missing meeting is st
     const e = await violation(play(m, d, [["Start", 0]]));
     expect(e.check).toBe(ORIENTATION_CHECK);
     // I7 judged the same step first and passed: each pair meets exactly 2 = legs times.
-    expect(m.stepChecks.get(I7)).toBe(6);
-    expect(e.evidence.length).toBe(6);
+    expect(m.stepChecks.get(I7)).toBe(pairs(4));
+    expect(e.evidence.length).toBe(pairs(4));
     for (const line of e.evidence) expect(line).toMatch(/^(\S+)→(\S+) meets 2× .* while \2→\1 meets 0×/);
   });
   it("the per-orientation bound is the engine's own: generateRoundRobin seats one orientation at most orientationBound(legs) times, and reaches it", () => {
@@ -383,7 +705,7 @@ describe("carry (d): a void fixture is not a meeting — its ad-hoc replay is no
     const replay = d.addFixture(h, a);
     const before = m.stepChecks.get(I7) ?? 0;
     await checkStep(m, d);
-    expect((m.stepChecks.get(I7) ?? 0) - before).toBe(6);
+    expect((m.stepChecks.get(I7) ?? 0) - before).toBe(pairs(4));
     expect(m.fixtures.get(replay.id)?.ledger).toEqual([]);
     expect(m.fixtures.get(f.id)?.status).toBe("abandoned");
   });
@@ -418,20 +740,18 @@ describe("model guards — assumptions are refusals, not comments", () => {
         return [...out, ...out.slice(-1)];
       }
     }
-    const d = new Overanswer();
-    const m = await newModelState({ driver: d, row: "league", sport: "generic", variant: "score", entrants: 4, tag: "t" });
+    const { m, d } = await fresh({}, {}, new Overanswer());
     await play(m, d, [["Start", 0]]);
     await expect(commandOf("Score", 0, 0, true).run(m, d)).rejects.toThrow(/answered 3 events for 2 posted/);
   });
   it("an addEntrants that answers no entrant is a harness fault, not a silently unchanged roster", async () => {
     // single-sport: the guard is on the driver's answer shape.
     class Silent extends ModelFakeDriver {
-      override async addEntrants(d: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]): Promise<Awaited<ReturnType<ModelFakeDriver["addEntrants"]>>> {
-        return es.length === 1 ? [] : super.addEntrants(d, es);
+      override async addEntrants(dv: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]): Promise<Awaited<ReturnType<ModelFakeDriver["addEntrants"]>>> {
+        return es.length === 1 ? [] : super.addEntrants(dv, es);
       }
     }
-    const d = new Silent();
-    const m = await newModelState({ driver: d, row: "league", sport: "generic", variant: "score", entrants: 4, tag: "t" });
+    const { m, d } = await fresh({}, {}, new Silent());
     await expect(commandOf("AddEntrant", 0, 0, true).run(m, d)).rejects.toThrow(/answered no entrant/);
     expect(m.entrants.length).toBe(4);
   });
@@ -465,20 +785,7 @@ describe("model guards — assumptions are refusals, not comments", () => {
     expect(e.check).toBe("model-fold-parity");
     expect(e.evidence.join(" ")).toMatch(/product null, engine fold of the ledger a refusal/);
   });
-  it("a second writer: a void the model did not post makes that ledger unknown (the tip moved), never a false parity violation", async () => {
-    // single-sport: void resolution is the kernel's.
-    const { m, d } = await fresh();
-    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
-    const f = [...m.fixtures.values()].find((x) => (x.ledger ?? []).length === 2);
-    const result = f?.ledger?.[1];
-    if (f === undefined || result === undefined) throw new Error("test: nothing scored");
-    await d.postStream(f.id, [{ type: "core.void", payload: { event_id: result.id } }], "someone-else");
-    const before = m.foldParity;
-    await checkStep(m, d);
-    expect(f.ledger).toBeNull();
-    expect(m.foldParity).toBe(before);
-  });
-  it("a withdrawal refused part-way still leaves that entrant's ledgers unknown: the cascade may have written", async () => {
+  it("a withdrawal refused part-way is an unexpected refusal, and still leaves that entrant's ledgers unknown: the cascade may have written", async () => {
     // single-sport: the cascade's composition is core events only.
     class HalfWithdraw extends ModelFakeDriver {
       override async withdraw(entrantId: string): ReturnType<ModelFakeDriver["withdraw"]> {
@@ -486,20 +793,20 @@ describe("model guards — assumptions are refusals, not comments", () => {
         throw new RefusedCall("POST", `/api/v1/entrants/${entrantId}/withdraw`, 409, "SEQ_CONFLICT", "raced");
       }
     }
-    const d = new HalfWithdraw();
-    const m = await newModelState({ driver: d, row: "league", sport: "generic", variant: "score", entrants: 4, tag: "t" });
-    await play(m, d, [["Start", 0], ["Score", 0, 0], ["Withdraw", 0]]);
-    expect(m.counts.Withdraw).toEqual({ ran: 1, accepted: 0, refused: 1 });
+    const { m, d } = await fresh({}, {}, new HalfWithdraw());
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    expect((await violation(play(m, d, [["Withdraw", 0]]))).check).toBe(UNEXPECTED_REFUSAL);
+    expect(m.counts.Withdraw).toEqual(counts(1, { unexpected: 1 }));
     const mine = [...m.fixtures.values()].filter((f) => f.home === m.entrants[0] || f.away === m.entrants[0]);
     expect(mine.length).toBe(3);
     for (const f of mine) expect(f.ledger, f.id).toBeNull();
   });
-  it("absorbFixtures: a new scheduled fixture starts with a known empty ledger; one first seen already under way is unknown; one gone from the list is dropped", async () => {
+  it("absorbFixtures: a new scheduled fixture with no result starts with a known empty ledger; one under way, or scheduled but CARRYING an outcome, is unknown; one gone from the list is dropped", async () => {
     // single-sport: no event is folded.
     const { m } = await fresh();
-    const row = (id: string, status: string): FixtureRow => ({ id, stage_id: m.stageId, pool_id: null, round_no: 1, fixture_no: 1, home_entrant_id: "e1", away_entrant_id: "e2", status, outcome: null });
-    absorbFixtures(m, [row("n1", "scheduled"), row("n2", "in_play"), row("n3", "decided")]);
-    expect([...m.fixtures.values()].map((f) => [f.id, f.ledger])).toEqual([["n1", []], ["n2", null], ["n3", null]]);
+    const row = (id: string, status: string, outcome: unknown = null): FixtureRow => ({ id, stage_id: m.stageId, pool_id: null, round_no: 1, fixture_no: 1, home_entrant_id: "e1", away_entrant_id: "e2", status, outcome });
+    absorbFixtures(m, [row("n1", "scheduled"), row("n2", "in_play"), row("n3", "decided"), row("n4", "scheduled", { kind: "award", winner: "e1" })]);
+    expect([...m.fixtures.values()].map((f) => [f.id, f.ledger])).toEqual([["n1", []], ["n2", null], ["n3", null], ["n4", null]]);
     absorbFixtures(m, [row("n2", "decided")]);
     expect([...m.fixtures.keys()]).toEqual(["n2"]);
   });
