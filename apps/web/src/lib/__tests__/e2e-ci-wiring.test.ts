@@ -449,8 +449,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // and revoke through the real panel and route, a lost-then-retried grant replaying its key
   // (one row), a lost-then-EDITED refund refused as a reused key and reset, a revoke below zero
   // refused, the widths, and a non-staff caller refused.
-  // (Task 15 adds stream-relay.spec.ts to this block.)
   "stream-credits-admin.spec.ts",
+  // Streaming R1 lane D — the fixture Phone tab's session lifecycle on the fake relay drivers:
+  // add a destination, Go live, the QR, LIVE, Stop, ENDED at 320/768/1280; which credit bucket
+  // pays; the free restart; the forced chooser; a second tab's double start; a refused
+  // destination; Stop reachable after each switch-off; the allowlist; one control set per
+  // width; Spanish; the QR at 125% zoom.
+  "stream-relay.spec.ts",
 ];
 
 afterEach(() => {
