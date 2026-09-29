@@ -1693,7 +1693,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 {msg("stream.phone.ended.credits")}
               </span>
             )}
-            {p.view.endReason && (
+            {/* P7: never live ⇒ the chip above is the whole story. Its end reason ("Stopped by you", on a Cancel from the
+                QR) only restated what the organiser had just done, as a second chip for one fact. */}
+            {p.view.endReason && p.view.startedAt !== null && (
               <span data-testid="stream-end-reason" className={CHIP}>
                 {msg(END_REASON_KEYS[p.view.endReason])}
               </span>

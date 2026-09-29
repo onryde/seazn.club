@@ -872,6 +872,15 @@ const textAt = (tree: ReactElement[], id: string): string => {
   return textOf(el).replace(/\s+/g, " ").trim();
 };
 
+/** The ended card's chips, in order, by testid — every span in its chip row, so a chip added without a testid still counts. */
+const endedChips = (tree: ReactElement[]): string[] => {
+  const card = byTestId(tree, "stream-ended");
+  if (!card) throw new Error("no stream-ended card in the tree");
+  const row = walk(propsOf(card).children as ReactElement).find((el) => el.type === "div");
+  if (!row) throw new Error("the ended card has no chip row");
+  return walk(propsOf(row).children as ReactElement).filter((el) => el.type === "span").map((el) => String(attr(el, "data-testid")));
+};
+
 /** B3: the states that are the heading and the credits card ONLY — no stepper, no pill (idle, balance < 1). */
 const CREDITS_ONLY = new Set(["idle, balance 0 (the credits card)"]);
 
@@ -1067,24 +1076,35 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(waived, "stream-replay")).toBeUndefined();
   });
 
-  it("P6: a session that ENDED BEFORE GOING LIVE says so — never 'Duration 0:00' — and keeps its end reason; one that went live keeps its duration", () => {
+  // P6 + P7 (fix round 4). Capture pass 3 read "Ended before going live" beside "Stopped by you" on a Cancel from the QR:
+  // two chips for one fact, the second restating what the organiser just did. A session that never went live now has ONE
+  // chip. Every end reason the view model declares is swept — the reason chip is dropped for all of them, not just "stopped".
+  it("P6/P7: a session that ENDED BEFORE GOING LIVE has ONE chip saying so — no duration, no end reason; one that went live keeps both", () => {
     // `startedAt` is stamped only on the live transition (relay/domain/session.ts, the same signal replayFill reads), so
-    // an ended session without one never went live: a Cancel on the QR, a camera that never connected.
+    // an ended session without one never went live: a Cancel on the QR, a camera that never connected. Nothing is consumed
+    // before live (the consume rides the live transition), so `creditUsed` is false here — the shape the server sends.
+    const reasons = Object.keys(END_REASON_KEYS) as (keyof typeof END_REASON_KEYS)[];
+    expect(reasons.length, "no end reasons declared — the sweep would be vacuous").toBeGreaterThan(0);
     let checked = 0;
-    for (const endReason of ["stopped", "max_duration"] as const) {
+    for (const endReason of reasons) {
       const never = body({ view: session({ state: "completed", qr: null, startedAt: null, endedAt: "2026-09-14T11:45:00Z", endReason, creditUsed: false }), balance: 1 });
+      expect(endedChips(never), `${endReason}: one chip, and it is the never-live one`).toEqual(["stream-ended-never-live"]);
       expect(textAt(never, "stream-ended-never-live"), endReason).toBe(m("stream.phone.ended.neverLive"));
-      expect(byTestId(never, "stream-ended-duration"), `${endReason}: no duration chip`).toBeUndefined();
       expect(textAt(never, "stream-ended"), endReason).not.toContain(m("stream.phone.ended.duration", { duration: "0:00" }));
-      expect(textAt(never, "stream-end-reason"), endReason).toBe(m(END_REASON_KEYS[endReason]));
+      expect(textAt(never, "stream-ended"), `${endReason}: the reason is not restated`).not.toContain(m(END_REASON_KEYS[endReason]));
       expect(byTestId(never, "stream-again"), endReason).toBeDefined();
-      // The positive pair: the same card once it went live shows the duration and no "before going live" line.
-      const went = body({ view: session({ state: "completed", qr: null, startedAt: "2026-09-14T11:44:45Z", endedAt: "2026-09-14T11:45:00Z", endReason, creditUsed: true }), balance: 1 });
-      expect(textAt(went, "stream-ended-duration"), endReason).toBe(m("stream.phone.ended.duration", { duration: "0:15" }));
-      expect(byTestId(went, "stream-ended-never-live"), endReason).toBeUndefined();
+      // The positive pair, UNCHANGED: once it went live the card shows its duration and its end reason — a paid stop adds
+      // "1 credit used", a free restart inside the reuse window does not.
+      const live = { state: "completed" as const, qr: null, startedAt: "2026-09-14T11:44:45Z", endedAt: "2026-09-14T11:45:00Z", endReason };
+      const paid = body({ view: session({ ...live, creditUsed: true }), balance: 1 });
+      expect(endedChips(paid), `${endReason}: paid stop`).toEqual(["stream-ended-duration", "stream-credit-used", "stream-end-reason"]);
+      expect(textAt(paid, "stream-ended-duration"), endReason).toBe(m("stream.phone.ended.duration", { duration: "0:15" }));
+      expect(textAt(paid, "stream-end-reason"), endReason).toBe(m(END_REASON_KEYS[endReason]));
+      const free = body({ view: session({ ...live, creditUsed: false }), balance: 1 });
+      expect(endedChips(free), `${endReason}: free restart`).toEqual(["stream-ended-duration", "stream-end-reason"]);
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(reasons.length);
     // The copy exists in all four locales, and differs from the English in each of the other three.
     let locales = 0;
     for (const l of ["en", "es", "fr", "nl"]) {
