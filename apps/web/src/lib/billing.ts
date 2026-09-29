@@ -16,7 +16,7 @@ import stripePlans from "@/config/stripe-plans.json";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { planItem } from "@/lib/subscription-items";
 import { creditPassTowardSubscription } from "@/server/usecases/pass-credit";
-import { grantPassStreamCredits, revokePassStreamCredits } from "@/server/usecases/stream-credits";
+import { grantPassStreamCredits } from "@/server/usecases/stream-credits";
 import {
   sendPassRungMismatchAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
@@ -1043,16 +1043,16 @@ export async function refundDuplicatePassPayment(intent: string): Promise<void> 
  * the `competition_passes` row, so it works even once the pass is deleted. A
  * non-pass refund (no `pass_grant` for this intent) is a harmless no-op.
  *
- * Streaming R1 addendum P: the pass's MATCH credits come back the same way —
- * `revokePassStreamCredits`, `min(grant, pack balance)`, idempotent on
- * `stream-pass-revoke:${intent}`, beside the AI claw-back and before the delete.
+ * Streaming R1: the pass's MATCH credits are NOT taken back (Task 14b fix round
+ * 2 ruling, 2026-09-29). They sit in the pack beside any bought pack, so a
+ * `min(grant, pack)` claw-back could take a later-bought pack's PAID credits;
+ * forgiving one pass's grant (at most 5) is the better trade.
  */
 export async function revokePassForRefundedCharge(charge: Stripe.Charge): Promise<boolean> {
   const intent =
     typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
   if (!intent || !charge.refunded) return false;
   await recordPassRefund(intent);
-  await revokePassStreamCredits(intent);
   const [revoked] = await sql<{ org_id: string; competition_id: string }[]>`
     delete from competition_passes where stripe_payment_intent = ${intent}
     returning org_id, competition_id`;

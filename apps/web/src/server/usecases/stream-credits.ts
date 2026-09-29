@@ -855,19 +855,13 @@ async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date)
 // Event Pass match credits (Task 14b fix round 1, addendum P — owner decision 2026-09-29)
 // ---------------------------------------------------------------------------
 
-/** The pass grant's idempotency key — ONE authority for its spelling, shared with the claw-back that finds it. The
+/** The pass grant's idempotency key — ONE authority for its spelling. The
  *  ANCHOR is lib/credits.ts `recordPassGrant`'s: the pass's payment intent, else its competition id. competition_passes
  *  (V271) has no id of its own — the competition is its primary key — and keying on the competition alone would
  *  suppress the grant on a genuine re-purchase after a refund (a NEW intent), the donor's review MINOR-2. A promotion-code
  *  pass settles with no intent at all, and falls back to the competition, which V271 makes unique per pass. */
 export function streamPassGrantKey(anchor: string): string {
   return `stream-pass:${anchor}`;
-}
-
-/** The pass claw-back's idempotency key: one per pass, so a refund and a lost dispute of the same charge collapse onto
- *  the row the first of them wrote (lib/credits.ts `pass_refund:${anchor}`'s shape). */
-export function streamPassRevokeKey(anchor: string): string {
-  return `stream-pass-revoke:${anchor}`;
 }
 
 /** An Event Pass rung's match credits. V426's `streaming.credits.monthly` row for the PASS key — for a pass key that
@@ -922,54 +916,4 @@ export async function grantPassStreamCredits(args: { orgId: string; passKey: Pas
               ${`Event Pass (${args.passKey}): ${amount} match credits, granted once, never expire`}, ${key})`;
     return amount;
   }) as Promise<number>;
-}
-
-export interface PassStreamRevokeResult {
-  /** A pass grant exists for this anchor. */
-  matched: boolean;
-  /** Credits revoked against this pass IN TOTAL, by this call or an earlier one. */
-  clawedBack: number;
-  /** Did THIS call write the revoke row? */
-  applied: boolean;
-}
-
-/**
- * Take a refunded (or lost-disputed) Event Pass's match credits back: `min(grant, current PACK balance)` (owner,
- * 2026-09-29), mirroring lib/credits.ts `recordPassRefund` — the pass's AI claw-back — which is `min(originalGrant,
- * packBalance)`. Credits already spent streamed and cannot be un-delivered; the free monthly credits were never part of
- * the pass, so the cap is the pack, not the total. Called beside `recordPassRefund` by both arms that revoke a pass (a
- * full refund, lib/billing.ts `revokePassForRefundedCharge`; a lost dispute, billing-events.ts `handlePlatformDispute`),
- * BEFORE the pass row is deleted — though it reads only the ledger, so it works after too.
- *
- * Reads the GRANT row first, unlocked, to learn which org to lock (the donor's ordering): a charge that was not a pass
- * leaves with no lock and nothing written. Then, under the lock, the revoke key BEFORE the cap (recordStreamPackRefund's
- * order): an org that has bought a pack since would otherwise lose that pack's credits to a replay. A pack below zero is
- * refused by name, as recordStreamPackRefund refuses it. A zero claw-back writes no row (V410: delta <> 0).
- */
-export async function revokePassStreamCredits(anchor: string): Promise<PassStreamRevokeResult> {
-  const grantKey = streamPassGrantKey(anchor);
-  const key = streamPassRevokeKey(anchor);
-  return sql.begin(async (tx) => {
-    const [grant] = await tx<{ org_id: string; delta: number }[]>`
-      select org_id, delta from org_stream_credits where idempotency_key = ${grantKey}`;
-    if (!grant) return { matched: false, clawedBack: 0, applied: false };
-
-    await lockOrg(tx, grant.org_id);
-    const [prior] = await tx<{ delta: number }[]>`
-      select delta from org_stream_credits where idempotency_key = ${key}`;
-    if (prior) return { matched: true, clawedBack: -prior.delta, applied: false };
-
-    const split = await creditBreakdown(tx, grant.org_id);
-    if (split.pack < 0) {
-      throw new HttpError(500, `This organisation's bought match-credit balance is ${split.pack}; refusing to claw back against a negative ledger`, "ledger_negative");
-    }
-    const clawback = Math.min(grant.delta, split.pack);
-    if (clawback <= 0) return { matched: true, clawedBack: 0, applied: false };
-    debit(split.pack, clawback);
-    await tx`
-      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
-      values (${grant.org_id}, ${-clawback}, 'revoke', 'pack', ${split.total - clawback},
-              ${`Event Pass refunded or disputed (${anchor}): its match credits taken back`}, ${key})`;
-    return { matched: true, clawedBack: clawback, applied: true };
-  }) as Promise<PassStreamRevokeResult>;
 }

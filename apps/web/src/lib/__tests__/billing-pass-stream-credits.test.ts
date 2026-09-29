@@ -11,23 +11,26 @@
 //
 // Driven through the REAL producers and consumers: the pass is bought through
 // `processStripeEvent` (the checkout webhook) and `reconcilePassCheckout` (the
-// buyer's return render), and taken back through `processStripeEvent` on a
+// buyer's return render), and revoked through `processStripeEvent` on a
 // `charge.refunded` / `charge.dispute.closed` event — the paths Stripe drives.
 //
-// Sequences, not features: buy → replay on either path; buy → refund → refund
-// again; buy → spend → refund; buy → refund → buy again; a duplicate second
-// charge; a pass with no payment intent; the monthly ensure after a pass.
+// A revoked pass KEEPS its match credits (Task 14b fix round 2 ruling,
+// 2026-09-29): they sit in the pack beside any bought pack, so a
+// `min(grant, pack)` claw-back could take a later-bought pack's paid credits,
+// and forgiving one pass's grant (at most 5) is the better trade. The pass
+// itself and its AI credits still go back, unchanged.
 //
-// Mutant killers (task-14b-report.md, FIX ROUND 1, addendum P):
+// Sequences, not features: buy → replay on either path; buy → buy pack →
+// refund → refund again; buy → refund → buy again; a duplicate second charge;
+// a pass with no payment intent; the monthly ensure after a pass.
+//
+// Mutant killers (task-14b-report.md, FIX ROUND 1 addendum P, FIX ROUND 2):
 //   p1 recordPassPurchase never calls the stream grant        → "buying each rung grants ITS V426 amount"
 //   p2 the grant's replay check deleted                        → "a replay on either path adds nothing"
 //   p3 the grant reads the wrong rung (always event_pass)      → "buying each rung grants ITS V426 amount"
-//   p4 the pass refund never revokes                           → "a full refund … revokes the WHOLE grant"
-//   p5 the revoke is capped by the TOTAL, not the pack         → "a refund after spending is capped at the PACK"
-//   p6 the revoke's replay check deleted                       → "a full refund … revokes the WHOLE grant" (second refund)
-//   p7 the lost-dispute arm never revokes                      → "a lost dispute revokes the grant the same way"
 //   p8 the org-mismatch report deleted                         → "a key already held by ANOTHER org grants nothing …"
-//   p10 the claw-back's negative-pack refusal deleted          → "a pack that sums below zero is REFUSED by the claw-back"
+//   r1 the round-1 stream claw-back restored on both arms      → "every arm that revokes a pass keeps its match credits …"
+//                                                                and "a RE-purchase … grants again"
 //
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -71,7 +74,6 @@ import {
   creditBreakdown,
   ensureMonthlyStreamGrant,
   grantPassStreamCredits,
-  revokePassStreamCredits,
 } from "@/server/usecases/stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -159,18 +161,6 @@ interface Row { reason: string; bucket: string; delta: number; idempotency_key: 
 const rows = (orgId: string) =>
   sql<Row[]>`select reason, bucket, delta, idempotency_key from org_stream_credits
               where org_id = ${orgId} order by created_at, balance_after desc`;
-
-/** Spend `n` BOUGHT credits. A raw pack `consume` row per credit — the
- *  PRECONDITION, not a seam under test (stream-credits-clawback.test.ts's
- *  `spend`): nothing here depends on HOW a credit was spent. */
-async function spendPack(orgId: string, n: number): Promise<void> {
-  for (let i = 0; i < n; i++) {
-    const bal = await creditBalance(sql, orgId);
-    await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after)
-      values (${orgId}, -1, 'consume', 'pack', ${bal - 1})`;
-  }
-}
 
 async function passRow(compId: string) {
   const [row] = await sql<{ stripe_payment_intent: string | null }[]>`
@@ -295,104 +285,46 @@ describe.skipIf(!HAS_DB)("an Event Pass grants its match credits once, when boug
   });
 });
 
-describe.skipIf(!HAS_DB)("a refunded or lost-disputed Event Pass takes its match credits back", () => {
-  it("a full refund after nothing was spent revokes the WHOLE grant — and a second refund revokes nothing more", async () => {
-    const { orgId, compId } = await seedPassBuyer();
-    const amount = await amountOf("event_pass_l");
-    const session = await passSession(orgId, compId, "event_pass_l");
-    const intent = session.payment_intent as string;
-    await processStripeEvent(completed(session));
-    expect(await creditBalance(sql, orgId)).toBe(amount);
+/** The pass's AI-credit rows (lib/credits.ts): its one-time grant, and the claw-back a revoke writes. */
+const aiPassRows = (intent: string) =>
+  sql<{ source: string; delta: number; idempotency_key: string | null }[]>`
+    select source, delta, idempotency_key from ai_credit_ledger
+     where ref = ${intent} and source in ('pass_grant', 'refund') order by created_at`;
 
-    await processStripeEvent(refunded(intent));
-    expect(await passRow(compId)).toBeUndefined(); // premise: the refund revoked the pass
-    expect(await creditBreakdown(sql, orgId)).toEqual({ monthly: 0, pack: 0, total: 0 });
-    expect((await rows(orgId)).filter((r) => r.reason === "revoke")).toEqual([
-      { reason: "revoke", bucket: "pack", delta: -amount, idempotency_key: `stream-pass-revoke:${intent}` },
-    ]);
+describe.skipIf(!HAS_DB)("a refunded or lost-disputed Event Pass KEEPS its match credits", () => {
+  const ARMS: { name: string; revoke: (intent: string) => Stripe.Event }[] = [
+    { name: "a full refund", revoke: (intent) => refunded(intent) },
+    { name: "a lost dispute", revoke: (intent) => disputeClosed(intent, "lost") },
+  ];
 
-    // A second refund event for the same charge (a different Stripe event id, so
-    // the billing_events claim does not stop it) is a no-op on the ledger. Buy a
-    // pack first, so a revoke that ignored its key would have something to take.
-    await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, stripe_event_id)
-      values (${orgId}, 5, 'purchase', 'pack', 5, ${"cs_later_" + uniq()})`;
-    await processStripeEvent(refunded(intent));
-    expect(await creditBalance(sql, orgId)).toBe(5);
-    expect((await rows(orgId)).filter((r) => r.reason === "revoke")).toHaveLength(1);
-  });
+  it("every arm that revokes a pass keeps its match credits — only the pass and its AI credits go back, unchanged; a second event writes nothing, even with a bought pack to take", async () => {
+    let checked = 0;
+    for (const arm of ARMS) {
+      const { orgId, compId } = await seedPassBuyer();
+      const amount = await amountOf("event_pass_l");
+      const session = await passSession(orgId, compId, "event_pass_l");
+      const intent = session.payment_intent as string;
+      await processStripeEvent(completed(session));
+      // A pack bought AFTER the pass: the credits a min(grant, pack) claw-back would have taken first.
+      await sql`
+        insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, stripe_event_id)
+        values (${orgId}, 5, 'purchase', 'pack', ${amount + 5}, ${"cs_later_" + uniq()})`;
+      const [aiGrant] = await aiPassRows(intent);
+      expect(aiGrant, `${arm.name}: premise — the pass granted AI credits`).toMatchObject({ source: "pass_grant" });
+      expect(aiGrant!.delta).toBeGreaterThan(0);
 
-  it("a refund after spending is capped at the PACK — the org's free monthly credits are not touched", async () => {
-    const { orgId, compId } = await seedPassBuyer();
-    const amount = await amountOf("event_pass_l");
-    const monthlyRate = await amountOf("community");
-    const spent = 3;
-    // Premise for a discriminating case: the pack left after spending is below
-    // the grant, and the TOTAL (pack + monthly) is above the pack — so a cap on
-    // the total would revoke more than the pack holds.
-    expect(amount - spent).toBeGreaterThan(0);
-    expect(monthlyRate).toBeGreaterThan(0);
+      for (let i = 0; i < 2; i++) await processStripeEvent(arm.revoke(intent));   // the second is a redelivery / later event
 
-    await ensureMonthlyStreamGrant(orgId);
-    const session = await passSession(orgId, compId, "event_pass_l");
-    const intent = session.payment_intent as string;
-    await processStripeEvent(completed(session));
-    await spendPack(orgId, spent);
-    expect(await creditBreakdown(sql, orgId)).toEqual({ monthly: monthlyRate, pack: amount - spent, total: monthlyRate + amount - spent });
-
-    await processStripeEvent(refunded(intent));
-    // min(grant, pack) = amount − spent: the spent credits streamed and cannot be
-    // un-delivered, and the monthly credits were never bought.
-    expect((await rows(orgId)).filter((r) => r.reason === "revoke")).toEqual([
-      { reason: "revoke", bucket: "pack", delta: -(amount - spent), idempotency_key: `stream-pass-revoke:${intent}` },
-    ]);
-    expect(await creditBreakdown(sql, orgId)).toEqual({ monthly: monthlyRate, pack: 0, total: monthlyRate });
-  });
-
-  it("a refund after EVERYTHING was spent writes no row", async () => {
-    const { orgId, compId } = await seedPassBuyer();
-    const amount = await amountOf("event_pass");
-    const session = await passSession(orgId, compId, "event_pass");
-    await processStripeEvent(completed(session));
-    await spendPack(orgId, amount);
-
-    await processStripeEvent(refunded(session.payment_intent as string));
-    expect((await rows(orgId)).filter((r) => r.reason === "revoke")).toEqual([]);
-    expect(await creditBalance(sql, orgId)).toBe(0);
-  });
-
-  it("a pack that sums below zero is REFUSED by the claw-back, with nothing written — not clawed back as zero", async () => {
-    // "Cannot happen" as a guard: V410's CHECK floors each row's snapshot of the TOTAL, not the pack, so a corrupt row
-    // can put the pack below zero behind a non-negative balance_after. min(grant, −1) would quietly claw back nothing.
-    const { orgId, compId } = await seedPassBuyer();
-    await ensureMonthlyStreamGrant(orgId);
-    const session = await passSession(orgId, compId, "event_pass");
-    const intent = session.payment_intent as string;
-    await processStripeEvent(completed(session));
-    const { pack, total } = await creditBreakdown(sql, orgId);
-    await sql`
-      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after)
-      values (${orgId}, ${-(pack + 1)}, 'consume', 'pack', ${total - pack - 1})`;
-    expect((await creditBreakdown(sql, orgId)).pack, "premise: the pack is below zero").toBe(-1);
-    const before = (await rows(orgId)).length;
-
-    await expect(revokePassStreamCredits(intent)).rejects.toMatchObject({ status: 500, code: "ledger_negative" });
-    expect((await rows(orgId)).length).toBe(before);
-  });
-
-  it("a lost dispute revokes the grant the same way", async () => {
-    const { orgId, compId } = await seedPassBuyer();
-    const amount = await amountOf("event_pass_l");
-    const session = await passSession(orgId, compId, "event_pass_l");
-    const intent = session.payment_intent as string;
-    await processStripeEvent(completed(session));
-
-    await processStripeEvent(disputeClosed(intent, "lost"));
-    expect(await passRow(compId)).toBeUndefined();
-    expect((await rows(orgId)).filter((r) => r.reason === "revoke")).toEqual([
-      { reason: "revoke", bucket: "pack", delta: -amount, idempotency_key: `stream-pass-revoke:${intent}` },
-    ]);
-    expect(await creditBalance(sql, orgId)).toBe(0);
+      expect(await passRow(compId), `${arm.name}: the pass itself is revoked`).toBeUndefined();
+      expect(await aiPassRows(intent), `${arm.name}: the AI claw-back is unchanged — the whole unspent grant, once`).toEqual([
+        { source: "pass_grant", delta: aiGrant!.delta, idempotency_key: aiGrant!.idempotency_key },
+        { source: "refund", delta: -aiGrant!.delta, idempotency_key: `pass_refund:${intent}` },
+      ]);
+      expect((await rows(orgId)).map((r) => r.reason), `${arm.name}: no match-credit row after the grant and the pack`).toEqual(["grant", "purchase"]);
+      expect(await creditBreakdown(sql, orgId), arm.name).toEqual({ monthly: 0, pack: amount + 5, total: amount + 5 });
+      checked++;
+    }
+    expect(checked).toBe(ARMS.length);
   });
 
   it("a WON dispute takes nothing back", async () => {
@@ -402,24 +334,25 @@ describe.skipIf(!HAS_DB)("a refunded or lost-disputed Event Pass takes its match
     await processStripeEvent(completed(session));
 
     await processStripeEvent(disputeClosed(session.payment_intent as string, "won"));
+    expect(await passRow(compId), "premise: a won dispute keeps the pass").toBeDefined();
     expect(await creditBalance(sql, orgId)).toBe(amount);
-    expect((await rows(orgId)).filter((r) => r.reason === "revoke")).toEqual([]);
+    expect((await rows(orgId)).map((r) => r.reason)).toEqual(["grant"]);
   });
 
-  it("a RE-purchase of the same competition after a refund grants again — the key is the payment, not the competition", async () => {
+  it("a RE-purchase of the same competition after a refund grants again — the key is the payment, not the competition — and the refunded pass's credits are still there", async () => {
     const { orgId, compId } = await seedPassBuyer();
     const amount = await amountOf("event_pass");
     const first = await passSession(orgId, compId, "event_pass");
     await processStripeEvent(completed(first));
     await processStripeEvent(refunded(first.payment_intent as string));
-    expect(await creditBalance(sql, orgId)).toBe(0);
+    expect(await passRow(compId), "premise: the refund revoked the pass").toBeUndefined();
+    expect(await creditBalance(sql, orgId)).toBe(amount);
 
     const second = await passSession(orgId, compId, "event_pass");
     await processStripeEvent(completed(second));
-    expect(await creditBalance(sql, orgId)).toBe(amount);
+    expect(await creditBalance(sql, orgId)).toBe(2 * amount);
     expect((await rows(orgId)).map((r) => r.idempotency_key)).toEqual([
       `stream-pass:${first.payment_intent}`,
-      `stream-pass-revoke:${first.payment_intent}`,
       `stream-pass:${second.payment_intent}`,
     ]);
   });
