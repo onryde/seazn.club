@@ -7,7 +7,7 @@
 // method sets the usecases call.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeIngest, FakeRunner } from "../fakes";
-import { RelayDriversDisabled, relayDrivers, setRelayDriversForTest } from "../drivers";
+import { RelayDriversDisabled, disabledRelayDrivers, relayDrivers, relayIsDisabled, setRelayDriversForTest } from "../drivers";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -64,5 +64,51 @@ describe("R5: relayDrivers() in disabled mode", () => {
     vi.stubEnv("ENV_NAME", "stg");
     setRelayDriversForTest(null);
     expect(() => relayDrivers()).toThrow(/RELAY_DRIVERS=fake is refused on ENV_NAME/);
+  });
+});
+
+// N1 (Task 14b fix round 2): the division page and the relay-checkout route ask "is the relay off?" on every render /
+// request. Answering by CONSTRUCTING the drivers took the fixtures tab down on a live deployment missing a Cloudflare
+// secret — `new CloudflareIngest()` throws — for every org, since V426 entitles the relay on every plan. The predicate
+// answers from the mode (or the test override) and never builds anything.
+describe("N1: relayIsDisabled() answers without constructing the drivers", () => {
+  it("live mode with NO Cloudflare env answers false and does not throw — while constructing the drivers there WOULD throw", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
+    setRelayDriversForTest(null);
+    expect(() => relayIsDisabled()).not.toThrow();
+    expect(relayIsDisabled()).toBe(false);
+    // The premise, witnessed: in this env the constructing read is exactly what fails.
+    expect(() => relayDrivers()).toThrow(/CLOUDFLARE_ACCOUNT_ID is not set/);
+  });
+
+  it("agrees with the drivers it would build — every mode, and the test override winning over the env", () => {
+    const cells: { env: Record<string, string>; override: "disabled" | "fake" | null; want: boolean }[] = [
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "" }, override: null, want: true },
+      { env: { NODE_ENV: "test", RELAY_DRIVERS: "" }, override: null, want: false },
+      { env: { NODE_ENV: "test", RELAY_DRIVERS: "fake" }, override: null, want: false },
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod" }, override: null, want: false },
+      // setRelayDriversForTest keeps working: the override answers, whatever the env says.
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "live", ENV_NAME: "prod" }, override: "disabled", want: true },
+      { env: { NODE_ENV: "production", RELAY_DRIVERS: "" }, override: "fake", want: false },
+    ];
+    let checked = 0;
+    for (const c of cells) {
+      vi.unstubAllEnvs();
+      for (const [k, v] of Object.entries(c.env)) vi.stubEnv(k, v);
+      setRelayDriversForTest(null);
+      if (c.override === "disabled") setRelayDriversForTest(disabledRelayDrivers());
+      if (c.override === "fake") setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
+      const label = JSON.stringify(c);
+      expect(relayIsDisabled(), label).toBe(c.want);
+      // Where constructing is safe (no live cell), the predicate and the built pair agree.
+      if (c.env.RELAY_DRIVERS !== "live" || c.override) expect(relayDrivers().disabled === true, label).toBe(c.want);
+      checked++;
+    }
+    expect(checked).toBe(cells.length);
+    expect(cells.some((c) => c.want) && cells.some((c) => !c.want), "both answers are reached").toBe(true);
   });
 });

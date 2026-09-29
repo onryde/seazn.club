@@ -21,11 +21,13 @@
 //                           → "the return_url reopens the Phone tab on that fixture"
 //   RT7 disabled drivers    the `relayDrivers().disabled` gate deleted (Task 14b review I2)
 //                           → "I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED"
+//   RT8 the gate constructs  `relayIsDisabled()` → `relayDrivers().disabled` (Task 14b re-review N1)
+//                           → "N1: a LIVE deployment missing its Cloudflare secret still sells"
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
-import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 
 const { requireUserMock, requireBillingOwnerMock, createRelayCheckoutMock, preferredCurrencyMock } =
   vi.hoisted(() => ({
@@ -184,6 +186,26 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     // The positive pair: the same caller, the same body, on the default (fake) drivers.
     expect((await post(body)).status).toBe(200);
     expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("N1: a LIVE deployment missing its Cloudflare secret still sells — the disabled check never constructs the drivers", async () => {
+    // The route asks "is the relay off?" before anything else. Answered by constructing the drivers, a live deploy
+    // without CLOUDFLARE_* answered every checkout with a 500 from `new CloudflareIngest()`.
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
+    setRelayDriversForTest(null);
+    try {
+      expect(() => relayDrivers(), "premise: constructing the drivers here throws").toThrow(/CLOUDFLARE_ACCOUNT_ID/);
+      expect((await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 })).status).toBe(200);
+      expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+      setRelayDriversForTest(null);
+    }
   });
 
   it("refuses a body naming another organisation (400), before the fixture is even looked up", async () => {

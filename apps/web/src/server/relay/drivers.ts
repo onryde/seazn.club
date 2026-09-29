@@ -124,6 +124,15 @@ export function relayDrivers(): RelayDrivers {
   return instance;
 }
 
+/** N1 (Task 14b fix round 2): is this process's relay DISABLED (R5 — production with RELAY_DRIVERS unset)? Answered from
+ *  the mode, or from the test override, WITHOUT constructing anything. The division page asks on every fixtures render
+ *  and the relay-checkout route on every request; `relayDrivers().disabled` built the live pair to answer, and
+ *  `new CloudflareIngest()` throws when a Cloudflare secret is missing — so a live deploy short one secret took the
+ *  fixtures tab down for every org. Ask this for the question; take `relayDrivers()` only to call a provider. */
+export function relayIsDisabled(): boolean {
+  return override ? override.disabled === true : relayDriverMode() === "disabled";
+}
+
 /** Tests only. `null` clears the override AND the cached instance. */
 export function setRelayDriversForTest(d: RelayDrivers | null): void {
   override = d;

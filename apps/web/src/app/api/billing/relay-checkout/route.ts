@@ -11,7 +11,7 @@ import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
 import { NextResponse } from "next/server";
 import { captureError } from "@/lib/sentry";
-import { relayDrivers } from "@/server/relay/drivers";
+import { relayIsDisabled } from "@/server/relay/drivers";
 import { log } from "@/server/logger";
 
 /** Every error the Stripe SDK raises for a request carries a `type` of `Stripe…Error` (invalid request, API, connection,
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
     // credit nothing can spend. Refused BEFORE the entitlement read and any Stripe call, with the code the Phone tab
     // already reads ("The streaming service is unavailable"). After the ownership checks: a fixture that is not this
     // org's stays 404 whatever the deployment.
-    if (relayDrivers().disabled) {
+    if (relayIsDisabled()) {
       throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
     }
 

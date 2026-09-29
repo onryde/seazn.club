@@ -119,7 +119,7 @@ import DivisionPage from "../page";
 import { hasFeature } from "@/lib/entitlements";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
-import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -250,6 +250,27 @@ describe("Task 14b: the Phone tab is handed the split and the monthly allowance 
     // The positive pair: the default (fake) drivers — the tab is live and the credits are read.
     expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 3 });
     expect(relay.balance).toHaveBeenCalledTimes(1);
+  });
+
+  it("N1: a LIVE deployment missing its Cloudflare secret still renders the fixtures tab — the render never constructs the drivers", async () => {
+    // The fixtures tab asks "is the relay off?" on every render. Answered by constructing the drivers, a live deploy
+    // without CLOUDFLARE_* threw here for every org (V426 entitles the relay on every plan).
+    relay.balance.mockResolvedValue(4);
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "");
+    setRelayDriversForTest(null);
+    try {
+      expect(() => relayDrivers(), "premise: constructing the drivers here throws").toThrow(/CLOUDFLARE_ACCOUNT_ID/);
+      const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as {
+        stream?: { relayEntitled?: unknown; relayDisabled?: unknown; streamBalance?: unknown };
+      }).stream;
+      expect(stream).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 4 });
+    } finally {
+      vi.unstubAllEnvs();
+      setRelayDriversForTest(null);
+    }
   });
 
   it("without the relay: no credits read, and the tab gets no split and no allowance — the empty case", async () => {
