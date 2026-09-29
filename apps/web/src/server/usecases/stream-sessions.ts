@@ -947,7 +947,7 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
     case "plan_lacks_overlay": throw new PaymentRequiredError(RELAY_PLAN_GATES.overlay);
     case "overlay_required": throw new HttpError(409, "phone streaming needs the overlay tier", "overlay_required");
     case "plan_lacks_relay": throw new PaymentRequiredError(RELAY_PLAN_GATES.relay);
-    case "no_credits": throw new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay" });
+    case "no_credits": throw new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: RELAY_PLAN_GATES.relay });
     case "target_not_found": throw new HttpError(404, "stream target not found");
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });

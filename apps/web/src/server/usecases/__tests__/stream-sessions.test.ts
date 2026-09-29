@@ -232,7 +232,8 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const overlayOnly = await rig({ overlay: true, relay: false });
     await expect(createSession(overlayOnly.auth, overlayOnly.fixtureId, body(overlayOnly.target.id), overlayOnly.deps)).rejects.toMatchObject({ status: 402, featureKey: "streaming.relay" });
     const broke = await rig({ credits: 0 });
-    await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+    // The feature key the Phone tab's view model reads (C-c): the RELAY's, so "no credits" is never mistaken for a plan.
+    await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits", extra: { featureKey: "streaming.relay" } });
     let checked = 0;
     for (const x of [none, relayOnly, overlayOnly, broke]) {
       const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${x.auth.orgId}`;
