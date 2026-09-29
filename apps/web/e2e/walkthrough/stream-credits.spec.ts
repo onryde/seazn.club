@@ -385,7 +385,9 @@ const MODAL_CLOSE_LABEL = "Close";
 /** D1's measured geometry: stages-panel.tsx:778-815, clipped by html overflow-x:clip. At 320 px the "Now playing"
  *  strip's content reaches 56 px past the viewport, every run (two `max-w-[9rem]` names in a non-wrapping
  *  `inline-flex` — a bounded width, so a fixed number). The exemption holds for THAT much and no more: a strip that
- *  grows, or a second thing overflowing inside it, reds instead of hiding behind the recorded defect. */
+ *  grows past it reds instead of hiding behind the recorded defect. The cap bounds the AMOUNT, not the number of boxes:
+ *  a second offender INSIDE the strip is excused while the total stays within D1_OVERFLOW_PX + D1_SLACK_PX (60 px); one
+ *  anywhere else is never excused (`outside` below). */
 const D1_OVERFLOW_PX = 56;
 /** Sub-pixel rounding and font metrics between machines — not room for a second defect. */
 const D1_SLACK_PX = 4;
@@ -930,6 +932,13 @@ test("B5 · an Event Pass grants its rung's declared credits into the bought buc
   // before it reads a line item, so no price is compared on this run. Said on the test, not assumed.
   const priced = PASS_KEYS.every((k) => priceOf(k) !== null);
   if (!priced) {
+    // In CI the walkthrough leg's own `stripe:sync` step prices this database (e2e.yml), so an unpriced one there is a
+    // lost step, and it would silently drop the price check AND its refusal pair below: fail, never warn.
+    if (process.env.CI) {
+      throw new Error(
+        "B5: plans.stripe_price_id_onetime is unset under CI — the walkthrough leg's stripe:sync did not reach this database, so the pass price check would not run",
+      );
+    }
     console.warn("::warning::B5: plans.stripe_price_id_onetime is unset here — the pass price check was NOT exercised");
     test.info().annotations.push({ type: "price-check-unconfigured", description: "run stripe:sync into this database to exercise the pass price check" });
   }
