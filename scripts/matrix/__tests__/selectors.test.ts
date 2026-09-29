@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
-import { MissingLabel, DATA, NAME, PAD_PINS, TESTID, templateLabel } from "../lib/browser/selectors.ts";
+import { MissingLabel, DATA, NAME, PAD_PINS, TESTID, UnrenderableName, renderedName, templateLabel } from "../lib/browser/selectors.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -78,8 +78,66 @@ describe("selectors are pinned to the product's text", () => {
 
   it("every dictionary-pinned name is the en dictionary's value, and no key is a placeholder", () => {
     const ui = enUi();
-    const wrong = Object.entries(NAME).filter(([, n]) => "dictKey" in n && (n.dictKey.startsWith("<") || ui[n.dictKey] !== n.text)).map(([k, n]) => `${k}: ${"dictKey" in n ? n.dictKey : ""} → ${"dictKey" in n ? ui[n.dictKey] : ""}`);
+    let plain = 0;
+    const wrong = Object.entries(NAME).filter(([, n]) => "dictKey" in n && !("rendered" in n && n.rendered !== undefined)).filter(([, n]) => {
+      plain++;
+      return "dictKey" in n && (n.dictKey.startsWith("<") || ui[n.dictKey] !== n.text);
+    }).map(([k, n]) => `${k}: ${"dictKey" in n ? n.dictKey : ""} → ${"dictKey" in n ? ui[n.dictKey] : ""}`);
+    expect(plain).toBeGreaterThan(0);
     expect(wrong).toEqual([]);
+  });
+
+  // M-4: a label the component decorates in a template literal —
+  // competition-wizard.tsx renders `${msg("comp.wizard.endsOn")} *` — has an
+  // accessible name that is NOT the dictionary value, and an exact-name
+  // locator built from the bare value clicks nothing.
+  /** The product's template literal around `msg("<key>")` in `file`, read from the product — never from selectors.ts. */
+  const productTemplate = (file: string, key: string) => {
+    const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return [...src(file).matchAll(new RegExp("`([^`]*)\\$\\{msg\\(\"" + esc + "\"\\)\\}([^`]*)`", "g"))];
+  };
+  it("a decorated dictionary name is the product's template filled with the en value, and its template is pinned verbatim", () => {
+    const ui = enUi();
+    let decorated = 0;
+    const wrong = Object.entries(NAME).flatMap(([k, n]) => {
+      if (!("dictKey" in n) || !("rendered" in n) || n.rendered === undefined) return [];
+      decorated++;
+      const found = productTemplate(n.file, n.dictKey);
+      if (found.length !== 1) return [`${k}: ${n.file} renders "${n.dictKey}" in ${found.length} template literals, not 1`];
+      const [whole, before, after] = found[0]!;
+      const out: string[] = [];
+      if (n.rendered !== whole) out.push(`${k}: rendered ${n.rendered} is not the product's ${whole}`);
+      if (n.text !== `${before}${ui[n.dictKey]}${after}`) out.push(`${k}: text ${JSON.stringify(n.text)} is not ${JSON.stringify(`${before}${ui[n.dictKey]}${after}`)}`);
+      return out;
+    });
+    expect(decorated).toBe(1);
+    expect(wrong).toEqual([]);
+    // Witness, read off competition-wizard.tsx:244 and en "comp.wizard.endsOn": "Ends on" today.
+    expect(NAME.endsOn.text).toBe("Ends on *");
+  });
+
+  it("a dictionary name its component decorates must declare it: no plain dictKey pin whose key the file renders inside a template", () => {
+    let plain = 0;
+    const wrong = Object.entries(NAME).flatMap(([k, n]) => {
+      if (!("dictKey" in n) || ("rendered" in n && n.rendered !== undefined)) return [];
+      plain++;
+      const found = productTemplate(n.file, n.dictKey);
+      return found.length === 0 ? [] : [`${k}: ${n.file} renders ${found[0]![0]} — pin it with \`rendered\`, the bare value is not its name`];
+    });
+    expect(plain).toBeGreaterThan(0);
+    expect(wrong).toEqual([]);
+  });
+
+  it("renderedName refuses a template it cannot fill, and a key the dictionary lacks, by name", () => {
+    expect(renderedName("comp.wizard.endsOn", "`${msg(\"comp.wizard.endsOn\")} *`")).toBe(`${enUi()["comp.wizard.endsOn"]} *`);
+    const cannot = [
+      "${msg(\"comp.wizard.endsOn\")} *", // not a template literal
+      "`Ends on *`", // no call to fill
+      "`${msg(\"comp.wizard.endsOn\")} ${msg(\"comp.wizard.endsOn\")}`", // two
+      "`${msg(\"comp.wizard.endsOn\")} ${required}`", // another interpolation left
+    ];
+    for (const t of cannot) expect(() => renderedName("comp.wizard.endsOn", t), t).toThrow(UnrenderableName);
+    expect(() => renderedName("no.such.key", "`${msg(\"no.such.key\")} *`")).toThrow(MissingLabel);
   });
 
   it("every dictionary-pinned name's key is the one its component passes (quoted, whole), and every hardcoded name is in its file", () => {

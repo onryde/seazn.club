@@ -12,8 +12,11 @@ export interface Pin { readonly file: string; readonly needle: string }
  *  composition in the dialog. */
 export type TestidPin = { readonly id: string } & Pin & { readonly via?: Pin };
 /** An accessible name or placeholder. A dictionary label names its en key
- *  and the component that passes it; a hardcoded English one is a Pin. */
-export type NamePin = { readonly text: string } & ({ readonly dictKey: string; readonly file: string } | Pin);
+ *  and the component that passes it; a hardcoded English one is a Pin. A
+ *  dictionary label the component decorates in a template literal carries
+ *  `rendered`, that literal verbatim, and its `text` is derived from it (see
+ *  `decorated` below). */
+export type NamePin = { readonly text: string } & ({ readonly dictKey: string; readonly file: string; readonly rendered?: string } | Pin);
 /** An attribute selector with no testid (data-role, data-tile-id, …). */
 export type DataPin = { readonly selector: string } & Pin;
 
@@ -27,6 +30,13 @@ function table<T extends Record<string, object>>(t: T): Readonly<T> {
 const V2 = "apps/web/src/components/v2";
 /** confirm-dialog.tsx derives both buttons from its `testId` prop. */
 const CONFIRM_DIALOG: Pin = Object.freeze({ file: `${V2}/confirm-dialog.tsx`, needle: "`${testId}-confirm`" });
+
+/** A dictionary label rendered inside the product's own template literal.
+ *  Its name is DERIVED on read — the en value put through `rendered` — never
+ *  retyped, so a dictionary edit moves it. Read lazily, like templateLabel. */
+function decorated(dictKey: string, file: string, rendered: string): { readonly text: string; readonly dictKey: string; readonly file: string; readonly rendered: string } {
+  return { dictKey, file, rendered, get text(): string { return renderedName(dictKey, rendered); } };
+}
 
 const testids = <T extends Record<string, TestidPin>>(t: T): Readonly<T> => table(t);
 const names = <T extends Record<string, NamePin>>(t: T): Readonly<T> => table(t);
@@ -80,8 +90,9 @@ export const NAME = names({
   sportSelect: { text: "Sport", dictKey: "wizard.sport", file: `${V2}/division-builder.tsx` },
   variantSelect: { text: "Variant", dictKey: "wizard.variant", file: `${V2}/division-builder.tsx` },
   formatTab: { text: "Format", dictKey: "wizard.tab.format", file: `${V2}/division-builder.tsx` },
-  // The field's label is `${msg("comp.wizard.endsOn")} *` — match it as a prefix.
-  endsOn: { text: "Ends on", dictKey: "comp.wizard.endsOn", file: `${V2}/competition-wizard.tsx` },
+  // The field's accessible name is "Ends on *" — the required star is the
+  // component's, not the dictionary's (review M-4).
+  endsOn: decorated("comp.wizard.endsOn", `${V2}/competition-wizard.tsx`, "`${msg(\"comp.wizard.endsOn\")} *`"),
   // "Create competition", not the brief's "Create" (re-pinned at Step 0; "Create" is clubs.list.create).
   createCompetition: { text: "Create competition", dictKey: "comp.wizard.create", file: `${V2}/competition-wizard.tsx` },
   // Two more for Task 5's createCompetitionUi (its brief asks for them here).
@@ -107,18 +118,43 @@ export class MissingLabel extends Error {
   }
 }
 
+export class UnrenderableName extends Error {
+  readonly key: string;
+  readonly rendered: string;
+  constructor(key: string, rendered: string) {
+    super(`selectors: cannot derive the name for ${key} from ${rendered} — it must be a template literal with exactly one \${msg("${key}")} and no other interpolation`);
+    this.name = "UnrenderableName";
+    this.key = key;
+    this.rendered = rendered;
+  }
+}
+
 /** apps/web/src/dictionaries/en/ui.json, read once, as text. */
 let enUi: Readonly<Record<string, unknown>> | null = null;
 function en(): Readonly<Record<string, unknown>> {
   enUi ??= JSON.parse(readFileSync(new URL("../../../../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8")) as Record<string, unknown>;
   return enUi;
 }
+function enLabel(key: string): string {
+  const v = en()[key];
+  if (typeof v !== "string" || v === "") throw new MissingLabel(key);
+  return v;
+}
 
 /** The builder's label for a template row (division-builder.tsx renders
  *  `format.template.<row>.label`), from the en dictionary. */
 export function templateLabel(row: TemplateRowKey): string {
-  const key = `format.template.${row}.label`;
-  const v = en()[key];
-  if (typeof v !== "string" || v === "") throw new MissingLabel(key);
-  return v;
+  return enLabel(`format.template.${row}.label`);
+}
+
+/** The name the product renders from `rendered` — its template literal,
+ *  verbatim — with the en value of `dictKey` in place of its one
+ *  `${msg("<dictKey>")}`. Refuses what it cannot fill: not a template literal,
+ *  not exactly one such call, or another interpolation left over. */
+export function renderedName(dictKey: string, rendered: string): string {
+  const call = "${msg(\"" + dictKey + "\")}";
+  const body = /^`([^`]*)`$/.exec(rendered)?.[1];
+  const parts = body?.split(call);
+  if (parts === undefined || parts.length !== 2 || parts.join("").includes("${")) throw new UnrenderableName(dictKey, rendered);
+  return `${parts[0]}${enLabel(dictKey)}${parts[1]}`;
 }
