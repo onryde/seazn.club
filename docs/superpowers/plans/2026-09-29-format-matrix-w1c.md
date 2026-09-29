@@ -173,12 +173,22 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" (Task
 
 **Ruled — 38 (2026-09-29):** borrow the bench's tap helpers by import (`ledger.ts`; the sport-blind exports of `drivers/scorer.ts`; `genericAdapter`; the pure helpers of `tap-play.ts`), copy the private `executeStep`, and do not use `playMatchByTaps` / `createTapPlayer`. Extends ruling 23 (a second transitive pack-schema load, via `simulate.ts`). Owner value: one source for the tap vocabulary and its product pins.
 
-**Recommendations for the owner's ruling at plan review** (not rulings; each is applied as written unless the owner rules otherwise):
+**Ruled — 39 (2026-09-29, plan review): D1 amended as below.** The owner asked whether 1280 alone is enough, since L1 proves that the product works; the recommendation that L1 = 1280 with the phone path proven elsewhere was confirmed.
 
-**D1 — O3, widths.** L1 runs every cell at **1280 and 320**; L2 uses the committed rotation in `l2-pairs.json` (never re-planned, `_INDEX.md` Recommendations "For W1c"). W1c adds a one-off **width sweep**: `league|badminton` LIFECYCLE at the other six widths (360, 375, 390, 430, 768, 834).
-- Owner value: 320 is the narrowest phone and every fold opens there; 1280 is the organiser's desk. The sweep proves each page object at the `md` breakpoint (768/834, where `md:hidden` toggles flip) before W1d's first full run, which would otherwise discover a broken page object on ~1,700 L2 runs at once.
-- Cost: 462 L1 runs full-grid (as `counts.json` already states); the sweep is 6 runs, W1c only.
-- Rejected: L1 at all seven widths (231 × 8 = 1,848 runs, four times the cost, and L2 already rotates the seven).
+**Ruled — 40 (2026-09-29, plan review): D2–D9 accepted as written; execution is subagent-driven.**
+
+The decisions as ruled:
+
+**D1 — O3, widths (ruling 39).** L1 runs every cell at **1280 only**: it proves the organiser's lifecycle works end to end at the desk. The phone path is proven by three things instead of a second L1 width:
+  - **L2** uses the committed rotation in `l2-pairs.json` over all seven phone and tablet widths (never re-planned, `_INDEX.md` Recommendations "For W1c"). In W1d that puts every row and every sport at a phone width.
+  - W1c's one-off **width sweep** runs `league|badminton` LIFECYCLE at **all seven L2 widths** (320, 360, 375, 390, 430, 768, 834).
+  - **Pad proof** runs at 1280 and 320.
+- Owner value:
+  - 1280 is the organiser's desk, and L1 is the proof that the product works.
+  - The only organiser control that folds below 768 is the stage rail (Generate, Complete). The sweep proves its fold at 320 and at the `md` breakpoint (768/834, where `md:hidden` toggles flip) before W1d scales up.
+  - The pad, which a scorer holds on a phone at the court, is proven at 320 by pad proof.
+- Cost: 231 L1 runs full-grid in W1d, not 462 (`counts.json` states 462 and W1d corrects it). The sweep is 7 runs, W1c only.
+- Rejected: L1 at 1280 and 320 (doubles L1 for coverage L2 already gives); L1 at all seven widths (1,848 runs).
 
 **D2 — pad adapters replay the generated events (bench `TapAdapter` shape, ruling 38).** For each generated event the adapter returns the taps that make the pad write it; the product must then hold one ledger row equal to it (less declared tolerated keys). An adapter whose pad cannot write an event type one-for-one declares a **fallback** for it: the pad's own route to the same result, its row count, and a file:line reason. Those rows are judged by the fold (`pad-outcome-as-requested`), not per payload; each such declaration is listed in `_INDEX.md`'s per-adapter table. `decideFixture` folds what the product stored.
 - Owner value: the ledger a browser run leaves is the ledger the HTTP run leaves, so standings, parity and every invariant compare like with like; a pad that writes the wrong thing reds on its own row, named.
@@ -1687,9 +1697,10 @@ Every ✅ must come with `pad-finalized checked 3`. For every red, the report na
 - Produces:
   ```ts
   export interface LayerCase { spec: CaseSpec; layer: "L1" | "L2"; width: BrowserWidth; noPath: string | null; notRun: string | null }
-  export function planL1(filter: { only?: string; scenario?: ScenarioKey }, widths: readonly BrowserWidth[]): LayerCase[];   // slice cells × LIFECYCLE × widths
+  export const L1_WIDTH = 1280;   // ruling 39
+  export function planL1(filter: { only?: string; scenario?: ScenarioKey }): LayerCase[];   // slice cells × LIFECYCLE @ L1_WIDTH
   export function planL2(pairs: { runs: readonly L2Run[] }, cells: ReadonlySet<string>): LayerCase[];                     // filter only; never re-plans
-  export const widthSweepPlanner: PlanCases;    // league|badminton LIFECYCLE @ 360/375/390/430/768/834
+  export const widthSweepPlanner: PlanCases;    // league|badminton LIFECYCLE @ every L2 width (ruling 39)
   export const apiOnlyBrowserPlanner: PlanCases; // each API_ONLY row × generic, LIFECYCLE @1280
   ```
 
@@ -1698,8 +1709,8 @@ Every ✅ must come with `pad-finalized checked 3`. For every red, the report na
   - **"planL2 never re-plans: every planned run's n, scenario, row, sport, preset and width are the committed entry's, byte for byte"**. Compare against `l2-pairs.json` read as JSON, for the slice's cells.
   - **"slice L2 = 68 runs: 3 executed, and the rest carry 🚫 or ░ with a reason"**. The expected figures come from filtering the committed file inside the test (`runs.filter(r => SLICE_CELLS.has(cellId(r.row, r.sport)))`), and the count is asserted to equal the filter's own length, not the literal 68. The 68 is written only in a comment, so a regenerated catalogue moves the test, not the plan. The three executed runs are exactly those whose atom has a `HARNESS_SCENARIO` entry. The 🚫 runs are exactly those whose atom has `knownNoPath` or `l2NoPath`, with the reason naming that wave. Everything else is ░ `"no scenario script yet"`.
   - **"🚫 and ░ both set is impossible"**. `planL2` never produces both, and `decideState` throws if handed both (T3's guard, reached here from a real planner output).
-  - **"planL1: 6 slice cells × 1 scenario × 2 widths = 12 cases, caseIds suffixed @width, layer L1"** (derived from `SLICE_ROWS × SLICE_SPORTS`, not typed).
-  - **"width sweep: exactly the six L2 widths other than 320, in L2_WIDTHS order"** (derived: `L2_WIDTHS.filter(w => w !== 320)`).
+  - **"planL1: 6 slice cells × 1 scenario at 1280 = 6 cases, caseIds suffixed @1280, layer L1; any other --width with --layer L1 is a usage refusal (ruling 39)"** (the cell count is derived from `SLICE_ROWS × SLICE_SPORTS`, not typed).
+  - **"width sweep: exactly L2_WIDTHS, in order, 320 included"** (derived: `[...L2_WIDTHS]`).
   - **"api-only browser set: one case per API_ONLY row, in catalogue order"**.
 
 - [ ] **Step 2: Run — FAIL. Step 3: Implement `layers.ts`.** `planL2` reads the committed file through `pairs.ts`'s own parser and maps each run as follows:
@@ -1708,7 +1719,7 @@ Every ✅ must come with `pad-finalized checked 3`. For every red, the report na
   - otherwise `notRun: "no scenario script yet (atom <id>)"`.
 
   `run.ts`:
-  - `--layer L1` → `planL1` at the widths given by `--width` (repeatable; at least one required);
+  - `--layer L1` → `planL1` at 1280 (ruling 39; `--width` defaults to 1280 and any other value is refused);
   - `--layer L2` → `planL2` over the slice cells;
   - planned 🚫/░ cases are recorded without a driver (`decideState` with `noPath`/`notRun`), so they appear in `results.json` and `MATRIX.md` as their states and are never dropped (R13).
 
@@ -1764,10 +1775,10 @@ No new code. A defect found here is fixed in the owning task's module with a fai
 Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Confirm that `show data_directory` is this session's and that `SMOKE_BASE` is `http://localhost:<port>`. Write `EXIT=$?` from every run. Evidence goes under `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1c-<name>/`.
 
 - [ ] **Step 1: HTTP baseline, the slice (L3 of the slice cells, 24 cases).** Run `pnpm matrix:l3 --run-id w1c-http-slice`. It must match W1b's committed slice states. Any drift stops the wave (class 14).
-- [ ] **Step 2: L1 browser, 12 cases.** Run `pnpm matrix:browser --layer L1 --width 1280 --width 320 --run-id w1c-l1`.
+- [ ] **Step 2: L1 browser, 6 cases at 1280 (ruling 39).** Run `pnpm matrix:browser --layer L1 --width 1280 --run-id w1c-l1`.
 - [ ] **Step 3: L2 browser, the slice.** Run `pnpm matrix:browser --layer L2 --run-id w1c-l2`, which gives 3 executed and the rest 🚫/░. Paste the state histogram, and confirm that 🚫 + ░ + executed equals the planned total.
 - [ ] **Step 4: Pad proof, 11 sports × 1280/320.** This is the Task 11 run, repeated on this fresh stack.
-- [ ] **Step 5: Width sweep, 6 cases.** Run `--set width-sweep`. At 768/834 the stage-rail fold toggle is hidden, and the page object must not click it (class 22).
+- [ ] **Step 5: Width sweep, 7 cases (320–834).** Run `--set width-sweep`. At 320–430 the page object must open the stage-rail fold; at 768/834 the stage-rail fold toggle is hidden, and the page object must not click it (class 22).
 - [ ] **Step 6: API-only browser set, 5 cases.** Run `--set api-only-browser`. Each case must carry `organiser-ui-path` ❌ naming W4/W5, or ⏳ where `setUpDivision` defers the multi-stage row to W1-driving. Paste which it was per row.
 - [ ] **Step 7: Parity.**
   ```
