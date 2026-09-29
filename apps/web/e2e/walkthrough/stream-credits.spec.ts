@@ -31,11 +31,13 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import Stripe from "stripe";
 import { apiJson, invalidateOrgEntitlements } from "../helpers";
 import { grantRigPackCredits, seedOverlayFixture, setRigPlan, type OverlayRig } from "../overlay-kit";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
+import { FakeIngest } from "../../src/server/relay/fakes";
+import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
 /** lib/currency.ts `PASS_KEYS`, restated: that module cannot be imported here — it pulls `@/config/stripe-plans.json`
  *  without an import attribute, and the spec then collects ZERO tests. The B1 registry test pins this list against the
@@ -103,6 +105,100 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
     await sql.end();
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The ONE stream slot this file may hold. Admission weighs the deployment's storage headroom — every ACTIVE session's
+// max-duration reservation, across the WHOLE server — before it looks at the fixture's own active session
+// (server/relay/domain/session.ts `admit`), so a stream started here while stream-relay.spec.ts (File A) streams on the
+// same server can be refused as "storage exhausted", or refuse one of File A's. File A holds the advisory-lock keys
+// [7_301_130_000, 7_301_130_000 + CAPACITY - 1) and leaves exactly one slot for any other file; this file takes THAT
+// key, for its one live case (B6), and stops the stream in teardown — on a red too — before it lets the key go. The
+// capacity is DERIVED the way File A derives it (the fake ingest's storage limit over the config's max duration), so a
+// change to either moves both files' key ranges together. No other case here goes live.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const STREAM_CAPACITY = Math.floor(new FakeIngest().storage.totalStorageMinutesLimit / MAX_DURATION_MINUTES);
+/** stream-relay.spec.ts's `SLOT_LOCK_BASE`, restated (a spec cannot import another spec). */
+const FILE_A_SLOT_BASE = 7_301_130_000;
+/** The slot File A leaves: the first key past its range. */
+const STREAM_SLOT_KEY = FILE_A_SLOT_BASE + STREAM_CAPACITY - 1;
+/** Waiting out one other holder of the key: its stream going live and its teardown taking it off the air. */
+const SLOT_WAIT_MS = LIVE_MS + NAV_MS;
+/** Teardown: the stop, then the organiser poll that ticks the session to completed. */
+const TEARDOWN_MS = NAV_MS;
+
+let lease: (() => Promise<void>) | null = null;
+const liveRigs: { request: APIRequestContext; orgId: string }[] = [];
+
+/** Take this file's stream slot before going live; held until teardown. */
+async function streamSlot(): Promise<void> {
+  if (!(STREAM_CAPACITY >= 1)) throw new Error(`the fake ingest holds ${STREAM_CAPACITY} stream(s) — none for this file`);
+  if (lease) throw new Error("this file holds at most ONE stream slot, and it is already held");
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(dbUrl, {
+    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+    idle_timeout: 0,
+  });
+  const deadline = Date.now() + SLOT_WAIT_MS;
+  for (;;) {
+    const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${STREAM_SLOT_KEY}::bigint) as ok`;
+    if (row?.ok) {
+      lease = () => sql.end(); // a session-level advisory lock is released with its connection
+      return;
+    }
+    if (Date.now() > deadline) {
+      await sql.end();
+      throw new Error(`stream slot ${STREAM_SLOT_KEY} not free after ${SLOT_WAIT_MS} ms`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/** Every session the org still holds that is not over. */
+async function openSessions(orgId: string): Promise<{ id: string; fixture_id: string }[]> {
+  return withDb(
+    (sql) => sql<{ id: string; fixture_id: string }[]>`
+      select id, fixture_id from fixture_stream_sessions where org_id = ${orgId} and state not in ('completed', 'failed')`,
+  );
+}
+
+/** Teardown: stop every stream the test went live on, through the product's own Stop as the rig's owner; tick each
+ *  with the organiser's poll until it is over; force any that will not end; THEN free the slot — so a red case never
+ *  keeps a reservation that refuses File A's next start. */
+async function teardownStreams(): Promise<void> {
+  try {
+    for (const { request, orgId } of liveRigs.splice(0)) {
+      const open = await openSessions(orgId);
+      for (const s of open) await request.post(`/api/v1/fixtures/${s.fixture_id}/stream-sessions/${s.id}/stop`).catch(() => null);
+      if (open.length === 0) continue;
+      await expect
+        .poll(
+          async () => {
+            for (const s of open) await request.get(`/api/v1/fixtures/${s.fixture_id}/stream-sessions/current`).catch(() => null);
+            return (await openSessions(orgId)).length;
+          },
+          { timeout: TEARDOWN_MS, intervals: [1_000] },
+        )
+        .toBe(0)
+        .catch(() =>
+          withDb((sql) => sql`update fixture_stream_sessions set state = 'failed', fail_reason = 'unknown', ended_at = now()
+                               where org_id = ${orgId} and state not in ('completed', 'failed')`),
+        );
+    }
+  } finally {
+    const release = lease;
+    lease = null;
+    await release?.();
+  }
+}
+
+test.afterEach(async () => {
+  await teardownStreams();
+});
 
 interface LedgerRow {
   reason: string;
@@ -833,12 +929,19 @@ test("B5 · an Event Pass grants its rung's declared credits into the bought buc
 test("B6 · mid-stream at 320px, a checkout sheet whose code cannot load says so, sends NO checkout request, and leaves Stop reachable — the next tap fetches the code again, once it loads the request goes out, and Stop still stops", async ({
   page,
 }) => {
-  test.setTimeout(budget({ seeds: 1, navs: 2, acts: 22, lives: 1 }));
+  test.setTimeout(budget({ seeds: 1, navs: 2, acts: 22, lives: 1 }) + SLOT_WAIT_MS + TEARDOWN_MS);
   // Pro: going live spends one credit, and "Buy more" shows mid-stream only while at least one is left.
   const { rig, rate } = await planRig(page, "pro");
   expect(rate, "a credit must remain after going live for Buy more to show").toBeGreaterThanOrEqual(2);
 
-  // LIVE, reached through the API (A1 drives the tapped version): a destination, a start, the organiser's poll.
+  // LIVE, reached through the API (A1 drives the tapped version): a destination, a start, the organiser's poll. The
+  // slot first, and the rig registered for teardown BEFORE the start, so a red after it still takes the stream down.
+  await streamSlot();
+  expect(
+    await withDb(async (sql) => (await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${STREAM_SLOT_KEY}::bigint) as ok`)[0]?.ok),
+    "the slot is HELD — a second holder is refused it",
+  ).toBe(false);
+  liveRigs.push({ request: page.request, orgId: rig.orgId });
   const target = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-targets`, "POST", {
     kind: "youtube",
     label: "B6 channel",
