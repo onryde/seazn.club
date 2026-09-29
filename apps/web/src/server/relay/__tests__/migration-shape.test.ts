@@ -371,6 +371,31 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     );
   });
 
+  it("org_stream_credits.bucket (V426, Task 14b R2) is NOT NULL, defaults to 'pack', and admits exactly 'monthly' and 'pack' — a row that names neither is refused", async () => {
+    // The two buckets are what make a monthly grant expirable while a bought pack never is. A row written without a
+    // bucket (every writer that predates V426, and every backfilled row) is a PACK: it never expires.
+    const { orgId } = await rig();
+    const insert = (bucket: string | null) =>
+      bucket === null
+        ? sql<{ bucket: string }[]>`insert into org_stream_credits (org_id, delta, reason, balance_after)
+                                     values (${orgId}, 1, 'grant', 1) returning bucket`
+        : sql<{ bucket: string }[]>`insert into org_stream_credits (org_id, delta, reason, balance_after, bucket)
+                                     values (${orgId}, 1, 'grant', 1, ${bucket}) returning bucket`;
+    expect((await insert(null))[0]!.bucket, "the default").toBe("pack");
+    let admitted = 0;
+    for (const bucket of ["monthly", "pack"]) {
+      expect((await insert(bucket))[0]!.bucket).toBe(bucket);
+      admitted++;
+    }
+    expect(admitted).toBe(2);
+    await expect(insert("grant"), "a reason is not a bucket").rejects.toMatchObject({ code: "23514" });
+    await expect(insert("Monthly"), "the check is exact").rejects.toMatchObject({ code: "23514" });
+    await expect(
+      sql`insert into org_stream_credits (org_id, delta, reason, balance_after, bucket) values (${orgId}, 1, 'grant', 1, ${null})`,
+      "NOT NULL",
+    ).rejects.toMatchObject({ code: "23502" });
+  });
+
   it("org_stream_credits.stripe_event_id and stripe_checkout_session_id say what they hold (V424, lane B carry M7): a Checkout Session id, the purchase idempotency key, NOT a Stripe event id — each naming its twin", async () => {
     // The column NAME says "event id"; the writer stores the Checkout SESSION id (billing-events.ts recordPurchase
     // `stripeEventId: session.id`), and the link column holds the same value. That FACT is pinned through the real webhook

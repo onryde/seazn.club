@@ -1901,15 +1901,20 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(snap!.competition_id).not.toBeNull();
   });
 
-  it("Dc: entitlement_via_override is true for a live staff override and false for a plan-granted org", async () => {
+  it("Dc: entitlement_via_override is true for a live staff override and false for a plan-granted org (driven through createSession since V426)", async () => {
     const r = await rig({ credits: 1 });                                   // the rig grants relay BY OVERRIDE
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await sql<{ v: boolean }[]>`select entitlement_via_override as v from fixture_stream_sessions where id = ${sessionId}`)[0]!.v).toBe(true);
-    // The false arm at the level it is producible: the column is `overrideRow(...)?.bool_value === true`,
-    // and an org with no live override row maps to false. Under V402 every R1 admission is an override,
-    // so this is asserted on the MAPPING rather than through a plan-granted org that does not exist yet.
-    await sql`delete from org_entitlement_overrides where org_id = ${r.auth.orgId} and feature_key = 'streaming.relay'`;
-    expect((await overrideRow(r.auth.orgId, "streaming.relay"))?.bool_value === true).toBe(false);
+    // The false arm through the REAL producer (Task 14b): V426 grants both keys on every plan, so an org with NO
+    // override row is admitted by its plan — the plan-granted org that did not exist under V402 — and its session must
+    // record false. A second rig, because the first one's session holds its fixture.
+    const p = await rig({ credits: 1 });
+    await sql`delete from org_entitlement_overrides where org_id = ${p.auth.orgId} and feature_key in ('streaming.overlay', 'streaming.relay')`;
+    await invalidateOrgEntitlements(p.auth.orgId);
+    expect(await overrideRow(p.auth.orgId, "streaming.relay"), "premise: no override row").toBeNull();
+    const { sessionId: planSession } = await createSession(p.auth, p.fixtureId, body(p.target.id), p.deps);
+    expect((await sql<{ v: boolean }[]>`select entitlement_via_override as v from fixture_stream_sessions where id = ${planSession}`)[0]!.v,
+      "admitted by the plan, not by an override").toBe(false);
   });
 
   it("Df: the estimate is DERIVED from the rate constants; passthrough (storage only) and composed (storage + compute) differ, and viewers change neither", async () => {

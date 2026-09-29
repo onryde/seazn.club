@@ -361,20 +361,18 @@ export function publicDashboardsReason(limit: number | null): string {
 // which `entitlements-v18-enterprise-ceiling.test.ts` catches by deriving the
 // set from the live matrix rather than from this list.
 //
-// V402 (Stream Overlay W1, 2026-09-09) adds the third and fourth: neither
-// `streaming.overlay` nor `streaming.relay` is granted by ANY plan (dark
-// rollout — false everywhere, not even Enterprise), so by the same rule as
-// the two above, `entitlements-v18-enterprise-ceiling.test.ts` requires them
-// here too. Nothing calls `featurePlan`/`<UpgradeGate>` with either key yet
-// (W1 ships only the catalogue rows and the entitlement gate, no paywall UI),
-// so this is inert until a later wave wires one — the GA-pricing migration
-// that eventually grants a self-serve plan should re-examine this pairing at
-// the same time, not carry it forward unread.
+// V402 (Stream Overlay W1, 2026-09-09) added `streaming.overlay` and
+// `streaming.relay` here while no plan granted them. V426 (Streaming R1 Task
+// 14b, owner 2026-09-29: "no enterprise, even community can do livestreaming")
+// grants both on EVERY plan, so by the rule above they left this set — the
+// re-examination the V402 note asked the GA migration for. A streaming gate is
+// now reachable only through a staff `org_entitlement_overrides` row set to
+// false, and it must never name Enterprise;
+// `entitlements-v18-enterprise-ceiling.test.ts` derives that from the live
+// matrix rather than from this list.
 const ENTERPRISE_FEATURES = new Set([
   "api.write",
   "dashboard.branding",
-  "streaming.overlay",
-  "streaming.relay",
 ]);
 
 export type PaidPlan = "pro" | "enterprise";

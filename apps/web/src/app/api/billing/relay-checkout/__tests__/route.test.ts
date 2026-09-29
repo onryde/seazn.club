@@ -86,19 +86,29 @@ async function callerFor(orgId: string): Promise<void> {
   preferredCurrencyMock.mockReset().mockResolvedValue("eur");
 }
 
-/** The live `streaming.relay` override the REAL resolver reads. No plan grants
- *  this key while streaming is dark (V402), so an override is the only way an
- *  org is entitled — which is exactly how a community pilot is admitted. */
+/** A live `streaming.relay` override set to TRUE — a staff lift. Since V426 (Task 14b) every plan grants the key, so
+ *  this is belt-and-braces for the cases that are not about the gate; the first case below proves the PLAN alone
+ *  admits a community org. */
 async function entitle(orgId: string): Promise<void> {
   await sql`
     insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
     values (${orgId}, 'streaming.relay', true, 'task-8 route test')`;
 }
 
+/** A live `streaming.relay` override set to FALSE — since V426 the ONLY way an org lacks the relay (every plan grants
+ *  it), and so the only way this route's 402 is reachable. */
+async function deny(orgId: string): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, 'streaming.relay', false, 'task-14b route test: staff switch-off')`;
+}
+
 describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
-  it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture", async () => {
+  it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture — for a community org entitled by its PLAN alone (V426: no override row)", async () => {
     const rig = await streamRig();
-    await entitle(rig.orgId);
+    // No `entitle`: V426 grants streaming.relay on every plan, and the rig's org has no subscription (community).
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_entitlement_overrides where org_id = ${rig.orgId}`;
+    expect(n, "premise: no override row — the plan is what admits this org").toBe(0);
     await callerFor(rig.orgId);
     const fixtureId = rig.fixtureIds[0]!;
 
@@ -141,9 +151,10 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     );
   });
 
-  it("refuses a plan without streaming.relay with 402 plan_lacks_relay, and never calls Stripe", async () => {
+  it("refuses an org whose streaming.relay is switched OFF by an override with 402 plan_lacks_relay, and never calls Stripe (V426: the only way the gate is reachable)", async () => {
     const rig = await streamRig();
-    await callerFor(rig.orgId); // deliberately NOT entitled
+    await deny(rig.orgId); // every plan grants it now, so the refusal needs a staff switch-off
+    await callerFor(rig.orgId);
     const res = await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 });
     expect(res.status).toBe(402);
     expect(await res.json()).toMatchObject({ ok: false, code: "plan_lacks_relay" });
@@ -165,7 +176,8 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
   it("a fixture that is not this org's is 404, even when the org is unentitled — the ownership check precedes the paywall", async () => {
     const rig = await streamRig();
     const other = await streamRig();
-    await callerFor(rig.orgId); // NOT entitled: a 402 here would mean the gates ran in the wrong order
+    await deny(rig.orgId); // switched OFF: a 402 here would mean the gates ran in the wrong order
+    await callerFor(rig.orgId);
     const res = await post({ orgId: rig.orgId, fixtureId: other.fixtureIds[0]!, pack: 5 });
     expect(res.status).toBe(404);
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
