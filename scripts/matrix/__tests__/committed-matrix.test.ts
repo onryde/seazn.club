@@ -1,4 +1,5 @@
-// R10: the committed W1a slice evidence is internally consistent and clean.
+// R10: the committed slice evidence — W1a's, and W1b's (T15 fix round 3,
+// M-8: the same shape, the same checks) — is internally consistent and clean.
 //  - MATRIX.md is byte-for-byte the render of results.json. The render reads
 //    results.json alone (its own `grid` included, never the live catalogue),
 //    so this reds only when the evidence or the renderer changed.
@@ -16,10 +17,13 @@ import { renderMatrix } from "../lib/render-matrix.ts";
 import { decideState, parseResults, stringsIn } from "../lib/results.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const DIR = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1a-slice");
-const RERENDER = "pnpm matrix:render docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1a-slice/results.json";
+const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs";
+/** Every committed slice: its wave and its directory under truth-runs. */
+const SLICES = [["W1a", "w1a-slice"], ["W1b", "w1b-slice"]] as const;
 
-describe("committed W1a slice evidence", () => {
+describe.each(SLICES)("committed %s slice evidence", (_wave, slice) => {
+  const DIR = resolve(REPO, TRUTH_RUNS, slice);
+  const RERENDER = `pnpm matrix:render ${TRUTH_RUNS}/${slice}/results.json --out ${TRUTH_RUNS}/${slice}/MATRIX.md`;
   const raw: unknown = JSON.parse(readFileSync(resolve(DIR, "results.json"), "utf8"));
   const results = parseResults(raw);
   it("is the full slice, not an empty or partial run: 24 DISTINCT cases, no canary", () => {
@@ -55,7 +59,7 @@ describe("committed W1a slice evidence", () => {
 // local server it drove. Every committed evidence file — slices, model
 // reports, probes — holds no loopback origin; the writers emit LOCAL_BASE.
 describe("committed truth-run evidence, every file", () => {
-  const ROOT = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
+  const ROOT = resolve(REPO, TRUTH_RUNS);
   const files = readdirSync(ROOT, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name));
   it("names no loopback origin (localhost, 127.0.0.1) in any file", () => {
     let checked = 0;
@@ -67,5 +71,13 @@ describe("committed truth-run evidence, every file", () => {
     expect(hits).toEqual([]);
     expect(checked, "no evidence file read — the sweep would be vacuous").toBeGreaterThan(0);
     expect(checked).toBe(files.length);
+  });
+});
+
+describe("the committed slices", () => {
+  it("are distinct runs, each swept above", () => {
+    const ids = SLICES.map(([, slice]) => parseResults(JSON.parse(readFileSync(resolve(REPO, TRUTH_RUNS, slice, "results.json"), "utf8"))).runId);
+    expect(ids.length).toBe(2);
+    expect(new Set(ids).size, ids.join(", ")).toBe(ids.length);
   });
 });
