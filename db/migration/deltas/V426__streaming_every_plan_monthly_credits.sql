@@ -32,15 +32,10 @@
 --    owner question, out of this task's scope.
 --
 -- 3. `org_stream_credits.bucket` — 'monthly' or 'pack'. Every existing row
---    backfills to 'pack' through the column default. ADD COLUMN ... DEFAULT
---    with a constant is catalogue-only in Postgres 11+ (no table rewrite), but
---    a CHECK written inline on that ADD COLUMN is not: it validates every row
---    with a full scan while the ALTER holds ACCESS EXCLUSIVE (measured on PG17,
---    Task 14b review M1: 2M rows, 247 ms with the inline CHECK, 1 ms without).
---    So the CHECK is added NOT VALID — catalogue-only, enforced for every new
---    and updated row from that instant — and then VALIDATEd as its own step,
---    which scans under SHARE UPDATE EXCLUSIVE: writers keep writing while it
---    reads. Every row written before this migration is a purchase, a consume of a
+--    backfills to 'pack' through the column default (catalogue-only in Postgres
+--    11+, no rewrite). The inline CHECK validates every row with a full scan
+--    under the ADD COLUMN's lock — acceptable at the table's size today.
+--    Every row written before this migration is a purchase, a consume of a
 --    purchase, a staff grant/refund/revoke, or a claw-back — none of them
 --    monthly. Which writer writes which bucket is stream-credits.ts's contract:
 --      grant (monthly)  → 'monthly', idempotency_key stream-monthly:{org}:{YYYY-MM}
@@ -80,14 +75,8 @@ on conflict (plan_key, feature_key) do update
   set bool_value = excluded.bool_value, int_value = excluded.int_value;
 
 alter table org_stream_credits
-  add column bucket text not null default 'pack';
-
-alter table org_stream_credits
-  add constraint org_stream_credits_bucket_check
-    check (bucket in ('monthly', 'pack')) not valid;
-
-alter table org_stream_credits
-  validate constraint org_stream_credits_bucket_check;
+  add column bucket text not null default 'pack'
+    check (bucket in ('monthly', 'pack'));
 
 comment on column org_stream_credits.bucket is
   'Which pool the row moves (V426): monthly = the plan''s free match credits for one UTC calendar month '

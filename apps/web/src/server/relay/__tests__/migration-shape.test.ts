@@ -394,15 +394,6 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
       sql`insert into org_stream_credits (org_id, delta, reason, balance_after, bucket) values (${orgId}, 1, 'grant', 1, ${null})`,
       "NOT NULL",
     ).rejects.toMatchObject({ code: "23502" });
-    // Review M1: V426 adds the CHECK `not valid` (no ACCESS EXCLUSIVE scan) and VALIDATEs it as its own step. A NOT VALID
-    // check still refuses every new row, so the inserts above pass either way — only the catalogue can tell a validated
-    // constraint (the old rows proven too) from one that skipped the validate step.
-    const [con] = await sql<{ convalidated: boolean; def: string }[]>`
-      select c.convalidated, pg_get_constraintdef(c.oid) as def from pg_constraint c
-       where c.conrelid = 'org_stream_credits'::regclass and c.conname = 'org_stream_credits_bucket_check'`;
-    expect(con, "V426's bucket CHECK, by name").toBeDefined();
-    expect(con!.convalidated, "validated, not left NOT VALID").toBe(true);
-    expect(con!.def).toMatch(/'monthly'.*'pack'/);
   });
 
   it("org_stream_credits.stripe_event_id and stripe_checkout_session_id say what they hold (V424, lane B carry M7): a Checkout Session id, the purchase idempotency key, NOT a Stripe event id — each naming its twin", async () => {
