@@ -21,6 +21,9 @@ import {
   DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
 } from "./config";
 import { machineNameFor } from "./domain/runner";   // T5-a: the fake names a Machine exactly as FlyRunner does
+import { LIST_VIDEOS_PAGE_LIMIT } from "./ingest-cf"; // m2: the fake lists in the REAL adapter's page size (A13 runs as in production)
+import { FlyApiError } from "./fly-client";           // A3: a create failure's PROOF is the adapter's own error type…
+import { runnerCreateErrorFrom } from "./runner-fly";  // …mapped onto the port's RunnerCreateError by the REAL adapter mapping (A23)
 import { NOOP_RECORDER } from "./ports";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
@@ -60,6 +63,7 @@ export class FakeIngest implements IngestProvider {
     timeoutSeconds: INGEST_TIMEOUT_SECONDS,
     deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     holdWindowSeconds: { rtmps: INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS, srt: null },
+    listVideosPageLimit: LIST_VIDEOS_PAGE_LIMIT,
   };
   readonly deletedInputs: string[] = [];
   readonly deletedVideos: string[] = [];
@@ -143,6 +147,38 @@ export class FakeIngest implements IngestProvider {
     return [...(this.inputs.get(inputId)?.outputs ?? [])];
   }
 
+  /** C1: every removeOutput call's output uid, in order — a repeat and an unknown uid included. */
+  readonly removedOutputs: string[] = [];
+
+  /** C1: Cloudflare's "Delete an output". An output already gone (or an input the fake never made) is its 404 — success,
+   *  and nothing changes. Only the named output leaves; its neighbours stay. */
+  async removeOutput(inputId: string, outputId: string): Promise<void> {
+    this.record("removeOutput", "DELETE", `/live_inputs/${inputId}/outputs/${outputId}`, [inputId, outputId], outputId);
+    this.removedOutputs.push(outputId);
+    const row = this.inputs.get(inputId);
+    const i = row ? row.outputUids.indexOf(outputId) : -1;
+    if (!row || i === -1) return;
+    row.outputUids.splice(i, 1);
+    row.outputs.splice(i, 1);
+  }
+
+  /** C1: the outputs still simulcasting from ONE input — none once the input is deleted (Cloudflare drops them with it). */
+  liveOutputCount(inputId: string): number {
+    const row = this.inputs.get(inputId);
+    return row && !row.deleted ? row.outputs.length : 0;
+  }
+
+  /** C1: the outputs still pushing to ONE destination (url + key) across EVERY live input — what "exactly one publisher
+   *  on the organiser's key" means, since each session opens its own input. */
+  liveOutputsTo(target: IngestTarget): number {
+    let n = 0;
+    for (const row of this.inputs.values()) {
+      if (row.deleted) continue;
+      n += row.outputs.filter((o) => o.url === target.url && o.streamKey === target.streamKey).length;
+    }
+    return n;
+  }
+
   async outputState(inputId: string): Promise<OutputState> {
     this.record("outputState", "GET", `/live_inputs/${inputId}/outputs`, [inputId], inputId);
     const row = this.inputs.get(inputId);
@@ -221,13 +257,18 @@ export class FakeRunner implements RunnerProvider {
   readonly created: RunnerSpec[] = [];
   readonly stops: { runnerId: string; signal: string; timeoutSeconds: number }[] = [];
   readonly destroyed: string[] = [];
-  private readonly alive = new Map<string, { sessionId: string | null; name: string | null }>(); // runnerId → who it was created for
+  private readonly alive = new Map<string, { sessionId: string | null; name: string | null; environment: string | null }>(); // runnerId → who (and which deployment) it was created for
   private readonly observed = new Map<string, RunnerObservation>();
-  private nextCreateFailure: { retryable: boolean } | null = null;
+  private nextCreateFailure: { retryable: boolean; proof: { status: number | null; retryable: boolean } | null } | null = null;
   private n = 0;
   private readonly rec: ProviderCallRecorder;
+  /** m1: a fake lists consistently, so 0 by default; a test that models Fly's lag passes its own window. */
+  readonly listSettleMs: number;
 
-  constructor(opts: { recorder?: ProviderCallRecorder } = {}) { this.rec = opts.recorder ?? NOOP_RECORDER; }
+  constructor(opts: { recorder?: ProviderCallRecorder; listSettleMs?: number } = {}) {
+    this.rec = opts.recorder ?? NOOP_RECORDER;
+    this.listSettleMs = opts.listSettleMs ?? 0;
+  }
 
   private record(operation: string, method: ProviderCallRecord["method"], path: string, subjectId: string | null, sessionId: string | null = null, status = 200): void {
     void Promise.resolve()
@@ -241,6 +282,10 @@ export class FakeRunner implements RunnerProvider {
     if (this.nextCreateFailure) {
       const f = this.nextCreateFailure;
       this.nextCreateFailure = null;
+      // A proof (lane C A3): a REAL FlyApiError — a transport failure carries no status (`network`), a provider answer
+      // carries one (`http`) — through the REAL adapter mapping, so the port's RunnerCreateError the usecase reads (A23)
+      // is decided by the code FlyRunner runs, never by a copy of it here.
+      if (f.proof) throw runnerCreateErrorFrom(new FlyApiError("fake create failed", f.proof.status === null ? "network" : "http", f.proof.status, f.proof.retryable, null, 1));
       throw Object.assign(new Error(`fake create failed (${f.retryable ? "retryable" : "not retryable"})`), { retryable: f.retryable });
     }
     // Whole-branch review I6: `create` is IDEMPOTENT PER (sessionId, attempt) — ports.ts says so and
@@ -258,7 +303,7 @@ export class FakeRunner implements RunnerProvider {
     }
     this.n += 1;
     const runnerId = `fake-machine-${this.n}-${randomBytes(3).toString("hex")}`;
-    this.alive.set(runnerId, { sessionId: spec.sessionId, name });
+    this.alive.set(runnerId, { sessionId: spec.sessionId, name, environment: spec.environment });
     this.observed.set(runnerId, { state: "running", exit: null });
     return { runnerId };
   }
@@ -293,7 +338,7 @@ export class FakeRunner implements RunnerProvider {
 
   async list(): Promise<RunnerListing[]> {
     this.record("listMachines", "GET", "/machines", null);
-    return [...this.alive].map(([runnerId, { sessionId, name }]) => ({ runnerId, sessionId, name, state: "running" as const }));
+    return [...this.alive].map(([runnerId, { sessionId, name, environment }]) => ({ runnerId, sessionId, name, environment, state: "running" as const }));
   }
 
   /** Test controls. */
@@ -301,10 +346,20 @@ export class FakeRunner implements RunnerProvider {
     this.observed.set(runnerId, { state, exit });
     if (state === "destroyed") this.alive.delete(runnerId);
   }
-  failNextCreate(retryable: boolean): void { this.nextCreateFailure = { retryable }; }
-  /** A Machine the provider holds that no session row explains. */
-  addOrphan(runnerId: string, sessionId: string | null): void {
-    this.alive.set(runnerId, { sessionId, name: null });
+  /** Fail the next `create`. The ARGUMENT is the proof the failure carries (lane C A3, owner-confirmed 2026-09-28; A23):
+   *   - a boolean — the legacy shape — throws a PLAIN error, which the port reads as outcome UNKNOWN whatever the flag
+   *     says (`createFailureOf`): the session tears down by name before any retry. It is kept plain on purpose — it is
+   *     the witness for the usecase's "not a RunnerCreateError ⇒ unknown" default;
+   *   - `{ status, retryable }` throws the port's `RunnerCreateError`, mapped from a real `FlyApiError` by
+   *     `runnerCreateErrorFrom`: a refusal status (4xx in CREATE_REFUSED_STATUSES) or a retryable one is a proof that
+   *     NOTHING was made; any other status is still unknown. */
+  failNextCreate(proof: boolean | { status: number | null; retryable: boolean }): void {
+    this.nextCreateFailure = typeof proof === "boolean" ? { retryable: proof, proof: null } : { retryable: proof.retryable, proof };
+  }
+  /** A Machine the provider holds that no session row explains. `environment` is REQUIRED (I1): which deployment's
+   *  Machine it is decides whether the sweep may touch it, so a test must say — null plants an untagged one. */
+  addOrphan(runnerId: string, sessionId: string | null, environment: string | null): void {
+    this.alive.set(runnerId, { sessionId, name: null, environment });
     this.observed.set(runnerId, { state: "running", exit: null });
   }
 }

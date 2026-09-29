@@ -5,8 +5,8 @@
 // reader which rows share a stream key, and a repeated wrap IV under the one
 // long-lived KEK is GCM nonce reuse); and RELAY_KEK is exactly 64 hex chars.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { randomBytes } from "node:crypto";
-import { hasValidKek, type KekName, open, openWith, seal, sealWith } from "../crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { fingerprintDestination, hasValidKek, type KekName, open, openWith, seal, sealWith } from "../crypto";
 
 // The developer's KEK (from .env.local) is put back afterwards, or removed when there was none — never assigned
 // `undefined`, which Node stores as the string "undefined". It is never printed: no assertion here reads it.
@@ -227,5 +227,51 @@ describe("hasValidKek — kek()'s own whole-string rule, for the key it is asked
         expect(hasValidKek("RELAY_KEK")).toBe(false);
       }),
     );
+  });
+});
+
+// A19 + A19b (owner 2026-09-28): the destination FINGERPRINT — HMAC-SHA256 under a key DERIVED from RELAY_KEK, over
+// the identity-normalised url + stream key. It is what V421's `org_stream_targets (org_id, dest_fingerprint)` unique
+// index compares, so one destination is one row and the one-live-session index holds per destination. Keyed on
+// purpose: the column is plaintext, and a bare hash of (url, key) would let anyone holding the table test guesses
+// of a stream key offline.
+describe("fingerprintDestination (A19/A19b)", () => {
+  const FB = "rtmps://live-api-s.facebook.com/rtmp/";
+  const YT = "rtmp://a.rtmp.youtube.com/live2";
+
+  it("64 lower-hex, stable for one destination; the explicit default port is the SAME fingerprint — rtmps :443 and rtmp :1935", () => {
+    const fb = fingerprintDestination(FB, "FB-1");
+    expect(fb).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintDestination(FB, "FB-1")).toBe(fb);
+    expect(fingerprintDestination("rtmps://live-api-s.facebook.com:443/rtmp/", "FB-1")).toBe(fb);
+    const yt = fingerprintDestination(YT, "YT-1");
+    expect(fingerprintDestination("rtmp://a.rtmp.youtube.com:1935/live2", "YT-1")).toBe(yt);
+    expect(yt).not.toBe(fb);
+  });
+
+  it("a different key, a different destination, or a different KEK is a different fingerprint", () => {
+    const base = fingerprintDestination(FB, "FB-1");
+    expect(fingerprintDestination(FB, "FB-2")).not.toBe(base);
+    expect(fingerprintDestination("rtmps://rtmp-api.facebook.com/rtmp/", "FB-1")).not.toBe(base);
+    withKek(randomBytes(32).toString("hex"), () => {
+      expect(fingerprintDestination(FB, "FB-1")).not.toBe(base);
+    });
+    // The field boundary is unambiguous: moving characters between url and key cannot collide.
+    expect(fingerprintDestination("rtmps://live-api-s.facebook.com/rtmp/a", "b")).not.toBe(fingerprintDestination("rtmps://live-api-s.facebook.com/rtmp/", "ab"));
+  });
+
+  it("it is KEYED: neither a bare SHA-256 of the inputs nor an HMAC under the raw KEK (the fingerprint key is derived, not the envelope key reused)", () => {
+    const fp = fingerprintDestination(FB, "FB-1");
+    const input = JSON.stringify([FB, "FB-1"]);
+    expect(fp).not.toBe(createHash("sha256").update(input).digest("hex"));
+    expect(fp).not.toBe(createHmac("sha256", Buffer.from(process.env.RELAY_KEK!, "hex")).update(input).digest("hex"));
+  });
+
+  it("an undialable URL is never fingerprinted — refused with a message that echoes neither the URL nor the key; the missing KEK refuses the way seal does", () => {
+    const msg = messageOf(() => fingerprintDestination("rtmps://127.0.0.1/app/SECRET-PATH", "SECRET-KEY"));
+    expect(msg).not.toContain("SECRET");
+    withKek(undefined, () => {
+      expect(messageOf(() => fingerprintDestination(FB, "FB-1"))).toContain("RELAY_KEK is not set");
+    });
   });
 });

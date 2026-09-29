@@ -157,12 +157,21 @@ for the full list.
 
 The streaming programme's Tier B relay publishes a phone's feed into a Cloudflare Stream
 live input, pulls it back into a headless browser, and re-encodes to the club's
-destination. None of it is wired yet — the tree currently references no Cloudflare env
-var at all — so an account and a scoped token are a prerequisite for any R0/R1/R2 work,
-including the U1 spike:
+destination. It is wired behind `RELAY_DRIVERS`
+([`apps/web/src/server/relay/drivers.ts`](apps/web/src/server/relay/drivers.ts)): unset,
+empty or `fake` runs in-memory Cloudflare and Fly doubles with no network — every local
+run and every test — and `live` calls the real APIs. Live mode needs an account and a
+Stream-scoped token:
 
-- `CF_ACCOUNT_ID` — the account live inputs are created under
-- `CF_API_TOKEN` — scoped to Stream; server-side only, never reaches the browser
+- `CLOUDFLARE_ACCOUNT_ID` — the account live inputs are created under
+- `CLOUDFLARE_STREAM_TOKEN` — scoped to Stream; server-side only, never a `NEXT_PUBLIC_*` var, never reaches the browser
+
+`RELAY_KEK` is required in both modes (it seals every stored stream key). Live mode also
+refuses without `ENV_NAME`, and live composed streams need `FLY_API_TOKEN`,
+`FLY_RELAY_APP` and `RELAY_IMAGE`. These refusals are LAZY: each fires at the first relay
+call that needs the value (a composed start's Machine, the daily sweep), not at boot — a
+deploy missing one starts and serves until then. The relay block of the root
+[`.env.example`](.env.example) documents each one.
 
 Two facts worth knowing before reading the design:
 

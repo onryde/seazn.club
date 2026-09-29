@@ -6,8 +6,8 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { APP_BUILD_SHA, SAMPLES_PER_SESSION_CAP } from "../config";
-import { recordEvent, recordProviderCall, recordSample, recordStorageSnapshot } from "../telemetry";
-import { STREAM_TABLES } from "./_stream-migration";
+import { PG_NUMERIC_RANGE, SAMPLE_NUMERIC_COLUMNS, recordEvent, recordProviderCall, recordSample, recordStorageSnapshot } from "../telemetry";
+import { MIGRATION, STREAM_TABLES } from "./_stream-migration";
 
 // Da: FLY_IMAGE_REF must be set BEFORE config.ts loads (APP_BUILD_SHA is read once, at import).
 // vi.hoisted runs above every import; without it APP_BUILD_SHA is null and the build-sha test is vacuous.
@@ -104,5 +104,74 @@ describe.skipIf(!HAS_DB)("telemetry — the writers", () => {
       select app_build_sha, ingest_reason from fixture_stream_samples where session_id = ${sid}`;
     expect(ev!.app_build_sha).toBe(BUILD.sha);
     expect(sm).toEqual({ app_build_sha: BUILD.sha, ingest_reason: "x" });
+  });
+});
+
+// Task 11 review I1: a beat carrying ffmpeg's own numbers (bitrate=2998.7kbits/s) 500-ed the heartbeat, because the
+// sample's integer columns refuse a fraction (22P02) and every numeric column refuses a value outside its type (22003).
+// recordSample fits each number to its column in ONE place. The column TYPES come from V410's text; the RANGES are
+// proven against Postgres itself; the stored values are compared with what Postgres's own casts give — never with
+// anything telemetry.ts computes.
+
+/** A table's numeric columns as V410 DECLARES them — read off the file. The identity key is not a written value. */
+function declaredNumericColumns(table: string): Record<string, string> {
+  const start = MIGRATION.indexOf(`create table ${table} (`);
+  const body = start === -1 ? "" : MIGRATION.slice(start, MIGRATION.indexOf("\n);", start));
+  return Object.fromEntries([...body.matchAll(/^\s+(\w+)\s+(integer|real|bigint|smallint|double precision|numeric)\b(?![^\n]*generated always)/gm)]
+    .map((m) => [m[1]!, m[2]!]));
+}
+
+describe("telemetry — every sample number fits its column (Task 11 review I1)", () => {
+  it("SAMPLE_NUMERIC_COLUMNS is exactly fixture_stream_samples' numeric columns, each with the type V410 declares", () => {
+    const declared = declaredNumericColumns("fixture_stream_samples");
+    expect(Object.keys(declared).length, "anti-vacuity: V410 declares numeric sample columns").toBeGreaterThanOrEqual(6);
+    expect(SAMPLE_NUMERIC_COLUMNS).toEqual(declared);
+  });
+});
+
+describe.skipIf(!HAS_DB)("telemetry — every sample number fits its column, against Postgres", () => {
+  it("each PG_NUMERIC_RANGE bound is ACCEPTED by Postgres as its type, and the next value outward is REFUSED 22003", async () => {
+    let checked = 0;
+    for (const [type, r] of Object.entries(PG_NUMERIC_RANGE)) {
+      // The bound goes in as a quoted literal — text, the way postgres.js sends a number (and so `-2147483648` is not
+      // parsed as the negation of an out-of-range 2147483648).
+      for (const bound of [r.max, r.min]) {
+        await expect(sql.unsafe(`select '${String(bound)}'::${type} as v`), `${type} ${bound}`).resolves.toBeDefined();
+        // One step outward: the next integer, or for a float the bound grown by one part in 10^6 — past float32's precision.
+        const beyond = r.integral ? bound + Math.sign(bound) : bound * (1 + 1e-6);
+        await expect(sql.unsafe(`select '${String(beyond)}'::${type} as v`), `${type} ${beyond}`).rejects.toMatchObject({ code: "22003" });
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: every type, both ends").toBe(Object.keys(PG_NUMERIC_RANGE).length * 2);
+  });
+
+  it("recordSample writes ffmpeg's fractions, an overflowing count and an out-of-range float instead of throwing — each stored as Postgres's own cast of it, clamped to the type", async () => {
+    const { sid } = await session();
+    const sent = { bitrateKbps: 2998.7, runnerMemMb: 511.5, droppedFrames: 3e9, fps: 29.97, runnerCpuPct: 1e39, encoderSpeed: 1e-50 };
+    await expect(recordSample(sql, { sessionId: sid, source: "poll", ...sent })).resolves.toBe("written");
+    const [row] = await sql<{ bitrate_kbps: number; runner_mem_mb: number; dropped_frames: number; fps: number; runner_cpu_pct: number; encoder_speed: number }[]>`
+      select bitrate_kbps, runner_mem_mb, dropped_frames, fps, runner_cpu_pct, encoder_speed from fixture_stream_samples where session_id = ${sid}`;
+    // In range: exactly what Postgres's own numeric → integer cast gives (it rounds; it never truncates).
+    const [cast] = await sql<{ bitrate: number; mem: number }[]>`select 2998.7::numeric::integer as bitrate, 511.5::numeric::integer as mem`;
+    expect(row!.bitrate_kbps).toBe(cast!.bitrate);
+    expect(row!.runner_mem_mb).toBe(cast!.mem);
+    expect(cast).not.toEqual({ bitrate: 2998, mem: 511 });   // the differential: a truncating writer lands on these
+    // Out of range: the type's own edge — int4's largest (Postgres manual §8.1.1), float32's largest finite (IEEE-754).
+    expect(row!.dropped_frames).toBe(2147483647);
+    expect(Math.fround(row!.runner_cpu_pct)).toBe(Math.fround(3.4028234663852886e38));
+    // Below float32's smallest normal magnitude, the value is flushed to zero (Postgres refuses 1e-50 as real outright).
+    expect(row!.encoder_speed).toBe(0);
+    // A real in range is stored as the float32 it is.
+    expect(Math.fround(row!.fps)).toBe(Math.fround(29.97));
+  });
+
+  it("recordSample: an absent number stays NULL (never a measured zero), and a non-finite one is NULL too — it measured nothing", async () => {
+    const { sid } = await session();
+    await expect(recordSample(sql, { sessionId: sid, source: "poll", bitrateKbps: Number.NaN, fps: Number.POSITIVE_INFINITY })).resolves.toBe("written");
+    const [row] = await sql<Record<string, number | null>[]>`
+      select bitrate_kbps, fps, dropped_frames, runner_cpu_pct, runner_mem_mb, encoder_speed from fixture_stream_samples where session_id = ${sid}`;
+    expect(Object.keys(row!).length).toBe(Object.keys(SAMPLE_NUMERIC_COLUMNS).length);
+    expect(row).toEqual(Object.fromEntries(Object.keys(SAMPLE_NUMERIC_COLUMNS).map((c) => [c, null])));
   });
 });

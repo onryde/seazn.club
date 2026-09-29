@@ -1,0 +1,459 @@
+// Destinations (design §6.1 org_stream_targets). The list NEVER carries the
+// key; readTargetSecret (server/relay/secret-columns.ts) returns it decrypted,
+// for its own org only (lane C ruling A4: three arguments), for the one request
+// that hands it to the ingest port. The stored envelope is not the plaintext
+// and does not contain it (smoke repeats this over HTTP). That byte read goes
+// through _session-rig.ts's `targetEnvelope`: this file may not name the sealed
+// column (ruling A9 — enc-boundary.test.ts keeps NO `__tests__` exemption).
+//
+// Sport-agnostic on purpose (TEST-STRATEGY rule 6): a destination is an ORG row
+// with no sport, division or fixture; seedOrg's `generic` sport is never read
+// here, so a registry sweep would run identical tests. The "another sport"
+// question becomes "another destination KIND", swept below over the declared enum.
+import { randomBytes } from "node:crypto";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+// The route test drives the REAL handler over the REAL session door: only
+// `requireUser` (who is signed in) is faked; `requireOrgAuth`'s own role lookup
+// runs against a real `org_members` row (event-import-route.test.ts harness).
+const authState = vi.hoisted(() => ({ userId: "" }));
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return {
+    ...actual,
+    requireUser: async () => ({ id: authState.userId }),
+    getCurrentUser: async () => ({ id: authState.userId }),
+    getActiveOrgId: async () => null,
+  };
+});
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
+  headers: async () => new Headers(),
+}));
+
+import { sql } from "@/lib/db";
+import { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
+import { readTargetSecret } from "@/server/relay/secret-columns";
+import { targetEnvelope } from "@/server/relay/__tests__/_session-rig";
+import { GET, POST } from "@/app/api/v1/orgs/[id]/stream-targets/route";
+import { createApiKey } from "../api-keys";
+import { seedOrg } from "./_rig";
+import { makeUser, seedOrg as seedSignedInOrg } from "./_seed";
+import { createStreamTarget, listStreamTargets } from "../stream-targets";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+// A KEK of this file's own (secret-columns.test.ts precedent): the developer's is put back afterwards, or removed
+// when there was none — never assigned `undefined`, which Node stores as the string "undefined". Never printed.
+const savedKek = process.env.RELAY_KEK;
+beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+afterAll(async () => {
+  if (savedKek === undefined) delete process.env.RELAY_KEK;
+  else process.env.RELAY_KEK = savedKek;
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = g._sql;
+  g._sql = undefined;
+  await client?.end();
+});
+
+/** A stream key nobody else holds, so a substring scan cannot match by accident. */
+const key = (): string => "sk-" + randomBytes(24).toString("hex");
+
+/** crypto.ts's envelope header (1 + IV + wrapped DEK + tag + IV + tag = 89 bytes): anything not longer than it
+ *  carries no ciphertext at all, and an empty envelope "holds no plaintext" vacuously. */
+const ENVELOPE_HEADER = 89;
+
+describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
+  it("create → list shows kind/label/watchUrl and never the key; the secret reads back decrypted for its org; the stored envelope holds neither the key nor the url", async () => {
+    const { auth } = await seedOrg();
+    const streamKey = key();
+    const rtmpUrl = "rtmps://a.rtmps.youtube.com/live2";
+    const made = await createStreamTarget(auth, auth.orgId, {
+      kind: "youtube", label: "Club channel", rtmpUrl, streamKey,
+      watchUrl: "https://www.youtube.com/watch?v=abc123",
+    });
+    expect(made).toMatchObject({ kind: "youtube", label: "Club channel", watchUrl: "https://www.youtube.com/watch?v=abc123" });
+    // Exactly the wire shape (the schema's own keys) — there is no field a key could ride in, not merely an absent value.
+    expect(Object.keys(made).sort()).toEqual(Object.keys(StreamTarget.shape).sort());
+    expect(StreamTarget.parse(made)).toEqual(made);
+    expect(JSON.stringify(made)).not.toContain(streamKey);
+    const list = await listStreamTargets(auth, auth.orgId);
+    expect(list.map((t) => t.id)).toEqual([made.id]);
+    expect(JSON.stringify(list)).not.toContain(streamKey);
+    // At rest FIRST — before any decrypting read, so a plaintext write reds HERE and not on the read's own throw.
+    const envelope = await targetEnvelope(made.id);
+    expect(envelope.length).toBeGreaterThan(ENVELOPE_HEADER);
+    expect(envelope.includes(Buffer.from(streamKey, "utf8")), "the envelope holds the stream key").toBe(false);
+    expect(envelope.includes(Buffer.from(rtmpUrl, "utf8")), "the envelope holds the ingest url").toBe(false);
+    // The negative's positive pair: the key IS stored — the one reader hands it back.
+    const secret = await sql.begin((tx) => readTargetSecret(tx, auth.orgId, made.id));
+    expect(secret).toEqual({ url: rtmpUrl, streamKey });
+    // createdAt is the row's own timestamp, not the clock of the caller.
+    const [row] = await sql<{ created_at: Date }[]>`select created_at from org_stream_targets where id = ${made.id}`;
+    expect(made.createdAt).toBe(row!.created_at.toISOString());
+  });
+
+  it("a watchUrl off the R16 allowlist is refused (422) and writes nothing; omitted and blank both store null — the VALIDATED value, never the raw one", async () => {
+    const { auth } = await seedOrg();
+    const base = { kind: "custom_rtmp" as const, label: "x", rtmpUrl: "rtmp://live.restream.io/live", streamKey: "k" };
+    await expect(createStreamTarget(auth, auth.orgId, { ...base, watchUrl: "https://evil.example/watch" }))
+      .rejects.toMatchObject({ status: 422 });
+    // A lookalike that CONTAINS an allowed host is not one (exact-host rule, lib/stream-url.ts).
+    await expect(createStreamTarget(auth, auth.orgId, { ...base, watchUrl: "https://www.youtube.com.evil.example/watch" }))
+      .rejects.toMatchObject({ status: 422 });
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    // Two DIFFERENT stream keys: since A19 (V421) one url + key is ONE destination and a repeat returns the
+    // first row, so the two rows this test compares must be two destinations.
+    const omitted = await createStreamTarget(auth, auth.orgId, { ...base, label: "omitted", streamKey: "k-omitted" });
+    expect(omitted.watchUrl).toBeNull();
+    // "" is what the allowlist NORMALISES to null. Storing the raw "" instead would break V410's
+    // `watch_url like 'https://%'` — so this case differs between the validated and the raw value.
+    const blank = await createStreamTarget(auth, auth.orgId, { ...base, label: "blank", watchUrl: "", streamKey: "k-blank" });
+    expect(blank.watchUrl).toBeNull();
+    const stored = await sql<{ id: string; watch_url: string | null }[]>`
+      select id, watch_url from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
+    expect(stored).toEqual([{ id: omitted.id, watch_url: null }, { id: blank.id, watch_url: null }]);
+  });
+
+  it("A18: an rtmpUrl off the destination allowlist is refused 422 DESTINATION_NOT_ALLOWED + its rule, BEFORE anything is sealed or written — twice over, then an allowlisted one lands", async () => {
+    const { auth } = await seedOrg();
+    const streamKey = key();
+    // Expected rules are A18's categories, typed here — not read back from the validator.
+    const cases: [string, string][] = [
+      ["rtmp://localhost/live", "host"],
+      ["rtmp://127.0.0.1/live", "ip_literal"],
+      ["rtmp://[::1]/live", "ip_literal"],
+      ["rtmp://top1.nearest.of.seazn-relay.internal/live", "host"],
+      ["rtmp://seazn-relay.flycast/live", "host"],
+      ["rtmps://evilyoutube.com/live2", "host"],
+      ["rtmps://user:pw@a.rtmps.youtube.com/live2", "userinfo"],
+      ["http://a.rtmp.youtube.com/live2", "scheme"],
+      ["rtmps://a.rtmps.youtube.com:1936/live2", "port"],
+      ["rtmps://a.rtmps.youtube.com", "path"],
+      ["", "scheme"],
+      // A Facebook lookalike whose U+212A KELVIN SIGN case-folds to "k" — refused on its raw bytes (re-review m1).
+      [`rtmps://live-api-s.faceboo${String.fromCharCode(0x212a)}.com:443/rtmp/`, "host"],
+    ];
+    let checked = 0;
+    // Second call: the same refusal twice is refused twice — no state makes the second one pass.
+    for (const round of [1, 2]) {
+      for (const [rtmpUrl, rule] of cases) {
+        const err = await createStreamTarget(auth, auth.orgId, { kind: "custom_rtmp", label: `r${round}`, rtmpUrl, streamKey }).then(
+          () => null,
+          (e: unknown) => e as { status?: number; code?: string; extra?: Record<string, unknown>; message?: string },
+        );
+        expect(err, `${round} ${rtmpUrl}`).toMatchObject({ status: 422, code: "DESTINATION_NOT_ALLOWED", extra: { rule } });
+        // The message is a sentence about the rule — never the URL, which can carry the key in its path.
+        if (rtmpUrl !== "") expect(err!.message).not.toContain(rtmpUrl);
+        expect(err!.message).not.toContain(streamKey);
+        checked++;
+      }
+    }
+    expect(checked).toBe(24);
+    const [row] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId}`;
+    expect(row!.n).toBe(0);
+    // The positive pair: the same org, key and door accept a listed host.
+    const made = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "ok", rtmpUrl: "rtmp://a.rtmp.youtube.com/live2", streamKey });
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id)).toEqual([made.id]);
+  });
+
+  it("the SEALED url is the canonical one the validator accepted — an upper-case pasted host is stored lower-cased, every other byte as given (re-review m1)", async () => {
+    const { auth } = await seedOrg();
+    // Pasted → expected sealed, both typed here: the host folds, the scheme/port/path/query do not.
+    const pairs: [string, string][] = [
+      ["rtmps://A.RTMPS.YOUTUBE.COM:443/live2?backup=1", "rtmps://a.rtmps.youtube.com:443/live2?backup=1"],
+      ["rtmp://Live.Restream.IO/Live", "rtmp://live.restream.io/Live"],
+      ["rtmps://live.cloudflare.com:443/live/", "rtmps://live.cloudflare.com:443/live/"],
+    ];
+    let checked = 0;
+    for (const [pasted, sealed] of pairs) {
+      const streamKey = key();
+      const made = await createStreamTarget(auth, auth.orgId, { kind: "custom_rtmp", label: pasted, rtmpUrl: pasted, streamKey });
+      const secret = await sql.begin((tx) => readTargetSecret(tx, auth.orgId, made.id));
+      expect(secret, pasted).toEqual({ url: sealed, streamKey });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("pasted SURROUNDING whitespace is trimmed from rtmpUrl and streamKey (Task 9 review minor 7): the sealed pair is the clean one, and the same destination as the clean paste; a whitespace-only key is refused 422 and writes nothing", async () => {
+    const { auth } = await seedOrg();
+    const url = "rtmps://a.rtmps.youtube.com/live2";
+    // Each pad is a paste artifact from a platform dashboard: a leading space, a trailing newline, a CRLF, a tab.
+    const pads: [string, string][] = [[" ", "\n"], ["\t", " "], ["", "\r\n"], ["  ", "\t\n"]];
+    let checked = 0;
+    for (const [before, after] of pads) {
+      const streamKey = key();
+      const made = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "pasted", rtmpUrl: `${before}${url}${after}`, streamKey: `${before}${streamKey}${after}` });
+      expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, made.id)), JSON.stringify([before, after])).toEqual({ url, streamKey });
+      // The same destination: the clean paste of the same pair is THIS row (A19 dedupes on what was sealed).
+      expect((await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "clean", rtmpUrl: url, streamKey })).id).toBe(made.id);
+      checked++;
+    }
+    expect(checked).toBe(pads.length);
+    expect(await listStreamTargets(auth, auth.orgId)).toHaveLength(pads.length);
+    // A key that is ONLY whitespace passes the schema's min(1) and is nothing once trimmed: refused, nothing sealed.
+    let refused = 0;
+    for (const blank of [" ", "\n", " \t\r\n "]) {
+      await expect(createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "blank", rtmpUrl: url, streamKey: blank }), JSON.stringify(blank))
+        .rejects.toMatchObject({ status: 422, message: "The stream key is empty" });
+      refused++;
+    }
+    expect(refused).toBe(3);
+    expect(await listStreamTargets(auth, auth.orgId)).toHaveLength(pads.length);
+    // Only the SURROUNDING bytes go: whitespace inside the url is still the validator's to refuse.
+    await expect(createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "inner", rtmpUrl: "rtmps://a.rtmps.youtube.com/live 2", streamKey: key() }))
+      .rejects.toMatchObject({ status: 422, code: "DESTINATION_NOT_ALLOWED" });
+  });
+
+  it("tenancy: B's list never shows A's target, and a caller authenticated for B cannot list or create under A's id (404, nothing written anywhere)", async () => {
+    const a = await seedOrg();
+    const b = await seedOrg();
+    expect(b.auth.orgId).not.toBe(a.auth.orgId);
+    const made = await createStreamTarget(a.auth, a.auth.orgId, { kind: "twitch", label: "A", rtmpUrl: "rtmp://live-jfk.twitch.tv/app", streamKey: key() });
+    expect((await listStreamTargets(a.auth, a.auth.orgId)).map((t) => t.id)).toEqual([made.id]);   // the positive pair
+    expect(await listStreamTargets(b.auth, b.auth.orgId)).toEqual([]);
+    await expect(listStreamTargets(b.auth, a.auth.orgId)).rejects.toMatchObject({ status: 404 });
+    await expect(
+      createStreamTarget(b.auth, a.auth.orgId, { kind: "twitch", label: "B into A", rtmpUrl: "rtmp://live-jfk.twitch.tv/app", streamKey: key() }),
+    ).rejects.toMatchObject({ status: 404 });
+    expect((await listStreamTargets(a.auth, a.auth.orgId)).map((t) => t.id)).toEqual([made.id]);
+    expect(await listStreamTargets(b.auth, b.auth.orgId)).toEqual([]);
+  });
+
+  it("second call: a second create is a second destination — both listed in creation order, each secret reads back its OWN key", async () => {
+    const { auth } = await seedOrg();
+    const [k1, k2] = [key(), key()];
+    const same = { kind: "youtube" as const, label: "Main", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2" };
+    const first = await createStreamTarget(auth, auth.orgId, { ...same, streamKey: k1 });
+    const second = await createStreamTarget(auth, auth.orgId, { ...same, streamKey: k2 });
+    expect(second.id).not.toBe(first.id);
+    // The list projection is exactly what create returned, in creation order.
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([first, second]);
+    const keys = await sql.begin(async (tx) => [
+      (await readTargetSecret(tx, auth.orgId, first.id)).streamKey,
+      (await readTargetSecret(tx, auth.orgId, second.id)).streamKey,
+    ]);
+    expect(keys).toEqual([k1, k2]);
+  });
+
+  it("empty first, then every declared kind: a fresh org lists []; each StreamTargetKind member is accepted by the table and round-trips", async () => {
+    const { auth } = await seedOrg();
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    let checked = 0;
+    for (const kind of StreamTargetKind.options) {
+      const t = await createStreamTarget(auth, auth.orgId, { kind, label: `dest ${kind}`, rtmpUrl: "rtmps://live.cloudflare.com:443/live/", streamKey: key() });
+      expect(t.kind).toBe(kind);
+      checked++;
+    }
+    expect(checked, "kinds checked").toBeGreaterThan(0);
+    expect(checked).toBe(StreamTargetKind.options.length);
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.kind)).toEqual([...StreamTargetKind.options]);
+  });
+
+  // A19 + A19b (owner 2026-09-28). One destination — one url (in its identity form) + one stream key — is ONE row
+  // per org, so V421's one-live-session-per-target index holds per DESTINATION rather than per row a user happened
+  // to add twice. The repeat is idempotent: the EXISTING target comes back and no second sealed copy is written.
+  it("A19: the SAME destination twice is ONE row — the repeat returns the stored target (its label, not the new body's) and seals nothing new; the explicit default port is the same destination on BOTH schemes (A19b)", async () => {
+    const { auth } = await seedOrg();
+    const [kFb, kYt] = [key(), key()];
+    const fb = await createStreamTarget(auth, auth.orgId, { kind: "facebook", label: "Facebook", rtmpUrl: "rtmps://live-api-s.facebook.com/rtmp/", streamKey: kFb });
+    const fbAgain = await createStreamTarget(auth, auth.orgId, { kind: "facebook", label: "Facebook again", rtmpUrl: "rtmps://live-api-s.facebook.com/rtmp/", streamKey: kFb });
+    expect(fbAgain).toEqual(fb);
+    const fb443 = await createStreamTarget(auth, auth.orgId, { kind: "facebook", label: "Facebook :443", rtmpUrl: "rtmps://live-api-s.facebook.com:443/rtmp/", streamKey: kFb });
+    expect(fb443).toEqual(fb);
+    const yt = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "YouTube", rtmpUrl: "rtmp://a.rtmp.youtube.com:1935/live2", streamKey: kYt });
+    const ytBare = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "YouTube bare", rtmpUrl: "rtmp://a.rtmp.youtube.com/live2", streamKey: kYt });
+    expect(ytBare).toEqual(yt);
+    expect(yt.id).not.toBe(fb.id);
+    // The FIRST envelope is the one kept: its url is the spelling the first create sealed.
+    expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, fb.id))).toEqual({ url: "rtmps://live-api-s.facebook.com/rtmp/", streamKey: kFb });
+    const rows = await sql<{ id: string; fp: string | null }[]>`
+      select id, dest_fingerprint as fp from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
+    expect(rows.map((r) => r.id)).toEqual([fb.id, yt.id]);
+    expect(rows.every((r) => /^[0-9a-f]{64}$/.test(r.fp ?? ""))).toBe(true);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([fb, yt]);
+  });
+
+  it("A19: a different KEY on the same url, another provider, or ANOTHER ORG with the same url + key is a new row (the dedupe never crosses an org)", async () => {
+    const a = await seedOrg();
+    const b = await seedOrg();
+    const k = key();
+    const same = { kind: "twitch" as const, label: "Twitch", rtmpUrl: "rtmps://live-jfk.twitch.tv:443/app", streamKey: k };
+    const inA = await createStreamTarget(a.auth, a.auth.orgId, same);
+    const otherKey = await createStreamTarget(a.auth, a.auth.orgId, { ...same, streamKey: key() });
+    const otherProvider = await createStreamTarget(a.auth, a.auth.orgId, { ...same, kind: "custom_rtmp", rtmpUrl: "rtmp://live.restream.io/live" });
+    const inB = await createStreamTarget(b.auth, b.auth.orgId, same);
+    expect(new Set([inA.id, otherKey.id, otherProvider.id, inB.id]).size).toBe(4);
+    expect((await listStreamTargets(a.auth, a.auth.orgId)).map((t) => t.id)).toEqual([inA.id, otherKey.id, otherProvider.id]);
+    expect((await listStreamTargets(b.auth, b.auth.orgId)).map((t) => t.id)).toEqual([inB.id]);
+    // Same destination in two orgs: the SAME fingerprint (one identity), two rows — the index is per org.
+    const fps = await sql<{ fp: string }[]>`
+      select dest_fingerprint as fp from org_stream_targets where id in ${sql([inA.id, inB.id])}`;
+    expect(fps).toHaveLength(2);
+    expect(fps[0]!.fp).toBe(fps[1]!.fp);
+  });
+
+  it("A19: a RACE — two creates of one destination at once → one row, and BOTH callers get its id (the unique index is the backstop, answered as the existing target, never a raw 23505)", async () => {
+    const { auth } = await seedOrg();
+    const body = { kind: "kick" as const, label: "Kick", rtmpUrl: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app", streamKey: key() };
+    let rounds = 0;
+    for (let i = 0; i < 3; i++) {
+      const settled = await Promise.allSettled([
+        createStreamTarget(auth, auth.orgId, body),
+        createStreamTarget(auth, auth.orgId, body),
+      ]);
+      const ids = settled.map((s) => (s.status === "fulfilled" ? s.value.id : `rejected: ${String((s as PromiseRejectedResult).reason)}`));
+      expect(ids[0]).toBe(ids[1]);
+      rounds++;
+    }
+    expect(rounds).toBe(3);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${auth.orgId}`;
+    expect(n).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The route: parse → authorize → delegate, over the real handler.
+// ---------------------------------------------------------------------------
+
+const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
+const post = (orgId: string, body: unknown, headers: HeadersInit = {}) =>
+  POST(
+    new Request(`http://localhost/api/v1/orgs/${orgId}/stream-targets`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    }),
+    ctx(orgId),
+  );
+const get = (orgId: string, headers: HeadersInit = {}) =>
+  GET(new Request(`http://localhost/api/v1/orgs/${orgId}/stream-targets`, { headers }), ctx(orgId));
+
+/** A signed-in owner of a fresh org (real users + org_members rows). */
+async function organiser() {
+  const { auth } = await seedSignedInOrg("pro");
+  authState.userId = auth.userId!;
+  return auth;
+}
+
+describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () => {
+  it("a signed-in organiser POSTs (201, the wire shape, no key) and GETs it back; a bad body is 400 and writes nothing", async () => {
+    const auth = await organiser();
+    const streamKey = key();
+    const bad = await post(auth.orgId, { kind: "youtube", label: "x", rtmpUrl: 42, streamKey });
+    expect(bad.status).toBe(400);
+    const unknownField = await post(auth.orgId, { kind: "youtube", label: "x", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey, stream_key: streamKey });
+    expect(unknownField.status).toBe(400);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+
+    const res = await post(auth.orgId, { kind: "youtube", label: "Club", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey, watchUrl: "https://youtu.be/abc" });
+    expect(res.status).toBe(201);
+    const text = await res.text();
+    expect(text).not.toContain(streamKey);
+    const created = StreamTarget.parse(JSON.parse(text).data);
+    expect(created).toMatchObject({ kind: "youtube", label: "Club", watchUrl: "https://youtu.be/abc" });
+
+    const listed = await get(auth.orgId);
+    expect(listed.status).toBe(200);
+    const listText = await listed.text();
+    expect(listText).not.toContain(streamKey);
+    expect(JSON.parse(listText).data).toEqual([created]);
+  });
+
+  it("A18: an off-list destination is 422 DESTINATION_NOT_ALLOWED with its rule, over the real route — the reply echoes neither the URL nor the key, and nothing is written", async () => {
+    const auth = await organiser();
+    const streamKey = key();
+    const cases: [string, string][] = [
+      ["rtmp://seazn-relay.internal:1935/live", "host"],
+      ["rtmps://169.254.169.254/latest", "ip_literal"],
+      ["rtmps://a.rtmps.youtube.com.evil.io/live2", "host"],
+      ["https://not-an-ingest.example/app", "scheme"],
+    ];
+    let checked = 0;
+    for (const [rtmpUrl, rule] of cases) {
+      const res = await post(auth.orgId, { kind: "custom_rtmp", label: "x", rtmpUrl, streamKey });
+      expect(res.status, rtmpUrl).toBe(422);
+      const text = await res.text();
+      const body = JSON.parse(text);
+      expect(body.error, rtmpUrl).toMatchObject({ code: "DESTINATION_NOT_ALLOWED", rule });
+      expect(text).not.toContain(rtmpUrl);
+      expect(text).not.toContain(streamKey);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    // The positive pair on the same org and door: an allowlisted destination is created.
+    const ok = await post(auth.orgId, { kind: "custom_rtmp", label: "Restream", rtmpUrl: "rtmp://live.restream.io/live", streamKey });
+    expect(ok.status).toBe(201);
+    expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.label)).toEqual(["Restream"]);
+  });
+
+  it("roles: a viewer (READ_ROLES, not EDITOR_ROLES) lists the destinations but cannot add one (403, nothing written)", async () => {
+    const owner = await organiser();
+    const made = await createStreamTarget(owner, owner.orgId, { kind: "facebook", label: "FB", rtmpUrl: "rtmps://live-api-s.facebook.com:443/rtmp/", streamKey: key() });
+    const viewer = await makeUser("viewer");
+    await sql`insert into org_members (org_id, user_id, role) values (${owner.orgId}, ${viewer.id}, 'viewer')`;
+    authState.userId = viewer.id;
+    const listed = await get(owner.orgId);
+    expect(listed.status).toBe(200);
+    expect((await listed.json()).data.map((t: { id: string }) => t.id)).toEqual([made.id]);
+    const refused = await post(owner.orgId, { kind: "facebook", label: "viewer's", rtmpUrl: "rtmps://live-api-s.facebook.com:443/rtmp/", streamKey: key() });
+    expect(refused.status).toBe(403);
+    expect((await listStreamTargets(owner, owner.orgId)).map((t) => t.id)).toEqual([made.id]);
+  });
+
+  // What this proves is the DOOR: no key reaches either handler. Which list refuses it (default-deny vs the explicit
+  // NEVER_KEY_ROUTES entry) is proved by key-scopes.test.ts's classification walk and stream-contract.test.ts.
+  it("an API key — even a manage-scoped one — is refused at BOTH doors (403) and writes nothing", async () => {
+    const auth = await organiser();
+    // Unblock the key surface itself, so the ONLY thing left to refuse is the route ban.
+    for (const feature of ["api.access", "api.write"]) {
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${auth.orgId}, ${feature}, true, 'test')
+        on conflict (org_id, feature_key) do update set bool_value = true`;
+    }
+    const { secret } = await createApiKey(auth, { name: "integration", scopes: ["manage"] });
+    const bearer = { authorization: `Bearer ${secret}` };
+    const keyedPost = await post(auth.orgId, { kind: "kick", label: "k", rtmpUrl: "rtmps://fa723fc1b171.global-contribute.live-video.net:443/app", streamKey: key() }, bearer);
+    expect(keyedPost.status).toBe(403);
+    const keyedGet = await get(auth.orgId, bearer);
+    expect(keyedGet.status).toBe(403);
+    // WHICH refusal (Task 9 review minor 4): apiKeyAuth has four 403 exits (auth.ts); the route ban is the one that
+    // says a key cannot use this endpoint at all — never the scope refusal a manage key would otherwise meet.
+    let doors = 0;
+    for (const [door, res] of [["POST", keyedPost], ["GET", keyedGet]] as const) {
+      const message = (await res.json()).error?.message as string;
+      expect(message, door).toMatch(/^API keys cannot access this endpoint/);
+      expect(message, door).not.toMatch(/scope/);
+      doors++;
+    }
+    expect(doors).toBe(2);
+    // The accepted twin: the same org's session reaches the same doors.
+    expect((await get(auth.orgId)).status).toBe(200);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+  });
+
+  // Task 9 review minor 1: `assertUuid` is the route's first guard, and nothing reached it. Without it a malformed id
+  // reaches the membership lookup's uuid compare. Each door is asked by a SIGNED-IN organiser (so authentication is not
+  // what refuses) with a body that would otherwise be created (so validation is not what refuses).
+  it("a malformed org id is 404 'organization not found' at BOTH doors, before auth or the body are read — and writes nothing", async () => {
+    const auth = await organiser();
+    const good = { kind: "youtube", label: "Club", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: key() };
+    let checked = 0;
+    for (const badId of ["not-a-uuid", `${auth.orgId}x`, ""]) {
+      for (const [door, res] of [["GET", await get(badId)], ["POST", await post(badId, good)]] as const) {
+        expect(res.status, `${door} ${JSON.stringify(badId)}`).toBe(404);
+        expect((await res.json()).error?.message, `${door} ${JSON.stringify(badId)}`).toBe("organization not found");
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    // The accepted twin: the same organiser, body and doors on the WELL-FORMED id.
+    expect((await post(auth.orgId, good)).status).toBe(201);
+    expect((await get(auth.orgId)).status).toBe(200);
+  });
+});

@@ -56,6 +56,10 @@ export interface IngestCapabilities {
   deleteRecordingAfterDays: number;
   /** C2/C8: declared per transport; SRT is UNMEASURED (H-P5-1) and stays null. */
   holdWindowSeconds: { rtmps: number; srt: number | null };
+  /** m2 (lane C final review): the most videos ONE `listVideos` call returns — the adapter's own page size. A listing of
+   *  exactly this many may be missing its tail (A13), so the sweep judges "full page" by the provider it is talking to,
+   *  read here, never by importing an adapter's module. */
+  listVideosPageLimit: number;
 }
 export interface IngestProvider {
   readonly capabilities: IngestCapabilities;
@@ -63,6 +67,10 @@ export interface IngestProvider {
   inputStatus(inputId: string): Promise<IngestStatus>;            // C5: the per-input GET
   addOutput(inputId: string, target: IngestTarget): Promise<string>; // passthrough only, exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
   outputState(inputId: string): Promise<OutputState>;             // target_rejected source
+  /** C1 (lane C final review): takes the passthrough output off its input, which is what stops Cloudflare simulcasting
+   *  to the destination — the ONE teardown of a passthrough broadcast. Idempotent: an output already gone is success.
+   *  Never `deleteInput` for this (the input carries the recording — C2). */
+  removeOutput(inputId: string, outputId: string): Promise<void>;
   deleteInput(inputId: string): Promise<void>;                    // LEAKS recordings (C2) — videos first
   storageUsage(): Promise<StorageUsage>;                          // C3: raw usage; headroom is the usecase's
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;
@@ -70,6 +78,11 @@ export interface IngestProvider {
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)
+  /** I1 (Task 12 fix round 1): the deploy environment creating this runner — config.ts `relayEnvironment()`. The adapter
+   *  stamps it on the runner, and `list()` hands it back as `RunnerListing.environment`: it is the daily sweep's ONLY
+   *  licence to destroy a listed runner. Two deployments can list one provider account, so "no row in my database" is
+   *  never ownership. */
+  environment: string;
   guest: { cpus: number; memoryMb: number; cpuClass: "shared" | "dedicated" };
   region: string;
   /** Recommendation B: the Machine exits on its own at this instant (env RELAY_DEADLINE_AT); auto_destroy removes it.
@@ -84,14 +97,56 @@ export type RunnerSpec = {
   deadlineAt: Date;
 };
 export type RunnerHandle = { runnerId: string };
+
+/** A23 (lane C, OWNER 2026-09-28): the ONE create failure this port declares — provider-neutral, so the application layer
+ *  classifies a failed `create` without importing any adapter (the guard is `__tests__/port-boundary.test.ts`). The two
+ *  facts are the domain's `create_failed` trigger fields (domain/runner.ts), and each adapter owes them from its own
+ *  evidence (FlyRunner: `runner-fly.ts` `runnerCreateErrorFrom`, whole-branch review I2's proof rules):
+ *   - `outcomeUnknown`: the provider MAY hold a runner under the requested name. true unless something positively proves
+ *     nothing was made — the domain then tears down by name before any retry.
+ *   - `retryable`: the licence to create attempt + 1 under a DIFFERENT name. Only a CONFIRMED absence may earn it.
+ *  The provider's own error rides as `cause` (ids, statuses, request ids stay on the adapter's side of the port). A
+ *  `create` rejection that is NOT this type is read as outcome UNKNOWN (`createFailureOf`) — the safe direction. */
+export class RunnerCreateError extends Error {
+  readonly retryable: boolean;
+  readonly outcomeUnknown: boolean;
+  constructor(message: string, facts: { retryable: boolean; outcomeUnknown: boolean; cause?: unknown }) {
+    super(message, facts.cause === undefined ? undefined : { cause: facts.cause });
+    this.name = "RunnerCreateError";
+    this.retryable = facts.retryable;
+    this.outcomeUnknown = facts.outcomeUnknown;
+  }
+}
+/** Task 12 n1: a create refused BEFORE any provider call — the runner could not be configured (a live deployment missing
+ *  FLY_RELAY_APP / ENV_NAME / its token, or still on the retired shared app), or the create's own inputs could not be
+ *  built. Nothing was sent, so nothing can exist under the name: made nothing, and not retryable — the same refusal would
+ *  answer attempt + 1. The session fails `machine_create_failed` at once instead of running lost → force_destroy → retry
+ *  with an alarm on every attempt. */
+export function createRefusedBeforeCall(cause: unknown): RunnerCreateError {
+  const why = cause instanceof Error ? cause.message : String(cause);
+  return new RunnerCreateError(`runner create refused before any provider call: ${why}`, { retryable: false, outcomeUnknown: false, cause });
+}
+/** The ONE reading of whatever a `create` threw. The port's own failure carries its proof; anything else — an adapter bug,
+ *  a failure the adapter did not map — is outcome UNKNOWN and not retryable: one extra teardown by name, which the
+ *  provider answers as success when nothing is there, against a runner nobody is watching. */
+export function createFailureOf(e: unknown): { retryable: boolean; outcomeUnknown: boolean } {
+  return e instanceof RunnerCreateError ? { retryable: e.retryable, outcomeUnknown: e.outcomeUnknown } : { retryable: false, outcomeUnknown: true };
+}
 /** `name` is the Machine's own name — `machineNameFor(sessionId, attempt)` for ours, so it carries the ATTEMPT (post-2C plan sync,
  *  T5-a: Task 10 adopts and force-destroys by session AND name, so an earlier attempt's Machine is never taken for the current
- *  one). null when the provider holds a Machine with no name. */
-export interface RunnerListing { runnerId: string; sessionId: string | null; name: string | null; state: "running" | "stopped" | "other" }
+ *  one). null when the provider holds a Machine with no name.
+ *  `environment` is the `RunnerSpec.environment` the runner was created with (I1); null when it carries none — a runner
+ *  that proves no ownership, which the sweep counts and never destroys. */
+export interface RunnerListing { runnerId: string; sessionId: string | null; name: string | null; environment: string | null; state: "running" | "stopped" | "other" }
 /** The lifecycle's observed input (plan §"Fly machine lifecycle"): the adapter's fromFlyState mapping, never Fly's spelling. */
 export interface RunnerObservation { state: ObservedRunnerState; exit: ExitInfo | null }   // both types from domain/runner.ts
 export interface RunnerProvider {
-  create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner
+  /** m1 (Task 12 fix round 1): how long a runner created just before a `list()` may still be MISSING from it — the
+   *  provider's list-consistency window (Fly's is undocumented: runner-fly.ts's adoption notes, and fly-client.ts settles
+   *  its own create lookup for the same reason). A caller that acts on a runner's ABSENCE lists again after this long
+   *  and acts only on what BOTH listings lack. */
+  readonly listSettleMs: number;
+  create(spec: RunnerSpec): Promise<RunnerHandle>;   // idempotent per (sessionId, attempt): a retry after an ambiguous failure returns the SAME runner. Rejects with RunnerCreateError (A23)
   stop(runnerId: string, opts: { signal: "SIGINT"; timeoutSeconds: number }): Promise<void>;   // the stop sequence; idempotent (already stopped / absent = success)
   /** GET + events → { state, exit }. "Absent" is TWO cases and they answer
    *  differently (lane-A minors, Task 3 review m1 — this line said only

@@ -16,9 +16,9 @@ const T0 = new Date("2026-09-14T10:00:00Z");
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "requested", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
-  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, ...over,
+  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, ...over,
 });
-const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once.
@@ -63,6 +63,21 @@ describe("admit — the §6.3 gates, in order", () => {
   });
   it("active_session carries the running id", () => {
     expect(admit({ ...OK, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+  });
+  // I2 (design §5.2, orchestrator ruling 2026-09-28): "a restart after a failure is the same match". Inside the fixture's
+  // reuse window the restart costs nothing, so the BALANCE gate does not apply to it — and ONLY that gate: a restart is
+  // still refused for a missing plan, a foreign target, no storage, or a session already running. The usecase computes
+  // the boolean (the window is a ledger read); the domain stays pure.
+  it("I2: a restart inside the reuse window is admitted at balance 0 — and the window waives ONLY the balance gate, every other gate on the ladder still refuses", () => {
+    expect(admit({ ...OK, balance: 0, restartWithinReuseWindow: true })).toEqual({ ok: true });
+    expect(admit({ ...OK, balance: 0, restartWithinReuseWindow: false })).toMatchObject({ refusal: "no_credits" });
+    let others = 0;
+    for (const [over, refusal] of REFUSAL_LADDER) {
+      if (refusal === "no_credits") continue;
+      others++;
+      expect(admit({ ...OK, ...over, balance: 0, restartWithinReuseWindow: true }), refusal).toMatchObject({ ok: false, refusal });
+    }
+    expect(others).toBe(REFUSAL_LADDER.length - 1);
   });
 });
 
@@ -1136,5 +1151,102 @@ describe("C1 — a live composed session's stale beat, evaluate → decide, for 
     expect(d.effects).toEqual([]);
     expect(d.events).toEqual([{ type: "RunnerChanged", from: "none", to: "none", trigger: "stale_beat" }, { type: "SessionEnded", reason: "machine_crash" }]);
     expect(evaluate(d.next, T(10 * STALE_HEARTBEAT_SECONDS))).toEqual({ kind: "none" });
+  });
+});
+
+describe("C1 (lane C final review): a passthrough session that holds an output RELEASES it on every transition into a terminal state — one predicate, never per arm", () => {
+  // Every command, by TYPE, and every expiry, by KIND — `Record` makes tsc refuse a command or expiry the domain adds
+  // without a row here, so the sweep below cannot silently skip a new way to end a session.
+  const EXPIRIES: Record<Expiry["kind"], Expiry> = {
+    none: { kind: "none" }, requested_timeout: { kind: "requested_timeout" }, provision_timeout: { kind: "provision_timeout" },
+    warming_timeout: { kind: "warming_timeout" }, wall_clock: { kind: "wall_clock" }, stale_beat: { kind: "stale_beat" },
+    grace_expired: { kind: "grace_expired" }, ending_timeout: { kind: "ending_timeout" },
+  };
+  const COMMANDS: Record<Command["type"], Command[]> = {
+    provision: [{ type: "provision" }], provisioned: [{ type: "provisioned" }], ingest_connected: [{ type: "ingest_connected" }],
+    credit_refused: [{ type: "credit_refused" }], target_rejected: [{ type: "target_rejected" }], stop: [{ type: "stop" }],
+    complete: [{ type: "complete" }],
+    expire: Object.values(EXPIRIES).map((expiry) => ({ type: "expire" as const, expiry })),
+    runner: [{ type: "runner", trigger: { type: "observed", state: "destroyed" } }],
+  };
+  const label = (c: Command) => (c.type === "expire" ? `expire:${c.expiry.kind}` : c.type);
+  const releases = (effects: Effect[]) => effects.filter((e) => e.type === "release_output").length;
+  // The ORACLE, typed here and never derived from `decide`: every passthrough cell that enters a terminal state. The
+  // stop and the wall clock are not in it because they enter `ending` (complete_now finishes them through `complete`).
+  const TERMINAL_ENTRIES = new Set([
+    "requested × expire:requested_timeout", "provisioning × expire:provision_timeout",
+    "warming × credit_refused", "warming × target_rejected", "warming × expire:warming_timeout",
+    "live × target_rejected", "live × complete",
+    "ending × complete", "ending × expire:ending_timeout",
+  ]);
+
+  it("the sweep: every non-terminal state × every command × output held or not — release_output exactly once iff the cell enters a terminal state AND an output is held; never otherwise", () => {
+    let entries = 0, released = 0, legal = 0;
+    const seen = new Set<string>();
+    for (const state of ACTIVE_STATES) {
+      for (const outputUid of [null, "out-1"]) {
+        for (const c of Object.values(COMMANDS).flat()) {
+          const cell = `${state} × ${label(c)}`;
+          let d;
+          try { d = decide(S({ state, outputUid }), c, T0); } catch (e) { expect(e, cell).toBeInstanceOf(InvalidTransition); continue; }
+          legal++;
+          const enters = isTerminal(d.next.state);
+          if (enters) { entries++; seen.add(cell); }
+          const want = enters && outputUid !== null ? 1 : 0;
+          expect(releases(d.effects), `${cell} (output ${outputUid ?? "none"})`).toBe(want);
+          released += want;
+        }
+      }
+    }
+    expect(seen).toEqual(TERMINAL_ENTRIES);                       // the oracle is exactly what the domain reaches
+    expect(entries).toBe(TERMINAL_ENTRIES.size * 2);              // each cell once with an output, once without
+    expect(released).toBe(TERMINAL_ENTRIES.size);                 // anti-vacuity: every terminal cell released when it held one
+    expect(legal).toBeGreaterThan(entries);                       // and the sweep walked non-terminal cells too
+  });
+
+  it("the stop and the wall clock: ending emits nothing to release, the completion that follows releases exactly once — and a session stopped before it was ever provisioned (no output) releases nothing", () => {
+    for (const first of [{ type: "stop" }, { type: "expire", expiry: { kind: "wall_clock" } }] as Command[]) {
+      const live = S({ state: "live", startedAt: T0, outputUid: "out-1" });
+      const ending = decide(live, first, T0);
+      expect(ending.next.state, label(first)).toBe("ending");
+      expect(ending.effects, label(first)).toEqual([{ type: "complete_now" }]);
+      const done = decide(ending.next, { type: "complete" }, T0);
+      expect(done.next.state).toBe("completed");
+      expect(releases(done.effects), label(first)).toBe(1);
+    }
+    for (const state of ["requested", "provisioning"] as const) {
+      const ending = decide(S({ state }), { type: "stop" }, T0);
+      expect(ending.next.state, state).toBe("ending");
+      expect(releases(decide(ending.next, { type: "complete" }, T0).effects), state).toBe(0);
+    }
+  });
+
+  it("the release runs FIRST in its decision: a completion that also fills the replay removes the output before anything else can throw", () => {
+    const d = decide(S({ state: "live", startedAt: T0, outputUid: "out-1" }), { type: "complete" }, T0);
+    expect(d.effects).toEqual([{ type: "release_output" }, { type: "fill_replay" }]);
+  });
+
+  it("a COMPOSED session never releases a passthrough output, even on a row that somehow holds one: the Machine is its teardown", () => {
+    let entries = 0;
+    for (const state of ACTIVE_STATES) {
+      for (const c of Object.values(COMMANDS).flat()) {
+        let d;
+        try { d = decide(S({ state, mode: "composed", outputUid: "out-1" }), c, T0); } catch { continue; }
+        if (isTerminal(d.next.state)) entries++;
+        expect(releases(d.effects), `${state} × ${label(c)}`).toBe(0);
+      }
+    }
+    expect(entries).toBeGreaterThan(0);
+  });
+
+  it("a TERMINAL passthrough session never re-emits the release: every command on it throws or decides nothing to release", () => {
+    let checked = 0;
+    for (const state of TERMINAL_STATES) {
+      for (const c of Object.values(COMMANDS).flat()) {
+        checked++;
+        try { expect(releases(decide(S({ state, outputUid: "out-1" }), c, T0).effects)).toBe(0); } catch (e) { expect(e).toBeInstanceOf(InvalidTransition); }
+      }
+    }
+    expect(checked).toBe(TERMINAL_STATES.length * Object.values(COMMANDS).flat().length);
   });
 });

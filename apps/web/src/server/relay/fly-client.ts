@@ -162,6 +162,8 @@ const ErrorBody = z.object({ error: z.string().optional() }).passthrough();
 
 export class FlyClient {
   private readonly o: Required<Omit<FlyClientOptions, "secrets">> & { secrets: readonly string[] };
+  /** The app every call is scoped to (I1: runner-fly.ts reads it off an injected client instead of defaulting one). */
+  get app(): string { return this.o.app; }
   constructor(opts: FlyClientOptions) {
     this.o = {
       fetchImpl: fetch, clock: () => Date.now(), sleep: (ms) => new Promise((r) => setTimeout(r, ms)), random: Math.random,

@@ -41,9 +41,10 @@ export type RunnerTrigger =
   | { type: "create_started"; name: string; attempt: number } | { type: "create_ok"; machineId: string }
   // `outcomeUnknown` (whole-branch review I2, money): the create call failed and we do NOT know whether Fly holds a
   // Machine under our name. It is REQUIRED, not optional, on purpose — absent would default to "nothing was made",
-  // which is the unsafe half, and tsc is the only guard that survives a second producer. `runner-fly.ts`'s
-  // `createFailedFrom` is the producer: it reads the fact off the error's FIELDS (isUnestablishedCreate), and an error
-  // shape it does not recognise is unknown rather than assumed-clean. false and `retryable: true` are consistent by
+  // which is the unsafe half, and tsc is the only guard that survives a second producer. The producer is the port's
+  // `RunnerCreateError` (ports.ts, A23): each adapter fills it from its own evidence (`runner-fly.ts`
+  // `runnerCreateErrorFrom` reads Fly's error FIELDS), and a rejection that is not one is read as unknown rather than
+  // assumed-clean (`createFailureOf`). false and `retryable: true` are consistent by
   // construction — T5-b downgrades a create it could not settle to `retryable: false`, so an ambiguous outcome can
   // never arrive with the domain's licence to create attempt + 1 under a different name.
   | { type: "create_failed"; retryable: boolean; outcomeUnknown: boolean } | { type: "callback_playing" } | { type: "callback_stopped" }

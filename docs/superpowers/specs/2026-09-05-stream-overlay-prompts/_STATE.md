@@ -495,7 +495,7 @@ nothing else. And Task 8's `m34` equivalence is accepted; the guard it depends o
 
 **M9 — the buyer-facing half of Task 8 is INERT, not rendered.** `/api/billing/relay-checkout`,
 `fetchRelayCheckoutClientSecret` and the tile fields of `STREAM_CREDIT_PACKS` have no production consumer;
-**lane C wires the Phone tab**, and until it does, no real purchase can reach the webhook branch. Anything
+**the Phone tab wires them — that is Task 14, LANE D (corrected 2026-09-29; this line said "lane C", and lane C = Tasks 9–12 has no UI)**, and until it does, no real purchase can reach the webhook branch. Anything
 in this file or in a header comment that says those tiles "render" is a FORWARD CLAIM, not present fact.
 
 **Routed to lane C:** M7 (`stream_credits.stripe_event_id` holds a `cs_…`, so the column name understates
@@ -557,6 +557,55 @@ Concurrency with this lane: the claw-back PR ADDS an export to `stream-credits.t
 and `lib/email.ts`. Task 9's file set and Task 10's creations are disjoint from all three, and Task 10 only
 IMPORTS from `stream-credits.ts` — an added export beside an import does not conflict. An actual EDIT to
 `stream-credits.ts` from lane C has to be sequenced.
+
+## LANE C — CLOSING 2026-09-29 (session `rl-lanec`). PR #902, branch `feat/stream-relay-c`, base `64e009f2d`.
+
+Tasks 9–12 built, each task-reviewed to approval, then one minors sweep (`565ea41b9..866f14e74`). Overriding
+authority for every lane C brief: `.superpowers/sdd/2026-09-13-streaming-r1/authorities/laneC-amendments.md`
+(A1–A23, gitignored — copy it across with the ledger before lane D). Migrations **V421**
+`stream_target_one_active` (+ keyed `dest_fingerprint`) and **V422** `stream_runner_gone_confirmed`; main's tail
+was V420 on the day.
+
+**Owner rulings in this lane, not derivable from the code:**
+- **ENV_NAME (`stg`/`prod`) is the environment identity.** Every Machine is tagged with it at create; the daily
+  sweep destroys ONLY Machines carrying this environment's tag, and deletes ONLY Cloudflare videos traceable to
+  an input this DB owns (positive ownership — house teardown rule). Live mode refuses an unset `FLY_RELAY_APP` /
+  `ENV_NAME`, or the old shared default `seazn-relay`.
+- **Both are Fly SECRETS, never in `fly.toml`/`fly.stg.toml`** (owner correction; tomls deliberately untouched).
+- Cloudflare env names are **`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_STREAM_TOKEN`** (the `CF_*` pair in older
+  docs was read by nothing; `.env.example` + README fixed, historical docs untouched).
+- **Destinations are an ALLOWLIST** (`lib/stream-destinations.ts`, G2(a)): rtmp/rtmps to YouTube, Facebook,
+  Twitch, Kick, Vimeo, Restream, Cloudflare Stream. **LinkedIn is NOT supported** — its AMS ingest host is
+  NXDOMAIN; add it only from a real, current LinkedIn Live URL. Same destination saved twice = same target (G1
+  fingerprint).
+- A13: >1000 Cloudflare videos = flag + warn counter, NOT paging (cursor param unmeasured).
+- A23: the usecase layer is provider-neutral (no `runner-fly`/`fly-client` import under usecases/ or
+  relay/domain/, guarded by a test) — a GCP runner is a new adapter, not a rewrite. The shared adapter
+  conformance suite is DEFERRED until a second adapter exists.
+
+**Orchestrator rulings the owner may override:** a same-fixture restart inside the 24 h reuse window is FREE even
+at 0 credits (spec §5.2 "a restart after a failure is the same match"); API-key callers stay refused on
+stream-session create (NEVER_KEY_ROUTES); a Machine left by a FINISHED fixture on the same destination is
+destroyed on the next admission rather than refused (it is an orphan by the sweep's own rule).
+
+**Runbook rule (clone exposure, not closed in code):** never copy `RELAY_KEK`, `FLY_API_TOKEN` or
+`CLOUDFLARE_STREAM_TOKEN` into an environment built from a cloned database — a clone's rows name live Machines
+and inputs, and with those secrets its sweep would act on them.
+
+**OWNER ACTIONS before any composed / live run:** `fly apps create seazn-relay-stg` and `seazn-relay-prod`; a
+per-app deploy token as `FLY_API_TOKEN` on each web app; Fly secrets `ENV_NAME` + `FLY_RELAY_APP` per
+environment; the `CLOUDFLARE_*` pair; the sweep's daily schedule in `onryde/seazn.club.workflow` (#757 — no
+workflow is added in this repo).
+
+**Carried to lane D:** M9 (the buyer-facing credits tiles + `/api/billing/relay-checkout` stay INERT until the
+Phone tab, Task 14) and M7 (`stream_credits.stripe_event_id` holds a `cs_…`; V410 is merged, so a comment or a
+forward rename, not an amend); the Phone tab must call `apiV1(...)`, not `api(...)` (the v1 routes 404 otherwise);
+the first real sandbox pack purchase end to end. Parked minors: Task 12 n6 (`ended_at` age gate on the
+two-listing mark — a 180 s gate reds 6 tests), a Stop tapped on an already-finished session is not audited,
+interior whitespace in a stream key is not refused (edges are trimmed).
+
+**Test-DB trap found:** an early Task 12 mutant run (before `dbb209e11`) dated ~14k events of OTHER suites to
+1996 in `seazn_rlc`. Run sweep mutants that widen `inScope` on a throwaway DB only.
 
 ## Environment (label `rly`, stood up 2026-09-14 from `.claude/worktrees/relay` @ `453d95cd6`)
 

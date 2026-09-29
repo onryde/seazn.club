@@ -8,12 +8,15 @@
 //     and a url column never keeps a query or fragment.
 //  3. a missing slot is null; an unknown target throws.
 //  4. a flipped envelope byte, or an envelope in any other shape, throws — and echoes none of its plaintext.
+//  5. (Task 9) a destination is written ONCE, sealed, by `insertStreamTarget` — the row carries exactly the org, kind,
+//     label and watch link it was given (`rtmp_enc` is NOT NULL, so there is no unsealed row to update later);
+//     `readFirstInput` reads the LOWEST slot of THIS session, or null — never a literal slot 0.
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
-import { seal } from "../crypto";
-import { readInputBySlot, readTargetSecret, storeInputCredentials, storeTargetSecret } from "../secret-columns";
+import { fingerprintDestination, seal } from "../crypto";
+import { StreamTargetVanishedError, insertStreamTarget, readFirstInput, readInputBySlot, readTargetSecret, storeInputCredentials } from "../secret-columns";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -32,18 +35,20 @@ const secret65 = (): string => randomBytes(33).toString("hex").slice(0, 65);
 async function rig() {
   const { auth } = await seedOrg();
   const { fixtureId } = await startedDivisionWithFixture(auth);
-  const [t] = await sql<{ id: string }[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc)
-    values (${auth.orgId}, 'youtube', 'x', ${Buffer.from("placeholder")}) returning id`;
+  // The destination is sealed at insert — the one writer (`rtmp_enc` is NOT NULL, so no placeholder row exists).
+  const target = destination();
+  const targetId = await sql.begin((tx) =>
+    insertStreamTarget(tx, { orgId: auth.orgId, kind: "youtube", label: "x", watchUrl: null, rtmp: target }),
+  ).then((t) => t.id);
   // seedOrg's AuthCtx carries `userId: null` (_rig.ts) and created_by is NOT NULL with no FK — a fresh uuid is a creator.
   const [s] = await sql<{ id: string }[]>`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
-    select f.id, ${auth.orgId}, 'passthrough', 'requested', ${t!.id}, ${randomUUID()}, d.sport_key, d.competition_id, f.division_id, true
+    select f.id, ${auth.orgId}, 'passthrough', 'requested', ${targetId}, ${randomUUID()}, d.sport_key, d.competition_id, f.division_id, true
       from fixtures f join divisions d on d.id = f.division_id
      where f.id = ${fixtureId}
     returning id`;
   const [input] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot) values (${s!.id}, 0) returning id`;
-  return { orgId: auth.orgId, sessionId: s!.id, inputId: input!.id, targetId: t!.id };
+  return { orgId: auth.orgId, sessionId: s!.id, inputId: input!.id, targetId, target };
 }
 
 /** Cloudflare's observed `liveInputs.create()` ingest legs: bare urls, credentials as separate fields, streamId = uid. */
@@ -83,11 +88,99 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(back!.srt!.streamId).toBe(uid);
   });
 
-  it("a destination's RTMP url and stream key round-trip", async () => {
+  it("a destination's RTMP url and stream key round-trip; insertStreamTarget writes exactly the org, kind, label and watch link it was given", async () => {
     const r = await rig();
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);
+    // Pin the VALUES on a row whose every field differs from the rig's (kind, label, a non-null watch link).
     const target = destination();
-    await sql.begin((tx) => storeTargetSecret(tx, r.targetId, target));
-    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(target);
+    const id = await sql.begin((tx) =>
+      insertStreamTarget(tx, { orgId: r.orgId, kind: "custom_rtmp", label: "Club RTMP", watchUrl: "https://kick.com/club", rtmp: target }),
+    ).then((t) => t.id);
+    expect(id).not.toBe(r.targetId);
+    const rows = await sql<{ org_id: string; kind: string; label: string; watch_url: string | null }[]>`
+      select org_id, kind, label, watch_url from org_stream_targets where id = ${id}`;
+    expect(rows).toEqual([{ org_id: r.orgId, kind: "custom_rtmp", label: "Club RTMP", watch_url: "https://kick.com/club" }]);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, id))).toEqual(target);
+    // …and the rig's own row, written with watchUrl null, stored null — not "" and not the string "null".
+    const [rigRow] = await sql<{ watch_url: string | null }[]>`select watch_url from org_stream_targets where id = ${r.targetId}`;
+    expect(rigRow!.watch_url).toBeNull();
+  });
+
+  // A19 + A19b (owner 2026-09-28): the writer is also the fingerprint's ONLY writer, and a repeat of one destination in
+  // one org is the FIRST row, not a second one and not a throw. The state transitions: first write (row + fingerprint),
+  // second write of the same destination spelled with its default port (no row, first id back, first row untouched),
+  // and a write of a different key (a new row).
+  it("A19: insertStreamTarget stores the destination's fingerprint; the same destination again — even spelled with its default port — returns the FIRST id and changes nothing; another key is another row", async () => {
+    const r = await rig();
+    const [first] = await sql<{ dest_fingerprint: string | null }[]>`
+      select dest_fingerprint from org_stream_targets where id = ${r.targetId}`;
+    expect(first!.dest_fingerprint).toBe(fingerprintDestination(r.target.url, r.target.streamKey));
+    const again = await sql.begin((tx) =>
+      insertStreamTarget(tx, {
+        orgId: r.orgId, kind: "custom_rtmp", label: "renamed", watchUrl: "https://youtube.com/@club",
+        rtmp: { url: "rtmps://a.rtmp.youtube.com:443/live2", streamKey: r.target.streamKey },
+      }),
+    );
+    expect(again.id).toBe(r.targetId);
+    expect(again).toMatchObject({ kind: "youtube", label: "x", watchUrl: null });   // the STORED row answers, not the arguments
+    const rows = await sql<{ id: string; kind: string; label: string; watch_url: string | null }[]>`
+      select id, kind, label, watch_url from org_stream_targets where org_id = ${r.orgId}`;
+    expect(rows).toEqual([{ id: r.targetId, kind: "youtube", label: "x", watch_url: null }]);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);   // first spelling kept
+    const other = await sql.begin((tx) =>
+      insertStreamTarget(tx, { orgId: r.orgId, kind: "youtube", label: "x", watchUrl: null, rtmp: destination() }),
+    );
+    expect(other.id).not.toBe(r.targetId);
+  });
+
+  // The guard's reach: the insert CONFLICTED (no row returned) and the read-back found nothing — the row was deleted
+  // between the two statements. No production path deletes a target today, so a real database cannot reach this
+  // window on demand; a scripted transaction answers both statements with nothing, which is exactly that window.
+  //
+  // m6 (lane C final review): the refusal used to be the END — nothing mapped it, so a lost race was a 500, and the comment
+  // promised a retry nobody made. The retry is now made HERE, once, in the same transaction: under READ COMMITTED the
+  // second insert is a new statement with a new snapshot, so it sees the conflicting row gone and lands. Only a second
+  // vanish in a row — the same destination re-created AND deleted again inside that retry — is still refused by name.
+  const INSERT_SQL = /^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null do nothing/;
+  const SELECT_SQL = /^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \?$/;
+  const scripted = (answers: unknown[][]) => {
+    const statements: string[] = [];
+    const tx = ((strings: TemplateStringsArray) => {
+      statements.push(strings.join("?").replace(/\s+/g, " ").trim());
+      return Promise.resolve(answers[statements.length - 1] ?? []);
+    }) as unknown as Tx;
+    return { tx, statements };
+  };
+
+  it("A19 guard + m6: a destination that conflicts and cannot be read back is RETRIED once in the same transaction, and the retry's insert lands — the caller gets the new row, never a 500 (mutant: no retry → StreamTargetVanishedError)", async () => {
+    const landed = { id: randomUUID(), kind: "youtube", label: "x", watch_url: null, created_at: new Date() };
+    const { tx, statements } = scripted([[], [], [landed]]);   // conflict, gone, then the retry's insert returns the row
+    const out = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() });
+    expect(out).toMatchObject({ id: landed.id, kind: "youtube", label: "x", watchUrl: null });
+    expect(statements).toHaveLength(3);
+    expect(statements[0]).toMatch(INSERT_SQL);
+    expect(statements[1]).toMatch(SELECT_SQL);
+    expect(statements[2]).toMatch(INSERT_SQL);
+  });
+
+  it("A19 guard: a destination that vanishes on the retry TOO is refused BY NAME — never an undefined row handed to the caller, and never a third attempt (mutant: retry forever / no refusal)", async () => {
+    const { tx, statements } = scripted([]);                   // every statement answers nothing: vanished twice
+    const err = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() })
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(StreamTargetVanishedError);
+    expect(statements).toHaveLength(4);
+    expect(statements.map((s) => (INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "select" : s))).toEqual(["insert", "select", "insert", "select"]);
+  });
+
+  it("A19: an undialable destination is refused BEFORE anything is written — no fingerprint means no row", async () => {
+    const r = await rig();
+    const before = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId}`;
+    await expect(sql.begin((tx) =>
+      insertStreamTarget(tx, { orgId: r.orgId, kind: "custom_rtmp", label: "x", watchUrl: null, rtmp: { url: "rtmps://127.0.0.1/app", streamKey: secret65() } }),
+    )).rejects.toThrow();
+    const after = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId}`;
+    expect(before[0]!.n).toBe(1);
+    expect(after[0]!.n).toBe(1);
   });
 
   // Whole-branch review I5 (auth). `org_stream_targets` is under FORCE RLS with ZERO policies and is reached only by
@@ -98,8 +191,7 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     const mine = await rig();
     const theirs = await rig();
     expect(theirs.orgId).not.toBe(mine.orgId);                      // two real orgs, or the refusal below is vacuous
-    const target = destination();
-    await sql.begin((tx) => storeTargetSecret(tx, mine.targetId, target));
+    const target = mine.target;
     // The row exists and holds an openable envelope: the ONLY thing that can refuse the next line is the org scope.
     expect(await sql.begin((tx) => readTargetSecret(tx, mine.orgId, mine.targetId))).toEqual(target);
     const err = await sql.begin((tx) => readTargetSecret(tx, theirs.orgId, mine.targetId)).then(() => null, (e: unknown) => e as Error);
@@ -108,8 +200,8 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(err!.message).not.toContain(target.streamKey);           // and the refusal is not an oracle
     expect(err!.message).not.toContain(theirs.orgId);
     // …and the owning org's own target is unaffected by the neighbour existing at all.
-    const theirTarget = destination();
-    await sql.begin((tx) => storeTargetSecret(tx, theirs.targetId, theirTarget));
+    const theirTarget = theirs.target;
+    expect(theirTarget.streamKey).not.toBe(target.streamKey);       // two distinct secrets, or the reads cannot differ
     expect(await sql.begin((tx) => readTargetSecret(tx, theirs.orgId, theirs.targetId))).toEqual(theirTarget);
     await expect(sql.begin((tx) => readTargetSecret(tx, mine.orgId, theirs.targetId))).rejects.toThrow(/not found/);
   });
@@ -117,11 +209,8 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
   it("the RAW row: no *_enc bytes hold the passphrase, streamId or a stream key; the url columns hold the bare urls", async () => {
     const r = await rig();
     const { uid, creds } = observed();
-    const target = destination();
-    await sql.begin(async (tx) => {
-      await storeInputCredentials(tx, r.inputId, uid, creds);
-      await storeTargetSecret(tx, r.targetId, target);
-    });
+    const target = r.target;
+    await sql.begin((tx) => storeInputCredentials(tx, r.inputId, uid, creds));
     const [row] = await sql<{ srt_enc: Uint8Array; rtmps_enc: Uint8Array; srt_url: string; rtmps_url: string }[]>`
       select ingest_srt_key_enc as srt_enc, ingest_rtmps_key_enc as rtmps_enc,
              ingest_srt_url as srt_url, ingest_rtmps_url as rtmps_url
@@ -175,19 +264,35 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(await sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0)))
       .toEqual({ id: r.inputId, slot: 0, ingestInputId: null, srt: null, rtmps: null });
     await expect(sql.begin((tx) => readTargetSecret(tx, r.orgId, randomUUID()))).rejects.toThrow(/not found/);
-    const target = destination();
-    await sql.begin((tx) => storeTargetSecret(tx, r.targetId, target));
-    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(target);
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);
+  });
+
+  it("readFirstInput: null with no input row (even while another session has a slot 0); otherwise THIS session's LOWEST slot, whatever the write order and whether or not a slot 0 exists", async () => {
+    const r = await rig();
+    const other = await rig();                                       // a neighbour session that DOES have slot 0
+    await sql`delete from fixture_stream_inputs where id = ${r.inputId}`;
+    expect(await sql.begin((tx) => readFirstInput(tx, r.sessionId))).toBeNull();
+    // Written out of order and with no slot 0: the right answer (slot 1) is neither the first row written nor a literal 0.
+    const [two] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot) values (${r.sessionId}, 2) returning id`;
+    const [one] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot) values (${r.sessionId}, 1) returning id`;
+    const { uid, creds } = observed();
+    await sql.begin((tx) => storeInputCredentials(tx, one!.id, uid, creds));
+    expect(await sql.begin((tx) => readFirstInput(tx, r.sessionId)))
+      .toEqual({ id: one!.id, slot: 1, ingestInputId: uid, srt: creds.srt, rtmps: creds.rtmps });
+    expect(two!.id).not.toBe(one!.id);
+    // A slot 0 arriving later becomes the first input — the read follows the data, not the history.
+    const [zero] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot) values (${r.sessionId}, 0) returning id`;
+    expect(await sql.begin((tx) => readFirstInput(tx, r.sessionId)))
+      .toEqual({ id: zero!.id, slot: 0, ingestInputId: null, srt: null, rtmps: null });
+    // The neighbour's first input is its own.
+    expect((await sql.begin((tx) => readFirstInput(tx, other.sessionId)))!.id).toBe(other.inputId);
   });
 
   it("one flipped byte in a stored envelope makes the read throw, echoing none of the plaintext; the untouched read opens", async () => {
     const r = await rig();
     const { uid, creds } = observed();
-    const target = destination();
-    await sql.begin(async (tx) => {
-      await storeInputCredentials(tx, r.inputId, uid, creds);
-      await storeTargetSecret(tx, r.targetId, target);
-    });
+    const target = r.target;
+    await sql.begin((tx) => storeInputCredentials(tx, r.inputId, uid, creds));
     const read = () => sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0));
     expect(await read()).toEqual({ id: r.inputId, slot: 0, ingestInputId: uid, srt: creds.srt, rtmps: creds.rtmps });
     expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(target);

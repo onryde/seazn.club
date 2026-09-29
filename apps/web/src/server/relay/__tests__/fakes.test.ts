@@ -10,6 +10,9 @@ import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, FakeRecorder, FakeRunner } f
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
 import { machineNameFor } from "../domain/runner";
+import { FlyApiError } from "../fly-client";
+import { CREATE_REFUSED_STATUSES } from "../runner-fly";
+import { RunnerCreateError, createFailureOf } from "../ports";
 
 describe("FakeIngest", () => {
   it("createLiveInput returns both credential shapes and no webRTC (C1/R-A, C10)", async () => {
@@ -133,6 +136,30 @@ describe("FakeIngest", () => {
     expect(fake.outputsFor(b.inputId)).toHaveLength(1);
   });
 
+  it("C1: removeOutput takes exactly that output off its input — a repeat (Cloudflare's 404) resolves and changes nothing; the LIVE count per input and per destination only counts outputs on inputs that still exist", async () => {
+    const fake = new FakeIngest();
+    const dest = { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };
+    const other = { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "other" };
+    expect(fake.liveOutputsTo(dest)).toBe(0);                          // the empty case
+    const a = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    const outA1 = await fake.addOutput(a.inputId, dest);
+    const outA2 = await fake.addOutput(a.inputId, other);
+    const b = await fake.createLiveInput({ sessionId: "s2", slot: 0 });
+    await fake.addOutput(b.inputId, dest);
+    expect([fake.liveOutputCount(a.inputId), fake.liveOutputCount(b.inputId), fake.liveOutputsTo(dest)]).toEqual([2, 1, 2]);
+    await fake.removeOutput(a.inputId, outA1);
+    expect(fake.outputsFor(a.inputId)).toEqual([other]);              // the named one, not its neighbour
+    expect([fake.liveOutputCount(a.inputId), fake.liveOutputsTo(dest)]).toEqual([1, 1]);
+    await expect(fake.removeOutput(a.inputId, outA1)).resolves.toBeUndefined();   // already gone: success, idempotent
+    await expect(fake.removeOutput("fake-in-unknown", "fake-out-x")).resolves.toBeUndefined();
+    expect(fake.liveOutputCount(a.inputId)).toBe(1);
+    expect(fake.removedOutputs).toEqual([outA1, outA1, "fake-out-x"]);   // every call is visible to a test
+    await fake.deleteInput(b.inputId);                                 // Cloudflare drops an input's outputs with it
+    expect([fake.liveOutputCount(b.inputId), fake.liveOutputsTo(dest)]).toEqual([0, 0]);
+    expect(fake.liveOutputsTo(other)).toBe(1);
+    void outA2;
+  });
+
   it("listVideos carries Cloudflare's recording facts, and a LIVE recording reads unknown — never a finalised-looking zero (Dd)", async () => {
     const fake = new FakeIngest();
     // The live row deliberately PASSES numbers: the fake must drop them. A fake
@@ -163,12 +190,13 @@ describe("FakeIngest", () => {
     expect((await fake.storageUsage()).totalStorageMinutes).toBe(999);
   });
 
-  it("capabilities come from config.ts, SRT hold unmeasured (C8)", () => {
+  it("capabilities come from config.ts, SRT hold unmeasured (C8); the listing page size is the REAL adapter's, so the sweep's full-page rule (A13) runs against the fake exactly as it does against Cloudflare (m2)", () => {
     const fake = new FakeIngest();
     expect(fake.capabilities).toEqual({
       timeoutSeconds: INGEST_TIMEOUT_SECONDS,
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
       holdWindowSeconds: { rtmps: INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS, srt: null },
+      listVideosPageLimit: 1000,   // a literal, as ingest-cf.test.ts pins it: never the constant supplying both sides
     });
   });
 });
@@ -177,7 +205,7 @@ describe("FakeRunner", () => {
   it("create records the spec and destroy is idempotent", async () => {
     const runner = new FakeRunner();
     const spec = {
-      sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app",
+      sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app",
       guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0),
     };
     const h = await runner.create(spec);
@@ -204,7 +232,7 @@ describe("FakeRunner", () => {
   it("I6: create is idempotent per (sessionId, attempt) — a repeat returns the SAME runnerId and leaves ONE live Machine under that name; a real retry (attempt + 1) still gets its own, and a different session's never collides", async () => {
     const runner = new FakeRunner();
     const spec = {
-      sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app",
+      sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app",
       guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0),
     };
     const first = await runner.create(spec);
@@ -231,7 +259,7 @@ describe("FakeRunner", () => {
 
   it("the stop sequence on the fake: stop records SIGINT + grace, observe reads stopped with exit 0 / requestedStop, then auto-destroyed; a lost Machine reads its exit", async () => {
     const runner = new FakeRunner();
-    const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const h = await runner.create(spec);
     expect(await runner.observe(h.runnerId)).toEqual({ state: "running", exit: null });
     await runner.stop(h.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
@@ -266,14 +294,49 @@ describe("FakeRunner", () => {
     expect((await runner.create({ ...spec, sessionId: "s4" })).runnerId).toMatch(/^fake-machine-/);   // ONE create fails, not every one after
   });
 
+  // A23 (lane C, OWNER 2026-09-28): the fake throws the PORT's failure, exactly as FlyRunner does — a real FlyApiError
+  // passed through the REAL adapter mapping (`runnerCreateErrorFrom`), so the A3 proofs are still decided by the code
+  // production runs, and the usecase reads them through the port alone (`createFailureOf`).
+  it("A3/A23: failNextCreate chooses the PROOF — a status throws the port's RunnerCreateError, mapped from a real FlyApiError by the REAL adapter mapping: made-nothing (a refusal status, or retryable) or unknown (anything else); a boolean throws a plain error, which the port reads as unknown; no failure leaves a Machine listed", async () => {
+    const runner = new FakeRunner();
+    const spec = { sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const classify = async (proof: Parameters<FakeRunner["failNextCreate"]>[0]) => {
+      runner.failNextCreate(proof);
+      const err = await runner.create(spec).then(() => null, (e: unknown) => e);
+      expect(err, JSON.stringify(proof)).not.toBeNull();
+      const isFly = err instanceof RunnerCreateError && err.cause instanceof FlyApiError;
+      return { isFly, trigger: { type: "create_failed", ...createFailureOf(err) } };
+    };
+    // The expectations are the A3 ruling's words (refused outright / retryable-with-absence ⇒ made nothing; no provider
+    // answer ⇒ unknown), swept over the adapter's own refusal list rather than one sample status.
+    let refusals = 0;
+    for (const status of CREATE_REFUSED_STATUSES) {
+      expect(await classify({ status, retryable: false }), String(status)).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: false, outcomeUnknown: false } });
+      refusals++;
+    }
+    expect(refusals, "the refusal sweep checked nothing").toBeGreaterThan(0);
+    expect(await classify({ status: 503, retryable: true })).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: true, outcomeUnknown: false } });
+    expect(await classify({ status: 500, retryable: false })).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } });
+    expect(await classify({ status: null, retryable: false })).toEqual({ isFly: true, trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } });
+    for (const legacy of [true, false]) {
+      expect(await classify(legacy), String(legacy)).toEqual({ isFly: false, trigger: { type: "create_failed", retryable: false, outcomeUnknown: true } });
+    }
+    expect(await runner.list()).toEqual([]);                                   // a failed create made nothing in the fake either
+    expect((await runner.create(spec)).runnerId).toMatch(/^fake-machine-/);  // …and the proof is spent: the next create lands
+  });
+
   it("list shows what still exists, with the session AND the attempt-carrying name each was created with; destroyed ones drop out; an orphan can be planted, nameless", async () => {
     const runner = new FakeRunner();
-    const spec = { sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
+    const spec = { sessionId: "s1", attempt: 1, environment: "stg", jobToken: "t", appUrl: "http://app", guest: { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" as const }, region: "lhr", deadlineAt: new Date(0) };
     const a = await runner.create(spec);
-    const b = await runner.create({ ...spec, sessionId: "s2", attempt: 2 });
-    runner.addOrphan("fake-machine-orphan", null);
+    const b = await runner.create({ ...spec, sessionId: "s2", attempt: 2, environment: "prod" });
+    runner.addOrphan("fake-machine-orphan", null, null);
     // T5-a: the NAME is the attempt identity Task 10 matches on — pinned by value (a fake that named every Machine r1 would pass a presence check).
-    expect((await runner.list()).map((r) => [r.runnerId, r.sessionId, r.name])).toEqual([[a.runnerId, "s1", "relay-s1-r1"], [b.runnerId, "s2", "relay-s2-r2"], ["fake-machine-orphan", null, null]]);
+    // I1: the ENVIRONMENT each was created with comes back as it went in (the real adapter's metadata round trip); a planted
+    // orphan carries whatever the test says, here none.
+    expect((await runner.list()).map((r) => [r.runnerId, r.sessionId, r.name, r.environment])).toEqual([[a.runnerId, "s1", "relay-s1-r1", "stg"], [b.runnerId, "s2", "relay-s2-r2", "prod"], ["fake-machine-orphan", null, null, null]]);
+    expect(runner.listSettleMs).toBe(0);                                          // a fake lists consistently…
+    expect(new FakeRunner({ listSettleMs: 25 }).listSettleMs).toBe(25);           // …unless a test asks it not to
     await runner.destroy(a.runnerId);
     expect((await runner.list()).map((r) => r.runnerId)).toEqual([b.runnerId, "fake-machine-orphan"]);
   });
@@ -286,7 +349,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
     const runner = new FakeRunner({ recorder: rec });
     const creds = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
     await ingest.inputStatus(creds.inputId);
-    const h = await runner.create({ sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
+    const h = await runner.create({ sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
     await runner.stop(h.runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
     await new Promise((r) => setImmediate(r));   // the record is a microtask behind the call
     expect(rec.calls.map((c) => [c.provider, c.operation, c.method])).toEqual([
@@ -326,13 +389,14 @@ describe("the provider-call recorder seam (ruling 13)", () => {
     const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
     ingest.addVideo({ videoId: "vid-a", inputId, createdAt: new Date(0).toISOString(), inProgress: false });
     await ingest.inputStatus(inputId);
-    await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
+    const out = await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
     await ingest.outputState(inputId);
+    await ingest.removeOutput(inputId, out);
     await ingest.storageUsage();
     await ingest.listVideos({ createdBefore: new Date(1) });
     await ingest.deleteVideo("vid-a");
     await ingest.deleteInput(inputId);
-    const { runnerId } = await runner.create({ sessionId: "s1", attempt: 1, jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
+    const { runnerId } = await runner.create({ sessionId: "s1", attempt: 1, environment: "local", jobToken: "t", appUrl: "http://localhost", guest: { cpus: 1, memoryMb: 256, cpuClass: "shared" }, region: "lhr", deadlineAt: new Date(0) });
     await runner.observe(runnerId);
     await runner.list();
     await runner.stop(runnerId, { signal: "SIGINT", timeoutSeconds: 10 });
@@ -345,6 +409,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
       ["cloudflare", "inputStatus", "GET", `${cf}/live_inputs/{id}`, inputId, null],
       ["cloudflare", "addOutput", "POST", `${cf}/live_inputs/{id}/outputs`, inputId, null],
       ["cloudflare", "outputState", "GET", `${cf}/live_inputs/{id}/outputs`, inputId, null],
+      ["cloudflare", "removeOutput", "DELETE", `${cf}/live_inputs/{id}/outputs/{id}`, out, null],   // C1: about the OUTPUT
       ["cloudflare", "storageUsage", "GET", `${cf}/storage-usage`, null, null],
       ["cloudflare", "listVideos", "GET", cf, null, null],
       ["cloudflare", "deleteVideo", "DELETE", `${cf}/{id}`, "vid-a", null],
