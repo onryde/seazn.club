@@ -1506,6 +1506,11 @@ jobs:
           # The e2e jobs do NOT set this; they mint tokens in the DB
           # (E2E_PROD_TARGET) and skip the specs that assert link exposure.
           AUTH_DEV_LINKS: "1"
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). Smoke drives the
+          # stream-overlay suite on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
+          # and an explicit fake is allowed only there, on "local" or on "ci".
+          RELAY_DRIVERS: fake
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

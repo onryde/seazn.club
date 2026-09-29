@@ -756,6 +756,11 @@ jobs:
           # floods the Actions log and buries the failure. warn keeps refusals
           # and faults; silent would hide the only signal when a red is real.
           LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
+          # and an explicit fake is allowed only there, on "local" or on "ci".
+          RELAY_DRIVERS: fake
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1180,6 +1185,11 @@ jobs:
           # floods the Actions log and buries the failure. warn keeps refusals
           # and faults; silent would hide the only signal when a red is real.
           LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
+          # and an explicit fake is allowed only there, on "local" or on "ci".
+          RELAY_DRIVERS: fake
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1508,6 +1518,11 @@ jobs:
           # floods the Actions log and buries the failure. warn keeps refusals
           # and faults; silent would hide the only signal when a red is real.
           LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
+          # and an explicit fake is allowed only there, on "local" or on "ci".
+          RELAY_DRIVERS: fake
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

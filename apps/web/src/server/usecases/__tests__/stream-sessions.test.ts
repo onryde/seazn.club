@@ -41,7 +41,7 @@ import {
   TOKEN_GRACE_MINUTES, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
-import { relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
@@ -2106,6 +2106,22 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     // The negative pair, on the rig's default (the grant made AND spent): no free credit left, so the same start is 402.
     const spent = await rig();
     await expect(createSession(spent.auth, spent.fixtureId, body(spent.target.id), spent.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+  });
+
+  it("R5: a deployment with its relay DISABLED refuses every start with the ingest's 503 — before any row, provider call or monthly grant; the same org starts on real drivers", async () => {
+    const r = await rig({ credits: 1, monthly: true });
+    const count = async (table: "fixture_stream_sessions" | "org_stream_credits") =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)} where org_id = ${r.auth.orgId}`)[0]!.n;
+    const before = { sessions: await count("fixture_stream_sessions"), credits: await count("org_stream_credits") };
+    const disabled: SessionDeps = { ...r.deps, drivers: disabledRelayDrivers() };
+    await expect(createSession(r.auth, r.fixtureId, body(r.target.id), disabled)).rejects.toMatchObject({ status: 503, code: "ingest_unavailable" });
+    expect(await count("fixture_stream_sessions"), "no session row").toBe(before.sessions);
+    expect(await count("org_stream_credits"), "no ledger row — not even this month's free grant").toBe(before.credits);
+    // Every port of the disabled pair rejects with RelayDriversDisabled, so a 503 carrying the ingest's own code (not
+    // that error) is itself the proof that no provider was asked.
+    // The positive pair: the same org, the same fixture, on the rig's drivers.
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect(sessionId).toBeTruthy();
   });
 
   it("V426 (R3b): relayCredits grants this month's free credits on the page's read, splits the balance by bucket beside the plan's allowance, a second read writes nothing, and another org's is 404", async () => {

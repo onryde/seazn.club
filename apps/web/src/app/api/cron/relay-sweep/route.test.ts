@@ -70,6 +70,19 @@ describe("POST /api/cron/relay-sweep", () => {
     expect(m.sweep).toHaveBeenCalledTimes(1);
     expect(m.sweep.mock.calls[0]).toEqual([m.sentinel]);   // exactly one argument: no `orgIds`, no options
   });
+
+  // R5 (Task 14b): a production deployment with RELAY_DRIVERS unset has no relay — every provider port refuses. The sweep
+  // has nothing to reconcile against, so the cron answers what it is ({ disabled: true }) instead of a daily 500 from
+  // the first provider read.
+  it("R5: relay DISABLED → the sweep is skipped and the answer says so; the positive pair above runs it", async () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    hdrs.store = new Headers({ "x-cron-secret": "s3cret" });
+    m.deps.mockReturnValue({ ...m.sentinel, drivers: { disabled: true } });
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, data: { disabled: true } });
+    expect(m.sweep).not.toHaveBeenCalled();
+  });
 });
 
 // PR #902 CI: `next build` collects this route's config by EVALUATING its module graph in a process with no

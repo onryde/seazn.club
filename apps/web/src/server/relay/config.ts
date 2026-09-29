@@ -223,12 +223,29 @@ export const FLY_PERFORMANCE_INCLUDED_GB_PER_CPU = 2;
  *  (iad) and wins. */
 export const FLY_BILLING_SECONDS_PER_MONTH = 30 * 24 * 3600;
 
-/** `RELAY_DRIVERS=fake|live`. Unset is `fake`: a process that has not been
- *  told it may spend money does not. A production deploy sets `live`. */
-export function relayDriverMode(env: Record<string, string | undefined> = process.env): "fake" | "live" {
+/** `RELAY_DRIVERS=fake|live`, resolved to the mode this process runs (R5, Task 14b, owner ruling 2026-09-29):
+ *   * `live` — the real Cloudflare and Fly adapters, whatever else is set.
+ *   * unset or empty — `fake` outside production (dev, test: a process that has not been told it may spend money does
+ *     not), and `disabled` under NODE_ENV=production: NO drivers, and createSession refuses with `ingest_unavailable`.
+ *     Once every plan streams (V426), a production deploy missing its relay secrets would otherwise hand every club a
+ *     FAKE "live" stream and consume a real credit for it.
+ *   * explicit `fake` — only on an unnamed, `local` or `ci` environment (ENV_NAME, read by `envNameOf`); on stg, prod
+ *     or any other named deployment it THROWS. instrumentation.ts calls this at boot, so such a deployment never starts.
+ *   * anything else — throws rather than guess. `disabled` is a resolved mode, never a value to set. */
+export type RelayDriverMode = "fake" | "live" | "disabled";
+export function relayDriverMode(env: Record<string, string | undefined> = process.env): RelayDriverMode {
   const v = env.RELAY_DRIVERS;
   if (v === "live") return "live";
-  if (v === "fake" || v === undefined || v === "") return "fake";
+  if (v === undefined || v === "") return env.NODE_ENV === "production" ? "disabled" : "fake";
+  if (v === "fake") {
+    const name = envNameOf(env);
+    if (name !== null && !FAKE_DRIVER_ENV_NAMES.includes(name)) {
+      throw new Error(
+        `RELAY_DRIVERS=fake is refused on ENV_NAME=${JSON.stringify(name)}: a named deployment would hand every club a fake "live" stream and spend a real credit on it — set RELAY_DRIVERS=live, or leave it unset to disable streaming`,
+      );
+    }
+    return "fake";
+  }
   throw new Error(`RELAY_DRIVERS must be "fake" or "live", got ${JSON.stringify(v)}`);
 }
 
@@ -241,15 +258,19 @@ export function relayDriverMode(env: Record<string, string | undefined> = proces
  *  A live process that cannot name its environment REFUSES rather than guess; a fake process needs neither variable and
  *  answers LOCAL_ENV_NAME — its FakeRunner holds only what it created itself. */
 export const LOCAL_ENV_NAME = "local";
+/** R5: the ENV_NAMEs an explicit RELAY_DRIVERS=fake may run under (an unset ENV_NAME too) — a developer's machine and CI. */
+export const FAKE_DRIVER_ENV_NAMES: readonly string[] = [LOCAL_ENV_NAME, "ci"];
 function envNameOf(env: Record<string, string | undefined>): string | null {
   const v = env.ENV_NAME?.trim();
   return v ? v : null;
 }
 const ENV_NAME_MISSING = "ENV_NAME is not set (RELAY_DRIVERS=live needs it — \"stg\" or \"prod\", a Fly secret per deployment: every Machine this deployment creates carries it, and the daily sweep destroys only Machines that do)";
 export function relayEnvironment(env: Record<string, string | undefined> = process.env): string {
+  // The mode FIRST (R5): an explicit fake on a named deployment is refused before this answers that deployment's name.
+  const mode = relayDriverMode(env);
   const name = envNameOf(env);
   if (name) return name;
-  if (relayDriverMode(env) === "live") throw new Error(ENV_NAME_MISSING);
+  if (mode === "live") throw new Error(ENV_NAME_MISSING);
   return LOCAL_ENV_NAME;
 }
 

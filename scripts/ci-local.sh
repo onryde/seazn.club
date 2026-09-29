@@ -247,7 +247,10 @@ start_server() {
   local log="$STATE/server-$port.log"
   # `exec` matters: without it $! is a wrapper shell, teardown kills the wrapper
   # and the server keeps listening — a stale bundle answering the next run.
-  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 node server.js ) > "$log" 2>&1 &
+  # R5 (Task 14b): server.js is NODE_ENV=production, where an unset RELAY_DRIVERS disables streaming; the smoke and
+  # e2e suites stream on the fake drivers, as CI's server steps now say explicitly. An explicit fake is refused on a
+  # named deployment (ENV_NAME stg/prod), so ENV_NAME is left to the caller's shell (unset, "local" or "ci").
+  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" node server.js ) > "$log" 2>&1 &
   SERVER_PID=$!
   echo "$SERVER_PID" > "$RUNDIR/server.pid"
 

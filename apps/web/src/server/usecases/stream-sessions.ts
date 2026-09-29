@@ -969,6 +969,13 @@ export async function createSession(
   // (device-links.ts, checkin-token.ts) answers 403. A device link carries its issuing organiser, so it passes.
   const actorUserId = auth.userId;
   if (actorUserId === null) throw new HttpError(403, "A stream can only be started by a signed-in organiser");
+  // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
+  // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
+  // so nothing is faked and no credit moves. The Phone tab already reads this code.
+  if (deps.drivers.disabled) {
+    log.warn({ fixtureId, orgId }, "stream session: the relay is disabled on this deployment — start refused");
+    throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+  }
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);

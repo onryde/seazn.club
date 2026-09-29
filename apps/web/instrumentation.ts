@@ -8,6 +8,12 @@ import * as Sentry from "@sentry/nextjs";
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("./sentry.server.config");
+    // R5 (Task 14b): resolve the relay's driver mode BEFORE the server takes a request. It throws for an explicit
+    // RELAY_DRIVERS=fake on a named deployment (ENV_NAME stg/prod) and for a junk value, so a deployment that would hand
+    // every club a fake "live" stream refuses to start instead of failing — or faking — at its first stream. Sentry is
+    // initialised first, so the refusal is reported.
+    const { relayDriverMode } = await import("@/server/relay/config");
+    relayDriverMode();
   }
   if (process.env.NEXT_RUNTIME === "edge") {
     await import("./sentry.edge.config");
