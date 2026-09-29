@@ -1,10 +1,17 @@
-// L3 runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
-// plan seeding, the scenario over HttpDriver, the invariants → one redacted
-// results.json → MATRIX.md.
+// The runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
+// plan seeding, the scenario over its driver, the invariants → one redacted
+// results.json → MATRIX.md. L3 drives HttpDriver; `--driver browser --width W`
+// (L1, W1c Task 6) drives each case through the organiser UI in one chromium
+// per run and one context per case (BrowserDriver), at width W.
 //
 //   pnpm run matrix:l3 --
 //     [--base URL] [--run-id ID] [--report-dir DIR]
 //     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
+//   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
+//
+// The browser layer is loaded LAZILY (realDeps.openBrowserRun's dynamic
+// import), so an L3 run never loads lib/browser (boundary.test.ts pins that
+// edge as the only one).
 //
 // Exit codes, each with one meaning:
 //   0  results written — reds are DATA, not a crash. In canary mode: the
@@ -14,7 +21,9 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter, a run id that is empty or too long once slugged); an unknown
+//      filter, a run id that is empty or too long once slugged; an unknown
+//      --driver, --driver browser without --width, a --width outside
+//      BROWSER_WIDTHS, or a --width on an http run); an unknown
 //      filter value (UnknownFilter — checked before anything else, PF13); an
 //      unknown --set (UnknownSet) or a planner that refuses to be built (a
 //      bound variant case the engine cannot score, BoundVariantUnscorable; a
@@ -34,7 +43,9 @@
 //      switches on the CLI, never on the code alone.
 //   3  aborted after the start gates, reason on stderr: the harness commit,
 //      the DB, sign-in, a planning read, a planner that plans a deny it did
-//      not declare (UndeclaredDeny), or writeResults refusing a secret
+//      not declare (UndeclaredDeny), no browser for a --driver browser run
+//      (openBrowserRun rejects: no chromium), a case whose browser cannot be
+//      set up (BrowserCaseAborted), or writeResults refusing a secret
 //      (nothing written); or MATRIX.md failing to render (results.json kept,
 //      the PF4 summary already printed).
 //   (3 also: a crash while the CLI LOADS, before any of its code runs — a
@@ -74,6 +85,7 @@ import {
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
+import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -108,6 +120,41 @@ export interface RunDeps {
   render(results: RunResults): string;
   /** Defaults to `slicePlanner`, or to `SETS[--set]`. */
   planCases?: PlanCases;
+  /** The run's browser, for `--driver browser` (W1c Task 6). realDeps loads
+   *  lib/browser/browser-run.ts lazily here; a runner without one aborts a
+   *  browser run. */
+  openBrowserRun?(): Promise<BrowserRun>;
+}
+
+/** What a case's browser driver is built from. `reportDir` is the run's own
+ *  report directory (the case's pictures go under it); `evidenceId` names the
+ *  case's shots directory — a plain segment, since a caseId carries `|`. */
+export interface CaseDriverOptions {
+  base: string;
+  session: Session;
+  orgId: string;
+  orgSlug: string;
+  spec: CaseSpec;
+  width: BrowserWidth;
+  padPolicy: "first" | "all";
+  reportDir: string;
+  evidenceId: string;
+}
+/** One case's driver and the close that releases its browser context. */
+export interface CaseBrowserDriver { driver: OrganiserDriver & { checks(): CheckResult[] }; close(): Promise<void> }
+/** One browser per run: a driver per case, then one close. */
+export interface BrowserRun {
+  caseDriver(o: CaseDriverOptions): Promise<CaseBrowserDriver>;
+  close(): Promise<void>;
+}
+
+/** A case whose browser could not be set up (no context, a refused cookie):
+ *  the environment, never a product red — the run aborts. */
+export class BrowserCaseAborted extends Error {
+  constructor(caseId: string, cause: unknown) {
+    super(`matrix: case ${caseId}: its browser could not be set up — ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`);
+    this.name = "BrowserCaseAborted";
+  }
 }
 
 /** What a planner may read from the command line. */
@@ -240,24 +287,41 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = "usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]";
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]`;
 
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined }
+/** `driver` and `width` (W1c Task 6): a browser run names its one width
+ *  (Task 12 rotates widths; until then --driver browser requires --width). */
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; width: BrowserWidth | null }
+
+/** The driver and width the command line asked for, or the usage refusal. */
+function parseDriver(driver: string | undefined, width: string | undefined): { driver: "http" | "browser"; width: BrowserWidth | null } | { usage: string } {
+  const d = driver ?? "http";
+  if (d !== "http" && d !== "browser") return { usage: `--driver must be http or browser, got ${d}` };
+  if (d === "http") return width === undefined ? { driver: d, width: null } : { usage: "--width is a browser run's width; it takes --driver browser" };
+  if (width === undefined) return { usage: `--driver browser needs --width (one of ${BROWSER_WIDTHS.join(", ")})` };
+  // Digits only: Number("") is 0 and Number(" 320") is 320 — neither was asked for.
+  const w = /^\d+$/.test(width) ? BROWSER_WIDTHS.find((x) => x === Number(width)) : undefined;
+  if (w === undefined) return { usage: `--width must be one of ${BROWSER_WIDTHS.join(", ")}, got ${width}` };
+  return { driver: d, width: w };
+}
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string };
   try {
     ({ values } = parseArgs({ args: argv, options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
       only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
+      driver: { type: "string" }, width: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
   }
+  const how = parseDriver(values.driver, values.width);
+  if ("usage" in how) return how;
   if (values.set !== undefined && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
     return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
   }
@@ -267,7 +331,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, width: how.width };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -309,7 +373,9 @@ export function keepNotes(notes: readonly string[]): string[] {
  *  never makes writeResults throw the whole run away (it still refuses, as the backstop). */
 const redactCheck = (c: CheckResult): CheckResult => ({ ...c, reason: redact(c.reason), evidence: c.evidence.map((x) => redact(x)) });
 
-interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string }
+/** `browser`: a --driver browser run's browser and width; null over HTTP.
+ *  `reportDir`: the run's own report directory. */
+interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string; reportDir: string; browser: { run: BrowserRun; width: BrowserWidth } | null }
 
 async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): Promise<{ result: CaseResult; refusal: CallRefusal | null }> {
   const t0 = Date.now();
@@ -319,6 +385,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   let error: string | null = null;
   let refusal: CallRefusal | null = null;
   let driver: OrganiserDriver | null = null;
+  let caseBrowser: CaseBrowserDriver | null = null;
   let counts = { calls: 0, fixtures: 0, events: 0 };
   let notes: string[] = [];
   try {
@@ -326,35 +393,55 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
       { name: `Matrix ${run.runId} ${i + 1}`, slug: caseOrgSlug(run.runId, i + 1), deny: spec.deny },
     );
-    driver = deps.driverFor(run.base, run.session, org.orgId);
+    if (run.browser === null) {
+      driver = deps.driverFor(run.base, run.session, org.orgId);
+    } else {
+      // After the org switch, so the context carries the case org's cookie.
+      // The scenario's padPolicy lands with Task 7; until then, "first".
+      const o: CaseDriverOptions = { base: run.base, session: run.session, orgId: org.orgId, orgSlug: org.orgSlug, spec, width: run.browser.width, padPolicy: "first", reportDir: run.reportDir, evidenceId: `case-${i + 1}` };
+      try { caseBrowser = await run.browser.run.caseDriver(o); } catch (e) { throw new BrowserCaseAborted(spec.caseId, e); }
+      driver = caseBrowser.driver;
+    }
     const scenario = SCENARIOS[spec.scenario];
     // W1b Task 10: a variant case scores under preset + its override, as the
     // division it creates stores it (setUpDivision posts the override).
     const cfg = resolveSportCfg(spec.sport, spec.variant, { ...(spec.overrides ?? {}) });
     const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg, tag: `${run.runId}-${i + 1}`, denied: org.denied });
     // ⛔ (Task 9): a scenario that builds no stage opts out of the fixture
-    // invariants, and one whose expected state is a refusal says so.
-    checks = [...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions].map(redactCheck);
+    // invariants, and one whose expected state is a refusal says so. A
+    // browser case adds its driver's own checks after them (W1c Task 6).
+    checks = [
+      ...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions,
+      ...(caseBrowser === null ? [] : caseBrowser.driver.checks()),
+    ].map(redactCheck);
     mandated = scenario.mandatedRefusal?.(spec) ?? null;
     counts = { calls: driver.callCount, fixtures: out.observed.stages.reduce((n, s) => n + s.fixtures.length, 0), events: out.events };
     notes = keepNotes(out.notes);
   } catch (e) {
-    // The DB stopped proving it is ours: that is the environment, not this
-    // case. Abort the run rather than record it as a product red.
-    if (e instanceof DataDirMismatch || e instanceof DataDirUnset) throw e;
+    // The DB stopped proving it is ours, or the case's browser could not be
+    // set up: that is the environment, not this case. Abort the run rather
+    // than record it as a product red.
+    if (e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted) throw e;
     if (e instanceof ScenarioUnsupported || e instanceof RowBuildDeferred) deferred = { wave: e.wave, reason: e.message };
     else {
       error = errText(e);
       if (e instanceof RefusedCall) refusal = { method: e.method, path: e.path, status: e.status, code: e.code };
     }
     if (driver !== null) counts = { ...counts, calls: driver.callCount };
+  } finally {
+    // Every case's context is closed, whatever the scenario did; a failed
+    // close is warned, never allowed to replace the case's own outcome.
+    if (caseBrowser !== null) {
+      try { await caseBrowser.close(); } catch (e) { warn(`matrix: case ${spec.caseId}: closing its browser failed — ${errText(e)}`); }
+    }
   }
   const { state, reason } = decideState({ checks, deferred, error, mandated });
+  const b = run.browser;
   const result: CaseResult = {
-    caseId: spec.caseId, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
+    caseId: b === null ? spec.caseId : `${spec.caseId}@${b.width}`, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
     state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,
-    // D9 (W1c Task 3): this runner is L3 over HTTP; Task 6 makes these follow the CLI.
-    layer: "L3", driver: "http", width: null,
+    // D9: the layer, driver and width follow the CLI.
+    ...(b === null ? { layer: "L3", driver: "http", width: null } as const : { layer: "L1", driver: "browser", width: b.width } as const),
   };
   return { result, refusal };
 }
@@ -388,6 +475,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   const startedAt = new Date().toISOString();
   const cases: CaseResult[] = [];
   const refusals = new Map<string, CallRefusal>();
+  let browserRun: BrowserRun | null = null;
   const db = await deps.openDb();
   try {
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
@@ -428,14 +516,28 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       const gaps = needed.filter((n) => !grants.has(n.gate));
       if (gaps.length > 0) throw new PlanLacksGate(plan, gaps);
     }
+    // W1c Task 6: one browser per run, opened once every start gate has
+    // passed. No browser is the environment: the run aborts, and no case is
+    // ever recorded as a product red for it.
+    let browser: RunCtx["browser"] = null;
+    // parseDriver sets a width exactly when the driver is browser.
+    if (cli.width !== null) {
+      if (deps.openBrowserRun === undefined) throw new Error("matrix: --driver browser, and this runner has no browser (RunDeps.openBrowserRun)");
+      browserRun = await deps.openBrowserRun();
+      browser = { run: browserRun, width: cli.width };
+    }
     for (const [i, spec] of specs.entries()) {
-      const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId }, spec, i);
+      const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir, browser }, spec, i);
       cases.push(result);
-      if (refusal !== null) refusals.set(spec.caseId, refusal);
-      say(`[${i + 1}/${specs.length}] ${spec.caseId} → ${result.state} ${result.reason}`);
+      if (refusal !== null) refusals.set(result.caseId, refusal);
+      say(`[${i + 1}/${specs.length}] ${result.caseId} → ${result.state} ${result.reason}`);
     }
   } finally {
-    // A failed close must not throw away the cases that already ran.
+    // A failed close must not throw away the cases that already ran. The
+    // browser is closed exactly once, after the last case or the abort.
+    if (browserRun !== null) {
+      try { await browserRun.close(); } catch (e) { warn(`matrix: browser close failed — ${errText(e)}`); }
+    }
     try { await db.dispose(); } catch (e) { warn(`matrix: db dispose failed — ${errText(e)}`); }
   }
 
@@ -444,7 +546,10 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
   // writeResults scans, THEN writes the run's base as LOCAL_BASE (final batch
   // FB-1); MATRIX.md renders what it wrote, so the two files agree.
-  const results: RunResults = { schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, layer: "L3", driver: "http", cases };
+  const results: RunResults = {
+    schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid,
+    layer: cli.driver === "browser" ? "L1" : "L3", driver: cli.driver, cases,
+  };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
@@ -582,6 +687,9 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
       } finally { await closeHandles(m, p); }
     },
     driverFor: (base, session, orgId) => new HttpDriver({ base, session, expectedOrgId: orgId }),
+    // LAZY (ruling A): the browser layer is loaded only when a browser run
+    // opens, so an L3 run never loads it (boundary.test.ts pins this edge).
+    openBrowserRun: async () => (await import("./lib/browser/browser-run.ts")).openBrowserRun(),
   };
 }
 

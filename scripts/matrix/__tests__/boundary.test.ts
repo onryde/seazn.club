@@ -46,15 +46,19 @@ function shipped(dir: string, out: string[] = []): string[] {
 // Y` followed by a value import marks that import type-only. Known, not fixed.
 const SPEC = /(?:^|\n)\s*(import|export)\s+(type\s+)?[^;]*?from\s+["']([^"']+)["']|import\(\s*["'`]([^"'`]+)["'`]\s*\)|(?:^|\n)\s*import\s+["']([^"']+)["']/g;
 
-function importsOf(file: string): { spec: string; typeOnly: boolean }[] {
+/** `dynamic`: an `import("x")` expression, which loads only when it runs —
+ *  never at module load (W1c Task 6, ruling A). */
+function importsOf(file: string): { spec: string; typeOnly: boolean; dynamic: boolean }[] {
   const src = readFileSync(file, "utf8");
-  return [...src.matchAll(SPEC)].map((m) => ({ spec: (m[3] ?? m[4] ?? m[5])!, typeOnly: m[2] !== undefined }));
+  return [...src.matchAll(SPEC)].map((m) => ({ spec: (m[3] ?? m[4] ?? m[5])!, typeOnly: m[2] !== undefined, dynamic: m[4] !== undefined }));
 }
 
-/** Every `.ts` file a real load reaches from `roots`: relative VALUE imports
- *  only (a type import is erased under strip-types and loads nothing), and
- *  only specs that name an existing `.ts` file — exactly what node follows.
- *  Bare packages and apps/web's `@/` alias are not walked. */
+/** Every `.ts` file a module LOAD reaches from `roots`: relative static VALUE
+ *  imports only (a type import is erased under strip-types and loads nothing;
+ *  a dynamic `import()` loads only when its code runs, and every one is pinned
+ *  by exact set below), and only specs that name an existing `.ts` file —
+ *  exactly what node follows. Bare packages and apps/web's `@/` alias are not
+ *  walked. */
 function closure(roots: readonly string[]): Set<string> {
   const seen = new Set<string>();
   const stack = [...roots];
@@ -62,8 +66,8 @@ function closure(roots: readonly string[]): Set<string> {
     const file = stack.pop()!;
     if (seen.has(file)) continue;
     seen.add(file);
-    for (const { spec, typeOnly } of importsOf(file)) {
-      if (typeOnly || !spec.startsWith(".")) continue;
+    for (const { spec, typeOnly, dynamic } of importsOf(file)) {
+      if (typeOnly || dynamic || !spec.startsWith(".")) continue;
       const target = resolve(dirname(file), spec);
       if (target.endsWith(".ts") && existsSync(target)) stack.push(target);
     }
@@ -196,8 +200,8 @@ describe("ruling 38: what the matrix may take from the bench", () => {
     while (queue.length > 0) {
       const file = queue.shift()!;
       if (file === target) break;
-      for (const { spec, typeOnly } of importsOf(file)) {
-        if (typeOnly || !spec.startsWith(".")) continue;
+      for (const { spec, typeOnly, dynamic } of importsOf(file)) {
+        if (typeOnly || dynamic || !spec.startsWith(".")) continue;
         const next = resolve(dirname(file), spec);
         if (!next.endsWith(".ts") || !existsSync(next) || parent.has(next)) continue;
         parent.set(next, file);
@@ -252,6 +256,42 @@ describe("ruling 38: what the matrix may take from the bench", () => {
     expect(bad).toEqual([]);
     // Positive pair: session.ts's own closure does reach another browser-layer module.
     expect([...closure([SESSION])].map((f) => relative(MATRIX, f))).toContain("lib/browser/viewports.ts");
+  });
+
+  // W1c Task 6, ruling A: the closures above walk STATIC imports only — a
+  // dynamic import() loads when its code runs, not when its module loads — so
+  // every dynamic edge is a door those walks do not look through. Each one, in
+  // any shipped module and into anywhere, is pinned here by exact set. The one
+  // allowed is the runner's lazy open of a browser run (realDeps.openBrowserRun;
+  // run-cli.test.ts pins that the import sits inside that function). A second
+  // edge reds until it is ruled on.
+  const KNOWN_DYNAMIC_EDGES = ["run.ts -> lib/browser/browser-run.ts"];
+  const BROWSER_RUN = join(MATRIX, "lib/browser/browser-run.ts");
+  it("every dynamic import() in a shipped module is a known edge: only run.ts's lazy open of the browser run", () => {
+    const edges: string[] = [];
+    let imports = 0;
+    for (const m of MODULES) {
+      for (const i of importsOf(m)) {
+        imports++;
+        if (!i.dynamic) continue;
+        const to = i.spec.startsWith(".") ? relative(MATRIX, resolve(dirname(m), i.spec)) : i.spec;
+        edges.push(`${relative(MATRIX, m)} -> ${to}`);
+      }
+    }
+    console.info(`boundary: ${MODULES.length} shipped modules, ${imports} imports read, ${edges.length} dynamic`);
+    expect(imports).toBeGreaterThan(MODULES.length);
+    expect(edges.sort()).toEqual(KNOWN_DYNAMIC_EDGES);
+    // The edge's target exists, is a shipped module (so every closure test above
+    // reads it as a root of its own) and is the browser layer's.
+    expect(MODULES).toContain(BROWSER_RUN);
+    expect(BROWSER_LAYER(relative(MATRIX, BROWSER_RUN))).toBe(true);
+    // Positive pair for the split: run.ts's static imports are read as static
+    // (its closure reaches http-driver.ts), and the dynamic target is not walked.
+    const runClosure = [...closure([join(MATRIX, "run.ts")])].map((f) => relative(MATRIX, f));
+    expect(runClosure).toContain("lib/driver/http-driver.ts");
+    expect(runClosure).not.toContain("lib/browser/browser-run.ts");
+    // ...while the target's own static closure is the browser path: it loads playwright.
+    expect(playwrightLoaders(closure([BROWSER_RUN])).map((f) => relative(MATRIX, f))).toContain("lib/browser/session.ts");
   });
 });
 

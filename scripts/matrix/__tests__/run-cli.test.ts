@@ -24,7 +24,8 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
+import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, type BrowserRun, type CaseDriverOptions, type DbFactories, type RunDeps } from "../run.ts";
+import { BROWSER_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -982,7 +983,7 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
 });
 
 describe("summariseRun (PF4) — empty first", () => {
-  const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [] };
+  const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [], layer: "L3" as const, driver: "http" as const, width: null };
   const chk = (verdict: CheckResult["verdict"], checked: number): CheckResult => ({ id: `k-${verdict}-${checked}`, kind: "invariant", verdict, checked, reason: "", evidence: [] });
   const kase = (caseId: string, state: CaseResult["state"], reason: string, checks: CheckResult[]): CaseResult => ({ ...base, caseId, state, reason, checks });
 
@@ -1186,5 +1187,161 @@ describe("describeCommit (final review m-6) — evidence never names a commit th
     const body = /harnessCommit: \(\) => ([^\n]+)/.exec(code)?.[1] ?? "";
     expect(body).toContain('describeCommit((args) => execFileSync("git", args');
     expect(code).not.toMatch(/execFileSync\("git", \["rev-parse"/);
+  });
+});
+
+// W1c Task 6: --driver browser --width. The browser itself is injected
+// (RunDeps.openBrowserRun); what is proven here is the runner's wiring: the
+// refusals, one case driver per case closed in a finally, the driver's checks
+// in the case, the D9 fields following the CLI, and one browser per run
+// closed exactly once.
+interface FakeBrowserRun { run: BrowserRun; log: string[]; opts: CaseDriverOptions[] }
+/** A browser run whose case drivers are league fakes carrying one check of their own. */
+function fakeBrowserRun(o: { failCaseAt?: number } = {}): FakeBrowserRun {
+  const log: string[] = [];
+  const opts: CaseDriverOptions[] = [];
+  const run: BrowserRun = {
+    caseDriver: async (co) => {
+      opts.push(co);
+      if (o.failCaseAt === opts.length) throw new Error("browser: newContext refused");
+      log.push(`open ${co.evidenceId}`);
+      const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
+        checks: (): CheckResult[] => [{ id: "browser-probe", kind: "assertion", verdict: "pass", checked: 1, reason: `driver of ${co.evidenceId}`, evidence: [] }],
+      });
+      return { driver, close: async () => { log.push(`close ${co.evidenceId}`); } };
+    },
+    close: async () => { log.push("run closed"); },
+  };
+  return { run, log, opts };
+}
+
+describe("runSlice — --driver browser --width (W1c Task 6)", () => {
+  it("usage: browser without a width, a width outside BROWSER_WIDTHS, a width on an http run, and an unknown driver are each refused (exit 2) before anything runs", async () => {
+    const io = capture();
+    const cases: [string[], RegExp][] = [
+      [["--driver", "browser"], /--driver browser needs --width/],
+      [["--driver", "browser", "--width", "999"], new RegExp(`--width must be one of ${BROWSER_WIDTHS.join(", ")}, got 999`)],
+      [["--driver", "browser", "--width", "320.5"], /--width must be one of .*, got 320\.5/],
+      [["--driver", "browser", "--width", ""], /--width must be one of .*, got/],
+      // Digits only: Number() reads both of these as 320 (found by mutation).
+      [["--driver", "browser", "--width", "320.0"], /--width must be one of .*, got 320\.0/],
+      [["--driver", "browser", "--width", "0x140"], /--width must be one of .*, got 0x140/],
+      [["--width", "320"], /--width is a browser run's width; it takes --driver browser/],
+      [["--driver", "http", "--width", "320"], /--width is a browser run's width; it takes --driver browser/],
+      [["--driver", "chrome"], /--driver must be http or browser, got chrome/],
+    ];
+    let checked = 0;
+    for (const [argv, want] of cases) {
+      const fb = fakeBrowserRun();
+      let opened = 0;
+      const d = deps({ openBrowserRun: async () => { opened++; return fb.run; } });
+      expect(await runSlice(d, [...argv, "--run-id", "u1", "--report-dir", dirFor()]), argv.join(" ")).toBe(2);
+      expect(d.order, argv.join(" ")).toEqual([]);
+      expect(opened, argv.join(" ")).toBe(0);
+      expect(io.err(), argv.join(" ")).toMatch(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // Positive pair: each allowed width is accepted (and the default driver is http).
+    expect(BROWSER_WIDTHS.length).toBeGreaterThan(0);
+  });
+
+  it("every case gets its own case driver on its own org, closed after it; its checks carry the driver's; results read L1 over browser at the width asked, caseIds suffixed @<width>", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fb.run; } });
+    expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", "b1", "--report-dir", dir])).toBe(0);
+    expect(opened).toBe(1);
+    const raw = JSON.parse(readFileSync(join(dir, "b1", "results.json"), "utf8")) as { layer: unknown; driver: unknown; cases: CaseResult[] };
+    expect({ layer: raw.layer, driver: raw.driver }).toEqual({ layer: "L1", driver: "browser" });
+    expect(raw.cases).toHaveLength(SCENARIO_KEYS.length);
+    let probed = 0;
+    for (const [i, c] of raw.cases.entries()) {
+      expect({ layer: c.layer, driver: c.driver, width: c.width }, c.caseId).toEqual({ layer: "L1", driver: "browser", width: 320 });
+      expect(c.caseId).toMatch(/^league\|generic\|[^@]+@320$/);
+      if (!c.reason.startsWith("error:")) {
+        expect(c.checks.map((k) => k.id), c.caseId).toContain("browser-probe");
+        expect(c.checks.find((k) => k.id === "browser-probe")?.reason).toBe(`driver of case-${i + 1}`);
+        probed++;
+      }
+    }
+    expect(probed, "no case carried its driver's checks").toBeGreaterThan(0);
+    // One driver per case, each closed before the next opens; the run's browser closed once, last.
+    expect(fb.log).toEqual([...raw.cases.flatMap((_c, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
+    expect(fb.opts.map((o) => [o.width, o.padPolicy, o.reportDir, o.base])).toEqual(raw.cases.map(() => [320, "first", join(dir, "b1"), "http://localhost:3999"]));
+    expect(fb.opts.map((o) => o.orgId)).toEqual(d.orgs.map((org) => `org-${org.slug}`));
+    expect(fb.opts.map((o) => o.orgSlug)).toEqual(d.orgs.map((org) => org.slug));
+    expect(fb.opts.every((o) => o.session === d.session)).toBe(true);
+    expect(fb.opts.map((o) => o.spec.caseId)).toEqual(raw.cases.map((c) => c.caseId.replace(/@320$/, "")));
+    // The HTTP factory is not used on a browser run.
+    expect(d.drivers).toEqual([]);
+    expect(readFileSync(join(dir, "b1", "MATRIX.md"), "utf8")).toContain("| league |");
+  });
+
+  it("a case whose scenario throws is red, and its case driver is still closed (finally)", async () => {
+    capture();
+    vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw new Error("scenario boom"); });
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = deps({ openBrowserRun: async () => fb.run });
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "b2", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "b2").cases;
+    expect(c).toMatchObject({ state: "red", width: 1280, driver: "browser" });
+    expect(c!.reason).toMatch(/scenario boom/);
+    expect(fb.log).toEqual(["open case-1", "close case-1", "run closed"]);
+  });
+
+  it("no browser (openBrowserRun rejects, or the runner has none): exit 3 aborted with the message, nothing recorded, the DB still closed", async () => {
+    for (const [name, over] of [
+      ["rejects", { openBrowserRun: async () => { throw new Error("browserType.launch: Executable doesn't exist"); } }],
+      ["absent", {}],
+    ] as const) {
+      const io = capture();
+      const dir = dirFor();
+      const d = deps(over as Partial<RunDeps>);
+      expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "390", "--run-id", "b3", "--report-dir", dir]), name).toBe(3);
+      expect(io.err(), name).toMatch(/aborted/);
+      expect(io.err(), name).toMatch(name === "rejects" ? /Executable doesn't exist/ : /no browser/);
+      expect(existsSync(join(dir, "b3", "results.json")), name).toBe(false);
+      expect(d.order.at(-1), name).toBe("dispose");
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("the browser run is closed exactly once, including when a case's browser cannot be set up (the run aborts, exit 3) or the DB stops proving it is ours (exit 2)", async () => {
+    const io = capture();
+    const failing = fakeBrowserRun({ failCaseAt: 2 });
+    const d1 = deps({ openBrowserRun: async () => failing.run });
+    expect(await runSlice(d1, ["--only", "league|generic", "--driver", "browser", "--width", "768", "--run-id", "b4", "--report-dir", dirFor()])).toBe(3);
+    expect(failing.log).toEqual(["open case-1", "close case-1", "run closed"]);
+    expect(io.err()).toMatch(/BrowserCaseAborted: .*newContext refused/);
+
+    const lost = fakeBrowserRun();
+    let n = 0;
+    const d2 = deps({
+      openBrowserRun: async () => lost.run,
+      prepareCaseOrg: async (_ctx, i) => { if (++n === 2) throw new DataDirMismatch("/tmp/pg", "/tmp/other"); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }; },
+    });
+    expect(await runSlice(d2, ["--only", "league|generic", "--driver", "browser", "--width", "768", "--run-id", "b5", "--report-dir", dirFor()])).toBe(2);
+    expect(lost.log).toEqual(["open case-1", "close case-1", "run closed"]);
+  });
+
+  it("an http run never opens a browser, and its results stay L3 over http", async () => {
+    capture();
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "h1", "--report-dir", dir])).toBe(0);
+    expect(opened).toBe(0);
+    expect(resultsIn(dir, "h1").cases[0]).toMatchObject({ layer: "L3", driver: "http", width: null, caseId: "league|generic|score|LIFECYCLE" });
+  });
+
+  it("realDeps opens the browser run lazily: a dynamic import of lib/browser/browser-run.ts inside openBrowserRun, never a static one", () => {
+    expect(typeof realDeps().openBrowserRun).toBe("function");
+    const code = readFileSync(RUN, "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(/openBrowserRun: [^\n]*await import\("\.\/lib\/browser\/browser-run\.ts"\)/.test(code)).toBe(true);
+    expect(code).not.toMatch(/^import [^;]*lib\/browser\//m);
   });
 });

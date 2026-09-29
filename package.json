@@ -15,6 +15,7 @@
     "bench:scheduler": "node --experimental-strip-types scripts/bench/bench.ts",
     "bench:build-packs": "node --experimental-strip-types scripts/bench/packs/build-packs/_tiny.ts",
     "matrix:l3": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/run.ts",
+    "matrix:browser": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/run.ts --driver browser",
     "matrix:render": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/render.ts",
     "matrix:catalogue": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/gen-catalogue.ts",
     "matrix:single-sport": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/single-sport.ts",
