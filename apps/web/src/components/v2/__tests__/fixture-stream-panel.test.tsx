@@ -2159,12 +2159,14 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(checkout.fetch, "after a refusal").toHaveBeenCalledTimes(3);
   });
 
-  // M1 (Task 14 fix round 4). `next/dynamic` is `React.lazy` over the loader, so a chunk that fails to load — a stale
-  // deploy is the usual way — THROWS during render. Without a boundary of its own the nearest one was the route's
-  // error.tsx: the whole division page went, an on-air Stop with it, and the purchase lock stayed held. The node harness
-  // has no reconciler, so React's catch is driven by hand below: the boundary's OWN static and lifecycle methods, on an
+  // M1 (Task 14 fix round 4). Anything the sheet THROWS while rendering would otherwise reach the nearest boundary, the
+  // route's error.tsx: the whole division page went, an on-air Stop with it, and the purchase lock stayed held. When M1
+  // landed the likely thrower was a chunk that failed to load (`next/dynamic` is `React.lazy`); since R5a the tap awaits
+  // the sheet's code BEFORE it asks for a Session, so a chunk failure never reaches this boundary (the R5a test below
+  // owns that path) and what is left for it is an error thrown while the sheet renders. The node harness has no
+  // reconciler, so React's catch is driven by hand below: the boundary's OWN static and lifecycle methods, on an
   // instance built from the element the container rendered — the order React runs them in (render phase, then commit).
-  it("M1: a sheet whose chunk FAILS to load takes down only the sheet — Stop stays, the lock and the tiles are freed, and it says so", async () => {
+  it("M1: a sheet that THROWS while rendering takes down only the sheet — Stop stays, the lock and the tiles are freed, and it says so", async () => {
     checkout.fetch.mockResolvedValue({ ok: true, clientSecret: "cs_test_secret_1" });
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", balance: 2 });
     const island = track(await mount({ current: live, targets: TARGETS }));
@@ -2180,7 +2182,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(held.some((el) => el.type === PhoneTabBody), "the boundary must not wrap the tab (Stop lives there)").toBe(false);
     expect(bodyOf(island).checkoutOpen, "tiles dead while the sheet loads").toBe(true);
 
-    // React hands both methods the thrown error (a ChunkLoadError here); the boundary reads neither, so none is passed.
+    // React hands both methods the thrown error; the boundary reads neither, so none is passed.
     const inst = new CheckoutSheetBoundary(propsOf(boundary!) as ConstructorParameters<typeof CheckoutSheetBoundary>[0]);
     expect(inst.render(), "before any failure the boundary renders its sheet").toBe(propsOf(boundary!).children);
     inst.state = CheckoutSheetBoundary.getDerivedStateFromError();
