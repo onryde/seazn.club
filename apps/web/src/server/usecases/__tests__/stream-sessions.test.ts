@@ -46,7 +46,9 @@ import type { RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
-import { creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits } from "../stream-credits";
+import {
+  creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
+} from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
@@ -1307,6 +1309,48 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     await holder;
     return pending;
   };
+
+  it("M6 (through apply): a session created in one UTC month that goes live in the next draws the NEW month's free credit — the go-live consume rolls the month over under its own lock", async () => {
+    const r = await rig({ credits: 2 });   // this month's grant made and spent: the ledger is 2 bought credits
+    // V426's own row, never typed here.
+    const [{ rate }] = await sql<{ rate: number }[]>`select int_value as rate from plan_entitlements where plan_key = 'community' and feature_key = 'streaming.credits.monthly'`;
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    // The month's period is the WALL clock (createSession's ensure and apply's rollover both read it, never deps.now()),
+    // so the month is turned by faking Date alone — the rig's own clock and every timer stay real.
+    const wall = new Date();
+    const next = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() + 1, 1, 0, 0, 30));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(next);
+    try {
+      r.tick(3000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    } finally {
+      vi.useRealTimers();
+    }
+    const consumes = await sql<{ bucket: string }[]>`select bucket from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`;
+    expect(consumes.map((c) => c.bucket), "the new month's free credit, not a bought one").toEqual(["monthly"]);
+    const grants = await sql<{ delta: number }[]>`
+      select delta from org_stream_credits where idempotency_key = ${streamMonthlyGrantKey(r.auth.orgId, streamMonthlyPeriod(next))}`;
+    expect(grants.map((g) => g.delta)).toEqual([rate]);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(2 + rate - 1);
+  });
+
+  it("M6 guard: a session the rate peek saw LIVE but the lock finds WARMING (a backwards move no writer makes) is refused by name — never consumed without the rollover — and the next apply goes live", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    await sql`update fixture_stream_sessions set state = 'live' where id = ${sessionId}`;   // what the peek reads
+    const out = await endUnderHeldLock(r, sessionId, () => apply(sessionId, { type: "ingest_connected" }, r.deps),
+      "update fixture_stream_sessions set state = 'warming' where id = $1");              // what the lock finds
+    expect(out.ok).toBe(false);
+    expect((out as { e: unknown }).e).toMatchObject({ status: 500, code: "monthly_rate_unresolved" });
+    const consumed = async () => (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`)[0]!.n;
+    expect(await consumed(), "nothing charged").toBe(0);
+    expect((await r.row(sessionId)).state, "nothing written").toBe("warming");
+    // The positive pair: the next apply peeks `warming`, reads the rate, and goes live with its consume.
+    expect((await apply(sessionId, { type: "ingest_connected" }, r.deps))!.state).toBe("live");
+    expect(await consumed()).toBe(1);
+  });
 
   it("m1 RACE (the poll): a Stop that lands between the poll's ingest read and its apply — the poll saw `warming` and a connected ingest — answers the ENDED projection, never a 500; nothing goes live and nothing is charged (mutant: plain ingest_connected apply → InvalidTransition)", async () => {
     const r = await rig({ credits: 1 });

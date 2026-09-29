@@ -49,6 +49,10 @@ import { setFixtureStreamUrl } from "./fixtures";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
 
+/** M6: the states a session can still CONSUME from, i.e. not yet live — `apply` reads the org's monthly rate (a pooled
+ *  read) for these alone. The domain decides a consume only from `warming`, and states only move forward. */
+const CAN_STILL_CONSUME: readonly Session["state"][] = ["requested", "provisioning", "warming"];
+
 export interface SessionDeps { drivers: RelayDrivers; now: () => Date; appUrl: string }
 export function defaultDeps(appUrl: string): SessionDeps {
   return { drivers: relayDrivers(), now: () => new Date(), appUrl };
@@ -289,6 +293,15 @@ export async function apply(
   actor?: Actor,
 ): Promise<Session | null> {
   const now = deps.now();
+  // M6 (Task 14b review): the go-live consume rolls the org's free month over under the money lock it already holds, so
+  // it needs the org's rate — a POOLED read (orgPlanKey) that must never run inside the transaction below (lib/db.ts's
+  // nesting guard: a second connection per open transaction is a self-deadlock under load). So it is read HERE, and only
+  // for a session that can still consume: states only move forward (domain/session.ts), and a consume is decided only
+  // from `warming`, so a session seen live, ending or terminal now can never consume in this apply. The row is peeked
+  // unlocked — `org_id` never changes, and `state` is only the gate for this read; the decision reads the LOCKED row.
+  const [peek] = await sql<{ org_id: string; state: Session["state"] }[]>`select org_id, state from fixture_stream_sessions where id = ${sessionId}`;
+  if (!peek) return null;
+  const monthly = CAN_STILL_CONSUME.includes(peek.state) ? { rate: await streamMonthlyRate(peek.org_id), now: new Date() } : undefined;
   const outcome = (await sql.begin(async (tx) => {
     // A7 — LOCK ORDER. stream-credits.ts's rule is that every writer takes the org's money lock FIRST (`lockOrg`, before
     // any read), and its staff paths then take this session row (`staffRow`: lockOrg, then FOR KEY SHARE on the linked
@@ -298,10 +311,9 @@ export async function apply(
     // `decide`, and that needs the locked row. `org_id` is read without a lock because nothing ever changes it; it is
     // only the lock's key. consumeForSession's own lockOrg is then re-entrant. `recordEffect` and the projection's
     // writes take the row alone and never the org lock, so no cycle can form through them.
-    // Witness: "A7 lock order: … the row stays free for a FOR UPDATE NOWAIT".
-    const [owner] = await tx<{ org_id: string }[]>`select org_id from fixture_stream_sessions where id = ${sessionId}`;
-    if (!owner) return null;
-    await lockOrg(tx, owner.org_id);
+    // Witness: "A7 lock order: … the row stays free for a FOR UPDATE NOWAIT". (M6: the unlocked `org_id` read is the peek
+    // above, before the transaction.)
+    await lockOrg(tx, peek.org_id);
     const row = await lockRow(tx, sessionId);
     if (!row) return null;
     const before = toSession(row);
@@ -312,8 +324,14 @@ export async function apply(
     let dec = decide(before, cmd, now);
     let applied: Command = cmd;
     if (dec.effects.some((e) => e.type === "consume_credit")) {
+      // "Cannot happen" as a guard: the peek saw a state that can no longer consume, yet the LOCKED row decided a consume
+      // — only a state moved BACKWARDS between the two can do that. Refused by name: consuming without the rollover
+      // would silently draw a bought credit over this month's free one. Nothing is written; the next apply peeks again.
+      if (!monthly) {
+        throw new HttpError(500, `Session ${sessionId} was ${peek.state} when its credit rate was read and ${before.state} when it went live; refusing to consume without the monthly rollover`, "monthly_rate_unresolved");
+      }
       try {
-        const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId }, now);
+        const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId, monthly }, now);
         if (c.ledgerId) await tx`update fixture_stream_sessions set credit_ledger_id = ${c.ledgerId} where id = ${sessionId}`;
       } catch (e) {
         if (!(e instanceof NoCreditsError)) throw e;

@@ -37,6 +37,7 @@ import { HttpError } from "@/lib/errors";
 import { utcMonthStart } from "@/lib/credits";
 import { orgPlanKey } from "@/lib/entitlements";
 import { InsufficientCredits, credit, debit, withinReuseWindow } from "@/server/relay/domain/credits";
+import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 // TYPE-ONLY, as lib/credits.ts does: admin-adjustments-log.ts VALUE-imports
 // STREAM_CREDIT_AUDIT_ACTIONS from here, so a value import back would be a runtime cycle.
@@ -140,10 +141,30 @@ export async function reuseWindowOpen(
 
 export async function consumeForSession(
   tx: Tx,
-  args: { orgId: string; fixtureId: string | null; sessionId: string },
+  args: {
+    orgId: string; fixtureId: string | null; sessionId: string;
+    /** M6 (Task 14b review): roll the org's free month over under THIS lock before the balance is read, at `rate` (the
+     *  org's resolved plan rate — a POOLED read the caller makes before its transaction, never inside it: lib/db.ts's
+     *  nesting guard) for the UTC month of `now` (the WALL clock, as createSession's ensure). Without it a session
+     *  created before the month turns and live after it draws last month's leftover — or a BOUGHT credit while this
+     *  month's free one is still ungranted. Omitted by direct ledger callers (tests, staff tooling). */
+    monthly?: { rate: number; now: Date };
+  },
   now: Date = new Date(),
 ): Promise<{ consumed: boolean; balance: number; ledgerId: string | null }> {
   await lockOrg(tx, args.orgId);
+  if (args.monthly) {
+    const { rate, now: wall } = args.monthly;
+    try {
+      // A SAVEPOINT, so a refused or failed rollover (a corrupt ledger's ledger_negative, a bad catalogue rate) rolls back
+      // alone: going live must never hinge on the month's bookkeeping. The consume below then runs on the ledger as it
+      // stands, which is exactly the pre-M6 behaviour — and the failure is reported, never swallowed.
+      await tx.savepoint((sp) => rollMonthlyLocked(sp, args.orgId, rate, wall));
+    } catch (err) {
+      log.error({ err, orgId: args.orgId, sid: args.sessionId }, "stream credits: monthly rollover at go-live failed; consuming on the ledger as it stands");
+      captureError(err, { orgId: args.orgId, route: "relay.credits.consume_rollover", extra: { sessionId: args.sessionId } });
+    }
+  }
   const reuse = await reuseWindowOpen(tx, args, now);
   const split = await creditBreakdown(tx, args.orgId);
   const balance = split.total;
@@ -714,7 +735,8 @@ async function monthlyGrantedThisPeriod(exec: Executor, orgId: string, period: s
 /**
  * This month's free match credits for one org — the lazy path (R3, as amended by the Task 14b review M4: the ONLY
  * path — no cron sweeps it). Every reader of the balance calls it before it reads: the division page (`relayCredits`)
- * and createSession's balance check. There is deliberately no eager call on org creation and no cron: an org that
+ * and createSession's balance check; the go-live consume runs the same body under its own lock (`consumeForSession`'s
+ * `monthly`, review M6), so a session that goes live after the month turns draws the new month's grant. There is deliberately no eager call on org creation and no cron: an org that
  * never streams never needs a row.
  *
  * Owed, per UTC month: the base grant at the first call of the period (after expiring last month's leftover), and —

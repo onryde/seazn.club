@@ -31,8 +31,12 @@
 //   k18 the locked body's "owed nothing" test is `===`, not `>=`  → the same test (grantMonthlyStreamCredits at a lower rate)
 //   k18c the fast path's "owed nothing" test is `===`, not `>=`   → the same test (the downgrade's statement count)
 //   k19 the under-lock re-read uses the pre-lock state            → "I3: two concurrent ensures after an upgrade"
+//   k20 consumeForSession ignores `monthly` (no rollover)         → "M6: a consume after the UTC month turns"
+//   k21 the rollover runs AFTER the breakdown the consume reads   → the same test (it draws pack)
+//   k22 a failed rollover fails the consume (no savepoint catch)  → "M6: a rollover that fails inside the consume"
+//   k23 … is swallowed without a report                            → the same test
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sql, statementCount } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
@@ -41,6 +45,9 @@ import {
   grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundCredits, revokeCredits, streamMonthlyDeltaKey,
   streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate,
 } from "../stream-credits";
+
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const MONTHLY = "streaming.credits.monthly";
@@ -76,9 +83,9 @@ const rowCount = async (orgId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${orgId}`)[0]!.n;
 
 /** One consume for a fresh session. `fixtureId: null` so the 24 h reuse window (per fixture) never waives it. */
-async function consume(r: Awaited<ReturnType<typeof rig>>): Promise<{ sessionId: string; bucket: string }> {
+async function consume(r: Awaited<ReturnType<typeof rig>>, monthly?: { rate: number; now: Date }): Promise<{ sessionId: string; bucket: string }> {
   const sessionId = await r.session(r.fixtureIds[0]!, "warming");
-  const c = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: null, sessionId }));
+  const c = await sql.begin((tx) => consumeForSession(tx, { orgId: r.orgId, fixtureId: null, sessionId, ...(monthly ? { monthly } : {}) }));
   if (!c.consumed) throw new Error("premise: the consume was waived");
   const [row] = await sql<{ bucket: string }[]>`select bucket from org_stream_credits where id = ${c.ledgerId}`;
   // The session holds its target until it ends; end it so the next session can be seated.
@@ -486,5 +493,40 @@ describe.skipIf(!HAS_DB)("monthly stream credits — sequences", () => {
     const expires = (await rows(r.orgId)).filter((x) => x.reason === "expire").map((x) => x.delta);
     expect(expires, "January left nothing; March sweeps February's R plus the late refund").toEqual([-(R + 1)]);
     expect(await creditBreakdown(sql, r.orgId)).toEqual({ monthly: R, pack: 0, total: R });
+  });
+
+  it("M6: a consume after the UTC month turns draws THIS month's grant — the rollover runs under the consume's own lock (k20, k21)", async () => {
+    const r = await rig(null);
+    const C = await rateOf("community");
+    await ensureMonthlyStreamGrant(r.orgId, JAN);
+    for (let i = 0; i < C; i++) await consume(r);     // January's free credits spent
+    await buy(r.orgId, 2);
+    expect(await creditBreakdown(sql, r.orgId)).toEqual({ monthly: 0, pack: 2, total: 2 });
+    // The session was created in January and goes live in February. Without the rollover the consume draws a BOUGHT
+    // credit while February's free one is still ungranted.
+    const c = await consume(r, { rate: C, now: FEB });
+    expect(c.bucket, "February's free credit, not the pack").toBe("monthly");
+    expect(await creditBreakdown(sql, r.orgId)).toEqual({ monthly: C - 1, pack: 2, total: C - 1 + 2 });
+    expect((await rows(r.orgId)).filter((x) => x.idempotency_key === streamMonthlyGrantKey(r.orgId, "2031-02")).map((x) => x.delta)).toEqual([C]);
+    // The next reader's ensure in February finds the month rolled: nothing more.
+    expect(await ensureMonthlyStreamGrant(r.orgId, FEB)).toBe(0);
+    // The negative pair on the SAME ledger: a consume with no rollover (a direct ledger caller) still draws monthly
+    // while any is left, then the pack — i.e. `monthly` is what moved the first one.
+    for (let i = 0; i < C - 1; i++) expect((await consume(r)).bucket).toBe("monthly");
+    expect((await consume(r)).bucket).toBe("pack");
+  });
+
+  it("M6: a rollover that fails inside the consume is REPORTED and never blocks going live — the savepoint keeps the consume's transaction (k22, k23)", async () => {
+    const r = await rig(null);
+    await buy(r.orgId, 2);
+    // A corrupt monthly bucket makes the rollover refuse (ledger_negative) — see "a NEGATIVE monthly bucket is REFUSED".
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, balance_after) values (${r.orgId}, -1, 'consume', 'monthly', 1)`;
+    sentry.captureError.mockClear();
+    const c = await consume(r, { rate: await rateOf("community"), now: FEB });
+    expect(c.bucket, "the consume still happens, from the pack").toBe("pack");
+    expect(await creditBreakdown(sql, r.orgId)).toEqual({ monthly: -1, pack: 1, total: 0 });
+    expect((await rows(r.orgId)).filter((x) => x.reason === "grant"), "nothing granted on the corrupt bucket").toHaveLength(0);
+    const reported = sentry.captureError.mock.calls.filter(([e, ctx]) => (e as { code?: string }).code === "ledger_negative" && (ctx as { orgId?: string }).orgId === r.orgId);
+    expect(reported).toHaveLength(1);
   });
 });
