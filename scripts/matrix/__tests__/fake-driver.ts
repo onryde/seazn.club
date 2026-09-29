@@ -206,12 +206,27 @@ export class FakeLeagueDriver implements OrganiserDriver {
       if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
       if (policy === "walkover" && opponent !== null) { await this.forfeit(f.id, entrantId, "walkover"); walkovers++; continue; }
-      f.status = "abandoned";
-      f.outcome = null;
+      await this.abandonFixture(f);
       voided++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
     return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
+  }
+  /** The expunge's void of one fixture. This table fake writes the status
+   *  directly, with no event, so a later post would fold over it (Task 1
+   *  review); ModelFakeDriver rides the ledger instead, as the product does. */
+  abandonFixture(f: FakeFixture): Promise<void> {
+    return settle(() => {
+      f.status = "abandoned";
+      f.outcome = null;
+    });
+  }
+  /** The table fake models no rebuild; refused by name (Task 13). */
+  rebuild(_stageId: string): Promise<void> {
+    return settle(() => {
+      this.log("rebuild");
+      throw new RefusedCall("POST", "/api/v1/stages/s1/rebuild", 422, "UNSUPPORTED_IN_FAKE", "fake: rebuild");
+    });
   }
   completeStage(): Promise<CompleteOut> {
     return settle(() => {

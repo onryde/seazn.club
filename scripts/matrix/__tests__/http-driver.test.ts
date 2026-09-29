@@ -315,3 +315,26 @@ describe("driver errors are redacted (R14a — public repo)", () => {
     expect((errors[0] as RefusedCall).path).not.toContain("abc123secret");
   });
 });
+
+describe("HttpDriver — rebuild (Task 13)", () => {
+  it("POSTs /stages/:id/rebuild with an empty body and resolves on 2xx", async () => {
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s1/rebuild" ? ok({ created: 3, existing: 0, removed: 3 }) : undefined)]);
+    const d = drv(t);
+    await expect(d.rebuild("s1")).resolves.toBeUndefined();
+    expect(calls).toMatchObject([{ path: "/api/v1/stages/s1/rebuild", method: "POST", body: {} }]);
+    expect(d.callCount).toBe(1);
+  });
+  it("a refusal throws RefusedCall with the product's status and code", async () => {
+    const { t } = fake([() => err(409, "STAGE_HAS_RESULTS")]);
+    const e = await drv(t).rebuild("s1").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS", method: "POST", path: "/api/v1/stages/s1/rebuild" });
+  });
+  it("a second rebuild is a second POST — never short-circuited like /complete", async () => {
+    const { t, calls } = fake([() => ok({ created: 0, existing: 0, removed: 0 })]);
+    const d = drv(t);
+    await d.rebuild("s1");
+    await d.rebuild("s1");
+    expect(posts(calls).length).toBe(2);
+  });
+});

@@ -76,6 +76,10 @@ export interface OrganiserDriver {
   forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
+  /** Replaces a root stage's fixtures wholesale (POST /stages/:id/rebuild).
+   *  Throws RefusedCall on a refusal — 409 STAGE_HAS_RESULTS once any fixture
+   *  carries a result (usecases/stages.ts rebuildStageFixtures). */
+  rebuild(stageId: string): Promise<void>;
   standings(stageId: string, poolId: string | null): Promise<StandingsOut>;
   publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut>;
   /** A probe: returns the refusal, never throws on 4xx. */

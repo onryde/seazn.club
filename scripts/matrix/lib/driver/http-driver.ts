@@ -205,6 +205,14 @@ export class HttpDriver implements OrganiserDriver {
     return out;
   }
 
+  async rebuild(stageId: string): Promise<void> {
+    // usecases/stages.ts rebuildStageFixtures: refuses whole (409
+    // STAGE_HAS_RESULTS) once any fixture carries a result or a score event,
+    // 422 STAGE_NOT_ROOT for a stage fed by another. The answer's counts are
+    // not read: the model re-lists the fixtures after it.
+    await this.#call<unknown>(`/api/v1/stages/${stageId}/rebuild`, "POST", {});
+  }
+
   async standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return this.#call(`/api/v1/stages/${stageId}/standings${poolId === null ? "" : `?pool_id=${encodeURIComponent(poolId)}`}`);
   }
