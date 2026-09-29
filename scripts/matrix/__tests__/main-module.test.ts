@@ -6,7 +6,8 @@
 // nothing and exited 0: a fail-open --check.
 // State transitions and the empty case first: no argv[1]; the file itself;
 // the file through a symlink; another file; a path that does not exist; and
-// each real CLI started through a symlink.
+// each real CLI started through a symlink — the matrix CLIs, and (final batch
+// FB-10) the engine boundary gate, which used the old idiom until then.
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -61,5 +62,15 @@ describe("isMainModule — the entry-script check the matrix CLIs share", () => 
     const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via, ...args], { cwd: REPO, encoding: "utf8", timeout: 60_000, env: { PATH: process.env.PATH ?? "" } });
     expect(r.stderr.trim(), `${name}: nothing on stderr — main never ran`).not.toBe("");
     expect(r.status, r.stderr).toBe(code);
+  });
+
+  it("final batch FB-10: the engine boundary gate (scripts/engine-boundary.ts) started through a symlinked path runs its scan — never a silent 0", () => {
+    // It takes no input to refuse: on a clean engine it passes, so the witness
+    // is its PASS line (the old idiom loaded, printed nothing and exited 0).
+    const via = join(dir, "link-engine-boundary.ts");
+    symlinkSync(resolve(REPO, "scripts/engine-boundary.ts"), via);
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via], { cwd: REPO, encoding: "utf8", timeout: 60_000, env: { PATH: process.env.PATH ?? "" } });
+    expect(r.stdout, `engine-boundary: no PASS line — main never ran (stderr: ${r.stderr})`).toContain("PASS  engine boundary clean");
+    expect(r.status, r.stderr).toBe(0);
   });
 });
