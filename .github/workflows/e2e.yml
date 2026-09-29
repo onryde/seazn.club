@@ -763,6 +763,12 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # The fake ingest reports the phone "connected" this long after a stream's input is
+          # made (server/relay/fakes.ts; default 3000). stream-relay.spec.ts asserts the QR the
+          # Phone tab draws while the camera warms, which stays on screen only until the server's
+          # next read after the connect; 3 s is inside a loaded runner's create + first read.
+          # The Playwright step below is told the same value: the spec budgets its waits from it.
+          FAKE_INGEST_CONNECT_AFTER_MS: "10000"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -813,6 +819,8 @@ jobs:
           PLAYWRIGHT_BASE: http://localhost:3000
           E2E_PARALLEL_SLICE: ${{ matrix.slice }}
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # The same value the server was started with (see "Start server"): the spec's waits derive from it.
+          FAKE_INGEST_CONNECT_AFTER_MS: "10000"
 
       # Distinct from "Connect walkthrough not configured" above: that one
       # keys on STRIPE_CONNECT_TEST_ACCOUNT and covers the REGISTRATION money
