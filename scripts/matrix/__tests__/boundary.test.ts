@@ -12,7 +12,14 @@ const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(MATRIX, "..", "..");
 // Full repo-relative paths, never basenames: scripts/bench/lib/drivers/http.ts
 // is a different module that a basename check would wave through as "http.ts".
-const ALLOWED_BENCH = new Set(["scripts/bench/lib/http.ts", "scripts/bench/lib/plan.ts", "scripts/bench/lib/env.ts"]);
+const ALLOWED_BENCH = new Set([
+  "scripts/bench/lib/http.ts", "scripts/bench/lib/plan.ts", "scripts/bench/lib/env.ts",
+  // Ruling 38 (2026-09-29): the tap vocabulary, the ledger reader, the generic adapter and the
+  // consent/device-link helpers are imported, not copied. scorer.ts and tap-play.ts reach
+  // pack-schema through simulate.ts — a second transitive load ruling 38 accepts by name.
+  "scripts/bench/lib/ledger.ts", "scripts/bench/lib/drivers/scorer.ts",
+  "scripts/bench/lib/drivers/adapters/generic.ts", "scripts/bench/lib/tap-play.ts",
+]);
 const ALLOWED_WEB = new Set(["apps/web/src/components/v2/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
