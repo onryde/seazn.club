@@ -10,14 +10,23 @@
 // (`1px` / `solid` / the RESOLVED custom property, never a hex literal — a hex
 // passes for one sport and rots silently for the other ten).
 //
-// SERIAL, on purpose. The rig grants an org-wide entitlement halfway through
-// its own life (the 404 gate is proved on the SAME fixture, before the grant),
-// so the tests are ordered rather than independent. AGENTS.md class 21 applies
+// SERIAL, on purpose. The rig switches the overlay OFF by an org-wide override
+// and back on halfway through its own life (the 404 is proved on the SAME
+// fixture before the override comes off — since V426 every plan grants
+// `streaming.overlay`, so an override is the only negative left), so the tests
+// are ordered rather than independent. AGENTS.md class 21 applies
 // to reading a red run from this file: the first failure aborts the rest, so a
 // red COUNT here is a floor, never a total — re-run after each fix until a
 // full pass completes.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type Browser, type Page } from "@playwright/test";
-import { apiJson, invalidateOrgEntitlements } from "./helpers";
+import {
+  apiJson,
+  expectNoHorizontalScroll,
+  invalidateOrgEntitlements,
+  setBoolEntitlementOverrideSql,
+} from "./helpers";
 import {
   OVERLAY_MOMENT_FOLD_MS,
   OVERLAY_MOMENT_HOLD_MS,
@@ -27,11 +36,13 @@ import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fix
 import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
-  grantOverlay,
+  clearStreamingOverride,
+  denyOverlay,
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
   sendEvent,
+  setRigPlan,
   signInAs,
   type OverlayRig,
 } from "./overlay-kit";
@@ -110,11 +121,11 @@ async function resolveToken(page: Page, token: string): Promise<string> {
 }
 
 let rig: OverlayRig;
-/** The route's status for this exact fixture BEFORE the entitlement existed.
- *  Captured in `beforeAll` rather than asserted there, so the gate has a named
- *  test of its own and its expectation is a real differential: one fixture,
- *  one URL, one variable. */
-let statusBeforeGrant = 0;
+/** The route's status for this exact fixture while an override switched
+ *  `streaming.overlay` OFF. Captured in `beforeAll` rather than asserted there,
+ *  so the gate has a named test of its own and its expectation is a real
+ *  differential: one fixture, one URL, one variable (the override row). */
+let statusWhileDenied = 0;
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(180_000);
@@ -127,18 +138,25 @@ test.beforeAll(async ({ browser }) => {
   try {
     rig = await seedOverlayFixture(ownerPage);
 
+    // V426: the rig's plan grants the overlay, so the only 404 left is an
+    // override. The seed's own API calls may already have resolved this org's
+    // entitlements, so the override drops that cache before the fetch reads it.
+    await denyOverlay(rig.orgId);
+    await invalidateOrgEntitlements(ownerPage.request, rig.orgId);
     const anon = await anonPage(browser);
     try {
       const res = await anon.goto(`/overlay/fixtures/${rig.fixtureId}`);
-      statusBeforeGrant = res?.status() ?? 0;
+      statusWhileDenied = res?.status() ?? 0;
     } finally {
       await anon.context().close();
     }
 
-    await grantOverlay(rig.orgId);
-    // The 404 above RESOLVED `streaming.overlay` for this org, so the grant has
-    // to drop whatever that resolution cached. A no-op where there is no Redis;
-    // required against a cached target, and the reason the two are not one step.
+    // The override comes OFF (not flipped to true): what serves the route from
+    // here on is the plan's own V426 row, which is the thing every later test
+    // in this file now rides. The 404 above RESOLVED `streaming.overlay` for
+    // this org, so the removal has to drop whatever that resolution cached — a
+    // no-op where there is no Redis, required against a cached target.
+    await clearStreamingOverride(rig.orgId, "streaming.overlay");
     await invalidateOrgEntitlements(ownerPage.request, rig.orgId);
   } finally {
     await owner.close();
@@ -268,15 +286,15 @@ for (const style of ["bar", "bug"] as const) {
 // ===========================================================================
 
 test.describe("the overlay route", () => {
-  test("the entitlement gate 404s until streaming.overlay is granted", async ({ browser }) => {
+  test("an override switches overlay off → 404", async ({ browser }) => {
     expect(
-      statusBeforeGrant,
-      "the same fixture, the same URL, no entitlement — the overlay must be indistinguishable from a missing fixture",
+      statusWhileDenied,
+      "the same fixture, the same URL, an override-false row — the overlay must be indistinguishable from a missing fixture",
     ).toBe(404);
     const page = await anonPage(browser);
     try {
       const res = await page.goto(`/overlay/fixtures/${rig.fixtureId}`);
-      expect(res?.status(), "and 200 once the org holds the key").toBe(200);
+      expect(res?.status(), "and 200 once the override is gone: the rig's plan grants it on its own (V426)").toBe(200);
       await expect(page.locator('[data-testid="ovl-root"]')).toHaveCount(1);
     } finally {
       await page.context().close();
@@ -787,6 +805,123 @@ test.describe("§8's live preview", () => {
 });
 
 // ===========================================================================
+// V426 (Task 14b): the Phone tab on the plan with the LEAST — community.
+// ===========================================================================
+
+/** The English copy the card must read, from the dictionary itself — never
+ *  typed here, so a copy edit moves the expectation with it. */
+const EN_UI = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+const en = (key: string, vars: Record<string, number> = {}): string => {
+  const raw = EN_UI[key];
+  if (raw === undefined) throw new Error(`en/ui.json has no ${key}`);
+  return raw.replace(/\{(\w+)\}/g, (_, v: string) => String(vars[v]));
+};
+
+test.describe("the Phone tab on a community org (V426)", () => {
+  // A rig of its own: this block moves its org's PLAN and writes an org-wide
+  // `streaming.relay` override, neither of which may reach `rig` above.
+  let community: OverlayRig;
+  let rate = 0;
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    try {
+      community = await seedOverlayFixture(ownerPage);
+      // Seeded on pro (the kit's recipe needs a paid plan's limits to build a
+      // rostered hockey fixture), then moved to community BEFORE any page read
+      // grants this period's credits — so the grant the page makes is the
+      // community rate, read from V426's row.
+      ({ monthlyMatchCredits: rate } = await setRigPlan(community.orgId, "community"));
+      await invalidateOrgEntitlements(ownerPage.request, community.orgId);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  async function openPhoneTab(page: Page): Promise<void> {
+    await page.goto(`/o/${community.orgSlug}/c/${community.compSlug}/d/${community.divSlug}?tab=fixtures`);
+    await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1);
+    // The sheet opens on "Today" and the seed does not schedule for today (the
+    // live-preview test's own premise above).
+    await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
+    const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
+    await expect(toggle, "community holds streaming.overlay (V426), so the row offers the panel").toHaveCount(1);
+    await toggle.click();
+    await page.locator('[data-testid="stream-tab-phone"]').click();
+  }
+
+  test("opens with no upgrade gate, grants the plan's free match credits on the read, and says so on the card", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    expect(rate, "V426 declares a community rate of at least one match").toBeGreaterThanOrEqual(1);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const page = await owner.newPage();
+    try {
+      await signInAs(page, community.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openPhoneTab(page);
+
+      const gate = page.locator('[data-testid="stream-phone-gate"]');
+      await expect(gate.locator("[data-phone-body]"), "the Phone tab body, not the relay's UpgradeGate").toHaveCount(1, {
+        timeout: 30_000,
+      });
+      await expect(gate.locator(":scope > a"), "no UpgradeGate pill in the tab").toHaveCount(0);
+
+      // The org owned NO credits before this render: the balance is the grant
+      // the page's own read made (R3b), at the community rate.
+      await expect(page.locator('[data-testid="stream-balance"]')).toHaveText(
+        rate === 1 ? en("stream.phone.credits.one") : en("stream.phone.credits.other", { n: rate }),
+      );
+      await expect(page.locator('[data-testid="stream-credits-split"]')).toHaveText(
+        en("stream.credits.split", { m: rate, p: 0 }),
+      );
+
+      await page.locator('[data-testid="stream-buy-more"]').click();
+      await expect(page.locator('[data-testid="stream-credits-monthly"]')).toHaveText(
+        rate === 1 ? en("stream.credits.monthlyNote.one") : en("stream.credits.monthlyNote.other", { n: rate }),
+      );
+
+      // The card is open with both new lines on it: no width may scroll the page.
+      let widths = 0;
+      for (const width of [1280, 768, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect(page.locator('[data-testid="stream-credits-monthly"]')).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        widths++;
+      }
+      expect(widths).toBe(3);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  test("the sibling negative: an override switches streaming.relay off, and the same tab is the UpgradeGate", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    await setBoolEntitlementOverrideSql(community.orgId, "streaming.relay", false);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const page = await owner.newPage();
+    try {
+      await invalidateOrgEntitlements(page.request, community.orgId);
+      await signInAs(page, community.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openPhoneTab(page);
+      const gate = page.locator('[data-testid="stream-phone-gate"]');
+      await expect(gate.locator(":scope > a"), "the relay's UpgradeGate pill").toHaveCount(1, { timeout: 30_000 });
+      await expect(gate.locator("[data-phone-body]")).toHaveCount(0);
+    } finally {
+      await owner.close();
+    }
+  });
+});
+
+// ===========================================================================
 // Private Realtime → overlay scorebug (JWT mint + Realtime Authorization)
 // Must stay BEFORE the stream-link describe: that one decides the fixture.
 // ===========================================================================
@@ -1012,7 +1147,6 @@ test.describe("moments (W2)", () => {
     const ownerPage = await owner.newPage();
     try {
       moments = await seedOverlayFixture(ownerPage);
-      await grantOverlay(moments.orgId);
     } finally {
       await owner.close();
     }
@@ -1170,7 +1304,6 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
     const ownerPage = await owner.newPage();
     try {
       clockRig = await seedOverlayFixture(ownerPage);
-      await grantOverlay(clockRig.orgId);
     } finally {
       await owner.close();
     }
@@ -1275,7 +1408,6 @@ test.describe("cricket crease band (W2 Task 3)", () => {
     const ownerPage = await owner.newPage();
     try {
       cricket = await seedCricketOverlayFixture(ownerPage);
-      await grantOverlay(cricket.orgId);
     } finally {
       await owner.close();
     }
@@ -1345,7 +1477,6 @@ test.describe("cricket end-of-over card (EOO)", () => {
     const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const ownerPage = await owner.newPage();
     const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
-    await grantOverlay(rig.orgId);
 
     const anon = await anonPage(browser);
     const anonBug = await anonPage(browser);
@@ -1446,7 +1577,6 @@ test.describe("§1's name ladder on the bar (W2-F45)", () => {
     const ownerPage = await owner.newPage();
     try {
       const rig = await seedOverlayFixture(ownerPage);
-      await grantOverlay(rig.orgId);
       for (const [id, name] of [
         [rig.homeEntrantId, home],
         [rig.awayEntrantId, away],

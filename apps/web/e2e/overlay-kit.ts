@@ -4,17 +4,19 @@
 // second copy would drift the moment the engine's card vocabulary moves.
 //
 // WHY A FRESH ORG, AND NOT THE SHARED PRO ONE (AUTH_STATE).
-// `streaming.overlay` is granted by NO plan (V402 inserts a row for every plan
-// with `bool_value = false`; `lib/feature-copy.ts` calls it a dark rollout), so
-// the only way to reach the overlay route is an `org_entitlement_overrides`
-// row. That override is ORG-WIDE — `resolve()` overlays it before the
-// competition-pass arm ever runs (`lib/entitlements.ts`) — so granting it on
-// the shared Pro org would put the OBS panel on every division fixtures tab in
-// the same Playwright job (`d/[divSlug]/page.tsx`: `streamOffered = tab ===
+// Since V426 (Task 14b, owner ruling 2026-09-29) EVERY plan grants
+// `streaming.overlay` and `streaming.relay` — V402 had set both false on every
+// plan, a dark rollout — so a rig's org reaches the overlay route on its plan
+// alone, and nothing here grants it. What still needs an org of its own is the
+// NEGATIVE: the only way left to 404 the route is an `org_entitlement_overrides`
+// row with `bool_value = false` (`denyOverlay` below), and that override is
+// ORG-WIDE — `resolve()` overlays it before the competition-pass arm ever runs
+// (`lib/entitlements.ts`). Written on the shared Pro org it would 404 every
+// overlay and take the stream toggle off every division fixtures tab in the
+// same Playwright job (`d/[divSlug]/page.tsx`: `streamOffered = tab ===
 // "fixtures" && editable`), where `run-sheet`/`competition-desk` are asserting
-// on those rows. It would also make an "unentitled ⇒ 404" assertion vacuous
-// for every later wave, which is the exact hazard the T1 visual pass recorded
-// when it deleted its own nine override rows.
+// on those rows — the hazard the T1 visual pass recorded when it deleted its
+// own nine override rows, now pointing the other way.
 //
 // A fresh org costs four INSERTs and is completely inert to every other spec.
 // The rig shape is `enterprise-gate.spec.ts`'s `seedOrgOnPlan`, which is the
@@ -138,10 +140,10 @@ export async function signInAs(page: Page, email: string): Promise<void> {
  * anonymous, so every assertion should open its own context; the sign-in is
  * only how the seed reaches the write API as this org.
  *
- * The entitlement is NOT granted here — `grantOverlay` below is a separate
- * step so a caller can photograph the 404 first. Not entitled ⇒ `notFound()`,
- * and a spec that granted in the same breath would be asserting against a 404
- * page without noticing.
+ * The org is on `pro`, which grants `streaming.overlay` since V426 — so the
+ * route answers 200 for this fixture from the moment the seed returns, with no
+ * override row. A caller that needs the 404 writes one (`denyOverlay`) and
+ * takes it away again (`clearStreamingOverride`); not entitled ⇒ `notFound()`.
  */
 export async function seedOverlayFixture(page: Page): Promise<OverlayRig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
@@ -553,11 +555,51 @@ export async function seedHockeyGoalOverlayFixture(page: Page): Promise<OverlayR
   });
 }
 
-/** Lift `streaming.overlay` for this rig's org. No cache invalidation is
- *  needed on a first grant, but a caller that has already resolved the key for
- *  this org (by fetching the route and getting its 404) must pass `request` —
- *  `invalidateOrgEntitlements` is the documented drop and is a cheap no-op
- *  where there is no Redis. */
-export async function grantOverlay(orgId: string): Promise<void> {
-  await setBoolEntitlementOverrideSql(orgId, "streaming.overlay", true);
+/** Switch `streaming.overlay` OFF for this rig's org — the one way left to
+ *  reach the route's 404 now that every plan grants it (V426). An org-wide
+ *  override, which is why it is only ever written on a rig's own fresh org. A
+ *  caller that has already resolved the key for this org must follow it with
+ *  `invalidateOrgEntitlements` (the documented drop; a cheap no-op where there
+ *  is no Redis). */
+export async function denyOverlay(orgId: string): Promise<void> {
+  await setBoolEntitlementOverrideSql(orgId, "streaming.overlay", false);
+}
+
+/** Remove this org's override row for a streaming key, so the key resolves
+ *  from the PLAN again — the differential half of `denyOverlay`: the 200 that
+ *  follows is the plan's own V426 row reaching the route, not another
+ *  override. Same invalidation obligation. Throws when there was no row, so a
+ *  "cleared" that removed nothing cannot pass for a differential. */
+export async function clearStreamingOverride(
+  orgId: string,
+  featureKey: "streaming.overlay" | "streaming.relay",
+): Promise<void> {
+  const removed = await withDb(
+    (sql) => sql`delete from org_entitlement_overrides where org_id = ${orgId} and feature_key = ${featureKey} returning 1`,
+  );
+  if (removed.length !== 1) {
+    throw new Error(`clearStreamingOverride: no ${featureKey} override on org ${orgId} (removed ${removed.length})`);
+  }
+}
+
+/** Move this rig's org onto `planKey` — the SQL-flip convention the kit's own
+ *  seed uses (`subscriptions.plan_key`), for a caller that needs the fixture
+ *  seeded on `pro` and then viewed on another plan. Same invalidation
+ *  obligation. Returns the plan's monthly free match credits, read from
+ *  `plan_entitlements` (V426's row), never typed: the expected value of every
+ *  assertion that follows. */
+export async function setRigPlan(orgId: string, planKey: string): Promise<{ monthlyMatchCredits: number }> {
+  return withDb(async (sql) => {
+    const moved = await sql`
+      update subscriptions set plan_key = ${planKey}
+       where id = (select subscription_id from organizations where id = ${orgId}) returning 1`;
+    if (moved.length !== 1) throw new Error(`setRigPlan: org ${orgId} has no subscription to move`);
+    const [row] = await sql<{ n: number | null }[]>`
+      select int_value as n from plan_entitlements
+       where plan_key = ${planKey} and feature_key = 'streaming.credits.monthly'`;
+    if (row?.n === null || row?.n === undefined) {
+      throw new Error(`setRigPlan: plan ${planKey} declares no streaming.credits.monthly (V426)`);
+    }
+    return { monthlyMatchCredits: row.n };
+  });
 }
