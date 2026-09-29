@@ -293,6 +293,33 @@ describe("ruling 38: what the matrix may take from the bench", () => {
     // ...while the target's own static closure is the browser path: it loads playwright.
     expect(playwrightLoaders(closure([BROWSER_RUN])).map((f) => relative(MATRIX, f))).toContain("lib/browser/session.ts");
   });
+
+  // Fix round 1 (d): SPEC reads only `import("literal")`, so an `import(p)` —
+  // or a template with a `${…}` in it — names its target at run time and
+  // slips past the exact-set pin above. Every `import(` in a shipped module's
+  // code (comments stripped) must be a literal the pin can read.
+  const LITERAL_IMPORT = /^import\s*\(\s*(?:"[^"\n]*"|'[^'\n]*'|`[^`$\n]*`)\s*\)/;
+  /** Comments out: a block comment, or a line comment at a line start or after
+   *  whitespace (so `http://` inside a string is not taken for one). */
+  const codeOf = (src: string) => src.replace(/(^|\s)\/\*[\s\S]*?\*\//g, "$1").replace(/(^|\s)\/\/.*$/gm, "$1");
+  it("every import() in a shipped module is a string literal — never an identifier or an interpolated template", () => {
+    const bad: string[] = [];
+    const literal: string[] = [];
+    for (const m of MODULES) {
+      const code = codeOf(readFileSync(m, "utf8"));
+      for (const hit of code.matchAll(/\bimport\s*\(/g)) {
+        const at = code.slice(hit.index);
+        (LITERAL_IMPORT.test(at) ? literal : bad).push(`${relative(MATRIX, m)}: ${at.split("\n")[0]!.slice(0, 80)}`);
+      }
+    }
+    console.info(`boundary: ${literal.length + bad.length} import() call(s) read, ${bad.length} not a literal`);
+    expect(bad).toEqual([]);
+    // Positive pair: the one known edge is read, as a literal.
+    expect(literal.some((l) => l.startsWith("run.ts: import(\"./lib/browser/browser-run.ts\")"))).toBe(true);
+    // The pattern has teeth on each refused shape, and passes each literal quote.
+    for (const refused of ["import(p)", "import(`./lib/${x}.ts`)", "import(\"./a\" + b)"]) expect(LITERAL_IMPORT.test(refused), refused).toBe(false);
+    for (const ok of ["import(\"./a.ts\")", "import('./a.ts')", "import(`./a.ts`)"]) expect(LITERAL_IMPORT.test(ok), ok).toBe(true);
+  });
 });
 
 // W1c Task 4 (Task 3 review, controller ruling): the harness's widths live in
