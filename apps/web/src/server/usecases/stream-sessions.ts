@@ -1228,6 +1228,13 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     select id, kind, label from org_stream_targets where id = ${row.target_id}`;
   const [fx] = await sql<{ stream_url: string | null; status: string }[]>`select stream_url, status from fixtures where id = ${fixtureId}`;
   const hb = row.last_heartbeat as { fps?: number | null; bitrateKbps?: number | null } | null;
+  // D3: the session's OWN net spend — its consume row, less any refund linked to it. Neither a restart inside the reuse
+  // window (no consume row) nor a refunded consume is "a credit used". Unlinked refunds name no session and never count.
+  // Org-scoped as reuseWindowOpen's arithmetic is — and that rides the (org_id, created_at) index on every poll, where
+  // session_id alone has none.
+  const [spend] = await sql<{ net: number }[]>`
+    select coalesce(sum(delta), 0)::int as net from org_stream_credits
+     where org_id = ${row.org_id} and session_id = ${row.id} and reason in ('consume', 'refund')`;
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
@@ -1239,6 +1246,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     endReason: row.end_reason,
+    creditUsed: spend!.net < 0,
   };
 }
 

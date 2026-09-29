@@ -1343,6 +1343,10 @@ export const StreamSessionCurrent = z
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     endReason: StreamEndReason.nullable(),
+    /** True iff THIS session's own consume still stands: the sum of its `consume` + `refund` credit rows is below zero.
+     *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —
+     *  both read false, so the "1 credit used" chip is never a false money claim (lane D D3). */
+    creditUsed: z.boolean(),
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;

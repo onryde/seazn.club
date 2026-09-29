@@ -38790,6 +38790,9 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "creditUsed": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -38808,7 +38811,8 @@
                             "replayUrl",
                             "target",
                             "fixtureDecided",
-                            "endReason"
+                            "endReason",
+                            "creditUsed"
                           ],
                           "additionalProperties": false
                         },
@@ -38870,7 +38874,8 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
-                    "endReason": "stopped"
+                    "endReason": "stopped",
+                    "creditUsed": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -39433,6 +39438,9 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "creditUsed": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -39451,7 +39459,8 @@
                         "replayUrl",
                         "target",
                         "fixtureDecided",
-                        "endReason"
+                        "endReason",
+                        "creditUsed"
                       ],
                       "additionalProperties": false
                     },
@@ -39508,7 +39517,8 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
-                    "endReason": "stopped"
+                    "endReason": "stopped",
+                    "creditUsed": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

@@ -176,9 +176,14 @@ describe("relay request schemas refuse what they must", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
-      target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null,
+      target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // D3: creditUsed is REQUIRED and a boolean — an absent field must not read as "no credit used" on the client.
+    const withoutCreditUsed: Record<string, unknown> = { ...current };
+    delete withoutCreditUsed.creditUsed;
+    expect(S.StreamSessionCurrent.safeParse(withoutCreditUsed).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, creditUsed: 1 }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, streamKey: "k" }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, qr: {} }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "storage_exhausted" }).success).toBe(false);

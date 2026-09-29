@@ -41,7 +41,7 @@ import { relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
-import { creditBalance, grantCredits, orgMoneyLockKey, revokeCredits } from "../stream-credits";
+import { creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
@@ -501,6 +501,51 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const failed = (await currentSession(broke.auth, broke.fixtureId, broke.deps))!;
     expect(failed.state).toBe("failed");
     expect(failed.failReason).toBe("no_credits");
+    expect(failed.creditUsed, "D3: a session refused its credit at live used none").toBe(false);
+    expect(live.creditUsed, "D3: the positive pair — the session that went live paid").toBe(true);
+  });
+
+  // Lane D amendment D3 (R3.15): the ended state's "1 credit used" chip reads `creditUsed`, so it must be TRUE only for
+  // a session whose OWN consume still stands — net of refunds linked to it. The rule is the amendment's: the sum of this
+  // session's consume + refund rows is below zero. Walked as a SEQUENCE: before the consume, after it, after a goodwill
+  // refund that names no session, after a refund linked to this session, and the NEXT session on the same fixture.
+  it("D3: creditUsed — false before the consume, true once it stands, unmoved by an unlinked refund, false after a refund linked to THIS session; the next session pays again and says so", async () => {
+    const r = await rig({ credits: 2 });
+    const a = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(warming.state).toBe("warming");
+    expect(warming.creditUsed, "no consume row yet — the empty case").toBe(false);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state).toBe("live");
+    expect(live.creditUsed).toBe(true);
+    const staff = await rigUser();
+    await refundCredits({ orgId: r.auth.orgId, delta: 1, createdBy: staff, note: "goodwill", idempotencyKey: randomUUID(), sessionId: null });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "a refund naming no session returns nothing of this one").toBe(true);
+    await refundCredits({ orgId: r.auth.orgId, delta: 1, createdBy: staff, note: "stream failed", idempotencyKey: randomUUID(), sessionId: a.sessionId });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "the linked refund nets the consume out").toBe(false);
+    const stopped = await stopSession(r.auth, r.fixtureId, a.sessionId, r.deps);
+    expect(stopped.creditUsed, "the stop route's projection is the same fact").toBe(false);
+    // The refunded consume no longer stands, so it opens no reuse window (lane C D2): the next session pays, and says so.
+    const b = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const again = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(again).toMatchObject({ id: b.sessionId, state: "live", creditUsed: true });
+  });
+
+  it("D3: a restart inside the reuse window consumed nothing, so its creditUsed is false — while the session that paid read true", async () => {
+    const r = await rig({ credits: 1 });
+    const a = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!).toMatchObject({ id: a.sessionId, state: "live", creditUsed: true });
+    expect((await stopSession(r.auth, r.fixtureId, a.sessionId, r.deps)).creditUsed).toBe(true);
+    const b = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const restarted = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(restarted).toMatchObject({ id: b.sessionId, state: "live" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${b.sessionId}`;
+    expect(n, "the restart wrote no ledger row").toBe(0);
+    expect(restarted.creditUsed).toBe(false);
   });
 
   // The brief's ONE-credit seed, restored (fix round 1, I2). A club that bought exactly one credit, went live (1 → 0) and
