@@ -3905,7 +3905,7 @@ describe("single-sport scanner (R26)", () => {
     const lines = ci.split("\n");
     const at = lines.findIndex((l) => l.trim() === "- run: npm run engine:boundary");
     expect(at).toBeGreaterThan(0);
-    expect(lines[at + 1]!.trim()).toBe("- run: pnpm matrix:single-sport --check");
+    expect(lines[at + 1]!.trim()).toBe("- run: pnpm matrix:single-sport --check --against HEAD^1");
     expect(pkg.scripts["matrix:single-sport"]).toBe("node --experimental-strip-types scripts/matrix/single-sport.ts");
   });
 ```
@@ -4060,7 +4060,7 @@ Expected: EXIT=0 twice. The planning scan found 5 files with double-quoted sport
 
 Single and backtick quotes may add more. Paste the file count and the entry count into the report. W1b does **not** add reasons to those files: they belong to other waves' code (scope fence), and the ratchet only stops the list from growing.
 
-`ci.yml`: directly after `      - run: npm run engine:boundary`, add `      - run: pnpm matrix:single-sport --check`.
+`ci.yml`: directly after `      - run: npm run engine:boundary`, add `      - run: pnpm matrix:single-sport --check --against HEAD^1`.
 
 `package.json`: add the `matrix:single-sport` script.
 
@@ -4272,7 +4272,7 @@ describe("reference CI wiring (Task 12)", () => {
     expect(m).toBeGreaterThan(0);
     expect(r).toBeGreaterThan(m);
     expect(lines.slice(m + 1, r).some((l) => l.startsWith("      - "))).toBe(false);
-    const ss = lines.findIndex((l) => l.trim() === "- run: pnpm matrix:single-sport --check");
+    const ss = lines.findIndex((l) => l.trim() === "- run: pnpm matrix:single-sport --check --against HEAD^1");
     expect(lines[ss + 1]!.trim()).toBe("- run: npm run reference:boundary");
     expect(stepOf(ci, REF).keys).toEqual(["name", "run"]);
   });
@@ -4470,7 +4470,7 @@ Root `package.json`:
 `Dockerfile`: after `COPY packages/engine/package.json packages/engine/`, add `COPY packages/reference/package.json packages/reference/`.
 
 `ci.yml`:
-- After `      - run: pnpm matrix:single-sport --check`, add `      - run: npm run reference:boundary`.
+- After `      - run: pnpm matrix:single-sport --check --against HEAD^1`, add `      - run: npm run reference:boundary`.
 - Directly after the matrix step's closing `'`, add a step named `Reference package tests (DB-free)`. Its `run: |` block is the matrix block with these substitutions:
   - `vitest-results-matrix.json` → `vitest-results-reference.json`;
   - positional `scripts/matrix` → `packages/reference`;
