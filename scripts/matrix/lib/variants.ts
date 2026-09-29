@@ -11,7 +11,7 @@ import { ROW_KEYS, builderDefaultVariant, stagesForRow, type RowKey } from "./ca
 import { foldStream } from "./fold.ts";
 import { CfgInvalid, resolveSportCfg, sportModule, variantKeys } from "./sport-cfg.ts";
 import { generateStream, matchesRequest } from "./streams/index.ts";
-import { GeneratorUnsupported, OutcomeUnreachable } from "./streams/types.ts";
+import { GeneratorUnsupported } from "./streams/types.ts";
 
 /** scripts/sync-sports.ts:32-36 (not exported there) — the display name every
  *  system variant is stored under, and so what the builder orders by
@@ -255,8 +255,10 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
 /** The refusals a generate-then-fold may answer with: the engine's own, and the
- *  stream registry's two named gaps. Anything else is a harness fault. */
-const SCORABLE_REFUSALS = [EngineError, GeneratorUnsupported, OutcomeUnreachable] as const;
+ *  stream registry's declared generator gap. Anything else is a harness fault —
+ *  including OutcomeUnreachable, the registry's DRAW guard: scorable asks only
+ *  for wins, so it cannot be a reason here (final batch FB-13). */
+const SCORABLE_REFUSALS = [EngineError, GeneratorUnsupported] as const;
 
 /** Can the harness score a fixture under this case? Win for each side, on the
  *  row's first stage kind, generated then folded through the real engine.

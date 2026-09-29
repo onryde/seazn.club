@@ -15,7 +15,7 @@ import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS, stagesForRow } from ".
 import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
-import type { StreamRequest } from "../lib/streams/types.ts";
+import { GeneratorUnsupported, OutcomeUnreachable, type StreamRequest } from "../lib/streams/types.ts";
 import {
   FieldUnbounded, RESCUE_BUDGET, VariantGenerationStuck, VariantRescueBudgetExceeded, buildSportVariants, buildVariant,
   factorsFor, levelsOf, offlineBuilderDefault, offlineVariantOrder, scorable, titleCase,
@@ -457,6 +457,29 @@ describe("scorability (the generatability sweep)", () => {
     expect(() => scorable({ ...vc, preset: "no-such-preset" })).toThrow(UnknownVariant);
     // Positive pair: the same call shape with a refusal the engine declares is a reason.
     expect(scorable({ ...vc, overrides: { resultMode: "no-such-mode" } })).toMatch(/^cfg: CfgInvalid: /);
+  });
+  it("final batch FB-13: scorable asks only for wins, so an OutcomeUnreachable (the registry's DRAW guard) is a harness fault and is rethrown, never a reason", () => {
+    // Registry sweep: record what scorable actually requests, per sport.
+    const asked: string[] = [];
+    let judged = 0;
+    for (const s of SPORT_KEYS) {
+      const vc = { id: "x", sport: s, row: "league" as const, preset: offlineBuilderDefault(s), classes: {}, values: {}, overrides: {}, scorable: null };
+      const recording = (req: StreamRequest) => { asked.push(req.outcome.kind); return generateStream(req); };
+      scorable(vc, { generate: recording });
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(asked.length, "scorable asked for no stream at all").toBeGreaterThan(0);
+    expect([...new Set(asked)], "the premise: only wins are ever requested").toEqual(["win"]);
+    // The engine's draw guard is where the registry throws it (the only throw site).
+    expect(src("scripts/matrix/lib/streams/index.ts").match(/throw new OutcomeUnreachable\(/g)?.length).toBe(1);
+    // single-sport: the fault is the harness's; generic's default preset is the plainest carrier.
+    const vc = { id: "x", sport: "generic", row: "league" as const, preset: offlineBuilderDefault("generic"), classes: {}, values: {}, overrides: {}, scorable: null };
+    const unreachableWin = () => { throw new OutcomeUnreachable("generic", "win-home", "a win the registry cannot reach"); };
+    expect(() => scorable(vc, { generate: unreachableWin })).toThrow(OutcomeUnreachable);
+    // Positive pair: the registry's declared win gap stays a reason.
+    const gap = () => { throw new GeneratorUnsupported("generic", "win-home", "declared gap"); };
+    expect(scorable(vc, { generate: gap })).toMatch(/^win-home: GeneratorUnsupported: /);
   });
   it("the generator records scorable(case) on every case — the seam is wired, not left null", () => {
     let n = 0;
