@@ -31,7 +31,7 @@ import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
-import { inputEnvelopesHex, resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
+import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -45,12 +45,13 @@ import { relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  openStreamFixtureIds, reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  openStreamFixtureIds, reconcileSession, relayBalance, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -176,7 +177,9 @@ async function override(orgId: string, key: string, value: boolean) {
   await invalidateOrgEntitlements(orgId);
 }
 
-async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; fixtures?: 1 | 2; targetHost?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
+/** `monthly: true` leaves this period's free match credits for createSession to grant (V426); by default the rig grants
+ *  and spends them (`spendMonthlyStreamGrant`), so `credits` is the whole balance, as every pre-V426 test assumes. */
+async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; targetHost?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null (_rig.ts:37), and fixture_stream_sessions.created_by is `uuid not null` — the
   // organiser who starts a stream is a REAL users row, so every `created_by` / `actor_user_id` below is a real id and
@@ -188,6 +191,7 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
   // The grant's in-transaction audit row needs a real users row (staff_audit_log.actor_id NOT NULL, V103:16) and every
   // staff write needs a key (Task 7).
   if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
+  if (!opts.monthly) await spendMonthlyStreamGrant(auth.orgId);
   const target = await createStreamTarget(auth, auth.orgId, {
     kind: opts.kind ?? "youtube", label: "Club",
     rtmpUrl: `rtmps://${opts.targetHost ?? "a.rtmps.youtube.com"}/live2`, streamKey: "yt-key",
@@ -2077,6 +2081,52 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(await relayBalance(r.auth, r.auth.orgId)).toBe(2);
     const other = await rig({ credits: 1 });
     await expect(relayBalance(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });   // 404 ≡ missing, never 403
+  });
+
+  // V426 (Task 14b, R3): the plan's free match credits, read from V426's own rows — never typed here.
+  const monthlyRate = async (plan: string) =>
+    (await sql<{ n: number }[]>`select int_value as n from plan_entitlements where plan_key = ${plan} and feature_key = 'streaming.credits.monthly'`)[0]!.n;
+
+  it("V426 (R3a): an org that never bought a credit is ADMITTED on its plan's free monthly credits — createSession grants them before the balance gate, and the go-live consume draws the MONTHLY bucket", async () => {
+    const r = await rig({ monthly: true });   // credits 0, and this period's grant left for createSession to make
+    const rate = await monthlyRate("community");
+    expect(rate, "premise: community's V426 row grants at least one").toBeGreaterThanOrEqual(1);
+    expect(await creditBalance(sql, r.auth.orgId), "premise: nothing bought, nothing granted yet").toBe(0);
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const grants = await sql<{ bucket: string; delta: number }[]>`
+      select bucket, delta from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'grant'`;
+    expect(grants.map((g) => ({ ...g }))).toEqual([{ bucket: "monthly", delta: rate }]);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state).toBe("live");
+    expect(live.balance).toBe(rate - 1);
+    const consumes = await sql<{ bucket: string }[]>`
+      select bucket from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`;
+    expect(consumes.map((c) => c.bucket)).toEqual(["monthly"]);
+    // The negative pair, on the rig's default (the grant made AND spent): no free credit left, so the same start is 402.
+    const spent = await rig();
+    await expect(createSession(spent.auth, spent.fixtureId, body(spent.target.id), spent.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+  });
+
+  it("V426 (R3b): relayCredits grants this month's free credits on the page's read, splits the balance by bucket beside the plan's allowance, a second read writes nothing, and another org's is 404", async () => {
+    const r = await rig({ credits: 2, monthly: true });
+    const rate = await monthlyRate("community");
+    const count = async () => (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId}`)[0]!.n;
+    const first = await relayCredits(r.auth, r.auth.orgId);
+    expect(first).toEqual({ monthly: rate, pack: 2, total: rate + 2, monthlyAllowance: rate });
+    expect(first.total, "the chip's number is creditBalance's").toBe(await creditBalance(sql, r.auth.orgId));
+    const n = await count();
+    expect(await relayCredits(r.auth, r.auth.orgId)).toEqual(first);
+    expect(await count(), "idempotent within the month").toBe(n);
+    const other = await rig({ monthly: true });
+    await expect(relayCredits(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });
+    expect(await count(), "a refused read grants nothing").toBe(n);
+    // The allowance follows the RESOLVED plan: a pro org's is pro's row, and differs from community's.
+    const pro = await rig({ monthly: true });
+    await setOrgPlan(pro.auth.orgId, "pro");
+    const proRate = await monthlyRate("pro");
+    expect(proRate, "premise: the two rows differ").not.toBe(rate);
+    expect(await relayCredits(pro.auth, pro.auth.orgId)).toEqual({ monthly: proRate, pack: 0, total: proRate, monthlyAllowance: proRate });
   });
 
   it("F1: openStreamFixtureIds names exactly the fixtures with a session still UP — every active state in, every terminal state out, another org's never", async () => {

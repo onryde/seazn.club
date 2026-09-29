@@ -174,6 +174,8 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     viewerPlan: "community",
     orgId: "o-1",
     streamBalance: 3,
+    streamSplit: null,
+    monthlyAllowance: 0,
     currency: "gbp",
     ...o,
   };
@@ -574,12 +576,13 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
   });
 
   it("with streaming.relay it mounts the container with THIS row's fixture and the page's org, balance and plan", () => {
-    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, viewerPlan: "pro", currency: "inr" }).tree();
+    const split = { monthly: 1, pack: 3, total: 4 };
+    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, viewerPlan: "pro", currency: "inr" }).tree();
     expect(tree.find((el) => el.type === UpgradeGate), "no upsell once entitled").toBeUndefined();
     const tab = tree.find((el) => el.type === PhoneTab);
     expect(tab, "the Phone tab body is not the container").toBeDefined();
     // Each value differs from ctx()'s default, so a prop wired to the wrong field (or a constant) cannot pass.
-    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, viewerPlan: "pro", currency: "inr" });
+    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, viewerPlan: "pro", currency: "inr" });
   });
 
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
@@ -868,7 +871,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
-  planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false, currency: "gbp",
+  planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0,
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {}, onTileIntent: () => {},
 };
@@ -970,6 +973,54 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(tree, "stream-buy-pack-5")).toBeUndefined();
     expect(byTestId(tree, "stream-buy-more")).toBeDefined();
     expect(textAt(body({ view: null, balance: 1 }), "stream-balance"), "one credit is singular").toBe(m("stream.phone.credits.one"));
+  });
+
+  // Task 14b (R4). The owner's per-plan rates are V426's rows — parsed from the migration itself, never typed here, so a
+  // changed rate moves this sweep with it (the DB-backed half, each plan's GRANT, is stream-credits-monthly.test.ts).
+  const v426Rates = (): [string, number][] => {
+    const sql = readFileSync(join(__dirname, "../../../../../../db/migration/deltas/V426__streaming_every_plan_monthly_credits.sql"), "utf8");
+    const block = sql.slice(sql.indexOf("'streaming.credits.monthly', null"), sql.indexOf("join plans p on p.key = v.plan_key"));
+    return [...block.matchAll(/\('(\w+)',\s*(\d+)\)/g)].map((x) => [x[1]!, Number(x[2])]);
+  };
+
+  it("Task 14b (R4): the credits card names the plan's free monthly credits — every V426 plan's own n, singular at 1", () => {
+    const rates = v426Rates();
+    let checked = 0;
+    for (const [plan, n] of rates) {
+      // Balance 0: the card is forced open, so the note is on screen.
+      const note = textAt(body({ view: null, balance: 0, monthlyAllowance: n }), "stream-credits-monthly");
+      expect(note, plan).toBe(n === 1 ? m("stream.credits.monthlyNote.one") : m("stream.credits.monthlyNote.other", { n }));
+      expect(note, `${plan}: the number itself is on screen`).toContain(String(n));
+      checked++;
+    }
+    expect(checked, "no V426 rate was parsed").toBeGreaterThan(0);
+    expect(checked).toBe(rates.length);
+    // Both plural arms were exercised by real rates, not by a value typed here.
+    expect(rates.some(([, n]) => n === 1) && rates.some(([, n]) => n > 1), "V426 covers both forms").toBe(true);
+  });
+
+  it("Task 14b (R4): no allowance, no note — and the note lives in the credits card, so a closed card shows none", () => {
+    expect(byTestId(body({ view: null, balance: 0, monthlyAllowance: 0 }), "stream-credits-monthly"), "the empty case").toBeUndefined();
+    expect(byTestId(body({ view: null, balance: 2, monthlyAllowance: 5 }), "stream-credits-monthly"), "card closed").toBeUndefined();
+    expect(byTestId(body({ view: null, balance: 2, monthlyAllowance: 5, showBuy: true }), "stream-credits-monthly"), "the positive pair: opened").toBeDefined();
+  });
+
+  it("Task 14b (R4): the split line shows ONLY while free credits are held and the split still adds up to the chip; the chip stays the total", () => {
+    const split = { monthly: 2, pack: 3, total: 5 };
+    const shown = body({ view: null, balance: 5, split });
+    expect(textAt(shown, "stream-credits-split")).toBe(m("stream.credits.split", { m: 2, p: 3 }));
+    expect(textAt(shown, "stream-balance"), "the chip is the total").toBe(m("stream.phone.credits.other", { n: 5 }));
+    let hidden = 0;
+    for (const [why, p] of [
+      ["no free credits held", { balance: 3, split: { monthly: 0, pack: 3, total: 3 } }],
+      ["stale: a session moved the balance since the page read it", { balance: 4, split }],
+      ["no split read (no relay)", { balance: 5, split: null }],
+      ["nothing at all", { balance: 0, split: { monthly: 0, pack: 0, total: 0 } }],
+    ] as const) {
+      expect(byTestId(body({ view: null, ...p }), "stream-credits-split"), why).toBeUndefined();
+      hidden++;
+    }
+    expect(hidden).toBe(4);
   });
 
   it("no destination yet: the select says to add one and Go live is disabled — the empty case", () => {
@@ -1483,7 +1534,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     stop?: () => unknown;
     saveTarget?: (json: unknown) => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, viewerPlan: "pro" as const, currency: "eur" as const };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, viewerPlan: "pro" as const, currency: "eur" as const };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
 
   function serve(s: Server): Server {
@@ -1556,6 +1607,16 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(byTestId(island.tree(), "stream-loading")).toBeUndefined();
     expect(bodyOf(island).view, "no session: idle").toBeNull();
+  });
+
+  it("Task 14b (R4): the container hands the body the page's split and monthly allowance, untouched", async () => {
+    serve({ current: null, targets: TARGETS });
+    const split = { monthly: 2, pack: 1, total: 3 };
+    const island = track(renderIsland(PhoneTab, { ...TAB, streamSplit: split, monthlyAllowance: 5 }));
+    await settle();
+    expect(bodyOf(island).split).toEqual(split);
+    expect(bodyOf(island).monthlyAllowance).toBe(5);
+    expect(bodyOf(island).balance, "the chip is still the total").toBe(TAB.streamBalance);
   });
 
   it("C1: no session → the SERVER-resolved balance; a session → its projection's fresher number, which Start another keeps", async () => {

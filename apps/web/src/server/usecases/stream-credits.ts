@@ -780,6 +780,9 @@ export async function ensureMonthlyStreamGrantsForAllOrgs(
   const now = opts.now ?? new Date();
   const period = streamMonthlyPeriod(now);
   const ids = opts.orgIds ?? null;
+  // An explicitly EMPTY scope grants nothing. It must never fall through to the every-org branch (the
+  // AI sweep's #390 regression), and `in ()` is not SQL.
+  if (ids !== null && ids.length === 0) return { orgs: 0, granted: 0, failed: 0 };
   const rows = await sql<{ id: string }[]>`
     select o.id from organizations o
      where o.deleted_at is null

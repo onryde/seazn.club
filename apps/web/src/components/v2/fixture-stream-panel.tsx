@@ -179,6 +179,15 @@ export interface StreamPanelFixture {
  * themes actually read so the RSC flight carries ~20 strings, not the whole
  * public catalogue.
  */
+/** Task 14b (V426): the org's match-credit balance split by bucket — `monthly` (this month's free credits, which expire
+ *  at the end of the UTC month) and `pack` (bought, never expire). `total` is the chip's number. Declared here rather than
+ *  imported from the server usecase, which is `server-only`. */
+export interface StreamCreditSplit {
+  monthly: number;
+  pack: number;
+  total: number;
+}
+
 export interface StreamPanelContext {
   /** `streaming.overlay`, competition-scoped. False ⇒ no panel and no toggle
    *  at all — never an upsell here (ruling 5: the OBS-side upsell is R1's). */
@@ -194,6 +203,12 @@ export interface StreamPanelContext {
    *  session does, so this is the idle tab's only source; without it a club that has just bought credits reads 0 and
    *  is shown the buy card again. */
   streamBalance: number;
+  /** Task 14b (R4) — `streamBalance` split by bucket, as the same server read resolved it; null when the page read no
+   *  credits (no relay). The tab shows the split only while it still adds up to the balance it shows. */
+  streamSplit: StreamCreditSplit | null;
+  /** Task 14b (R4) — the plan's free match credits per month (V426's `streaming.credits.monthly`), for the credits card's
+   *  note. 0 when the page read no credits. */
+  monthlyAllowance: number;
   /** P1 — the currency the relay-checkout route will CHARGE (`preferredCurrency`, resolved by the page for the same
    *  org and browser), so the tiles quote the amount the checkout's line shows — never a GBP number above a USD sheet. */
   currency: Currency;
@@ -671,6 +686,8 @@ export function FixtureStreamPanel({
               fixtureId={fixture.id}
               orgId={stream.orgId}
               streamBalance={stream.streamBalance}
+              streamSplit={stream.streamSplit}
+              monthlyAllowance={stream.monthlyAllowance}
               viewerPlan={stream.viewerPlan}
               currency={stream.currency}
             />
@@ -936,12 +953,16 @@ export function PhoneTab({
   fixtureId,
   orgId,
   streamBalance,
+  streamSplit,
+  monthlyAllowance,
   viewerPlan,
   currency,
 }: {
   fixtureId: string;
   orgId: string;
   streamBalance: number;
+  streamSplit: StreamCreditSplit | null;
+  monthlyAllowance: number;
   viewerPlan: ViewerPlan;
   currency: Currency;
 }) {
@@ -1155,6 +1176,8 @@ export function PhoneTab({
         stopFailed={session.stopFailed}
         checkoutOpen={checkoutSecret !== null}
         currency={currency}
+        split={streamSplit}
+        monthlyAllowance={monthlyAllowance}
         onSelectTarget={setSelectedTargetId}
         onAddTarget={() => setShowTargetForm((v) => !v)}
         onMode={setMode}
@@ -1210,6 +1233,12 @@ export function PhoneTab({
 export interface PhoneTabBodyProps {
   view: StreamSessionView | null;
   balance: number;
+  /** Task 14b (R4): the page's split of the balance by bucket. Shown as "{m} free this month · {p} bought" under the
+   *  chip only while the org holds free credits AND the split still adds up to `balance` — once a session's projection
+   *  moves the balance, the page's split is stale and says nothing rather than something wrong. */
+  split: StreamCreditSplit | null;
+  /** Task 14b (R4): the plan's free match credits per month; the credits card's note names it. None below 1. */
+  monthlyAllowance: number;
   targets: StreamTarget[];
   busy: boolean;
   createError: CreateError | null;
@@ -1345,6 +1374,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // B3: an idle org with no credits sees the heading and the credits card ONLY — a "Ready" pill and a three-step
   // stepper promise a stream it cannot start.
   const creditsOnly = forced && !p.planGate;
+  // Task 14b (R4): the chip stays the TOTAL; the split is its footnote, and only when there is something free to split.
+  const split = p.split !== null && p.split.monthly > 0 && p.split.total === p.balance ? p.split : null;
   // m12: §8a's ending row — "every control disabled" while the last seconds flush.
   const frozen = state === "ending";
   const stopFailure = p.stopFailed ? stopError(msg, state) : null;
@@ -1393,6 +1424,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           </button>
         )}
       </div>
+      {split && (
+        <p data-testid="stream-credits-split" className="mt-1 text-right text-[11px] text-slate-500 tabular-nums">
+          {msg("stream.credits.split", { m: split.monthly, p: split.pack })}
+        </p>
+      )}
 
       {/* Steps: the ol at ≥ 768, ONE line below — same tree, two branches (§8a). None at all while credits-only (B3). */}
       {!creditsOnly && (
@@ -1442,6 +1478,14 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         <div className="mt-3">
           <h5 className="text-sm font-semibold text-slate-700">{msg("stream.credits.title")}</h5>
           <p className="mt-1 text-xs text-slate-500">{msg("stream.credits.line")}</p>
+          {p.monthlyAllowance >= 1 && (
+            // Task 14b (R4): why a club with free credits might still buy — and which ones expire.
+            <p data-testid="stream-credits-monthly" className="mt-1 text-xs text-slate-500">
+              {p.monthlyAllowance === 1
+                ? msg("stream.credits.monthlyNote.one")
+                : msg("stream.credits.monthlyNote.other", { n: p.monthlyAllowance })}
+            </p>
+          )}
           <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
             {STREAM_CREDIT_PACKS.map((pack) => {
               // P1: the amount the pack's Stripe price charges in the checkout's currency. A currency the price has no

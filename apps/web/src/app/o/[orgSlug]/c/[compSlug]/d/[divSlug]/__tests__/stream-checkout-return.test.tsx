@@ -96,6 +96,9 @@ vi.mock("@/lib/db", () => ({
 const relay = vi.hoisted(() => ({
   reconcile: vi.fn<(orgId: string, sessionId: string) => Promise<boolean>>(async () => true),
   balance: vi.fn<(auth: unknown, orgId: string) => Promise<number>>(async () => 0),
+  // Task 14b: the page reads `relayCredits` (the balance split by bucket + the plan's monthly allowance). Its double is
+  // COMPOSED over `balance` above, so every G1/M4 test keeps witnessing the same read; `split` shapes the rest.
+  split: vi.fn<(total: number) => { monthly: number; pack: number; monthlyAllowance: number }>((total) => ({ monthly: 0, pack: total, monthlyAllowance: 1 })),
   open: vi.fn<(auth: unknown, fixtureIds: readonly string[]) => Promise<string[]>>(async () => []),
 }));
 vi.mock("@/server/usecases/stream-credits-checkout", () => ({
@@ -105,7 +108,10 @@ vi.mock("@/server/usecases/stream-credits-checkout", () => ({
 const money = vi.hoisted(() => ({ preferredCurrency: vi.fn<(orgId: string | null, req?: Request) => Promise<string>>(async () => "gbp") }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: (orgId: string | null, req?: Request) => money.preferredCurrency(orgId, req) }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
-  relayBalance: (auth: unknown, orgId: string) => relay.balance(auth, orgId),
+  relayCredits: async (auth: unknown, orgId: string) => {
+    const total = await relay.balance(auth, orgId);
+    return { ...relay.split(total), total };
+  },
   openStreamFixtureIds: (auth: unknown, fixtureIds: readonly string[]) => relay.open(auth, fixtureIds),
 }));
 
@@ -198,6 +204,46 @@ describe("the checkout return reconciles the session BEFORE the Phone tab's bala
     }
     expect(checked).toBe(3);
     expect(relay.reconcile).not.toHaveBeenCalled();
+  });
+});
+
+// Task 14b (R3b/R4): the page reads the balance through `relayCredits` — which grants this month's free credits first —
+// and hands the Phone tab the chip's total, the split behind it and the plan's monthly allowance, from that ONE read.
+describe("Task 14b: the Phone tab is handed the split and the monthly allowance from the page's one credits read", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    relay.balance.mockReset();
+    relay.split.mockReset();
+    scene.frozen = false;
+    scene.fixtures = [];
+    scene.entrants = [];
+  });
+
+  it("passes the total as the chip, the split behind it and the allowance — each a value no default could produce", async () => {
+    relay.balance.mockResolvedValue(7);
+    relay.split.mockReturnValue({ monthly: 2, pack: 5, monthlyAllowance: 20 });
+    const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as {
+      stream?: { streamBalance?: unknown; streamSplit?: unknown; monthlyAllowance?: unknown };
+    }).stream;
+    expect(relay.balance).toHaveBeenCalledTimes(1);
+    expect(relay.balance.mock.calls[0]![1]).toBe(PAGE.auth.orgId);
+    expect(stream?.streamBalance).toBe(7);
+    expect(stream?.streamSplit).toEqual({ monthly: 2, pack: 5, total: 7 });
+    expect(stream?.monthlyAllowance).toBe(20);
+  });
+
+  it("without the relay: no credits read, and the tab gets no split and no allowance — the empty case", async () => {
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+    try {
+      const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as {
+        stream?: { streamBalance?: unknown; streamSplit?: unknown; monthlyAllowance?: unknown };
+      }).stream;
+      expect(relay.balance).not.toHaveBeenCalled();
+      expect(stream).toMatchObject({ streamBalance: 0, streamSplit: null, monthlyAllowance: 0 });
+    } finally {
+      vi.mocked(hasFeature).mockImplementation(async () => true);
+    }
   });
 });
 

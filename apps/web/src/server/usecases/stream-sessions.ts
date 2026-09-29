@@ -40,7 +40,10 @@ import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { NoCreditsError, consumeForSession, creditBalance, lockOrg, reuseWindowOpen } from "./stream-credits";
+import {
+  NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, lockOrg, reuseWindowOpen,
+  streamMonthlyRate, type StreamCreditBreakdown,
+} from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
 import { setFixtureStreamUrl } from "./fixtures";
 
@@ -991,6 +994,13 @@ export async function createSession(
   if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
   const priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
 
+  // V426 (Task 14b, R3a): this month's free match credits are granted BEFORE the balance is read, so an org that has
+  // never bought a pack is admitted on its plan's allowance. Idempotent and one indexed read once the period's row
+  // exists. On the WALL clock, not deps.now(): the grant's period is the real UTC month (ledger rows carry the DB's
+  // now()), and a test clock ticked across a month end must not mint a second grant mid-test. Outside the admission
+  // transaction: it takes the org's money lock in a transaction of its own, which must not be held across `admit`.
+  await ensureMonthlyStreamGrant(orgId);
+
   const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
@@ -1001,9 +1011,9 @@ export async function createSession(
     sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`,
     deps.drivers.ingest.storageUsage().then(storageUsageForColumns),   // outside the transaction; G7: fitted to the integer columns
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
-    // existing single authority (it already filters expired overrides); no resolver edit. Under V402
-    // every R1 admission is an override, so the FALSE branch is exercised as a unit-level assertion on
-    // this mapping rather than through a plan-granted org that does not exist yet.
+    // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
+    // plan grants the relay, so the FALSE branch (plan-granted) is the common one; stream-sessions.test.ts
+    // drives it through createSession on an org with no override row.
     overrideRow(orgId, "streaming.relay"),
   ]);
   const viaOverride = relayOverride?.bool_value === true;
@@ -1134,6 +1144,23 @@ async function latestRow(fixtureId: string): Promise<Row | null> {
 export async function relayBalance(auth: AuthCtx, orgId: string): Promise<number> {
   if (orgId !== auth.orgId) throw new HttpError(404, "organisation not found");
   return creditBalance(sql, orgId);
+}
+
+/** What the Phone tab's credits card shows (Task 14b, R2/R4): the balance split by bucket, plus the plan's monthly
+ *  allowance for the "Your plan includes {n} free match credits" note. The division page's reader — it GRANTS this
+ *  month's free credits first (R3b, `ensureMonthlyStreamGrant`, idempotent), so the idle tab of an org that has never
+ *  started a stream already shows them. `total` is creditBalance's number (creditBreakdown sums the same rows), so the
+ *  chip and the split cannot disagree. Tenancy as `relayBalance`: a mismatch is 404, never 403. */
+export interface RelayCredits extends StreamCreditBreakdown {
+  /** The plan's `streaming.credits.monthly` (V426), on the org's RESOLVED plan. */
+  monthlyAllowance: number;
+}
+
+export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayCredits> {
+  if (orgId !== auth.orgId) throw new HttpError(404, "organisation not found");
+  await ensureMonthlyStreamGrant(orgId);
+  const [split, monthlyAllowance] = await Promise.all([creditBreakdown(sql, orgId), streamMonthlyRate(orgId)]);
+  return { ...split, monthlyAllowance };
 }
 
 /** F1: which of `fixtureIds` have a session still UP (an ACTIVE state) — THIS org's only. A billing-frozen competition

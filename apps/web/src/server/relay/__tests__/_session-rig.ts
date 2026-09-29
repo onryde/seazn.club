@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { seal } from "../crypto";
+import { creditBreakdown, ensureMonthlyStreamGrant } from "@/server/usecases/stream-credits";
 
 /** A real users row. staff_audit_log.actor_id is `not null references users(id)` (V103) and
  *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. */
@@ -50,6 +51,22 @@ export async function inputEnvelopesHex(sessionId: string): Promise<{ srt: strin
 export async function resealTargetDestination(targetId: string, rtmp: { url: string; streamKey: string }): Promise<void> {
   const rows = await sql`update org_stream_targets set rtmp_enc = ${seal(JSON.stringify(rtmp))} where id = ${targetId} returning id`;
   if (rows.length !== 1) throw new Error(`no org_stream_targets row ${targetId}`);
+}
+
+/** V426 (Task 14b): createSession now grants the org's free monthly credits before it reads the balance, so a rig that
+ *  seeds "N credits" would admit N + the plan's rate. This makes THIS period's grant (so createSession's ensure is a
+ *  no-op) and then expires it on the spot, leaving the ledger at the pack credits the test chose — the arithmetic every
+ *  pre-V426 test was written against. A test ABOUT the monthly grant opts out and lets createSession make it. Returns
+ *  the rate it granted and spent (read from V426's row, never typed). */
+export async function spendMonthlyStreamGrant(orgId: string): Promise<number> {
+  const rate = await ensureMonthlyStreamGrant(orgId);
+  const split = await creditBreakdown(sql, orgId);
+  if (split.monthly > 0) {
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+      values (${orgId}, ${-split.monthly}, 'expire', 'monthly', ${split.total - split.monthly}, 'rig: monthly grant spent')`;
+  }
+  return rate;
 }
 
 export interface StreamRig {

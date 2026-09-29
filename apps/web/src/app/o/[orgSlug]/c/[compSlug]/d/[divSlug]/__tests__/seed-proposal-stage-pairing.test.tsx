@@ -116,6 +116,12 @@ vi.mock("@/lib/db", () => ({
   withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
   statementCount: () => 0,
 }));
+// Task 14b: the fixtures tab reads the Phone tab's credits through `relayCredits`, which GRANTS this month's free match
+// credits in a real transaction first — this page test is not about streaming, so that read is a zero double.
+vi.mock("@/server/usecases/stream-sessions", () => ({
+  relayCredits: async () => ({ monthly: 0, pack: 0, total: 0, monthlyAllowance: 0 }),
+  openStreamFixtureIds: async () => [],
+}));
 
 import DivisionPage from "../page";
 import { ProgressionPanel } from "@/components/v2/progression-panel";

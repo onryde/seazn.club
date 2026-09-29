@@ -31,7 +31,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
-import { openStreamFixtureIds, relayBalance } from "@/server/usecases/stream-sessions";
+import { openStreamFixtureIds, relayCredits } from "@/server/usecases/stream-sessions";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
@@ -514,13 +514,13 @@ export default async function DivisionPage({
   // Sliced to that prefix, so the flight carries ~20 strings and not the whole
   // public catalogue.
   //
-  // Everything after the FIRST read is behind `streamEntitled`. Streaming is
-  // a dark rollout — `streaming.overlay` is granted by no plan today
-  // (`lib/feature-copy.ts`) — so on every division page that currently exists
-  // this costs exactly one entitlement query and neither the second read, the
-  // `public` dictionary import, nor a byte of it on the RSC flight. Skipped
-  // entirely off the fixtures tab and for a viewer who cannot edit: neither
-  // can reach a panel at all.
+  // Everything after the FIRST read is behind `streamEntitled`. Since V426
+  // (Task 14b) every plan grants both keys, so on an editable fixtures tab the
+  // reads below run; an org a staff override switched off still costs exactly
+  // one entitlement query and neither the second read, the `public`
+  // dictionary import, nor a byte of it on the RSC flight. Skipped entirely
+  // off the fixtures tab and for a viewer who cannot edit: neither can reach a
+  // panel at all.
   const streamOffered = tab === "fixtures" && editable;
   const streamEntitled =
     streamOffered && (await hasFeature(auth.orgId, "streaming.overlay", competition.id));
@@ -533,11 +533,13 @@ export default async function DivisionPage({
   if (checkout === "success" && checkoutSessionId) {
     await reconcileStreamCreditsCheckout(auth.orgId, checkoutSessionId);
   }
-  // M4 (Task 14 fix round 4): the balance and the currency are independent reads — one query and one cookies/headers
-  // read — so they run together, not one after the other. Both only with the relay (D9's query budget).
-  const [streamBalance, streamCurrency] = streamRelayEntitled
-    ? await Promise.all([relayBalance(auth, auth.orgId), preferredCurrency(auth.orgId)])
-    : [0, "gbp" as const];
+  // M4 (Task 14 fix round 4): the credits and the currency are independent reads — ledger queries and one
+  // cookies/headers read — so they run together, not one after the other. Both only with the relay (D9's query budget).
+  // Task 14b (R3b): `relayCredits` grants this month's free match credits BEFORE it reads (idempotent), and answers the
+  // balance split by bucket beside the plan's monthly allowance — the chip stays the total.
+  const [streamCredits, streamCurrency] = streamRelayEntitled
+    ? await Promise.all([relayCredits(auth, auth.orgId), preferredCurrency(auth.orgId)])
+    : [null, "gbp" as const];
   const streamPanel = streamOffered
     ? {
         entitled: streamEntitled,
@@ -545,7 +547,13 @@ export default async function DivisionPage({
         // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before
         // any session exists (C1). Read only when the relay gate is open — the tab shows the UpgradeGate otherwise.
         orgId: auth.orgId,
-        streamBalance,
+        streamBalance: streamCredits?.total ?? 0,
+        // Task 14b (R4): the split behind the chip ("{m} free this month · {p} bought") and the plan's monthly allowance
+        // for the credits card's note. Null / 0 without the relay, where no tab reads them.
+        streamSplit: streamCredits
+          ? { monthly: streamCredits.monthly, pack: streamCredits.pack, total: streamCredits.total }
+          : null,
+        monthlyAllowance: streamCredits?.monthlyAllowance ?? 0,
         // P1: the currency `/api/billing/relay-checkout` will CHARGE — the same `preferredCurrency` for the same org and
         // browser (subscription → cookie → Accept-Language) — so the tiles quote the checkout's own amount. Without the
         // relay there are no tiles, and nothing reads it.

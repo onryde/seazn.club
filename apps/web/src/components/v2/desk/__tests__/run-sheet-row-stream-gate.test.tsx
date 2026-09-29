@@ -68,6 +68,8 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     viewerPlan: "community",
     orgId: "o-1",
     streamBalance: 0,
+    streamSplit: null,
+    monthlyAllowance: 0,
     currency: "gbp",
     ...o,
   };

@@ -241,6 +241,17 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
     expect(await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [a.orgId, b.orgId] }), "the anti-join leaves nothing to do").toEqual({ orgs: 0, granted: 0, failed: 0 });
   });
 
+  it("the sweep: an explicitly EMPTY scope grants nothing (never the every-org branch), and a soft-deleted org is skipped", async () => {
+    expect(await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [] })).toEqual({ orgs: 0, granted: 0, failed: 0 });
+    const gone = await rig(null, 1);
+    const live = await rig(null, 1);
+    await sql`update organizations set deleted_at = now() where id = ${gone.orgId}`;
+    const res = await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [gone.orgId, live.orgId] });
+    expect(res).toEqual({ orgs: 1, granted: await rateOf("community"), failed: 0 });
+    expect(await rowCount(gone.orgId), "a deleted org is never granted").toBe(0);
+    expect((await creditBreakdown(sql, live.orgId)).monthly, "the positive pair").toBe(await rateOf("community"));
+  });
+
   it("grantMonthlyStreamCredits refuses a rate that is not a non-negative integer; a rate of 0 still expires the leftover and grants nothing, and a repeat writes nothing (k12)", async () => {
     const r = await rig(null, 1);
     await ensureMonthlyStreamGrant(r.orgId, JAN);

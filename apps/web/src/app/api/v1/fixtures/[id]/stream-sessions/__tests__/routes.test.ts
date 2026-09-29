@@ -48,7 +48,7 @@ import { MAX_DURATION_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_S
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { StorageUsage } from "@/server/relay/ports";
-import { resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
+import { resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
@@ -99,6 +99,9 @@ async function organiser(opts: { credits?: number; overlay?: boolean; relay?: bo
   await override(auth.orgId, "streaming.relay", opts.relay ?? true);
   const credits = opts.credits ?? 1;
   if (credits > 0) await grantCredits({ orgId: auth.orgId, delta: credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
+  // V426: createSession grants the plan's free monthly credits first; grant AND spend them here so `credits` stays the
+  // whole balance these refusal tests are written against.
+  await spendMonthlyStreamGrant(auth.orgId);
   const streamKey = `k-${randomUUID().slice(0, 8)}`;
   const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", rtmpUrl: YT, streamKey });
   // The fake ingest never connects inside a test, so a passthrough session stays `warming` (its QR on show).
