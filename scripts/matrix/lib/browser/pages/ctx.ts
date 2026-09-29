@@ -21,6 +21,25 @@ export function actBudget(c: Pick<PageCtx, "holdMs">, requests: number): number 
   return budgetMs({ base: FLOOR_MS, taps: requests, holdMs: c.holdMs });
 }
 
+/** One step's own bound: a tap at the human pace plus its slack, floored. The
+ *  bench's executeStep waits this long for a control (fixture-console.ts
+ *  forfeitBudgets passes it as waitMs) and then taps it with a bare
+ *  click()/fill(), which Playwright bounds by the page's DEFAULT timeout. */
+export function stepBudget(c: Pick<PageCtx, "holdMs">): number {
+  return budgetMs({ taps: 1, holds: 0, holdMs: c.holdMs });
+}
+
+/** Controller ruling F (T5 N1): sets the page's default action timeout to
+ *  stepBudget, so every tap no page object bounds itself is one step's bound
+ *  in the product's constants — never Playwright's own 30 s. BrowserDriver
+ *  calls it on every case page before its first action; the answer is the
+ *  bound it set. */
+export function boundActions(page: Pick<Page, "setDefaultTimeout">, c: Pick<PageCtx, "holdMs">): number {
+  const ms = stepBudget(c);
+  page.setDefaultTimeout(ms);
+  return ms;
+}
+
 export class LandedElsewhere extends Error {
   readonly wanted: string;
   readonly landed: string;

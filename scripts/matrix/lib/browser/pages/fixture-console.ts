@@ -29,7 +29,7 @@ import { executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
 import type { FixtureRow, PostedEvent } from "../../driver/types.ts";
-import { actBudget, awaitScreen, exactPath, navBudget, shoot, type PageCtx } from "./ctx.ts";
+import { actBudget, awaitScreen, exactPath, navBudget, shoot, stepBudget, type PageCtx } from "./ctx.ts";
 
 /** The route every console send answers on — finalize's included. */
 export function eventsPath(fixtureId: string): RegExp {
@@ -56,16 +56,22 @@ export function forfeitSteps(fixture: ForfeitFixture, by: string, reason: Forfei
 
 export interface ForfeitBudgets { readonly stepMs: number; readonly responseMs: number }
 
+/** Bounded waits one step can spend (execute.ts): its waitFor(waitMs), then a
+ *  bare click()/fill() under the page's default — stepMs too, once
+ *  BrowserDriver has run boundActions (ctx.ts, ruling F). */
+const WAITS_PER_STEP = 2;
+
 /** The forfeit's two bounds, both in the product's constants (AGENTS class
- *  20). Each step waits up to `stepMs` for its control (executeStep); the
+ *  20). Each step waits up to `stepMs` for its control and then taps it under
+ *  the page default, stepMs as well (executeStep; ctx.ts boundActions); the
  *  events answer lands only after the LAST step, so its wait is every step's
  *  worst case plus one round trip — a slow success must never read as
- *  act-pending. `stepMs` is budgetMs's per-tap bound, which floors at
- *  FLOOR_MS, above the bench's TAP_WAIT_TIMEOUT_MS (execute.ts's contract). */
+ *  act-pending. `stepMs` is ctx.ts stepBudget, which floors at FLOOR_MS,
+ *  above the bench's TAP_WAIT_TIMEOUT_MS (execute.ts's contract). */
 export function forfeitBudgets(c: Pick<PageCtx, "holdMs">, steps: number): ForfeitBudgets {
   if (!(Number.isInteger(steps) && steps >= 1)) throw new BadBudget("steps", steps, "a whole count of at least 1 (a forfeit with no steps posts nothing to wait on)");
-  const stepMs = budgetMs({ taps: 1, holds: 0, holdMs: c.holdMs });
-  return { stepMs, responseMs: budgetMs({ base: steps * stepMs, taps: 1, holdMs: c.holdMs }) };
+  const stepMs = stepBudget(c);
+  return { stepMs, responseMs: budgetMs({ base: steps * WAITS_PER_STEP * stepMs, taps: 1, holdMs: c.holdMs }) };
 }
 
 /** Taps `steps` on the open console and returns the product's answer to the

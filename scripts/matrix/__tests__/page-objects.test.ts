@@ -15,7 +15,7 @@ import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON } from "../lib/browser/pages/competition.ts";
 import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
-import { LandedElsewhere, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, entrantNameMatcher, exactPath, navBudget, selectorValue, shotLabel, visit } from "../lib/browser/pages/ctx.ts";
+import { LandedElsewhere, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, boundActions, entrantNameMatcher, exactPath, navBudget, selectorValue, shotLabel, stepBudget, visit } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
 import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit } from "../lib/browser/pages/fixture-console.ts";
@@ -344,6 +344,30 @@ describe("the shared steps", () => {
     expect(actBudget({ holdMs: 3000 }, 3) - actBudget({ holdMs: 3000 }, 2)).toBe(TAP_PACE_MS + SLACK_MS);
   });
 
+  // Controller ruling F (T5 N1): execute.ts bounds each step's waitFor by the
+  // caller's waitMs but taps with a bare click()/fill(), which Playwright
+  // bounds by the PAGE's default. That default must be one step's own bound,
+  // in the constants, or "every step's worst case" is a claim about 30 s.
+  it("the page's default action timeout is one step's bound in the constants, whatever the hold, and boundActions sets exactly that", () => {
+    const want = Math.max(FLOOR_MS, TAP_PACE_MS + SLACK_MS);
+    let checked = 0;
+    for (const holdMs of [500, 3000, 10_000, 60_000]) {
+      const set: number[] = [];
+      const ms = boundActions({ setDefaultTimeout: (t: number) => { set.push(t); } }, { holdMs });
+      expect(ms, `holdMs ${holdMs}`).toBe(want);
+      expect(set, `holdMs ${holdMs}`).toEqual([want]);
+      expect(stepBudget({ holdMs })).toBe(want);
+      // One authority: the forfeit's per-step bound is this same number.
+      expect(forfeitBudgets({ holdMs }, 1).stepMs).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // A hold that is no duration is refused before any page is touched.
+    const set: number[] = [];
+    expect(() => boundActions({ setDefaultTimeout: (t: number) => { set.push(t); } }, { holdMs: Number.NaN })).toThrow(/holdMs/);
+    expect(set).toEqual([]);
+  });
+
   it("a value composed into a selector is refused by name when it could break out of its quotes", () => {
     expect(selectorValue("stage id", "3f2a9c1e-77b0-4c1d-9d1e-0a0b0c0d0e0f")).toBe("3f2a9c1e-77b0-4c1d-9d1e-0a0b0c0d0e0f");
     const bad = ['a"b', "a\\b", "a]b", "", "a b"];
@@ -553,9 +577,11 @@ describe("the console, the run sheet and the public page", () => {
   });
 
   // AGENTS class 20: the forfeit is four steps, each waiting up to its own
-  // bound for its control, and the events answer lands only after the last.
-  // So the answer's wait must outlast every step's worst case plus a round
-  // trip — derived here from the budget constants, never from forfeitBudgets.
+  // bound for its control and then tapping it under the page's default (one
+  // step's bound too, ruling F) — two bounded waits a step — and the events
+  // answer lands only after the last. So the answer's wait must outlast every
+  // step's worst case plus a round trip — derived here from the budget
+  // constants, never from forfeitBudgets.
   it("a forfeit's answer is budgeted past every step's own worst case plus a round trip, for any number of steps", () => {
     const step = Math.max(FLOOR_MS, TAP_PACE_MS + SLACK_MS);
     let checked = 0;
@@ -563,7 +589,7 @@ describe("the console, the run sheet and the public page", () => {
       for (let n = 1; n <= 6; n++) {
         const b = forfeitBudgets({ holdMs }, n);
         expect(b.stepMs, `holdMs ${holdMs}`).toBe(step);
-        expect(b.responseMs, `${n} steps, holdMs ${holdMs}`).toBeGreaterThanOrEqual(n * step + TAP_PACE_MS + SLACK_MS);
+        expect(b.responseMs, `${n} steps, holdMs ${holdMs}`).toBeGreaterThanOrEqual(n * 2 * step + TAP_PACE_MS + SLACK_MS);
         checked++;
       }
     }
@@ -581,32 +607,44 @@ describe("the console, the run sheet and the public page", () => {
     expect(steps.length).toBe(4);
     const submit = `[data-testid="${PROMPT_SUBMIT_TESTID}"]`;
     const stepWaits: number[] = [];
+    /** The bound each click/fill ran under: its own timeout, else the page default. */
+    const actWaits: number[] = [];
     const acts: string[] = [];
     let responseWait = 0;
     let deliver: (() => void) | null = null;
+    // Playwright's own default until a page sets one (a real Page answers 30 s).
+    let defaultMs = 30_000;
     const answer = { seq: 2, status: "in_progress", outcome: null, event_id: "ev-2" };
     const response = { request: () => ({ method: () => "POST" }), url: () => "http://localhost:3999/api/v1/fixtures/fx-1/events", status: () => 201, json: () => Promise.resolve({ ok: true, data: answer }) };
     const page = {
+      setDefaultTimeout(ms: number) { defaultMs = ms; },
       waitForResponse(pred: (r: typeof response) => boolean, o: { timeout: number }) {
         responseWait = o.timeout;
         return new Promise((resolve) => { deliver = () => { if (pred(response)) resolve(response); }; });
       },
       locator: (sel: string) => ({
-        waitFor: async (o?: { timeout?: number }) => { stepWaits.push(o?.timeout ?? 0); },
-        click: async () => { acts.push(`click ${sel}`); if (sel === submit) deliver!(); },
-        fill: async (v: string) => { acts.push(`fill ${sel} ${v}`); },
+        waitFor: async (o?: { timeout?: number }) => { stepWaits.push(o?.timeout ?? defaultMs); },
+        click: async (o?: { timeout?: number }) => { actWaits.push(o?.timeout ?? defaultMs); acts.push(`click ${sel}`); if (sel === submit) deliver!(); },
+        fill: async (v: string, o?: { timeout?: number }) => { actWaits.push(o?.timeout ?? defaultMs); acts.push(`fill ${sel} ${v}`); },
         count: async () => 1,
       }),
       goto: async () => null,
       setViewportSize: async () => undefined,
     };
+    // As BrowserDriver does to every case page (ruling F).
+    boundActions(page, { holdMs: 3000 });
     const posted = await postForfeit(page as unknown as Parameters<typeof postForfeit>[0], { holdMs: 3000 }, fx.id, steps);
     expect(posted).toEqual(answer);
     expect(acts.length).toBe(steps.length);
     expect(acts.at(-1)).toBe(`click ${submit}`);
     expect(stepWaits).toEqual(steps.map(() => b.stepMs));
+    // Every tap ran under the page default the driver set: one step's bound.
+    expect(actWaits).toEqual(steps.map(() => b.stepMs));
     expect(responseWait).toBe(b.responseMs);
-    expect(responseWait).toBeGreaterThanOrEqual(stepWaits.reduce((s, w) => s + w, 0) + TAP_PACE_MS + SLACK_MS);
+    // Every bounded wait the steps can spend, observed here, plus a round trip.
+    const worst = [...stepWaits, ...actWaits].reduce((s, w) => s + w, 0);
+    expect(worst).toBe(2 * steps.length * b.stepMs);
+    expect(responseWait).toBeGreaterThanOrEqual(worst + TAP_PACE_MS + SLACK_MS);
   });
 
   it("a DATA selector narrowed to one value keeps its attribute and quotes the value; an unsafe value is refused", () => {
