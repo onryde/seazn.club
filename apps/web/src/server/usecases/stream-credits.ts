@@ -24,8 +24,18 @@ import "server-only";
 //    writes neither row; the same key with a different org, reason, delta or session is a
 //    409 (a deliberate departure from adminAdjust, which answers applied:false to any replay).
 //    Refusals are 422, as the donor route's are. admin-addons.ts has no refund neighbour (P9).
+//  * TWO BUCKETS (V426, Task 14b, owner-approved 2026-09-29). Every row names the pool it moves:
+//    'monthly' — the plan's free match credits for one UTC calendar month, granted by
+//    ensureMonthlyStreamGrant and expired (the leftover only) before the next month's grant — and
+//    'pack' — bought packs and staff grants, which never expire. A consume draws monthly while
+//    monthly > 0, else pack; a linked refund returns to its consume's bucket; a goodwill refund,
+//    a staff grant and every revoke (staff or Stripe claw-back) are pack, and a revoke is floored
+//    on the PACK, so no writer can drive either bucket below zero. balance_after is still the ORG
+//    total, and creditBalance is still the one authority for it; creditBreakdown splits it.
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { utcMonthStart } from "@/lib/credits";
+import { orgPlanKey } from "@/lib/entitlements";
 import { InsufficientCredits, credit, debit, withinReuseWindow } from "@/server/relay/domain/credits";
 import { log } from "@/server/logger";
 // TYPE-ONLY, as lib/credits.ts does: admin-adjustments-log.ts VALUE-imports
@@ -44,6 +54,31 @@ export async function creditBalance(exec: Executor, orgId: string): Promise<numb
   const [row] = await exec<{ bal: string | null }[]>`
     select coalesce(sum(delta), 0)::text as bal from org_stream_credits where org_id = ${orgId}`;
   return Number(row?.bal ?? 0);
+}
+
+/** V426's two pools. See the header's TWO BUCKETS note for which writer moves which. */
+export type StreamCreditBucket = "monthly" | "pack";
+
+export interface StreamCreditBreakdown {
+  /** This month's free match credits still held (expire at the end of the UTC month). */
+  monthly: number;
+  /** Bought packs and staff grants still held (never expire). */
+  pack: number;
+  /** monthly + pack — the same number creditBalance returns. */
+  total: number;
+}
+
+/** The balance split by bucket, in ONE statement. `total` is summed from the two parts rather than
+ *  read a second time, so the three can never disagree; the "one authority for the total" test pins
+ *  it equal to creditBalance at every step of a sequence. An empty ledger is {0, 0, 0}. */
+export async function creditBreakdown(exec: Executor, orgId: string): Promise<StreamCreditBreakdown> {
+  const [row] = await exec<{ monthly: string | null; pack: string | null }[]>`
+    select coalesce(sum(delta) filter (where bucket = 'monthly'), 0)::text as monthly,
+           coalesce(sum(delta) filter (where bucket = 'pack'), 0)::text as pack
+      from org_stream_credits where org_id = ${orgId}`;
+  const monthly = Number(row?.monthly ?? 0);
+  const pack = Number(row?.pack ?? 0);
+  return { monthly, pack, total: monthly + pack };
 }
 
 /** The org's money-lock key — ONE authority for its spelling. Lower-cased (N1): Postgres
@@ -110,7 +145,8 @@ export async function consumeForSession(
 ): Promise<{ consumed: boolean; balance: number; ledgerId: string | null }> {
   await lockOrg(tx, args.orgId);
   const reuse = await reuseWindowOpen(tx, args, now);
-  const balance = await creditBalance(tx, args.orgId);
+  const split = await creditBreakdown(tx, args.orgId);
+  const balance = split.total;
   if (reuse) {
     log.info({ orgId: args.orgId, fixtureId: args.fixtureId, sid: args.sessionId, reason: "reuse_24h" }, "stream credits: restart within the reuse window, no consume");
     return { consumed: false, balance, ledgerId: null };   // no row written, so no id
@@ -122,11 +158,15 @@ export async function consumeForSession(
     if (e instanceof InsufficientCredits) throw new NoCreditsError(args.orgId);
     throw e;
   }
+  // V426: the free monthly credit is spent first — it expires at month end, a bought one never
+  // does. `> 0`, not `>= 0`: at monthly 0 the credit comes from the pack (debit above has already
+  // proved the total covers it, and no writer leaves a bucket negative).
+  const bucket: StreamCreditBucket = split.monthly > 0 ? "monthly" : "pack";
   // `returning id` — Task 10 writes it to fixture_stream_sessions.credit_ledger_id,
   // so the session row points at the exact row that paid for it.
   const [row] = await tx<{ id: string }[]>`
-    insert into org_stream_credits (org_id, delta, reason, session_id, balance_after)
-    values (${args.orgId}, -1, 'consume', ${args.sessionId}, ${balanceAfter})
+    insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after)
+    values (${args.orgId}, -1, 'consume', ${bucket}, ${args.sessionId}, ${balanceAfter})
     returning id`;
   return { consumed: true, balance: balanceAfter, ledgerId: row!.id };
 }
@@ -265,6 +305,9 @@ export interface StreamPackRefundResult {
  * means the stream already broadcast and Cloudflare already billed us for those
  * minutes; we cannot un-deliver it. The caller compares `clawedBack` with
  * `purchased` and alerts a human on the difference; this writer never judges.
+ * Since V426 both limbs are read in the PACK bucket — pack consumes, pack
+ * balance — and the row is a pack row: the free monthly credits were never
+ * bought, so they are neither what a refund returns nor what shields one.
  *
  * The owner ruling's own words are `min(creditsPurchased, currentBalance)`, and
  * THAT formula caps by the org's TOTAL balance, which is not the same thing once
@@ -351,15 +394,18 @@ export async function recordStreamPackRefund(args: {
       return { matched: true, clawedBack: -prior.delta, purchased: match.purchased, orgId: match.orgId, applied: false };
     }
 
-    const balance = await creditBalance(tx, match.orgId);
-    // A NAMED REFUSAL, not a silent `Math.max(0, balance)` clamp (house rule:
+    // V426: a claw-back takes back BOUGHT credits, so it is a PACK debit — read, attributed, capped
+    // and written against the pack bucket. The org's free monthly credits are not what was refunded.
+    const split = await creditBreakdown(tx, match.orgId);
+    const pack = split.pack;
+    // A NAMED REFUSAL, not a silent `Math.max(0, pack)` clamp (house rule:
     // assumptions are guards, not comments). V410's `balance_after >= 0` CHECK
-    // constrains each row's SNAPSHOT, not `sum(delta)`, so a corrupt row can
-    // still put the true balance below zero. A clamp would quietly claw back
-    // nothing and look like an ordinary fully-spent pack; this throws, the
+    // constrains each row's SNAPSHOT of the TOTAL, not either bucket's sum, so a
+    // corrupt row can still put the pack below zero. A clamp would quietly claw
+    // back nothing and look like an ordinary fully-spent pack; this throws, the
     // webhook does not ACK, Stripe retries, and a human is made to look.
-    if (balance < 0) {
-      throw new HttpError(500, `This organisation's match-credit balance is ${balance}; refusing to claw back against a negative ledger`, "ledger_negative");
+    if (pack < 0) {
+      throw new HttpError(500, `This organisation's bought match-credit balance is ${pack}; refusing to claw back against a negative ledger`, "ledger_negative");
     }
 
     // ATTRIBUTION. Consumption from this purchase's own instant onward, which is
@@ -374,27 +420,38 @@ export async function recordStreamPackRefund(args: {
     // conservative direction on a money path, and the one that cannot take a
     // credit the customer still holds. The purchase row cannot count itself:
     // `reason = 'consume'` excludes it.
+    //
+    // V426: PACK consumes only. A match paid from the free monthly credits did
+    // not spend this purchase, and counting it would shield a refunded pack
+    // from its own claw-back (buy 3, stream 3 on the monthly allowance, refund:
+    // every-consume attribution claws back 0 and the customer keeps both).
     const [spent] = await tx<{ consumed: number }[]>`
       select coalesce(-sum(delta), 0)::int as consumed from org_stream_credits
-       where org_id = ${match.orgId} and reason = 'consume' and created_at >= ${match.purchasedAt}`;
+       where org_id = ${match.orgId} and reason = 'consume' and bucket = 'pack'
+         and created_at >= ${match.purchasedAt}`;
     // May go NEGATIVE when later packs' credits were also spent (consumedSince
-    // counts every consume after this purchase, not just this pack's). The
+    // counts every pack consume after this purchase, not just this pack's). The
     // `clawback <= 0` guard below is the single place that answers that, so
     // there is no second clamp here to cover for it.
     const outstanding = match.purchased - spent!.consumed;
-    const clawback = Math.min(outstanding, balance);
+    // Capped by the PACK, not the total: a staff revoke (also pack) lowers the
+    // pack without a consume, and a total cap would then reach into the monthly
+    // credits and drive the pack negative behind a non-negative balance_after.
+    const clawback = Math.min(outstanding, pack);
     if (clawback <= 0) {
       return { matched: true, clawedBack: 0, purchased: match.purchased, orgId: match.orgId, applied: false };
     }
-    // FS10 in memory before the row, as every other writer here does; the
-    // balance_after CHECK is the backstop, not the guard. `clawback <= balance`
-    // by construction above, so this cannot raise.
-    const { balanceAfter } = debit(balance, clawback);
+    // FS10 in memory before the row, as every other writer here does — against
+    // the PACK, which is the floor that matters; the balance_after CHECK is the
+    // backstop, not the guard. `clawback <= pack` by construction above, so this
+    // cannot raise. The snapshot is still the org TOTAL (V426).
+    debit(pack, clawback);
+    const balanceAfter = split.total - clawback;
 
     await tx`
-      insert into org_stream_credits (org_id, delta, reason, balance_after, note,
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note,
                                       stripe_payment_intent_id, idempotency_key)
-      values (${match.orgId}, ${-clawback}, 'revoke', ${balanceAfter},
+      values (${match.orgId}, ${-clawback}, 'revoke', 'pack', ${balanceAfter},
               ${`Stripe claw-back — ${CLAWBACK_CAUSE[args.via]} ${args.reference}, payment intent ${intent}`},
               ${intent}, ${key})`;
     return { matched: true, clawedBack: clawback, purchased: match.purchased, orgId: match.orgId, applied: true };
@@ -474,7 +531,11 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
   const delta = kind === "revoke" ? -args.delta : args.delta;   // the SIGNED delta the row stores
   return sql.begin(async (tx) => {
     await lockOrg(tx, args.orgId);   // FIRST: the money lock (an empty ledger included)
-    const balance = await creditBalance(tx, args.orgId);
+    const split = await creditBreakdown(tx, args.orgId);
+    const balance = split.total;
+    // V426: which pool this row moves. A staff grant, a goodwill refund and a revoke are PACK; a
+    // linked refund is re-pointed below at the bucket of the consume it reverses.
+    let bucket: StreamCreditBucket = "pack";
 
     // THE KEY CHECK — under the lock and BEFORE every guard (adminAdjust's order). Looked up
     // TABLE-wide (the V410 index is table-wide, the donor's V320 scope) so the stored row's org
@@ -498,14 +559,19 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
 
     let balanceAfter: number;
     if (kind === "revoke") {
+      // FS10 in memory, floored on the PACK (V426): a revoke is a pack debit, so revoking past the pack
+      // while monthly credits are held would drive the pack negative behind a non-negative total — and
+      // the next rollover's expire would then write a negative balance_after and fail every
+      // createSession for this org. The balance_after CHECK is the backstop, not the guard.
       try {
-        ({ balanceAfter } = debit(balance, args.delta));   // FS10 in memory; the balance_after CHECK is the backstop
+        debit(split.pack, args.delta);
       } catch (e) {
         if (e instanceof InsufficientCredits) {
-          throw new HttpError(422, `Revoking ${args.delta} would take this organisation's match credits (${balance}) below zero`, "insufficient_credits");
+          throw new HttpError(422, `Revoking ${args.delta} would take this organisation's bought match credits (${split.pack}) below zero`, "insufficient_credits");
         }
         throw e;
       }
+      balanceAfter = balance - args.delta;
     } else {
       if (kind === "refund" && sessionId) {
         // A linked refund returns what THAT session consumed, at most, across every refund linked to it.
@@ -515,20 +581,31 @@ async function staffRow(kind: StaffKind, args: StaffCreditArgs & { sessionId?: s
         // only because a credit is consumed ONCE, at warming → live, so a session inside that
         // transaction has no committed consume row, and THIS cap refuses its refund BEFORE the insert.
         // Keep the cap ahead of the insert, and keep consume a one-shot, or this becomes a 40P01.
-        const [s] = await tx<{ consumed: number; refunded: number }[]>`
+        const [s] = await tx<{ consumed: number; refunded: number; buckets: StreamCreditBucket[] | null }[]>`
           select coalesce(-sum(delta) filter (where reason = 'consume'), 0)::int as consumed,
-                 coalesce(sum(delta) filter (where reason = 'refund'), 0)::int as refunded
+                 coalesce(sum(delta) filter (where reason = 'refund'), 0)::int as refunded,
+                 array_agg(distinct bucket) filter (where reason = 'consume') as buckets
             from org_stream_credits where org_id = ${args.orgId} and session_id = ${sessionId}`;
         if (s!.refunded + args.delta > s!.consumed) {
           throw new HttpError(422, `That session consumed ${s!.consumed} and has ${s!.refunded} refunded already; refund it unlinked if more is owed`, "refund_exceeds_consumed");
         }
+        // V426: the credit goes back to the bucket it was drawn from, so a refunded free credit is
+        // still a free one (and the next rollover sweeps it) and a refunded bought one never expires.
+        // Past the cap above, the session consumed ≥ 1, so `buckets` has at least one entry. More than
+        // one cannot happen — consume is a one-shot per session (the lock-order note above) — and a
+        // guard, not a guess, answers it: picking either would move money between the pools.
+        const drawn = s!.buckets ?? [];
+        if (drawn.length !== 1) {
+          throw new HttpError(500, `That session's consumes were drawn from ${drawn.length} buckets (${drawn.join(", ")}); refusing to guess which one the refund returns to`, "refund_bucket_ambiguous");
+        }
+        bucket = drawn[0]!;
       }
       ({ balanceAfter } = credit(balance, args.delta));
     }
 
     const [row] = await tx<{ id: string }[]>`
-      insert into org_stream_credits (org_id, delta, reason, session_id, balance_after, note, created_by, idempotency_key)
-      values (${args.orgId}, ${delta}, ${kind}, ${sessionId}, ${balanceAfter}, ${note}, ${args.createdBy}, ${args.idempotencyKey})
+      insert into org_stream_credits (org_id, delta, reason, bucket, session_id, balance_after, note, created_by, idempotency_key)
+      values (${args.orgId}, ${delta}, ${kind}, ${bucket}, ${sessionId}, ${balanceAfter}, ${note}, ${args.createdBy}, ${args.idempotencyKey})
       returning id`;
     // The unified staff audit, IN this transaction — adminAdjust's auditApplied statement
     // (lib/credits.ts): target 'org', balance_after in the detail, and `reason` = the note
@@ -562,4 +639,173 @@ export async function refundCredits(args: StaffCreditArgs & { sessionId: string 
 
 export async function revokeCredits(args: StaffCreditArgs): Promise<StaffCreditResult> {
   return staffRow("revoke", args);
+}
+
+// ---------------------------------------------------------------------------
+// Monthly free match credits (Task 14b, V426, owner-approved 2026-09-29)
+// ---------------------------------------------------------------------------
+
+/** V426's numeric plan entitlement: free match credits per UTC calendar month. */
+export const STREAM_MONTHLY_FEATURE = "streaming.credits.monthly";
+
+/** The UTC calendar month a grant belongs to, `YYYY-MM`. Truncated in JS through lib/credits.ts's
+ *  `utcMonthStart` — the AI grant's own anchor (#292) — never `date_trunc` in SQL, which truncates
+ *  in the SESSION time zone (Europe/London in prod). */
+export function streamMonthlyPeriod(now: Date): string {
+  return utcMonthStart(now).toISOString().slice(0, 7);
+}
+
+/** The monthly grant's idempotency key — ONE authority for its spelling, shared by the grant, its
+ *  fast path and the cron sweep's anti-join. Lower-cased for the reason orgMoneyLockKey is: an
+ *  upper-case id pasted into a hand-built URL must name the same period's row. */
+export function streamMonthlyGrantKey(orgId: string, period: string): string {
+  return `stream-monthly:${orgId.toLowerCase()}:${period}`;
+}
+
+/** V426's `streaming.credits.monthly` rows for a set of plan keys, in ONE read — the ONLY place the
+ *  rate is read (V426's header names this function), so the single-org path and the sweep cannot
+ *  disagree. lib/credits.ts `monthlyPerSeatByPlan`'s shape, WITHOUT its per-seat multiplier: stream
+ *  credits are per ORG (org_stream_credits.org_id), not per billing-group wallet. A plan with no row
+ *  is absent from the map and grants nothing through the callers' `?? 0`. */
+export async function streamMonthlyRateByPlan(planKeys: readonly string[]): Promise<Map<string, number>> {
+  const distinct = [...new Set(planKeys)];
+  if (distinct.length === 0) return new Map();
+  const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
+    select plan_key, int_value from plan_entitlements
+     where feature_key = ${STREAM_MONTHLY_FEATURE} and plan_key in ${sql(distinct)}`;
+  return new Map(rows.map((r) => [r.plan_key, r.int_value ?? 0]));
+}
+
+/** One org's monthly rate on its RESOLVED plan — `orgPlanKey`, the seven-arm read-time resolver every
+ *  other entitlement read uses (lapsed comp, dunning grace, trial backstop, suspension …), so a churned
+ *  org is granted community's rate, not its stale row's. Plans are group-scoped; the org's own id is
+ *  what the resolver takes. */
+export async function streamMonthlyRate(orgId: string): Promise<number> {
+  const plan = await orgPlanKey(orgId);
+  return (await streamMonthlyRateByPlan([plan])).get(plan) ?? 0;
+}
+
+/**
+ * This month's free match credits for one org, granted at most once per UTC month — the lazy path
+ * (R3). Called before the balance check in createSession, before the division page reads the
+ * balance, and per org by the billing-grant cron. There is deliberately no eager call on org
+ * creation: an org that never streams never needs a row.
+ *
+ * CHEAP once this period's row exists: ONE indexed read of the grant key (the table-wide partial
+ * unique index) and nothing else — the budget test pins it at one statement. That read is an
+ * unlocked PRE-FILTER only; grantMonthlyStreamCredits re-checks the key under the money lock, which
+ * is what makes two concurrent callers produce one grant. A plan that grants 0 writes no key and so
+ * pays the full path on every call — no plan does today (V426: every plan ≥ 1).
+ *
+ * Returns the credits granted by THIS call (0 when this period's grant already exists).
+ */
+export async function ensureMonthlyStreamGrant(orgId: string, now: Date = new Date()): Promise<number> {
+  const key = streamMonthlyGrantKey(orgId, streamMonthlyPeriod(now));
+  const [hit] = await sql<{ one: number }[]>`select 1 as one from org_stream_credits where idempotency_key = ${key}`;
+  if (hit) return 0;
+  return grantMonthlyStreamCredits(orgId, await streamMonthlyRate(orgId), now);
+}
+
+/**
+ * The rollover transaction for an ALREADY-RESOLVED rate (split out, as lib/credits.ts splits
+ * `grantMonthlyDelta`, so the sweep can batch the rate read and still run this one body). Under
+ * the org's money lock:
+ *   1. re-check this period's grant key — present → 0, nothing written;
+ *   2. refuse a negative bucket by name (`ledger_negative`);
+ *   3. expire EXACTLY the monthly leftover (reason 'expire', bucket 'monthly'), never the pack —
+ *      no row when nothing is left (V410: delta <> 0);
+ *   4. grant `rate` (reason 'grant', bucket 'monthly', the period's key) — no row for a rate of 0.
+ * One transaction, so an org is never seen between its expiry and its grant. The expire row carries
+ * NO idempotency key: step 1's re-check makes the whole transaction idempotent per period, and a
+ * key on it would collide with a legitimate second expiry (a rate-0 month followed by a refund).
+ * A refund that lands after the rollover returns to 'monthly' (its consume's bucket), and the NEXT
+ * rollover sweeps it with the rest — monthly credits never outlive the month they are spent in by
+ * more than one rollover.
+ */
+export async function grantMonthlyStreamCredits(orgId: string, rate: number, now: Date = new Date()): Promise<number> {
+  // A rate that is not a non-negative integer is a broken catalogue row, not a grant: refuse it by
+  // name before any row is written rather than let credit()'s generic error surface from inside.
+  if (!Number.isInteger(rate) || rate < 0) {
+    throw new HttpError(500, `The monthly match-credit rate must be a non-negative integer; got ${rate}`, "monthly_rate_invalid");
+  }
+  const period = streamMonthlyPeriod(now);
+  const key = streamMonthlyGrantKey(orgId, period);
+  return sql.begin(async (tx) => {
+    await lockOrg(tx, orgId);
+    const [already] = await tx<{ id: string }[]>`select id from org_stream_credits where idempotency_key = ${key}`;
+    if (already) return 0;
+
+    const split = await creditBreakdown(tx, orgId);
+    // "Cannot happen" as a guard: no writer takes either bucket below zero (consume draws monthly only
+    // while > 0; every revoke is floored on the pack). A negative monthly bucket granted on top of
+    // would silently hand the org rate − n; a negative pack would make the expire below write a
+    // negative snapshot and fail V410's CHECK on every createSession. Two comparisons, so each limb
+    // can be mutated on its own.
+    if (split.monthly < 0 || split.pack < 0) {
+      throw new HttpError(500, `This organisation's match-credit buckets are monthly ${split.monthly}, pack ${split.pack}; refusing to roll over a negative ledger`, "ledger_negative");
+    }
+    let balance = split.total;
+    if (split.monthly > 0) {
+      const { balanceAfter } = debit(balance, split.monthly);
+      await tx`
+        insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+        values (${orgId}, ${-split.monthly}, 'expire', 'monthly', ${balanceAfter},
+                ${`Unused free match credits expired before the ${period} grant`})`;
+      balance = balanceAfter;
+    }
+    if (rate === 0) return 0;
+    const { balanceAfter } = credit(balance, rate);
+    await tx`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
+      values (${orgId}, ${rate}, 'grant', 'monthly', ${balanceAfter},
+              ${`Free match credits for ${period}`}, ${key})`;
+    return rate;
+  }) as Promise<number>;
+}
+
+/**
+ * Cron entry point (`api/cron/billing-grant`, beside the AI wallet sweep): every live org's monthly
+ * stream grant for this period. The anti-join is a PRE-FILTER (lib/credits.ts #390's discipline) —
+ * it may only reduce the candidate set; the lock and the under-lock key check in
+ * grantMonthlyStreamCredits stay the guard. Three passes, as the AI sweep's: resolve each org's plan
+ * (orgPlanKey, one query per org, never inlined), read every distinct plan's rate ONCE, then grant
+ * org by org with a per-org try/catch so one failure is counted, logged and skipped.
+ *
+ * `orgIds` is for tests (a schema-wide sweep's answer depends on sibling suites mid-fixture); the
+ * cron passes none. `orgs` is the number of orgs this run CONSIDERED.
+ */
+export async function ensureMonthlyStreamGrantsForAllOrgs(
+  opts: { orgIds?: readonly string[]; now?: Date } = {},
+): Promise<{ orgs: number; granted: number; failed: number }> {
+  const now = opts.now ?? new Date();
+  const period = streamMonthlyPeriod(now);
+  const ids = opts.orgIds ?? null;
+  const rows = await sql<{ id: string }[]>`
+    select o.id from organizations o
+     where o.deleted_at is null
+       and not exists (
+         select 1 from org_stream_credits c
+          where c.idempotency_key = 'stream-monthly:' || o.id::text || ':' || ${period})
+       ${ids ? sql`and o.id in ${sql(ids as string[])}` : sql``}`;
+  let granted = 0;
+  let failed = 0;
+  const resolved: { orgId: string; plan: string }[] = [];
+  for (const row of rows) {
+    try {
+      resolved.push({ orgId: row.id, plan: await orgPlanKey(row.id) });
+    } catch (err) {
+      failed++;
+      log.error({ err, orgId: row.id }, "stream credits: monthly plan resolve failed");
+    }
+  }
+  const rateByPlan = await streamMonthlyRateByPlan(resolved.map((r) => r.plan));
+  for (const r of resolved) {
+    try {
+      granted += await grantMonthlyStreamCredits(r.orgId, rateByPlan.get(r.plan) ?? 0, now);
+    } catch (err) {
+      failed++;
+      log.error({ err, orgId: r.orgId }, "stream credits: monthly grant failed");
+    }
+  }
+  return { orgs: rows.length, granted, failed };
 }
