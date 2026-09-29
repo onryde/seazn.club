@@ -1568,7 +1568,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
   it("I1: a 402 at checkout while a session is UP never replaces the tab — the body keeps Stop and shows the gate; at idle it still does", async () => {
     checkout.fetch.mockResolvedValueOnce({ ok: false, error: "plan_lacks_relay", status: 402 });
-    const island = track(await mount({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS }));
+    const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
+    const island = track(await mount(s));
     bodyOf(island).onShowBuy();
     bodyOf(island).onBuy(5);
     await settle();
@@ -1581,6 +1582,14 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(byTestId(rendered, "stream-stop"), "Stop is gone").toBeDefined();
     expect(byTestId(rendered, "stream-plan-gate")).toBeDefined();
     // …and once the session ends and the organiser starts another, idle has nothing to protect: the gate IS the tab.
+    // N5: the session ends the way it really does — the SERVER serves it completed and the next poll reads it; Start
+    // another is only offered on an ended card, so it is pressed from there, never from a live one.
+    s.current = session({ id: "s1", state: "completed", qr: null, startedAt: "2026-09-14T11:50:00Z", endedAt: "2026-09-14T11:58:00Z", endReason: "stopped", creditUsed: true });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(bodyOf(island).view?.state, "the poll read the ended session").toBe("completed");
+    expect(island.tree().find((el) => el.type === UpgradeGate), "an ended card is still a session to show").toBeUndefined();
+    expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-again"), "Start another is on the ended card").toBeDefined();
     bodyOf(island).onAgain();
     expect(island.tree().find((el) => el.type === UpgradeGate), "idle + a plan refusal is the gate").toBeDefined();
   });
