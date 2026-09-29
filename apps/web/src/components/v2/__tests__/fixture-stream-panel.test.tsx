@@ -1005,7 +1005,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(body({ view: null, balance: 2, monthlyAllowance: 5, showBuy: true }), "stream-credits-monthly"), "the positive pair: opened").toBeDefined();
   });
 
-  it("Task 14b (R4): the split line shows ONLY while free credits are held and the split still adds up to the chip; the chip stays the total", () => {
+  it("Task 14b (R4, review M2): the split line shows ONLY while BOTH buckets are held and the split still adds up to the chip; the chip stays the total", () => {
     const split = { monthly: 2, pack: 3, total: 5 };
     const shown = body({ view: null, balance: 5, split });
     expect(textAt(shown, "stream-credits-split")).toBe(m("stream.credits.split", { m: 2, p: 3 }));
@@ -1013,6 +1013,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     let hidden = 0;
     for (const [why, p] of [
       ["no free credits held", { balance: 3, split: { monthly: 0, pack: 3, total: 3 } }],
+      ["no bought credits held (M2: the chip already says it)", { balance: 2, split: { monthly: 2, pack: 0, total: 2 } }],
       ["stale: a session moved the balance since the page read it", { balance: 4, split }],
       ["no split read (no relay)", { balance: 5, split: null }],
       ["nothing at all", { balance: 0, split: { monthly: 0, pack: 0, total: 0 } }],
@@ -1020,7 +1021,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       expect(byTestId(body({ view: null, ...p }), "stream-credits-split"), why).toBeUndefined();
       hidden++;
     }
-    expect(hidden).toBe(4);
+    expect(hidden).toBe(5);
   });
 
   it("no destination yet: the select says to add one and Go live is disabled — the empty case", () => {

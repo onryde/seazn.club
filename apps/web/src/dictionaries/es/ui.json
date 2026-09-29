@@ -5374,7 +5374,7 @@
   "stream.credits.line": "1 partido = 1 crédito, hasta 5 horas.",
   "stream.credits.monthlyNote.one": "Tu plan incluye 1 crédito de partido gratis cada mes. Si no lo usas, caduca a final de mes. Los créditos que compras no caducan nunca.",
   "stream.credits.monthlyNote.other": "Tu plan incluye {n} créditos de partido gratis cada mes. Los que no uses caducan a final de mes. Los créditos que compras no caducan nunca.",
-  "stream.credits.split": "{m} gratis este mes · {p} comprados",
+  "stream.credits.split": "Gratis este mes: {m} · comprados: {p}",
   "stream.credits.pack1": "1 partido",
   "stream.credits.pack5": "5 partidos",
   "stream.credits.pack20": "20 partidos",

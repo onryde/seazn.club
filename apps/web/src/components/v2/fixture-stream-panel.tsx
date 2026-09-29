@@ -1374,8 +1374,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // B3: an idle org with no credits sees the heading and the credits card ONLY — a "Ready" pill and a three-step
   // stepper promise a stream it cannot start.
   const creditsOnly = forced && !p.planGate;
-  // Task 14b (R4): the chip stays the TOTAL; the split is its footnote, and only when there is something free to split.
-  const split = p.split !== null && p.split.monthly > 0 && p.split.total === p.balance ? p.split : null;
+  // Task 14b (R4): the chip stays the TOTAL; the split is its footnote, and only when there is something to SPLIT — both
+  // buckets held (review M2, controller ruling). One bucket alone is the chip's own number said twice.
+  const split =
+    p.split !== null && p.split.monthly > 0 && p.split.pack > 0 && p.split.total === p.balance ? p.split : null;
   // m12: §8a's ending row — "every control disabled" while the last seconds flush.
   const frozen = state === "ending";
   const stopFailure = p.stopFailed ? stopError(msg, state) : null;
