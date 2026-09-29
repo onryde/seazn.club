@@ -17,7 +17,7 @@
 //    Forfeit (:1294) or, once decided, Finalize (:1274).
 import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID } from "../../../../bench/lib/drivers/scorer.ts";
 import { DATA, TESTID } from "../selectors.ts";
-import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
+import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, selectorValue, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 
 export const ALL_FILTER = "all";
@@ -26,6 +26,15 @@ export const ALL_FILTER = "all";
 export function fixtureRowSelector(no: number): string {
   if (!Number.isInteger(no) || no < 1) throw new UnsafeSelectorValue("fixture number", no);
   return attrEquals(DATA.fixtureRow.selector, "fixture number", String(no));
+}
+
+/** A link to fixture `no`'s console: `[href="…"]` over routes.fixture. Every
+ *  slug goes through selectorValue, like every other composed value — the
+ *  product's slugs are [a-z0-9-], and one that is not is refused by name
+ *  rather than breaking out of the quotes. */
+export function fixtureLinkSelector(org: string, comp: string, div: string, no: number): string {
+  if (!Number.isInteger(no) || no < 1) throw new UnsafeSelectorValue("fixture number", no);
+  return `[href="${paths.fixture(selectorValue("org slug", org), selectorValue("competition slug", comp), selectorValue("division slug", div), no)}"]`;
 }
 
 /** Presses the run sheet's "all" filter unless it is pressed already. A sheet
@@ -53,8 +62,9 @@ export async function openFixtureUi(c: PageCtx, where: DivisionWhere, fixtureNo:
   const t = navBudget(c);
   await awaitScreen(() => row.waitFor({ state: "attached", timeout: t }), `run-sheet row #${fixtureNo}`, t);
   const href = paths.fixture(c.orgSlug, where.compSlug, where.divSlug, fixtureNo);
-  const action = row.locator(`a${DATA.rowAction.selector}[href="${href}"]`);
-  const link = (await action.count()) > 0 ? action : row.locator(`a[href="${href}"]`).first();
+  const toConsole = fixtureLinkSelector(c.orgSlug, where.compSlug, where.divSlug, fixtureNo);
+  const action = row.locator(`a${DATA.rowAction.selector}${toConsole}`);
+  const link = (await action.count()) > 0 ? action : row.locator(`a${toConsole}`).first();
   await link.click({ timeout: actBudget(c, 1) });
   await awaitScreen(() => page.waitForURL((u) => u.pathname === href, { timeout: t }), `fixture #${fixtureNo}'s console at ${href}`, t);
   await awaitScreen(() => page.locator(CONSOLE_MOUNTED).first().waitFor({ state: "attached", timeout: t }), `fixture #${fixtureNo}'s console controls`, t);

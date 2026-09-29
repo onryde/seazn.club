@@ -15,7 +15,7 @@ import type { Locator, Page } from "playwright";
 import { assertWaitMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
 import { TESTID } from "../selectors.ts";
-import type { CompleteOut, GenerateOut } from "../../driver/types.ts";
+import type { CompleteOut, FixtureRow, GenerateOut } from "../../driver/types.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 import { fixtureRowSelector, showAllFixtures } from "./run-sheet.ts";
@@ -62,6 +62,29 @@ async function railFor(c: PageCtx, where: DivisionWhere, stageId: string): Promi
   return sheet;
 }
 
+/** Generate answered rows created, yet none of them carries a fixture number.
+ *  fixtures.fixture_no is NOT NULL and every insert is numbered by a trigger
+ *  (V263__routing_slugs.sql:37-53), so this is a broken answer — refused by
+ *  name rather than quietly skipping the check that the screen drew them. */
+export class GeneratedWithoutFixtureNumbers extends Error {
+  readonly created: number;
+  constructor(created: number) {
+    super(`browser: generate answered ${created} fixtures created but no fixture number among them — fixture_no is NOT NULL (V263), so the run sheet has no row to prove the screen by`);
+    this.name = "GeneratedWithoutFixtureNumbers";
+    this.created = created;
+  }
+}
+
+/** The run-sheet row that proves a generate drew: the highest fixture number
+ *  in the answer (numbers only grow), or null when nothing was created and
+ *  nothing new is drawn. */
+export function newestCreatedFixtureNo(out: { readonly created: GenerateOut["created"]; readonly fixtures: readonly Pick<FixtureRow, "fixture_no">[] }): number | null {
+  if (out.created === 0) return null;
+  const newest = Math.max(0, ...out.fixtures.map((f) => f.fixture_no ?? 0));
+  if (newest < 1) throw new GeneratedWithoutFixtureNumbers(out.created);
+  return newest;
+}
+
 /** Generate `stageId`'s fixtures from its rail; the product's GenerateOut. */
 export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: string): Promise<GenerateOut> {
   const { page } = c;
@@ -69,15 +92,14 @@ export async function generateUi(c: PageCtx, where: DivisionWhere, stageId: stri
   const before = await shoot(c, "05-generated-before");
   const { data } = await actAndAwait<GenerateOut>(page, { method: "POST", path: exactPath(`/api/v1/stages/${stageId}/generate`) },
     () => sheet.getByTestId(TESTID.stageGenerate.id).click({ timeout: actBudget(c, 1) }), actBudget(c, 1));
-  // The screen proves it once the refresh draws the NEWEST row (fixture numbers
-  // only grow). Nothing created, nothing new to draw — and nothing to differ.
-  const newest = Math.max(0, ...data.fixtures.map((f) => f.fixture_no ?? 0));
-  const drew = data.created > 0 && newest > 0;
-  if (drew) {
+  // The screen proves it once the refresh draws the NEWEST row. Nothing
+  // created, nothing new to draw — and nothing to differ.
+  const newest = newestCreatedFixtureNo(data);
+  if (newest !== null) {
     const t = navBudget(c);
     await awaitScreen(() => page.locator(fixtureRowSelector(newest)).waitFor({ state: "attached", timeout: t }), `run-sheet row #${newest} after generate`, t);
   }
-  await shoot(c, "05-generated", drew ? before : undefined);
+  await shoot(c, "05-generated", newest !== null ? before : undefined);
   return data;
 }
 

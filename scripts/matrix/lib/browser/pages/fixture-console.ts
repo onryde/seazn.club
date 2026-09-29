@@ -23,9 +23,10 @@
 //    and a console loaded before the fixture's last event is answered
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
 //    reloadConsoleBeforeAction does (tap-play.ts:456).
-import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID, TAP_WAIT_TIMEOUT_MS, organiserStepsFor, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
+import type { Page } from "playwright";
+import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
 import { executeSteps } from "../../pads/execute.ts";
-import { budgetMs } from "../budget.ts";
+import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
 import type { FixtureRow, PostedEvent } from "../../driver/types.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, shoot, type PageCtx } from "./ctx.ts";
@@ -53,6 +54,27 @@ export function forfeitSteps(fixture: ForfeitFixture, by: string, reason: Forfei
   return organiserStepsFor({ type: "core.forfeit", payload: { by, reason } }, { cfg: null, entrants: { home: fixture.home_entrant_id, away: fixture.away_entrant_id } });
 }
 
+export interface ForfeitBudgets { readonly stepMs: number; readonly responseMs: number }
+
+/** The forfeit's two bounds, both in the product's constants (AGENTS class
+ *  20). Each step waits up to `stepMs` for its control (executeStep); the
+ *  events answer lands only after the LAST step, so its wait is every step's
+ *  worst case plus one round trip — a slow success must never read as
+ *  act-pending. `stepMs` is budgetMs's per-tap bound, which floors at
+ *  FLOOR_MS, above the bench's TAP_WAIT_TIMEOUT_MS (execute.ts's contract). */
+export function forfeitBudgets(c: Pick<PageCtx, "holdMs">, steps: number): ForfeitBudgets {
+  if (!(Number.isInteger(steps) && steps >= 1)) throw new BadBudget("steps", steps, "a whole count of at least 1 (a forfeit with no steps posts nothing to wait on)");
+  const stepMs = budgetMs({ taps: 1, holds: 0, holdMs: c.holdMs });
+  return { stepMs, responseMs: budgetMs({ base: steps * stepMs, taps: 1, holdMs: c.holdMs }) };
+}
+
+/** Taps `steps` on the open console, each within `b.stepMs`, and returns the
+ *  product's answer to the core.forfeit they post, waited on for `b.responseMs`. */
+export async function postForfeit(page: Pick<Page, "waitForResponse"> & PadPage, fixtureId: string, steps: readonly TapStep[], b: ForfeitBudgets): Promise<PostedEvent> {
+  const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => executeSteps(page, steps, b.stepMs), b.responseMs);
+  return data;
+}
+
 /** Forfeits the open console's match for `by` (an entrant id); every events
  *  answer the console produced, in order: core.start's first when the fixture
  *  was still scheduled, then core.forfeit's. A `by` naming neither side, or
@@ -70,9 +92,7 @@ export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string,
     await awaitScreen(() => start.waitFor({ state: "detached", timeout: nav }), "the console, started", nav);
   }
   const before = await shoot(c, "07-forfeit-before");
-  // execute.ts's own contract for its wait: never below the bench's per-tap floor.
-  const waitMs = Math.max(TAP_WAIT_TIMEOUT_MS, budgetMs({ taps: 1, holds: 0, holdMs: c.holdMs }));
-  posted.push((await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixture.id) }, () => executeSteps(page, steps, waitMs), actBudget(c, steps.length))).data);
+  posted.push(await postForfeit(page, fixture.id, steps, forfeitBudgets(c, steps.length)));
   await awaitScreen(() => page.getByTestId(FORFEIT_TESTID).waitFor({ state: "detached", timeout: nav }), "the console, decided by forfeit", nav);
   await shoot(c, "07-forfeit", before);
   return posted;

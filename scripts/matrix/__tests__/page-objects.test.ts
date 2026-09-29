@@ -14,16 +14,16 @@ import { describe, expect, it } from "vitest";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON } from "../lib/browser/pages/competition.ts";
-import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID } from "../../bench/lib/drivers/scorer.ts";
+import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { LandedElsewhere, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, entrantNameMatcher, exactPath, navBudget, selectorValue, shotLabel, visit } from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
-import { ForfeitNeedsBothSides, eventsPath, forfeitSteps } from "../lib/browser/pages/fixture-console.ts";
+import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
-import { ALL_FILTER, fixtureRowSelector } from "../lib/browser/pages/run-sheet.ts";
-import { openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
+import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector } from "../lib/browser/pages/run-sheet.ts";
+import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { DATA, NAME } from "../lib/browser/selectors.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
@@ -158,6 +158,31 @@ describe("the stage rail's fold", () => {
   });
 });
 
+// generateUi proves the screen by waiting on the newest run-sheet row. Every
+// fixture row carries a number: fixtures.fixture_no is NOT NULL, numbered by a
+// BEFORE INSERT trigger (db/migration/deltas/V263__routing_slugs.sql:37-53).
+describe("generate: the run-sheet row that proves the screen", () => {
+  const fx = (fixture_no: number | null) => ({ fixture_no });
+
+  it("empty case first: nothing created is nothing new to draw, whatever already exists", () => {
+    expect(newestCreatedFixtureNo({ created: 0, fixtures: [] })).toBeNull();
+    // A second Generate on a drawn stage answers created 0 with the existing rows.
+    expect(newestCreatedFixtureNo({ created: 0, fixtures: [fx(1), fx(2)] })).toBeNull();
+  });
+
+  it("rows created: the newest is the highest fixture number, in any order", () => {
+    expect(newestCreatedFixtureNo({ created: 3, fixtures: [fx(3), fx(7), fx(5)] })).toBe(7);
+    expect(newestCreatedFixtureNo({ created: 1, fixtures: [fx(1)] })).toBe(1);
+  });
+
+  it("rows created with no fixture number among them is refused by name, never a silently skipped screen check", () => {
+    const cases = [{ created: 2, fixtures: [] }, { created: 1, fixtures: [fx(null)] }, { created: 2, fixtures: [fx(null), fx(0)] }];
+    for (const out of cases) expect(() => newestCreatedFixtureNo(out), JSON.stringify(out)).toThrow(GeneratedWithoutFixtureNumbers);
+    expect(cases.length).toBe(3);
+    expect(() => newestCreatedFixtureNo(cases[0]!)).toThrow(/2 fixtures/);
+  });
+});
+
 // The rank cell's text, as standings-table.tsx renders it: a plain rank chip;
 // a tied row's chip, its "*" and — because the popover panel is ALWAYS in the
 // markup, `hidden` while closed (standings-popover.tsx) — the tie note after
@@ -249,6 +274,28 @@ describe("reading the page's own tables and banner", () => {
     expect(() => tablesFromCells(cells[0]!)).toThrow(UnreadableStandingsRow);
   });
 
+  it("only a TBODY row is a row: a thead or tfoot row that carries a row header with a title is not read", () => {
+    const header = (name: string) => el("tr", {}, [el("th", { scope: "row" }, [el("span", { title: name }, [name])])]);
+    const t = el("table", {}, [el("thead", {}, [header("Head row")]), el("tbody", {}, [row(["1"], "Matrix Player 1")]), el("tfoot", {}, [el("tr", {}, [el("td", {}, ["—"]), el("th", { scope: "row" }, [el("span", { title: "Totals" }, ["Totals"])])])])]);
+    const cells = standingsCellsOf([t], SEL);
+    expect(cells).toEqual([[["1", "Matrix Player 1"]]]);
+    // Three sections each carry a row header; only the tbody's is read.
+    expect(t.children.filter((s) => s.querySelector(SEL.rowHeader) !== null).length).toBe(3);
+  });
+
+  it("the row header must be a TH: a tbody cell that says scope=row but is a TD is not the header, so its row is not read", () => {
+    const tdHeader = el("tr", {}, [el("td", { scope: "row" }, [el("span", { title: "Ann" }, ["Ann"])]), el("td", {}, ["9"])]);
+    const cells = standingsCellsOf([table(row(["1"], "Matrix Player 1"), tdHeader)], SEL);
+    expect(cells).toEqual([[["1", "Matrix Player 1"]]]);
+    expect(tdHeader.children[0]!.matches(SEL.rowHeader)).toBe(true);
+  });
+
+  it("the banner's label is found through the whitespace JSX puts around it", () => {
+    const label = NAME.championLabel.text;
+    const padded = el("div", {}, [el("p", {}, [`  ${label} \n`]), el("p", {}, ["Matrix Player 4"])]);
+    expect(championFrom(padded.children, label)).toBe("Matrix Player 4");
+  });
+
   it("the champion is the text of the paragraph after the one that says the banner's label; no banner is null", () => {
     const label = NAME.championLabel.text;
     const banner = el("div", {}, [el("p", {}, [label]), el("p", {}, ["  Matrix Player 2 "])]);
@@ -306,6 +353,14 @@ describe("the shared steps", () => {
     // A run-sheet row is its fixture number, a positive integer, in the product's own li[data-fixture-no].
     expect(fixtureRowSelector(7)).toBe(DATA.fixtureRow.selector.replace("]", '="7"]'));
     for (const n of [0, -1, 1.5, Number.NaN]) expect(() => fixtureRowSelector(n), String(n)).toThrow(UnsafeSelectorValue);
+  });
+
+  it("a fixture's console link is an href selector over routes.fixture, each slug refused by name when it could break out of its quotes", () => {
+    expect(fixtureLinkSelector("matrix-org", "cup-2026", "open_a", 7)).toBe(`[href="${paths.fixture("matrix-org", "cup-2026", "open_a", 7)}"]`);
+    const unsafe = [["a\"b", "c", "d"], ["a", "c]d", "d"], ["a", "c", "d\"] , a[href"]] as const;
+    for (const [org, comp, div] of unsafe) expect(() => fixtureLinkSelector(org, comp, div, 7), `${org} ${comp} ${div}`).toThrow(UnsafeSelectorValue);
+    expect(unsafe.length).toBe(3);
+    for (const n of [0, -1, 1.5, Number.NaN]) expect(() => fixtureLinkSelector("o", "c", "d", n), String(n)).toThrow(UnsafeSelectorValue);
   });
 
   it("an entrant's row is found by its WHOLE name: Player 1 never matches Player 10", () => {
@@ -495,6 +550,62 @@ describe("the console, the run sheet and the public page", () => {
     // The side buttons are the console's own composition (fixture-console.tsx ForfeitButton).
     expect(src(`${V2}/fixture-console.tsx`)).toContain("data-testid={`score-forfeit-${sideKey}`}");
     expect(FORFEIT_SIDE_TESTID_PREFIX).toBe("score-forfeit-");
+  });
+
+  // AGENTS class 20: the forfeit is four steps, each waiting up to its own
+  // bound for its control, and the events answer lands only after the last.
+  // So the answer's wait must outlast every step's worst case plus a round
+  // trip — derived here from the budget constants, never from forfeitBudgets.
+  it("a forfeit's answer is budgeted past every step's own worst case plus a round trip, for any number of steps", () => {
+    const step = Math.max(FLOOR_MS, TAP_PACE_MS + SLACK_MS);
+    let checked = 0;
+    for (const holdMs of [500, 3000, 10_000]) {
+      for (let n = 1; n <= 6; n++) {
+        const b = forfeitBudgets({ holdMs }, n);
+        expect(b.stepMs, `holdMs ${holdMs}`).toBe(step);
+        expect(b.responseMs, `${n} steps, holdMs ${holdMs}`).toBeGreaterThanOrEqual(n * step + TAP_PACE_MS + SLACK_MS);
+        checked++;
+      }
+    }
+    expect(checked).toBe(18);
+    // Never below the bench's own per-tap wait (execute.ts's contract).
+    expect(forfeitBudgets({ holdMs: 3000 }, 4).stepMs).toBeGreaterThanOrEqual(TAP_WAIT_TIMEOUT_MS);
+    // Empty case: no steps is no forfeit to wait on — refused by name.
+    for (const n of [0, -1, 1.5, Number.NaN]) expect(() => forfeitBudgets({ holdMs: 3000 }, n), String(n)).toThrow(/steps/);
+  });
+
+  it("postForfeit taps every step within its step bound and waits on the answer past all of them", async () => {
+    const fx = { id: "fx-1", home_entrant_id: "e-home", away_entrant_id: "e-away" };
+    const steps = forfeitSteps(fx, "e-away", "walkover");
+    const b = forfeitBudgets({ holdMs: 3000 }, steps.length);
+    const submit = `[data-testid="${PROMPT_SUBMIT_TESTID}"]`;
+    const stepWaits: number[] = [];
+    const acts: string[] = [];
+    let responseWait = 0;
+    let deliver: (() => void) | null = null;
+    const answer = { seq: 2, status: "in_progress", outcome: null, event_id: "ev-2" };
+    const response = { request: () => ({ method: () => "POST" }), url: () => "http://localhost:3999/api/v1/fixtures/fx-1/events", status: () => 201, json: () => Promise.resolve({ ok: true, data: answer }) };
+    const page = {
+      waitForResponse(pred: (r: typeof response) => boolean, o: { timeout: number }) {
+        responseWait = o.timeout;
+        return new Promise((resolve) => { deliver = () => { if (pred(response)) resolve(response); }; });
+      },
+      locator: (sel: string) => ({
+        waitFor: async (o?: { timeout?: number }) => { stepWaits.push(o?.timeout ?? 0); },
+        click: async () => { acts.push(`click ${sel}`); if (sel === submit) deliver!(); },
+        fill: async (v: string) => { acts.push(`fill ${sel} ${v}`); },
+        count: async () => 1,
+      }),
+      goto: async () => null,
+      setViewportSize: async () => undefined,
+    };
+    const posted = await postForfeit(page as unknown as Parameters<typeof postForfeit>[0], fx.id, steps, b);
+    expect(posted).toEqual(answer);
+    expect(acts.length).toBe(steps.length);
+    expect(acts.at(-1)).toBe(`click ${submit}`);
+    expect(stepWaits).toEqual(steps.map(() => b.stepMs));
+    expect(responseWait).toBe(b.responseMs);
+    expect(responseWait).toBeGreaterThanOrEqual(stepWaits.reduce((s, w) => s + w, 0) + TAP_PACE_MS + SLACK_MS);
   });
 
   it("a DATA selector narrowed to one value keeps its attribute and quotes the value; an unsafe value is refused", () => {

@@ -87,19 +87,54 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
-  it("the functions evaluateAll ships to the page compile and run from their own source, outside their module", () => {
+  // It must also RUN there: a module constant referenced inside a loop body
+  // compiles fine and is a ReferenceError in the browser only once the loop
+  // has a row to visit. So the rebuilt functions are fed a real table and a
+  // real banner (a plain-JS twin of page-objects.test.ts's fake DOM), and each
+  // answer must equal the in-module function's on the same input.
+  const FAKE_DOM = String.raw`
+    function el(tag, attrs = {}, kids = []) {
+      const children = kids.filter((k) => typeof k !== "string");
+      const node = {
+        tagName: tag.toUpperCase(), children, nextElementSibling: null,
+        get textContent() { return kids.map((k) => (typeof k === "string" ? k : k.textContent ?? "")).join(""); },
+        getAttribute: (n) => (n in attrs ? attrs[n] : null),
+        matches(s) {
+          const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(s);
+          if (m === null) throw new Error("fake DOM: unsupported selector " + s);
+          return m[2] === undefined ? m[1] in attrs : attrs[m[1]] === m[2];
+        },
+        querySelector(s) {
+          for (const c of children) { if (c.matches(s)) return c; const deep = c.querySelector(s); if (deep !== null) return deep; }
+          return null;
+        },
+      };
+      children.forEach((c, i) => { c.nextElementSibling = children[i + 1] ?? null; });
+      return node;
+    }`;
+  it("the functions evaluateAll ships to the page compile and run from their own source, outside their module, on a real table and banner", () => {
     const mod = (rel: string) => JSON.stringify(pathToFileURL(join(MATRIX, rel)).href);
     const code = [
       `const s = await import(${mod("lib/browser/pages/standings.ts")});`,
       `const p = await import(${mod("lib/browser/pages/public-division.ts")});`,
-      "const rebuilt = (f) => new Function(`return (${f.toString()})`)();",
-      "const cells = rebuilt(s.standingsCellsOf)([], s.CELL_SELECTORS);",
-      "const champion = rebuilt(p.championFrom)([], 'Champion');",
-      "console.log(JSON.stringify({ cells, champion }));",
+      `const { NAME } = await import(${mod("lib/browser/selectors.ts")});`,
+      FAKE_DOM,
+      "const rebuilt = (f) => new Function(\"return (\" + f.toString() + \")\")();",
+      "const row = (rank, name) => el('tr', {}, [el('td', {}, [rank]), el('th', { scope: 'row' }, [el('span', {}, [el('span', { title: name }, [name.slice(0, 6)])])]), el('td', {}, ['3'])]);",
+      "const table = el('table', {}, [el('caption', {}, ['Pool A']), el('thead', {}, [el('tr', {}, [el('th', { scope: 'col', title: 'Points' }, ['Pts'])])]), el('tbody', {}, [row('1', 'Matrix Player 1'), el('tr', {}, [el('td', { colspan: '3' }, ['Qualify'])]), row('2', 'Matrix Player 2')])]);",
+      "const label = NAME.championLabel.text;",
+      "const banner = el('div', {}, [el('p', {}, ['Intro']), el('p', {}, [label]), el('p', {}, [' Matrix Player 1 '])]);",
+      "const out = (cellsOf, championFrom) => ({ cells: cellsOf([table], s.CELL_SELECTORS), empty: cellsOf([], s.CELL_SELECTORS), champion: championFrom(banner.children, label), none: championFrom([], label) });",
+      "console.log(JSON.stringify({ rebuilt: out(rebuilt(s.standingsCellsOf), rebuilt(p.championFrom)), inModule: out(s.standingsCellsOf, p.championFrom) }));",
     ].join("\n");
     const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { cwd: resolve(MATRIX, "..", ".."), encoding: "utf8", timeout: 25_000 });
     expect(r.stderr).toBe("");
-    expect(r.stdout.trim()).toBe(JSON.stringify({ cells: [], champion: null }));
+    expect(r.status).toBe(0);
+    const got = JSON.parse(r.stdout.trim()) as { rebuilt: { cells: string[][][] }; inModule: unknown };
+    expect(got.rebuilt).toEqual({ cells: [[["1", "Matrix Player 1"], ["2", "Matrix Player 2"]]], empty: [], champion: "Matrix Player 1", none: null });
+    expect(got.rebuilt).toEqual(got.inModule);
+    // The loop bodies ran: two rows were read, not zero.
+    expect(got.rebuilt.cells.flat().length).toBe(2);
   });
 
   it.each(MODULES)("%s", (file) => {

@@ -3,7 +3,8 @@
 // Three changes, and only these (pad-execute.test.ts compares this body with
 // the bench's, the first change normalised away):
 //  (a) every TAP_WAIT_TIMEOUT_MS is the caller's `waitMs`. The caller passes
-//      Math.max(TAP_WAIT_TIMEOUT_MS, budgetMs({ taps: 1, holds: 0, holdMs })),
+//      budgetMs({ taps: 1, holds: 0, holdMs }) (fixture-console.ts
+//      forfeitBudgets), which floors at FLOOR_MS — above TAP_WAIT_TIMEOUT_MS —
 //      so a slow width never reds as a timeout (AGENTS class 20);
 //  (b) HANDLED_KINDS names the tap kinds the switch below handles;
 //  (c) a waitMs that is not a finite number of ms above 0 is refused first
