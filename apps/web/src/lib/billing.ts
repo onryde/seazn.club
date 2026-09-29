@@ -973,8 +973,15 @@ export async function recordPassPurchase(args: {
     return { recorded: false, duplicateIntent: null, unknownCompetition: true };
   }
   if (inserted) {
-    await grantPassCredits();
-    await invalidateOrgEntitlements(args.orgId);
+    // The pass row is committed above, so it is live from here whatever the grants do: bust the cache in a `finally`
+    // (Task 14b re-review N3). A grant that throws still fails the call — the webhook answers 5xx, Stripe retries, and
+    // the same-intent replay below heals the grant — but the buyer's pass no longer waits for that retry to show.
+    // invalidateOrgEntitlements swallows its own errors, so it cannot mask the grant's.
+    try {
+      await grantPassCredits();
+    } finally {
+      await invalidateOrgEntitlements(args.orgId);
+    }
     return { recorded: true, duplicateIntent: null, unknownCompetition: false };
   }
   const [existing] = await sql<{ stripe_payment_intent: string | null }[]>`
