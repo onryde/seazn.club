@@ -14,6 +14,7 @@ import "server-only";
 // transaction has closed. E5: storage_exhausted is a REFUSAL (503, no row).
 import { sql, type Tx } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
@@ -943,9 +944,9 @@ function targetInUse(h: Holder): HttpError {
 
 function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
   switch (refusal.refusal) {
-    case "plan_lacks_overlay": throw new PaymentRequiredError("streaming.overlay");
+    case "plan_lacks_overlay": throw new PaymentRequiredError(RELAY_PLAN_GATES.overlay);
     case "overlay_required": throw new HttpError(409, "phone streaming needs the overlay tier", "overlay_required");
-    case "plan_lacks_relay": throw new PaymentRequiredError("streaming.relay");
+    case "plan_lacks_relay": throw new PaymentRequiredError(RELAY_PLAN_GATES.relay);
     case "no_credits": throw new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay" });
     case "target_not_found": throw new HttpError(404, "stream target not found");
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });

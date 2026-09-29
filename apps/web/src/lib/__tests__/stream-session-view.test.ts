@@ -23,6 +23,7 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { parseCaptureQr } from "@/lib/capture-qr";
 import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS } from "@/lib/stream-destinations";
+import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
 import { StreamEndReason, StreamFailReason, StreamIngest, StreamSessionState } from "@/server/api-v1/schemas";
@@ -179,8 +180,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["target_in_use 409, the index race (holder null)", new HttpError(409, "in use", "target_in_use", { holder: null }), "target_in_use"],
     // m4 (Task 13 review): the server's OWN refusal class (stream-targets.ts), not an HttpError shaped like it.
     ["DESTINATION_NOT_ALLOWED 422", new DestinationNotAllowedError("host"), "destination_not_allowed"],
-    ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError("streaming.relay"), "plan_lacks_relay"],
-    ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError("streaming.overlay"), "plan_lacks_relay"],
+    ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError(RELAY_PLAN_GATES.relay), "plan_lacks_relay"],
+    ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
     ["NOT_FOUND 404 (target_not_found)", new HttpError(404, "stream target not found"), "unknown"],
     ["FORBIDDEN 403 (no signed-in user)", new HttpError(403, "a signed-in organiser is required"), "unknown"],
@@ -203,9 +204,9 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
   });
 
   it("the plan refusal's machine-readable field is feature_key — the envelope's reason is a sentence, never 'plan_lacks_relay' (D1's premise, measured)", async () => {
-    const e = await wire(new PaymentRequiredError("streaming.relay"));
+    const e = await wire(new PaymentRequiredError(RELAY_PLAN_GATES.relay));
     expect(e.code).toBe("PAYMENT_REQUIRED");
-    expect(e.extra.feature_key).toBe("streaming.relay");
+    expect(e.extra.feature_key).toBe(RELAY_PLAN_GATES.relay);
     expect(e.extra.reason).not.toBe("plan_lacks_relay");
     expect(typeof e.extra.reason).toBe("string");
   });

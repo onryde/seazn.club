@@ -24,6 +24,10 @@ import { resolve } from "node:path";
 import { parseCaptureQr } from "@/lib/capture-qr";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { ApiV1Error, apiV1 } from "@/lib/client-v1";
+import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
+import { createErrorCode } from "@/lib/stream-session-view";
+import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
@@ -672,6 +676,33 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     await resealTargetDestination(r.target.id, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key" });
     const made = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await r.row(made.sessionId)).state).toBe("warming");
+  });
+
+  // Task 13 review m5: the two plan gates `refuse` throws are read back by the Phone tab's view model off
+  // `extra.feature_key`, and both sides take the keys from ONE authority (lib/stream-plan-gates.ts). This drives each gate
+  // through the REAL producer (createSession → refuse) and the REAL consumer (the v1 envelope → apiV1 → createErrorCode):
+  // a server key that drifts from the authority reads as "unknown" here — a retry sentence where an upgrade was owed.
+  it("m5: both plan gates createSession refuses carry an authority key on the wire, and the Phone tab reads each as plan_lacks_relay", async () => {
+    const GATES = [
+      { opts: { overlay: false, relay: false }, key: RELAY_PLAN_GATES.overlay },
+      { opts: { overlay: true, relay: false }, key: RELAY_PLAN_GATES.relay },
+    ] as const;
+    let checked = 0;
+    for (const { opts, key } of GATES) {
+      const r = await rig({ credits: 1, ...opts });
+      const err = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err, key).toBeInstanceOf(HttpError);
+      const res = await v1(async () => { throw err; });
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(res);
+      const wired = await apiV1(`/api/v1/fixtures/${r.fixtureId}/stream-sessions`, { method: "POST", json: body(r.target.id) })
+        .catch((e: unknown) => e)
+        .finally(() => fetchSpy.mockRestore());
+      expect(wired, key).toBeInstanceOf(ApiV1Error);
+      expect((wired as ApiV1Error).extra.feature_key, key).toBe(key);
+      expect(createErrorCode(wired), key).toBe("plan_lacks_relay");
+      checked++;
+    }
+    expect(checked).toBe(GATES.length);
   });
 
   // Task 13 review m4: `ingest_unavailable` is one of CREATE_ERROR_KEYS' refusals, and until now nothing drove the path

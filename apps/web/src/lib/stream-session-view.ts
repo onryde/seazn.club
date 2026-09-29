@@ -27,6 +27,7 @@ import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, type DestinationRefusal } from "@/lib/stream-destinations";
+import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import type { StreamEndReason, StreamFailReason, StreamSessionCurrent } from "@/server/api-v1/schemas";
 
 /** Prompt watch 4 closed: `live-score.tsx` exports no POLL_MS after W1's lift;
@@ -127,10 +128,11 @@ const VERBATIM_CODES: readonly CreateErrorCode[] = [
   "no_credits", "overlay_required", "active_session", "storage_exhausted", "ingest_unavailable", "target_in_use",
 ];
 
-/** The plan gates createSession refuses with `PaymentRequiredError(featureKey)`. Both mean "your plan, not your
+/** The plan gates createSession refuses with `PaymentRequiredError(featureKey)` — read from the ONE authority the
+ *  server's `refuse` throws from (lib/stream-plan-gates.ts, Task 13 review m5). Both mean "your plan, not your
  *  credits" — the Phone tab shows the UpgradeGate for either. The v1 envelope carries the key as
  *  `extra.feature_key`; its `extra.reason` is featureReason()'s human SENTENCE, never a machine code. */
-const PLAN_GATE_FEATURES: readonly string[] = ["streaming.relay", "streaming.overlay"];
+const PLAN_GATE_FEATURES: readonly string[] = Object.values(RELAY_PLAN_GATES);
 
 /** The `code` / `extra` split of an `ApiV1Error` (lib/client-v1.ts), read structurally — `null` for anything that never
  *  reached the server (a network TypeError, an abort, a non-object). Structural rather than `instanceof` so a test
