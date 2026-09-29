@@ -8,8 +8,11 @@ import { messages } from "@/lib/messages";
 // `RunSheetRow` reaches for `useRouter` (its inline Set-time editor refreshes
 // on save). Nothing here clicks it, but the hook throws outside a router
 // context, so the whole tree fails to render without this.
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 
 // Competition Desk W2 — the filter chips' two DERIVED counts, which had no

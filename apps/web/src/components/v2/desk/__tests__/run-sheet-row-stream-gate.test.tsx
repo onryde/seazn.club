@@ -16,8 +16,11 @@ import {
 } from "@/components/v2/fixture-stream-panel";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 
 const TZ = "Europe/London";

@@ -8,8 +8,11 @@ import type { RunSheetFixture } from "@/lib/run-sheet-groups";
 import { messages } from "@/lib/messages";
 import type { MessageKey } from "@/lib/messages";
 
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 vi.mock("@/components/ui/confirm-provider", () => ({
   useConfirm: () => vi.fn(async () => false),
