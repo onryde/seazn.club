@@ -7,8 +7,8 @@
 // this module never imports the runner.
 import type { Browser } from "playwright";
 import type { Session } from "../../../bench/lib/http.ts";
-import { BrowserDriver, EMPTY_PADS, type PadRegistry } from "../driver/browser-driver.ts";
-import { HttpDriver } from "../driver/http-driver.ts";
+import { BrowserDriver, EMPTY_PADS, REAL_PAGES, type BrowserPages, type PadRegistry } from "../driver/browser-driver.ts";
+import { HttpDriver, type Transport } from "../driver/http-driver.ts";
 import type { PadPolicy } from "../driver/mixed.ts";
 import type { CaseSpec } from "../scenarios/types.ts";
 import type { BrowserWidth } from "../widths.ts";
@@ -40,6 +40,11 @@ export interface BrowserRunDeps {
   /** Where the build's hold window is read from (holdMsFromEnv). */
   env: Readonly<Record<string, string | undefined>>;
   pads: PadRegistry;
+  /** The page objects (REAL_PAGES) and the HTTP side's transport (bench's raw
+   *  when absent): the page/wire boundary a runner-level test fakes, so the
+   *  wiring from the runner's case options to each driver runs for real (I-3). */
+  pages?: BrowserPages;
+  transport?: Transport;
 }
 
 const REAL: BrowserRunDeps = {
@@ -47,6 +52,7 @@ const REAL: BrowserRunDeps = {
   newCase: (browser, o) => newCaseBrowser(browser as Browser, o),
   env: process.env,
   pads: EMPTY_PADS,
+  pages: REAL_PAGES,
 };
 
 export class BrowserRunClosed extends Error {
@@ -69,8 +75,8 @@ export async function openBrowserRun(deps: BrowserRunDeps = REAL): Promise<OpenB
       const cb = await deps.newCase(browser, { base: o.base, cookies: o.session.cookies, width: o.width });
       try {
         const ctx: PageCtx = { page: cb.page, base: o.base, orgSlug: o.orgSlug, holdMs: holdMsFromEnv(deps.env), evidence: new Evidence(o.reportDir, o.evidenceId) };
-        const http = new HttpDriver({ base: o.base, session: o.session, expectedOrgId: o.orgId });
-        const driver = new BrowserDriver({ http, ctx, spec: o.spec, padPolicy: o.padPolicy, pads: deps.pads, orgId: o.orgId });
+        const http = new HttpDriver({ base: o.base, session: o.session, expectedOrgId: o.orgId, ...(deps.transport === undefined ? {} : { transport: deps.transport }) });
+        const driver = new BrowserDriver({ http, ctx, spec: o.spec, padPolicy: o.padPolicy, pads: deps.pads, orgId: o.orgId, pages: deps.pages ?? REAL_PAGES });
         let done = false;
         return {
           driver,

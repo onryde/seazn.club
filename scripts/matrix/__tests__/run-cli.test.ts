@@ -7,7 +7,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
-import { RefusedCall } from "../lib/driver/types.ts";
+import { NoOrganiserPath, RefusedCall } from "../lib/driver/types.ts";
+import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
+import type { PageCtx } from "../lib/browser/pages/ctx.ts";
+import type { CaseBrowser } from "../lib/browser/session.ts";
+import { EMPTY_PADS, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
+import type { Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
@@ -24,7 +29,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, type BrowserRun, type CaseDriverOptions, type DbFactories, type RunDeps } from "../run.ts";
+import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type RunDeps } from "../run.ts";
 import { BROWSER_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
@@ -996,6 +1001,8 @@ describe("summariseRun (PF4) — empty first", () => {
       kase("zero-items", "red", "checked zero items (vacuous): k", [chk("pass", 0)]),
       // Controller ruling (fix round 1): ⏳ is an honest owner-assigned state, never vacuity.
       kase("deferred", "later", "W1b: team rosters", []),
+      // …and so is 🚫 (W1c Task 6, M-4 ruling): a path this layer does not drive, owned by a wave.
+      kase("no-path", "no_path", "W1-driving: the division builder takes no rule override", []),
       kase("works", "works", "1 checks, 3 items", [chk("pass", 3), chk("abstain", 0)]),
       kase("real-red", "red", "k: wrong", [chk("fail", 2)]),
       kase("refused", "red", "error: RefusedCall: POST /x → HTTP 400 VALIDATION: bad", []),
@@ -1196,8 +1203,9 @@ describe("describeCommit (final review m-6) — evidence never names a commit th
 // in the case, the D9 fields following the CLI, and one browser per run
 // closed exactly once.
 interface FakeBrowserRun { run: BrowserRun; log: string[]; opts: CaseDriverOptions[] }
-/** A browser run whose case drivers are league fakes carrying one check of their own. */
-function fakeBrowserRun(o: { failCaseAt?: number } = {}): FakeBrowserRun {
+/** A browser run whose case drivers are league fakes carrying one check of their own.
+ *  `checksThrow`: reading the driver's checks throws (fix round 1, M-2). */
+function fakeBrowserRun(o: { failCaseAt?: number; checksThrow?: boolean } = {}): FakeBrowserRun {
   const log: string[] = [];
   const opts: CaseDriverOptions[] = [];
   const run: BrowserRun = {
@@ -1206,7 +1214,10 @@ function fakeBrowserRun(o: { failCaseAt?: number } = {}): FakeBrowserRun {
       if (o.failCaseAt === opts.length) throw new Error("browser: newContext refused");
       log.push(`open ${co.evidenceId}`);
       const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
-        checks: (): CheckResult[] => [{ id: "browser-probe", kind: "assertion", verdict: "pass", checked: 1, reason: `driver of ${co.evidenceId}`, evidence: [] }],
+        checks: (): CheckResult[] => {
+          if (o.checksThrow) throw new Error("checks unreadable");
+          return [{ id: "browser-probe", kind: "assertion", verdict: "pass", checked: 1, reason: `driver of ${co.evidenceId}`, evidence: [] }];
+        },
       });
       return { driver, close: async () => { log.push(`close ${co.evidenceId}`); } };
     },
@@ -1291,6 +1302,141 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(c).toMatchObject({ state: "red", width: 1280, driver: "browser" });
     expect(c!.reason).toMatch(/scenario boom/);
     expect(fb.log).toEqual(["open case-1", "close case-1", "run closed"]);
+    // Fix round 1, M-2: the thrown case keeps what its driver recorded (its evidence).
+    expect(c!.checks.map((k) => k.id)).toEqual(["browser-probe"]);
+    expect(c!.checks[0]!.reason).toBe("driver of case-1");
+  });
+
+  it("M-2: a driver whose checks cannot be read after a throw leaves the case's own error as its outcome, warned, never replaced", async () => {
+    const io = capture();
+    vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw new Error("scenario boom"); });
+    const dir = dirFor();
+    const fb = fakeBrowserRun({ checksThrow: true });
+    expect(await runSlice(deps({ openBrowserRun: async () => fb.run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "b2t", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "b2t").cases;
+    expect(c).toMatchObject({ state: "red", checks: [] });
+    expect(c!.reason).toMatch(/^error: .*scenario boom/);
+    expect(io.err()).toMatch(/its driver's checks could not be read — Error: checks unreadable/);
+    expect(fb.log).toEqual(["open case-1", "close case-1", "run closed"]);
+  });
+
+  it("M-4 ruling: a case whose driver has no organiser path for it is 🚫 no_path naming the owning wave — never an error red, never vacuous", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const run: BrowserRun = {
+      caseDriver: async (co) => {
+        const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
+          createDivision: async () => { throw new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"); },
+          checks: (): CheckResult[] => [],
+        });
+        return { driver, close: async () => undefined };
+      },
+      close: async () => undefined,
+    };
+    expect(await runSlice(deps({ openBrowserRun: async () => run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "np", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "np").cases;
+    expect(c).toMatchObject({ state: "no_path", reason: "W1-driving: the division builder takes no rule override (pointsToWin)", checks: [] });
+    expect(io.out()).toMatch(/vacuous: none/);
+    expect(io.out()).toMatch(/error reds: none/);
+  });
+
+  it("fix round 1 (a): pnpm 10 forwards the `--` of `pnpm run matrix:browser -- --width W` into argv mid-list; every bare `--` is dropped, so the flags after it are read", async () => {
+    const io = capture();
+    // Measured (pnpm 10.34.5): the script's own flags, then the `--`, then the user's.
+    const opened: string[] = [];
+    const d0 = deps({ openBrowserRun: async () => { opened.push("d0"); return fakeBrowserRun().run; } });
+    expect(await runSlice(d0, ["--driver", "browser", "--", "--width", "999", "--run-id", "dd0", "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/--width must be one of .*, got 999/);
+    expect(io.err()).not.toMatch(/Unexpected argument/);
+    // Both scripts' forms run: matrix:browser's (mid-list) and matrix:l3's (leading).
+    let ran = 0;
+    for (const [argv, id, driver] of [
+      [["--driver", "browser", "--", "--width", "320", "--only", "league|generic", "--scenario", "LIFECYCLE"], "dd1", "browser"],
+      [["--", "--only", "league|generic", "--scenario", "LIFECYCLE"], "dd2", "http"],
+    ] as const) {
+      const dir = dirFor();
+      const d = deps({ openBrowserRun: async () => { opened.push(id); return fakeBrowserRun().run; } });
+      expect(await runSlice(d, [...argv, "--run-id", id, "--report-dir", dir]), id).toBe(0);
+      expect(resultsIn(dir, id).cases.map((c) => c.driver), id).toEqual([driver]);
+      ran++;
+    }
+    expect(ran).toBe(2);
+    expect(opened).toEqual(["dd1"]);
+    // A bare `--` is never a flag's value — parseArgs refuses `--run-id --` as
+    // ambiguous with or without the drop — and `--run-id=--` is one token, kept.
+    expect(await runSlice(deps(), ["--run-id", "--", "--report-dir", dirFor()])).toBe(2);
+    expect(withoutBareDashes(["--run-id=--", "--", "a", "--"])).toEqual(["--run-id=--", "a"]);
+  });
+
+  it("I-3: the REAL --driver browser path — openBrowserRun → caseDriver → BrowserDriver, faked only at the page and wire — carries each case's org slug, org id, expected org id, pad policy and evidence id into its driver", async () => {
+    capture();
+    const dir = dirFor();
+    const runId = "i3";
+    const seen: { n: number; orgSlug: string; base: string }[] = [];
+    const wire: { base: string; path: string; method: string | undefined; session: Session }[] = [];
+    let current = "";
+    const unexpected = async () => { throw new Error("an unexpected page call"); };
+    const pages = {
+      ...Object.fromEntries(Object.keys(REAL_PAGES).map((k) => [k, unexpected])),
+      createCompetitionUi: async (ctx: PageCtx, input: { name: string }) => {
+        const n = d.orgs.length; // prepareCaseOrg ran for this case first
+        seen.push({ n, orgSlug: ctx.orgSlug, base: ctx.base });
+        const shotPage = { evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }), screenshot: async () => new Uint8Array([137, 80, 78, 71]) };
+        await ctx.evidence.shot(shotPage as unknown as Parameters<PageCtx["evidence"]["shot"]>[0], "01-competition");
+        // The case org as the runner planned it — never read back from ctx.
+        return { id: `comp-${n}`, org_id: `org-${d.orgs.at(-1)!.slug}`, name: input.name, slug: `prod-slug-${n}`, visibility: "unlisted", status: "draft" };
+      },
+      createDivisionUi: async () => { throw new Error("STOP: past what this test drives"); },
+    } as unknown as BrowserPages;
+    const transport: Transport = {
+      raw: async (base, s, path, method, body) => {
+        wire.push({ base, path, method, session: s });
+        if (path === "/api/v1/competitions" && method === "POST") {
+          return { status: 201, json: { ok: true, data: { id: "c-http", slug: (body as { slug: string }).slug, org_id: current, visibility: "unlisted" } } };
+        }
+        return { status: 404, json: { ok: false, error: "NOT_FOUND" } };
+      },
+    };
+    const drivers: BrowserDriver[] = [];
+    const wrap = (r: OpenBrowserRun): BrowserRun => ({
+      caseDriver: async (o) => { const cd = await r.caseDriver(o); drivers.push(cd.driver); return cd; },
+      close: () => r.close(),
+    });
+    // The page fakes above read `d` only when a case runs, after this line.
+    const d = deps({
+      openBrowserRun: async () => wrap(await openBrowserRun({
+        launch: async () => ({ close: async () => undefined }),
+        newCase: async () => ({ page: { setDefaultTimeout: () => undefined } as unknown as CaseBrowser["page"], close: async () => undefined }),
+        env: {}, pads: EMPTY_PADS, pages, transport,
+      })),
+    });
+    expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", runId, "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, runId).cases;
+    expect(cases.length).toBeGreaterThanOrEqual(2);
+    // Every case reached the builder: nothing refused it earlier (an OrgMismatch on a wrong org id would).
+    for (const c of cases) expect(c.reason, c.caseId).toMatch(/^error: Error: STOP/);
+    // orgSlug and base reach the page context, per case.
+    expect(seen.map((s) => s.n)).toEqual(cases.map((_c, i) => i + 1));
+    expect(seen.map((s) => s.orgSlug)).toEqual(d.orgs.map((o) => o.slug));
+    expect(seen.every((s) => s.base === "http://localhost:3999")).toBe(true);
+    // The evidence id: each case's shot lands under its own case-<n>, and the case keeps it (M-2).
+    let shots = 0;
+    for (const [i, c] of cases.entries()) {
+      expect(existsSync(join(dir, runId, "shots", `case-${i + 1}`, "01-competition.png")), c.caseId).toBe(true);
+      expect(c.checks.find((k) => k.id === "visual-evidence"), c.caseId).toMatchObject({ verdict: "pass", checked: 1 });
+      shots++;
+    }
+    expect(shots).toBe(cases.length);
+    // padPolicy and the HTTP side's expected org id: the second createCompetition
+    // goes over the wire ("first"), and lands only in the case's own org.
+    expect(drivers).toHaveLength(cases.length);
+    for (const [i, drv] of drivers.entries()) {
+      expect(drv.padPolicy, `case ${i + 1}`).toBe("first");
+      current = `org-${d.orgs[i]!.slug}`;
+      await expect(drv.createCompetition({ name: "again", slug: `again-${i + 1}` }), `case ${i + 1}`).resolves.toMatchObject({ orgId: current });
+    }
+    expect(wire.map((w) => [w.base, w.path, w.method])).toEqual(drivers.map(() => ["http://localhost:3999", "/api/v1/competitions", "POST"]));
+    expect(wire.every((w) => w.session === d.session)).toBe(true);
   });
 
   it("no browser (openBrowserRun rejects, or the runner has none): exit 3 aborted with the message, nothing recorded, the DB still closed", async () => {

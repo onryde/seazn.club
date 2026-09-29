@@ -9,6 +9,12 @@
 //     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
 //
+// pnpm 10 passes that `--` through into argv — for matrix:browser AFTER the
+// script's own `--driver browser`, so mid-list (measured, W1c Task 6 fix
+// round 1) — and parseArgs reads everything after a `--` as a positional.
+// parseCli drops every bare `--` (withoutBareDashes), so the `-- …` form above
+// and `pnpm matrix:browser --width W` both reach the same flags.
+//
 // The browser layer is loaded LAZILY (realDeps.openBrowserRun's dynamic
 // import), so an L3 run never loads lib/browser (boundary.test.ts pins that
 // edge as the only one).
@@ -69,7 +75,7 @@ import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
 import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "./lib/catalogue.ts";
 import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
 import { HttpDriver } from "./lib/driver/http-driver.ts";
-import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
+import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
@@ -309,10 +315,19 @@ function parseDriver(driver: string | undefined, width: string | undefined): { d
   return { driver: d, width: w };
 }
 
+/** The argv parseCli reads: every bare `--` dropped (pnpm 10 forwards the one
+ *  in `pnpm run <script> -- <flags>`, mid-list for a script that carries flags
+ *  of its own). Nothing is lost: this runner takes no positional, and a bare
+ *  `--` is never a flag's value (parseArgs refuses `--run-id --` as ambiguous
+ *  with or without it; `--run-id=--` is one token and is kept). */
+export function withoutBareDashes(argv: readonly string[]): string[] {
+  return argv.filter((a) => a !== "--");
+}
+
 function parseCli(argv: string[]): Cli | { usage: string } {
   let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string };
   try {
-    ({ values } = parseArgs({ args: argv, options: {
+    ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
       only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
       driver: { type: "string" }, width: { type: "string" },
@@ -341,11 +356,12 @@ function parseCli(argv: string[]): Cli | { usage: string } {
  *    refused call.
  *  - A deferred case (⏳ `later`: ScenarioUnsupported / RowBuildDeferred) is an
  *    honest owner-assigned state naming its wave, not vacuity (controller
- *    ruling, Task 9 fix round 1). */
+ *    ruling, Task 9 fix round 1) — and so is 🚫 `no_path` (NoOrganiserPath,
+ *    W1c Task 6 M-4 ruling). */
 export function summariseRun(cases: readonly CaseResult[], refusals: ReadonlyMap<string, CallRefusal>): RunSummary {
   const isErrorRed = (c: CaseResult) => c.reason.startsWith("error:");
   return {
-    vacuous: cases.filter((c) => c.state !== "later" && !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
+    vacuous: cases.filter((c) => c.state !== "later" && c.state !== "no_path" && !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
     errorReds: cases.filter(isErrorRed).map((c) => ({ caseId: c.caseId, error: c.reason.replace(/^error: ?/, ""), refusal: refusals.get(c.caseId) ?? null })),
   };
 }
@@ -383,6 +399,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
   let deferred: { wave: string; reason: string } | null = null;
   let mandated: string | null = null;
   let error: string | null = null;
+  let noPath: { wave: string; reason: string } | null = null;
   let refusal: CallRefusal | null = null;
   let driver: OrganiserDriver | null = null;
   let caseBrowser: CaseBrowserDriver | null = null;
@@ -423,11 +440,19 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
     // than record it as a product red.
     if (e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted) throw e;
     if (e instanceof ScenarioUnsupported || e instanceof RowBuildDeferred) deferred = { wave: e.wave, reason: e.message };
+    // M-4 ruling: a path this layer does not drive is 🚫 naming its wave, never an error red.
+    else if (e instanceof NoOrganiserPath) noPath = { wave: e.wave, reason: e.reason };
     else {
       error = errText(e);
       if (e instanceof RefusedCall) refusal = { method: e.method, path: e.path, status: e.status, code: e.code };
     }
     if (driver !== null) counts = { ...counts, calls: driver.callCount };
+    // M-2: a thrown case keeps what its browser driver recorded before the
+    // throw (its screenshots' checks among them); reading them must not
+    // replace the case's own outcome.
+    if (caseBrowser !== null) {
+      try { checks = caseBrowser.driver.checks().map(redactCheck); } catch (k) { warn(`matrix: case ${spec.caseId}: its driver's checks could not be read — ${errText(k)}`); }
+    }
   } finally {
     // Every case's context is closed, whatever the scenario did; a failed
     // close is warned, never allowed to replace the case's own outcome.
@@ -435,7 +460,7 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
       try { await caseBrowser.close(); } catch (e) { warn(`matrix: case ${spec.caseId}: closing its browser failed — ${errText(e)}`); }
     }
   }
-  const { state, reason } = decideState({ checks, deferred, error, mandated });
+  const { state, reason } = decideState({ checks, deferred, error, mandated, noPath });
   const b = run.browser;
   const result: CaseResult = {
     caseId: b === null ? spec.caseId : `${spec.caseId}@${b.width}`, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
