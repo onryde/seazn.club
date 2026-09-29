@@ -18,11 +18,13 @@
 //     `@seazn/engine/sports` (static or dynamic import) — the engine's own
 //     idiom for pinning a sport.
 // A pin is SWEPT (not a pin) when it sits inside a sweep, or in a test block
-// that itself sweeps. A sweep is a call shape, never a mention: a call of
-// forEachSport / forEachSportAsync / sportCases; `for … of` over builtinModules
-// or SPORT_KEYS; `.map/.forEach/.flatMap/.filter/.some/.every/.reduce(` on
-// them; or `it.each(<registry>)`. A `.find(` or `[n]` pick is a pin, not a
-// sweep, and a sweep in one test block exempts nothing in its siblings.
+// that itself sweeps. A sweep is a FULL iteration of the registry, as a call
+// shape, never a mention: a call of forEachSport / forEachSportAsync; `for …
+// of` over the registry; `.map/.forEach/.flatMap(` on it; or `it.each(<the
+// registry>)` — where the registry is builtinModules, SPORT_KEYS, a copy
+// `[...x]`, or sportCases(). A pick or a predicate is not a sweep (review
+// RR-4): `.filter/.some/.every/.reduce/.find(`, `[n]`, and anything over a
+// filtered subset. A sweep in one test block exempts nothing in its siblings.
 //
 // A reason is a `// single-sport: <reason>` line comment, the reason
 // non-empty. It covers:
@@ -35,8 +37,10 @@
 //     lines: the NEXT statement only (a test call, an import, a const).
 //
 // The baseline counts unreasoned pins per `<file>:<sport>`. A line move is no
-// change; a new entry, or a count that rises, fails --check. A count that
-// falls passes, and --write records it (the ratchet turns down).
+// change. --check fails on a new entry, a count that rose, AND a count that
+// fell (review RR-1): the PR that lowers the pins records it with --write, so
+// the committed baseline always equals today's counts and no slack is left
+// for a later PR to fill back up.
 //
 // usage: single-sport.ts [--check [--against REF] | --write | --init |
 //                         --move OLD NEW] [--root DIR]
@@ -44,8 +48,12 @@
 //   --check    list them, then compare with the committed baseline. With
 //              --against REF, the baseline itself must also sit at or below
 //              REF's committed baseline (read via `git show REF:<path>`), so a
-//              PR cannot raise the ceiling it is checked against. REF with no
-//              baseline yet (the introducing PR) is a notice, not a failure;
+//              PR cannot raise the ceiling it is checked against. Every move
+//              the baseline records that REF's does not must be a real rename
+//              since REF: NEW absent at REF, OLD present at REF, OLD gone here
+//              (review RR-2). REF with neither the baseline nor this scanner
+//              (the introducing PR) is a notice; REF with the scanner but no
+//              baseline is refused (review RR-3);
 //   --write    record today's counts. Only lowers: any count above the
 //              baseline (a new entry included) is refused;
 //   --init     write the first baseline; refused when one already exists;
@@ -55,12 +63,14 @@
 //   --root     the checkout to scan (default: this file's own checkout).
 // Exit codes, each with one meaning:
 //   0  ok;
-//   1  the ratchet is violated (--check): a new entry, a count that rose, or
-//      (--against) a baseline above REF's;
+//   1  the ratchet is violated (--check): a new entry, a count that rose, a
+//      count that fell and was not recorded, or (--against) a baseline above
+//      REF's;
 //   2  refused: bad arguments; a scope root that scanned ZERO files (a scope
 //      that finds nothing is wrong, not clean); a missing or malformed
-//      baseline (here or at REF); an unknown REF; --write that would raise a
-//      count; --init over an existing baseline; an invalid --move;
+//      baseline (here or at REF); an unknown REF; REF with the scanner but no
+//      baseline; a recorded move that is not a rename since REF; --write that
+//      would raise a count; --init over an existing baseline; an invalid --move;
 //   3  the scanner crashed — never 1, which would read as a ratchet verdict.
 // Deterministic: files in codepoint order, pins in source order, keys sorted.
 import { spawnSync } from "node:child_process";
@@ -83,13 +93,18 @@ export const NAME_ROOTS = ["packages/engine/src", "apps/web/src"] as const;
 export const TEST_FILE = /\.test\.tsx?$/;
 export const SCOPE_NAME = /(standing|progression|seeding|tiebreak)[^/\\]*\.test\.tsx?$/i;
 export const REGISTRY_EXPORTS: ReadonlySet<string> = new Set(["builtinModules", "SPORT_KEYS"]);
-export const SWEEP_CALLS: ReadonlySet<string> = new Set(["forEachSport", "forEachSportAsync", "sportCases"]);
-export const ITERATORS: ReadonlySet<string> = new Set(["map", "forEach", "flatMap", "filter", "some", "every", "reduce"]);
+/** Calls that return the whole registry (as cases): a registry, not a sweep. */
+export const REGISTRY_CALLS: ReadonlySet<string> = new Set(["sportCases"]);
+export const SWEEP_CALLS: ReadonlySet<string> = new Set(["forEachSport", "forEachSportAsync"]);
+/** Full iterations only; filter/some/every/reduce/find pick or test (review RR-4). */
+export const ITERATORS: ReadonlySet<string> = new Set(["map", "forEach", "flatMap"]);
 export const TEST_ROOTS: ReadonlySet<string> = new Set(["it", "test", "describe", "bench"]);
 export const BASELINE_PATH = "scripts/matrix/catalogue/single-sport-baseline.json";
 export const REASON = /^\/\/\s*single-sport:\s*\S/;
 const ENGINE_SPORTS = "@seazn/engine/sports";
-const GENERATED_BY = "scripts/matrix/single-sport.ts";
+/** This scanner, repo-relative: its presence at REF says the ratchet already exists there. */
+export const SCANNER_PATH = "scripts/matrix/single-sport.ts";
+const GENERATED_BY = SCANNER_PATH;
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const USAGE = "usage: single-sport.ts [--check [--against REF] | --write | --init | --move OLD NEW] [--root DIR]";
 
@@ -142,17 +157,20 @@ function unwrap(e: TS.Expression): TS.Expression {
   return x;
 }
 
-/** builtinModules / SPORT_KEYS (also as `x.SPORT_KEYS` or `[...builtinModules]`), or a sweep call's result. */
+/** The whole registry: builtinModules / SPORT_KEYS (also as `x.SPORT_KEYS` or `[...builtinModules]`), or sportCases(). */
 function isRegistryRef(e: TS.Expression): boolean {
   const x = unwrap(e);
   if (ts.isIdentifier(x)) return REGISTRY_EXPORTS.has(x.text);
   if (ts.isPropertyAccessExpression(x)) return REGISTRY_EXPORTS.has(x.name.text);
   if (ts.isArrayLiteralExpression(x)) return x.elements.length === 1 && x.elements[0] !== undefined && ts.isSpreadElement(x.elements[0]) && isRegistryRef(x.elements[0].expression);
-  if (ts.isCallExpression(x)) return isSweep(x);
+  if (ts.isCallExpression(x)) {
+    const c = unwrap(x.expression);
+    return ts.isIdentifier(c) && REGISTRY_CALLS.has(c.text);
+  }
   return false;
 }
 
-/** A sweep is a call or an iteration over the registry — never a mention. */
+/** A sweep is a full iteration of the registry — never a mention, a pick or a predicate. */
 export function isSweep(n: TS.Node): boolean {
   if (ts.isForOfStatement(n)) return isRegistryRef(n.expression);
   if (!ts.isCallExpression(n)) return false;
@@ -443,8 +461,13 @@ function git(root: string, args: string[]): { status: number | null; stdout: str
   return { status: r.status, stdout: r.stdout ?? "" };
 }
 
-/** REF's committed baseline, or null when REF has none yet. An unknown REF, or
- *  a root that is not a git checkout's top level, is a Refusal. */
+const existsAt = (root: string, ref: string, path: string): boolean => git(root, ["cat-file", "-e", `${ref}:${path}`]).status === 0;
+
+/** REF's committed baseline, or null when REF predates the ratchet (neither the
+ *  baseline nor this scanner). REF with the scanner but no baseline — the
+ *  baseline moved or deleted by the PR under check — is a Refusal (review
+ *  RR-3), as are an unknown REF and a root that is not a git checkout's top
+ *  level. */
 export function baselineAt(root: string, ref: string): Baseline | null {
   if (ref === "" || ref.startsWith("-")) throw new Refusal(`--against: "${ref}" is not a ref`);
   const top = git(root, ["rev-parse", "--show-toplevel"]);
@@ -452,10 +475,36 @@ export function baselineAt(root: string, ref: string): Baseline | null {
   if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).status !== 0) {
     throw new Refusal(`--against ${ref}: no such commit here (in CI the gates job checks out with fetch-depth: 2 so the base, HEAD^1, is present)`);
   }
-  if (git(root, ["cat-file", "-e", `${ref}:${BASELINE_PATH}`]).status !== 0) return null;
+  if (!existsAt(root, ref, BASELINE_PATH)) {
+    if (existsAt(root, ref, SCANNER_PATH)) {
+      throw new Refusal(`${ref} has ${SCANNER_PATH} but no ${BASELINE_PATH} — the baseline cannot be moved or dropped in a PR; restore it at that path`);
+    }
+    return null;
+  }
   const shown = git(root, ["show", `${ref}:${BASELINE_PATH}`]);
   if (shown.status !== 0) throw new Error(`git show ${ref}:${BASELINE_PATH} failed`);
   return parseBaseline(shown.stdout, `${ref}:${BASELINE_PATH}`);
+}
+
+/** Every move `own` records that `base` does not (a changed OLD counts as new)
+ *  must be a real rename since REF: NEW absent at REF, OLD present at REF, and
+ *  OLD gone from this tree. Anything else would lend OLD's ceiling to a file
+ *  that already existed, or that never went away (review RR-2). Moves `base`
+ *  already records were checked when they were introduced. */
+export function checkNewMoves(root: string, ref: string, own: Baseline, base: Baseline): void {
+  for (const [to, from] of Object.entries(own.moves)) {
+    if (base.moves[to] === from) continue;
+    const why = existsAt(root, ref, to)
+      ? `${to} already exists at ${ref}`
+      : !existsAt(root, ref, from)
+        ? `${from} does not exist at ${ref}`
+        : existsSync(resolve(root, from))
+          ? `${from} still exists here`
+          : null;
+    if (why !== null) {
+      throw new Refusal(`the baseline's move ${to} ← ${from} is not a rename since ${ref}: ${why}. A move may only carry a renamed file's ceiling (two renames in one PR: run --move from the original file)`);
+    }
+  }
 }
 
 const serialize = (b: Baseline): string =>
@@ -557,16 +606,19 @@ function run(o: Opts, scan: (root: string) => Scan): number {
   }
   for (const d of added) warn(`::error::new unreasoned single-sport pin ${fmt(d)} — sweep with forEachSport, or add \`// single-sport: <reason>\``);
   for (const d of rose) warn(`::error::unreasoned single-sport pins rose ${fmt(d)} — sweep with forEachSport, or add \`// single-sport: <reason>\``);
-  for (const d of lowered) say(`::notice::single-sport: ${fmt(d)} can be lowered — run: pnpm matrix:single-sport --write`);
+  for (const d of lowered) warn(`::error::single-sport: ${fmt(d)} fell — record it in this PR: pnpm matrix:single-sport --write (slack left in the ceiling would let the pins come back)`);
   let raised: Delta[] = [];
   if (o.against !== undefined) {
     const base = baselineAt(o.root, o.against);
     if (base === null) say(`::notice::single-sport: ${o.against} has no ${BASELINE_PATH} yet — the baseline is being introduced, so its own counts are the ceiling`);
-    else raised = raisedAbove(own, base);
+    else {
+      checkNewMoves(o.root, o.against, own, base);
+      raised = raisedAbove(own, base);
+    }
     for (const d of raised) warn(`::error::the baseline raises ${d.key} above ${o.against}'s (${d.was} → ${d.now}) — a ceiling cannot rise; sweep or reason the pins instead`);
   }
-  const bad = added.length + rose.length + raised.length;
-  if (bad > 0) { say(`single-sport: check FAILED — ${added.length} new, ${rose.length} risen, ${raised.length} raised above ${o.against ?? "the base"}`); return 1; }
+  const bad = added.length + rose.length + lowered.length + raised.length;
+  if (bad > 0) { say(`single-sport: check FAILED — ${added.length} new, ${rose.length} risen, ${lowered.length} fallen and unrecorded, ${raised.length} raised above ${o.against ?? "the base"}`); return 1; }
   say(`single-sport: check passed against ${BASELINE_PATH}${o.against === undefined ? "" : ` and ${o.against}`}`);
   return 0;
 }

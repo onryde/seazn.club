@@ -382,19 +382,39 @@ describe("single-sport scanner (R26)", () => {
       const shapes: Array<[string, string]> = [
         ["forEachSport(", "forEachSport((c) => { g(c); });"],
         ["forEachSportAsync(", "void forEachSportAsync(async (c) => { g(c); });"],
-        ["sportCases()", "const cs = sportCases();"],
+        ["for…of sportCases()", "for (const c of sportCases()) g(c);"],
+        ["sportCases().map(", "const cs = sportCases().map((c) => c.key);"],
         ["for…of builtinModules", "for (const m of builtinModules) g(m);"],
         ["for…of SPORT_KEYS", "for (const k of SPORT_KEYS) g(k);"],
         ["builtinModules.map(", "const ks = builtinModules.map((m) => m.key);"],
         ["SPORT_KEYS.forEach(", "SPORT_KEYS.forEach(g);"],
-        ["[...builtinModules].filter(", "const d = [...builtinModules].filter((m) => m.supportsDraws);"],
+        ["[...builtinModules].map(", "const d = [...builtinModules].map((m) => m.supportsDraws);"],
         ["x.SPORT_KEYS.flatMap(", "const f2 = catalogue.SPORT_KEYS.flatMap((k) => [k]);"],
-        ["builtinModules.filter(…).map(", "const k2 = builtinModules.filter((m) => m.variants).map((m) => m.key);"],
       ];
       for (const [name, body] of shapes) expect({ name, live: live(pinsIn(inTest("", body), "t.test.ts")) }).toEqual({ name, live: [] });
       // it.each over the registry sweeps its own block (the table and the body)
       expect(live(pinsIn(`it.each(SPORT_KEYS)("%s", (k) => { expect(k === "generic").toBeDefined(); });`, "t.test.ts"))).toEqual([]);
-      console.info(`single-sport sweeps: ${shapes.length + 1} sweep shapes`);
+      expect(live(pinsIn(`it.each(sportCases())("%s", (c) => { expect(c.key === "generic").toBeDefined(); });`, "t.test.ts"))).toEqual([]);
+      console.info(`single-sport sweeps: ${shapes.length + 2} sweep shapes`);
+    });
+
+    it("a pick or a predicate over the registry is not a sweep — only a full iteration is (review RR-4): the pin, and every other pin in its test, stays", () => {
+      // the review's N1 and N2, in shape: their own key is a pin too
+      expect(live(pinsIn(`it("t", () => {\n  const m = builtinModules.filter((x) => x.key === "badminton")[0];\n  expect(f("generic")).toBe(1);\n});`, "t.test.ts"))).toEqual(["badminton", "generic"]);
+      expect(live(pinsIn(`it("t", () => {\n  expect(builtinModules.some((m) => m.key === "cricket")).toBe(true);\n  expect(f("generic")).toBe(1);\n});`, "t.test.ts"))).toEqual(["cricket", "generic"]);
+      const picks: Array<[string, string]> = [
+        [".filter(", "const d = builtinModules.filter((m) => m.supportsDraws);"],
+        [".some(", "const any = SPORT_KEYS.some((k) => k.length > 3);"],
+        [".every(", "const all = builtinModules.every((m) => m.metrics);"],
+        [".reduce(", "const n = SPORT_KEYS.reduce((a) => a + 1, 0);"],
+        [".find(", "const m = builtinModules.find((x) => x.variants);"],
+        ["a map over a filtered subset", "const k2 = builtinModules.filter((m) => m.variants).map((m) => m.key);"],
+        ["for…of a filtered subset", "for (const k of SPORT_KEYS.filter((x) => x.length > 3)) g(k);"],
+        ["sportCases() alone", "const cs = sportCases();"],
+        ["sportCases().find(", "const c = sportCases().find((x) => x.index === 0);"],
+      ];
+      for (const [name, body] of picks) expect({ name, live: live(pinsIn(inTest("", body), "t.test.ts")) }).toEqual({ name, live: ["generic"] });
+      console.info(`single-sport sweeps: ${picks.length + 2} picks and predicates`);
     });
 
     it("the exemption is the sweep's own test block: a sibling, a nested test under a sweeping describe, and module level all keep their pins; a pin INSIDE a sweep is exempt anywhere", () => {
@@ -413,10 +433,12 @@ describe("single-sport scanner (R26)", () => {
         `    expect(f("cricket")).toBe(1);`,
         `  });`,
         `});`,
-        `const picked = SPORT_KEYS.filter((k) => k !== "football");`,
+        `const flags = SPORT_KEYS.map((k) => k !== "football");`,
         `const fixture = "badminton";`,
-        // the pin is in the OUTER call's argument, so only the chain makes it a sweep
-        `const chained = builtinModules.filter((m) => m.variants).map((m) => m.key === "volleyball");`,
+        // a map over sportCases() sweeps: the pin sits in the map's argument
+        `const cased = sportCases().map((c) => c.key === "volleyball");`,
+        // a pick is not a sweep, even at module level
+        `const subset = SPORT_KEYS.filter((k) => k !== "hockey");`,
       ].join("\n");
       const pins = pinsIn(text, "t.test.ts");
       expect(pins.map((p) => [p.line, p.sport, p.swept])).toEqual([
@@ -426,6 +448,7 @@ describe("single-sport scanner (R26)", () => {
         [15, "football", true],
         [16, "badminton", false],
         [17, "volleyball", true],
+        [18, "hockey", false],
       ]);
     });
 
@@ -536,7 +559,7 @@ describe("single-sport scanner (R26)", () => {
 
   });
 
-  it("the ratchet, run for real: a reasoned new pin is fine; a fall passes with a notice and --write records it, down to zero", () => {
+  it("the ratchet, run for real: a reasoned new pin is fine; a fall FAILS --check until --write records it, down to zero (review RR-1)", () => {
     const pinned = "packages/engine/src/scheduling/sched.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
@@ -546,18 +569,47 @@ describe("single-sport scanner (R26)", () => {
     writeFileSync(join(root, pinned), `f("generic");\nf("generic");\n// single-sport: tennis is the pinned example\nf("tennis");\n`);
     expect(run("--check").status).toBe(0);
 
-    // A fall passes (with a notice) and --write records it; zero drops the entry.
+    // A fall fails until --write records it — slack left in the ceiling would
+    // let the pins come back later; zero drops the entry.
     writeFileSync(join(root, pinned), `f("generic");\n`);
     const fell = run("--check");
-    expect(fell.status).toBe(0);
-    expect(fell.stdout).toContain(`${pinned}:generic (2 → 1) can be lowered`);
+    expect(fell.status).toBe(1);
+    expect(fell.stderr).toContain(`${pinned}:generic (2 → 1) fell`);
+    expect(fell.stderr).toContain("pnpm matrix:single-sport --write");
     expect(run("--write").status).toBe(0);
     expect(pinsOf(root)).toEqual({ [`${pinned}:generic`]: 1 });
-    writeFileSync(join(root, pinned), `f(1);\n`);
     expect(run("--check").status).toBe(0);
+    writeFileSync(join(root, pinned), `f(1);\n`);
+    const gone = run("--check");
+    expect(gone.status).toBe(1);
+    expect(gone.stderr).toContain(`${pinned}:generic (1 → 0) fell`);
     expect(run("--write").status).toBe(0);
     expect(pinsOf(root)).toEqual({});
     expect(run("--check").status).toBe(0);
+  });
+
+  it("the review's two-PR probe goes red at PR1: lowering pins without --write fails; with --write the lowered ceiling then catches PR2's re-raise (the CLI, run for real)", () => {
+    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\nf("generic");\nf("tennis");\n` });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    expect(run("--init").status).toBe(0);
+    commitAll(root, "base");
+    // PR1 cuts generic 3 → 1 and drops the only tennis pin, and does not --write
+    writeFileSync(join(root, pinned), `f("generic");\n`);
+    const pr1 = run("--check", "--against", "HEAD");
+    expect(pr1.status).toBe(1);
+    expect(pr1.stderr).toContain(`${pinned}:generic (3 → 1) fell`);
+    expect(pr1.stderr).toContain(`${pinned}:tennis (1 → 0) fell`);
+    // PR1 as it must land: with --write
+    expect(run("--write").status).toBe(0);
+    expect(run("--check", "--against", "HEAD").status).toBe(0);
+    commitAll(root, "PR1");
+    // PR2 re-adds what PR1 removed
+    writeFileSync(join(root, pinned), `f("generic");\nf("generic");\nf("generic");\nf("tennis");\n`);
+    const pr2 = run("--check", "--against", "HEAD");
+    expect(pr2.status).toBe(1);
+    expect(pr2.stderr).toContain(`rose ${pinned}:generic (1 → 3)`);
+    expect(pr2.stderr).toContain(`new unreasoned single-sport pin ${pinned}:tennis (0 → 1)`);
   });
 
   it("--move transfers a renamed file's entries, and refuses a move that is not a rename (the CLI, run for real)", () => {
@@ -644,10 +696,12 @@ describe("single-sport scanner (R26)", () => {
     renameSync(join(root, old), join(root, moved));
     expect(run("--move", old, moved).status).toBe(0);
     expect(run("--check", "--against", "HEAD").status).toBe(0);
-    // a hand-made move from a file the base never had grants no ceiling
+    // a hand-made move onto a file the base already had is refused (review RR-2)
     writeBaseline(root, { [`${moved}:generic`]: 1, "packages/engine/src/scheduling/sched.test.ts:tennis": 1 }, { [moved]: old, "packages/engine/src/scheduling/sched.test.ts": "packages/engine/src/scheduling/ghost.test.ts" });
     writeFileSync(join(root, FULL_SCHED), `f("tennis");\n`);
-    expect(run("--check", "--against", "HEAD").status).toBe(1);
+    const handMade = run("--check", "--against", "HEAD");
+    expect(handMade.status).toBe(2);
+    expect(handMade.stderr).toContain("packages/engine/src/scheduling/sched.test.ts already exists at HEAD");
 
     for (const ref of ["no-such-ref", "-p", "HEAD~5"]) {
       const c = run("--check", ...(ref.startsWith("-") ? [`--against=${ref}`] : ["--against", ref]));
@@ -661,6 +715,65 @@ describe("single-sport scanner (R26)", () => {
     const broken = run("--check", "--against", "HEAD");
     expect(broken.status).toBe(2);
     expect(broken.stderr).toContain(`HEAD:${BASELINE_PATH} does not parse`);
+  });
+
+  it("a move --against REF must be a real rename since REF: the review's probes D and D2, each condition alone, an inherited move, and a changed one (the CLI, run for real; review RR-2)", () => {
+    const OLD = "packages/engine/src/scheduling/old.test.ts";
+    const B = "packages/engine/src/scheduling/b.test.ts";
+    const N = "packages/engine/src/scheduling/n.test.ts";
+    const R = "packages/engine/src/scheduling/renamed.test.ts";
+    const GHOST = "packages/engine/src/scheduling/ghost.test.ts";
+    const three = `f("generic");\nf("generic");\nf("generic");\n`;
+    const root = tree({ ...FULL, [OLD]: three, [B]: "f(1);\n" });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    const refused = (why: string) => {
+      const c = run("--check", "--against", "HEAD");
+      expect({ why, status: c.status }).toEqual({ why, status: 2 });
+      expect(c.stderr).toContain(why);
+    };
+    expect(run("--init").status).toBe(0);
+    commitAll(root, "base");
+
+    // D: OLD is cleaned but stays; B (already at REF) gains 3 pins and borrows OLD's ceiling
+    writeFileSync(join(root, OLD), "f(1);\n");
+    writeFileSync(join(root, B), three);
+    writeBaseline(root, { [`${B}:generic`]: 3 }, { [B]: OLD });
+    refused(`${B} ← ${OLD}`);
+    // D2: OLD deleted too — still not a rename, B existed at REF
+    rmSync(join(root, OLD));
+    refused(`${B} already exists at HEAD`);
+    // only "OLD still exists here" fails: NEW is new, OLD was at REF, OLD kept (a copy)
+    writeFileSync(join(root, OLD), "f(1);\n");
+    writeFileSync(join(root, B), "f(1);\n");
+    writeFileSync(join(root, N), three);
+    writeBaseline(root, { [`${N}:generic`]: 3 }, { [N]: OLD });
+    refused(`${OLD} still exists here`);
+    // only "OLD was at REF" fails: a move from a file REF never had
+    writeBaseline(root, { [`${N}:generic`]: 3 }, { [N]: GHOST });
+    refused(`${GHOST} does not exist at HEAD`);
+
+    // a real rename, committed: its move is then inherited and not re-validated
+    rmSync(join(root, N));
+    writeFileSync(join(root, OLD), three);
+    writeBaseline(root, { [`${OLD}:generic`]: 3 });
+    renameSync(join(root, OLD), join(root, R));
+    expect(run("--move", OLD, R).status).toBe(0);
+    expect(run("--check", "--against", "HEAD").status).toBe(0);
+    commitAll(root, "rename");
+    expect(run("--check", "--against", "HEAD").status).toBe(0);
+    // changing an inherited move's OLD makes it a new move, validated again
+    writeBaseline(root, { [`${R}:generic`]: 3 }, { [R]: GHOST });
+    refused(`${R} already exists at HEAD`);
+  });
+
+  it("--against a base with the scanner but no baseline is refused — a PR cannot move or drop the baseline to take the introducing-PR notice (the CLI, run for real; review RR-3)", () => {
+    const root = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, "scripts/matrix/single-sport.ts": "// the scanner\n", "scripts/matrix/catalogue/old-baseline.json": "{}\n" });
+    commitAll(root, "base with the scanner, baseline elsewhere");
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    expect(run("--init").status).toBe(0);
+    const c = run("--check", "--against", "HEAD");
+    expect(c.status).toBe(2);
+    expect(c.stderr).toContain(`HEAD has scripts/matrix/single-sport.ts but no ${BASELINE_PATH}`);
   });
 
   it("--against a base with no baseline yet (the introducing PR) passes with a notice; --against applies to --check only (the CLI, run for real)", () => {
