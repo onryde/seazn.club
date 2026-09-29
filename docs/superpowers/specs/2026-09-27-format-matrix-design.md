@@ -113,57 +113,59 @@ predicate is mutated once (`return false`) to prove a red — an over-broad
 predicate must not reach "zero ❌" by testing nothing (R13).
 
 **Compound scenarios split into atomic cases** in W1b ("A vs B" items such as
-R4, M7, M8, X1, X4, C3, F5, Q1, Q4 become `R4a`/`R4b`…), and W1b decides
+R4, M4, M7, M8, M12, X1, X4, C3, F5, Q1, Q4 become `R4a`/`R4b`…), and W1b decides
 whether **E (entry path)** multiplies the M and C scenarios or stays a
-scenario of its own.
+scenario of its own. Ruling 30 (2026-09-28) split M4 by whether the abandon
+carries a result, and added M12, the injured player, as three atomic cases.
 
 **Outcomes the product chooses are expected values, not inputs.** Withdrawal
 expunge-vs-keep is decided by the engine (a 50% threshold; Swiss never
 expunges) — the scenario asserts which one the rulebook requires, it does not
 pick it.
 
-Catalogue (69 scenario IDs, more atomic cases):
+Catalogue (70 scenario IDs, more atomic cases):
 
 **R — roster**
 - R1 late entry before Start · R2 late entry after Start
-- R3 withdrawal before Start · R4 withdrawal mid-event after some results (expunge vs keep, incl. already-finalized fixtures) · R5 withdrawal after the entrant has played all their matches · R6 withdrawal of an entrant already drawn into a later bracket/playoff slot
-- R7 disqualification (today: status only, no fixture cascade) · R8 entrant deleted · R9 pair/team rename or lineup change mid-event
-- R10 waitlist promotion after the draw · R11 duplicate entrant (same person twice, or in two partnerships in one division) · R12 doubles partner withdraws → substitute or pair dissolved · R13 entrant moved to another division after the draw
+- R3 withdrawal before Start · R4 withdrawal mid-event after some results (expunge vs keep, incl. already-finalized fixtures): under half the entrant's matches played, none finalized (R4a) / half or more played (R4b) / under half played, some fixtures already finalized (R4c) · R5 withdrawal after the entrant has played all their matches · R6 withdrawal of an entrant already drawn into a later bracket/playoff slot
+- R7 disqualification (today: status only, no fixture cascade) · R8 entrant deleted · R9 pair/team rename (R9a) or lineup change (R9b) mid-event
+- R10 waitlist promotion after the draw · R11 duplicate entrant: the same person twice (R11a), or in two partnerships in one division (R11b) · R12 doubles partner withdraws → substitute (R12a) or pair dissolved (R12b) · R13 entrant moved to another division after the draw
 - R14 retires from one match, continues in the next · R15 entrant leaves after their last match and is still paired next round · R16 substitute / different lineup in a team match (stats attribution)
 
 **M — single match**
-- M1 walkover in only one match · M2 double walkover · M3 retirement mid-match (partial score) · M4 abandoned / no-result
+- M1 walkover in only one match · M2 double walkover · M3 retirement mid-match (partial score) · M4 abandoned: with no result (M4a) vs with a result, e.g. a cricket DLS decision or a football award-policy abandon (M4b) — ruling 30
 - M5 draw in a stage that cannot end level · M6 tie after regulation → decider (shoot-out, super over, extra time, chess tiebreak)
-- M7 void a decided result, before and after the next match started · M8 correct a finalized score (winner stays / winner flips) · M9 forfeit/award by the organiser
+- M7 void a decided result, before (M7a) and after (M7b) the next match started · M8 correct a finalized score: winner stays (M8a) / winner flips (M8b) · M9 forfeit (M9a) / award (M9b) by the organiser
 - M10 disqualification mid-match · M11 a rules change attempted mid-match — **must refuse** (ruling 12)
+- M12 player injured mid-match (team sport): a substitute comes on and the match continues (M12a) / no replacement, the team plays short (M12b) / a cricket batter retires hurt, then resumes (M12c) — ruling 30
 
 **F — field shape**
 - F1 odd field (byes) · F2 field below the format's minimum · F3 non-power-of-two bracket · F4 unequal pools
-- F5 two-way and 3+-way ties · F6 everyone level · F7 tie falling through to lots · F8 protected seeds
+- F5 two-way (F5a) and 3+-way (F5b) ties · F6 everyone level · F7 tie falling through to lots · F8 protected seeds
 
 **D — draw and structure**
-- D1 two divisions merged · D2 one division split · D3 seeding changed after the draw is published · D4 same-club / same-country separation
-- D5 re-draw after fixtures are published or timed · D6 format changed after entries close · D7 stage rules changed after Start
+- D1 two divisions merged · D2 one division split · D3 seeding changed after the draw is published · D4 same-club (D4a) / same-country (D4b) separation
+- D5 re-draw after fixtures are published (D5a) or timed (D5b) · D6 format changed after entries close · D7 stage rules changed after Start
 
 **P — progression**
 - P1 complete a stage with a fixture pending · P2 group → knockout with a qualifying tie unresolved · P3 Generate after a roster change · P4 Rebuild after results exist
-- P5 undo Generate / Pair next round · P6 per-stage rule override (a best-of-3 final) · P7 rank override
+- P5 undo Generate (P5a) / Pair next round (P5b) · P6 per-stage rule override (a best-of-3 final) · P7 rank override
 
 **Q — qualification and placing**
-- Q1 qualifier decided by lots/organiser, then a correction changes it after the knockout draw · Q2 group winner withdraws after qualifying → promote next or bye
-- Q3 third-place match skipped → shared 3rd · Q4 final not played → joint winners or decided by table · Q5 plate entrant withdraws / a main-draw loser declines the plate
+- Q1 qualifier decided by lots (Q1a) / organiser (Q1b), then a correction changes it after the knockout draw · Q2 group winner withdraws after qualifying → promote next or bye
+- Q3 third-place match skipped → shared 3rd · Q4 final not played → joint winners (Q4a) or decided by table (Q4b) · Q5 plate entrant withdraws (Q5a) / a main-draw loser declines the plate (Q5b)
 
 **X — disruption**
-- X1 weather stops play mid-round; resumed next day or cancelled · X2 event cut short: remaining rounds cancelled, standings and winner from an incomplete table
-- X3 a round shortened on the fly (fixture-level format override before start) · X4 a match resumed from its saved score vs replayed from scratch; replayed after a protest
+- X1 weather stops play mid-round; resumed next day (X1a) or cancelled (X1b) · X2 event cut short: remaining rounds cancelled, standings and winner from an incomplete table
+- X3 a round shortened on the fly (fixture-level format override before start) · X4 a match resumed from its saved score (X4a) vs replayed from scratch (X4b); replayed after a protest (X4c)
 
 **C — corrections**
-- C1 scores swapped home/away · C2 result entered on the wrong match · C3 protest upheld: overturn or replay a day later
+- C1 scores swapped home/away · C2 result entered on the wrong match · C3 protest upheld: overturn (C3a) or replay a day later (C3b)
 - C4 ineligible player → retroactive forfeits across the table · C5 points deduction (conduct) applied to the table
-- C6 late correction after the stage or event is complete (reopen, recompute ranks) · C7 result annulled weeks later
+- C6 late correction after the stage (C6a) or event (C6b) is complete (reopen, recompute ranks) · C7 result annulled weeks later
 
 **E — entry path** (how results reach the ledger)
-- E1 phone pad · E2 single-event result over the API (there is no separate quick-result endpoint) · E3 Bo1 points editor · E4 device link / printed scorer-sheet scan
+- E1 phone pad · E2 single-event result over the API (there is no separate quick-result endpoint) · E3 Bo1 points editor · E4 device link (E4a) / printed scorer-sheet scan (E4b)
 
 **Known 🚫 at design time** (no route or screen today): D1, D2, D4, R13, Q4,
 C5 (`carry_deltas` exists only through stage PUT, `FORMAT_LOCKED` once fixtures
@@ -172,6 +174,15 @@ wave per §8 — division-level D1, D2, R13 in W9; D4 in W4; Q4 in W4; C5 in W5.
 
 **Cases that need times** (E4, the printed-sheet surface, X1, D5) are excluded
 from L3 by predicate — L3 skips scheduling — and covered in L1/L2.
+Within D5 only **D5b** (re-draw after fixtures are timed) needs times; **D5a**
+(re-draw after an untimed board is published) runs in L3, because
+`publishSchedule` accepts an untimed board (`schedule.ts:3650-3656`) — W1b
+atomisation, recorded in `_INDEX.md` decision log 2026-09-28.
+
+**Known UI-only 🚫** (ruling 30): an API route exists but no screen can send
+it, so the atom is 🚫 in L2 and still runs over HTTP in L3. M12b — the team
+plays short (`core.lineup.retirement`): no pad or console control sends it,
+and no minimum-players rule exists; both are owed to W2.
 
 **Surfaces asserted after every scenario:** desk, public table, embed (HTML —
 there is no JSON embed; the public standings route is read), slideshow,
@@ -256,8 +267,8 @@ same `POST /stages/:id/generate`.
 | Layer | What | Size (derived in W1b from the committed files) |
 |---|---|---|
 | **L1** | every cell × full lifecycle **in the browser**, at 1280 and 320 | 231 × 2 = **462** runs |
-| **L2** | scenarios in the browser: every applicable (format, scenario) and (sport, scenario) pair at least once, widths rotating across the seven | ≥ number of applicable (format, scenario) pairs — up to 21 × 69 = 1,449 before drops |
-| **L3** | **every applicable (cell × scenario) at default config** (full cartesian, ruling 7) **+ config variants pair-covered across (format, sport)**, through the real server, no browser | ≤ 231 × 69 = 15,939 before drops, plus the variant set |
+| **L2** | scenarios in the browser: every applicable (format, scenario) and (sport, scenario) pair at least once, widths rotating across the seven | ≥ number of applicable (format, scenario) pairs — up to 21 × 70 = 1,470 before drops |
+| **L3** | **every applicable (cell × scenario) at default config** (full cartesian, ruling 7) **+ config variants pair-covered across (format, sport)**, through the real server, no browser | ≤ 231 × 70 = 16,170 before drops, plus the variant set |
 
 **Mixed-driver lifecycle (ruling 15).** An L1/L2 run drives **every distinct
 action type** through the browser at least once — generate, one match on the
@@ -403,7 +414,7 @@ rulebook is silent, the case is ⬜ and goes to the owner as a recommendation.
 
 ### 7.5 Finding the holes nobody listed (ruling 21)
 
-The 69 scenarios are the cases someone thought of. Three mechanisms look for the
+The 70 scenarios are the cases someone thought of. Three mechanisms look for the
 rest:
 
 1. **Model-based sequence testing (W1b).** A `fast-check` command model
@@ -435,7 +446,7 @@ format/sport; **every audit ID must be closed or ruled by programme end**.
 | Wave | Scope | Carries |
 |---|---|---|
 | **W1a — L3 core** | Lean HTTP runner reusing the bench's helpers; `HttpDriver`; org/plan seeding; **stream generators for all 11 sports**; per-round generation for swiss/mexicano/ladder; invariants **with anti-vacuity counts (§7.3a)**; JSON results; `MATRIX.md` generator | Proven on a vertical slice: league, knockout, swiss × generic, badminton |
-| **W1b — catalogues + reference skeleton** | fast-check command model over the organiser actions (§7.5); `forEachSport` test helper (R26); 69 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
+| **W1b — catalogues + reference skeleton** | fast-check command model over the organiser actions (§7.5); `forEachSport` test helper (R26); 70 scenarios split into atomic cases; applicability over (format, sport, variant) with the committed drop list and floors; variant set with boundary classes; L2 pair file; `packages/reference/` skeleton, boundary gate, Dockerfile line | Formulas and real counts for §6.2; E-axis decision; reference import mode |
 | **W1c — browser layers** | `BrowserDriver`: organiser page objects + **11 pad adapters**; L1/L2 frameworks; width rotation | API-only rows created over HTTP, then driven in the browser |
 | **W1d — CI + truth run** | Shards, fresh DB per shard, weekly + dispatch workflow with the visibility guard, per-PR sample, three green dispatches before the schedule, per-case timing, weekly Stryker mutation run with a score floor (§7.5), **the first full truth run** and triage of its reds into waves | The ❌ list (a floor) becomes each wave's starting backlog |
 | **W2 — sport scoring fidelity** (a sport-family wave: one rulebook per sport family, reference families for its exact-oracle items) | The input layer every format consumes | SC-X1 (knockout tie/no-result stall), SC-X2 (stage deciders with a screen), SC-X3 (no event to settle an abandoned knockout by lot), SC-X4 (auto-advance blocked by `abandoned`), SC-P1, SC-P2 (level knockout without a decider), SC-P4 (no points fields when hockey shoot-outs are on — FIH 2/1 is Pro League only), SC-P11 (futsal preset — **not a matrix row**; W2 rules build or refuse, and only a built preset adds a column), SC-S* (walkover/retirement set and point credit, tennis impossible sets, tennis Bo1 match tie-break, double walkover SC-S6), SC-C3 (DLS NRR), **SC-O1/SC-O2 (boardgame/generic draws in brackets — the `supportsDraws` root cause, owned here)**, ST-G1, ST-G2, ST-G16, ST-G10 (tiebreak validation against the sport + stage tiebreak UI); **stage-level match format for every sport** (ruling 12, FX-G23, SC-O8); fixture-level format override through every `resolveFixtureCfg` caller (§5); division-level lock of points/tiebreakers per started stage (O8) |

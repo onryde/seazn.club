@@ -2,8 +2,12 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findSecrets, redact } from "../lib/redact.ts";
+import { BaseNotUrl, LOCAL_BASE, baseScrubber, findSecrets, redact } from "../lib/redact.ts";
 import { CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
+import { baseLiteralsIn, loopbackLiteralsIn } from "./loopback-literals.ts";
+
+/** The base every writeResults call below scrubs (FB-1): no evidence here names it unless a test says so. */
+const RUN_BASE = "http://localhost:3999";
 
 const chk = (p: Partial<CheckResult>): CheckResult => ({ id: "c", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence: [], ...p });
 
@@ -65,6 +69,41 @@ describe("decideState — error reds vs vacuous reds (PF4)", () => {
       expect(r.state).toBe("red");
       expect(r.reason.startsWith("error:")).toBe(false);
     }
+  });
+});
+
+// ⛔ (Task 9, ruling 24): `mandated` turns a green into `refused` and nothing
+// else — every red and every deferral keeps its own state and reason.
+describe("decideState — mandated refusal (⛔, Task 9)", () => {
+  const pass = (id: string, checked = 1): CheckResult => ({ id, kind: "assertion", verdict: "pass", checked, reason: "", evidence: [] });
+  it("empty case first: a mandated refusal with no checks is still vacuous red, never ⛔", () => {
+    expect(decideState({ checks: [], deferred: null, error: null, mandated: "denied: formats.double_elim" }).state).toBe("red");
+  });
+  it("all checks pass → refused, carrying the mandate as the reason", () => {
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null, mandated: "denied: formats.double_elim" })).toEqual({ state: "refused", reason: "denied: formats.double_elim" });
+  });
+  it("a failed check beats the mandate: red", () => {
+    const failed: CheckResult = { ...pass("b"), verdict: "fail", reason: "stages deleted" };
+    expect(decideState({ checks: [pass("a"), failed], deferred: null, error: null, mandated: "x" }).state).toBe("red");
+  });
+  it("a zero-item applied check beats the mandate: vacuous red", () => {
+    expect(decideState({ checks: [pass("a", 0)], deferred: null, error: null, mandated: "x" }).state).toBe("red");
+  });
+  it("every check abstaining beats the mandate: vacuous red", () => {
+    const abstain: CheckResult = { ...pass("a", 0), verdict: "abstain", reason: "n/a" };
+    expect(decideState({ checks: [abstain], deferred: null, error: null, mandated: "x" })).toEqual({ state: "red", reason: expect.stringMatching(/vacuous/) });
+  });
+  it("an abstention beside an applied pass does not block ⛔ (the applied check carries it)", () => {
+    const abstain: CheckResult = { ...pass("z", 0), verdict: "abstain", reason: "n/a" };
+    expect(decideState({ checks: [pass("a"), abstain], deferred: null, error: null, mandated: "x" }).state).toBe("refused");
+  });
+  it("an error and a deferral each beat the mandate", () => {
+    expect(decideState({ checks: [pass("a")], deferred: null, error: "boom", mandated: "x" })).toEqual({ state: "red", reason: "error: boom" });
+    expect(decideState({ checks: [pass("a")], deferred: { wave: "W9", reason: "later" }, error: null, mandated: "x" })).toEqual({ state: "later", reason: "W9: later" });
+  });
+  it("no mandate: unchanged — works", () => {
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null }).state).toBe("works");
+    expect(decideState({ checks: [pass("a")], deferred: null, error: null, mandated: null }).state).toBe("works");
   });
 });
 
@@ -145,8 +184,8 @@ describe("redaction (R14a)", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
     const base: RunResults = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
     const bad = { ...base, runId: "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl" };
-    expect(() => writeResults(dir, bad)).toThrow(SecretInResults);
-    const path = writeResults(dir, base);
+    expect(() => writeResults(dir, bad, RUN_BASE)).toThrow(SecretInResults);
+    const { path } = writeResults(dir, base, RUN_BASE);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(base);
   });
 });
@@ -247,9 +286,9 @@ const withEvidence = (evidence: string[]): RunResults => ({
   }],
 });
 /** writeResults into a fresh dir: the thrown value (or null) and whether a file landed. */
-const tryWrite = (r: RunResults): { error: unknown; wrote: boolean } => {
+const tryWrite = (r: RunResults, runBase: string = RUN_BASE): { error: unknown; wrote: boolean } => {
   const dir = mkdtempSync(join(tmpdir(), "fm-"));
-  try { writeResults(dir, r); return { error: null, wrote: existsSync(join(dir, "results.json")) }; }
+  try { writeResults(dir, r, runBase); return { error: null, wrote: existsSync(join(dir, "results.json")) }; }
   catch (e) { return { error: e, wrote: existsSync(join(dir, "results.json")) }; }
 };
 
@@ -318,7 +357,7 @@ describe("writeResults", () => {
   });
   it("refuses a secret nested in check evidence, writes NOTHING, and does not echo the secret", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    const e = (() => { try { writeResults(dir, withEvidence([`cookie: seazn_session=${TOKEN43}`])); } catch (x) { return x; } return null; })();
+    const e = (() => { try { writeResults(dir, withEvidence([`cookie: seazn_session=${TOKEN43}`]), RUN_BASE); } catch (x) { return x; } return null; })();
     expect(e).toBeInstanceOf(SecretInResults);
     expect((e as Error).message).not.toContain(TOKEN43);
     expect(existsSync(join(dir, "results.json"))).toBe(false);
@@ -326,11 +365,122 @@ describe("writeResults", () => {
   it("writes evidence that went through redact() (the Task 9 path)", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
     const clean = withEvidence([redact(`cookie: seazn_session=${TOKEN43}`), "Matrix Player 3", "delivered+matrix-r@resend.dev"]);
-    expect(JSON.parse(readFileSync(writeResults(dir, clean), "utf8"))).toEqual(clean);
+    expect(JSON.parse(readFileSync(writeResults(dir, clean, RUN_BASE).path, "utf8"))).toEqual(clean);
   });
   it("refuses results the schema refuses, and writes nothing", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
-    expect(() => writeResults(dir, { ...base, schemaVersion: 1 } as unknown as RunResults)).toThrow();
+    expect(() => writeResults(dir, { ...base, schemaVersion: 1 } as unknown as RunResults, RUN_BASE)).toThrow();
     expect(existsSync(join(dir, "results.json"))).toBe(false);
+  });
+});
+
+// T15 fix round 3, M-7, then final batch FB-1: a run drives a server on this
+// machine, and its address is noise in a public repo. Every committed writer
+// emits LOCAL_BASE for THE RUN'S OWN BASE — in any loopback spelling, on its
+// port — and for nothing else: a database on 5433 or product prose that says
+// "localhost" is not the server a run drove, and rewriting it misattributed a
+// Postgres outage to the app server. The secret scan reads the text BEFORE
+// the scrub, so the scrub can never launder a credential. Expected values are
+// typed here (the spec), and "no base left" is judged by a literal list
+// (loopback-literals.ts), never by the scrubber's own regex.
+describe("the run's base (FB-1)", () => {
+  const scrub = baseScrubber("http://localhost:3313");
+  it("empty case first: text that does not name the run's base is unchanged — lookalikes, other ports and prose included", () => {
+    const kept = [
+      "", "Matrix Player 3", "delivered+matrix-r@resend.dev", "POST /api/v1/fixtures/f1/events → HTTP 409", "https://seazn.club/c/x", LOCAL_BASE,
+      "localhostname", "mylocalhost", "127.0.0.10", "the base must not point at localhost", "user@localhost",
+      "https://localhost.example.com/x", "127.0.0.1.nip.io", "localhost:33130", "localhost:331", "http://localhost:3314/x",
+      "ECONNREFUSED 127.0.0.1:5433", "redis at 127.0.0.1:6379", "ws://localhost/3313", "mylocalhost:3313", "x127.0.0.1:3313", "a.localhost:3313",
+    ];
+    let checked = 0;
+    for (const text of kept) {
+      expect(scrub(text), text).toBe(text);
+      checked++;
+    }
+    expect(checked).toBe(kept.length);
+  });
+  it("the base in every loopback spelling on its port becomes LOCAL_BASE, the path and any other port kept", () => {
+    const cases: [string, string][] = [
+      ["http://localhost:3313", LOCAL_BASE],
+      ["https://127.0.0.1:3313/api/v1/x", `${LOCAL_BASE}/api/v1/x`],
+      ["localhost:3313", LOCAL_BASE],
+      ["LOCALHOST:3313", LOCAL_BASE],
+      ["connect ECONNREFUSED ::1:3313", `connect ECONNREFUSED ${LOCAL_BASE}`],
+      ["http://[::1]:3313/a", `${LOCAL_BASE}/a`],
+      ["[::1]:3313", LOCAL_BASE],
+      ["0.0.0.0:3313 answered", `${LOCAL_BASE} answered`],
+      ["http://127.0.1.1:3313/b.", `${LOCAL_BASE}/b.`],
+      ["GET http://localhost:3313/a then 127.0.0.1:5433", `GET ${LOCAL_BASE}/a then 127.0.0.1:5433`],
+      ['{"base": "http://localhost:3313"}', `{"base": "${LOCAL_BASE}"}`],
+      ["http://user@localhost:3313/x", `http://user@${LOCAL_BASE}/x`],
+      ["ws://localhost:3313", `ws://${LOCAL_BASE}`],
+    ];
+    let checked = 0;
+    for (const [dirty, clean] of cases) {
+      expect(baseLiteralsIn(dirty, 3313).length, `${dirty}: the oracle sees the base`).toBeGreaterThan(0);
+      expect(scrub(dirty), dirty).toBe(clean);
+      expect(baseLiteralsIn(scrub(dirty), 3313), `${dirty}: no spelling of the base is left`).toEqual([]);
+      expect(scrub(scrub(dirty)), `${dirty}: a fixpoint`).toBe(clean);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+  it("a base spelled in any loopback form scrubs every spelling on its port — and only its port", () => {
+    let checked = 0;
+    for (const base of ["http://[::1]:4000", "http://0.0.0.0:4000", "http://127.0.1.1:4000", "http://LOCALHOST:4000/"]) {
+      const s = baseScrubber(base);
+      expect(s("GET http://localhost:4000/x"), base).toBe(`GET ${LOCAL_BASE}/x`);
+      expect(s("ECONNREFUSED ::1:4000"), base).toBe(`ECONNREFUSED ${LOCAL_BASE}`);
+      expect(s("127.0.1.1:4000 and http://[::1]:4000/y"), base).toBe(`${LOCAL_BASE} and ${LOCAL_BASE}/y`);
+      expect(s("localhost:3313 and 127.0.0.1:5433"), base).toBe("localhost:3313 and 127.0.0.1:5433");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+  it("a base with no port scrubs its origin, never the bare host (prose, another port)", () => {
+    const s = baseScrubber("http://localhost");
+    expect(s("GET http://localhost/api and http://localhost:80/b")).toBe(`GET ${LOCAL_BASE}/api and ${LOCAL_BASE}/b`);
+    expect(s("http://localhost:3313/x and point at localhost")).toBe("http://localhost:3313/x and point at localhost");
+  });
+  it("a base that is not loopback is scrubbed as itself, and no loopback text with it", () => {
+    const s = baseScrubber("https://staging.example.test");
+    expect(s("GET https://staging.example.test/x")).toBe(`GET ${LOCAL_BASE}/x`);
+    expect(s("https://staging.example.testing/x localhost:3313 https://stagingxexample.test")).toBe("https://staging.example.testing/x localhost:3313 https://stagingxexample.test");
+  });
+  it("refuses, by name, a base that is not a URL", () => {
+    expect(() => baseScrubber("localhost:3313 nope")).toThrow(BaseNotUrl);
+    expect(() => baseScrubber("")).toThrow(BaseNotUrl);
+  });
+  it("the secret semantics do not move: a local origin is no secret, redact leaves it, and the placeholder is none either", () => {
+    expect(findSecrets("http://localhost:3313/api")).toEqual([]);
+    expect(redact("http://localhost:3313/api")).toBe("http://localhost:3313/api");
+    expect(findSecrets(LOCAL_BASE)).toEqual([]);
+    expect(loopbackLiteralsIn(LOCAL_BASE)).toEqual([]);
+  });
+  it("writeResults writes LOCAL_BASE for the base in any string, returns exactly what it wrote, and nothing else changes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const r = withEvidence(["GET http://localhost:3313/api/v1/x → 500", "from 127.0.0.1:5433", "Matrix Player 3"]);
+    const out = writeResults(dir, r, "http://localhost:3313");
+    const text = readFileSync(out.path, "utf8");
+    expect(baseLiteralsIn(text, 3313)).toEqual([]);
+    const want = withEvidence([`GET ${LOCAL_BASE}/api/v1/x → 500`, "from 127.0.0.1:5433", "Matrix Player 3"]);
+    expect(JSON.parse(text)).toEqual(want);
+    expect(out.written).toEqual(want);
+  });
+  it("…and the scan reads the text BEFORE the scrub: a credential the scrub would un-shape is still REFUSED (MZ6)", () => {
+    // `https://localhost:hunter22@db.example.com` — a password URL whose
+    // userinfo starts with the base: scrubbed first, it reads
+    // `[local-base]:hunter22@…` and no longer looks like a credential.
+    const witness = "https://localhost:hunter22@db.example.com";
+    expect(findSecrets(witness).length, "the witness is a secret as written").toBeGreaterThan(0);
+    expect(findSecrets(baseScrubber("https://localhost")(witness)), "…and not once scrubbed — so only the order refuses it").toEqual([]);
+    let checked = 0;
+    for (const [evidence, base] of [[witness, "https://localhost"], ["row from postgres://bench:hunter22@localhost:5433/seazn", "http://localhost:5433"]] as const) {
+      const r = tryWrite(withEvidence([evidence]), base);
+      expect(r.error, evidence).toBeInstanceOf(SecretInResults);
+      expect(r.wrote, evidence).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });

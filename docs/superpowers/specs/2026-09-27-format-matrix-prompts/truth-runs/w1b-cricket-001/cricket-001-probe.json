@@ -1,0 +1,214 @@
+{
+  "runId": "w1b-cricket001-0929a",
+  "case": "cricket#001",
+  "preset": "hundred",
+  "overrides": {
+    "ballsPerInnings": 600,
+    "maxOversPerBowler": 1,
+    "superOver": true,
+    "dls": {
+      "enabled": true,
+      "edition": "standard"
+    },
+    "playersPerSide": 3
+  },
+  "cfg": {
+    "ballsPerInnings": 600,
+    "ballsPerOver": 5,
+    "maxOversPerBowler": 1,
+    "playersPerSide": 3,
+    "superOver": true,
+    "dls": {
+      "enabled": true,
+      "edition": "standard"
+    }
+  },
+  "legs": [
+    {
+      "leg": "m4b-league-abandon",
+      "outcome": "ran",
+      "storedConfig": {
+        "ballsPerInnings": 600,
+        "maxOversPerBowler": 1,
+        "playersPerSide": 3,
+        "superOver": true,
+        "dls": {
+          "edition": "standard",
+          "enabled": true
+        }
+      },
+      "engine": {
+        "kind": "no_result"
+      },
+      "declared": {
+        "home": 1,
+        "away": 1
+      },
+      "posts": [
+        {
+          "index": 0,
+          "type": "core.start",
+          "http": "2xx",
+          "seq": 1,
+          "status": "in_play",
+          "outcome": null
+        },
+        {
+          "index": 1,
+          "type": "core.abandon",
+          "http": "2xx",
+          "seq": 2,
+          "status": "abandoned",
+          "outcome": {
+            "kind": "no_result"
+          }
+        }
+      ],
+      "refused": null,
+      "after": {
+        "status": "abandoned",
+        "outcome": {
+          "kind": "no_result"
+        }
+      },
+      "home": {
+        "won": 0,
+        "lost": 0,
+        "rank": 1,
+        "drawn": 0,
+        "played": 0,
+        "points": 0,
+        "metrics": {},
+        "tieBreak": {
+          "key": "seed",
+          "with": [
+            "3c4ec404-af84-4df0-9f35-402967b453aa"
+          ]
+        },
+        "entrantId": "c5304aca-1f7c-4c3f-9ac7-d5583bda1cfb"
+      },
+      "away": {
+        "won": 0,
+        "lost": 0,
+        "rank": 2,
+        "drawn": 0,
+        "played": 0,
+        "points": 0,
+        "metrics": {},
+        "tieBreak": {
+          "key": "seed",
+          "with": [
+            "c5304aca-1f7c-4c3f-9ac7-d5583bda1cfb"
+          ]
+        },
+        "entrantId": "3c4ec404-af84-4df0-9f35-402967b453aa"
+      }
+    },
+    {
+      "leg": "m6-ko-tie",
+      "outcome": "ran",
+      "storedConfig": {
+        "ballsPerInnings": 600,
+        "maxOversPerBowler": 1,
+        "playersPerSide": 3,
+        "superOver": true,
+        "dls": {
+          "edition": "standard",
+          "enabled": true
+        }
+      },
+      "stream": [
+        {
+          "type": "core.start",
+          "payload": {}
+        },
+        {
+          "type": "cricket.innings.summary",
+          "payload": {
+            "runs": 100,
+            "wickets": 0,
+            "legalBalls": 600
+          }
+        },
+        {
+          "type": "cricket.innings.summary",
+          "payload": {
+            "runs": 100,
+            "wickets": 0,
+            "legalBalls": 600
+          }
+        }
+      ],
+      "engine": null,
+      "posts": [
+        {
+          "index": 0,
+          "type": "core.start",
+          "http": "2xx",
+          "seq": 1,
+          "status": "in_play",
+          "outcome": null
+        },
+        {
+          "index": 1,
+          "type": "cricket.innings.summary",
+          "http": "2xx",
+          "seq": 2,
+          "status": "in_play",
+          "outcome": null
+        },
+        {
+          "index": 2,
+          "type": "cricket.innings.summary",
+          "http": "2xx",
+          "seq": 3,
+          "status": "in_play",
+          "outcome": null
+        }
+      ],
+      "refused": null,
+      "after": {
+        "status": "in_play",
+        "last_seq": 3,
+        "outcome": null
+      },
+      "final": {
+        "home": null,
+        "away": null,
+        "status": "scheduled"
+      },
+      "semi1": {
+        "home": "ecb6dd17-f815-4001-9872-ce754f6b043d",
+        "away": "ddf3ac20-4508-4114-8e77-a292d3a9cc07"
+      }
+    },
+    {
+      "leg": "ball-by-ball-first-ball",
+      "outcome": "ran",
+      "engineAnswer": "refused: batting order for \"f99f0fc6-a167-4be2-8a7d-d45ae05831ad\" needs at least 2 players",
+      "posts": [
+        {
+          "index": 0,
+          "type": "core.start",
+          "http": "2xx",
+          "seq": 1,
+          "status": "in_play",
+          "outcome": null
+        },
+        {
+          "index": 1,
+          "type": "cricket.ball",
+          "http": 422,
+          "code": "INVALID_EVENT"
+        }
+      ],
+      "refused": {
+        "index": 1,
+        "type": "cricket.ball",
+        "status": 422,
+        "code": "INVALID_EVENT",
+        "message": "POST /api/v1/fixtures/a4764ac6-5043-46a8-a56b-6a23b6536c88/events → HTTP 422 INVALID_EVENT: batting order for Matrix Side 1 needs at least 2 players"
+      }
+    }
+  ]
+}

@@ -79,3 +79,60 @@ export function findSecrets(text: string): string[] {
 export function redact(text: string): string {
   return PATTERNS.reduce((t, p) => t.replace(new RegExp(p.source, p.flags), "[redacted]"), text);
 }
+
+/** T15 fix round 3 (M-7): what a committed file says in place of the local
+ *  server a run drove. The repo is public, and this machine's own address and
+ *  port tell a reader nothing, so the committed writers (model.ts's report,
+ *  writeResults, and through it run.ts's MATRIX.md) emit this instead. A local
+ *  origin is no secret: findSecrets and redact do not change. */
+export const LOCAL_BASE = "[local-base]";
+
+/** Every spelling of a loopback host in a URL or a node error message
+ *  (`connect ECONNREFUSED ::1:3313`): localhost, 127/8, the IPv6 loopback
+ *  bracketed and bare, and the any-address a dev server binds. */
+const LOOPBACK_HOST = String.raw`localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\]|::1`;
+const IS_LOOPBACK = new RegExp(`^(?:${LOOPBACK_HOST})$`, "i");
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Where a host (and its port) ends: not inside a longer name, number or port. */
+const HOST_END = String.raw`(?![\w-]|\.\w|:\d)`;
+
+/** A base that is not an http(s) URL with a host: nothing could say which text is the base. */
+export class BaseNotUrl extends Error {
+  constructor(base: string) {
+    super(`the base '${base}' is not a URL`);
+    this.name = "BaseNotUrl";
+  }
+}
+
+/** Final batch FB-1: the scrub for ONE run's base, and only it. The base's
+ *  origin (`http://localhost:3313`, the path after it kept) and, when it names
+ *  a port, its bare authority (`localhost:3313`) become LOCAL_BASE. A loopback
+ *  base matches in every loopback spelling on ITS port — node reports the
+ *  server `http://localhost:3313` refused as `127.0.0.1:3313` or `::1:3313`.
+ *  Nothing else moves: another port (a database on 5433, Redis on 6379 — the
+ *  port the seazn-local-env red signatures key on), a bare host in prose,
+ *  `user@localhost`, `localhost.example.com`. Callers scrub AFTER the secret
+ *  scan, never before: `https://localhost:pw@host` scrubbed first loses its
+ *  credential shape. */
+export function baseScrubber(base: string): (text: string) => string {
+  let u: URL;
+  try {
+    u = new URL(base);
+  } catch {
+    throw new BaseNotUrl(base);
+  }
+  // `localhost:3313` parses — as scheme `localhost:` with no host.
+  if ((u.protocol !== "http:" && u.protocol !== "https:") || u.hostname === "") throw new BaseNotUrl(base);
+  const host = IS_LOOPBACK.test(u.hostname) ? `(?:${LOOPBACK_HOST})` : escapeRe(u.hostname);
+  const defaultPort = u.protocol === "https:" ? "443" : "80";
+  const origin = String.raw`(?<![\w+.-])https?://${host}${u.port === "" ? `(?::${defaultPort})?` : `:${u.port}`}${HOST_END}`;
+  // The bare host:port only when the base names a port: a bare host alone is prose.
+  const authority = u.port === "" ? [] : [String.raw`(?<![\w.:\[-])${host}:${u.port}${HOST_END}`];
+  const re = new RegExp([origin, ...authority].join("|"), "gi");
+  return (text) => text.replace(re, LOCAL_BASE);
+}
+
+/** Every string value in a JSON value, through `f` (keys are the schema's own). */
+export function mapStrings<T>(value: T, f: (s: string) => string): T {
+  return JSON.parse(JSON.stringify(value), (_k, x: unknown) => (typeof x === "string" ? f(x) : x)) as T;
+}

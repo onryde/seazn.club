@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
+import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
+import { SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
@@ -11,13 +14,14 @@ import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
+  DRIVING_WAVE, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
+import type { VariantCase } from "../lib/variants.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** Task 8 m-7: the status api-v1 answers STAGE_NOT_READY with, read from the
@@ -35,7 +39,7 @@ function ctxFor(driver: FakeLeagueDriver, scenario: ScenarioKey, opts: Opts = {}
   const variant = opts.variant ?? "score";
   const row = opts.row ?? "league";
   const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${scenario}`, row, sport, variant, scenario, canary: opts.canary ?? false };
-  return { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t" };
+  return { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
 }
 
 async function runOn(driver: FakeLeagueDriver, scenario: ScenarioKey, opts: Opts = {}) {
@@ -45,7 +49,9 @@ async function runOn(driver: FakeLeagueDriver, scenario: ScenarioKey, opts: Opts
 }
 const runFake = (scenario: ScenarioKey, opts: Opts = {}) => runOn(new FakeLeagueDriver(), scenario, opts);
 const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) => c.verdict === "fail").map((c) => c.id);
-const SCENARIO_KEYS = Object.keys(SCENARIOS) as ScenarioKey[];
+/** The fixture-driving scenarios. DENIED (⛔, Task 9) builds no stage and runs
+ *  only on a gated row whose org is denied; denied.test.ts is its suite. */
+const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED");
 
 describe("assertion helper — empty first (R25)", () => {
   it("zero items is a fail, abstain carries a reason, one bad item fails", () => {
@@ -61,7 +67,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
     ({ id: "f1", stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status: "decided", outcome: { kind: "win", winner: "a" }, declared: null, ...over });
   const run = (standings: ObservedRun["stages"][number]["standings"], fixtures: ObservedFixture[] = []): ObservedRun => ({
     caseId: "c", facts: [], withdrawal: null, configEdit: null,
-    stages: [{ id: "s1", seq: 1, kind: "league", config: {}, field: ["a", "b"], fixtures, standings, generates: [], pairRounds: [], complete: null }],
+    stages: [{ id: "s1", seq: 1, kind: "league", config: {}, field: ["a", "b"], fieldSource: "division", fixtures, standings, generates: [], pairRounds: [], complete: null }],
   });
 
   it("foldParity: nothing posted is vacuous; a differing product outcome fails; foreign events are unjudgeable", () => {
@@ -99,7 +105,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
 
   it("builtAsPosted (final review I-2): each item is derived from the POSTED bodies; every way the build can differ fails", () => {
     const body = { kind: "swiss", name: "Swiss", config: { rounds: 5, tiebreak: { a: 1, b: 2 } }, progression: null, seq: 1 };
-    const posted = { sport: "generic", variant: "score", stages: [body], entrants: [{ displayName: "Matrix Player 1", seed: 1 }, { displayName: "Matrix Player 2", seed: 2 }] };
+    const posted = { sport: "generic", variant: "score", stages: [body], entrants: [{ displayName: "Matrix Player 1", seed: 1 }, { displayName: "Matrix Player 2", seed: 2 }], config: {} };
     const rows = [{ id: "a", display_name: "Matrix Player 1", seed: 1, status: "active" }, { id: "b", display_name: "Matrix Player 2", seed: 2, status: "active" }];
     const good: BuiltReadback = {
       posted,
@@ -303,6 +309,11 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
     expect(i("publicStandings")).toBeGreaterThan(i("completeStage"));
     expect(out.observed.stages[0]!.fixtures).toHaveLength(28); // 8 entrants, single RR
+    // snapshot observes the ROOT stage, so its field is the division's (W1a carry 1)…
+    expect(out.observed.stages.map((s) => [s.seq, s.fieldSource])).toEqual([[1, "division"]]);
+    // …and the step-safe checks judge the whole lifecycle: C(8,2) pairs, every Generate answer.
+    expect(checks.find((c) => c.id === "I7-rr-no-pair-over-legs")).toMatchObject({ verdict: "pass", checked: 28 });
+    expect(checks.find((c) => c.id === "I8-generate-named")).toMatchObject({ verdict: "pass", checked: driver.calls.filter((c) => c === "generate").length });
     expect(state, JSON.stringify(checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
     expect(checks.find((c) => c.id === "life-draw-path-exercised")).toMatchObject({ verdict: "pass" });
     expect(checks.find((c) => c.id === "life-fold-parity")!.checked).toBe(28);
@@ -481,6 +492,175 @@ describe("final review I-2 on the fakes: a product that builds something other t
       expect(c, r.out.observed.caseId).toMatchObject({ verdict: "pass" });
       expect(c.checked, r.out.observed.caseId).toBeGreaterThanOrEqual(3 + 1 + 2 + 2 * 7);
     }
+  });
+});
+
+describe("LIFECYCLE with a variant override (Task 10)", () => {
+  // single-sport: the editor-built override path on the fake; the registry-wide sweep of the item is the next block.
+  const inherited = sportModule("generic").variants.score as Record<string, unknown>;
+  const overrides = buildRuleOverride("generic", { allowDraws: "off" }, inherited);
+  const key = Object.keys(overrides)[0]!;
+  const spec = (o?: Record<string, unknown>) => ({ caseId: "league|generic|score|LIFECYCLE|v", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, ...(o === undefined ? {} : { overrides: o }) }) as CaseSpec;
+  const run = (driver: FakeLeagueDriver, o?: Record<string, unknown>) =>
+    SCENARIOS.LIFECYCLE.run({ driver, spec: spec(o), orgSlug: "o", cfg: resolveSportCfg("generic", "score", o ?? {}), tag: "t", denied: [] });
+  it("the override is non-empty and changes the preset (else this block proves nothing)", () => {
+    expect(Object.keys(overrides).length).toBeGreaterThan(0);
+    expect(resolveSportCfg("generic", "score", overrides)).not.toEqual(resolveSportCfg("generic", "score"));
+  });
+  it("the division is CREATED with the override, and life-built-as-posted judges one more item per overridden key, and passes", async () => {
+    const posted: unknown[] = [];
+    class Records extends FakeLeagueDriver {
+      override createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]) { posted.push(i.config); return super.createDivision(c, i); }
+    }
+    const plain = (await run(new Records())).assertions.find((a) => a.id === "life-built-as-posted")!;
+    const withO = (await run(new Records(), overrides)).assertions.find((a) => a.id === "life-built-as-posted")!;
+    expect(posted).toEqual([{}, overrides]);
+    expect(plain.verdict).toBe("pass");
+    expect(withO.verdict).toBe("pass");
+    expect(withO.checked).toBe(plain.checked + Object.keys(overrides).length);
+  });
+  it("the fake scores under the override, as the product's config_snapshot does", async () => {
+    const d = new FakeLeagueDriver();
+    await run(d, overrides);
+    expect(d.cfg).toEqual(resolveSportCfg("generic", "score", overrides));
+    expect(d.cfg).not.toEqual(resolveSportCfg("generic", "score"));
+  });
+  it("a product that stores something else under the key reds it, naming config.<key>", async () => {
+    class Tampered extends FakeLeagueDriver {
+      override getDivision() { return super.getDivision().then((d) => ({ ...d, config: { ...d.config, [key]: !(d.config[key] as boolean) } })); }
+    }
+    const a = (await run(new Tampered(), overrides)).assertions.find((x) => x.id === "life-built-as-posted")!;
+    expect(a.verdict).toBe("fail");
+    expect(a.evidence.join(" ")).toContain(`config.${key}`);
+  });
+  it("a product that DROPS the override (stores the bare preset) reds it too", async () => {
+    class Drops extends FakeLeagueDriver {
+      override createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]) { return super.createDivision(c, { ...i, config: {} }); }
+    }
+    const a = (await run(new Drops(), overrides)).assertions.find((x) => x.id === "life-built-as-posted")!;
+    expect(a.verdict).toBe("fail");
+    expect(a.evidence).toEqual([`division config.${key}: built ${JSON.stringify(inherited[key])}, the engine resolves ${JSON.stringify(overrides[key])}`]);
+  });
+});
+
+describe("builtAsPosted's override items, swept over the sport registry (Task 10)", () => {
+  const committed = (JSON.parse(readFileSync(resolve(REPO, "scripts/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: VariantCase[] }[] }).sports;
+  const readback = (sport: string, variant: string, config: Record<string, unknown>, stored: Record<string, unknown>): BuiltReadback => ({
+    posted: { sport, variant, stages: [], entrants: [], config },
+    division: { id: "d1", slug: "d", sportKey: sport, variantKey: variant, config: stored },
+    stages: [], entrants: [], echo: [],
+  });
+  const none: ObservedRun = { caseId: "c", facts: [], withdrawal: null, configEdit: null, stages: [] };
+  it("every registry sport: its first committed override is one item per key, passing on the engine's parse and failing, by key, on any other stored value", () => {
+    let keys = 0;
+    for (const sport of SPORT_KEYS) {
+      const vc = committed.find((s) => s.sport === sport)?.cases.find((c) => Object.keys(c.overrides).length > 0);
+      expect(vc, `${sport}: no committed case carries an override`).toBeDefined();
+      const cfg = resolveSportCfg(sport, vc!.preset, { ...vc!.overrides }) as Record<string, unknown>;
+      const base = builtAsPosted(readback(sport, vc!.preset, {}, cfg), none);
+      const ok = builtAsPosted(readback(sport, vc!.preset, { ...vc!.overrides }, cfg), none);
+      expect(ok.verdict, `${sport}: ${ok.reason}`).toBe("pass");
+      expect(ok.checked, sport).toBe(base.checked + Object.keys(vc!.overrides).length);
+      for (const k of Object.keys(vc!.overrides)) {
+        const bad = builtAsPosted(readback(sport, vc!.preset, { ...vc!.overrides }, { ...cfg, [k]: { tampered: k } }), none);
+        expect(bad.verdict, `${sport}.${k}`).toBe("fail");
+        expect(bad.evidence.length, `${sport}.${k}`).toBe(1);
+        expect(bad.evidence[0], `${sport}.${k}`).toMatch(new RegExp(`^division config\\.${k}: built \\{"tampered":"${k}"\\}, the engine resolves `));
+        keys++;
+      }
+    }
+    expect(keys).toBeGreaterThanOrEqual(SPORT_KEYS.length);
+  });
+  it("the expected value is the engine's PARSE of preset + override, never the raw override (a product storing the raw one reds)", () => {
+    // A committed override whose parse differs from what was sent: the schema
+    // fills the rest of a partly-overridden nested object.
+    let found: { vc: VariantCase; k: string; cfg: Record<string, unknown> } | null = null;
+    for (const vc of committed.flatMap((s) => s.cases)) {
+      let cfg: Record<string, unknown>;
+      try { cfg = resolveSportCfg(vc.sport, vc.preset, { ...vc.overrides }) as Record<string, unknown>; } catch { continue; }
+      const k = Object.keys(vc.overrides).find((x) => !isDeepStrictEqual(cfg[x], vc.overrides[x]));
+      if (k !== undefined) { found = { vc, k, cfg }; break; }
+    }
+    expect(found, "no committed override parses to something other than what was sent").not.toBeNull();
+    const { vc, k, cfg } = found!;
+    expect(builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, cfg), none).verdict).toBe("pass");
+    const raw = builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, { ...cfg, [k]: vc.overrides[k] }), none);
+    expect(raw.verdict).toBe("fail");
+    expect(raw.evidence[0]).toMatch(new RegExp(`^division config\\.${k}: `));
+    // Key order inside a stored nested value is not a difference.
+    const reordered = Object.fromEntries(Object.entries(cfg[k] as Record<string, unknown>).reverse());
+    expect(builtAsPosted(readback(vc.sport, vc.preset, { ...vc.overrides }, { ...cfg, [k]: reordered }), none).verdict).toBe("pass");
+  });
+});
+
+describe("knockout_third_place: the third-place match is BUILT, not only stored (T3 review G1)", () => {
+  const tp = stagesForRow("knockout_third_place")[0]!;
+  const ko = stagesForRow("knockout")[0]!;
+  const fx = (over: Partial<ObservedFixture>): ObservedFixture =>
+    ({ id: "f1", stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status: "decided", outcome: { kind: "win", winner: "a" }, declared: null, ...over });
+  const readback = (body: typeof tp): BuiltReadback => ({
+    posted: { sport: "generic", variant: "score", stages: [body], entrants: [], config: {} },
+    division: { id: "d1", slug: "d", sportKey: "generic", variantKey: "score", config: {} },
+    stages: [{ id: "s1", seq: 1, kind: body.kind, config: { ...body.config }, status: "active" }],
+    entrants: [], echo: [],
+  });
+  const observed = (fixtures: ObservedFixture[]): ObservedRun => ({
+    caseId: "c", facts: [], withdrawal: null, configEdit: null,
+    stages: [{ id: "s1", seq: 1, kind: "knockout", config: {}, field: [], fieldSource: "division", fixtures, standings: [], generates: [], pairRounds: [], complete: null }],
+  });
+  it("the row posts a knockout with config.thirdPlace true; the plain knockout does not", () => {
+    expect(tp.kind).toBe("knockout");
+    expect(tp.config.thirdPlace).toBe(true);
+    expect(ko.config.thirdPlace).toBeUndefined();
+  });
+  it("exactly one fixture flagged third place passes; none or two fail, naming the count", () => {
+    const one = builtAsPosted(readback(tp), observed([fx({}), fx({ id: "f2", thirdPlace: true })]));
+    expect(one).toMatchObject({ verdict: "pass" });
+    expect(builtAsPosted(readback(tp), observed([fx({})]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 0 third-place fixture(s)"] });
+    expect(builtAsPosted(readback(tp), observed([fx({ thirdPlace: true }), fx({ id: "f2", thirdPlace: true })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 2 third-place fixture(s)"] });
+  });
+  it("fix round 1, m-4: two-sided — a plain knockout must build NO third-place fixture; one unasked reds, naming the count", () => {
+    const one = builtAsPosted(readback(tp), observed([fx({}), fx({ id: "f2", thirdPlace: true })]));
+    const plain = builtAsPosted(readback(ko), observed([fx({})]));
+    expect(plain.verdict).toBe("pass");
+    // The plain knockout carries its own third-place item: only the posted thirdPlace key differs.
+    expect(plain.checked).toBe(one.checked - (Object.keys(tp.config).length - Object.keys(ko.config).length));
+    expect(builtAsPosted(readback(ko), observed([fx({}), fx({ id: "f2", thirdPlace: true })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted no thirdPlace, built 1 third-place fixture(s)"] });
+    // A non-knockout body judges no third-place item.
+    const lg = stagesForRow("league")[0]!;
+    expect(builtAsPosted(readback(lg), observed([fx({}), fx({ id: "f2", thirdPlace: true })])).evidence.join("\n")).not.toMatch(/third-place/);
+  });
+  it("the flag reaches the check from the product's row (`third_place`) through the real scenario's snapshot", async () => {
+    /** A knockout product that also mints its third-place match, flagged as the product's row flags it. */
+    class ThirdPlaceKo extends FakeKnockoutDriver {
+      override async start() {
+        const out = await super.start();
+        if (this.stage!.config.thirdPlace === true) this.seat(Math.max(...this.fixtures.map((f) => f.round_no ?? 0)), null, null, { third_place: true } satisfies Partial<FakeFixture>);
+        return out;
+      }
+    }
+    const built = async (d: FakeKnockoutDriver, row: Row) => (await runOn(d, "M1", { row })).checks.find((c) => c.id === "life-built-as-posted")!;
+    expect(await built(new ThirdPlaceKo(), "knockout_third_place")).toMatchObject({ verdict: "pass" });
+    expect(await built(new FakeKnockoutDriver(), "knockout_third_place")).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted thirdPlace, built 0 third-place fixture(s)"] });
+    expect(await built(new ThirdPlaceKo(), "knockout")).toMatchObject({ verdict: "pass" });
+    /** m-4: a product that mints the third-place match whether or not it was asked. */
+    class AlwaysThirdPlaceKo extends FakeKnockoutDriver {
+      override async start() {
+        const out = await super.start();
+        this.seat(Math.max(...this.fixtures.map((f) => f.round_no ?? 0)), null, null, { third_place: true } satisfies Partial<FakeFixture>);
+        return out;
+      }
+    }
+    expect(await built(new AlwaysThirdPlaceKo(), "knockout")).toMatchObject({ verdict: "fail", evidence: ["stage 1: posted no thirdPlace, built 1 third-place fixture(s)"] });
+    expect(await built(new AlwaysThirdPlaceKo(), "knockout_third_place")).toMatchObject({ verdict: "pass" });
+  });
+  it("text pin: the org fixtures list the driver reads selects `f.third_place` and the route does not strip it", () => {
+    const usecase = readFileSync(resolve(REPO, "apps/web/src/server/usecases/fixtures.ts"), "utf8");
+    const body = /export async function listDivisionFixtures\([\s\S]*?\n}\n/.exec(usecase)?.[0] ?? "";
+    expect(body).toMatch(/\bf\.third_place\b/);
+    const route = readFileSync(resolve(REPO, "apps/web/src/app/api/v1/divisions/[id]/fixtures/route.ts"), "utf8").replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+    expect(route).toMatch(/listDivisionFixtures\(auth, id\)/);
+    expect(route).not.toMatch(/third_place/);
   });
 });
 
@@ -691,8 +871,9 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "R4"]);
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
-    for (const k of SCENARIO_KEYS) expect(SCENARIOS[k].key).toBe(k);
+    for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
     expect([SCENARIOS.M1.canaryCheck, SCENARIOS.R4.canaryCheck, SCENARIOS.F1.canaryCheck]).toEqual(["m1-walkover-recorded", "r4-cascade-consistent", "f1-round-size"]);
   });
@@ -805,21 +986,32 @@ describe("1b: a stage whose fixtures are ALL finished must complete — in EVERY
 });
 
 describe("deferrals are named", () => {
-  it("a multi-stage row is ScenarioUnsupported(W1b), not a crash, before any driver call", async () => {
+  it("the driving wave is the one ruling 28 (Q-A) names in the programme index", () => {
+    const index = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md"), "utf8");
+    const named = /^28\. \*\*Q-A — W1a's deferred driving work becomes a "([\w-]+)" wave/m.exec(index)?.[1];
+    expect(named).toBeDefined();
+    expect(DRIVING_WAVE).toBe(named);
+  });
+  // group_group_ko is the API-only multi-stage row Task 10's probe expects to
+  // read ⏳ W1-driving; league_ko is the template one. CaseSpec.row is RowKey
+  // (Task 9), so the API-only row needs no cast.
+  it.each(["league_ko", "group_group_ko"] as const)("%s (multi-stage) is ScenarioUnsupported(DRIVING_WAVE), not a crash, before any driver call", async (key) => {
+    const row: Row = key;
+    expect(stagesForRow(row).length).toBeGreaterThan(1);
     const driver = new FakeLeagueDriver();
-    await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toBeInstanceOf(ScenarioUnsupported);
-    await expect(runOn(driver, "LIFECYCLE", { row: "league_ko" })).rejects.toMatchObject({ wave: "W1b", message: expect.stringMatching(/multi-stage/) });
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toBeInstanceOf(ScenarioUnsupported);
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ wave: DRIVING_WAVE, message: expect.stringMatching(/multi-stage/) });
     expect(driver.calls).toEqual([]);
   });
-  it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(W1b) before any driver call", async (row) => {
+  it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {
     const driver = new FakeLeagueDriver();
-    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: "W1b", message: expect.stringContaining(row) });
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: `${row}: challenge/rotation driving lands in ${DRIVING_WAVE}` });
     expect(driver.calls).toEqual([]);
   });
-  it("a team sport is ScenarioUnsupported(W1b, team rosters) before any driver call", async () => {
+  it("a team sport is ScenarioUnsupported(DRIVING_WAVE, team rosters) before any driver call", async () => {
     const driver = new FakeLeagueDriver();
     const football = Object.keys(sportModule("football").variants as object)[0]!;
-    await expect(runOn(driver, "LIFECYCLE", { sport: "football", variant: football })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: "W1b", message: "team rosters" });
+    await expect(runOn(driver, "LIFECYCLE", { sport: "football", variant: football })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: "team rosters" });
     expect(driver.calls).toEqual([]);
   });
 });

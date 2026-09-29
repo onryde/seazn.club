@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "runId": "w1b-model-final-ko",
+  "harnessCommit": "15d434d35",
+  "settings": {
+    "maxCommands": 30,
+    "timeLimitMs": 300000,
+    "regressions": false
+  },
+  "cells": [
+    {
+      "cell": "knockout|generic",
+      "variant": "score",
+      "seed": -1424798710,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 14,
+          "accepted": 14,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 45,
+          "accepted": 22,
+          "refused": 0,
+          "expected": 23,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 9,
+          "accepted": 9,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 9,
+          "accepted": 9,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 15,
+          "accepted": 15,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 8,
+          "accepted": 7,
+          "refused": 0,
+          "expected": 1,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 3,
+          "accepted": 3,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 21,
+          "accepted": 21,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 23,
+          "accepted": 13,
+          "refused": 10,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 11,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 136,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 118,
+      "fenced": {
+        "ko-generate-after-roster-change": 15,
+        "ko-withdraw-waiting-on-tbd": 1
+      },
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 23,
+          "evidence": [
+            "AddEntrant(51,0): POST /api/v1/divisions/d2ebe868-58d6-424c-a1da-4e6850ba2232/entrants → 422 ERROR",
+            "AddEntrant(58,1): POST /api/v1/divisions/d2ebe868-58d6-424c-a1da-4e6850ba2232/entrants → 422 ERROR",
+            "AddEntrant(57,1): POST /api/v1/divisions/04864f34-2867-4464-90bf-dbd8fd34b8ce/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 124,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    },
+    {
+      "cell": "knockout|badminton",
+      "variant": "bwf",
+      "seed": -1451311303,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 16,
+          "accepted": 16,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 29,
+          "accepted": 13,
+          "refused": 0,
+          "expected": 16,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 5,
+          "accepted": 5,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 14,
+          "accepted": 14,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 12,
+          "accepted": 12,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 11,
+          "accepted": 10,
+          "refused": 0,
+          "expected": 1,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 4,
+          "accepted": 2,
+          "refused": 0,
+          "expected": 2,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 12,
+          "accepted": 12,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 15,
+          "accepted": 3,
+          "refused": 12,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 20,
+          "accepted": 20,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 68,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 123,
+      "fenced": {
+        "ko-generate-after-roster-change": 8
+      },
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 16,
+          "evidence": [
+            "AddEntrant(4,1): POST /api/v1/divisions/f0fe6667-29d7-4a5d-87a7-7979532eb22d/entrants → 422 ERROR",
+            "AddEntrant(42,0): POST /api/v1/divisions/19ce20b2-ec79-4999-a97c-e40efaa29597/entrants → 422 ERROR",
+            "AddEntrant(37,0): POST /api/v1/divisions/19ce20b2-ec79-4999-a97c-e40efaa29597/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 107,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    }
+  ]
+}

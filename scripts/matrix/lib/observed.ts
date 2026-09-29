@@ -24,6 +24,8 @@ export interface ObservedFixture {
   outcome: ObservedOutcome | null;
   /** Σ-points the sport declares for the stream the HARNESS posted; null when the harness did not post it. */
   declared: ObservedDeclared | null;
+  /** The product flagged this row a knockout's third-place match (W1b Task 10). Absent otherwise. */
+  thirdPlace?: boolean;
 }
 
 export interface StandingsRowObs { entrantId: string; rank: number; points: number | null }
@@ -38,6 +40,11 @@ export interface ObservedStage {
   config: Record<string, unknown>;
   /** Every entrant added to the division (withdrawn ones included). */
   field: string[];
+  /** Where `field` came from: "division" = every entrant of the division (right
+   *  for a root stage), "seeded" = the entrants the product placed into THIS
+   *  stage (a later stage). I1 refuses to judge a later stage on a
+   *  division-wide field (W1a carry 1). */
+  fieldSource: "division" | "seeded";
   fixtures: ObservedFixture[];
   standings: { poolId: string | null; rows: StandingsRowObs[] }[];
   generates: GenerateObs[];

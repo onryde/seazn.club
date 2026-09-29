@@ -1,6 +1,8 @@
 // R3 / ruling 17 as a gate, not a convention: the harness imports only the
-// bench's small helpers, only one apps/web file, and the invariant layer is
-// type-only so W1b's fast-check model and W10's shadow checks can reuse it.
+// bench's small helpers, only two apps/web files (the builder's templates and,
+// from W1b Task 5, the match-rules table the variant set is built from), and
+// the invariant layer is type-only so W1b's fast-check model and W10's shadow
+// checks can reuse it.
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +13,7 @@ const REPO = resolve(MATRIX, "..", "..");
 // Full repo-relative paths, never basenames: scripts/bench/lib/drivers/http.ts
 // is a different module that a basename check would wave through as "http.ts".
 const ALLOWED_BENCH = new Set(["scripts/bench/lib/http.ts", "scripts/bench/lib/plan.ts", "scripts/bench/lib/env.ts"]);
-const ALLOWED_WEB = new Set(["apps/web/src/components/v2/format-templates.ts"]);
+const ALLOWED_WEB = new Set(["apps/web/src/components/v2/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 

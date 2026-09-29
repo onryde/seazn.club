@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { INVARIANTS, evaluateInvariant, evaluateInvariants, type InvariantSpec } from "../lib/invariants.ts";
+import { ENGINE_HTTP_STATUS } from "../lib/driver/engine-http.ts";
+import { INVARIANTS, STEP_INVARIANTS, evaluateInvariant, evaluateInvariants, evaluateStepInvariants, type InvariantSpec } from "../lib/invariants.ts";
 import type { CaseFact, ObservedFixture, ObservedOutcome, ObservedRun, ObservedStage } from "../lib/observed.ts";
 import { GENERIC_ERROR_CODES, TERMINAL_STATUSES, isNamedRefusal, isTerminal, sameResult, toObservedOutcome } from "../lib/observed.ts";
 
@@ -15,7 +16,7 @@ const fx = (p: Partial<ObservedFixture>): ObservedFixture => ({
   id: `f${++n}`, stageId: "s1", poolId: null, roundNo: 1, home: null, away: null, status: "decided", outcome: null, declared: null, ...p,
 });
 const stage = (p: Partial<ObservedStage>): ObservedStage => ({
-  id: "s1", seq: 1, kind: "league", config: {}, field: [], fixtures: [], standings: [], generates: [], pairRounds: [], complete: null, ...p,
+  id: "s1", seq: 1, kind: "league", config: {}, field: [], fieldSource: "division", fixtures: [], standings: [], generates: [], pairRounds: [], complete: null, ...p,
 });
 const run = (stages: ObservedStage[], p: Partial<ObservedRun> = {}): ObservedRun => ({ caseId: "t", facts: [], stages, withdrawal: null, configEdit: null, ...p });
 /** Full single round robin; home always wins. */
@@ -26,11 +27,22 @@ function rr(ids: string[]): ObservedFixture[] {
 }
 const facts = (...f: CaseFact[]) => f;
 
-it("registry: six invariants, unique ids, I1..I6 in order", () => {
+it("registry: eight invariants in id order", () => {
   expect(INVARIANTS.map((s) => s.id)).toEqual([
-    "I1-rr-pair-once-per-leg", "I2-bracket-one-champion-ranks-permutation", "I3-table-points-equal-declared",
-    "I4-nothing-ends-stuck", "I5-config-edit-never-rescores", "I6-swiss-no-rematch",
+    "I1-rr-pair-once-per-leg", "I2-bracket-one-champion-ranks-permutation", "I3-table-points-equal-declared", "I4-nothing-ends-stuck",
+    "I5-config-edit-never-rescores", "I6-swiss-no-rematch", "I7-rr-no-pair-over-legs", "I8-generate-named",
   ]);
+});
+it("'any'-kind invariants are I4, I5 and I8", () => {
+  expect(INVARIANTS.filter((s) => s.stageKinds === "any").map((s) => s.id)).toEqual(["I4-nothing-ends-stuck", "I5-config-edit-never-rescores", "I8-generate-named"]);
+});
+it("the step-safe subset is exactly I6, I7, I8 — the ones that hold after EVERY organiser step", () => {
+  expect(STEP_INVARIANTS.map((s) => s.id)).toEqual(["I6-swiss-no-rematch", "I7-rr-no-pair-over-legs", "I8-generate-named"]);
+  expect(STEP_INVARIANTS.length).toBeGreaterThan(0);
+  // Every spec DECLARES its step-safety (a boolean, never absent), and the
+  // subset is the registry filtered in registry order — never re-sorted.
+  expect(INVARIANTS.every((s) => typeof s.stepSafe === "boolean")).toBe(true);
+  expect(STEP_INVARIANTS).toEqual(INVARIANTS.filter((s) => s.stepSafe));
 });
 
 // R25: the guard lives in evaluateInvariant, not in any one check, so every
@@ -49,7 +61,7 @@ describe("R25: the anti-vacuity guard every spec inherits", () => {
   // abstain on — it is a zero-item check. Kind-bound specs still abstain.
   it("a run with NO stages fails every 'any'-kind spec and abstains the kind-bound ones", () => {
     const anyKind = INVARIANTS.filter((s) => s.stageKinds === "any");
-    expect(anyKind.map((s) => s.id)).toEqual(["I4-nothing-ends-stuck", "I5-config-edit-never-rescores"]); // the loop below is not vacuous
+    expect(anyKind.map((s) => s.id)).toEqual(["I4-nothing-ends-stuck", "I5-config-edit-never-rescores", "I8-generate-named"]); // the loop below is not vacuous
     for (const s of INVARIANTS) {
       const r = evaluateInvariant(s, run([]));
       if (s.stageKinds === "any") {
@@ -185,6 +197,16 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
   it("abstain: stage not completed; shared place declared", () => {
     expect(evaluateInvariant(I2, run([bracket(null, false)])).verdict).toBe("abstain");
     expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"])], { facts: facts("shared_place_declared") })).verdict).toBe("abstain");
+  });
+  // W1a carry 1, review M-2: I2 reads s.field too. This later bracket is a
+  // correct bracket over its field, so without the guard it would PASS — judged
+  // against the division's entrants instead of the ones seeded into it.
+  it("a later-stage bracket (seq 2) with a division-wide field FAILS by name; seeded is judged; the root is still judged beside it", () => {
+    const carry1 = "stage seq 2: field is division-wide — per-stage entrants were not observed (W1a carry 1)";
+    const later = (fieldSource: "division" | "seeded"): ObservedStage => ({ ...bracket(["a", "b", "c", "d"]), id: "s2", seq: 2, fieldSource });
+    expect(evaluateInvariant(I2, run([later("division")]))).toMatchObject({ verdict: "fail", checked: 0, evidence: [carry1] });
+    expect(evaluateInvariant(I2, run([later("seeded")]))).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(evaluateInvariant(I2, run([bracket(["a", "b", "c", "d"]), later("division")]))).toMatchObject({ verdict: "fail", checked: 5, evidence: [carry1] });
   });
 });
 
@@ -525,7 +547,8 @@ describe("evaluateInvariants + observed helpers", () => {
     const out = evaluateInvariants(run([stage({ field: ["a", "b"], fixtures: posted })]));
     expect(out.map((c) => c.id)).toEqual(INVARIANTS.map((s) => s.id));
     expect(out.every((c) => c.kind === "invariant" && Number.isInteger(c.checked))).toBe(true);
-    expect(out.map((c) => [c.verdict, c.checked])).toEqual([["pass", 1], ["abstain", 0], ["fail", 0], ["fail", 0], ["abstain", 0], ["abstain", 0]]);
+    // I7 judges the one a~b meeting (pass, 1); I8 has no generate recorded (abstain).
+    expect(out.map((c) => [c.verdict, c.checked])).toEqual([["pass", 1], ["abstain", 0], ["fail", 0], ["fail", 0], ["abstain", 0], ["abstain", 0], ["pass", 1], ["abstain", 0]]);
     expect(out[0]!.reason).toBe(INVARIANTS[0]!.description);
     expect(out[2]!.reason).toMatch(/has results but no row/);
   });
@@ -556,4 +579,148 @@ describe("evaluateInvariants + observed helpers", () => {
     expect(toObservedOutcome({ kind: "award", winner: "a", method: "walkover" })).toEqual({ kind: "award", winner: "a", method: "walkover" });
     expect(toObservedOutcome({ kind: "tie" })).toEqual({ kind: "tie" });
   });
+});
+
+describe("I7 — no round-robin pair over its legs (step-safe, no abstentions)", () => {
+  const I7 = INVARIANTS.find((s) => s.id === "I7-rr-no-pair-over-legs")!;
+  it("empty case first: no league/group stage → abstain", () => {
+    expect(evaluateInvariant(I7, run([stage({ kind: "knockout" })])).verdict).toBe("abstain");
+  });
+  it("no two-sided fixture yet → abstain (nothing generated), never a vacuous pass", () => {
+    const r = evaluateInvariant(I7, run([stage({ fixtures: [] })]));
+    expect(r).toMatchObject({ verdict: "abstain", checked: 0 });
+  });
+  it("a 4-field single round robin: 6 pairs, each once → pass, checked 6", () => {
+    const f = [["a", "b"], ["c", "d"], ["a", "c"], ["b", "d"], ["a", "d"], ["b", "c"]].map(([h, w], i) => fx({ id: `f${i}`, home: h!, away: w! }));
+    expect(evaluateInvariant(I7, run([stage({ fixtures: f })]))).toMatchObject({ verdict: "pass", checked: 6 });
+  });
+  it("#879's shape: a late entrant, then Generate duplicates a pair → I7 FAILS while I1 abstains on late_entry", () => {
+    const f = [["a", "b"], ["a", "b"], ["a", "e"]].map(([h, w], i) => fx({ id: `f${i}`, home: h!, away: w! }));
+    const r = run([stage({ fixtures: f, field: ["a", "b", "e"] })], { facts: ["late_entry"] });
+    expect(evaluateInvariant(I7, r).verdict).toBe("fail");
+    expect(evaluateInvariant(I7, r).evidence[0]).toMatch(/a~b meets 2× in stage 1 \(legs 1\)/);
+    expect(evaluateInvariant(INVARIANTS[0]!, r).verdict).toBe("abstain"); // the witness I7 exists for
+  });
+  it("legs from the stage config: 2 meetings at legs 2 pass, 3 fail", () => {
+    const two = [0, 1].map((i) => fx({ id: `f${i}`, home: "a", away: "b" }));
+    expect(evaluateInvariant(I7, run([stage({ fixtures: two, config: { legs: 2 } })])).verdict).toBe("pass");
+    const three = [0, 1, 2].map((i) => fx({ id: `f${i}`, home: "a", away: "b" }));
+    expect(evaluateInvariant(I7, run([stage({ fixtures: three, config: { legs: 2 } })])).verdict).toBe("fail");
+  });
+  // Review M-1: I1 flags self-play but abstains on every fact below and is not
+  // step-safe; I6 covers swiss only. I7 is the model's only step check that sees it.
+  it("an entrant seated against itself fails as a step failure, named — even where I1 abstains", () => {
+    const r = run([stage({ fixtures: [fx({ id: "sp", home: "a", away: "a" }), fx({ id: "ok", home: "a", away: "b" })] })], { facts: ["late_entry"] });
+    expect(evaluateInvariant(spec("I1-rr-pair-once-per-leg"), r).verdict).toBe("abstain");
+    expect(evaluateInvariant(I7, r)).toMatchObject({ verdict: "fail", checked: 2, evidence: ["sp: self-play a"] });
+  });
+  // Beyond the brief: the other state transitions I1 goes silent on.
+  it("still speaks under EVERY fact I1 abstains on — withdrawal, expunge, void, cut short, late entry (swept from I1's own declaration)", () => {
+    const I1 = spec("I1-rr-pair-once-per-leg");
+    const dup = [fx({ id: "d1", home: "a", away: "b" }), fx({ id: "d2", home: "b", away: "a" })];
+    let swept = 0;
+    for (const fact of I1.abstainOn) {
+      const r = run([stage({ field: ["a", "b"], fixtures: dup })], { facts: [fact] });
+      expect(evaluateInvariant(I1, r).verdict, fact).toBe("abstain");
+      expect(evaluateInvariant(I7, r), fact).toMatchObject({ verdict: "fail", checked: 1, evidence: ["a~b meets 2× in stage 1 (legs 1): d1, d2"] });
+      swept++;
+    }
+    expect(swept).toBe(I1.abstainOn.length);
+    expect(swept).toBeGreaterThan(0);
+  });
+  it("judged where I1 is — league AND group — and per stage: a pair met once in each of two stages is no repeat", () => {
+    expect(I7.stageKinds).toEqual(spec("I1-rr-pair-once-per-leg").stageKinds);
+    const dup = [fx({ id: "g1", poolId: "A", home: "a", away: "b" }), fx({ id: "g2", poolId: "A", home: "a", away: "b" })];
+    expect(evaluateInvariant(I7, run([stage({ kind: "group", fixtures: dup })]))).toMatchObject({ verdict: "fail", checked: 1 });
+    const once = (id: string, stageSeq: number) => stage({ id: `s${stageSeq}`, seq: stageSeq, kind: "group", fixtures: [fx({ id, stageId: `s${stageSeq}`, home: "a", away: "b" })] });
+    expect(evaluateInvariant(I7, run([once("x1", 1), once("x2", 2)]))).toMatchObject({ verdict: "pass", checked: 2 });
+    const twiceIn2 = stage({ id: "s2", seq: 2, fixtures: [fx({ id: "y1", home: "c", away: "d" }), fx({ id: "y2", home: "d", away: "c" })] });
+    expect(evaluateInvariant(I7, run([once("x1", 1), twiceIn2])).evidence).toEqual(["c~d meets 2× in stage 2 (legs 1): y1, y2"]);
+  });
+});
+
+describe("I8 — every Generate answer is fixtures or a named refusal", () => {
+  const I8 = INVARIANTS.find((s) => s.id === "I8-generate-named")!;
+  // `total` is the stage's full fixture list as the answer carried it
+  // (recordGenerate: total = fixtures.length); a refusal carries none.
+  const g = (status: number, code: string | null, total = 0, created = total) => ({ status, code, total, created });
+  it("empty case first: no generate recorded → abstain", () => {
+    expect(evaluateInvariant(I8, run([stage({ generates: [] })])).verdict).toBe("abstain");
+  });
+  it("200 and 422 STAGE_NOT_READY pass (checked 2); 409 CONFLICT, 500 INTERNAL and a code-less 422 fail", () => {
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(200, null, 6), g(422, "STAGE_NOT_READY")] })]))).toMatchObject({ verdict: "pass", checked: 2 });
+    for (const bad of [g(409, "CONFLICT"), g(500, "INTERNAL"), g(422, null)]) {
+      expect(evaluateInvariant(I8, run([stage({ generates: [bad] })])).verdict).toBe("fail");
+    }
+  });
+  // Beyond the brief: the statuses come from the product's own EngineErrorCode
+  // table (engine-http.ts, text-pinned against api-v1 http.ts by engine-http.test.ts).
+  it("every engine refusal the product answers with a 4xx passes; one it answers with a 5xx fails (swept from ENGINE_HTTP_STATUS)", () => {
+    let fourxx = 0;
+    let swept = 0;
+    for (const [code, status] of Object.entries(ENGINE_HTTP_STATUS)) {
+      const r = evaluateInvariant(I8, run([stage({ generates: [g(status, code)] })]));
+      if (status >= 400 && status < 500) { fourxx++; expect(r, code).toMatchObject({ verdict: "pass", checked: 1 }); }
+      else expect(r, code).toMatchObject({ verdict: "fail", evidence: [`stage 1: generate → ${status} ${code}`] });
+      swept++;
+    }
+    expect(swept).toBe(Object.keys(ENGINE_HTTP_STATUS).length);
+    expect(fourxx).toBeGreaterThan(0);
+  });
+  it("a second Generate is judged too, in any stage: one unnamed answer among named ones fails, naming its stage", () => {
+    const r = evaluateInvariant(I8, run([
+      stage({ generates: [g(200, null, 6), g(422, "STAGE_NOT_READY")] }),
+      stage({ id: "s2", seq: 2, generates: [g(200, null, 3), g(409, "CONFLICT")] }),
+    ]));
+    expect(r).toMatchObject({ verdict: "fail", checked: 4, evidence: ["stage 2: generate → 409 CONFLICT"] });
+  });
+  // Review I-1. R13 (_RULES.md): "an empty result is a failure: … an empty
+  // generate". I4 carries that clause but is not step-safe, and the model
+  // evaluates only the step-safe set — so I8 has to carry it too, or its
+  // "fixtures (2xx)" pass reason would print over an answer with none.
+  it("R13: a 2xx Generate that answered NO fixtures fails, named — any 2xx, beside named refusals", () => {
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(422, "STAGE_NOT_READY"), g(200, null, 0)] })])))
+      .toMatchObject({ verdict: "fail", checked: 2, evidence: ["stage 1: empty generate (R13)"] });
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(201, null, 0)] })]))).toMatchObject({ verdict: "fail", evidence: ["stage 1: empty generate (R13)"] });
+  });
+  // The product's Generate answers EVERY fixture of the stage, not only the new
+  // ones (server/usecases/stages.ts generate's return), so a repeat call has
+  // total > 0 and created 0. Keying R13 on `created` would red every re-Generate.
+  it("a repeat Generate (the stage's full list, nothing new created) passes — no false red on a second call", () => {
+    expect(evaluateInvariant(I8, run([stage({ generates: [g(200, null, 6, 6), g(200, null, 6, 0)] })]))).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+});
+
+describe("I1 — a later stage's field must be observed per stage (W1a carry 1)", () => {
+  it("seq 2 with a division-wide field FAILS by name rather than judging the wrong entrants", () => {
+    const r = evaluateInvariant(INVARIANTS[0]!, run([stage({ seq: 2, fieldSource: "division" })]));
+    expect(r.verdict).toBe("fail");
+    expect(r.evidence.join(" ")).toMatch(/stage seq 2: field is division-wide/);
+  });
+  it("seq 2 with a seeded field is judged normally", () => {
+    const f = [fx({ id: "f1", home: "a", away: "b" })];
+    expect(evaluateInvariant(INVARIANTS[0]!, run([stage({ seq: 2, fieldSource: "seeded", field: ["a", "b"], fixtures: f })])).verdict).toBe("pass");
+    expect(evaluateInvariant(INVARIANTS[0]!, run([stage({ seq: 2, fieldSource: "seeded", field: ["a", "b"], fixtures: f })]))).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+  it("the root stage keeps a division-wide field, and a refused later stage does not silence the root's own judgement", () => {
+    const root = stage({ field: ["a", "b"], fixtures: [fx({ id: "r1", home: "a", away: "b" })] });
+    expect(evaluateInvariant(INVARIANTS[0]!, run([root]))).toMatchObject({ verdict: "pass", checked: 1 });
+    const r = evaluateInvariant(INVARIANTS[0]!, run([root, stage({ id: "s2", seq: 2, fieldSource: "division", field: ["a", "b"], fixtures: [fx({ id: "r2", stageId: "s2", home: "a", away: "b" })] })]));
+    expect(r).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(r.evidence).toEqual(["stage seq 2: field is division-wide — per-stage entrants were not observed (W1a carry 1)"]);
+  });
+});
+
+it("evaluateStepInvariants returns exactly the step-safe ids", () => {
+  const out = evaluateStepInvariants(run([stage({})]));
+  expect(out.map((c) => c.id)).toEqual(STEP_INVARIANTS.map((s) => s.id));
+});
+it("evaluateStepInvariants reports each step-safe spec exactly as evaluateInvariants does (one mapping, not two)", () => {
+  const f = [fx({ id: "e1", home: "a", away: "b" }), fx({ id: "e2", home: "a", away: "b" })];
+  const r = run([stage({ fixtures: f, generates: [{ status: 200, code: null, total: 2, created: 2 }] })], { facts: ["late_entry"] });
+  const ids = new Set(STEP_INVARIANTS.map((s) => s.id));
+  const full = evaluateInvariants(r).filter((c) => ids.has(c.id));
+  expect(full.length).toBe(STEP_INVARIANTS.length);
+  expect(evaluateStepInvariants(r)).toEqual(full);
+  expect(evaluateStepInvariants(r).find((c) => c.id === "I7-rr-no-pair-over-legs")).toMatchObject({ verdict: "fail", reason: "a~b meets 2× in stage 1 (legs 1): e1, e2" });
 });

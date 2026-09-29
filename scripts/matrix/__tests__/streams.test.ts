@@ -10,6 +10,9 @@ import { CfgInvalid, drawsAllowed, resolveSportCfg, sportModule, variantKeys } f
 import { foldStream } from "../lib/fold.ts";
 import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
+import { AllOutUndeclared, declaredAllOut } from "../lib/streams/cricket.ts";
+import { stagesForRow } from "../lib/catalogue.ts";
+import { buildSportVariants } from "../lib/variants.ts";
 import { footballPhases } from "../lib/streams/football.ts";
 import { periodLabels } from "../lib/streams/period.ts";
 import {
@@ -199,6 +202,95 @@ describe("off-catalogue cfgs — the right answer differs from the catalogue's s
     const r = offCatalogue("carrom", "icf", { tieBoard: "draw" }, "league", { kind: "draw" });
     expect(drawsAllowed("carrom", r.cfg, "league")).toBe(true);
     expect(() => generateStream(r)).toThrow(GeneratorUnsupported);
+  });
+});
+
+// T8 RR-1: the cricket generator hard-coded 4/5/3 wickets, so every short-side
+// cfg (3 a side: all-out is 2) folded to "wickets exceed all-out" — a harness
+// defect the catalogue filed as an engine refusal for W2. The engine's
+// all-out follows playersPerSide (cricket.ts allOutWickets, :625-629, refused
+// under a strict fold at :1682); the declared variant set only ever uses one
+// side size, so a hard-coded count still passed the default-preset sweep.
+const SUMMARY = "cricket.innings.summary";
+/** The engine's own declared wicket ceiling for an innings total (its padSpec
+ *  field), read here in the test from the module — never from the generator. */
+function declaredWicketsMax(cfg: unknown): number {
+  const spec = sportModule("cricket").padSpec?.(cfg as never);
+  const field = spec?.panels.flatMap((p) => p.actions).find((a) => a.type === SUMMARY)?.fields.find((f) => f.path === "wickets");
+  expect(field?.kind, "cricket padSpec declares no summary wickets field").toBe("number");
+  return field?.kind === "number" ? field.max : Number.NaN;
+}
+function cricketWins(cfg: unknown, stageKind: StageKind, label: string): number {
+  let n = 0;
+  for (const outcome of WINS) {
+    const req: StreamRequest = { sportKey: "cricket", cfg, stageKind, home: "H", away: "A", outcome };
+    const events = generateStream(req);
+    const max = declaredWicketsMax(cfg);
+    const summaries = events.filter((e) => e.type === SUMMARY).map((e) => e.payload as { wickets: number });
+    expect(summaries.length, label).toBe(2);
+    for (const s of summaries) expect(s.wickets, `${label} ${outcomeLabel(outcome)}`).toBeLessThanOrEqual(max);
+    // A chase that wins has a wicket in hand: the side is not all out.
+    if (outcome.kind === "win" && outcome.winner === "away") expect(summaries[1]?.wickets, label).toBeLessThan(max);
+    expect(matchesRequest(req, foldStream(sportModule("cricket"), cfg, "H", "A", events).outcome), `${label} ${outcomeLabel(outcome)}`).toBe("match");
+    n++;
+  }
+  return n;
+}
+
+describe("cricket wickets follow playersPerSide (T8 RR-1)", () => {
+  it("every committed cricket variant case, both winners, folds strictly to the requested winner — swept from the variant set, counted", () => {
+    const vs = buildSportVariants("cricket");
+    const sizes = new Set<number>();
+    let folded = 0;
+    let twoInnings = 0;
+    for (const vc of vs.cases) {
+      const cfg = resolveSportCfg("cricket", vc.preset, { ...vc.overrides }) as { playersPerSide: number; inningsPerSide: number };
+      if (cfg.inningsPerSide !== 1) {
+        // Two innings: a KNOWN generator gap (W1-driving), refused by name.
+        expect(() => generateStream({ sportKey: "cricket", cfg, stageKind: "league", home: "H", away: "A", outcome: { kind: "win", winner: "home" } }), vc.id).toThrow(GeneratorUnsupported);
+        twoInnings++;
+        continue;
+      }
+      folded += cricketWins(cfg, stagesForRow(vc.row)[0]!.kind as StageKind, `${vc.id} (${cfg.playersPerSide} a side)`);
+      sizes.add(cfg.playersPerSide);
+    }
+    expect(folded).toBeGreaterThan(0);
+    expect(folded / WINS.length + twoInnings).toBe(vs.cases.length);
+    // Load-bearing: the set holds a side too short for the old hard-coded 5
+    // wickets (all-out below 5), or this sweep cannot witness RR-1.
+    expect([...sizes].some((n) => declaredWicketsMax(resolveSportCfg("cricket", "t20", { playersPerSide: n })) < 5), [...sizes].join(",")).toBe(true);
+    console.info(`streams: ${folded} cricket variant wins folded across side sizes ${[...sizes].sort((a, b) => a - b).join(", ")}`);
+  });
+
+  it("every schema-legal side size up to the default folds both winners — empty case first: the schema refuses a side of 1", () => {
+    const refused: number[] = [];
+    let folded = 0;
+    for (let n = 1; n <= 11; n++) {
+      let cfg: unknown;
+      try {
+        cfg = resolveSportCfg("cricket", "t20", { playersPerSide: n });
+      } catch (e) {
+        if (!(e instanceof CfgInvalid)) throw e;
+        refused.push(n);
+        continue;
+      }
+      for (const stageKind of STAGES) folded += cricketWins(cfg, stageKind, `t20, ${n} a side, ${stageKind}`);
+    }
+    expect(refused).toEqual([1]);
+    expect(folded).toBe(10 * STAGES.length * WINS.length);
+  });
+
+  it("the all-out read from the engine's declaration refuses a spec that does not declare it (a guard, reached)", () => {
+    const cfg = resolveSportCfg("cricket", "t20", { playersPerSide: 3 });
+    const real = sportModule("cricket").padSpec?.(cfg as never);
+    expect(declaredAllOut(real)).toBe(declaredWicketsMax(cfg));
+    expect(() => declaredAllOut(undefined)).toThrow(AllOutUndeclared);
+    expect(() => declaredAllOut({ panels: [], fidelity: {} })).toThrow(AllOutUndeclared);
+    const zero = real === undefined ? undefined : {
+      ...real,
+      panels: real.panels.map((p) => ({ ...p, actions: p.actions.map((a) => (a.type === SUMMARY ? { ...a, fields: a.fields.map((f) => (f.path === "wickets" && f.kind === "number" ? { ...f, max: 0 } : f)) } : a)) })),
+    };
+    expect(() => declaredAllOut(zero)).toThrow(AllOutUndeclared);
   });
 });
 

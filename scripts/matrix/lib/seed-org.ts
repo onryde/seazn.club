@@ -34,6 +34,20 @@ export interface MatrixSql {
   insertCaseOrg(input: { userId: string; name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }>;
   listPlanKeys(): Promise<string[]>;
   variantKeysInBuilderOrder(sportKey: string): Promise<string[]>;
+  /** ⛔ (ruling 24): a live `org_entitlement_overrides` deny for one feature. */
+  denyFeature(input: { orgId: string; featureKey: string; reason: string }): Promise<void>;
+  /** RR-1 (W1b T10 fix round 2): the feature keys a plan grants — its
+   *  `plan_entitlements` rows whose bool is exactly true, read as the product's
+   *  resolver reads a plan (lib/entitlements.ts resolveFromDb + hasFeature;
+   *  pinned by seed-org.test.ts). An org on the plan with no pass and no
+   *  override holds exactly these. */
+  planGrants(planKey: string): Promise<string[]>;
+  /** W1b T15 fix round 1 (b): a plan's numeric limit for one feature, read as
+   *  the product's getLimit reads it (lib/entitlements.ts; pinned by
+   *  seed-org.test.ts): its ONE `plan_entitlements` row's int_value, where a
+   *  null is UNLIMITED (null here) and no row at all is 0. A case org on the
+   *  plan with no pass, no override and no add-on holds exactly this. */
+  planLimit(planKey: string, featureKey: string): Promise<number | null>;
 }
 
 export class DataDirUnset extends Error {
@@ -71,6 +85,9 @@ export function gateOnOwnDataDir(inner: MatrixSql, readDataDir: () => Promise<st
     async insertCaseOrg(input) { await proven(); return inner.insertCaseOrg(input); },
     async listPlanKeys() { await proven(); return inner.listPlanKeys(); },
     async variantKeysInBuilderOrder(sportKey) { await proven(); return inner.variantKeysInBuilderOrder(sportKey); },
+    async denyFeature(input) { await proven(); return inner.denyFeature(input); },
+    async planGrants(planKey) { await proven(); return inner.planGrants(planKey); },
+    async planLimit(planKey, featureKey) { await proven(); return inner.planLimit(planKey, featureKey); },
   };
 }
 
@@ -139,18 +156,51 @@ export interface PrepareCaseOrgDeps {
   provision: (orgId: string, plan: string) => Promise<void>;
 }
 
-export async function prepareCaseOrg(deps: PrepareCaseOrgDeps, input: { name: string; slug: string }): Promise<{ orgId: string; orgSlug: string }> {
+/** `deny` (ruling 24): feature keys the case org is denied AFTER provisioning,
+ *  so the plan write cannot touch them and the org holds the top plan with
+ *  exactly these features off. `denied` is what was applied: a key joins it
+ *  only once denyFeature's read-back held (it throws otherwise). */
+export async function prepareCaseOrg(deps: PrepareCaseOrgDeps, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string; denied: string[] }> {
   const org = await deps.sql.insertCaseOrg({ userId: deps.userId, name: input.name, slug: input.slug });
   await switchToCaseOrg(deps.transport, deps.base, deps.session, org.orgId);
   await deps.provision(org.orgId, deps.plan);
-  return org;
+  const denied: string[] = [];
+  for (const featureKey of input.deny ?? []) {
+    await deps.sql.denyFeature({ orgId: org.orgId, featureKey, reason: "format-matrix denied state (ruling 24)" });
+    denied.push(featureKey);
+  }
+  return { ...org, denied };
+}
+
+// A case org's identity: runCase stamps its slug with caseOrgSlug, and it is
+// created by the run's owner, ownerEmail. denyFeature's SQL refuses any org
+// that is not both (m-2), so a wrong id can never strip a feature from, say,
+// the e2e suite's shared AUTH_STATE org on a local DB they share.
+export const CASE_ORG_SLUG_PREFIX = "m-";
+const OWNER_LOCAL_PREFIX = "delivered+matrix-";
+const OWNER_DOMAIN = "@resend.dev";
+/** LIKE patterns: one `%` each, and no `_` or `\`, so the rest is literal. */
+export const CASE_ORG_SLUG_LIKE = `${CASE_ORG_SLUG_PREFIX}%`;
+export const CASE_OWNER_EMAIL_LIKE = `${OWNER_LOCAL_PREFIX}%${OWNER_DOMAIN}`;
+
+/** The case org's slug: the n-th case of run `runId`. */
+export function caseOrgSlug(runId: string, n: number): string {
+  return `${CASE_ORG_SLUG_PREFIX}${runId}-${n}`;
 }
 
 /** R14a: the run's owner is a synthetic resend.dev sink. The run id must be
  *  slug-safe, so nothing but `[a-z0-9-]` can reach the local part. */
 export function ownerEmail(runId: string): string {
   if (!/^[a-z0-9-]+$/.test(runId)) throw new Error(redact(`seed-org: run id "${runId}" is not slug-safe ([a-z0-9-]+)`));
-  return `delivered+matrix-${runId}@resend.dev`;
+  return `${OWNER_LOCAL_PREFIX}${runId}${OWNER_DOMAIN}`;
+}
+
+/** denyFeature was handed an org that is not a case org. Nothing was written. */
+export class NotACaseOrg extends Error {
+  constructor(orgId: string) {
+    super(redact(`seed-org: org ${orgId} is not a case org (slug like '${CASE_ORG_SLUG_LIKE}', created by '${CASE_OWNER_EMAIL_LIKE}') — refusing to deny anything on it`));
+    this.name = "NotACaseOrg";
+  }
 }
 
 // seed-org.test.ts reads matrixSqlOver's source and compares every insert in it
@@ -190,6 +240,19 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
     async listPlanKeys() {
       return (await db<{ key: string }[]>`select key from plans order by key`).map((r) => r.key);
     },
+    async planGrants(planKey) {
+      return (await db<{ feature_key: string }[]>`
+        select feature_key from plan_entitlements where plan_key = ${planKey} and bool_value = true
+        order by feature_key`).map((r) => r.feature_key);
+    },
+    async planLimit(planKey, featureKey) {
+      const [row] = await db<{ int_value: number | null }[]>`
+        select int_value from plan_entitlements where plan_key = ${planKey} and feature_key = ${featureKey}`;
+      if (row === undefined) return 0;
+      const v = row.int_value;
+      if (v !== null && !Number.isInteger(v)) throw new Error(redact(`seed-org: plan ${planKey}'s ${featureKey} int_value is ${JSON.stringify(v)}, not an integer or null`));
+      return v;
+    },
     async variantKeysInBuilderOrder(sportKey) {
       // The division builder (app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx)
       // selects every sport_variants row under withTenant, ordered
@@ -200,6 +263,32 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
       return (await db<{ key: string }[]>`
         select key from sport_variants where sport_key = ${sportKey} and org_id is null
         order by is_system desc, name`).map((r) => r.key);
+    },
+    async denyFeature({ orgId, featureKey, reason }) {
+      // Ruling 24: the denied state is an override deny (lib/entitlements.ts:
+      // a live override wins over the plan — pinned by seed-org.test.ts).
+      // Upsert, then read back: an expired or true row would let the gate
+      // through and the case would read as an entitlement bug instead of the
+      // harness's own miss.
+      await db.begin(async (tx) => {
+        // Re-proven on THIS transaction's connection, before its write.
+        const [dir] = await tx<{ data_directory: string }[]>`show data_directory`;
+        const actual = dir?.data_directory ?? "";
+        if (actual !== expectedDataDir) throw new DataDirMismatch(expectedDataDir, actual);
+        // m-2: the row is written only for a CASE org — the SELECT yields
+        // nothing for any other id, so nothing is inserted or updated.
+        const [held] = await tx<{ org_id: string }[]>`
+          insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+          select o.id, ${featureKey}, false, ${reason}
+          from organizations o join users u on u.id = o.created_by
+          where o.id = ${orgId} and o.slug like ${CASE_ORG_SLUG_LIKE} and u.email like ${CASE_OWNER_EMAIL_LIKE}
+          on conflict (org_id, feature_key) do update set bool_value = false, int_value = null, reason = excluded.reason, expires_at = null
+          returning org_id`;
+        if (held === undefined) throw new NotACaseOrg(orgId);
+        const [row] = await tx<{ bool_value: boolean | null; expires_at: string | null }[]>`
+          select bool_value, expires_at from org_entitlement_overrides where org_id = ${orgId} and feature_key = ${featureKey}`;
+        if (row?.bool_value !== false || row.expires_at !== null) throw new Error(redact(`seed-org: deny did not hold for ${featureKey} (read back ${JSON.stringify(row ?? null)})`));
+      });
     },
   };
   const readDataDir = async (): Promise<string> => {

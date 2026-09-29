@@ -74,9 +74,9 @@ These cost nothing to adopt and are owed from now on.
 
 6. **Sweep the sport registry by default** for engine, standings, scoring and
    progression tests. A single-sport test carries a one-line reason in the test
-   body. *(The shared `forEachSport` helper does not exist yet — see Owed
-   below. Until it does, iterate the registry directly rather than hard-coding
-   `generic`.)*
+   body. *(Use the shared `forEachSport` / `forEachSportAsync` helper from
+   `@seazn/engine/testkit` — `packages/engine/src/testkit/for-each-sport.ts`,
+   format-matrix W1b Task 11 — rather than hard-coding `generic`.)*
 
 7. **Decide the rules before building.** Most rework in the week this ruling
    came from was build-then-decide. If the rule is not written and signed, that
@@ -115,9 +115,11 @@ incomplete:
 Recorded so no agent reports them as in force. Each needs its own scoped piece
 of work and its own owner go-ahead on timing.
 
-- **A shared `forEachSport` helper**, plus a CI listing of tests that sweep a
-  single sport without a stated reason. *Does not exist today* — grep confirms
-  no such symbol in `packages/` or `apps/web/src/`.
+- ~~**A shared `forEachSport` helper**, plus a CI listing of tests that sweep a
+  single sport without a stated reason.~~ *Built by format-matrix W1b Task 11*:
+  `forEachSport` in `packages/engine/src/testkit/for-each-sport.ts`, and the
+  `pnpm matrix:single-sport --check --against HEAD^1` ratchet in
+  `.github/workflows/ci.yml` (no unreasoned single-sport pin count may rise).
 - **Weekly automated mutation testing (Stryker)** on the engine's scheduling,
   competition and tiebreaker modules, with a score floor that may only rise;
   surviving mutants either killed by a test or recorded as equivalent. *Stryker

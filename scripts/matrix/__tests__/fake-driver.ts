@@ -9,8 +9,9 @@
 // playStage (per-round generate, pair rounds, byes) is witnessed DB-free, and
 // FakeKnockoutDriver does the same for a bracket (M1's progression, F1's
 // first-round-only rule).
-import type { MatchOutcome, StageKind } from "@seazn/engine/core";
+import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import type { StagePostBody } from "../lib/catalogue.ts";
+import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -18,7 +19,7 @@ import {
   RefusedCall, idempotencyKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
@@ -73,8 +74,9 @@ export class FakeLeagueDriver implements OrganiserDriver {
       this.log("createDivision");
       this.sport = i.sportKey;
       this.variant = i.variantKey;
-      this.cfg = resolveSportCfg(i.sportKey, i.variantKey);
-      // divisions.ts createDivision stores the PARSED preset+overrides.
+      // divisions.ts createDivision stores the PARSED preset+overrides, and the
+      // fixtures are scored under it (config_snapshot) — overrides included.
+      this.cfg = resolveSportCfg(i.sportKey, i.variantKey, i.config ?? {});
       this.divisionConfig = { ...(resolveSportCfg(i.sportKey, i.variantKey, i.config ?? {}) as Record<string, unknown>) };
       return { id: "d1", slug: i.slug, sportKey: i.sportKey, variantKey: i.variantKey, config: { ...this.divisionConfig } };
     });
@@ -162,8 +164,11 @@ export class FakeLeagueDriver implements OrganiserDriver {
         try {
           folded = foldStream(sportModule(this.sport), this.cfg, f.home_entrant_id!, f.away_entrant_id!, next);
         } catch (e) {
-          const code = (e as { code?: unknown }).code;
-          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, typeof code === "string" ? code : null, (e as Error).message);
+          // The product turns ONLY an EngineError into a status (http.ts:157-158);
+          // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
+          // harness fault, so it surfaces as itself, never as an engine refusal.
+          if (!EngineError.is(e)) throw e;
+          throw new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, engineHttpStatus(e.code), e.code, e.message);
         }
         f.events = next;
         f.outcome = folded.outcome;
@@ -200,13 +205,34 @@ export class FakeLeagueDriver implements OrganiserDriver {
     for (const f of touched) {
       if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
-      if (policy === "walkover" && opponent !== null) { await this.forfeit(f.id, entrantId, "walkover"); walkovers++; continue; }
-      f.status = "abandoned";
-      f.outcome = null;
+      if (policy === "walkover" && opponent !== null) { await this.walkoverFixture(f, entrantId); walkovers++; continue; }
+      await this.abandonFixture(f);
       voided++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
     return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
+  }
+  /** The walkover of one pending fixture. This table fake composes it as
+   *  HttpDriver.forfeit does (START first on a scheduled fixture);
+   *  ModelFakeDriver posts withdrawal.ts's bare forfeit instead. */
+  async walkoverFixture(f: FakeFixture, by: string): Promise<void> {
+    await this.forfeit(f.id, by, "walkover");
+  }
+  /** The expunge's void of one fixture. This table fake writes the status
+   *  directly, with no event, so a later post would fold over it (Task 1
+   *  review); ModelFakeDriver rides the ledger instead, as the product does. */
+  abandonFixture(f: FakeFixture): Promise<void> {
+    return settle(() => {
+      f.status = "abandoned";
+      f.outcome = null;
+    });
+  }
+  /** The table fake models no rebuild; refused by name (Task 13). */
+  rebuild(_stageId: string): Promise<void> {
+    return settle(() => {
+      this.log("rebuild");
+      throw new RefusedCall("POST", "/api/v1/stages/s1/rebuild", 422, "UNSUPPORTED_IN_FAKE", "fake: rebuild");
+    });
   }
   completeStage(): Promise<CompleteOut> {
     return settle(() => {
@@ -265,6 +291,13 @@ export class FakeLeagueDriver implements OrganiserDriver {
       const entrants = config.entrants;
       this.divisionConfig = entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed;
       return { status: 200, code: null };
+    });
+  }
+  /** The league fake models no stage replacement: FakeDeniedDriver does. */
+  replaceStagesProbe(_d: string, _stages: readonly StagePostBody[]): Promise<StagesProbe> {
+    return settle(() => {
+      this.log("replaceStagesProbe");
+      return { status: 422, code: "UNSUPPORTED_IN_FAKE", featureKey: null };
     });
   }
   #f(id: string): FakeFixture { const f = this.fixtures.find((x) => x.id === id); if (!f) throw new Error(`fake: no fixture ${id}`); return f; }
@@ -420,6 +453,64 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       }
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));
       return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(champion === null ? [] : [champion]), ...out.map((x) => x.id)] }] };
+    });
+  }
+}
+
+/** A product that gates stage kinds by feature (ruling 24): `deny` maps a
+ *  kind to the feature_key its 402 names, and is read in insertion order —
+ *  the FIRST entry whose kind any posted stage has answers, as createStages
+ *  checks its gates in order over every stage (stages.ts:373-382). Only kinds:
+ *  the advanced gate's config keys (byes, cross_feeds, placements) are carried
+ *  by no catalogue row. Stages are kept per division (ids d1, d2, …).
+ *  deleteFirst mirrors today's replaceStages (stages.ts: delete, THEN gate). */
+export class FakeDeniedDriver extends FakeLeagueDriver {
+  readonly deny: ReadonlyMap<string, string>;
+  readonly deleteFirst: boolean;
+  readonly byDivision = new Map<string, StageRef[]>();
+  #divisions = 0;
+  constructor(deny: ReadonlyMap<string, string>, opts: { deleteFirst: boolean }, orgId = "org-fake") {
+    super(orgId);
+    this.deny = deny;
+    this.deleteFirst = opts.deleteFirst;
+  }
+  override createDivision(c: string, i: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
+    return super.createDivision(c, i).then((d) => {
+      const id = `d${++this.#divisions}`;
+      this.byDivision.set(id, []);
+      return { ...d, id };
+    });
+  }
+  #refusal(stages: readonly StagePostBody[]): RefusedCall | null {
+    for (const [kind, featureKey] of this.deny) {
+      if (stages.some((s) => s.kind === kind)) return new RefusedCall("POST", "/api/v1/divisions/d/stages", 402, "PAYMENT_REQUIRED", "upgrade", featureKey);
+    }
+    return null;
+  }
+  override postStages(d: string, stages: readonly StagePostBody[]): Promise<StageRef[]> {
+    return settle(() => {
+      this.log("postStages");
+      const refused = this.#refusal(stages);
+      if (refused !== null) throw refused;
+      const made = stages.map((s, k) => ({ id: `${d}-s${k + 1}`, seq: s.seq, kind: s.kind, config: { ...s.config }, status: "pending" }));
+      this.byDivision.set(d, made);
+      return made.map((s) => ({ ...s }));
+    });
+  }
+  override listStages(d = "d1"): Promise<StageRef[]> {
+    return settle(() => {
+      this.log("listStages");
+      return (this.byDivision.get(d) ?? []).map((s) => ({ ...s }));
+    });
+  }
+  override replaceStagesProbe(d: string, stages: readonly StagePostBody[]): Promise<StagesProbe> {
+    return settle(() => {
+      this.log("replaceStagesProbe");
+      if (this.deleteFirst) this.byDivision.set(d, []);
+      const refused = this.#refusal(stages);
+      if (refused !== null) return { status: refused.status, code: refused.code, featureKey: refused.featureKey };
+      this.byDivision.set(d, stages.map((s, k) => ({ id: `${d}-r${k + 1}`, seq: s.seq, kind: s.kind, config: { ...s.config }, status: "pending" })));
+      return { status: 200, code: null, featureKey: null };
     });
   }
 }

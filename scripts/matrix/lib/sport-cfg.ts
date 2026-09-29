@@ -85,3 +85,11 @@ export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKin
 export function entrantKindFor(sportKey: string, cfg: unknown): "individual" | "pair" | "team" {
   return effectiveEntrantModel(sportModule(sportKey).entrantModel ?? null, cfg).defaultKind;
 }
+
+/** Every entrant kind the sport's model allows under this cfg (a division
+ *  picks one; the default is entrantKindFor). Doubles-capable sports list
+ *  "pair" here though they default to "individual"; a module that declares no
+ *  model (generic) allows every kind. */
+export function entrantKindsFor(sportKey: string, cfg: unknown): string[] {
+  return [...effectiveEntrantModel(sportModule(sportKey).entrantModel ?? null, cfg).kinds];
+}

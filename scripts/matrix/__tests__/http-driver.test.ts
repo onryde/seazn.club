@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
-import { HttpDriver, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded } from "../lib/driver/types.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
+import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
@@ -263,6 +263,45 @@ describe("HttpDriver — reads and probes", () => {
   });
 });
 
+// ⛔ (Task 9): a 402 is named only by its feature_key — api-v1/http.ts's
+// PaymentRequiredError branch answers the generic PAYMENT_REQUIRED code, so the
+// key is the one field that says WHICH gate refused.
+describe("HttpDriver — denied stages (Task 9)", () => {
+  const body = [{ seq: 1, kind: "double_elim", config: {}, progression: null }] as never;
+  it("postStages on a 402 throws a RefusedCall carrying feature_key", async () => {
+    const { t } = fake([(c) => (c.method === "POST" ? err(402, "PAYMENT_REQUIRED", { feature_key: "formats.double_elim" }) : undefined)]);
+    const e = await drv(t).postStages("d1", body).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).status).toBe(402);
+    expect((e as RefusedCall).code).toBe("PAYMENT_REQUIRED");
+    expect((e as RefusedCall).featureKey).toBe("formats.double_elim");
+  });
+  it("a refusal without feature_key carries null (empty case)", async () => {
+    const { t } = fake([() => err(422, "INVALID_STAGE")]);
+    const e = await drv(t).postStages("d1", body).catch((x: unknown) => x);
+    expect((e as RefusedCall).featureKey).toBeNull();
+  });
+  it("a RefusedCall built with the five original arguments carries a null featureKey", () => {
+    expect(new RefusedCall("GET", "/x", 400, "X", "m").featureKey).toBeNull();
+  });
+  it("replaceStagesProbe PUTs the body and returns the refusal without throwing", async () => {
+    const { t, calls } = fake([(c) => (c.method === "PUT" ? err(402, "PAYMENT_REQUIRED", { feature_key: "formats.advanced" }) : undefined)]);
+    expect(await drv(t).replaceStagesProbe("d1", body)).toEqual({ status: 402, code: "PAYMENT_REQUIRED", featureKey: "formats.advanced" });
+    expect(calls).toMatchObject([{ path: "/api/v1/divisions/d1/stages", method: "PUT", body }]);
+  });
+  it("replaceStagesProbe on 2xx returns status with null code and key", async () => {
+    const { t } = fake([() => ok([{ id: "s1" }])]);
+    expect(await drv(t).replaceStagesProbe("d1", body)).toEqual({ status: 200, code: null, featureKey: null });
+  });
+  it("replaceStagesProbe reports a 5xx or a keyless 4xx as it came, and counts each call", async () => {
+    const { t } = fake([(c) => (c.method === "PUT" && c.path.includes("/d1/") ? err(500, "INTERNAL") : undefined), () => err(409, "FORMAT_LOCKED")]);
+    const d = drv(t);
+    expect(await d.replaceStagesProbe("d1", body)).toEqual({ status: 500, code: "INTERNAL", featureKey: null });
+    expect(await d.replaceStagesProbe("d2", body)).toEqual({ status: 409, code: "FORMAT_LOCKED", featureKey: null });
+    expect(d.callCount).toBe(2);
+  });
+});
+
 describe("driver errors are redacted (R14a — public repo)", () => {
   it("every driver error redacts its message, and RefusedCall its path", () => {
     const secret = "token=abc123secret";
@@ -274,5 +313,83 @@ describe("driver errors are redacted (R14a — public repo)", () => {
     ];
     for (const e of errors) expect(e.message, e.name).not.toContain("abc123secret");
     expect((errors[0] as RefusedCall).path).not.toContain("abc123secret");
+  });
+});
+
+describe("HttpDriver — rebuild (Task 13)", () => {
+  it("POSTs /stages/:id/rebuild with an empty body and resolves on 2xx", async () => {
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s1/rebuild" ? ok({ created: 3, existing: 0, removed: 3 }) : undefined)]);
+    const d = drv(t);
+    await expect(d.rebuild("s1")).resolves.toBeUndefined();
+    expect(calls).toMatchObject([{ path: "/api/v1/stages/s1/rebuild", method: "POST", body: {} }]);
+    expect(d.callCount).toBe(1);
+  });
+  it("a refusal throws RefusedCall with the product's status and code", async () => {
+    const { t } = fake([() => err(409, "STAGE_HAS_RESULTS")]);
+    const e = await drv(t).rebuild("s1").then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS", method: "POST", path: "/api/v1/stages/s1/rebuild" });
+  });
+  it("a second rebuild is a second POST — never short-circuited like /complete", async () => {
+    const { t, calls } = fake([() => ok({ created: 0, existing: 0, removed: 0 })]);
+    const d = drv(t);
+    await d.rebuild("s1");
+    await d.rebuild("s1");
+    expect(posts(calls).length).toBe(2);
+  });
+});
+
+describe("HttpDriver — a request that never answers (T14 fix round 1, M-5)", () => {
+  // The model's time box gates a property run's START, never one in flight
+  // (run-cell.ts); a hung request would hold a live cell forever without this.
+  const hanging = (): { t: Transport; calls: string[] } => {
+    const calls: string[] = [];
+    return { t: { raw: (_b, _s, path, method = "GET") => { calls.push(`${method} ${path}`); return new Promise<RawResult>(() => {}); } }, calls };
+  };
+  const settle = <T>(p: Promise<T>) => {
+    const box: { v: unknown } = { v: "pending" };
+    p.then(() => { box.v = "answered"; }, (e: unknown) => { box.v = e; });
+    return box;
+  };
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("the DEFAULT bound is REQUEST_TIMEOUT_MS: no option given, a silent request is refused by name at that bound and not a millisecond before", async () => {
+    vi.useFakeTimers();
+    const { t } = hanging();
+    const box = settle(drv(t).listFixtures("d1"));
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS - 1);
+    expect(box.v).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(box.v).toBeInstanceOf(RequestTimedOut);
+    expect((box.v as Error).message).toContain(`GET /api/v1/divisions/d1/fixtures did not answer within ${REQUEST_TIMEOUT_MS} ms`);
+  });
+
+  it("an answer in time clears its timer: nothing is left pending after the call", async () => {
+    vi.useFakeTimers();
+    const { t } = fake([() => ok([])]);
+    expect(await drv(t).listFixtures("d1")).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("requestTimeoutMs overrides the default; a bound that is not a positive finite number is refused when the driver is built", async () => {
+    vi.useFakeTimers();
+    const { t } = hanging();
+    const box = settle(new HttpDriver({ base: "http://localhost:3999", session, expectedOrgId: "org-1", transport: t, requestTimeoutMs: 50 }).generate("s1"));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(box.v).toBeInstanceOf(RequestTimedOut);
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => new HttpDriver({ base: "http://localhost:3999", session, expectedOrgId: "org-1", transport: t, requestTimeoutMs: bad }), String(bad)).toThrow(DriverMisuse);
+    }
+  });
+
+  it("a /complete that timed out may have committed: it is recorded like one that never answered, and never sent again", async () => {
+    vi.useFakeTimers();
+    const { t, calls } = hanging();
+    const d = drv(t);
+    const box = settle(d.completeStage("s1"));
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    expect(box.v).toBeInstanceOf(RequestTimedOut);
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls).toEqual(["POST /api/v1/stages/s1/complete"]);
   });
 });

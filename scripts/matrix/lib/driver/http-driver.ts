@@ -11,10 +11,10 @@ import { newSession, raw as benchRaw, type RawResult, type Session } from "../..
 import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import {
-  DriverMisuse, OrgMismatch, RefusedCall, VisibilityDegraded, idempotencyKey, retryKey,
+  DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, idempotencyKey, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -26,14 +26,27 @@ export interface HttpDriverOptions {
   session: Session;
   expectedOrgId: string;
   transport?: Transport;
+  /** How long one request may go unanswered (default REQUEST_TIMEOUT_MS). */
+  requestTimeoutMs?: number;
 }
 
-/** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
- *  `{ok:false, error:{code, message, current_seq?}}`. A non-v1 or non-JSON
- *  answer can carry a bare string `error`; it then yields no code. */
-interface Envelope { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; current_seq?: number } | string }
+/** How long one request may go unanswered before the driver stops waiting
+ *  (T14 fix round 1, M-5). The model's time box only gates a property run's
+ *  START (run-cell.ts), so without this one hung request holds a live cell
+ *  forever. A minute: far above any single call the harness makes, far below a
+ *  cell's time box (model.ts MODEL_DEFAULTS, pinned by model-cli.test.ts).
+ *  The request is not aborted — bench's raw() takes no signal — only no longer
+ *  awaited: it may still land, which is why a timed-out /complete is recorded
+ *  as an unknown outcome (completeStage). */
+export const REQUEST_TIMEOUT_MS = 60_000;
 
-function errorOf(r: RawResult): { code?: string; message?: string; current_seq?: number } {
+/** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
+ *  `{ok:false, error:{code, message, current_seq?, feature_key?}}` (a 402
+ *  carries `feature_key`). A non-v1 or non-JSON answer can carry a bare string
+ *  `error`; it then yields no code. */
+interface Envelope { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; current_seq?: number; feature_key?: string } | string }
+
+function errorOf(r: RawResult): { code?: string; message?: string; current_seq?: number; feature_key?: string } {
   const e = (r.json as unknown as Envelope | null)?.error;
   if (typeof e === "string") return { message: e };
   return e ?? {};
@@ -50,6 +63,7 @@ export class HttpDriver implements OrganiserDriver {
   readonly #expectedOrgId: string;
   readonly #t: Transport;
   readonly #completed = new Set<string>();
+  readonly #timeoutMs: number;
   #calls = 0;
 
   constructor(opts: HttpDriverOptions) {
@@ -57,6 +71,10 @@ export class HttpDriver implements OrganiserDriver {
     this.#session = opts.session;
     this.#expectedOrgId = opts.expectedOrgId;
     this.#t = opts.transport ?? { raw: benchRaw };
+    const ms = opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+    // A zero, negative or NaN bound would fire at once; an infinite one never.
+    if (!(Number.isFinite(ms) && ms > 0)) throw new DriverMisuse(`driver: requestTimeoutMs must be a positive finite number of ms, got ${ms}`);
+    this.#timeoutMs = ms;
   }
 
   get callCount(): number { return this.#calls; }
@@ -66,13 +84,22 @@ export class HttpDriver implements OrganiserDriver {
    *  anonymous after the first public answer that set a cookie. */
   async #send(path: string, method = "GET", body?: unknown, anonymous = false): Promise<RawResult> {
     this.#calls++;
-    return this.#t.raw(this.#base, anonymous ? newSession() : this.#session, path, method, body);
+    const answer = this.#t.raw(this.#base, anonymous ? newSession() : this.#session, path, method, body);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new RequestTimedOut(method, path, this.#timeoutMs)), this.#timeoutMs);
+    });
+    try {
+      return await Promise.race([answer, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   #unwrap<T>(method: string, path: string, r: RawResult): T {
     if (!is2xx(r)) {
       const e = errorOf(r);
-      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null);
+      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null, e.feature_key ?? null);
     }
     const data = (r.json as unknown as Envelope | null)?.data;
     if (data === undefined) throw new RefusedCall(method, path, r.status, "NO_DATA", "response carried no data");
@@ -204,6 +231,14 @@ export class HttpDriver implements OrganiserDriver {
     return out;
   }
 
+  async rebuild(stageId: string): Promise<void> {
+    // usecases/stages.ts rebuildStageFixtures: refuses whole (409
+    // STAGE_HAS_RESULTS) once any fixture carries a result or a score event,
+    // 422 STAGE_NOT_ROOT for a stage fed by another. The answer's counts are
+    // not read: the model re-lists the fixtures after it.
+    await this.#call<unknown>(`/api/v1/stages/${stageId}/rebuild`, "POST", {});
+  }
+
   async standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return this.#call(`/api/v1/stages/${stageId}/standings${poolId === null ? "" : `?pool_id=${encodeURIComponent(poolId)}`}`);
   }
@@ -215,5 +250,12 @@ export class HttpDriver implements OrganiserDriver {
   async patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     const r = await this.#send(`/api/v1/divisions/${divisionId}`, "PATCH", { config });
     return { status: r.status, code: is2xx(r) ? null : (errorOf(r).code ?? null) };
+  }
+
+  async replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe> {
+    const r = await this.#send(`/api/v1/divisions/${divisionId}/stages`, "PUT", stages);
+    if (is2xx(r)) return { status: r.status, code: null, featureKey: null };
+    const e = errorOf(r);
+    return { status: r.status, code: e.code ?? null, featureKey: e.feature_key ?? null };
   }
 }

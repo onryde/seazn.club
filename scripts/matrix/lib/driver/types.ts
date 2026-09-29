@@ -15,7 +15,11 @@ export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
 export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
 export interface EntrantRow { id: string; display_name: string; seed: number | null; status: string }
-export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown }
+/** `third_place` (W1b Task 10, T3 review G1): the product's row flag for a
+ *  knockout's third-place match (usecases/fixtures.ts listDivisionFixtures
+ *  selects it; the division fixtures route serves it). Optional: the fakes
+ *  and older rows omit it, which reads as "not a third-place match". */
+export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean }
 export interface GenerateOut { created: number; existing: number; fixtures: FixtureRow[] }
 export interface StartOut { division_id: string; status: string; started: boolean; generated: number }
 export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean }
@@ -49,6 +53,10 @@ export function retryKey(key: string): string {
   return `${key}:retry`;
 }
 export interface ProbeOutcome { status: number; code: string | null }
+/** A stage write's answer as a probe reads it. `featureKey` is api-v1's 402
+ *  `feature_key` (server/api-v1/http.ts): PAYMENT_REQUIRED is a generic code
+ *  (observed.ts GENERIC_ERROR_CODES), so the key is what names WHICH gate refused. */
+export interface StagesProbe { status: number; code: string | null; featureKey: string | null }
 
 export interface OrganiserDriver {
   createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef>;
@@ -68,29 +76,56 @@ export interface OrganiserDriver {
   forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
+  /** Replaces a root stage's fixtures wholesale (POST /stages/:id/rebuild).
+   *  Throws RefusedCall on a refusal — 409 STAGE_HAS_RESULTS once any fixture
+   *  carries a result (usecases/stages.ts rebuildStageFixtures). */
+  rebuild(stageId: string): Promise<void>;
   standings(stageId: string, poolId: string | null): Promise<StandingsOut>;
   publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut>;
   /** A probe: returns the refusal, never throws on 4xx. */
   patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome>;
+  /** A probe: PUT /divisions/:id/stages; returns the refusal, never throws on 4xx. */
+  replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe>;
   readonly callCount: number;
+}
+
+/** RefusedCall's placeholders for an answer that carried no code or no message. */
+export const NO_CODE = "(no code)";
+export const NO_MESSAGE = "(no message)";
+/** RefusedCall's request line, which it writes before the product's words:
+ *  `METHOD path → HTTP status CODE: `, CODE being NO_CODE or one without a
+ *  space or a colon. */
+const REQUEST_LINE = /^\S+ \S+ → HTTP \d{3} (?:\(no code\)|[^\s:]+): /;
+
+/** The product's own words in a RefusedCall's message — what follows its
+ *  request line — or null: a message in no such shape, or one the product gave
+ *  no words for (NO_MESSAGE). A committed `match` is read against these alone
+ *  (final batch FB-3), never the method, path, status or code around them. */
+export function productMessageOf(said: string): string | null {
+  const line = REQUEST_LINE.exec(said);
+  if (line === null) return null;
+  const words = said.slice(line[0].length);
+  return words === NO_MESSAGE ? null : words;
 }
 
 /** A product answer outside 2xx (or a 2xx with no data). Carries what I4's
  *  named-refusal check reads (observed.ts isNamedRefusal: status + code) and
  *  what a reader needs to find the call (method + path). Message and path are
- *  redacted (R14a). */
+ *  redacted (R14a). `featureKey` is a 402's `feature_key` (Task 9), else null. */
 export class RefusedCall extends Error {
   readonly method: string;
   readonly path: string;
   readonly status: number;
   readonly code: string | null;
-  constructor(method: string, path: string, status: number, code: string | null, message: string | null) {
-    super(redact(`${method} ${path} → HTTP ${status} ${code ?? "(no code)"}: ${message ?? "(no message)"}`));
+  readonly featureKey: string | null;
+  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null) {
+    super(redact(`${method} ${path} → HTTP ${status} ${code ?? NO_CODE}: ${message ?? NO_MESSAGE}`));
     this.name = "RefusedCall";
     this.method = method;
     this.path = redact(path);
     this.status = status;
     this.code = code;
+    this.featureKey = featureKey;
   }
 }
 
@@ -99,6 +134,24 @@ export class DriverMisuse extends Error {
   constructor(message: string) {
     super(redact(message));
     this.name = "DriverMisuse";
+  }
+}
+
+/** A request that did not answer within the driver's bound (HttpDriver,
+ *  REQUEST_TIMEOUT_MS). Its outcome is unknown, and it is environmental — the
+ *  product did not answer, it did not refuse — so the model aborts the cell on
+ *  it rather than report a regression (T14 fix round 2, RR-2). Here, not in
+ *  http-driver.ts, so the model reads it without importing bench. */
+export class RequestTimedOut extends Error {
+  readonly method: string;
+  readonly path: string;
+  readonly ms: number;
+  constructor(method: string, path: string, ms: number) {
+    super(`driver: ${method} ${path} did not answer within ${ms} ms — its outcome is unknown`);
+    this.name = "RequestTimedOut";
+    this.method = method;
+    this.path = path;
+    this.ms = ms;
   }
 }
 

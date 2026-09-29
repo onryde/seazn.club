@@ -4,7 +4,7 @@
 // _INDEX.md "False premises found" before editing this list; never widen it
 // to make the sweep green.
 export const KNOWN_UNSUPPORTED: readonly string[] = Object.freeze([
-  // cricket `test` is two-innings (cricket.ts:3559): W2's cricket rulebook.
+  // cricket `test` is two-innings (cricket.ts:3559): W1-driving's generator work.
   "cricket:test:league:win-home", "cricket:test:league:win-away",
   "cricket:test:knockout:win-home", "cricket:test:knockout:win-away",
   "cricket:test:swiss:win-home", "cricket:test:swiss:win-away",

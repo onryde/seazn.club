@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "runId": "w1b-model-0929f",
+  "harnessCommit": "299df5b32",
+  "settings": {
+    "maxCommands": 30,
+    "timeLimitMs": 300000,
+    "regressions": false
+  },
+  "cells": [
+    {
+      "cell": "league|generic",
+      "variant": "score",
+      "seed": 752674687,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": false,
+      "numRuns": 2,
+      "executions": 32,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 15,
+          "accepted": 15,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 48,
+          "accepted": 48,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 380,
+        "I8-generate-named": 60,
+        "model-rr-orientation": 316
+      },
+      "foldParity": 0,
+      "fenced": {},
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {},
+      "informativeSteps": 55,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": {
+        "check": "I7-rr-no-pair-over-legs",
+        "seed": 752674687,
+        "path": "1:2:3:3:3:3:3:3",
+        "replayPath": "BAABABCU:qC",
+        "commands": [
+          "Generate(0,0)",
+          "AddEntrant(0,0)",
+          "Generate(0,0)"
+        ],
+        "evidence": [
+          "2f978cfc-ed1d-49b4-b782-d864cf93c349~488d7363-01bc-4a62-a99f-bb726956bd4f meets 2× in stage 1 (legs 1): bb8b638a-954f-41a5-be7a-4ff69632d76b, ab980a17-c9e6-4143-86e9-271319590113",
+          "488d7363-01bc-4a62-a99f-bb726956bd4f~c66e5acd-f475-4a12-9cfb-5df08e14fdc3 meets 2× in stage 1 (legs 1): 5e36ae76-1303-4969-9bf9-2fcd5c5a0ec8, adba6c65-20b8-458c-bf7e-d5e69ea35ce1"
+        ],
+        "known": "MB-001"
+      },
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "known-failure"
+    }
+  ]
+}

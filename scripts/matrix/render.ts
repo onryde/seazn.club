@@ -5,13 +5,16 @@
 //      results (nothing written);
 //   2  usage or input error, with a message on stderr and nothing written: no
 //      file, a second file, an unknown flag, a missing or unreadable file, bad
-//      JSON, results the schema refuses, or a case off the run's own grid.
-// An uncaught throw would also exit 1, so every input failure is caught here
-// rather than left to read as "zero cases".
+//      JSON, results the schema refuses, or a case off the run's own grid;
+//   3  a crash while it loads, through `pnpm matrix:render` (its preload,
+//      lib/crash-exit.ts, final batch F-6); a bare `node …` run exits 1.
+// An uncaught throw would exit 1 on a bare run (3 through the package
+// script), so every input failure is caught here rather than left to read as
+// "zero cases".
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { isMainModule } from "./lib/main-module.ts";
 import { redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { parseResults } from "./lib/results.ts";
@@ -52,6 +55,6 @@ export function main(argv: string[]): number {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2));
 }

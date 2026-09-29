@@ -3,7 +3,7 @@
 // randomness. Run with: node --experimental-strip-types scripts/engine-boundary.ts
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./matrix/lib/main-module.ts";
 
 const BANNED_IMPORTS = [
   "postgres",
@@ -85,7 +85,7 @@ export function checkEngineBoundary(srcDir: string): Violation[] {
   return violations;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule(import.meta.url)) {
   const srcDir = new URL("../packages/engine/src", import.meta.url).pathname;
   const violations = checkEngineBoundary(srcDir);
   for (const v of violations) {

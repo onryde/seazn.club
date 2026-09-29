@@ -1,0 +1,429 @@
+{
+  "runId": "w1b-tie-ko-0928b",
+  "verdict": "CONFIRMED",
+  "controlSeated": true,
+  "legs": {
+    "tie": {
+      "leg": "tie",
+      "variant": "t20",
+      "cfg": {
+        "ballsPerInnings": 120,
+        "superOver": false,
+        "playersPerSide": 11
+      },
+      "start": {
+        "division_id": "c7a31a98-409b-4c9c-a41f-feb7d52e191a",
+        "status": "active",
+        "started": true,
+        "generated": 3
+      },
+      "fixturesAtStart": [
+        {
+          "id": "4a07712d-ee8a-4aca-9101-c7aa61d4c5d2",
+          "round_no": 1,
+          "fixture_no": 1,
+          "home": "63d33a24-c9e9-48b2-8c49-ee7d7d410c61",
+          "away": "85cb7839-573b-4571-9c0c-5fe9289790b1",
+          "status": "scheduled",
+          "third_place": false
+        },
+        {
+          "id": "7e453e09-a1ac-4cb2-81d3-abb94217a54c",
+          "round_no": 1,
+          "fixture_no": 2,
+          "home": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+          "away": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+          "status": "scheduled",
+          "third_place": false
+        },
+        {
+          "id": "a49c0894-381f-42f1-b1a1-979bb91f0f4c",
+          "round_no": 2,
+          "fixture_no": 3,
+          "home": null,
+          "away": null,
+          "status": "scheduled",
+          "third_place": false
+        }
+      ],
+      "semi1": {
+        "id": "4a07712d-ee8a-4aca-9101-c7aa61d4c5d2",
+        "home": "63d33a24-c9e9-48b2-8c49-ee7d7d410c61",
+        "away": "85cb7839-573b-4571-9c0c-5fe9289790b1",
+        "engineOutcome": {
+          "kind": "tie"
+        },
+        "events": [
+          "core.start",
+          "cricket.innings.summary",
+          "cricket.innings.summary"
+        ],
+        "posts": [
+          {
+            "index": 0,
+            "type": "core.start",
+            "http": "2xx",
+            "seq": 1,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 1,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 2,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 2,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 3,
+            "status": "decided",
+            "outcome": {
+              "kind": "tie"
+            }
+          }
+        ],
+        "refused": null,
+        "after": {
+          "status": "decided",
+          "last_seq": 3,
+          "outcome": {
+            "kind": "tie"
+          }
+        }
+      },
+      "finalAfterSemi1": {
+        "id": "a49c0894-381f-42f1-b1a1-979bb91f0f4c",
+        "home": null,
+        "away": null,
+        "status": "scheduled"
+      },
+      "finalSeatsSemi1Entrant": false,
+      "semi2": {
+        "id": "7e453e09-a1ac-4cb2-81d3-abb94217a54c",
+        "home": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+        "away": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+        "engineOutcome": {
+          "kind": "win",
+          "winner": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+          "loser": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+          "method": "regulation"
+        },
+        "posts": [
+          {
+            "index": 0,
+            "type": "core.start",
+            "http": "2xx",
+            "seq": 1,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 1,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 2,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 2,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 3,
+            "status": "decided",
+            "outcome": {
+              "kind": "win",
+              "winner": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+              "loser": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+              "method": "regulation"
+            }
+          }
+        ],
+        "refused": null,
+        "after": {
+          "status": "decided",
+          "last_seq": 3,
+          "outcome": {
+            "kind": "win",
+            "loser": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+            "method": "regulation",
+            "winner": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3"
+          }
+        }
+      },
+      "finalAfterSemi2": {
+        "id": "a49c0894-381f-42f1-b1a1-979bb91f0f4c",
+        "home": null,
+        "away": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+        "status": "scheduled"
+      },
+      "finalSeatsSemi1EntrantAfterSemi2": false,
+      "finalSeatsSemi2Winner": true,
+      "stageAfter": [
+        {
+          "id": "40fa8e10-a9be-4c8e-a661-d377ba333f51",
+          "kind": "knockout",
+          "status": "active"
+        }
+      ],
+      "fixturesAfter": [
+        {
+          "id": "4a07712d-ee8a-4aca-9101-c7aa61d4c5d2",
+          "round_no": 1,
+          "home": "63d33a24-c9e9-48b2-8c49-ee7d7d410c61",
+          "away": "85cb7839-573b-4571-9c0c-5fe9289790b1",
+          "status": "decided",
+          "outcome": {
+            "kind": "tie"
+          },
+          "third_place": false
+        },
+        {
+          "id": "7e453e09-a1ac-4cb2-81d3-abb94217a54c",
+          "round_no": 1,
+          "home": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+          "away": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "fec5fedc-fb5c-4a30-8646-eb21dda7ad2e",
+            "method": "regulation",
+            "winner": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3"
+          },
+          "third_place": false
+        },
+        {
+          "id": "a49c0894-381f-42f1-b1a1-979bb91f0f4c",
+          "round_no": 2,
+          "home": null,
+          "away": "996f21da-be63-4ee8-9c0f-c0d996bb8ea3",
+          "status": "scheduled",
+          "outcome": null,
+          "third_place": false
+        }
+      ],
+      "outcome": "ran"
+    },
+    "control": {
+      "leg": "control",
+      "variant": "t20",
+      "cfg": {
+        "ballsPerInnings": 120,
+        "superOver": false,
+        "playersPerSide": 11
+      },
+      "start": {
+        "division_id": "42229630-62c7-4854-9f5a-01008711816b",
+        "status": "active",
+        "started": true,
+        "generated": 3
+      },
+      "fixturesAtStart": [
+        {
+          "id": "66ef3664-9489-425b-8902-6b5c508b0155",
+          "round_no": 1,
+          "fixture_no": 1,
+          "home": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+          "away": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+          "status": "scheduled",
+          "third_place": false
+        },
+        {
+          "id": "ef615c38-4153-49dd-8f58-ebb58a30f022",
+          "round_no": 1,
+          "fixture_no": 2,
+          "home": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+          "away": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+          "status": "scheduled",
+          "third_place": false
+        },
+        {
+          "id": "62147a11-feab-4d23-9794-9b7f01c36e7f",
+          "round_no": 2,
+          "fixture_no": 3,
+          "home": null,
+          "away": null,
+          "status": "scheduled",
+          "third_place": false
+        }
+      ],
+      "semi1": {
+        "id": "66ef3664-9489-425b-8902-6b5c508b0155",
+        "home": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+        "away": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+        "engineOutcome": {
+          "kind": "win",
+          "winner": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+          "loser": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+          "method": "regulation"
+        },
+        "events": [
+          "core.start",
+          "cricket.innings.summary",
+          "cricket.innings.summary"
+        ],
+        "posts": [
+          {
+            "index": 0,
+            "type": "core.start",
+            "http": "2xx",
+            "seq": 1,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 1,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 2,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 2,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 3,
+            "status": "decided",
+            "outcome": {
+              "kind": "win",
+              "winner": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+              "loser": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+              "method": "regulation"
+            }
+          }
+        ],
+        "refused": null,
+        "after": {
+          "status": "decided",
+          "last_seq": 3,
+          "outcome": {
+            "kind": "win",
+            "loser": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+            "method": "regulation",
+            "winner": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b"
+          }
+        }
+      },
+      "finalAfterSemi1": {
+        "id": "62147a11-feab-4d23-9794-9b7f01c36e7f",
+        "home": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+        "away": null,
+        "status": "scheduled"
+      },
+      "finalSeatsSemi1Entrant": true,
+      "semi2": {
+        "id": "ef615c38-4153-49dd-8f58-ebb58a30f022",
+        "home": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+        "away": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+        "engineOutcome": {
+          "kind": "win",
+          "winner": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+          "loser": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+          "method": "regulation"
+        },
+        "posts": [
+          {
+            "index": 0,
+            "type": "core.start",
+            "http": "2xx",
+            "seq": 1,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 1,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 2,
+            "status": "in_play",
+            "outcome": null
+          },
+          {
+            "index": 2,
+            "type": "cricket.innings.summary",
+            "http": "2xx",
+            "seq": 3,
+            "status": "decided",
+            "outcome": {
+              "kind": "win",
+              "winner": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+              "loser": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+              "method": "regulation"
+            }
+          }
+        ],
+        "refused": null,
+        "after": {
+          "status": "decided",
+          "last_seq": 3,
+          "outcome": {
+            "kind": "win",
+            "loser": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+            "method": "regulation",
+            "winner": "5fcb3405-da40-4740-bc53-d6764e352fdb"
+          }
+        }
+      },
+      "finalAfterSemi2": {
+        "id": "62147a11-feab-4d23-9794-9b7f01c36e7f",
+        "home": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+        "away": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+        "status": "scheduled"
+      },
+      "finalSeatsSemi1EntrantAfterSemi2": true,
+      "finalSeatsSemi2Winner": true,
+      "stageAfter": [
+        {
+          "id": "e334b252-ea30-49ee-a242-a41d12186191",
+          "kind": "knockout",
+          "status": "active"
+        }
+      ],
+      "fixturesAfter": [
+        {
+          "id": "66ef3664-9489-425b-8902-6b5c508b0155",
+          "round_no": 1,
+          "home": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+          "away": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "ca8e6a4e-4a9d-4b51-b33b-008b26f0616e",
+            "method": "regulation",
+            "winner": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b"
+          },
+          "third_place": false
+        },
+        {
+          "id": "ef615c38-4153-49dd-8f58-ebb58a30f022",
+          "round_no": 1,
+          "home": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+          "away": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "a1183cd8-cc19-49d4-96b1-f49dd7e63cad",
+            "method": "regulation",
+            "winner": "5fcb3405-da40-4740-bc53-d6764e352fdb"
+          },
+          "third_place": false
+        },
+        {
+          "id": "62147a11-feab-4d23-9794-9b7f01c36e7f",
+          "round_no": 2,
+          "home": "8f3ac0bb-c536-4ad5-9db9-2910ca0a945b",
+          "away": "5fcb3405-da40-4740-bc53-d6764e352fdb",
+          "status": "scheduled",
+          "outcome": null,
+          "third_place": false
+        }
+      ],
+      "outcome": "ran"
+    }
+  }
+}

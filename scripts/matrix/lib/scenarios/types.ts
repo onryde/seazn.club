@@ -1,16 +1,28 @@
 // A scenario turns OrganiserDriver calls into an ObservedRun for the invariants
 // to judge, plus its own assertions (design §6.2). run.ts (Task 9) calls them;
 // Task 11 drives them live.
-import type { TemplateRowKey } from "../catalogue.ts";
+import type { RowKey } from "../catalogue.ts";
 import type { OrganiserDriver } from "../driver/types.ts";
 import type { ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1";
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED";
 
-export interface CaseSpec { caseId: string; row: TemplateRowKey; sport: string; variant: string; scenario: ScenarioKey; canary: boolean }
+/** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
+ *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys
+ *  the case org is denied through `org_entitlement_overrides`. `overrides`
+ *  (W1b Task 10) is a committed variant case's rule override: the division is
+ *  created with it as `config`, and the case scores under preset + override. */
+export interface CaseSpec {
+  caseId: string; row: RowKey; sport: string; variant: string; scenario: ScenarioKey; canary: boolean;
+  deny?: readonly string[];
+  overrides?: Readonly<Record<string, unknown>>;
+}
 
-export interface ScenarioContext { driver: OrganiserDriver; spec: CaseSpec; orgSlug: string; cfg: unknown; tag: string }
+/** `denied`: the feature keys prepareCaseOrg actually denied the case org
+ *  (each one's read-back held) — what the org IS, where `spec.deny` is only
+ *  what the plan asked for. */
+export interface ScenarioContext { driver: OrganiserDriver; spec: CaseSpec; orgSlug: string; cfg: unknown; tag: string; denied: readonly string[] }
 
 export interface ScenarioOutput {
   observed: ObservedRun;
@@ -28,6 +40,10 @@ export interface Scenario {
   entrantCount: number;
   /** The one check a canary run must turn red; null for a scenario with no canary. */
   canaryCheck: string | null;
+  /** ⛔: the case's expected state is `refused` (decideState's `mandated`). */
+  mandatedRefusal?: (spec: CaseSpec) => string;
+  /** false: the fixture invariants do not apply (no stage was ever built). Default true. */
+  evaluatesInvariants?: boolean;
   run(ctx: ScenarioContext): Promise<ScenarioOutput>;
 }
 

@@ -6,7 +6,8 @@
 //
 // Stage bodies are built by the PRODUCT's buildTemplateStages (R15: the
 // builder's own output goes through the real API), with the builder's clamp,
-// carry and seq steps restated (division-builder.tsx:384-392, 443-447).
+// carry and seq steps restated (division-builder.tsx:384-392, 443-447). The
+// API-only rows are derived from product authorities too (apiOnlyStages).
 import { builtinModules } from "@seazn/engine/sports";
 import {
   STAGE_TEMPLATES,
@@ -82,6 +83,8 @@ export class UnknownRow extends Error {
   }
 }
 
+/** A row whose stage bodies a later wave builds. No row throws it since W1b
+ *  Task 3 derived the five API-only rows; run.ts still reads it as ⏳. */
 export class RowBuildDeferred extends Error {
   readonly row: string;
   readonly wave: string;
@@ -97,9 +100,9 @@ export interface StagePostBody extends StageDraft {
   seq: number;
 }
 
-export function stagesForRow(row: string, knobs: TemplateKnobs = BUILDER_DEFAULT_KNOBS): StagePostBody[] {
-  if ((API_ONLY_ROWS as readonly string[]).includes(row)) throw new RowBuildDeferred(row, "W1b");
-  if (!(TEMPLATE_ROW_KEYS as readonly string[]).includes(row)) throw new UnknownRow(row);
+/** The builder's own bodies for a template row (division-builder.tsx:383-392):
+ *  clamp → buildTemplateStages → carry "none". Seq is added by stagesForRow. */
+export function builderStages(row: TemplateRowKey, knobs: TemplateKnobs = BUILDER_DEFAULT_KNOBS): StageDraft[] {
   // The catalogue could name a key the product has since dropped; the product
   // would then silently build a league. Refuse instead.
   if (!STAGE_TEMPLATES.some((t) => t.key === row)) throw new UnknownRow(row);
@@ -108,5 +111,54 @@ export function stagesForRow(row: string, knobs: TemplateKnobs = BUILDER_DEFAULT
     qualified: clampKnob(knobs.qualified, BUILDER_KNOB_BOUNDS.qualified.min, BUILDER_KNOB_BOUNDS.qualified.max),
     poolCount: clampKnob(knobs.poolCount, BUILDER_KNOB_BOUNDS.poolCount.min, BUILDER_KNOB_BOUNDS.poolCount.max),
   };
-  return applyStandingsCarry(buildTemplateStages(row, clamped), "none").map((s, i) => ({ ...s, seq: i + 1 }));
+  return applyStandingsCarry(buildTemplateStages(row, clamped), "none");
+}
+
+/** apps/web/src/server/templates/catalog/t20-super8.json — the product's one
+ *  group → group → knockout shape. Pinned field by field by catalogue.test.ts. */
+export const SUPER8 = Object.freeze({ firstPools: 4, secondPools: 2, take: 2 } as const);
+
+const feed = (placement: "snake" | "rank_order"): NonNullable<StageDraft["progression"]> => ({
+  sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: SUPER8.take }] }],
+  placement,
+  timing: "setup",
+});
+
+/** The five shapes the builder does not offer, each built from a product
+ *  authority: the builder's own stage bodies, the t20-super8 catalog template
+ *  (pool counts and both feeds), and the knockout generate's
+ *  `cfg.thirdPlace` read (usecases/stages.ts generate()). */
+function apiOnlyStages(row: ApiOnlyRowKey, knobs: TemplateKnobs): StageDraft[] {
+  switch (row) {
+    case "group_only":
+      return [builderStages("groups_ko", knobs)[0]];
+    case "group_group_ko": {
+      const group = builderStages("groups_ko", knobs)[0];
+      return [
+        { ...group, config: { ...group.config, pools: { count: SUPER8.firstPools } } },
+        { ...group, name: "Second group stage", config: { ...group.config, pools: { count: SUPER8.secondPools } }, progression: feed("snake") },
+        { kind: "knockout", name: "Knockout", config: {}, progression: feed("rank_order") },
+      ];
+    }
+    case "knockout_third_place": {
+      const ko = builderStages("knockout", knobs)[0];
+      return [{ ...ko, config: { ...ko.config, thirdPlace: true } }];
+    }
+    case "page_playoff_only":
+      return [{ ...builderStages("group_playoffs", knobs)[1], progression: null }];
+    case "stepladder_only":
+      return [{ ...builderStages("group_stepladder", knobs)[1], progression: null }];
+    default:
+      // tsc proves exhaustiveness, but run.ts executes under strip-types: an
+      // API_ONLY_ROWS key with no case would return undefined and crash later.
+      throw new UnknownRow(row);
+  }
+}
+
+export function stagesForRow(row: string, knobs: TemplateKnobs = BUILDER_DEFAULT_KNOBS): StagePostBody[] {
+  let drafts: StageDraft[];
+  if ((API_ONLY_ROWS as readonly string[]).includes(row)) drafts = apiOnlyStages(row as ApiOnlyRowKey, knobs);
+  else if ((TEMPLATE_ROW_KEYS as readonly string[]).includes(row)) drafts = builderStages(row as TemplateRowKey, knobs);
+  else throw new UnknownRow(row);
+  return drafts.map((s, i) => ({ ...s, seq: i + 1 }));
 }

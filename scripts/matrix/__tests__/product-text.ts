@@ -1,0 +1,159 @@
+// Product rules the model's fake and its pins READ from the product's source
+// instead of typing them (Task 13 fix round 1, ruling C-1): a product change
+// moves the fake with it, and turns the model's pin red.
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import type * as TS from "typescript";
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
+
+/** api-v1 http.ts statusCode(): the code an HttpError that carries none of its
+ *  own reaches the wire with. */
+export function wireCodeFor(status: number): string {
+  const body = /\nfunction statusCode\(status: number\): string \{\n([\s\S]*?)\n\}\n/.exec(read("apps/web/src/server/api-v1/http.ts"))?.[1];
+  if (body === undefined) throw new Error("product-text: http.ts statusCode() not found");
+  for (const [, s, c] of body.matchAll(/case (\d{3}): return "([A-Z_]+)";/g)) if (Number(s) === status) return c;
+  const fallback = /default: return status >= 500 \? "([A-Z_]+)" : "([A-Z_]+)";/.exec(body);
+  if (fallback === null) throw new Error("product-text: http.ts statusCode() has no default arm in the expected shape");
+  return status >= 500 ? fallback[1] : fallback[2];
+}
+
+export interface RosterLockText {
+  /** divisions.status values that lock the roster. */
+  statuses: string[];
+  /** Stage kinds that keep a started roster open. */
+  openKinds: string[];
+  status: number;
+  /** The HttpError's own code, or null (none: the wire carries wireCode). */
+  code: string | null;
+  /** What a client reads: the code, or http.ts's generic one for the status. */
+  wireCode: string;
+  message: string;
+}
+
+/** entrants.ts createEntrants: a started tournament's entrant list is locked
+ *  unless one of its stages is an open-window format. */
+export function rosterLockText(): RosterLockText {
+  const src = read("apps/web/src/server/usecases/entrants.ts");
+  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(!openFormat\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
+  if (m === null) throw new Error("product-text: entrants.ts roster lock not found in the expected shape — re-read it and update the model's ROSTER_LOCK");
+  const statuses = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  const openKinds = [...m[2].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+  const status = Number(m[3]);
+  const arg = m[5];
+  let code: string | null = null;
+  if (arg !== undefined) {
+    if (arg.startsWith("\"")) code = arg.slice(1, -1);
+    else {
+      const def = new RegExp(`\\bconst ${arg} = "([A-Z_]+)"`).exec(src);
+      if (def === null) throw new Error(`product-text: the roster lock's code ${arg} is not a string constant in entrants.ts — resolve it`);
+      code = def[1];
+    }
+  }
+  return { statuses, openKinds, status, code, wireCode: code ?? wireCodeFor(status), message: m[4] };
+}
+
+/** schedule.ts roundRobinStageIds: the stage kinds the product generates as a
+ *  round robin — the ones #879's positional reconcile can duplicate. */
+export function roundRobinKindsText(): string[] {
+  const m = /export async function roundRobinStageIds\([\s\S]*?kind in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/schedule.ts"));
+  if (m === null) throw new Error("product-text: schedule.ts roundRobinStageIds not found");
+  return [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+}
+
+/** withdrawal.ts REASON: the reason every cascade event carries. */
+export function withdrawalReason(): string {
+  const r = /\nconst REASON = "([^"]+)";/.exec(read("apps/web/src/server/usecases/withdrawal.ts"));
+  if (r === null) throw new Error("product-text: withdrawal.ts REASON not found");
+  return r[1];
+}
+
+/** lib/table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES: the fixtures a
+ *  withdrawal's cascade still acts on. */
+export function withdrawalPendingText(): string[] {
+  const m = /\nexport const WITHDRAWAL_PENDING_STATUSES: ReadonlySet<string> = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/lib/table-withdrawal.ts"));
+  if (m === null) throw new Error("product-text: table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES not found in the expected shape");
+  const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error("product-text: table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES names no status");
+  return out;
+}
+
+export interface NextMatchText {
+  status: number;
+  /** The HttpError's code, resolved through fed-seats.ts's import. */
+  code: string;
+  /** The one fixture status fed-seats.ts hasStarted reads as not started. */
+  notStarted: string;
+  /** fed-seats.ts isCascadeWalkover: the walkover the system awarded (this
+   *  status, this outcome kind, no live event) is reset, never refused. */
+  cascade: { status: string; outcomeKind: string };
+  /** planRelease refuses only `!reset && hasStarted(t)`, `reset` being isCascadeWalkover(t). */
+  resetExempt: boolean;
+  /** append-event.ts calls releaseFedSeats at the top level of the append:
+   *  every event, a void included, is judged. */
+  everyAppend: boolean;
+  /** next-match-started.ts nextMatchStartedMessage, for a label. */
+  message: (label: string) => string;
+}
+
+/** fed-seats.ts planRelease (ruling RR-1): a write that takes back a knockout
+ *  decision whose next match has started is refused by name. */
+export function nextMatchStartedText(): NextMatchText {
+  const fed = read("apps/web/src/server/engine-db/fed-seats.ts");
+  const thrown = /\n\s*if \(!reset && hasStarted\(t\)\) \{[\s\S]*?throw new HttpError\((\d{3}), nextMatchStartedMessage\([^;]*?\), ([A-Z_]+), \{ next_match: ref \}\);/.exec(fed);
+  if (thrown === null) throw new Error("product-text: fed-seats.ts NEXT_MATCH_STARTED refusal not found in the expected shape — re-read it and update the model's NEXT_MATCH_LOCK");
+  const from = new RegExp(`import \\{[^}]*\\b${thrown[2]}\\b[^}]*\\} from "@/([^"]+)";`).exec(fed);
+  if (from === null) throw new Error(`product-text: fed-seats.ts does not import ${thrown[2]} from an @/ module — resolve it`);
+  const lib = read(`apps/web/src/${from[1]}.ts`);
+  const code = new RegExp(`\\bexport const ${thrown[2]} = "([A-Z_]+)";`).exec(lib)?.[1];
+  if (code === undefined) throw new Error(`product-text: ${thrown[2]} is not a string constant in ${from[1]}.ts`);
+  const started = /\nfunction hasStarted\(t: Node\): boolean \{\s*return t\.status !== "([a-z_]+)" \|\| t\.outcome !== null \|\| t\.live_events > 0;\s*\}/.exec(fed);
+  if (started === null) throw new Error("product-text: fed-seats.ts hasStarted is not the three-term rule the model mirrors — re-read it");
+  const cascade = /\nfunction isCascadeWalkover\(t: Node\): boolean \{\s*return t\.status === "([a-z_]+)" && \(t\.outcome as \{ kind\?: string \} \| null\)\?\.kind === "([a-z_]+)" && t\.live_events === 0;\s*\}/.exec(fed);
+  if (cascade === null) throw new Error("product-text: fed-seats.ts isCascadeWalkover is not the three-term exemption the model mirrors — re-read it");
+  const resetExempt = /\n\s*const reset = isCascadeWalkover\(t\);\s*if \(!reset && hasStarted\(t\)\) \{/.test(fed);
+  const everyAppend = /\n {2}const \w+ = await releaseFedSeats\(tx, fixtureId, fixture\.outcome, outcome\);/.test(read("apps/web/src/server/engine-db/append-event.ts"));
+  const template = /\nexport function nextMatchStartedMessage\(label: string\): string \{\s*return `([^`]*)`;\s*\}/.exec(lib)?.[1];
+  if (template === undefined) throw new Error(`product-text: ${from[1]}.ts nextMatchStartedMessage not found`);
+  return { status: Number(thrown[1]), code, notStarted: started[1], cascade: { status: cascade[1], outcomeKind: cascade[2] }, resetExempt, everyAppend, message: (label) => template.replace("${label}", label) };
+}
+
+/** stages.ts bracketToGen: the round_no the product stores for an engine
+ *  bracket fixture — its lane's offset (a multiple of the lane depth), plus
+ *  the engine's 0-based round, plus one. */
+export function bracketRoundNoText(): (lane: string | undefined, round: number, laneDepth: number) => number {
+  const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(read("apps/web/src/server/usecases/stages.ts"))?.[1];
+  const offset = body === undefined ? null : /const laneOffset = \(f: BracketFixtureGen\): number =>\s*f\.bracket === "LB" \? laneDepth : f\.bracket === "GF" \? laneDepth \* (\d+) : 0;/.exec(body);
+  if (body === undefined || offset === null || !body.includes("const roundNo = laneOffset(f) + f.round + 1;")) {
+    throw new Error("product-text: stages.ts bracketToGen's round_no is not lane offset + round + 1 — re-read it and re-check the model's later-round rule");
+  }
+  const gf = Number(offset[1]);
+  return (lane, round, laneDepth) => (lane === "LB" ? laneDepth : lane === "GF" ? laneDepth * gf : 0) + round + 1;
+}
+
+/** The literal words of every `throw new X(…)` in a product source file: each
+ *  string argument, and a template's literal pieces (its head and the text
+ *  after each substitution, which splits them). A committed regression `match`
+ *  is pinned to these, so it quotes what the product really throws (final
+ *  batch FB-3). `typescript` loads through require, and only when called: vite's
+ *  transform chokes on its CJS bundle, and the model's fake imports this file. */
+export function thrownWords(path: string): string[] {
+  const ts = createRequire(import.meta.url)("typescript") as typeof TS;
+  const sf = ts.createSourceFile(path, read(path), ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  const visit = (n: TS.Node): void => {
+    if (ts.isThrowStatement(n) && ts.isNewExpression(n.expression)) {
+      for (const a of n.expression.arguments ?? []) {
+        if (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) out.push(a.text);
+        else if (ts.isTemplateExpression(a)) out.push(a.head.text, ...a.templateSpans.map((span) => span.literal.text));
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (out.length === 0) throw new Error(`product-text: ${path} throws no literal words — a vacuous pin`);
+  return out;
+}

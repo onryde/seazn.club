@@ -15,14 +15,15 @@ const STEP_HEAD = `      - name: ${STEP_NAME}`;
 
 const indentOf = (line: string) => line.length - line.trimStart().length;
 
-// The step as GitHub sees it: its own keys, and its `run: |` block dedented.
-// Hand-parsed (no YAML dependency at the repo root); the parse is strict about
-// the one shape it accepts, so a reshaped step reds here rather than parsing
-// into something vacuous.
-function matrixStep(text: string): { keys: string[]; body: string; script: string | null } {
+// A named step as GitHub sees it: its own keys, and its `run: |` block
+// dedented. Hand-parsed (no YAML dependency at the repo root); the parse is
+// strict about the one shape it accepts, so a reshaped step reds here rather
+// than parsing into something vacuous.
+function stepOf(text: string, name: string): { keys: string[]; body: string; script: string | null } {
+  const head = `      - name: ${name}`;
   const lines = text.split("\n");
-  const heads = lines.flatMap((l, i) => (l === STEP_HEAD ? [i] : []));
-  if (heads.length !== 1) throw new Error(`expected exactly one "${STEP_HEAD.trim()}" line, found ${heads.length}`);
+  const heads = lines.flatMap((l, i) => (l === head ? [i] : []));
+  if (heads.length !== 1) throw new Error(`expected exactly one "${head.trim()}" line, found ${heads.length}`);
   const start = heads[0]!;
   let end = start + 1;
   while (end < lines.length && (lines[end]!.trim() === "" || indentOf(lines[end]!) >= 8)) end++;
@@ -37,6 +38,7 @@ function matrixStep(text: string): { keys: string[]; body: string; script: strin
   }
   return { keys, body: body.join("\n"), script: script.join("\n").trimEnd() + "\n" };
 }
+const matrixStep = (t: string) => stepOf(t, STEP_NAME);
 
 /** A job-level (4-space) block of a job's YAML: its key line and every deeper
  *  line after it, or "" when the job has no such key. */
@@ -74,14 +76,16 @@ function report(root: string, o: { total: number; passed: number; failedSuites?:
   };
 }
 
-// Runs the step's REAL run block, from ci.yml, in a scratch checkout whose
+// Runs a named step's REAL run block, from ci.yml, in a scratch checkout whose
 // `./packages/engine/node_modules/.bin/vitest` is a stand-in: it writes the
 // given report to whatever `--outputFile=` the step passed it, then exits
 // with the given code. Plain `bash`, not `bash -e`: the block's own `set -e`
-// must carry the fail-fast, not the runner's default flag.
-function runStep(o: { json: ReturnType<typeof report> | ((root: string) => ReturnType<typeof report>) | null; exit: number; stale?: (root: string) => ReturnType<typeof report> }) {
-  const { script } = matrixStep(ci);
-  if (script === null) throw new Error("the matrix step has no `run: |` block");
+// must carry the fail-fast, not the runner's default flag. `reportFile` is
+// only where a STALE report is planted; the stand-in writes wherever the step
+// told it to.
+function runNamedStep(name: string, reportFile: string, o: { json: ReturnType<typeof report> | ((root: string) => ReturnType<typeof report>) | null; exit: number; stale?: (root: string) => ReturnType<typeof report> }) {
+  const { script } = stepOf(ci, name);
+  if (script === null) throw new Error(`the "${name}" step has no \`run: |\` block`);
   const root = realpathSync(mkdtempSync(join(tmpdir(), "fm-ci-")));
   try {
     const bin = join(root, "packages/engine/node_modules/.bin");
@@ -104,7 +108,7 @@ function runStep(o: { json: ReturnType<typeof report> | ((root: string) => Retur
       writeFileSync(fakeJson, JSON.stringify(typeof o.json === "function" ? o.json(root) : o.json));
     }
     // A report left over from an earlier run, sitting where the step writes its own.
-    if (o.stale !== undefined) writeFileSync(join(root, "vitest-results-matrix.json"), JSON.stringify(o.stale(root)));
+    if (o.stale !== undefined) writeFileSync(join(root, reportFile), JSON.stringify(o.stale(root)));
     writeFileSync(join(root, "step.sh"), script);
     const r = spawnSync("bash", ["step.sh"], {
       cwd: root,
@@ -118,6 +122,7 @@ function runStep(o: { json: ReturnType<typeof report> | ((root: string) => Retur
     rmSync(root, { recursive: true, force: true });
   }
 }
+const runStep = (o: Parameters<typeof runNamedStep>[2]) => runNamedStep(STEP_NAME, "vitest-results-matrix.json", o);
 
 describe("matrix CI wiring", () => {
   it("a DB-free step runs scripts/matrix with the JSON reporter, right after the bench step", () => {
@@ -246,13 +251,164 @@ describe("matrix CI wiring", () => {
   });
 
   it("package scripts run the CLIs under strip-types", () => {
-    expect(pkg.scripts["matrix:l3"]).toBe("node --experimental-strip-types scripts/matrix/run.ts");
-    expect(pkg.scripts["matrix:render"]).toBe("node --experimental-strip-types scripts/matrix/render.ts");
+    expect(pkg.scripts["matrix:l3"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/run.ts");
+    expect(pkg.scripts["matrix:render"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/render.ts");
     expect(existsSync(resolve(REPO, "scripts/matrix/run.ts"))).toBe(true);
     expect(existsSync(resolve(REPO, "scripts/matrix/render.ts"))).toBe(true);
   });
 
+  describe("R26: the single-sport ratchet", () => {
+    const SS_STEP = "      - run: pnpm matrix:single-sport --check --against HEAD^1";
+    const lines = ci.split("\n");
+    const isComment = (l: string) => /^\s*#/.test(l);
+    // the job a line sits in: the last two-space job key at or above it
+    const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+    const gatesAt = lines.indexOf("  gates:");
+    const gatesEnd = gatesAt + 1 + lines.slice(gatesAt + 1).findIndex((l) => /^ {2}[a-z][\w-]*:$/.test(l));
+
+    it("the gates job runs it as the next step after engine:boundary, exactly once, through pnpm, against HEAD^1", () => {
+      const boundary = lines.indexOf("      - run: npm run engine:boundary");
+      expect(boundary).toBeGreaterThan(0);
+      let next = boundary + 1;
+      while (next < lines.length && isComment(lines[next]!)) next++;
+      expect(lines[next]).toBe(SS_STEP);
+      expect(lines.filter((l) => l.includes("matrix:single-sport") && !isComment(l))).toEqual([SS_STEP]);
+      expect(jobAt(next)).toBe("  gates:");
+      expect(pkg.scripts["matrix:single-sport"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/single-sport.ts");
+      expect(existsSync(resolve(REPO, "scripts/matrix/single-sport.ts"))).toBe(true);
+    });
+
+    it("nothing can turn the step off or make it advisory: no key under it, and no `if:` or continue-on-error on the gates job (review M-2)", () => {
+      const at = lines.indexOf(SS_STEP);
+      expect(at).toBeGreaterThan(0);
+      // the very next line starts another step or is a comment — a key under the
+      // step (`if:`, `continue-on-error:`, `env:`, …) would sit at indent 8
+      expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);
+      expect(gatesAt).toBeGreaterThan(0);
+      expect(gatesEnd).toBeGreaterThan(gatesAt);
+      const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+      expect(header.length).toBeGreaterThan(0);
+      for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+    });
+
+    it("the gates checkout fetches deep enough for HEAD^1 to exist (fetch-depth 0 or at least 2)", () => {
+      const job = lines.slice(gatesAt, gatesEnd);
+      const checkouts = job.flatMap((l, i) => (l === "      - uses: actions/checkout@v5" ? [i] : []));
+      expect(checkouts).toHaveLength(1);
+      const c = checkouts[0]!;
+      let end = c + 1;
+      while (end < job.length && (isComment(job[end]!) || indentOf(job[end]!) >= 8)) end++;
+      const depths = job.slice(c + 1, end).flatMap((l) => /^ {10}fetch-depth: (\d+)$/.exec(l)?.slice(1) ?? []).map(Number);
+      expect(depths).toHaveLength(1);
+      const depth = depths[0]!;
+      expect(depth === 0 || depth >= 2, `fetch-depth ${depth}`).toBe(true);
+      // and it sits before the ratchet step, in the same job
+      expect(gatesAt + c).toBeLessThan(lines.indexOf(SS_STEP));
+    });
+
+    it("the step's command as ci.yml spells it, run the way CI runs it (the ref as HEAD, so no history is needed), reaches --check --against and passes on this tree", () => {
+      const step = lines.find((l) => l.includes("matrix:single-sport") && !isComment(l));
+      expect(step).toBeDefined();
+      const cmd = (step ?? "").trim().replace(/^- run: /, "");
+      expect(cmd).toContain(" --against HEAD^1");
+      const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      // only --check --against prints this line: both flags reached the CLI through pnpm
+      expect(r.stdout).toMatch(/single-sport: check passed against scripts\/matrix\/catalogue\/single-sport-baseline\.json and HEAD$/m);
+    });
+  });
+
   it("matrix-report/ is ignored", () => {
     expect(readFileSync(resolve(REPO, ".gitignore"), "utf8")).toMatch(/^matrix-report\/$/m);
+  });
+});
+
+describe("reference CI wiring (Task 12)", () => {
+  const REF = "Reference package tests (DB-free)";
+  const REF_REPORT = "vitest-results-reference.json";
+  const BOUNDARY_STEP = "      - run: npm run reference:boundary";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+  const refReport = (root: string, o: { total: number; passed: number; failedSuites?: number; files?: string[] }) => ({
+    numTotalTests: o.total, numPassedTests: o.passed, numFailedTests: o.total - o.passed, numFailedTestSuites: o.failedSuites ?? 0,
+    testResults: (o.files ?? [join(root, "packages/reference/src/index.test.ts")]).map((name) => ({ name })),
+  });
+  const run = (o: Parameters<typeof runNamedStep>[2]) => runNamedStep(REF, REF_REPORT, o);
+
+  it("the step exists right after the matrix step, and the boundary gate runs after the single-sport ratchet", () => {
+    const m = lines.indexOf(`      - name: ${STEP_NAME}`);
+    const r = lines.indexOf(`      - name: ${REF}`);
+    expect(m).toBeGreaterThan(0);
+    expect(r).toBeGreaterThan(m);
+    expect(lines.slice(m + 1, r).some((l) => l.startsWith("      - "))).toBe(false);
+    const ss = lines.findIndex((l) => l.trim() === "- run: pnpm matrix:single-sport --check --against HEAD^1");
+    expect(ss).toBeGreaterThan(0);
+    expect(lines[ss + 1]!.trim()).toBe("- run: npm run reference:boundary");
+    expect(stepOf(ci, REF).keys).toEqual(["name", "run"]);
+  });
+
+  it("both run in the gates job, exactly once each, and nothing can make the boundary gate conditional or advisory", () => {
+    const at = lines.indexOf(BOUNDARY_STEP);
+    expect(at).toBeGreaterThan(0);
+    expect(lines.filter((l) => l.includes("reference:boundary") && !isComment(l))).toEqual([BOUNDARY_STEP]);
+    // a key under the step (`if:`, `continue-on-error:`, `env:`, …) would sit at indent 8
+    expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);
+    expect(jobAt(at)).toBe("  gates:");
+    expect(jobAt(lines.indexOf(`      - name: ${REF}`))).toBe("  gates:");
+    expect(lines.filter((l) => l === `      - name: ${REF}`)).toHaveLength(1);
+    expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/reference-boundary.ts");
+    expect(existsSync(resolve(REPO, "scripts/reference-boundary.ts"))).toBe(true);
+  });
+
+  it("the reference step is only a name and a run block, runs packages/reference with the JSON reporter, and reaches no database", () => {
+    const step = stepOf(ci, REF);
+    expect(step.body).not.toContain("${{");
+    expect(step.body).not.toMatch(/DATABASE_URL|secrets\./);
+    const cmd = (step.script ?? "").split("\n").filter((l) => l.includes("node_modules/.bin/vitest run"));
+    expect(cmd).toEqual([
+      "./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-reference.json --testTimeout=30000 packages/reference",
+    ]);
+    const at = ci.indexOf(`      - name: ${REF}`);
+    const jobKeys = [...ci.matchAll(/^ {2}[a-z][\w-]*:$/gm)].map((mm) => mm.index!);
+    const job = ci.slice(Math.max(...jobKeys.filter((i) => i < at)), Math.min(...jobKeys.filter((i) => i > at), ci.length));
+    expect(job).toContain(`      - name: ${REF}`);
+    expect(dbLeaks(job)).toEqual([]);
+  });
+
+  it("green on a full pass inside packages/reference, and says what it counted", () => {
+    const r = run({ json: (root) => refReport(root, { total: 4, passed: 4 }), exit: 0 });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("reference package: 4/4 tests passed in 1 files");
+  });
+
+  it("red on zero tests, a failed-to-collect suite, a skip, and a stray file", () => {
+    expect(run({ json: (root) => refReport(root, { total: 0, passed: 0, files: [] }), exit: 0 }).status).not.toBe(0);
+    expect(run({ json: (root) => refReport(root, { total: 4, passed: 4, failedSuites: 1 }), exit: 0 }).status).not.toBe(0);
+    expect(run({ json: (root) => refReport(root, { total: 4, passed: 3 }), exit: 0 }).status).not.toBe(0);
+    expect(run({ json: (root) => refReport(root, { total: 4, passed: 4, files: [join(root, "scripts/x.test.ts")] }), exit: 0 }).status).not.toBe(0);
+  });
+
+  // The positional is a substring filter; each of these is a file it could
+  // really select, and each alone must red the step.
+  it.each([
+    ["a sibling whose name only starts with reference", (root: string) => join(root, "packages/reference-legacy/src/a.test.ts")],
+    ["a nested worktree's copy", (root: string) => join(root, ".claude/worktrees/x/packages/reference/src/a.test.ts")],
+  ])("a file outside <cwd>/packages/reference/ is red: %s", (_label, stray) => {
+    const r = run({ json: (root) => refReport(root, { total: 2, passed: 2, files: [join(root, "packages/reference/src/index.test.ts"), stray(root)] }), exit: 0 });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/outside packages\/reference/);
+  });
+
+  it("a non-zero vitest exit, no report, and a STALE green report are each red", () => {
+    const failed = run({ json: (root) => refReport(root, { total: 4, passed: 4 }), exit: 1 });
+    expect(failed.status).toBe(1);
+    expect(failed.stdout).not.toContain("4/4");
+    expect(run({ json: null, exit: 0 }).status).not.toBe(0);
+    const stale = run({ json: null, exit: 0, stale: (root) => refReport(root, { total: 9, passed: 9 }) });
+    expect(stale.status).not.toBe(0);
+    expect(stale.stdout).not.toContain("9/9");
+    expect(stale.stderr).toMatch(/vitest-results-reference\.json/);
   });
 });
