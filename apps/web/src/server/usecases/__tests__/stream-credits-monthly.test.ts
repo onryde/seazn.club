@@ -25,7 +25,12 @@
 //   k12 the rate guard deleted                                    → "grantMonthlyStreamCredits refuses a rate"
 //   k13 the refund_bucket_ambiguous guard deleted                 → "a linked refund returns to its consume's bucket …"
 //   k14 the claw-back's negative-pack guard deleted               → "a pack that sums below zero is refused by the claw-back"
-//   k15 ensure's fast path deleted (always the full grant path)   → "a second ensure … costs ONE statement"
+//   k15 ensure's fast path deleted (always the full grant path)   → "a second ensure … costs the rate read plus ONE statement"
+//   k16 the top-up is rate − monthly BALANCE, not − granted        → "I3: a mid-month UPGRADE tops the month up"
+//   k17 no top-up: an existing base grant always returns 0        → the same test (0, not P − C)
+//   k18 the locked body's "owed nothing" test is `===`, not `>=`  → the same test (grantMonthlyStreamCredits at a lower rate)
+//   k18c the fast path's "owed nothing" test is `===`, not `>=`   → the same test (the downgrade's statement count)
+//   k19 the under-lock re-read uses the pre-lock state            → "I3: two concurrent ensures after an upgrade"
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { sql, statementCount } from "@/lib/db";
@@ -33,8 +38,8 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant,
-  grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundCredits, revokeCredits, streamMonthlyGrantKey,
-  streamMonthlyPeriod, streamMonthlyRate,
+  grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundCredits, revokeCredits, streamMonthlyDeltaKey,
+  streamMonthlyGrantKey, streamMonthlyPeriod, streamMonthlyRate,
 } from "../stream-credits";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -146,16 +151,22 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
     expect(await ensureMonthlyStreamGrant(r.orgId, JAN)).toBe(await rateOf("community"));
   });
 
-  it("a second ensure in the same period writes 0 rows — on another day of the month too — and costs ONE statement", async () => {
+  it("a second ensure in the same period writes 0 rows — on another day of the month too — and costs the rate read plus ONE statement", async () => {
     const r = await rig("pro", 1);
     const want = await rateOf("pro");
     expect(await ensureMonthlyStreamGrant(r.orgId, JAN)).toBe(want);
     const before = await rowCount(r.orgId);
+    // I3: the fast path must know the CURRENT rate (a mid-month upgrade is owed a top-up), so it pays the plan resolve.
+    // That cost is streamMonthlyRate's own, measured here rather than typed; the ensure may add ONE read to it.
+    const q0 = statementCount();
+    await streamMonthlyRate(r.orgId);
+    const rateCost = statementCount() - q0;
+    expect(rateCost, "premise: the rate read is measured").toBeGreaterThan(0);
     let checked = 0;
     for (const now of [JAN, JAN_LAST]) {
       const q = statementCount();
       expect(await ensureMonthlyStreamGrant(r.orgId, now)).toBe(0);
-      expect(statementCount() - q, "cheap once this period's row exists: the key lookup and nothing else").toBe(1);
+      expect(statementCount() - q, "cheap once this period is granted: the rate, one ledger read, and nothing else").toBe(rateCost + 1);
       checked++;
     }
     expect(checked).toBe(2);
@@ -224,6 +235,77 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
     expect(settled.map((s) => (s as PromiseFulfilledResult<number>).value).sort((a, b) => a - b)).toEqual([0, R]);
     expect((await rows(r.orgId)).filter((x) => x.reason === "grant")).toHaveLength(1);
     expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(R);
+  });
+
+  it("I3: a mid-month UPGRADE tops the month up to the new rate — by the plan difference, never the missing balance; a second ensure and a downgrade grant 0 and claw nothing back (k16, k17, k18)", async () => {
+    const r = await rig(null, 2);
+    const C = await rateOf("community");
+    const P = await rateOf("pro");
+    expect(P - C, "premise: pro grants more than community").toBeGreaterThan(0);
+    const FIRST = new Date("2031-01-01T08:00:00Z");
+    const TENTH = new Date("2031-01-10T12:00:00Z");
+    expect(await ensureMonthlyStreamGrant(r.orgId, FIRST)).toBe(C);
+    // Spend one free credit first: the owed top-up is P − C (what the NEW plan grants beyond what this month already
+    // granted), not P − balance — the two differ by exactly the credit spent, so k16 has a witness.
+    await consume(r);
+    expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(C - 1);
+    await setOrgPlan(r.orgId, "pro");
+    expect(await ensureMonthlyStreamGrant(r.orgId, TENTH), "the top-up is the plan difference").toBe(P - C);
+    expect(await creditBreakdown(sql, r.orgId)).toEqual({ monthly: P - 1, pack: 0, total: P - 1 });
+    const top = (await rows(r.orgId)).filter((x) => x.idempotency_key === streamMonthlyDeltaKey(r.orgId, "2031-01", P));
+    expect(top.map((x) => [x.reason, x.bucket, x.delta, x.balance_after])).toEqual([["grant", "monthly", P - C, P - 1]]);
+
+    const n = await rowCount(r.orgId);
+    let checked = 0;
+    for (const [plan, when] of [["pro", TENTH], ["pro", JAN_LAST], ["community", JAN_LAST], ["pro", JAN_LAST]] as const) {
+      await setOrgPlan(r.orgId, plan);
+      const q0 = statementCount();
+      await streamMonthlyRate(r.orgId);
+      const rateCost = statementCount() - q0;
+      const q = statementCount();
+      expect(await ensureMonthlyStreamGrant(r.orgId, when), `${plan} after the top-up`).toBe(0);
+      // The fast path answers a downgrade too (k18c): no transaction for an org that is owed nothing.
+      expect(statementCount() - q, `${plan}: the fast path`).toBe(rateCost + 1);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The under-lock body on its own (k18: the fast path above would shield it): a LOWER rate than this month granted.
+    expect(await grantMonthlyStreamCredits(r.orgId, C, JAN_LAST), "the locked body refuses a claw-back too").toBe(0);
+    expect(await rowCount(r.orgId), "no second top-up, and a downgrade claws nothing back").toBe(n);
+    expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(P - 1);
+
+    // The next rollover expires the top-up with the rest of the leftover — it is a monthly credit like the base.
+    expect(await ensureMonthlyStreamGrant(r.orgId, FEB)).toBe(P);
+    expect((await rows(r.orgId)).filter((x) => x.reason === "expire").map((x) => [x.bucket, x.delta])).toEqual([["monthly", -(P - 1)]]);
+    expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(P);
+  });
+
+  it("I3: two concurrent ensures after an upgrade produce ONE top-up — the under-lock re-read sees the first (k19)", async () => {
+    const r = await rig(null, 1);
+    const C = await rateOf("community");
+    const P = await rateOf("pro");
+    await ensureMonthlyStreamGrant(r.orgId, JAN);
+    await setOrgPlan(r.orgId, "pro");
+    let release!: () => void;
+    const released = new Promise<void>((res) => (release = res));
+    let signalHeld!: (pid: number) => void;
+    const held = new Promise<number>((res) => (signalHeld = res));
+    const holder = sql.begin(async (tx) => {
+      await lockOrg(tx, r.orgId);
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      signalHeld(pid);
+      await released;
+    });
+    const holderPid = await held;
+    const racers = [ensureMonthlyStreamGrant(r.orgId, JAN), ensureMonthlyStreamGrant(r.orgId, JAN)];
+    const blocked = await advisoryWaitersBehind(holderPid, 2);
+    release();
+    await holder;
+    const settled = await Promise.allSettled(racers);
+    expect(blocked, "both top-ups queue on the money lock").toBe(2);
+    expect(settled.map((s) => s.status), JSON.stringify(settled.map((s) => (s.status === "rejected" ? String(s.reason) : "")))).toEqual(["fulfilled", "fulfilled"]);
+    expect(settled.map((s) => (s as PromiseFulfilledResult<number>).value).sort((a, b) => a - b)).toEqual([0, P - C]);
+    expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(P);
   });
 
   it("grantMonthlyStreamCredits refuses a rate that is not a non-negative integer; a rate of 0 still expires the leftover and grants nothing, and a repeat writes nothing (k12)", async () => {

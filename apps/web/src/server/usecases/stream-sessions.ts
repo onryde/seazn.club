@@ -41,8 +41,8 @@ import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/rel
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import {
-  NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, lockOrg, reuseWindowOpen,
-  streamMonthlyRate, type StreamCreditBreakdown,
+  NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
+  lockOrg, reuseWindowOpen, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
 import { setFixtureStreamUrl } from "./fixtures";
@@ -1160,9 +1160,10 @@ export interface RelayCredits extends StreamCreditBreakdown {
 
 export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayCredits> {
   if (orgId !== auth.orgId) throw new HttpError(404, "organisation not found");
-  await ensureMonthlyStreamGrant(orgId);
-  const [split, monthlyAllowance] = await Promise.all([creditBreakdown(sql, orgId), streamMonthlyRate(orgId)]);
-  return { ...split, monthlyAllowance };
+  // I3: the ensure resolves the plan's rate to decide a mid-month top-up, and hands it back — the allowance printed on
+  // the card is the same number the grant was topped up to, read once.
+  const { rate: monthlyAllowance } = await ensureMonthlyStreamGrantWithRate(orgId);
+  return { ...(await creditBreakdown(sql, orgId)), monthlyAllowance };
 }
 
 /** F1: which of `fixtureIds` have a session still UP (an ACTIVE state) — THIS org's only. A billing-frozen competition

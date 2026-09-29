@@ -2146,6 +2146,18 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(await relayCredits(pro.auth, pro.auth.orgId)).toEqual({ monthly: proRate, pack: 0, total: proRate, monthlyAllowance: proRate });
   });
 
+  it("I3: after a mid-month upgrade the card agrees with itself — relayCredits' monthly bucket is topped up to the allowance it prints", async () => {
+    const r = await rig({ credits: 2, monthly: true });
+    const community = await monthlyRate("community");
+    const pro = await monthlyRate("pro");
+    expect(pro, "premise: the upgrade raises the allowance").toBeGreaterThan(community);
+    expect(await relayCredits(r.auth, r.auth.orgId)).toEqual({ monthly: community, pack: 2, total: community + 2, monthlyAllowance: community });
+    await setOrgPlan(r.auth.orgId, "pro");
+    const after = await relayCredits(r.auth, r.auth.orgId);
+    expect(after.monthly, "\"Your plan includes N free\" above \"N free this month\" — the same N").toBe(after.monthlyAllowance);
+    expect(after).toEqual({ monthly: pro, pack: 2, total: pro + 2, monthlyAllowance: pro });
+  });
+
   it("F1: openStreamFixtureIds names exactly the fixtures with a session still UP — every active state in, every terminal state out, another org's never", async () => {
     // The billing-frozen division page mounts a stop probe for each id this returns, so an org whose competition froze
     // mid-stream can still stop it. The states come from the engine's own ACTIVE_STATES / TERMINAL_STATES.

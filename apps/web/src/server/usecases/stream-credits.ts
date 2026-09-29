@@ -691,81 +691,127 @@ export async function streamMonthlyRate(orgId: string): Promise<number> {
   return (await streamMonthlyRateByPlan([plan])).get(plan) ?? 0;
 }
 
-/**
- * This month's free match credits for one org, granted at most once per UTC month — the lazy path
- * (R3, as amended by the Task 14b review M4: the ONLY path — no cron sweeps it). Every reader of the
- * balance calls it before it reads: the division page (`relayCredits`) and createSession's balance
- * check. There is deliberately no eager
- * call on org creation and no cron: an org that never streams never needs a row.
- *
- * CHEAP once this period's row exists: ONE indexed read of the grant key (the table-wide partial
- * unique index) and nothing else — the budget test pins it at one statement. That read is an
- * unlocked PRE-FILTER only; grantMonthlyStreamCredits re-checks the key under the money lock, which
- * is what makes two concurrent callers produce one grant. A plan that grants 0 writes no key and so
- * pays the full path on every call — no plan does today (V426: every plan ≥ 1).
- *
- * Returns the credits granted by THIS call (0 when this period's grant already exists).
- */
-export async function ensureMonthlyStreamGrant(orgId: string, now: Date = new Date()): Promise<number> {
-  const key = streamMonthlyGrantKey(orgId, streamMonthlyPeriod(now));
-  const [hit] = await sql<{ one: number }[]>`select 1 as one from org_stream_credits where idempotency_key = ${key}`;
-  if (hit) return 0;
-  return grantMonthlyStreamCredits(orgId, await streamMonthlyRate(orgId), now);
+/** A mid-month top-up's idempotency key (Task 14b review I3): the period's base key plus the rate it tops the month up
+ *  TO. Unique per period and target without a counter: after a top-up to R this period has granted R, so a later top-up
+ *  targets a strictly higher rate, and a return to R (down, then up again) is owed nothing. The same authority for the
+ *  spelling as the base key, so the ledger read below can find both by prefix. */
+export function streamMonthlyDeltaKey(orgId: string, period: string, toRate: number): string {
+  return `${streamMonthlyGrantKey(orgId, period)}:to-${toRate}`;
+}
+
+/** What this period has granted so far: whether its BASE grant exists (the rollover ran), and the sum of the base and
+ *  every top-up. Grant rows only, by their keys — never the balance, which consumes and refunds move. */
+async function monthlyGrantedThisPeriod(exec: Executor, orgId: string, period: string): Promise<{ hasBase: boolean; granted: number }> {
+  const base = streamMonthlyGrantKey(orgId, period);
+  const [r] = await exec<{ has_base: boolean; granted: number }[]>`
+    select coalesce(bool_or(idempotency_key = ${base}), false) as has_base, coalesce(sum(delta), 0)::int as granted
+      from org_stream_credits
+     where org_id = ${orgId} and reason = 'grant' and bucket = 'monthly'
+       and (idempotency_key = ${base} or starts_with(idempotency_key, ${`${base}:to-`}))`;
+  return { hasBase: r!.has_base, granted: r!.granted };
 }
 
 /**
- * The rollover transaction for an ALREADY-RESOLVED rate (split out, as lib/credits.ts splits
- * `grantMonthlyDelta`, so a caller that already holds the rate does not read it twice). Under
- * the org's money lock:
- *   1. re-check this period's grant key — present → 0, nothing written;
- *   2. refuse a negative bucket by name (`ledger_negative`);
- *   3. expire EXACTLY the monthly leftover (reason 'expire', bucket 'monthly'), never the pack —
- *      no row when nothing is left (V410: delta <> 0);
- *   4. grant `rate` (reason 'grant', bucket 'monthly', the period's key) — no row for a rate of 0.
- * One transaction, so an org is never seen between its expiry and its grant. The expire row carries
- * NO idempotency key: step 1's re-check makes the whole transaction idempotent per period, and a
- * key on it would collide with a legitimate second expiry (a rate-0 month followed by a refund).
- * A refund that lands after the rollover returns to 'monthly' (its consume's bucket), and the NEXT
- * rollover sweeps it with the rest — monthly credits never outlive the month they are spent in by
- * more than one rollover.
+ * This month's free match credits for one org — the lazy path (R3, as amended by the Task 14b review M4: the ONLY
+ * path — no cron sweeps it). Every reader of the balance calls it before it reads: the division page (`relayCredits`)
+ * and createSession's balance check. There is deliberately no eager call on org creation and no cron: an org that
+ * never streams never needs a row.
+ *
+ * Owed, per UTC month: the base grant at the first call of the period (after expiring last month's leftover), and —
+ * review I3 — a TOP-UP when the org's CURRENT plan grants more than this period has granted so far (a mid-month
+ * upgrade), of exactly the difference. A downgrade is owed nothing and claws nothing back.
+ *
+ * The fast path is an unlocked PRE-FILTER: the rate (it must know the current plan to know whether a top-up is owed)
+ * and ONE ledger read. grantMonthlyStreamCredits re-reads under the money lock, which is what makes two concurrent
+ * callers produce one grant. A plan that grants 0 writes no key and so pays the full path on every call — no plan
+ * does today (V426: every plan ≥ 1).
+ *
+ * Returns the credits granted by THIS call and the rate it resolved — relayCredits prints that rate as the allowance,
+ * so the plan is resolved once per page read, not twice.
  */
+export async function ensureMonthlyStreamGrantWithRate(orgId: string, now: Date = new Date()): Promise<{ granted: number; rate: number }> {
+  const rate = await streamMonthlyRate(orgId);
+  const so = await monthlyGrantedThisPeriod(sql, orgId, streamMonthlyPeriod(now));
+  if (so.hasBase && so.granted >= rate) return { granted: 0, rate };
+  return { granted: await grantMonthlyStreamCredits(orgId, rate, now), rate };
+}
+
+/** `ensureMonthlyStreamGrantWithRate`, for callers that only need what was granted. */
+export async function ensureMonthlyStreamGrant(orgId: string, now: Date = new Date()): Promise<number> {
+  return (await ensureMonthlyStreamGrantWithRate(orgId, now)).granted;
+}
+
+/** The rollover transaction for an ALREADY-RESOLVED rate (split out, as lib/credits.ts splits `grantMonthlyDelta`, so
+ *  a caller that already holds the rate does not read it twice). The body is `rollMonthlyLocked`. */
 export async function grantMonthlyStreamCredits(orgId: string, rate: number, now: Date = new Date()): Promise<number> {
-  // A rate that is not a non-negative integer is a broken catalogue row, not a grant: refuse it by
-  // name before any row is written rather than let credit()'s generic error surface from inside.
+  assertMonthlyRate(rate);
+  return sql.begin(async (tx) => {
+    await lockOrg(tx, orgId);
+    return rollMonthlyLocked(tx, orgId, rate, now);
+  }) as Promise<number>;
+}
+
+/** A rate that is not a non-negative integer is a broken catalogue row, not a grant: refuse it by name before any row
+ *  is written rather than let credit()'s generic error surface from inside. */
+function assertMonthlyRate(rate: number): void {
   if (!Number.isInteger(rate) || rate < 0) {
     throw new HttpError(500, `The monthly match-credit rate must be a non-negative integer; got ${rate}`, "monthly_rate_invalid");
   }
-  const period = streamMonthlyPeriod(now);
-  const key = streamMonthlyGrantKey(orgId, period);
-  return sql.begin(async (tx) => {
-    await lockOrg(tx, orgId);
-    const [already] = await tx<{ id: string }[]>`select id from org_stream_credits where idempotency_key = ${key}`;
-    if (already) return 0;
+}
 
-    const split = await creditBreakdown(tx, orgId);
-    // "Cannot happen" as a guard: no writer takes either bucket below zero (consume draws monthly only
-    // while > 0; every revoke is floored on the pack). A negative monthly bucket granted on top of
-    // would silently hand the org rate − n; a negative pack would make the expire below write a
-    // negative snapshot and fail V410's CHECK on every createSession. Two comparisons, so each limb
-    // can be mutated on its own.
-    if (split.monthly < 0 || split.pack < 0) {
-      throw new HttpError(500, `This organisation's match-credit buckets are monthly ${split.monthly}, pack ${split.pack}; refusing to roll over a negative ledger`, "ledger_negative");
-    }
-    let balance = split.total;
-    if (split.monthly > 0) {
-      const { balanceAfter } = debit(balance, split.monthly);
-      await tx`
-        insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
-        values (${orgId}, ${-split.monthly}, 'expire', 'monthly', ${balanceAfter},
-                ${`Unused free match credits expired before the ${period} grant`})`;
-      balance = balanceAfter;
-    }
-    if (rate === 0) return 0;
-    const { balanceAfter } = credit(balance, rate);
+/**
+ * The rollover body. The CALLER holds the org's money lock (grantMonthlyStreamCredits takes it; consumeForSession
+ * already holds it). Under it:
+ *   1. re-read what this period has granted — base present and nothing owed → 0, nothing written;
+ *   2. refuse a negative bucket by name (`ledger_negative`);
+ *   3a. no base yet (a new period): expire EXACTLY the monthly leftover (reason 'expire', bucket 'monthly'), never the
+ *       pack — no row when nothing is left (V410: delta <> 0) — then grant `rate` (reason 'grant', bucket 'monthly',
+ *       the period's key); no grant row for a rate of 0;
+ *   3b. base present but the rate is higher (I3, a mid-month upgrade): grant `rate − granted` under the top-up key.
+ *       No expire: the leftover is this month's own.
+ * One transaction, so an org is never seen between its expiry and its grant. The expire row carries NO idempotency
+ * key: step 1's re-read makes the whole body idempotent per period, and a key on it would collide with a legitimate
+ * second expiry (a rate-0 month followed by a refund). A refund that lands after the rollover returns to 'monthly'
+ * (its consume's bucket), and the NEXT rollover sweeps it with the rest — monthly credits (top-ups included) never
+ * outlive the month they are spent in by more than one rollover.
+ */
+async function rollMonthlyLocked(tx: Tx, orgId: string, rate: number, now: Date): Promise<number> {
+  assertMonthlyRate(rate);
+  const period = streamMonthlyPeriod(now);
+  const so = await monthlyGrantedThisPeriod(tx, orgId, period);
+  if (so.hasBase && so.granted >= rate) return 0;
+
+  const split = await creditBreakdown(tx, orgId);
+  // "Cannot happen" as a guard: no writer takes either bucket below zero (consume draws monthly only while > 0; every
+  // revoke is floored on the pack). A negative monthly bucket granted on top of would silently hand the org rate − n;
+  // a negative pack would make the expire below write a negative snapshot and fail V410's CHECK on every
+  // createSession. Two comparisons, so each limb can be mutated on its own.
+  if (split.monthly < 0 || split.pack < 0) {
+    throw new HttpError(500, `This organisation's match-credit buckets are monthly ${split.monthly}, pack ${split.pack}; refusing to roll over a negative ledger`, "ledger_negative");
+  }
+  if (so.hasBase) {
+    const topUp = rate - so.granted;
+    const { balanceAfter } = credit(split.total, topUp);
     await tx`
       insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
-      values (${orgId}, ${rate}, 'grant', 'monthly', ${balanceAfter},
-              ${`Free match credits for ${period}`}, ${key})`;
-    return rate;
-  }) as Promise<number>;
+      values (${orgId}, ${topUp}, 'grant', 'monthly', ${balanceAfter},
+              ${`Free match credits for ${period}: topped up to the plan's ${rate}`}, ${streamMonthlyDeltaKey(orgId, period, rate)})`;
+    return topUp;
+  }
+  let balance = split.total;
+  if (split.monthly > 0) {
+    const { balanceAfter } = debit(balance, split.monthly);
+    await tx`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+      values (${orgId}, ${-split.monthly}, 'expire', 'monthly', ${balanceAfter},
+              ${`Unused free match credits expired before the ${period} grant`})`;
+    balance = balanceAfter;
+  }
+  if (rate === 0) return 0;
+  const { balanceAfter } = credit(balance, rate);
+  await tx`
+    insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note, idempotency_key)
+    values (${orgId}, ${rate}, 'grant', 'monthly', ${balanceAfter},
+            ${`Free match credits for ${period}`}, ${streamMonthlyGrantKey(orgId, period)})`;
+  return rate;
 }
