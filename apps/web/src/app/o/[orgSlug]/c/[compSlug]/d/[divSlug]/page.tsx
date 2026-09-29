@@ -533,6 +533,11 @@ export default async function DivisionPage({
   if (checkout === "success" && checkoutSessionId) {
     await reconcileStreamCreditsCheckout(auth.orgId, checkoutSessionId);
   }
+  // M4 (Task 14 fix round 4): the balance and the currency are independent reads — one query and one cookies/headers
+  // read — so they run together, not one after the other. Both only with the relay (D9's query budget).
+  const [streamBalance, streamCurrency] = streamRelayEntitled
+    ? await Promise.all([relayBalance(auth, auth.orgId), preferredCurrency(auth.orgId)])
+    : [0, "gbp" as const];
   const streamPanel = streamOffered
     ? {
         entitled: streamEntitled,
@@ -540,11 +545,11 @@ export default async function DivisionPage({
         // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before
         // any session exists (C1). Read only when the relay gate is open — the tab shows the UpgradeGate otherwise.
         orgId: auth.orgId,
-        streamBalance: streamRelayEntitled ? await relayBalance(auth, auth.orgId) : 0,
+        streamBalance,
         // P1: the currency `/api/billing/relay-checkout` will CHARGE — the same `preferredCurrency` for the same org and
         // browser (subscription → cookie → Accept-Language) — so the tiles quote the checkout's own amount. Without the
         // relay there are no tiles, and nothing reads it.
-        currency: streamRelayEntitled ? await preferredCurrency(auth.orgId) : "gbp",
+        currency: streamCurrency,
         sportKey: division.sport_key,
         overlayDict: streamEntitled
           ? (Object.fromEntries(

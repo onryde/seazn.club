@@ -110,6 +110,7 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 }));
 
 import DivisionPage from "../page";
+import { hasFeature } from "@/lib/entitlements";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 
@@ -291,5 +292,42 @@ describe("P1: the Phone tab is handed the currency the checkout will charge", ()
       checked++;
     }
     expect(checked).toBe(3);
+  });
+
+  // M4 (fix round 4): the balance and the currency were awaited one after the other inside the object literal — one extra
+  // round trip on every relay-entitled fixtures-tab render. Neither depends on the other, so neither may wait for it.
+  it("M4: the balance and the currency are read CONCURRENTLY — the second is asked before the first has answered", async () => {
+    let checked = 0;
+    for (const slow of ["balance", "currency"] as const) {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => { release = r; });
+      relay.balance.mockReset().mockImplementation(async () => { if (slow === "balance") await gate; return 4; });
+      money.preferredCurrency.mockReset().mockImplementation(async () => { if (slow === "currency") await gate; return "usd"; });
+      const page = render({ tab: "fixtures" });
+      await vi.waitFor(() => expect(slow === "balance" ? relay.balance : money.preferredCurrency).toHaveBeenCalledTimes(1));
+      // The slow one is still pending: the other must already have been asked.
+      expect(slow === "balance" ? money.preferredCurrency : relay.balance, `${slow} held the other back`).toHaveBeenCalledTimes(1);
+      release();
+      const stream = (find(await page, StagesPanel)!.props as { stream?: { streamBalance?: unknown; currency?: unknown } }).stream;
+      expect(stream?.streamBalance, slow).toBe(4);
+      expect(stream?.currency, slow).toBe("usd");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("M4: without the relay neither is read — the tab gets 0 and gbp, and the page keeps its query budget", async () => {
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
+    try {
+      money.preferredCurrency.mockReset().mockResolvedValue("usd");
+      const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as { stream?: { relayEntitled?: unknown; streamBalance?: unknown; currency?: unknown } }).stream;
+      expect(stream?.relayEntitled, "premise: overlay yes, relay no").toBe(false);
+      expect(stream?.streamBalance).toBe(0);
+      expect(stream?.currency).toBe("gbp");
+      expect(relay.balance).not.toHaveBeenCalled();
+      expect(money.preferredCurrency).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(hasFeature).mockImplementation(async () => true);
+    }
   });
 });
