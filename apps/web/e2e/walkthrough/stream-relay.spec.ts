@@ -103,20 +103,12 @@ const SLOT_LOCK_BASE = 7_301_130_000;
 const SLOT_WAIT_MS = 3 * CYCLE_MS;
 
 let lease: (() => Promise<void>) | null = null;
-/** How many keys the current lease holds — checked on reuse, so a second ask for more than was leased throws. */
-let leaseHeld = 0;
 const rigsThisTest: { request: APIRequestContext; orgId: string }[] = [];
 
-/** Take `n` of this file's FILE_SLOTS keys before the test's first go-live; held until teardown. Every case takes one;
- *  `n` exists so a case that needs more fails loudly on reuse rather than streaming unleased. Keys are only ever
- *  [BASE, BASE + FILE_SLOTS): the last capacity key is never taken here. */
-async function streamSlot(n = 1): Promise<void> {
-  const keys = FILE_SLOTS;
-  if (n < 1 || n > keys) throw new Error(`this file leases ${keys} stream slot(s) — cannot take ${n}`);
-  if (lease) {
-    if (leaseHeld < n) throw new Error(`the lease holds ${leaseHeld} slot(s); ${n} asked`);
-    return;
-  }
+/** Take ONE of this file's FILE_SLOTS keys before the test's first go-live; held until teardown (a second call in the
+ *  same test reuses it). Keys are only ever [BASE, BASE + FILE_SLOTS): the last capacity key is never taken here. */
+async function streamSlot(): Promise<void> {
+  if (lease) return;
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) throw new Error("DATABASE_URL required for the stream-slot lease");
   const { default: postgres } = await import("postgres");
@@ -127,21 +119,17 @@ async function streamSlot(n = 1): Promise<void> {
     idle_timeout: 0,
   });
   const deadline = Date.now() + SLOT_WAIT_MS;
-  const held = new Set<number>();
   for (;;) {
-    for (let i = 0; i < keys && held.size < n; i++) {
-      if (held.has(i)) continue;
+    for (let i = 0; i < FILE_SLOTS; i++) {
       const [row] = await sql<{ ok: boolean }[]>`select pg_try_advisory_lock(${SLOT_LOCK_BASE + i}::bigint) as ok`;
-      if (row?.ok) held.add(i);
-    }
-    if (held.size === n) {
-      leaseHeld = held.size;
-      lease = () => sql.end(); // a session-level advisory lock is released with its connection
-      return;
+      if (row?.ok) {
+        lease = () => sql.end(); // a session-level advisory lock is released with its connection
+        return;
+      }
     }
     if (Date.now() > deadline) {
       await sql.end();
-      throw new Error(`only ${held.size} of ${n} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
+      throw new Error(`none of this file's ${FILE_SLOTS} stream slot(s) free after ${SLOT_WAIT_MS} ms`);
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -169,7 +157,6 @@ async function teardownStreams(): Promise<void> {
   } finally {
     const release = lease;
     lease = null;
-    leaseHeld = 0;
     await release?.();
   }
 }
@@ -506,10 +493,9 @@ for (const width of WIDTHS) {
     // Everything that reads the QR state goes first — it lasts only until the server's first read after the connect.
     await shot(panel, `A1-${width}-2-qr.png`);
     await expectNoHorizontalScroll(page);
-    if (width === 320) {
-      expect(await expectTapTargets(body), "QR-state controls hit-tested").toBeGreaterThan(0);
-      await expect(body.getByTestId("stream-qr"), "the hit-test measured the QR state, not what came after it").toBeVisible({ timeout: 1 });
-    }
+    if (width === 320) expect(await expectTapTargets(body), "QR-state controls hit-tested").toBeGreaterThan(0);
+    // One shot, no retry: the checks above measured the QR state, not what came after it.
+    await expect(body.getByTestId("stream-qr"), "the QR state outlasted every check made of it").toBeVisible({ timeout: 1 });
 
     // LIVE — decided by the server on the tab's own poll.
     await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
