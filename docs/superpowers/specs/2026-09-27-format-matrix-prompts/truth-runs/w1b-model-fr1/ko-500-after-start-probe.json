@@ -1,7 +1,7 @@
 {
   "runId": "w1b-fr1-ko-0929b",
   "harness": "299df5b32",
-  "base": "http://localhost:3313",
+  "base": "[local-base]",
   "plan": "pro",
   "verdicts": [
     {

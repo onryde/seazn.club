@@ -7,11 +7,11 @@
 //    (the render drops per-check verdicts and evidence).
 //  - 24 distinct cases, no canary, a clean harness commit, no secret-shaped
 //    string anywhere (the repo is public; writeResults guarded only the write).
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { findSecrets } from "../lib/redact.ts";
+import { findLocalBases, findSecrets } from "../lib/redact.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { decideState, parseResults, stringsIn } from "../lib/results.ts";
 
@@ -48,5 +48,24 @@ describe("committed W1a slice evidence", () => {
     const strings = stringsIn(raw);
     expect(strings.length).toBeGreaterThan(24);
     expect(strings.flatMap((s) => findSecrets(s))).toEqual([]);
+  });
+});
+
+// T15 fix round 3, M-7: the repo is public, and a run's evidence named the
+// local server it drove. Every committed evidence file — slices, model
+// reports, probes — holds no loopback origin; the writers emit LOCAL_BASE.
+describe("committed truth-run evidence, every file", () => {
+  const ROOT = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
+  const files = readdirSync(ROOT, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name));
+  it("names no loopback origin (localhost, 127.0.0.1) in any file", () => {
+    let checked = 0;
+    const hits: string[] = [];
+    for (const f of files) {
+      for (const h of findLocalBases(readFileSync(f, "utf8"))) hits.push(`${f.slice(ROOT.length + 1)}: ${h}`);
+      checked++;
+    }
+    expect(hits).toEqual([]);
+    expect(checked, "no evidence file read — the sweep would be vacuous").toBeGreaterThan(0);
+    expect(checked).toBe(files.length);
   });
 });

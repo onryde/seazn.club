@@ -55,7 +55,7 @@ import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
-import { redact } from "./lib/redact.ts";
+import { redact, scrubLocalBases } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
 import { decideState, writeResults, type CaseResult, type CheckResult, type RunResults } from "./lib/results.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
@@ -432,7 +432,9 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // The grid is snapshotted into the results (T11 review M4), so MATRIX.md
   // renders from results.json alone however the catalogue moves later.
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
-  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases };
+  // Loopback origins as LOCAL_BASE here too, so MATRIX.md renders what
+  // results.json holds (T15 fix round 3, M-7).
+  const results: RunResults = scrubLocalBases({ schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases });
   const resultsPath = writeResults(dir, results);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);

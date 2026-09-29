@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findSecrets, redact } from "../lib/redact.ts";
+import { LOCAL_BASE, findLocalBases, findSecrets, redact, scrubLocalBase } from "../lib/redact.ts";
 import { CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
 
 const chk = (p: Partial<CheckResult>): CheckResult => ({ id: "c", kind: "invariant", verdict: "pass", checked: 1, reason: "", evidence: [], ...p });
@@ -367,5 +367,56 @@ describe("writeResults", () => {
     const dir = mkdtempSync(join(tmpdir(), "fm-"));
     expect(() => writeResults(dir, { ...base, schemaVersion: 1 } as unknown as RunResults)).toThrow();
     expect(existsSync(join(dir, "results.json"))).toBe(false);
+  });
+});
+
+// T15 fix round 3, M-7: a run drives a server on this machine, and its address
+// is noise in a public repo. Every committed writer emits LOCAL_BASE in its
+// place; the secret semantics (findSecrets, redact) do not move.
+describe("local base (T15 fix round 3, M-7)", () => {
+  it("empty case first: text with no loopback origin is unchanged — lookalikes included", () => {
+    let checked = 0;
+    for (const text of ["", "Matrix Player 3", "delivered+matrix-r@resend.dev", "POST /api/v1/fixtures/f1/events → HTTP 409", "localhostname", "mylocalhost", "127.0.0.10", "https://seazn.club/c/x", "[local-base]"]) {
+      expect(findLocalBases(text), text).toEqual([]);
+      expect(scrubLocalBase(text), text).toBe(text);
+      checked++;
+    }
+    expect(checked).toBe(9);
+  });
+  it("every loopback origin — scheme and port optional, either spelling — becomes LOCAL_BASE, the path kept", () => {
+    const cases: [string, string][] = [
+      ["http://localhost:3313", LOCAL_BASE],
+      ["https://127.0.0.1:8080/api/v1/x", `${LOCAL_BASE}/api/v1/x`],
+      ["localhost:5433", LOCAL_BASE],
+      ["LOCALHOST", LOCAL_BASE],
+      ["GET http://localhost:3999/a then http://127.0.0.1:4000/b", `GET ${LOCAL_BASE}/a then ${LOCAL_BASE}/b`],
+      ['{"base": "http://localhost:3313"}', `{"base": "${LOCAL_BASE}"}`],
+    ];
+    let checked = 0;
+    for (const [dirty, clean] of cases) {
+      expect(findLocalBases(dirty).length, dirty).toBeGreaterThan(0);
+      expect(scrubLocalBase(dirty), dirty).toBe(clean);
+      expect(findLocalBases(scrubLocalBase(dirty)), `${dirty}: a fixpoint`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+  it("the secret semantics do not move: a loopback origin is no secret, redact leaves it, and the placeholder is none either", () => {
+    expect(findSecrets("http://localhost:3313/api")).toEqual([]);
+    expect(redact("http://localhost:3313/api")).toBe("http://localhost:3313/api");
+    expect(findSecrets(LOCAL_BASE)).toEqual([]);
+    expect(findLocalBases(LOCAL_BASE)).toEqual([]);
+  });
+  it("writeResults writes LOCAL_BASE for a loopback origin in any string, and nothing else changes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const r = withEvidence(["GET http://localhost:3313/api/v1/x → 500", "Matrix Player 3"]);
+    const text = readFileSync(writeResults(dir, r), "utf8");
+    expect(findLocalBases(text)).toEqual([]);
+    expect(JSON.parse(text)).toEqual(withEvidence([`GET ${LOCAL_BASE}/api/v1/x → 500`, "Matrix Player 3"]));
+  });
+  it("…and a secret on a loopback origin is still REFUSED, never laundered by the scrub", () => {
+    const r = tryWrite(withEvidence(["row from postgres://bench:hunter22@localhost:5433/seazn"]));
+    expect(r.error).toBeInstanceOf(SecretInResults);
+    expect(r.wrote).toBe(false);
   });
 });

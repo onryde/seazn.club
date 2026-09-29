@@ -12,6 +12,7 @@ import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-g
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
+import { LOCAL_BASE, findLocalBases } from "../lib/redact.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
@@ -459,6 +460,33 @@ describe("runSlice — a run", () => {
     expect(k.reason).toBe("saw [redacted]");
     expect(k.evidence).toEqual(["row from [redacted]"]);
     expect(io.err()).not.toMatch(/SecretInResults/);
+  });
+
+  it("T15 fix round 3, M-7: a loopback origin in a check's evidence or a case's error is written as LOCAL_BASE — in results.json and in MATRIX.md", async () => {
+    capture();
+    const local: CheckResult = { id: "local", kind: "assertion", verdict: "pass", checked: 1, reason: "GET http://localhost:3999/api/v1/x answered", evidence: ["from 127.0.0.1:5433"] };
+    wrapScenario("LIFECYCLE", (out) => ({ ...out, assertions: [...out.assertions, local] }));
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t5l", "--report-dir", dir])).toBe(0);
+    const k = resultsIn(dir, "t5l").cases[0]!.checks.find((x) => x.id === "local")!;
+    expect(k.reason).toBe(`GET ${LOCAL_BASE}/api/v1/x answered`);
+    expect(k.evidence).toEqual([`from ${LOCAL_BASE}`]);
+    // A case's error is the reason MATRIX.md renders.
+    const driverFor = () => new (class extends FakeLeagueDriver { override async createCompetition(): Promise<never> { throw new Error("fetch http://localhost:3999/api/v1/competitions failed"); } })("org-fake");
+    const dir2 = dirFor();
+    expect(await runSlice(deps({ driverFor }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t6l", "--report-dir", dir2])).toBe(0);
+    expect(resultsIn(dir2, "t6l").cases[0]!.reason).toMatch(new RegExp(`^error: Error: fetch ${LOCAL_BASE.replace(/[[\]]/g, "\\$&")}/api/v1/competitions failed`));
+    let checked = 0;
+    for (const [d, id] of [[dir, "t5l"], [dir2, "t6l"]] as const) {
+      for (const f of ["results.json", "MATRIX.md"]) {
+        const text = readFileSync(join(d, id, f), "utf8");
+        expect(text.length, `${id}/${f}`).toBeGreaterThan(0);
+        expect(findLocalBases(text), `${id}/${f}`).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+    expect(readFileSync(join(dir2, "t6l", "MATRIX.md"), "utf8"), "the error reaches MATRIX.md, scrubbed").toContain(`fetch ${LOCAL_BASE}/api/v1/competitions failed`);
   });
 
   it("m-5: the scenario's own notes reach results.json — the stage status after start among them", async () => {

@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { DIVISION_CAP_KEY, MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
+import { LOCAL_BASE, findLocalBases } from "../lib/redact.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { MODEL_ERROR } from "../lib/model/run-cell.ts";
 import { REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
@@ -628,6 +629,20 @@ describe("model.ts", () => {
     expect(text).toContain("[redacted]");
     expect(text).not.toContain("hunter2");
     expect(io.out() + io.err()).not.toContain("hunter2");
+  });
+
+  it("T15 fix round 3, M-7: a loopback origin in a failure's evidence reaches the report as LOCAL_BASE, never as this machine's address", async () => {
+    capture();
+    class LocalAnswer extends ModelFakeDriver {
+      override generate(): ReturnType<ModelFakeDriver["generate"]> {
+        return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, null, "upstream http://localhost:3313/api/v1/stages/s1/generate and 127.0.0.1:5433 refused"));
+      }
+    }
+    const dir = reportDir();
+    expect(await runModel(deps({ driverFor: () => new LocalAnswer() }), ["--run-id", "rl", "--report-dir", dir, ...ONE])).toBe(1);
+    const text = readFileSync(join(dir, "rl", "model-report.json"), "utf8");
+    expect(text).toContain(`upstream ${LOCAL_BASE}/api/v1/stages/s1/generate and ${LOCAL_BASE} refused`);
+    expect(findLocalBases(text)).toEqual([]);
   });
 
   it("aborts (exit 3): a case org that cannot be prepared, and a report that cannot be written; a DB that stops proving it is ours is refused (exit 2)", async () => {

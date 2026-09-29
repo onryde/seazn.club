@@ -79,3 +79,26 @@ export function findSecrets(text: string): string[] {
 export function redact(text: string): string {
   return PATTERNS.reduce((t, p) => t.replace(new RegExp(p.source, p.flags), "[redacted]"), text);
 }
+
+/** T15 fix round 3 (M-7): what a committed file says in place of the local
+ *  server a run drove. The repo is public, and this machine's own address and
+ *  port tell a reader nothing, so the committed writers (model.ts's report,
+ *  writeResults, run.ts's MATRIX.md) emit this instead. A loopback origin is
+ *  no secret: findSecrets and redact do not change. */
+export const LOCAL_BASE = "[local-base]";
+/** A loopback origin: an optional http(s) scheme, `localhost` or `127.0.0.1`
+ *  as a whole word, an optional port. The path after it is kept. */
+const LOCAL_ORIGIN = /(?:\bhttps?:\/\/)?\b(?:localhost|127\.0\.0\.1)\b(?::\d+)?/gi;
+
+export function findLocalBases(text: string): string[] {
+  return [...text.matchAll(new RegExp(LOCAL_ORIGIN.source, LOCAL_ORIGIN.flags))].map((m) => m[0]);
+}
+
+export function scrubLocalBase(text: string): string {
+  return text.replace(new RegExp(LOCAL_ORIGIN.source, LOCAL_ORIGIN.flags), LOCAL_BASE);
+}
+
+/** Every string value in a JSON value, scrubbed (keys are the schema's own). */
+export function scrubLocalBases<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value), (_k, x: unknown) => (typeof x === "string" ? scrubLocalBase(x) : x)) as T;
+}

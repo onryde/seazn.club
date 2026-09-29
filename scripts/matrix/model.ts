@@ -47,7 +47,7 @@ import { isMainModule } from "./lib/main-module.ts";
 import type { OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
-import { findSecrets, redact } from "./lib/redact.ts";
+import { findSecrets, redact, scrubLocalBase } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
 import { MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
 import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
@@ -221,8 +221,9 @@ function verdictOf(rep: CellReport, replay: RegressionCase | null): Verdict {
 }
 
 /** Every string in a value, redacted (R14a) — before it is kept, so one
- *  secret-shaped string cannot throw away a whole report. */
-const redactAll = <T>(v: T): T => JSON.parse(JSON.stringify(v), (_k, x: unknown) => (typeof x === "string" ? redact(x) : x)) as T;
+ *  secret-shaped string cannot throw away a whole report — and any loopback
+ *  origin written as LOCAL_BASE (T15 fix round 3, M-7: the report is committed). */
+const redactAll = <T>(v: T): T => JSON.parse(JSON.stringify(v), (_k, x: unknown) => (typeof x === "string" ? scrubLocalBase(redact(x)) : x)) as T;
 
 function printCell(c: ModelCell): void {
   const f = c.failure;

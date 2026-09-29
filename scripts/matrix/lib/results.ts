@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { findSecrets } from "./redact.ts";
+import { findSecrets, scrubLocalBases } from "./redact.ts";
 
 export const CASE_STATES = ["works", "refused", "red", "later", "needs_ruling", "no_path", "not_run"] as const;
 export type CaseState = (typeof CASE_STATES)[number];
@@ -156,7 +156,9 @@ export function writeResults(dir: string, results: RunResults): string {
   const parsed = RunResultsSchema.parse(results);
   const hits = stringsIn(parsed).flatMap((s) => findSecrets(s));
   if (hits.length > 0) throw new SecretInResults(hits.length);
-  const body = `${JSON.stringify(parsed, null, 2)}\n`;
+  // After the scan, so a secret on a loopback origin is refused, never
+  // laundered (T15 fix round 3, M-7: results.json is committed evidence).
+  const body = `${JSON.stringify(scrubLocalBases(parsed), null, 2)}\n`;
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "results.json");
   writeFileSync(path, body);
