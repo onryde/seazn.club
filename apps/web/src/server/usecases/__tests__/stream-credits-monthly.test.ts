@@ -32,7 +32,7 @@ import { sql, statementCount } from "@/lib/db";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
 import {
-  NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantsForAllOrgs,
+  NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant,
   grantMonthlyStreamCredits, lockOrg, recordPurchase, recordStreamPackRefund, refundCredits, revokeCredits, streamMonthlyGrantKey,
   streamMonthlyPeriod, streamMonthlyRate,
 } from "../stream-credits";
@@ -224,32 +224,6 @@ describe.skipIf(!HAS_DB)("monthly stream credits — the grant", () => {
     expect(settled.map((s) => (s as PromiseFulfilledResult<number>).value).sort((a, b) => a - b)).toEqual([0, R]);
     expect((await rows(r.orgId)).filter((x) => x.reason === "grant")).toHaveLength(1);
     expect((await creditBreakdown(sql, r.orgId)).monthly).toBe(R);
-  });
-
-  it("the cron sweep grants every scoped org its plan's rate, once: a second run considers none of them", async () => {
-    const a = await rig(null, 1);
-    const b = await rig("pro", 1);
-    const want = new Map([[a.orgId, await rateOf("community")], [b.orgId, await rateOf("pro")]]);
-    const first = await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [a.orgId, b.orgId] });
-    expect(first).toEqual({ orgs: 2, granted: want.get(a.orgId)! + want.get(b.orgId)!, failed: 0 });
-    let checked = 0;
-    for (const [orgId, n] of want) {
-      expect((await creditBreakdown(sql, orgId)).monthly, orgId).toBe(n);
-      checked++;
-    }
-    expect(checked).toBe(2);
-    expect(await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [a.orgId, b.orgId] }), "the anti-join leaves nothing to do").toEqual({ orgs: 0, granted: 0, failed: 0 });
-  });
-
-  it("the sweep: an explicitly EMPTY scope grants nothing (never the every-org branch), and a soft-deleted org is skipped", async () => {
-    expect(await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [] })).toEqual({ orgs: 0, granted: 0, failed: 0 });
-    const gone = await rig(null, 1);
-    const live = await rig(null, 1);
-    await sql`update organizations set deleted_at = now() where id = ${gone.orgId}`;
-    const res = await ensureMonthlyStreamGrantsForAllOrgs({ orgIds: [gone.orgId, live.orgId] });
-    expect(res).toEqual({ orgs: 1, granted: await rateOf("community"), failed: 0 });
-    expect(await rowCount(gone.orgId), "a deleted org is never granted").toBe(0);
-    expect((await creditBreakdown(sql, live.orgId)).monthly, "the positive pair").toBe(await rateOf("community"));
   });
 
   it("grantMonthlyStreamCredits refuses a rate that is not a non-negative integer; a rate of 0 still expires the leftover and grants nothing, and a repeat writes nothing (k12)", async () => {

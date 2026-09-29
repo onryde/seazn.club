@@ -3,7 +3,6 @@ import { handler } from "@/lib/http";
 import { HttpError } from "@/lib/errors";
 import { checkEarnGrantVolumeAlert, grantMonthlyForAllWallets } from "@/lib/credits";
 import { log } from "@/server/logger";
-import { ensureMonthlyStreamGrantsForAllOrgs } from "@/server/usecases/stream-credits";
 
 /** POST /api/cron/billing-grant — daily: grant every billing wallet its
  *  `ai.credits.monthly(plan) * quantity_paid` allowance for this period
@@ -30,15 +29,12 @@ import { ensureMonthlyStreamGrantsForAllOrgs } from "@/server/usecases/stream-cr
  *  (CRON_SECRET env). Also runs the earn_grant daily-volume farm-watch
  *  (v17 gap #296) — same daily poll, no separate schedule.
  *
- *  Task 14b (R3c, V426): the same poll grants every live org its free
- *  monthly MATCH credits (`ensureMonthlyStreamGrantsForAllOrgs`) — per org,
- *  expire-then-grant, idempotent per UTC month; createSession and the
- *  division page make the same grant lazily, so this is the backstop that
- *  keeps an org's rollover from waiting for its next visit. It runs AFTER
- *  the AI grant and inside its own try/catch: a second product on this
- *  schedule must never turn the AI grant's response into an error. Its
- *  counts ride beside the AI grant's under `stream` (`{ error: true }` when
- *  it threw); the top-level shape is unchanged. */
+ *  NOT the stream match credits (Task 14b review M4, controller ruling
+ *  2026-09-29, amending R3). A cron sweep would write two ledger rows per live
+ *  org per month forever, for orgs that never stream. Every reader of the
+ *  stream balance rolls the org's month over itself, under the money lock,
+ *  before it reads (stream-credits.ts `ensureMonthlyStreamGrant`, which names
+ *  the readers), so no reader can see a stale month. */
 export async function POST() {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;
@@ -46,13 +42,6 @@ export async function POST() {
     const given = (await headers()).get("x-cron-secret");
     if (given !== secret) throw new HttpError(401, "Bad cron secret");
     const result = await grantMonthlyForAllWallets();
-    let stream: Awaited<ReturnType<typeof ensureMonthlyStreamGrantsForAllOrgs>> | { error: true };
-    try {
-      stream = await ensureMonthlyStreamGrantsForAllOrgs();
-    } catch (err) {
-      log.error({ err }, "cron/billing-grant: stream match-credit sweep failed");
-      stream = { error: true };
-    }
     // Growth-loop farm-watch (v17 gap #296): the SAME daily poll also checks
     // today's earn_grant volume — no new cron/workflow, this one already
     // runs once a day (billing-grant-stg.yml). checkEarnGrantVolumeAlert never
@@ -63,6 +52,6 @@ export async function POST() {
     } catch (err) {
       log.error({ err }, "cron/billing-grant: earn_grant volume check failed");
     }
-    return { ...result, stream };
+    return result;
   });
 }

@@ -655,18 +655,24 @@ export function streamMonthlyPeriod(now: Date): string {
   return utcMonthStart(now).toISOString().slice(0, 7);
 }
 
-/** The monthly grant's idempotency key — ONE authority for its spelling, shared by the grant, its
- *  fast path and the cron sweep's anti-join. Lower-cased for the reason orgMoneyLockKey is: an
+/** The monthly grant's idempotency key — ONE authority for its spelling, shared by the grant and its
+ *  fast path. Lower-cased for the reason orgMoneyLockKey is: an
  *  upper-case id pasted into a hand-built URL must name the same period's row. */
 export function streamMonthlyGrantKey(orgId: string, period: string): string {
   return `stream-monthly:${orgId.toLowerCase()}:${period}`;
 }
 
 /** V426's `streaming.credits.monthly` rows for a set of plan keys, in ONE read — the ONLY place the
- *  rate is read (V426's header names this function), so the single-org path and the sweep cannot
- *  disagree. lib/credits.ts `monthlyPerSeatByPlan`'s shape, WITHOUT its per-seat multiplier: stream
- *  credits are per ORG (org_stream_credits.org_id), not per billing-group wallet. A plan with no row
- *  is absent from the map and grants nothing through the callers' `?? 0`. */
+ *  rate is read (V426's header names this function). lib/credits.ts `monthlyPerSeatByPlan`'s shape,
+ *  WITHOUT its per-seat multiplier: stream credits are per ORG (org_stream_credits.org_id), not per
+ *  billing-group wallet. A plan with no row is absent from the map and grants nothing through the
+ *  callers' `?? 0`.
+ *
+ *  DELIBERATE, not an oversight (Task 14b review M4): a row whose `int_value` is NULL also reads as 0.
+ *  lib/credits.ts's AI grant reads NULL as "unlimited"; a stream grant has no unlimited — every credit
+ *  is a paid relay minute — so the safe reading of an unset number is "grants nothing". A catalogue
+ *  edit that nulls the row therefore stops the grant silently rather than handing out infinity; the
+ *  catalogue test (V426's every-plan ≥ 1 sweep) is what notices it. */
 export async function streamMonthlyRateByPlan(planKeys: readonly string[]): Promise<Map<string, number>> {
   const distinct = [...new Set(planKeys)];
   if (distinct.length === 0) return new Map();
@@ -687,9 +693,10 @@ export async function streamMonthlyRate(orgId: string): Promise<number> {
 
 /**
  * This month's free match credits for one org, granted at most once per UTC month — the lazy path
- * (R3). Called before the balance check in createSession, before the division page reads the
- * balance, and per org by the billing-grant cron. There is deliberately no eager call on org
- * creation: an org that never streams never needs a row.
+ * (R3, as amended by the Task 14b review M4: the ONLY path — no cron sweeps it). Every reader of the
+ * balance calls it before it reads: the division page (`relayCredits`) and createSession's balance
+ * check. There is deliberately no eager
+ * call on org creation and no cron: an org that never streams never needs a row.
  *
  * CHEAP once this period's row exists: ONE indexed read of the grant key (the table-wide partial
  * unique index) and nothing else — the budget test pins it at one statement. That read is an
@@ -708,7 +715,7 @@ export async function ensureMonthlyStreamGrant(orgId: string, now: Date = new Da
 
 /**
  * The rollover transaction for an ALREADY-RESOLVED rate (split out, as lib/credits.ts splits
- * `grantMonthlyDelta`, so the sweep can batch the rate read and still run this one body). Under
+ * `grantMonthlyDelta`, so a caller that already holds the rate does not read it twice). Under
  * the org's money lock:
  *   1. re-check this period's grant key — present → 0, nothing written;
  *   2. refuse a negative bucket by name (`ledger_negative`);
@@ -761,54 +768,4 @@ export async function grantMonthlyStreamCredits(orgId: string, rate: number, now
               ${`Free match credits for ${period}`}, ${key})`;
     return rate;
   }) as Promise<number>;
-}
-
-/**
- * Cron entry point (`api/cron/billing-grant`, beside the AI wallet sweep): every live org's monthly
- * stream grant for this period. The anti-join is a PRE-FILTER (lib/credits.ts #390's discipline) —
- * it may only reduce the candidate set; the lock and the under-lock key check in
- * grantMonthlyStreamCredits stay the guard. Three passes, as the AI sweep's: resolve each org's plan
- * (orgPlanKey, one query per org, never inlined), read every distinct plan's rate ONCE, then grant
- * org by org with a per-org try/catch so one failure is counted, logged and skipped.
- *
- * `orgIds` is for tests (a schema-wide sweep's answer depends on sibling suites mid-fixture); the
- * cron passes none. `orgs` is the number of orgs this run CONSIDERED.
- */
-export async function ensureMonthlyStreamGrantsForAllOrgs(
-  opts: { orgIds?: readonly string[]; now?: Date } = {},
-): Promise<{ orgs: number; granted: number; failed: number }> {
-  const now = opts.now ?? new Date();
-  const period = streamMonthlyPeriod(now);
-  const ids = opts.orgIds ?? null;
-  // An explicitly EMPTY scope grants nothing. It must never fall through to the every-org branch (the
-  // AI sweep's #390 regression), and `in ()` is not SQL.
-  if (ids !== null && ids.length === 0) return { orgs: 0, granted: 0, failed: 0 };
-  const rows = await sql<{ id: string }[]>`
-    select o.id from organizations o
-     where o.deleted_at is null
-       and not exists (
-         select 1 from org_stream_credits c
-          where c.idempotency_key = 'stream-monthly:' || o.id::text || ':' || ${period})
-       ${ids ? sql`and o.id in ${sql(ids as string[])}` : sql``}`;
-  let granted = 0;
-  let failed = 0;
-  const resolved: { orgId: string; plan: string }[] = [];
-  for (const row of rows) {
-    try {
-      resolved.push({ orgId: row.id, plan: await orgPlanKey(row.id) });
-    } catch (err) {
-      failed++;
-      log.error({ err, orgId: row.id }, "stream credits: monthly plan resolve failed");
-    }
-  }
-  const rateByPlan = await streamMonthlyRateByPlan(resolved.map((r) => r.plan));
-  for (const r of resolved) {
-    try {
-      granted += await grantMonthlyStreamCredits(r.orgId, rateByPlan.get(r.plan) ?? 0, now);
-    } catch (err) {
-      failed++;
-      log.error({ err, orgId: r.orgId }, "stream credits: monthly grant failed");
-    }
-  }
-  return { orgs: rows.length, granted, failed };
 }
