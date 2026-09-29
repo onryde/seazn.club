@@ -39,7 +39,8 @@ export interface Session {
   outputUid: string | null;
 }
 
-// ---- admission (§6.3 order; E5: storage_exhausted is a refusal, never a state)
+// ---- admission (§6.3 order, amended by owner ruling 2026-09-29 (F-A5): active_session moves up to directly after the
+// plan gates; E5: storage_exhausted is a refusal, never a state)
 export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session";
 export interface AdmitInput {
   overlay: boolean; relay: boolean; balance: number; targetBelongsToOrg: boolean;
@@ -54,10 +55,13 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   if (i.relay && !i.overlay) return { ok: false, refusal: "overlay_required" };  // r5: the implication check
   if (!i.overlay) return { ok: false, refusal: "plan_lacks_overlay" };
   if (!i.relay) return { ok: false, refusal: "plan_lacks_relay" };
+  // F-A5 (owner ruling 2026-09-29): a match already streaming answers a second start before credits, destination or
+  // storage are weighed — "already running" is the truth; "no credits" or "storage full" would send the organiser the
+  // wrong way while their stream is up.
+  if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
   if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };
-  if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };
   return { ok: true };
 }
 

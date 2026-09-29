@@ -21,15 +21,17 @@ const S = (over: Partial<Session> = {}): Session => ({
 const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
-// per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once.
+// per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once. Order amended by owner ruling
+// 2026-09-29 (F-A5): `active_session` right after the plan gates — a match already streaming is the truest answer to a
+// second start, whatever the credits, the destination or the storage say.
 const REFUSAL_LADDER = [
   [{ overlay: false, relay: false }, "plan_lacks_overlay"],
   [{ overlay: false, relay: true }, "overlay_required"],       // r5: relay without overlay is the implication check
   [{ relay: false }, "plan_lacks_relay"],
+  [{ activeSessionId: "s0" }, "active_session"],
   [{ balance: 0 }, "no_credits"],
   [{ targetBelongsToOrg: false }, "target_not_found"],
   [{ headroomMinutes: 299 }, "storage_exhausted"],           // C3: headroom < max_duration refuses
-  [{ activeSessionId: "s0" }, "active_session"],
 ] as const;
 
 describe("admit — the §6.3 gates, in order", () => {
@@ -60,6 +62,14 @@ describe("admit — the §6.3 gates, in order", () => {
       }
     }
     expect(pairs).toBe(19);   // C(7,2) = 21, minus overlay_required beside plan_lacks_overlay and beside plan_lacks_relay
+  });
+  it("F-A5 (owner 2026-09-29): a second start on a match already streaming is told so even when STORAGE is exhausted — active_session, not storage_exhausted", () => {
+    expect(admit({ ...OK, activeSessionId: "s0", headroomMinutes: 0 })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+    expect(admit({ ...OK, activeSessionId: null, headroomMinutes: 0 }), "the positive pair: no running session → storage_exhausted").toMatchObject({ refusal: "storage_exhausted" });
+  });
+  it("F-A5 (owner 2026-09-29): …and even at balance 0 with no reuse window — active_session, not no_credits", () => {
+    expect(admit({ ...OK, activeSessionId: "s0", balance: 0, restartWithinReuseWindow: false })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
+    expect(admit({ ...OK, activeSessionId: null, balance: 0, restartWithinReuseWindow: false }), "the positive pair: no running session → no_credits").toMatchObject({ refusal: "no_credits" });
   });
   it("active_session carries the running id", () => {
     expect(admit({ ...OK, activeSessionId: "s0" })).toEqual({ ok: false, refusal: "active_session", activeSessionId: "s0" });
