@@ -2146,6 +2146,38 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(await relayCredits(pro.auth, pro.auth.orgId)).toEqual({ monthly: proRate, pack: 0, total: proRate, monthlyAllowance: proRate });
   });
 
+  it("I1: a grant that FAILS never fails the page's read — relayCredits logs and reports it, then answers the ungranted balance; the healthy org beside it still grants", async () => {
+    // A corrupt ledger: a NEGATIVE monthly bucket (no writer makes one — the rollover's ledger_negative guard refuses
+    // it by name). This period's grant is left unmade, so the page's read takes the full path and the guard throws on
+    // every render. Before I1 that throw was the division page's: one bad row took down the whole fixtures tab.
+    const r = await rig({ credits: 2, monthly: true });
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, balance_after) values (${r.auth.orgId}, -1, 'consume', 'monthly', 1)`;
+    const rate = await monthlyRate("community");
+    const before = (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId}`)[0]!.n;
+    sentry.captureError.mockClear();
+    const errors: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((_o: unknown, msg?: string) => { errors.push(String(msg)); }) as never);
+    try {
+      let checked = 0;
+      for (let i = 0; i < 2; i++) {   // every render, not just the first: a failed grant writes no key
+        expect(await relayCredits(r.auth, r.auth.orgId)).toEqual({ monthly: -1, pack: 2, total: 1, monthlyAllowance: rate });
+        checked++;
+      }
+      expect(checked).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId}`)[0]!.n, "nothing granted on top of the corrupt bucket").toBe(before);
+    const reported = sentry.captureError.mock.calls.filter(([e, ctx]) => (e as { code?: string }).code === "ledger_negative" && (ctx as { orgId?: string }).orgId === r.auth.orgId);
+    expect(reported, "each failed grant is REPORTED, not swallowed").toHaveLength(2);
+    expect(errors.filter((m) => m.includes("monthly grant failed")), "and logged").toHaveLength(2);
+    // Tenancy is not a grant failure: another org's read is still 404, never a soft fallback.
+    const other = await rig({ monthly: true });
+    await expect(relayCredits(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });
+    // The positive pair: a healthy org's read still grants.
+    expect(await relayCredits(other.auth, other.auth.orgId)).toMatchObject({ monthly: rate, monthlyAllowance: rate });
+  });
+
   it("I3: after a mid-month upgrade the card agrees with itself — relayCredits' monthly bucket is topped up to the allowance it prints", async () => {
     const r = await rig({ credits: 2, monthly: true });
     const community = await monthlyRate("community");

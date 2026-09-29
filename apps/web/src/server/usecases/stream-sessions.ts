@@ -42,7 +42,7 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
-  lockOrg, reuseWindowOpen, type StreamCreditBreakdown,
+  lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
 import { setFixtureStreamUrl } from "./fixtures";
@@ -1162,7 +1162,19 @@ export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayC
   if (orgId !== auth.orgId) throw new HttpError(404, "organisation not found");
   // I3: the ensure resolves the plan's rate to decide a mid-month top-up, and hands it back — the allowance printed on
   // the card is the same number the grant was topped up to, read once.
-  const { rate: monthlyAllowance } = await ensureMonthlyStreamGrantWithRate(orgId);
+  let monthlyAllowance: number;
+  try {
+    ({ rate: monthlyAllowance } = await ensureMonthlyStreamGrantWithRate(orgId));
+  } catch (err) {
+    // I1: this is a WRITE made during the division page's GET, for every editable org. It can refuse by design (a
+    // corrupt ledger's `ledger_negative`) or fail on the lock or the plan read, and a failed grant writes no key, so it
+    // fails again on every render. Thrown from here it took down the org's whole fixtures tab (no error boundary under
+    // d/[divSlug]/). Log it, report it, and answer the UNGRANTED balance. The next start (createSession) runs the
+    // same ensure and refuses loudly there, on the action that needs the credit, not on the page that shows it.
+    log.error({ err, orgId }, "relayCredits: monthly grant failed; answering the ungranted balance");
+    captureError(err, { orgId, route: "relay.credits.monthly_grant" });
+    monthlyAllowance = await streamMonthlyRate(orgId).catch(() => 0);
+  }
   return { ...(await creditBreakdown(sql, orgId)), monthlyAllowance };
 }
 
