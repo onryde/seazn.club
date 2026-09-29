@@ -81,12 +81,25 @@ describe.skipIf(!HAS_DB)("streaming on every plan (V426)", () => {
       checked++;
     }
     expect(checked).toBe(plans.length);
-    // ORDER, not values (the values are the owner's, read from the DB wherever they are used): a paid tier never
-    // grants fewer than the one below it, and the L pass never fewer than the M pass.
+    // The L pass never grants fewer than the M pass. The pass VALUES are pinned as literals where the pass grant is
+    // tested (billing-pass-stream-credits.test.ts); the subscription plans' values are pinned in the next test.
     const n = (k: string) => by.get(k)!.int_value!;
-    expect(n("pro")).toBeGreaterThan(n("community"));
-    expect(n("enterprise")).toBeGreaterThan(n("pro"));
     expect(n("event_pass_l")).toBeGreaterThan(n("event_pass"));
+  });
+
+  // I-3 (lane-close review): the owner's monthly numbers, as LITERALS. Every other suite reads the expected grant from
+  // these same V426 rows (stream-credits-monthly.test.ts through `streamMonthlyRate`), so a typo in the migration — pro
+  // at 50 — would move the code and every one of those expectations together and leave them all green. This is money
+  // the owner ruled (2026-09-29: community 1, pro 5, enterprise 20), and for a ruled number the literal IS the rulebook.
+  it(`the owner's ${MONTHLY} for the three subscription plans: community 1, pro 5, enterprise 20 — literals, never read back from the rows under test`, async () => {
+    const OWNER_RULED = { community: 1, pro: 5, enterprise: 20 } as const;
+    const rows = await sql<{ plan_key: string; int_value: number | null }[]>`
+      select plan_key, int_value from plan_entitlements
+       where feature_key = ${MONTHLY} and plan_key in ${sql(Object.keys(OWNER_RULED))}`;
+    const got = Object.fromEntries(rows.map((r) => [r.plan_key, r.int_value]));
+    // Anti-vacuity: a plan whose row is missing would drop out of `got` and fail the equality below, but say so first.
+    expect(rows.length, "one V426 row per owner-ruled plan").toBe(Object.keys(OWNER_RULED).length);
+    expect(got).toEqual(OWNER_RULED);
   });
 
   it("is TRUE for a fresh (community) org with no override, and an override row switches it OFF — the only way a gate appears now", async () => {
