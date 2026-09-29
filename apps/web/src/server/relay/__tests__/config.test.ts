@@ -204,8 +204,8 @@ describe("liveRunnerIdentity — a live runner needs its OWN app and its environ
 });
 
 // R5 "throws at boot": instrumentation.ts's register() — the hook Next calls ONCE before the server takes a request —
-// resolves the relay mode on the nodejs runtime, so a deployment configured to fake refuses to START rather than fail at
-// its first stream. Sentry is doubled: the hook initialises it first, and this file is about the relay check only.
+// resolves the relay mode on the nodejs runtime, so a deployment configured to fake fails its boot hook rather than fake at
+// its first stream. On Fly that is not an exit: the process stays up and answers 500 to every request until it is fixed. Sentry is doubled: the hook initialises it first, and this file is about the relay check only.
 vi.mock("@sentry/nextjs", () => ({ captureRequestError: () => {}, init: () => {} }));
 vi.mock("../../../../sentry.server.config", () => ({}));
 vi.mock("../../../../sentry.edge.config", () => ({}));
@@ -227,7 +227,7 @@ describe("R5: the boot hook refuses a faking deployment", () => {
       booted++;
     }
     expect(booted).toBe(4);
-    // m2: a PRODUCTION server (server.js) with an explicit fake and no ENV_NAME refuses to start; named ci, it starts.
+    // m2: a PRODUCTION server (server.js) with an explicit fake and no ENV_NAME fails its boot hook; named ci, it passes.
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("RELAY_DRIVERS", "fake");
     vi.stubEnv("ENV_NAME", "");

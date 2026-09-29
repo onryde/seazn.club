@@ -3,7 +3,8 @@
 // server for a suite that streams (e2e's stream-overlay spec and Phone tab, smoke's stream-overlay suite) must say
 // RELAY_DRIVERS=fake explicitly, or those suites go red on a 503 that looks like an outage. And (m2, lane-close fix,
 // ruled 2026-09-29) under production an explicit fake also needs ENV_NAME named as one of FAKE_DRIVER_ENV_NAMES — an
-// unnamed production server REFUSES to boot — so each of those steps says ENV_NAME: ci beside it.
+// unnamed production server fails its boot check and answers 500 to every request — so each of those steps says
+// ENV_NAME: ci beside it.
 //
 // Swept by BEHAVIOUR, not by file or step name (AGENTS.md class 16; Task 14b review M3): EVERY workflow under
 // .github/workflows is read, every line that boots a production server (a `node … server.js`, `next start`, or an

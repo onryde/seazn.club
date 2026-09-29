@@ -232,7 +232,10 @@ export const FLY_BILLING_SECONDS_PER_MONTH = 30 * 24 * 3600;
  *   * explicit `fake` — only on a `local` or `ci` environment (ENV_NAME, read by `envNameOf`); on stg, prod or any other
  *     named deployment it THROWS. An UNSET ENV_NAME is allowed outside production only (m2, lane-close fix, ruled
  *     2026-09-29): an unnamed production server is exactly what a deployment missing its ENV_NAME secret looks like, so
- *     it THROWS too. instrumentation.ts calls this at boot, so such a deployment never starts.
+ *     it THROWS too. instrumentation.ts calls this at boot; on Fly that does not stop the process — it stays up and
+ *     answers 500 to every request until the misconfiguration is fixed (lane-close re-review M-1). A server started
+ *     without the compiled instrumentation (a hand-staged standalone tree) never runs that call; there every caller of
+ *     this function throws instead, so each relay-touching request 500s.
  *   * anything else — throws rather than guess. `disabled` is a resolved mode, never a value to set. */
 export type RelayDriverMode = "fake" | "live" | "disabled";
 export function relayDriverMode(env: Record<string, string | undefined> = process.env): RelayDriverMode {
