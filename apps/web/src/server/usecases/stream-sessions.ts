@@ -1339,6 +1339,9 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     endReason: row.end_reason,
     creditUsed: spend!.net < 0,
+    // I-1: admission's own question, on admission's own clock (createSession asks `reuseWindowOpen` with deps.now()), so
+    // the tab's "free restart" and the gate that waives the balance cannot disagree.
+    restartFree: await reuseWindowOpen(sql, { orgId: row.org_id, fixtureId }, deps.now()),
   };
 }
 

@@ -31,7 +31,7 @@
 import {
   Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode,
 } from "react";
-import { Check, Copy, Smartphone, Video } from "lucide-react";
+import { Check, Copy, RotateCcw, Smartphone, Video } from "lucide-react";
 import QRCode from "qrcode";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -1174,6 +1174,9 @@ export function PhoneTab({
         currency={currency}
         split={streamSplit}
         monthlyAllowance={monthlyAllowance}
+        // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
+        // is exactly what the next start is asking about. No session ever → nothing consumed → no window.
+        restartFree={view?.restartFree ?? false}
         onSelectTarget={setSelectedTargetId}
         onAddTarget={() => setShowTargetForm((v) => !v)}
         onMode={setMode}
@@ -1255,6 +1258,9 @@ export interface PhoneTabBodyProps {
   checkoutOpen: boolean;
   /** P1: the currency the checkout will charge; the tiles quote in it. */
   currency: Currency;
+  /** I-1: the projection's `restartFree` — a start on this fixture now would be admitted without a credit (the reuse
+   *  window). At balance 0 it is what keeps Go live reachable instead of the forced chooser. */
+  restartFree: boolean;
   onSelectTarget: (id: string) => void;
   onAddTarget: () => void;
   onMode: (m: FeedMode) => void;
@@ -1390,8 +1396,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
     p.balance === 1 ? msg("stream.phone.credits.one") : msg("stream.phone.credits.other", { n: p.balance });
   // The chooser opens either because the org cannot start without credits (FORCED — there is nothing behind it to go
   // back to), or because the organiser asked for it from "Buy more" — mid-session included. A plan refusal (I1) takes
-  // its slot: buying is exactly what the plan refused.
-  const forced = state === "idle" && p.balance < 1;
+  // its slot: buying is exactly what the plan refused. I-1: NOT forced when the restart is free — admission waives the
+  // credit inside the fixture's reuse window, so balance 0 is no reason to withhold Go live.
+  const forced = state === "idle" && p.balance < 1 && !p.restartFree;
   const buyCard = !p.planGate && (forced || p.showBuy);
   // B3: an idle org with no credits sees the heading and the credits card ONLY — a "Ready" pill and a three-step
   // stepper promise a stream it cannot start.
@@ -1646,6 +1653,13 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               <span className="block text-[10px]">{msg("stream.phone.mode.soon")}</span>
             </button>
           </div>
+          {p.restartFree && (
+            // I-1: why a zero (or unchanged) balance can start — the line Go live stands on, in the chip's emerald.
+            <p data-testid="stream-restart-free" className="flex items-start gap-1.5 text-xs text-emerald-800">
+              <RotateCcw aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-600" strokeWidth={2} />
+              {msg("stream.phone.restartFree")}
+            </p>
+          )}
           <button
             type="button"
             data-testid="stream-go-live"

@@ -636,6 +636,52 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(await consumes()).toBe(1);
   });
 
+  // I-1 (lane-close review): the Phone tab read only the balance, so at 0 it sold a pack for a restart the server admits
+  // free (§5.2, `admit`'s waived balance gate). The projection now carries `restartFree` — the SAME authority admission
+  // asks (`reuseWindowOpen`, on the same clock) — and each of its answers below is checked against what `createSession`
+  // then actually does, so the fact the panel shows and the gate the server applies cannot disagree. The window is the
+  // DECLARED one (config.ts CREDIT_REUSE_HOURS), a minute inside and a minute past. The scenario is the review's: the paid
+  // session went live, then the free restart's phone never connected and it failed `no_inbound_timeout` — at balance 0.
+  it("I-1: restartFree — false before any consume, true once this fixture's consume stands; after a failed (no_inbound_timeout) restart at balance 0 it is true a minute inside the window and false a minute past it — and createSession agrees both ways", async () => {
+    const r = await rig({ credits: 1 });
+    const first = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(warming).toMatchObject({ id: first.sessionId, state: "warming" });
+    expect(warming.restartFree, "the empty case: nothing consumed on this fixture yet").toBe(false);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live).toMatchObject({ state: "live", creditUsed: true, restartFree: true });
+    await stopSession(r.auth, r.fixtureId, first.sessionId, r.deps);
+    expect(await creditBalance(sql, r.auth.orgId), "premise: the restart below runs AT zero").toBe(0);
+
+    // The free restart's phone never connects: warming past its timeout, read by the organiser's poll.
+    // Both rows are re-dated, the paid one further back: the projection reads the fixture's LATEST session by created_at.
+    const second = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 2}) where id = ${first.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${second.sessionId}`;
+    const redate = (minutesAgo: number) => sql`
+      update org_stream_credits set created_at = ${r.deps.now()}::timestamptz - make_interval(mins => ${minutesAgo})
+       where org_id = ${r.auth.orgId} and reason = 'consume'`;
+    await redate(CREDIT_REUSE_HOURS * 60 - 1);
+    const failed = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(failed).toMatchObject({ id: second.sessionId, state: "failed", failReason: "no_inbound_timeout", balance: 0 });
+    // The differential against D3's fact: THIS session used no credit, yet its restart is free — the paid one's window.
+    expect(failed.creditUsed).toBe(false);
+    expect(failed.restartFree, "a minute inside the window").toBe(true);
+
+    await redate(CREDIT_REUSE_HOURS * 60 + 1);
+    const past = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(past.restartFree, "a minute past the window").toBe(false);
+    await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps), "…and admission agrees: at 0 it is refused").rejects.toMatchObject({ status: 402, code: "no_credits" });
+
+    await redate(CREDIT_REUSE_HOURS * 60 - 1);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.restartFree).toBe(true);
+    const third = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect(third.sessionId, "…and admission agrees: inside the window at 0 it is admitted").toBeTruthy();
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`;
+    expect(n, "one consume across all three sessions").toBe(1);
+  });
+
   it("stop → ending → completed for passthrough; replay fill copies the YouTube watch URL only when stream_url is null", async () => {
     const r = await rig({ credits: 1, watchUrl: "https://www.youtube.com/watch?v=relay1" });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);

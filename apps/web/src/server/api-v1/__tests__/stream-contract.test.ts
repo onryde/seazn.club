@@ -178,6 +178,7 @@ describe("relay request schemas refuse what they must", () => {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
+      restartFree: false,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
     // D3: creditUsed is REQUIRED and a boolean — an absent field must not read as "no credit used" on the client.
@@ -185,6 +186,12 @@ describe("relay request schemas refuse what they must", () => {
     delete withoutCreditUsed.creditUsed;
     expect(S.StreamSessionCurrent.safeParse(withoutCreditUsed).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, creditUsed: 1 }).success).toBe(false);
+    // I-1: restartFree likewise — an absent field would read as "not free" and force the chooser on a free restart.
+    const withoutRestartFree: Record<string, unknown> = { ...current };
+    delete withoutRestartFree.restartFree;
+    expect(S.StreamSessionCurrent.safeParse(withoutRestartFree).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: "yes" }).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: true }).success, "the positive pair").toBe(true);
     expect(S.StreamSessionCurrent.safeParse({ ...current, streamKey: "k" }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, qr: {} }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "storage_exhausted" }).success).toBe(false);

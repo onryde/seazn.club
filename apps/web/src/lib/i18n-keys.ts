@@ -6254,6 +6254,7 @@ export type DictionaryKey =
   | "stream.phone.qr.field"
   | "stream.phone.rec"
   | "stream.phone.replay"
+  | "stream.phone.restartFree"
   | "stream.phone.retry"
   | "stream.phone.state.ended"
   | "stream.phone.state.ending"

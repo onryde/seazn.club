@@ -43,6 +43,8 @@ import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
 import { STREAM_CREDIT_PACKS, streamPack, streamPackPriceAmounts } from "@/lib/stream-credit-packs";
 import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
+import { LOCALES } from "@/lib/i18n-constants";
+import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
 import {
   DESTINATION_REFUSAL_KEYS,
@@ -524,6 +526,7 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null },
   qr: QR, balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
+  restartFree: false,
   ...over,
 });
 
@@ -895,7 +898,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
-  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0,
+  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {}, onTileIntent: () => {},
 };
@@ -1221,6 +1224,58 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     // …and a FAILED session at balance 0 is not idle: it keeps its pill and stepper (the no_credits failure explains itself).
     const failed = body({ view: session({ state: "failed", qr: null, failReason: "no_credits" }), balance: 0 });
     expect(byTestId(failed, "stream-state-pill")).toBeDefined();
+  });
+
+  // I-1 (lane-close review): admission waives the credit for a restart inside the fixture's reuse window
+  // (stream-credits.ts `reuseWindowOpen`), so an org at balance 0 may start this match again — but the tab forced the
+  // chooser at balance 0 and no path reached Go live. The projection now says so (`restartFree`) and the tab obeys it.
+  it("I-1: idle at balance 0 with a FREE restart is Go live plus the free-restart line — not the forced chooser; without it, the tiles", () => {
+    const free = body({ view: null, balance: 0, restartFree: true, targets: TARGETS, selectedTargetId: "t1" });
+    const go = byTestId(free, "stream-go-live");
+    expect(go, "a free restart at balance 0 reaches Go live").toBeDefined();
+    expect(propsOf(go!).disabled, "…and it is enabled").toBeFalsy();
+    let tiles = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      expect(byTestId(free, `stream-buy-pack-${pack.size}`), `no forced tile ${pack.size}`).toBeUndefined();
+      tiles++;
+    }
+    expect(tiles, "no packs declared — the absence above would be vacuous").toBeGreaterThan(0);
+    expect(textAt(free, "stream-restart-free")).toBe(m("stream.phone.restartFree"));
+    // Not credits-only (B3): a startable tab keeps its pill and stepper.
+    for (const id of ["stream-state-pill", "stream-step", "stream-steps"]) expect(byTestId(free, id), id).toBeDefined();
+    // Still no balance chip and no Buy more — the org holds nothing to count or top up from here.
+    expect(byTestId(free, "stream-balance")).toBeUndefined();
+
+    // The positive pair, the SAME balance-0 idle with the window shut: the forced tiles, no Go live, no line.
+    const shut = body({ view: null, balance: 0, restartFree: false, targets: TARGETS, selectedTargetId: "t1" });
+    for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(shut, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+    expect(byTestId(shut, "stream-go-live")).toBeUndefined();
+    expect(byTestId(shut, "stream-restart-free")).toBeUndefined();
+    expect(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }), "stream-restart-free"), "funded, window shut: no line").toBeUndefined();
+
+    // A funded org restarting inside the window is told the same true thing: this start will not spend a credit.
+    expect(textAt(body({ view: null, balance: 2, restartFree: true, targets: TARGETS, selectedTargetId: "t1" }), "stream-restart-free")).toBe(m("stream.phone.restartFree"));
+    // …and only at idle, where the start is: a running or finished session never shows it.
+    const up = [
+      session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", restartFree: true }),
+      session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true, restartFree: true }),
+      session({ state: "failed", qr: null, failReason: "no_inbound_timeout", balance: 0, restartFree: true }),
+    ];
+    for (const v of up) expect(byTestId(body({ view: v, balance: 0, restartFree: true }), "stream-restart-free"), v.state).toBeUndefined();
+  });
+
+  it("I-1: the free-restart line says the reuse window's own hours, in every locale", () => {
+    // Taken from the relay's declaration (config.ts CREDIT_REUSE_HOURS — the hours `withinReuseWindow` counts), never
+    // typed here: a window moved to 12 h leaves every locale's "24" a lie, and this is where that shows.
+    let locales = 0;
+    for (const l of LOCALES) {
+      const line = uiDict(l)["stream.phone.restartFree"];
+      expect(line?.length, `${l}: the key exists`).toBeGreaterThan(0);
+      expect(line, `${l} names the window's hours`).toMatch(new RegExp(`\\b${CREDIT_REUSE_HOURS}\\b`));
+      if (l !== "en") expect(line, `${l} is translated`).not.toBe(uiDict("en")["stream.phone.restartFree"]);
+      locales++;
+    }
+    expect(locales).toBe(4);
   });
 
   it("B6: an OPENED chooser has a visible Close that hands back the idle controls; a FORCED one (balance 0) has none", () => {
@@ -1650,6 +1705,47 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(done).onAgain();
     expect(bodyOf(done).view, "Start another returns the tab to idle").toBeNull();
     expect(bodyOf(done).balance, "…and keeps the fresher balance, not the page-load one").toBe(1);
+  });
+
+  // I-1: the review's own case. A restart whose phone never connected failed (no_inbound_timeout) at balance 0, inside
+  // the reuse window of the match's paid go-live — admission would waive the credit, so Try again must reach Go live.
+  it("I-1: a failed no_inbound_timeout session at balance 0 INSIDE the window → Try again shows Go live and no forced tiles; OUTSIDE → the tiles", async () => {
+    const failed = { id: "s2", state: "failed" as const, qr: null, failReason: "no_inbound_timeout" as const, balance: 0 };
+    let checked = 0;
+    for (const restartFree of [true, false]) {
+      const island = track(await mount({ current: session({ ...failed, restartFree }), targets: TARGETS }));
+      expect(bodyOf(island).restartFree, `${restartFree}: the container hands the projection's answer down`).toBe(restartFree);
+      expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-retry"), "Try again is on the failed card").toBeDefined();
+      bodyOf(island).onAgain();
+      const b = bodyOf(island);
+      expect(b.view, "Try again returns the tab to idle").toBeNull();
+      expect(b.balance, "the projection's balance, kept").toBe(0);
+      // …and the answer survives the dismiss: it is the FIXTURE's window, not the dismissed card's.
+      expect(b.restartFree, `${restartFree}: kept across Try again`).toBe(restartFree);
+      const tree = walk(expandWithHooks(PhoneTabBody, b));
+      if (restartFree) {
+        expect(byTestId(tree, "stream-go-live"), "inside the window: Go live").toBeDefined();
+        expect(byTestId(tree, "stream-buy-pack-5"), "inside the window: no forced tiles").toBeUndefined();
+        expect(byTestId(tree, "stream-restart-free")).toBeDefined();
+      } else {
+        expect(byTestId(tree, "stream-go-live"), "outside the window: no Go live").toBeUndefined();
+        for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(tree, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("I-1: the balance-0 ENDED card still offers Start another, and it leads to Go live inside the window", async () => {
+    const ended = session({ id: "s1", state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true, balance: 0, restartFree: true });
+    const island = track(await mount({ current: ended, targets: TARGETS }));
+    expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-again"), "Start another at balance 0").toBeDefined();
+    bodyOf(island).onAgain();
+    const tree = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(byTestId(tree, "stream-go-live")).toBeDefined();
+    expect(byTestId(tree, "stream-buy-pack-5")).toBeUndefined();
+    // The go-live it leads to POSTs a create like any other; the server (createSession → reuseWindowOpen) decides.
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "a destination is selected").toBeFalsy();
   });
 
   it("opens at the FIRST destination (created_at order, as the route returns it) and at clean feed; no destination → none selected", async () => {

@@ -1349,6 +1349,11 @@ export const StreamSessionCurrent = z
      *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —
      *  both read false, so the "1 credit used" chip is never a false money claim (lane D D3). */
     creditUsed: z.boolean(),
+    /** I-1 (lane-close review): true iff a new start on THIS fixture would cost nothing right now — a consume of this
+     *  fixture still stands inside the reuse window (§5.2 "a restart after a failure is the same match"). Computed through
+     *  the one authority admission asks (`reuseWindowOpen`), so the Phone tab never sells a pack for a restart the server
+     *  would admit at balance 0. A fixture fact, not this session's: a restart that consumed nothing still reads true. */
+    restartFree: z.boolean(),
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
