@@ -9,6 +9,7 @@ import "server-only";
 // `"credit_pack"`, which is the AI credit WALLET's and lands on a different
 // ledger; `metadata.credits` SNAPSHOTS the grant (the donor's review fix — a
 // later catalogue edit must not change what a paid session grants).
+import { createHash } from "node:crypto";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { HttpError } from "@/lib/errors";
@@ -77,15 +78,39 @@ export async function resolveStreamPackPriceId(pack: StreamCreditPack): Promise<
   return price.id;
 }
 
+/** Key-sorted JSON (arrays keep their order), so two equal requests hash equal whatever order their fields were built in. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, val: unknown) =>
+    val && typeof val === "object" && !Array.isArray(val)
+      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
+      : val,
+  );
+}
+
+/**
+ * D-A (Task 14 fix round 4): the idempotency key for ONE Checkout Session request — a digest of every parameter the
+ * Session is created with, plus the 30-second bucket.
+ *
+ * It was `relay-checkout-<org>-<size>-<bucket>`, and Stripe answers a reused key whose parameters DIFFER with
+ * StripeIdempotencyError: the same pack bought for another fixture (another return_url and metadata) or in another
+ * currency inside one bucket was a 502 "Checkout didn't open" (capture pass 3, three times). Hashing the params
+ * themselves makes the key vary exactly when the request does — a true double tap (the same request) still dedupes,
+ * a different request can never collide, and a field added to the params later is covered without an edit here.
+ */
+export function relayCheckoutIdempotencyKey(params: Stripe.Checkout.SessionCreateParams, bucket: number): string {
+  const digest = createHash("sha256").update(canonicalJson(params)).digest("hex").slice(0, 32);
+  return `relay-checkout-${digest}-${bucket}`;
+}
+
 /**
  * Open a one-time embedded Checkout Session for a match-credit pack. The route
  * resolves the caller/org/currency and calls this, so the Stripe-call shape
  * lives in one place.
  *
- * The idempotency key is scoped to a 30-second bucket per (org, pack): enough
- * to dedupe a double-click or a retry of the SAME purchase attempt, short
- * enough that a genuine second pack purchase moments later is not answered
- * with the first (completed) session.
+ * The idempotency key (`relayCheckoutIdempotencyKey`) is the request's own
+ * digest in a 30-second bucket: enough to dedupe a double-click or a retry of
+ * the SAME purchase attempt, short enough that a genuine second pack purchase
+ * moments later is not answered with the first (completed) session.
  */
 export async function createRelayCheckout(args: {
   orgId: string;
@@ -100,17 +125,15 @@ export async function createRelayCheckout(args: {
   if (!pack) throw new HttpError(400, `Unknown match-credit pack: ${args.size}`);
   const priceId = await resolveStreamPackPriceId(pack);
   const bucket = Math.floor(Date.now() / 30_000);
-  return getStripe().checkout.sessions.create(
-    buildRelayCheckoutParams({
-      priceId,
-      orgId: args.orgId,
-      fixtureId: args.fixtureId,
-      pack,
-      returnUrl: args.returnUrl,
-      currency: args.currency,
-      customerId: args.customerId ?? undefined,
-      customerEmail: args.customerEmail,
-    }),
-    { idempotencyKey: `relay-checkout-${args.orgId}-${args.size}-${bucket}` },
-  );
+  const params = buildRelayCheckoutParams({
+    priceId,
+    orgId: args.orgId,
+    fixtureId: args.fixtureId,
+    pack,
+    returnUrl: args.returnUrl,
+    currency: args.currency,
+    customerId: args.customerId ?? undefined,
+    customerEmail: args.customerEmail,
+  });
+  return getStripe().checkout.sessions.create(params, { idempotencyKey: relayCheckoutIdempotencyKey(params, bucket) });
 }

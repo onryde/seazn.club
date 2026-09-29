@@ -24,7 +24,9 @@ vi.mock("@/lib/stripe", () => ({
   }),
 }));
 
-import { buildRelayCheckoutParams, createRelayCheckout, resolveStreamPackPriceId } from "../relay-checkout";
+import {
+  buildRelayCheckoutParams, createRelayCheckout, relayCheckoutIdempotencyKey, resolveStreamPackPriceId,
+} from "../relay-checkout";
 
 describe("STREAM_CREDIT_PACKS", () => {
   it("is the three packs the design names, one popular, lookup keys unique", () => {
@@ -231,7 +233,10 @@ describe("createRelayCheckout", () => {
     });
     const [sent, opts] = stripeMock.sessionsCreate.mock.calls[0]!;
     expect(sent.line_items).toEqual([{ price: "price_5", quantity: 1 }]);
-    expect(opts.idempotencyKey).toBe(`relay-checkout-org-1-5-${Math.floor(Date.now() / 30_000)}`);
+    // D-A: a digest of the request, then the 30 s bucket — the bucket computed HERE, not read back from the code.
+    expect(opts.idempotencyKey).toMatch(new RegExp(`^relay-checkout-[0-9a-f]{32}-${Math.floor(Date.now() / 30_000)}$`));
+    // Stripe caps an idempotency key at 255 characters.
+    expect(opts.idempotencyKey.length).toBeLessThanOrEqual(255);
     // A SECOND call inside the same 30 s window reuses the key, so Stripe
     // replays the first session rather than opening a second charge (S8).
     // A different pack is a different purchase and gets its own key.
@@ -252,6 +257,103 @@ describe("createRelayCheckout", () => {
       currency: "gbp",
     });
     expect(stripeMock.sessionsCreate.mock.calls[2]![1].idempotencyKey).not.toBe(opts.idempotencyKey);
+  });
+
+  // D-A (capture pass 3). The key was `relay-checkout-<org>-<size>-<bucket>`, so the SAME pack bought for another fixture
+  // (another return_url and metadata) or in another currency inside one 30 s bucket reused a key with DIFFERENT
+  // parameters. Stripe refuses that (StripeIdempotencyError) and the route answered 502 "Checkout didn't open" — seen
+  // three times in one pass. The key is now a digest of every parameter the Session is created with, plus the bucket.
+  describe("D-A: the idempotency key", () => {
+    type Args = Parameters<typeof createRelayCheckout>[0];
+    // Every argument, spelled out (`Required` makes the compiler demand a new one here the day it is added). The
+    // first-purchase shape — no Stripe customer yet, so the email is what Stripe is sent.
+    const BASE: Required<Args> = {
+      orgId: "org-1",
+      fixtureId: "fx-1",
+      size: 5,
+      returnUrl: "https://seazn.club/o/a/c/b/d/c?tab=fixtures&fixture=fx-1&stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}",
+      currency: "usd",
+      customerId: null,
+      customerEmail: "o@example.com",
+    };
+    /** One call, the price id Stripe resolves the pack's lookup key to, and the key and params it was sent with. */
+    async function keyFor(args: Args, priceId = "price_5"): Promise<{ key: string; sent: Record<string, unknown> }> {
+      stripeMock.pricesList.mockResolvedValueOnce({ data: [{ id: priceId }] });
+      stripeMock.sessionsCreate.mockResolvedValueOnce({ id: "cs", client_secret: "cs_secret" });
+      await createRelayCheckout(args);
+      const [sent, opts] = stripeMock.sessionsCreate.mock.calls.at(-1)!;
+      return { key: opts.idempotencyKey as string, sent };
+    }
+
+    it("a true double tap (the same request) reuses the key; every argument that changes the Session, ALONE, changes it", async () => {
+      const base = await keyFor(BASE);
+      expect((await keyFor({ ...BASE })).key, "a double tap must dedupe").toBe(base.key);
+      // Each row moves ONE argument. The two repros from capture pass 3 are rows here: another fixture's return, and
+      // another currency for the same pack.
+      const VARIANTS: { [K in keyof Args]-?: Args[K] } = {
+        orgId: "org-2",
+        fixtureId: "fx-2",
+        size: 20,
+        returnUrl: BASE.returnUrl.replaceAll("fx-1", "fx-2"),
+        currency: "gbp",
+        customerId: "cus_existing",
+        customerEmail: "treasurer@example.com",
+      };
+      expect(Object.keys(VARIANTS).sort(), "a createRelayCheckout argument with no row").toEqual(Object.keys(BASE).sort());
+      let checked = 0;
+      const seen = new Set([base.key]);
+      for (const k of Object.keys(VARIANTS) as (keyof Args)[]) {
+        const moved = await keyFor({ ...BASE, [k]: VARIANTS[k] });
+        expect(moved.sent, `premise: ${k} changes what Stripe is sent`).not.toEqual(base.sent);
+        expect(moved.key, `${k} alone collided with the base key`).not.toBe(base.key);
+        seen.add(moved.key);
+        checked++;
+      }
+      // The Stripe price the pack's lookup key resolves to is a parameter too (a re-minted price inside one bucket).
+      const repriced = await keyFor(BASE, "price_5_v2");
+      expect(repriced.key, "priceId alone collided").not.toBe(base.key);
+      seen.add(repriced.key);
+      checked++;
+      expect(checked).toBe(Object.keys(BASE).length + 1);
+      expect(seen.size, "two different requests shared a key").toBe(checked + 1);
+    });
+
+    it("the key follows what Stripe is SENT: arguments that do not change the request do not change the key", async () => {
+      // A returning buyer is sent `customer`, never `customer_email` (the two are exclusive), so the email is not part
+      // of the request — two taps that differ only there are the same request and must dedupe.
+      const a = await keyFor({ ...BASE, customerId: "cus_existing", customerEmail: "o@example.com" });
+      const b = await keyFor({ ...BASE, customerId: "cus_existing", customerEmail: "someone-else@example.com" });
+      expect(b.sent, "premise: Stripe is sent the same thing").toEqual(a.sent);
+      expect(b.key).toBe(a.key);
+    });
+
+    it("equal requests hash equal whatever order their fields were built in — nested objects included", () => {
+      const params = buildRelayCheckoutParams({
+        priceId: "price_5", orgId: "org-1", fixtureId: "fx-1", pack: streamPack(5)!, returnUrl: BASE.returnUrl, currency: "usd",
+        customerEmail: "o@example.com",
+      });
+      const reversed = (o: unknown): unknown =>
+        o && typeof o === "object" && !Array.isArray(o)
+          ? Object.fromEntries(Object.entries(o).reverse().map(([k, v]) => [k, reversed(v)]))
+          : o;
+      const flipped = reversed(params) as typeof params;
+      expect(Object.keys(flipped), "premise: the field order really differs").not.toEqual(Object.keys(params));
+      expect(Object.keys(flipped.metadata!), "premise: nested too").not.toEqual(Object.keys(params.metadata!));
+      expect(relayCheckoutIdempotencyKey(flipped, 7)).toBe(relayCheckoutIdempotencyKey(params, 7));
+      // …and the positive pair: one nested value moved is another key.
+      expect(relayCheckoutIdempotencyKey({ ...params, metadata: { ...params.metadata, fixture_id: "fx-2" } }, 7)).not.toBe(
+        relayCheckoutIdempotencyKey(params, 7),
+      );
+    });
+
+    it("the bucket still ends a key: the same request 30 s later is a new purchase attempt", async () => {
+      const now = await keyFor(BASE);
+      vi.setSystemTime(Date.now() + 30_000);
+      const later = await keyFor(BASE);
+      expect(later.sent).toEqual(now.sent);
+      expect(later.key).not.toBe(now.key);
+      expect(later.key.endsWith(`-${Math.floor(Date.now() / 30_000)}`)).toBe(true);
+    });
   });
 
   it("503s when the sandbox price has not been created yet", async () => {
