@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { builtinModules } from "@seazn/engine/sports";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BASELINE_PATH,
   checkRatchet,
@@ -30,6 +30,7 @@ import {
   SCOPE_NAME,
   type Pin,
 } from "../single-sport.ts";
+import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const CLI = resolve(REPO, "scripts/matrix/single-sport.ts");
@@ -59,8 +60,13 @@ const FULL: Record<string, string> = {
   "apps/web/src/server/usecases/__tests__/stage-progression.test.ts": "const c = 3;\n",
 };
 
+// Every test's CLI spawns are counted against the budget its suite declares,
+// which derives from the spawn's cap (final batch FB-6, task 11 review M-4).
+const meter = new SpawnMeter(11);
+beforeEach(() => meter.reset());
 function cli(args: string[], script = CLI) {
-  const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", script, ...args], { cwd: REPO, encoding: "utf8", timeout: 25_000 });
+  meter.tick();
+  const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", script, ...args], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
@@ -84,7 +90,7 @@ function writeBaseline(root: string, pins: Record<string, number>, moves: Record
 const at = (pins: Pin[]) => pins.map((p) => [p.line, p.sport, p.reasoned]);
 const live = (pins: Pin[]) => pins.filter((p) => !p.swept).map((p) => p.sport);
 
-describe("single-sport scanner (R26)", () => {
+describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   it("premise: the sport keys these fixtures use are registry keys, and the negatives are not", () => {
     expect(REGISTRY.length).toBeGreaterThan(0);
     for (const k of ["generic", "badminton", "tennis", "football", "cricket", "volleyball", "carrom", "hockey", "icehockey"]) expect(REGISTRY).toContain(k);

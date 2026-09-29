@@ -9,19 +9,27 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ESLINT = join(PKG, "node_modules", ".bin", "eslint");
 type Result = { filePath: string; messages: { ruleId: string | null; message: string }[] };
+// A type-aware eslint start takes ~2.5s idle; the package's bare `vitest run`
+// (the root test chain) defaults to a 5s test timeout, and CI passes 30s. One
+// constant sets both the spawn's cap and the test budget (final batch FB-6,
+// AGENTS.md class 20): each test lints once, so its budget is one cap plus
+// slack, and a hung eslint is reported as the spawn's own failure.
+const LINT_MS = 60_000;
+const SLACK_MS = 5_000;
+let lints = 0;
+beforeEach(() => { lints = 0; });
 function lint(code: string): { status: number | null; results: Result[]; stderr: string } {
-  const r = spawnSync(ESLINT, ["--format", "json", "--stdin", "--stdin-filename", "src/index.ts"], { cwd: PKG, input: code, encoding: "utf8", timeout: 60_000 });
+  if (++lints > 1) throw new Error("test: a second eslint spawn in one test — the budget covers one (LINT_MS + SLACK_MS); raise it with the count");
+  const r = spawnSync(ESLINT, ["--format", "json", "--stdin", "--stdin-filename", "src/index.ts"], { cwd: PKG, input: code, encoding: "utf8", timeout: LINT_MS });
   return { status: r.status, results: r.stdout.trim() === "" ? [] : (JSON.parse(r.stdout) as Result[]), stderr: r.stderr };
 }
 
-// A type-aware eslint start takes ~2.5s idle; the package's bare `vitest run`
-// (the root test chain) defaults to a 5s test timeout.
-describe("eslint: ruling 27's statement form is a lint error in src (review I-2)", { timeout: 60_000 }, () => {
+describe("eslint: ruling 27's statement form is a lint error in src (review I-2)", { timeout: LINT_MS + SLACK_MS }, () => {
   it("the package's own eslint binary exists — a missing binary is not a pass", () => {
     expect(existsSync(ESLINT), ESLINT).toBe(true);
   });

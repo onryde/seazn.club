@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type * as TS from "typescript";
 import { EngineError, type StageKind } from "@seazn/engine/core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { RULES, decide, planL3 } from "../lib/applicability.ts";
 import { UnscorableUnclassified, computeCounts } from "../lib/counts.ts";
@@ -40,6 +40,7 @@ import { generateStream } from "../lib/streams/index.ts";
 import { GeneratorUnsupported } from "../lib/streams/types.ts";
 import { buildSportVariants, offlineBuilderDefault, type SportVariants, type VariantCase } from "../lib/variants.ts";
 import { CATALOGUE_DIR, GENERATED, generateCatalogue, lowered, main, zeros, type Floors } from "../gen-catalogue.ts";
+import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
 // `typescript` through require, not import (as scenario-catalogue.test.ts).
 const ts: typeof TS = createRequire(import.meta.url)("typescript");
@@ -430,9 +431,14 @@ describe("lowered / zeros (the floor refusals)", () => {
   });
 });
 
-describe("gen-catalogue CLI", () => {
-  const cli = (args: string[], root: string) =>
-    spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", resolve(REPO, "scripts/matrix/gen-catalogue.ts"), ...args, "--root", root], { encoding: "utf8", timeout: 120_000 });
+// At most three CLI spawns per test; the budget derives from the spawn's cap (final batch FB-6).
+const genMeter = new SpawnMeter(3);
+describe("gen-catalogue CLI", { timeout: genMeter.budget }, () => {
+  beforeEach(() => genMeter.reset());
+  const cli = (args: string[], root: string) => {
+    genMeter.tick();
+    return spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", resolve(REPO, "scripts/matrix/gen-catalogue.ts"), ...args, "--root", root], { encoding: "utf8", timeout: SPAWN_MS });
+  };
   const roots: string[] = [];
   const temp = (): string => {
     const root = mkdtempSync(join(tmpdir(), "w1b-cat-"));
