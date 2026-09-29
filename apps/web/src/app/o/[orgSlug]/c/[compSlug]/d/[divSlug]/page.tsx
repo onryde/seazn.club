@@ -94,9 +94,12 @@ export default async function DivisionPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string; checkout?: string; session_id?: string }>;
+  searchParams: Promise<{ tab?: string; checkout?: string; session_id?: string; stream?: string; fixture?: string }>;
 }) {
-  const [{ orgSlug, compSlug, divSlug }, { tab: rawTab, checkout, session_id: checkoutSessionId }] = await Promise.all([
+  const [
+    { orgSlug, compSlug, divSlug },
+    { tab: rawTab, checkout, session_id: checkoutSessionId, stream: streamParam, fixture: fixtureParam },
+  ] = await Promise.all([
     params,
     searchParams,
   ]);
@@ -889,6 +892,9 @@ export default async function DivisionPage({
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
               stream={streamPanel}
+              // D2 — a stream-credit checkout returns with `?stream=open&fixture=<id>`; the panel decides (through
+              // `checkoutReturnFor`) which row that names and mounts the run sheet on a filter that renders it.
+              checkoutReturn={{ stream: streamParam, fixture: fixtureParam }}
             />
           </>
         )}

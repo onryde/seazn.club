@@ -16,7 +16,8 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
-import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
+import { checkoutReturnFor, type StreamPanelContext } from "@/components/v2/fixture-stream-panel";
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TipCallout } from "@/components/ui/tip";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
@@ -93,7 +94,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
-import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+import { RunSheet, runSheetKeeps, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
@@ -202,6 +203,30 @@ function toRunSheetFixture(f: FixtureRow): RunSheetFixture {
     venue_name: f.venue_name ?? null,
     officials: f.officials ?? [],
   };
+}
+
+/**
+ * The run sheet's MOUNTING filter. The design's default (desk design §filters): "Today" when the division is on its
+ * match day, else "All" — unchanged for every visit that is not a checkout return.
+ *
+ * D2 (stream-credits walkthrough, owner: fix now, 2026-09-29): a stream-credit checkout returns to this page naming a
+ * fixture (`checkoutReturnFor`, fixture-stream-panel.tsx — the one authority on which row the URL names), and that
+ * row's panel reopens on the Phone tab only if the row is RENDERED. "Today" keeps only a timed fixture dated today, so
+ * an untimed fixture's row was filtered away and a club that had just paid landed on a page without its match. When
+ * the default's rows would not include the returned fixture — asked of the run sheet's own row test, `runSheetKeeps`,
+ * never a restatement of it — the sheet mounts on "All", which keeps every row. `returned` is the fixture itself,
+ * already looked up in this division: an id the division does not hold arrives as `null` and changes nothing.
+ */
+export function initialRunSheetFilter(
+  phase: DivisionPhase | undefined,
+  returned: RunSheetFixture | null,
+  clock: { tz: string; nowMs: number; matchMinutes: number },
+): RunSheetFilter {
+  const byDefault: RunSheetFilter = phase === "match_day" ? "today" : "all";
+  if (returned === null) return byDefault;
+  const { tz, nowMs, matchMinutes } = clock;
+  const onSheet = runSheetKeeps(returned, byDefault, { stageId: null, tz, today: dayKeyInTz(nowMs, tz), nowMs, matchMinutes });
+  return onSheet ? byDefault : "all";
 }
 
 /** Adapts this panel's rows to `feedLabels()`'s input — the same normalising
@@ -346,6 +371,12 @@ interface Props {
    *  `stages-panel-*.test.tsx` props build without it, and absent reads as
    *  "not entitled", so no panel appears rather than a broken one. */
   stream?: StreamPanelContext;
+  /** D2 (stream-credits walkthrough, owner: fix now, 2026-09-29) — the `stream` and `fixture` params the division
+   *  page was opened with. A stream-credit checkout returns here with `?stream=open&fixture=<id>`, and the run sheet
+   *  must MOUNT on a filter that renders that fixture's row, or its panel never mounts to reopen. Read by the page
+   *  (a server component) and passed down rather than read here with `useSearchParams`: every other
+   *  `stages-panel-*.test.tsx` mocks `next/navigation` with `useRouter` alone. Absent = no return. */
+  checkoutReturn?: { stream?: string; fixture?: string };
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -455,7 +486,7 @@ export function boardSlotOptionsFor(
 // Schedule page, where the control now lives.
 
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, divisionConfig = {}, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, stream, checkoutReturn }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -552,8 +583,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // DEFAULT is spec: "Today" on a match day, else "All" — read once at
   // mount, same as every other `useState` initializer here; Task 7 replaces
   // this local state with the `?filter=` URL param without touching
-  // `<RunSheet>`'s own `filter`/`onFilter` props.
-  const [filter, setFilter] = useState<RunSheetFilter>(phase === "match_day" ? "today" : "all");
+  // `<RunSheet>`'s own `filter`/`onFilter` props. D2: a checkout return that
+  // names a fixture the default would hide mounts on "All" instead
+  // (`initialRunSheetFilter`). Read once, so G5's strip of the return params
+  // (a `router.replace`) re-renders without moving the filter under the user.
+  const [filter, setFilter] = useState<RunSheetFilter>(() => {
+    const params = { get: (name: string) => (name === "stream" ? checkoutReturn?.stream : name === "fixture" ? checkoutReturn?.fixture : undefined) ?? null };
+    const returned = checkoutReturn ? fixtures.find((f) => checkoutReturnFor(params, f.id)) : undefined;
+    return initialRunSheetFilter(phase, returned ? toRunSheetFixture(returned) : null, { tz, nowMs: Date.now(), matchMinutes });
+  });
   // Owner-approved "Option 2" (on top of Option B) — which stage the run
   // sheet below is filtered to, or `null` for every stage. A SECOND,
   // orthogonal dimension from `filter` above, never folded into

@@ -36,6 +36,55 @@ export type RunSheetFilter = "today" | "needs_result" | "unscheduled" | "all";
  *  never a second stage fetch. */
 export type RunSheetStageInfo = { id: string; kind: string; name: string };
 
+/** Everything one row test needs besides the filter: the stage filter (`null` = every stage), the venue zone,
+ *  today's day key in it, the clock, and the division's `matchMinutes` (the "Needs result" grace). */
+export type RunSheetKeepContext = {
+  stageId: string | null;
+  tz: string;
+  today: string;
+  nowMs: number;
+  matchMinutes: number;
+};
+
+// Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
+//
+// A bye is never actionable (R7a) and is never work, so it survives only the
+// unfiltered view. Max-effort review, finding 14: the bye short-circuit used
+// to be `filter === "all" || isBye(f)`, i.e. it ran BEFORE any filter test, so
+// a bye was retained under EVERY filter — `buildRunSheet` enforced R7(a) on
+// the grouping side and this predicate undid it on the rendering side. A
+// knockout with four round-1 byes, filtered to "Unscheduled", rendered a
+// "Round 1" header and four italic ghost rows under a chip reading 0, because
+// the COUNTS at `:131` already skip byes. Ruling R7(a), quoted at
+// run-sheet-groups.ts:11-12: byes "never enter the unscheduled group and never
+// carry an action" — taken literally here, which is also the only reading
+// under which the chip and the rows beneath it can agree.
+//
+// ORDER is the whole fix: `all` still wins, so a bracket round never hides the
+// bye that explains its missing fourth fixture; every work filter now drops it.
+//
+// The STAGE dimension (`stageId`) is checked FIRST, ahead of even `all` —
+// it is a second, orthogonal axis a row must ALSO satisfy, not one more
+// value of the `RunSheetFilter` ladder below it. A bye belonging to a
+// stage the organiser has filtered away must not survive under "all"
+// either, so this cannot reuse the `all`-wins-first ordering the TYPE
+// filter uses for byes — it runs before that ladder even starts.
+//
+// Module scope and exported (D2, stream-credits walkthrough, 2026-09-29) so the division page's MOUNTING filter
+// (`initialRunSheetFilter`, stages-panel.tsx) asks this same predicate whether a checkout-returned fixture's row is
+// on the sheet, instead of restating the "Today" rule beside it.
+export function runSheetKeeps(f: RunSheetFixture, filter: RunSheetFilter, ctx: RunSheetKeepContext): boolean {
+  const { stageId, tz, today, nowMs, matchMinutes } = ctx;
+  if (stageId !== null && f.stage_id !== stageId) return false;
+  if (filter === "all") return true;
+  if (isBye(f)) return false;
+  if (filter === "needs_result")
+    return isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
+  if (filter === "unscheduled") return isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
+  // "today": only a TIMED fixture landing on today's venue-zone day counts.
+  return f.scheduled_at !== null && dayKeyInTz(Date.parse(f.scheduled_at), tz) === today;
+}
+
 export function RunSheet({
   blocks,
   stages,
@@ -218,38 +267,8 @@ export function RunSheet({
   const needsResult = (f: RunSheetFixture) =>
     isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
 
-  // Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
-  //
-  // A bye is never actionable (R7a) and is never work, so it survives only the
-  // unfiltered view. Max-effort review, finding 14: the bye short-circuit used
-  // to be `filter === "all" || isBye(f)`, i.e. it ran BEFORE any filter test, so
-  // a bye was retained under EVERY filter — `buildRunSheet` enforced R7(a) on
-  // the grouping side and this predicate undid it on the rendering side. A
-  // knockout with four round-1 byes, filtered to "Unscheduled", rendered a
-  // "Round 1" header and four italic ghost rows under a chip reading 0, because
-  // the COUNTS at `:131` already skip byes. Ruling R7(a), quoted at
-  // run-sheet-groups.ts:11-12: byes "never enter the unscheduled group and never
-  // carry an action" — taken literally here, which is also the only reading
-  // under which the chip and the rows beneath it can agree.
-  //
-  // ORDER is the whole fix: `all` still wins, so a bracket round never hides the
-  // bye that explains its missing fourth fixture; every work filter now drops it.
-  //
-  // The STAGE dimension (`stageId`) is checked FIRST, ahead of even `all` —
-  // it is a second, orthogonal axis a row must ALSO satisfy, not one more
-  // value of the `RunSheetFilter` ladder below it. A bye belonging to a
-  // stage the organiser has filtered away must not survive under "all"
-  // either, so this cannot reuse the `all`-wins-first ordering the TYPE
-  // filter uses for byes — it runs before that ladder even starts.
-  const keep = (f: RunSheetFixture): boolean => {
-    if (stageId !== null && f.stage_id !== stageId) return false;
-    if (filter === "all") return true;
-    if (isBye(f)) return false;
-    if (filter === "needs_result") return needsResult(f);
-    if (filter === "unscheduled") return isUnscheduled(f);
-    // "today": only a TIMED fixture landing on today's venue-zone day counts.
-    return f.scheduled_at !== null && dayKeyInTz(Date.parse(f.scheduled_at), tz) === today;
-  };
+  // The row test lives at module scope (`runSheetKeeps`, above) — its filter semantics and ORDER are documented there.
+  const keep = (f: RunSheetFixture): boolean => runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes });
 
   // Filter counts read over EVERY block's fixtures, unfiltered — a filter's
   // own count must not shrink just because it is the one currently selected.

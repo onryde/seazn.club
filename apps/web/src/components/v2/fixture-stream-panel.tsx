@@ -224,11 +224,12 @@ export interface StreamPanelContext {
 
 /**
  * Owner ruling 4 (re-ruled on C19): a return from checkout carries `?stream=open&fixture=<id>` and lands with THIS
- * row's panel open on the Phone tab. Both readers — which tab the panel opens on, and whether the row opens at all —
- * ask this one function, so they cannot disagree about which row the URL names. `useSearchParams` can be null outside
- * the app router, hence the `?.`.
+ * row's panel open on the Phone tab. Every reader — which tab the panel opens on, whether the row opens at all, and
+ * (D2) which filter the division's run sheet mounts on so that row is rendered in the first place (stages-panel.tsx
+ * `initialRunSheetFilter`) — asks this one function, so they cannot disagree about which row the URL names.
+ * `useSearchParams` can be null outside the app router, hence the `?.`.
  */
-function checkoutReturnFor(params: { get(name: string): string | null } | null, fixtureId: string): boolean {
+export function checkoutReturnFor(params: { get(name: string): string | null } | null, fixtureId: string): boolean {
   return params?.get("stream") === "open" && params.get("fixture") === fixtureId;
 }
 

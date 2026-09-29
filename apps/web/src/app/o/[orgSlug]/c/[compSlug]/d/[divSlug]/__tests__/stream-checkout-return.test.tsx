@@ -515,3 +515,36 @@ describe("RT: the page hands the panel one signed overlay key per fixture — an
     expect(Object.keys((await keysOf({ tab: "fixtures" })) ?? {})).toHaveLength(IDS.length);
   });
 });
+
+// D2 (stream-credits walkthrough, owner: fix now, 2026-09-29): the return's fixture is rendered only if the run sheet
+// MOUNTS on a filter that keeps its row — decided inside StagesPanel (`initialRunSheetFilter`) from the URL's `stream`
+// and `fixture` params. The panel cannot read them itself (its tests mock `next/navigation` with `useRouter` alone), so
+// the page must hand them over; this pins that hand-over, the seam the panel's own unit test cannot see.
+describe("D2: the page hands StagesPanel the URL's checkout-return params", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    relay.reconcile.mockClear();
+    relay.balance.mockReset().mockResolvedValue(0);
+    relay.open.mockReset().mockResolvedValue([]);
+    scene.frozen = false;
+    scene.fixtures = [];
+    scene.entrants = [];
+  });
+
+  const checkoutReturnOf = async (sp: Record<string, string>): Promise<unknown> => {
+    const panel = find(await render(sp), StagesPanel);
+    expect(panel, "no StagesPanel on the fixtures tab").not.toBeNull();
+    return (panel!.props as { checkoutReturn?: unknown }).checkoutReturn;
+  };
+
+  it("a checkout return: the panel is handed exactly the URL's stream and fixture", async () => {
+    expect(
+      await checkoutReturnOf({ tab: "fixtures", fixture: "fx-1", stream: "open", checkout: "success", session_id: "cs_test_d2" }),
+    ).toEqual({ stream: "open", fixture: "fx-1" });
+  });
+
+  it("an ordinary visit: the panel is handed no stream and no fixture (the positive pair's other half)", async () => {
+    expect(await checkoutReturnOf({ tab: "fixtures" })).toEqual({ stream: undefined, fixture: undefined });
+  });
+});
