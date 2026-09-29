@@ -765,7 +765,8 @@ type TargetFormValues = { kind: StreamTargetKind; label: string; rtmpUrl: string
 /**
  * One fixture's relay session as the organiser sees it — shared by the Phone tab and the unentitled stop probe (G2), so
  * the two cannot disagree about what "stop" means. Reads `current` on mount and polls it at STREAM_POLL_MS while the
- * session is not terminal (the SERVER flips warming → live on that read; the client never decides), ticks a 1-s clock
+ * session is not terminal, or no read has landed yet (m3) (the SERVER flips warming → live on that read; the client
+ * never decides), ticks a 1-s clock
  * while live, and owns the two ways out: Stop (confirmed — it is on air) and Cancel (re-read first — m3).
  */
 function usePhoneSession(fixtureId: string) {
@@ -781,6 +782,10 @@ function usePhoneSession(fixtureId: string) {
   // m1: a stop that neither landed nor could be confirmed by a re-read. Its own state and its own sentence — the create
   // copy ("That did not start") says the opposite of what happened.
   const [stopFailed, setStopFailed] = useState(false);
+  // m3 (lane-close fix): the mount's read FAILED, so "no view" is not known to mean "nothing is up". Until a read lands,
+  // the idle it shows is a guess and is polled like any other unsettled state — a stream on air behind one dropped
+  // request would otherwise leave the stop probe drawing nothing, and the tab offering Go live, until a reload.
+  const [readFailed, setReadFailed] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
   // `reveal` marks a read as the organiser DISCLOSING the credentials rather than the 5-second poll (De). Only two
@@ -792,6 +797,7 @@ function usePhoneSession(fixtureId: string) {
       );
       setView(cur);
       setLoaded(true);
+      setReadFailed(false);
       setNow(new Date());
       return cur;
     },
@@ -804,6 +810,7 @@ function usePhoneSession(fixtureId: string) {
         await read();
       } catch {
         setLoaded(true); // an unreadable first read still leaves the tab usable: idle, from the page's balance
+        setReadFailed(true);
       }
     })();
   }, [read]);
@@ -812,12 +819,12 @@ function usePhoneSession(fixtureId: string) {
   const state = phoneTabState(shown);
   const terminal = state === "idle" || state === "ended" || state === "failed";
   useEffect(() => {
-    if (terminal) return;
+    if (terminal && !readFailed) return;
     const id = setInterval(() => {
       void read().catch(() => {});
     }, STREAM_POLL_MS);
     return () => clearInterval(id);
-  }, [terminal, read]);
+  }, [terminal, readFailed, read]);
 
   // The elapsed clock ticks every second while live, rather than jumping by the poll interval.
   useEffect(() => {

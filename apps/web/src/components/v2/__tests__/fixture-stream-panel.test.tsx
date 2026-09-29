@@ -2413,6 +2413,67 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(byTestId(island.tree(), "stream-ending")).toBeDefined();
       expect(byTestId(island.tree(), "stream-stop-error"), "'did not stop' beside 'ending'").toBeUndefined();
     });
+
+    // m3 (lane-close fix, ruled 2026-09-29): a first read that FAILED is not an answer. Before, the probe read "no view"
+    // as idle, idle as terminal, and never polled — so a stream on air behind one dropped request left the organiser
+    // with no Stop until a reload. It now keeps reading at STREAM_POLL_MS until a read lands, and stops once one does.
+    it("m3: a FAILED first read keeps polling at STREAM_POLL_MS until a read lands — then shows the live stream's Stop", async () => {
+      const s = { current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true } as Server;
+      apiV1.mockClear();
+      const island = await probe(s);
+      expect(island.tree(), "nothing known yet: nothing drawn").toEqual([]);
+      expect(plainPolls(), "the mount's read").toBe(1);
+      // Still down: each interval is another read, never a silence.
+      let retried = 0;
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+        await settle();
+        retried++;
+        expect(plainPolls(), `retry ${retried}`).toBe(1 + retried);
+        expect(island.tree()).toEqual([]);
+      }
+      expect(retried).toBe(3);
+      // A read comes back: the stream that was on air all along is stoppable.
+      s.failCurrent = false;
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(byTestId(island.tree(), "stream-stop")).toBeDefined();
+    });
+
+    it("m3: the retry ENDS once a read lands on nothing — a probe with no stream stops asking; after a failed read at mount, a finished one does too", async () => {
+      let checked = 0;
+      for (const answer of [null, session({ id: "s1", state: "completed", qr: null })]) {
+        const s = { current: answer, targets: TARGETS, failCurrent: true } as Server;
+        apiV1.mockClear();
+        const island = await probe(s);
+        s.failCurrent = false;
+        await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+        await settle();
+        const landed = plainPolls();
+        expect(landed, `${String(answer?.state)}: the mount's failed read and the retry that landed`).toBe(2);
+        await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 3);
+        await settle();
+        expect(plainPolls(), `${String(answer?.state)}: polled on after a read said nothing is up`).toBe(landed);
+        expect(island.tree()).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+  });
+
+  it("m3: the Phone tab shares the retry — a failed first read keeps polling until the live session it missed is shown", async () => {
+    const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true });
+    apiV1.mockClear();
+    const island = track(await mount(s));
+    expect(bodyOf(island).view, "premise: the failed read leaves the tab usable, at idle").toBeNull();
+    const before = plainPolls();
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(plainPolls() - before, "idle after a FAILED read is not terminal").toBe(1);
+    s.failCurrent = false;
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(bodyOf(island).view?.state).toBe("live");
   });
 
   it("D11: re-saving the SAME destination replaces its row (A19 answers with the existing one); a new one is appended and selected", async () => {
