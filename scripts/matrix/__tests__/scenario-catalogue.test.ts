@@ -18,6 +18,11 @@ import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions,
 } from "../lib/scenario-catalogue.ts";
+import { productMessageOf } from "../lib/driver/types.ts";
+import { FENCES } from "../lib/model/fences.ts";
+import { NEXT_MATCH_CHECK, ORIENTATION_CHECK, ROSTER_LOCK_CHECK } from "../lib/model/state.ts";
+import { STEP_INVARIANTS } from "../lib/invariants.ts";
+import { thrownWords } from "./product-text.ts";
 
 // `typescript` through require, not import: vite's transform chokes on the
 // ~9 MB CJS bundle and the file then fails to collect (see
@@ -278,8 +283,8 @@ describe("regression cases (R29)", () => {
       seed: [1.5, "42"],
       path: [""],
       replayPath: [""],
-      fence: [""],
-      match: [""],
+      fence: ["", "no-such-fence"],
+      match: ["", " ", "POST", "the second leg"],
       status: ["stale"],
       found: ["YYYY-MM-DD", "2026-9-28"],
       runId: [""],
@@ -348,11 +353,90 @@ describe("regression cases (R29)", () => {
       checked++;
     }
     expect(checked).toBe(MATCH_REQUIRED_CHECKS.length);
-    // Any other check may leave it null — and may still carry one (T15 fix
-    // round 3: model-refusal-named now owes one, so the example is I7's).
+    // Any other check leaves it null (final batch FB-3 supersedes T15 fix
+    // round 3's "may still carry one": the next test).
     expect((MATCH_REQUIRED_CHECKS as readonly string[]).includes(base.check)).toBe(false);
     expect(parseRegressions(file({ ...base, match: null }))[0]!.match).toBeNull();
-    expect(parseRegressions(file({ ...base, match: "the second leg" }))[0]!.match).toBe("the second leg");
+  });
+  it("final batch FB-3: a match on a check that never carries the product's answer is refused — every other check the model throws; null parses there", () => {
+    // The harness judges these alone (an invariant, fold parity, a lock): no
+    // `said`, so a string match could only ever name nothing.
+    const SAIDLESS = [...STEP_INVARIANTS.map((s) => s.id), ORIENTATION_CHECK, ROSTER_LOCK_CHECK, NEXT_MATCH_CHECK, "model-fold-parity"];
+    let checked = 0;
+    for (const check of SAIDLESS) {
+      expect((MATCH_REQUIRED_CHECKS as readonly string[]).includes(check), check).toBe(false);
+      expect(() => parseRegressions(file({ ...base, check, match: "fixture has an unassigned entrant" })), check).toThrow(/never carries the product's answer/);
+      expect(parseRegressions(file({ ...base, check, match: null }))[0]!.check, check).toBe(check);
+      checked++;
+    }
+    expect(checked).toBe(SAIDLESS.length);
+    expect(checked).toBeGreaterThan(4);
+  });
+  it("final batch FB-3: a trivial match is refused on every check that owes one — too short, or RefusedCall's request line (arrow, status, placeholder, method, path, bare code)", () => {
+    // Each rule has an entry only it refuses (the last six), so none rides on another.
+    const TRIVIAL = [" ", "POST", "HTTP 500", "→ HTTP 500 INTERNAL", "(no code)", "POST /api/v1/stages/", "WRONG_PHASE",
+      "   fixture   ", "a refusal → then a retry", "HTTP 422 WRONG_PHASE: fixture", "(no message)", "DELETE the whole fixture", "a refusal from /api/v1/entrants", "NEXT_MATCH_STARTED"];
+    let checked = 0;
+    for (const check of MATCH_REQUIRED_CHECKS) {
+      for (const match of TRIVIAL) {
+        expect(() => parseRegressions(file({ ...base, check, match })), `${check}: ${JSON.stringify(match)}`).toThrow(/match/);
+        checked++;
+      }
+      // The positive pair: the committed product words parse on the same check.
+      for (const match of ["fixture has an unassigned entrant", "would strand home_slot_label"]) expect(parseRegressions(file({ ...base, check, match }))[0]!.match).toBe(match);
+    }
+    expect(checked).toBe(MATCH_REQUIRED_CHECKS.length * TRIVIAL.length);
+  });
+  it("final batch F-2: fence names a fence the model has — an unknown id is refused; each of FENCES parses", () => {
+    expect(FENCES.length).toBeGreaterThan(0);
+    expect(() => parseRegressions(file({ ...base, fence: "no-such-fence" }))).toThrow(/fence/);
+    expect(() => parseRegressions(file({ ...base, fence: "#879" }))).toThrow(/fence/);
+    let checked = 0;
+    for (const f of FENCES) {
+      expect(parseRegressions(file({ ...base, fence: f.id }))[0]!.fence).toBe(f.id);
+      checked++;
+    }
+    expect(checked).toBe(FENCES.length);
+  });
+  it("final batch F-2: every fence the model has is a committed OPEN case's fence — a fenced bug is still witnessed (fences.ts)", () => {
+    const open = loadRegressions().filter((r) => r.status === "open");
+    let checked = 0;
+    for (const f of FENCES) {
+      expect(open.filter((r) => r.fence === f.id).map((r) => r.id), `fence ${f.id} names no open committed case`).not.toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(FENCES.length);
+  });
+  it("final batch FB-3: every committed match is the product's own words — thrown in its source, and read from the product's message in the committed live evidence", () => {
+    /** The product files whose thrown words the committed matches quote. */
+    const SOURCES = ["apps/web/src/server/engine-db/append-event.ts", "apps/web/src/server/engine-db/fold.ts", "apps/web/src/server/usecases/stages.ts"];
+    const words = new Map(SOURCES.map((p) => [p, thrownWords(p)]));
+    const live: { cell: string; check: string; said: string }[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as { cells?: { cell: string; failure: { check: string; said?: string | null } | null }[] };
+          for (const c of rep.cells ?? []) if (typeof c.failure?.said === "string") live.push({ cell: c.cell, check: c.failure.check, said: c.failure.said });
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
+    expect(live.length, "no committed live failure carries the product's answer").toBeGreaterThan(0);
+    const cases = loadRegressions().filter((r) => r.status === "open" && r.match !== null);
+    expect(cases.length, "no committed match — the pin would be vacuous").toBeGreaterThan(0);
+    const used = new Set<string>();
+    for (const r of cases) {
+      const match = r.match ?? "";
+      const from = SOURCES.filter((p) => (words.get(p) ?? []).some((w) => w.includes(match)));
+      expect(from, `${r.id}: "${match}" is thrown by none of the pinned sources — pin the file that throws it`).not.toEqual([]);
+      for (const p of from) used.add(p);
+      const heard = live.filter((f) => f.cell === r.cell && f.check === r.check).map((f) => productMessageOf(f.said) ?? "");
+      expect(heard.length, `${r.id}: no committed live ${r.check} failure on ${r.cell}`).toBeGreaterThan(0);
+      expect(heard.some((m) => m.includes(match)), `${r.id}: "${match}" is in no product message heard on ${r.cell}`).toBe(true);
+    }
+    // No dead source: every pinned file backs at least one committed match.
+    expect([...used].sort()).toEqual([...SOURCES].sort());
   });
   it("the committed file: every case on a generic check carries a match", () => {
     const rs = loadRegressions();

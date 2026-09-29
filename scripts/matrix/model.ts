@@ -45,12 +45,12 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ROW_KEYS, SPORT_KEYS, builderDefaultVariant, cellId, type RowKey } from "./lib/catalogue.ts";
 import { isMainModule } from "./lib/main-module.ts";
-import type { OrganiserDriver } from "./lib/driver/types.ts";
+import { productMessageOf, type OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
-import { MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
+import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
 import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "./lib/slice.ts";
 import { variantKeys } from "./lib/sport-cfg.ts";
@@ -262,9 +262,12 @@ function printStub(c: ModelCell, runId: string): void {
   const matchRequired = (MATCH_REQUIRED_CHECKS as readonly string[]).includes(f.check);
   say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, match: matchRequired ? "" : null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
   if (matchRequired) {
-    say(f.said === null
-      ? `  match owed: ${f.check} names no single failure, and this one carries no product answer to match — it is the harness's to fix, not a case to commit`
-      : `  match owed: ${f.check} names no single failure — set "match" to text from the product's answer (never the model's own line), or regressions.json is refused: ${f.said}`);
+    // Final batch FB-3: a match reads the product's own words alone, so the
+    // owed line quotes those — never RefusedCall's request line around them.
+    const words = f.said === null ? null : productMessageOf(f.said);
+    if (f.said === null) say(`  match owed: ${f.check} names no single failure, and this one carries no product answer to match — it is the harness's to fix, not a case to commit`);
+    else if (words === null) say(`  match owed: ${f.check} names no single failure, and the product's answer carries no words past its request line to match — it cannot be committed as a case: ${f.said}`);
+    else say(`  match owed: ${f.check} names no single failure — set "match" to at least ${MATCH_MIN_LENGTH} characters of the product's own words below (never the request line, never the model's own line), or regressions.json is refused: ${words}`);
   }
   // A replay regenerates the counterexample from the seed; the committed case
   // records neither --max-commands nor the fences. --regressions honours

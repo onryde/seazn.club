@@ -2,8 +2,10 @@
 // instead of typing them (Task 13 fix round 1, ruling C-1): a product change
 // moves the fake with it, and turns the model's pin red.
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type * as TS from "typescript";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
@@ -120,4 +122,28 @@ export function bracketRoundNoText(): (lane: string | undefined, round: number, 
   }
   const gf = Number(offset[1]);
   return (lane, round, laneDepth) => (lane === "LB" ? laneDepth : lane === "GF" ? laneDepth * gf : 0) + round + 1;
+}
+
+/** The literal words of every `throw new X(…)` in a product source file: each
+ *  string argument, and a template's literal pieces (its head and the text
+ *  after each substitution, which splits them). A committed regression `match`
+ *  is pinned to these, so it quotes what the product really throws (final
+ *  batch FB-3). `typescript` loads through require, and only when called: vite's
+ *  transform chokes on its CJS bundle, and the model's fake imports this file. */
+export function thrownWords(path: string): string[] {
+  const ts = createRequire(import.meta.url)("typescript") as typeof TS;
+  const sf = ts.createSourceFile(path, read(path), ts.ScriptTarget.Latest, true);
+  const out: string[] = [];
+  const visit = (n: TS.Node): void => {
+    if (ts.isThrowStatement(n) && ts.isNewExpression(n.expression)) {
+      for (const a of n.expression.arguments ?? []) {
+        if (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a)) out.push(a.text);
+        else if (ts.isTemplateExpression(a)) out.push(a.head.text, ...a.templateSpans.map((span) => span.literal.text));
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (out.length === 0) throw new Error(`product-text: ${path} throws no literal words — a vacuous pin`);
+  return out;
 }

@@ -11,6 +11,8 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, cellId } from "./catalogue.ts";
+import { NO_CODE, NO_MESSAGE } from "./driver/types.ts";
+import { FENCES } from "./model/fences.ts";
 import type { ScenarioKey } from "./scenarios/types.ts";
 
 export type Family = "R" | "M" | "F" | "D" | "P" | "Q" | "X" | "C" | "E";
@@ -193,9 +195,32 @@ const CELLS = new Set(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s)
  *  no single failure: a case on one must carry `match` (T15 fix rounds 2 and
  *  3), or it would make every such failure on its cell "known". The names are
  *  state.ts's (UNEXPECTED_REFUSAL, REFUSAL_NAMED) and run-cell.ts's
- *  (MODEL_ERROR); model-run-cell.test.ts pins them. */
+ *  (MODEL_ERROR); model-run-cell.test.ts pins them. They are also the only
+ *  checks whose failure carries the product's answer (`said`: commands.ts's
+ *  refusals, an escaped RefusedCall), so a match is refused on every other
+ *  (final batch FB-3). */
 export const MATCH_REQUIRED_CHECKS = ["model-unexpected-refusal", "model-refusal-named", "model-error"] as const;
 const matchRequired = (check: string): boolean => (MATCH_REQUIRED_CHECKS as readonly string[]).includes(check);
+/** A match names a failure by the product's words (final batch FB-3): at
+ *  least this long once trimmed — the committed ones run 28+ — so a word such
+ *  as "fixture" or a lone code cannot name every refusal on its cell. */
+export const MATCH_MIN_LENGTH = 12;
+/** What RefusedCall writes around the product's words (its request line and
+ *  placeholders): a match carrying any of it names the harness's text. */
+const REQUEST_LINE_TEXT: readonly (readonly [(match: string) => boolean, string])[] = [
+  [(m) => m.includes("→"), "RefusedCall's arrow"],
+  [(m) => /\bHTTP \d{3}\b/.test(m), "a status line"],
+  [(m) => m.includes(NO_CODE) || m.includes(NO_MESSAGE), "a placeholder"],
+  [(m) => /^\s*(?:GET|POST|PUT|PATCH|DELETE)\b/.test(m), "a request method"],
+  [(m) => m.includes("/api/"), "a request path"],
+  [(m) => /^\s*[A-Z][A-Z0-9_]*\s*$/.test(m), "a bare code (the status line's, never the product's words)"],
+];
+/** Why a match is too weak to name one failure, or null. */
+function trivialMatch(match: string): string | null {
+  if (match.trim().length < MATCH_MIN_LENGTH) return `under ${MATCH_MIN_LENGTH} characters once trimmed`;
+  return REQUEST_LINE_TEXT.find(([is]) => is(match))?.[1] ?? null;
+}
+const FENCE_IDS: ReadonlySet<string> = new Set(FENCES.map((f) => f.id));
 const RegressionSchema = z.strictObject({
   id: z.string().regex(/^MB-\d{3}$/),
   title: z.string().min(1),
@@ -210,12 +235,13 @@ const RegressionSchema = z.strictObject({
    *  null only when the counterexample carried none. */
   replayPath: z.string().min(1).nullable(),
   fence: z.string().min(1).nullable(),
-  /** Text that must appear in the product's own answer (its refusal message,
-   *  or a server assertion it carries — never the harness's lines) for this
-   *  case to name the failure: a failure is known only when cell, check AND
-   *  match agree. null names every failure on the check — refused on
-   *  MATCH_REQUIRED_CHECKS; a matching case outranks a null one (T15 fix
-   *  round 3). */
+  /** Text that must appear in the product's own words (its refusal message,
+   *  or a server assertion it carries — never RefusedCall's request line, never
+   *  the harness's lines) for this case to name the failure: a failure is
+   *  known only when cell, check AND match agree. Owed on MATCH_REQUIRED_CHECKS
+   *  (null there would name every failure on the check) and refused on every
+   *  other check, which never carries the product's answer: null names those
+   *  (final batch FB-3). A trivial match is refused (trivialMatch). */
   match: z.string().min(1).nullable(),
   status: z.enum(["open", "fixed"]),
   found: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -223,6 +249,17 @@ const RegressionSchema = z.strictObject({
 }).superRefine((r, ctx) => {
   if (r.match === null && matchRequired(r.check)) {
     ctx.addIssue({ code: "custom", path: ["match"], message: `${r.id}: match is required on ${r.check} — the text in the failure's evidence that names it (the product's message)` });
+  }
+  if (r.match !== null && !matchRequired(r.check)) {
+    ctx.addIssue({ code: "custom", path: ["match"], message: `${r.id}: a match is refused on ${r.check}, which never carries the product's answer — the harness judges it alone, so a null match names it` });
+  }
+  const trivial = r.match === null ? null : trivialMatch(r.match);
+  if (trivial !== null) {
+    ctx.addIssue({ code: "custom", path: ["match"], message: `${r.id}: match ${JSON.stringify(r.match)} is trivial (${trivial}) — quote the product's own words` });
+  }
+  // F-2: a fence is one the model has, or the case claims a fence nothing applies.
+  if (r.fence !== null && !FENCE_IDS.has(r.fence)) {
+    ctx.addIssue({ code: "custom", path: ["fence"], message: `${r.id}: fence ${JSON.stringify(r.fence)} is not one of the model's fences (${[...FENCE_IDS].join(", ")})` });
   }
 });
 export type RegressionCase = z.infer<typeof RegressionSchema>;

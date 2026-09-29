@@ -22,7 +22,7 @@
 // test sweeps the model's own sports (SLICE_SPORTS) instead.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { RefusedCall, RequestTimedOut, type PostedEvent } from "../lib/driver/types.ts";
+import { RefusedCall, RequestTimedOut, productMessageOf, type FixtureStateOut, type PostedEvent } from "../lib/driver/types.ts";
 import { COMMAND_KINDS, ModelViolation, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { FENCES } from "../lib/model/fences.ts";
 import { MODEL_ERROR, regressionFor, runCell, shrinkTarget, vacuityOf, type FailureKey, type RunCellInput } from "../lib/model/run-cell.ts";
@@ -117,11 +117,12 @@ const N = (check: string): FailureKey => ({ check, known: null });
 const K = (check: string, id = "MB-009"): FailureKey => ({ check, known: id });
 /** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
 const openReg = (id: string, check: string, match: string | null = null) => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
-/** A fake refusal's code, which the product's own answer carries (RefusedCall's
- *  message: `METHOD path → HTTP status CODE: message`) — what those tests' open
- *  cases match. The backstop's own sentence is the harness's, never matched (T15
- *  fix round 3). */
-const POST_REFUSED = "TEST_POST_REFUSED";
+/** The words both fake post refusals give (RefusingPosts, GatedLiar) — the
+ *  product's message, after RefusedCall's `METHOD path → HTTP status CODE: `
+ *  request line, which a match never reads (final batch FB-3) — what those
+ *  tests' open cases match. The backstop's own sentence is the harness's, never
+ *  matched (T15 fix round 3). */
+const POST_REFUSED = "test: refuses";
 const BACKSTOP = "unexpected refusal(s) counted over the cell";
 
 describe("shrinkTarget — which failure a cell's shrink is locked to", () => {
@@ -202,20 +203,54 @@ describe("regressionFor — cell, check AND match, the match read from the produ
     }
     expect(checked).toBe(3);
   });
-  it("fix round 3, M-2: a case whose match is in the answer outranks a null-match case on the same cell and check, whatever the file order; the null one names only what no match does", () => {
-    // I7 owes no match, so both shapes load there (the loader refuses a null one
-    // on MATCH_REQUIRED_CHECKS, where this shadow could not arise).
+  it("final batch FB-3 (supersedes fix round 3's M-2 shadow): a check that never carries the product's answer is named by a null-match case alone — a string match there (the loader refuses it) names nothing, whatever answer is passed", () => {
+    // I7 is judged by the harness alone: production never gives it a `said`.
     expect((MATCH_REQUIRED_CHECKS as readonly string[]).includes(I7)).toBe(false);
     const any = openReg("MB-N", I7);
     const specific = openReg("MB-S", I7, "home_slot_label");
+    const answer = new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, "INTERNAL", "would strand home_slot_label").message;
     let checked = 0;
     for (const order of [[any, specific], [specific, any]]) {
-      expect(regressionFor(order, CELL, I7, "HTTP 500: would strand home_slot_label"), "the matching case wins").toBe("MB-S");
-      expect(regressionFor(order, CELL, I7, "HTTP 500: something else"), "no match: the null case").toBe("MB-N");
+      expect(regressionFor(order, CELL, I7, answer), "an answer I7 never carries: still the null case").toBe("MB-N");
       expect(regressionFor(order, CELL, I7, null), "no answer: the null case").toBe("MB-N");
       checked++;
     }
+    expect(regressionFor([specific], CELL, I7, answer), "a string match alone names nothing on I7").toBeNull();
     expect(checked).toBe(2);
+  });
+  it("final batch FB-3: the match is read from the PRODUCT's words only — the request line RefusedCall writes around them names nothing", () => {
+    const preamble = ["POST /api/v1/entrants/e1/withdraw", "→ HTTP 422 WRONG_PHASE", "HTTP 422", "WRONG_PHASE: fixture"];
+    let checked = 0;
+    for (const text of preamble) {
+      expect(said, `the premise: said carries ${text}`).toContain(text);
+      expect(regressionFor([openReg("MB-P", UNEXPECTED_REFUSAL, text)], CELL, UNEXPECTED_REFUSAL, said), text).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(preamble.length);
+    // The positive pair: the product's own words, whole or in part.
+    expect(regressionFor([openReg("MB-P", UNEXPECTED_REFUSAL, `${TBD} (bye/TBD)`)], CELL, UNEXPECTED_REFUSAL, said)).toBe("MB-P");
+    expect(regressionFor([openReg("MB-P", UNEXPECTED_REFUSAL, "unassigned entrant")], CELL, UNEXPECTED_REFUSAL, said)).toBe("MB-P");
+    // A refusal the product gave no words for names nothing — not even by RefusedCall's placeholder.
+    const silent = new RefusedCall("POST", "/api/v1/x", 500, null, null).message;
+    expect(silent).toContain("(no message)");
+    expect(regressionFor([openReg("MB-P", REFUSAL_NAMED, "(no message)")], CELL, REFUSAL_NAMED, silent)).toBeNull();
+    // An answer not in RefusedCall's shape carries no product words at all.
+    expect(regressionFor([openReg("MB-P", REFUSAL_NAMED, "unassigned entrant")], CELL, REFUSAL_NAMED, `harness says: ${TBD}`)).toBeNull();
+  });
+  it("final batch FB-3: productMessageOf reads back exactly the words RefusedCall was given — every code shape, a placeholder, words that look like a request line", () => {
+    const cases: [string, string, number, string | null, string | null][] = [
+      ["GET", "/api/v1/divisions/d1/fixtures", 503, "UNAVAILABLE", "the list is resting"],
+      ["POST", "/api/v1/stages/s1/generate", 500, null, "generateStageFixtures: x: y → HTTP 500 z"],
+      ["PATCH", "/api/v1/x", 422, "WRONG_PHASE", "a: b"],
+      ["POST", "/api/v1/x", 409, "TEST_POST_REFUSED", null],
+    ];
+    let checked = 0;
+    for (const [m, path, st, code, msg] of cases) {
+      expect(productMessageOf(new RefusedCall(m, path, st, code, msg).message), `${m} ${path} ${st} ${String(code)}`).toBe(msg);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    expect(productMessageOf("not a refusal line")).toBeNull();
   });
   it("fix round 3, MR: a null-match case on a check that owes a match (the schema bypassed) names nothing — a missing key and an explicit null, on every such check", () => {
     let checked = 0;
@@ -424,12 +459,51 @@ describe("runCell", () => {
       expect(r.failure?.known, harness).toBeNull();
       checked++;
     }
-    expect(checked).toBe(2);
+    // Final batch FB-3: nor does the request line RefusedCall writes INTO the
+    // answer — in `said`, but not the product's words.
+    for (const preamble of ["HTTP 409 TEST_POST_REFUSED", "POST /api/v1/fixtures/"]) {
+      const r = await runCell(input({ driver: () => new RefusingPosts(), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, preamble)] }));
+      expect(r.failure?.said ?? "", `the premise: said carries ${preamble}`).toContain(preamble);
+      expect(r.failure?.known, preamble).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(4);
     // The positive control: the same run, matched on the product's own words.
     const own = await runCell(input({ driver: () => new RefusingPosts(), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }));
     expect(own.failure?.known).toBe("MB-003");
   });
 
+  it("final batch FB-4 (MH): a failure the harness judged alone carries no product answer — its said is null, and a case matching its own evidence never names it", async () => {
+    const r = await runCell(input({ fences: false, fault879: true }));
+    expect(r.failure?.check).toBe(I7);
+    expect(r.failure?.said, "an invariant is the harness's verdict: no product words").toBeNull();
+    const words = (r.failure?.evidence[0] ?? "").slice(0, 24);
+    expect(words.length, "the premise: the invariant wrote evidence").toBeGreaterThan(12);
+    const named = await runCell(input({ fences: false, fault879: true, regressions: [openReg("MB-H", I7, words)] }));
+    expect(named.failure?.evidence.join("\n"), "the premise: the same evidence carries the case's text").toContain(words);
+    expect(named.failure?.said).toBeNull();
+    expect(named.failure?.known, "a string match never names a said-less failure").toBeNull();
+    // The positive pair: I7's own null-match case names it.
+    expect((await runCell(input({ fences: false, fault879: true, regressions: [openReg("MB-H", I7)] }))).failure?.known).toBe("MB-H");
+  });
+  it("final batch FB-4 (MRC): a refusal no command caught (a model-error) carries the product's answer, and a model-error case names it by the product's words", async () => {
+    const RESTING = "the fixture's state is resting";
+    /** A product that lies about an outcome, then refuses the tip read the
+     *  fold-parity check makes before calling it a lie: checkStep runs outside
+     *  every command's catch, so the refusal escapes. */
+    class ListingRefused extends ModelFakeDriver {
+      constructor() { super({ lieOutcome: true }); }
+      override fixtureState(id: string): Promise<FixtureStateOut> { return Promise.reject(new RefusedCall("GET", `/api/v1/fixtures/${id}/state`, 503, "UNAVAILABLE", RESTING)); }
+    }
+    const bare = await runCell(input({ driver: () => new ListingRefused() }));
+    expect(bare.failure?.check).toBe(MODEL_ERROR);
+    expect(bare.failure?.said, "the escaped refusal's own words").toContain(`: ${RESTING}`);
+    expect(bare.failure?.known).toBeNull();
+    const named = await runCell(input({ driver: () => new ListingRefused(), regressions: [openReg("MB-E", MODEL_ERROR, RESTING)] }));
+    expect(named.failure?.known).toBe("MB-E");
+    // …by the product's words only: the request line around them names nothing.
+    expect((await runCell(input({ driver: () => new ListingRefused(), regressions: [openReg("MB-E", MODEL_ERROR, "HTTP 503 UNAVAILABLE")] }))).failure?.known).toBeNull();
+  });
   it("backstop: unexpected refusals counted while the reported failure is another check (or none) still report model-unexpected-refusal, NEW, carrying what it displaced", async () => {
     const seeded = (fault879: boolean): RunCellInput["newDriverState"] => async (n) => {
       const real = new ModelFakeDriver({ fault879 });

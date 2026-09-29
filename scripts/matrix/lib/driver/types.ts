@@ -89,6 +89,25 @@ export interface OrganiserDriver {
   readonly callCount: number;
 }
 
+/** RefusedCall's placeholders for an answer that carried no code or no message. */
+export const NO_CODE = "(no code)";
+export const NO_MESSAGE = "(no message)";
+/** RefusedCall's request line, which it writes before the product's words:
+ *  `METHOD path → HTTP status CODE: `, CODE being NO_CODE or one without a
+ *  space or a colon. */
+const REQUEST_LINE = /^\S+ \S+ → HTTP \d{3} (?:\(no code\)|[^\s:]+): /;
+
+/** The product's own words in a RefusedCall's message — what follows its
+ *  request line — or null: a message in no such shape, or one the product gave
+ *  no words for (NO_MESSAGE). A committed `match` is read against these alone
+ *  (final batch FB-3), never the method, path, status or code around them. */
+export function productMessageOf(said: string): string | null {
+  const line = REQUEST_LINE.exec(said);
+  if (line === null) return null;
+  const words = said.slice(line[0].length);
+  return words === NO_MESSAGE ? null : words;
+}
+
 /** A product answer outside 2xx (or a 2xx with no data). Carries what I4's
  *  named-refusal check reads (observed.ts isNamedRefusal: status + code) and
  *  what a reader needs to find the call (method + path). Message and path are
@@ -100,7 +119,7 @@ export class RefusedCall extends Error {
   readonly code: string | null;
   readonly featureKey: string | null;
   constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null) {
-    super(redact(`${method} ${path} → HTTP ${status} ${code ?? "(no code)"}: ${message ?? "(no message)"}`));
+    super(redact(`${method} ${path} → HTTP ${status} ${code ?? NO_CODE}: ${message ?? NO_MESSAGE}`));
     this.name = "RefusedCall";
     this.method = method;
     this.path = redact(path);

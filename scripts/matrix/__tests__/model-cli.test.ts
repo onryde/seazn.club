@@ -33,7 +33,7 @@ import { LOCAL_BASE } from "../lib/redact.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { MODEL_ERROR } from "../lib/model/run-cell.ts";
 import { REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
-import { MATCH_REQUIRED_CHECKS, parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
+import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
@@ -46,8 +46,9 @@ const I7 = "I7-rr-no-pair-over-legs";
 const FOLD = "model-fold-parity";
 /** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
 const openReg = (id: string, check: string, match: string | null = null): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open", found: "2026-09-29", runId: "t" });
-/** The code both fake refusals below carry, in the model's line and the product's message. */
-const POST_REFUSED = "TEST_POST_REFUSED";
+/** The words both fake post refusals below give — the product's message, which
+ *  a match reads (never RefusedCall's request line: final batch FB-3). */
+const POST_REFUSED = "test: refuses";
 const scratch = mkdtempSync(join(tmpdir(), "w1b-model-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 afterEach(() => { vi.restoreAllMocks(); });
@@ -360,7 +361,9 @@ describe("model.ts", () => {
     expect(await runModel(deps({ driverFor: () => new CrashingGenerate() }), ["--run-id", "mg", "--report-dir", reportDir(), ...ONE])).toBe(1);
     expect(failureLine(io.out())).toMatch(new RegExp(`^FAILURE ${REFUSAL_NAMED} \\(NEW\\): `));
     expect(stubOf(io.out()).match).toBe("");
-    expect(io.out()).toContain(`\n  match owed: ${REFUSAL_NAMED} names no single failure — set "match" to text from the product's answer (never the model's own line), or regressions.json is refused: POST /api/v1/stages/s1/generate → HTTP 500 (no code): ${STRAND}\n`);
+    // Final batch FB-3: the owed line quotes the product's words alone — never the request line a match cannot read.
+    expect(io.out()).toContain(`\n  match owed: ${REFUSAL_NAMED} names no single failure — set "match" to at least ${MATCH_MIN_LENGTH} characters of the product's own words below (never the request line, never the model's own line), or regressions.json is refused: ${STRAND}\n`);
+    expect(io.out()).not.toMatch(/match owed: [^\n]*HTTP 500/);
     // As printed, the stub is refused; with the product's words as its match it is a valid case.
     expect(() => completedStub(io.out(), { issue: null, fence: null })).toThrow(/match/);
     const reg = completedStub(io.out(), { id: "MB-004", issue: null, fence: null, match: "would strand home_slot_label" });
@@ -402,6 +405,14 @@ describe("model.ts", () => {
     const io = capture();
     await runModel(deps({ driverFor: () => new BrokenPosts() }), ["--run-id", "msb", "--report-dir", reportDir(), ...ONE]);
     expect(io.out()).toContain(`\n  match owed: ${MODEL_ERROR} names no single failure, and this one carries no product answer to match — it is the harness's to fix, not a case to commit\n`);
+    // Final batch FB-3: a refusal the product gave no words for has nothing a match can read either.
+    const silent = capture();
+    const Silent = class extends ModelFakeDriver {
+      override generate(): ReturnType<ModelFakeDriver["generate"]> { return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, null, null)); }
+    };
+    expect(await runModel(deps({ driverFor: () => new Silent() }), ["--run-id", "msn", "--report-dir", reportDir(), ...ONE])).toBe(1);
+    expect(failureLine(silent.out())).toMatch(new RegExp(`^FAILURE ${REFUSAL_NAMED} \\(NEW\\): `));
+    expect(silent.out()).toContain(`\n  match owed: ${REFUSAL_NAMED} names no single failure, and the product's answer carries no words past its request line to match — it cannot be committed as a case: POST /api/v1/stages/s1/generate → HTTP 500 (no code): (no message)\n`);
     const io2 = capture();
     expect(await runModel(deps({ fault879: true }), ["--run-id", "ms-i7", "--report-dir", reportDir(), ...ONE, "--no-fences"])).toBe(1);
     expect(stubOf(io2.out()).check).toBe(I7);

@@ -3,8 +3,9 @@
 // cell), path-replayable, time-boxed. A shrunk failure reports its check,
 // seed, path, replayPath and the commands that RAN (R-PF9); it is KNOWN when
 // an open committed regression names the same cell and check (R29) and, when
-// the case carries one, its `match` is in the product's own answer (`said`,
-// never the harness's lines — T15 fix rounds 2 and 3: regressionFor).
+// the case carries one, its `match` is in the product's own words (`said`
+// past RefusedCall's request line, never the harness's lines — T15 fix rounds
+// 2 and 3, final batch FB-3: regressionFor).
 // Anti-vacuity per cell, across runs (R25, vacuityOf): every command kind ran,
 // a Score was accepted, each step check its stage kind owes and fold parity
 // judged more than zero items, and at least one step was informative.
@@ -38,7 +39,7 @@
 //    starts, and the cell reports `timeout`; the CLI aborts it.
 import fc from "fast-check";
 import type { RowKey } from "../catalogue.ts";
-import { RefusedCall, RequestTimedOut, type OrganiserDriver } from "../driver/types.ts";
+import { RefusedCall, RequestTimedOut, productMessageOf, type OrganiserDriver } from "../driver/types.ts";
 import { STEP_INVARIANTS } from "../invariants.ts";
 import { MATCH_REQUIRED_CHECKS, type RegressionCase } from "../scenario-catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, modelCommands } from "./commands.ts";
@@ -128,22 +129,23 @@ export function shrinkTarget(current: FailureKey | null, thrown: FailureKey): Fa
 }
 
 /** The open committed case that names a failure (R29; T15 fix rounds 2 and
- *  3): the same cell and check, and — when the case carries a `match` — that
- *  text in `said`, the product's own answer, never the harness's lines (a
- *  failure the harness judged alone has none, so only a null match names it).
- *  The most specific case wins: one whose match is in `said` outranks one with
- *  a null match, whatever the file order (M-2). A null match names every
- *  failure on its check, which the loader refuses on MATCH_REQUIRED_CHECKS; a
- *  case that bypassed the loader with none there names nothing. */
+ *  3; final batch FB-3): the same cell and check, and then by the check's kind.
+ *  - A check that carries the product's answer (MATCH_REQUIRED_CHECKS): only a
+ *    case whose `match` is in the product's own words — productMessageOf(said),
+ *    never RefusedCall's request line around them, never the harness's lines.
+ *    A failure with no words (no said, NO_MESSAGE) is named by none, and a case
+ *    that bypassed the loader with a null match names nothing.
+ *  - Any other check, which the harness judges alone: only a null-match case.
+ *    The loader refuses a match there, and a stray `said` is never read. */
 export function regressionFor(regressions: readonly RegressionCase[], cell: string, check: string, said: string | null): string | null {
   const open = regressions.filter((r) => r.status === "open" && r.cell === cell && r.check === check);
-  const matching = open.find((r) => {
+  if (!(MATCH_REQUIRED_CHECKS as readonly string[]).includes(check)) return open.find((r) => r.match === null)?.id ?? null;
+  const words = said === null ? null : productMessageOf(said);
+  if (words === null) return null;
+  return open.find((r) => {
     const m: unknown = r.match;
-    return typeof m === "string" && said !== null && said.includes(m);
-  });
-  if (matching !== undefined) return matching.id;
-  if ((MATCH_REQUIRED_CHECKS as readonly string[]).includes(check)) return null;
-  return open.find((r) => r.match === null)?.id ?? null;
+    return typeof m === "string" && words.includes(m);
+  })?.id ?? null;
 }
 
 /** The fast-check failure a run reports when fast-check gave up on skips. */
