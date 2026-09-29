@@ -23,6 +23,17 @@ function resp(method: string, path: string, status: number, body: unknown, opts:
   };
 }
 
+// The two rejections a real waitForResponse gives, as measured against
+// Playwright's chromium (fix round 1): its budget running out is an error NAMED
+// "TimeoutError" (class TimeoutError); a page, context or browser closing under
+// the wait is a plain "Error" (class TargetClosedError).
+function playwrightTimeout(ms: number): Error {
+  const e = new Error(`page.waitForResponse: Timeout ${ms}ms exceeded while waiting for event "response"`);
+  e.name = "TimeoutError";
+  return e;
+}
+const TARGET_CLOSED = "page.waitForResponse: Target page, context or browser has been closed";
+
 function fakePage() {
   type Waiter = { pred: (r: FakeResponse) => boolean; resolve: (r: FakeResponse) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> };
   const waiters: Waiter[] = [];
@@ -32,7 +43,7 @@ function fakePage() {
     waitForResponse(pred: (r: FakeResponse) => boolean, o: { timeout: number }): Promise<FakeResponse> {
       timeouts.push(o.timeout);
       return new Promise((resolve, reject) => {
-        const w: Waiter = { pred, resolve, reject, timer: setTimeout(() => { drop(w); reject(new Error(`Timeout ${o.timeout}ms exceeded while waiting for event "response"`)); }, o.timeout) };
+        const w: Waiter = { pred, resolve, reject, timer: setTimeout(() => { drop(w); reject(playwrightTimeout(o.timeout)); }, o.timeout) };
         waiters.push(w);
       });
     },
@@ -44,8 +55,13 @@ function fakePage() {
     emit(...rs: FakeResponse[]) {
       for (const r of rs) for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); drop(w); w.resolve(r); }
     },
+    /** The page (or its context, or the browser) goes away under every wait. */
+    close() {
+      for (const w of [...waiters]) { clearTimeout(w.timer); drop(w); w.reject(new Error(TARGET_CLOSED)); }
+    },
   };
 }
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const ok = (data: unknown) => ({ ok: true, data });
 const POST_ENTRANTS = { method: "POST", path: /^\/api\/v1\/divisions\/[^/]+\/entrants$/ };
@@ -145,6 +161,65 @@ describe("actAndAwait resolves on the product's own response", () => {
     expect((e as Error).message).toContain(POST_ENTRANTS.path.source);
     expect((e as Error).message).toContain("30 ms");
     expect(f.timeouts).toEqual([30]);
+  });
+
+  // M-5: three different failures, three different headlines. Only an act that
+  // FINISHED with no request behind it is "the click reached nothing"; a budget
+  // spent while the act was still running (a control that never became
+  // actionable — the fold at 320, a selector miss) and a page that went away
+  // are other stories, and a run report must not tell them as that one.
+  it("the act finished and no request followed: reason no-response, 'the click reached nothing'", async () => {
+    const f = fakePage();
+    const e = await actAndAwait(f.page, POST_ENTRANTS, async () => undefined, 30).catch((x: unknown) => x) as NoProductResponse;
+    expect(e).toBeInstanceOf(NoProductResponse);
+    expect(e.reason).toBe("no-response");
+    expect(e.message).toContain("the action finished");
+    expect(e.message).toContain("the click reached nothing");
+  });
+
+  it("the budget ran out while the act was still running: reason act-pending, never 'the click reached nothing'", async () => {
+    const f = fakePage();
+    const e = await actAndAwait(f.page, POST_ENTRANTS, () => sleep(80), 20).catch((x: unknown) => x) as NoProductResponse;
+    expect(e).toBeInstanceOf(NoProductResponse);
+    expect(e.reason).toBe("act-pending");
+    expect(e.message).toContain("while the action was still running");
+    expect(e.message).not.toContain("the click reached nothing");
+    expect(e.message).toContain("20 ms");
+  });
+
+  it("the page went away under the wait: reason wait-failed, the cause named, never 'the click reached nothing'", async () => {
+    const f = fakePage();
+    const e = await actAndAwait(f.page, POST_ENTRANTS, async () => { f.close(); }, 5000).catch((x: unknown) => x) as NoProductResponse;
+    expect(e).toBeInstanceOf(NoProductResponse);
+    expect(e.reason).toBe("wait-failed");
+    expect(e.message).toContain("Target page, context or browser has been closed");
+    expect(e.message).not.toContain("the click reached nothing");
+  });
+
+  // C-1: the budget expiring while act() is still pending rejects the wait
+  // before anything awaits it. Without a handler attached at creation that is
+  // an unhandled rejection, which crash-exit.ts turns into exit 3 for the WHOLE
+  // run instead of one red case. Both orderings are driven: the act resolving
+  // after the budget, and the act rejecting after it.
+  it("C-1: an act that RESOLVES after the budget expired is one case's NoProductResponse, and nothing is unhandled", async () => {
+    process.on("unhandledRejection", onUnhandled);
+    const f = fakePage();
+    const e = await actAndAwait(f.page, POST_ENTRANTS, () => sleep(80), 20).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(NoProductResponse);
+    await sleep(20);
+    expect(unhandled).toEqual([]);
+  });
+
+  it("C-1: an act that REJECTS after the budget expired rejects with the act's own error, and nothing is unhandled", async () => {
+    process.on("unhandledRejection", onUnhandled);
+    const f = fakePage();
+    const boom = new Error("locator.click: Timeout 80ms exceeded (the control never became actionable)");
+    const e = await actAndAwait(f.page, POST_ENTRANTS, async () => { await sleep(80); throw boom; }, 20).catch((x: unknown) => x);
+    // Precedence: the act's own error beats the expired wait — it names the
+    // control that failed, which is the more specific cause.
+    expect(e).toBe(boom);
+    await sleep(20);
+    expect(unhandled).toEqual([]);
   });
 
   it("an act that throws rejects with ITS error, and the abandoned wait never surfaces as an unhandled rejection", async () => {
