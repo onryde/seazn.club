@@ -457,6 +457,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // destination; Stop reachable after each switch-off; the allowlist; one control set per
   // width; Spanish; the QR at 125% zoom.
   "stream-relay.spec.ts",
+  // Streaming R1 lane D, File B: the credits ledger through the page — each plan's monthly
+  // grant, the month rollover, the upgrade top-up, a pack bought from the chooser (and its
+  // checkout return to an untimed fixture), the Event Pass grant, a checkout sheet that
+  // cannot load.
+  "stream-credits.spec.ts",
 ];
 
 afterEach(() => {
