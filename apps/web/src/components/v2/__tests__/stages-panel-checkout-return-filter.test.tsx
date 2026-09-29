@@ -114,6 +114,7 @@ describe("the run sheet's mounting filter honours a checkout return (D2)", () =>
         }
       }
       expect(checked, "phase × fixture cases checked").toBe(DIVISION_PHASES.length * 2);
+      expect(checked).toBeGreaterThan(0);
     });
   });
 
@@ -130,10 +131,16 @@ describe("the run sheet's mounting filter honours a checkout return (D2)", () =>
       renderToStaticMarkup(<StagesPanel {...baseProps} phase={phase} checkoutReturn={checkoutReturn} />);
 
     it("NO return → mounts on 'today', and the untimed row is not rendered (the positive pair)", () => {
-      const html = render();
-      expect(pressedFilter(html)).toBe("today");
-      expect(rowRendered(html, timed.fixture_no)).toBe(true);
-      expect(rowRendered(html, untimed.fixture_no)).toBe(false);
+      // The page's exact shape on an ordinary visit (page.tsx hands both params through, each undefined) — a truthy
+      // object, so the lookup runs and must find nothing — and the prop left off entirely.
+      let checked = 0;
+      for (const html of [render({ stream: undefined, fixture: undefined }), render()]) {
+        expect(pressedFilter(html)).toBe("today");
+        expect(rowRendered(html, timed.fixture_no)).toBe(true);
+        expect(rowRendered(html, untimed.fixture_no)).toBe(false);
+        checked++;
+      }
+      expect(checked).toBe(2);
     });
 
     it("a return naming the UNTIMED fixture → its row is rendered", () => {
@@ -156,6 +163,62 @@ describe("the run sheet's mounting filter honours a checkout return (D2)", () =>
     it("a URL that names the fixture but will not open its panel (no stream=open) → the default", () => {
       expect(pressedFilter(render({ fixture: untimed.id }))).toBe("today");
       expect(pressedFilter(render({ stream: "closed", fixture: untimed.id }))).toBe("today");
+    });
+  });
+
+  /**
+   * "Today" is the VENUE's day (the run sheet's `tz`, the division's venue zone), never UTC's or the org's. Auckland is
+   * UTC+13 on 2026-03-01 (NZDT): at 12:00Z it is already 01:00 on 2 March there, so a fixture at 09:00Z (22:00 on
+   * 1 March, local) is TODAY in UTC and YESTERDAY at the venue. The expected filter is asked of `runSheetKeeps` under the
+   * venue's own clock; the two premises prove the case tells the zones apart, so a derivation reading the wrong one reds.
+   */
+  describe("the zone: 'today' is the venue's day", () => {
+    const VENUE = "Pacific/Auckland";
+    const yesterdayAtVenue = fixture({ id: "f-venue-yesterday", fixture_no: 3, scheduled_at: "2026-03-01T09:00:00Z" });
+    const venueCtx: RunSheetKeepContext = { ...ctx, tz: VENUE, today: dayKeyInTz(NOW_MS, VENUE) };
+    const venuePhase = resolvePhase({
+      ...phaseInput,
+      tz: VENUE,
+      fixtures: [timed, yesterdayAtVenue].map((f) => ({
+        id: f.id, status: f.status, scheduledAt: f.scheduled_at, startedAt: null, eventCount: 0, matchMinutes: 30,
+        hasScorer: true, stageId: "s1", awaitsSeedDraw: false,
+      })),
+    });
+
+    it("premise: match day at the venue; the fixture is today in UTC and not today at the venue", () => {
+      expect(venuePhase, "15:00Z is 04:00 on 2 March in Auckland — today there").toBe("match_day");
+      expect(runSheetKeeps(asRow(yesterdayAtVenue), "today", ctx), "today in UTC").toBe(true);
+      expect(runSheetKeeps(asRow(yesterdayAtVenue), "today", venueCtx), "yesterday at the venue").toBe(false);
+    });
+
+    it("the derivation reads the venue's clock: the returned fixture is on the mounted sheet there", () => {
+      const chosen = initialRunSheetFilter(venuePhase, asRow(yesterdayAtVenue), { tz: VENUE, nowMs: NOW_MS, matchMinutes: 30 });
+      expect(runSheetKeeps(asRow(yesterdayAtVenue), chosen, venueCtx), `mounted on "${chosen}"`).toBe(true);
+      expect(chosen).not.toBe(designDefault(venuePhase));
+    });
+
+    describe("rendered, venue zone ≠ org zone", () => {
+      beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(NOW));
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+      const renderAtVenue = (checkoutReturn: { stream?: string; fixture?: string }) =>
+        renderToStaticMarkup(
+          <StagesPanel {...baseProps} tz={VENUE} orgTz="UTC" phase={venuePhase} fixtures={[timed, yesterdayAtVenue]} checkoutReturn={checkoutReturn} />,
+        );
+
+      it("a return naming it → its row is rendered; an ordinary visit → it is not (the positive pair)", () => {
+        const returned = renderAtVenue(returnTo(yesterdayAtVenue.id));
+        expect(rowRendered(returned, yesterdayAtVenue.fixture_no)).toBe(true);
+        expect(pressedFilter(returned)).toBe("all");
+        const ordinary = renderAtVenue({ stream: undefined, fixture: undefined });
+        expect(pressedFilter(ordinary)).toBe("today");
+        expect(rowRendered(ordinary, yesterdayAtVenue.fixture_no)).toBe(false);
+        expect(rowRendered(ordinary, timed.fixture_no)).toBe(true);
+      });
     });
   });
 });
