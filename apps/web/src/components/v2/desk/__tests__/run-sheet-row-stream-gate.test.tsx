@@ -63,6 +63,8 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     sportKey: "football",
     overlayDict: {},
     viewerPlan: "community",
+    orgId: "o-1",
+    streamBalance: 0,
     ...o,
   };
 }
@@ -134,6 +136,9 @@ describe("what the toggle opens", () => {
     expect(find(island.tree(), FixtureStreamPanel), "the panel must not mount closed").toBeUndefined();
     const toggle = find(island.tree(), FixtureStreamToggle)!;
     expect(propsOf(toggle).open).toBe(false);
+    // The row's one line for the checkout return (owner ruling 4): the toggle is told WHICH fixture it is, so a
+    // `?stream=open&fixture=<id>` URL opens this row and no other.
+    expect(propsOf(toggle).fixtureId).toBe("f1");
     (propsOf(toggle).onToggle as () => void)();
     const panel = find(island.tree(), FixtureStreamPanel);
     expect(panel, "opening the toggle did not mount the panel").toBeDefined();

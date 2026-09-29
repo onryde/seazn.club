@@ -31,6 +31,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
+import { relayBalance } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
@@ -519,11 +520,16 @@ export default async function DivisionPage({
   const streamOffered = tab === "fixtures" && editable;
   const streamEntitled =
     streamOffered && (await hasFeature(auth.orgId, "streaming.overlay", competition.id));
+  const streamRelayEntitled =
+    streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id));
   const streamPanel = streamOffered
     ? {
         entitled: streamEntitled,
-        relayEntitled:
-          streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id)),
+        relayEntitled: streamRelayEntitled,
+        // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before
+        // any session exists (C1). Read only when the relay gate is open — the tab shows the UpgradeGate otherwise.
+        orgId: auth.orgId,
+        streamBalance: streamRelayEntitled ? await relayBalance(auth, auth.orgId) : 0,
         sportKey: division.sport_key,
         overlayDict: streamEntitled
           ? (Object.fromEntries(

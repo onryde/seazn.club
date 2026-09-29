@@ -26,6 +26,7 @@ import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
 import { StreamEndReason, StreamFailReason, StreamIngest, StreamSessionState } from "@/server/api-v1/schemas";
+import { DestinationNotAllowedError } from "@/server/usecases/stream-targets";
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, CREATE_ERROR_KEYS, DESTINATION_REFUSAL_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
@@ -176,7 +177,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["ingest_unavailable 503", new HttpError(503, "the ingest service is unavailable", "ingest_unavailable"), "ingest_unavailable"],
     ["target_in_use 409, a holder with a court", new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: "f-2", courtName: "Court 3", label: "Club channel" } }), "target_in_use"],
     ["target_in_use 409, the index race (holder null)", new HttpError(409, "in use", "target_in_use", { holder: null }), "target_in_use"],
-    ["DESTINATION_NOT_ALLOWED 422", new HttpError(422, "The ingest host is not one of the supported streaming services", DESTINATION_NOT_ALLOWED, { rule: "host" }), "destination_not_allowed"],
+    // m4 (Task 13 review): the server's OWN refusal class (stream-targets.ts), not an HttpError shaped like it.
+    ["DESTINATION_NOT_ALLOWED 422", new DestinationNotAllowedError("host"), "destination_not_allowed"],
     ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError("streaming.relay"), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError("streaming.overlay"), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
@@ -213,6 +215,13 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     expect(createErrorCode(new DOMException("aborted", "AbortError"))).toBe("unknown");
     expect(createErrorCode("no_credits")).toBe("unknown");
     expect(createErrorCode(null)).toBe("unknown");
+  });
+
+  it("m6: an error with a code but NO extra is read as an empty extra — never a TypeError out of the reader", () => {
+    // Both rows reach `wireError`'s `extra` guard: without it `w.extra` is undefined and the property read throws.
+    expect(createErrorCode(Object.assign(new Error("x"), { code: "PAYMENT_REQUIRED" }))).toBe("unknown");
+    expect(createErrorHolder({ code: "target_in_use" })).toBeNull();
+    expect(targetRefusalRule({ code: DESTINATION_NOT_ALLOWED })).toBeNull();
   });
 
   it("createErrorHolder reads extra.holder: the court and label when present; courtName null kept; null for the index race, another code, or a malformed holder", async () => {
@@ -259,27 +268,62 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
 
 describe("stream-session-view — health, elapsed, the paste code", () => {
   it("health chips: the ingest state for passthrough; fps/Mbps/beat with a heartbeat; the beat is stale at 45 s, not 44", () => {
-    expect(healthChips(view(), msg, NOW).map((c) => c.text)).toEqual([msg("stream.health.ingest.connected")]);
+    expect(healthChips(view(), msg, NOW, "en").map((c) => c.text)).toEqual([msg("stream.health.ingest.connected")]);
     const fresh = view({ health: { fps: 30, bitrateKbps: 2900, lastBeatAt: new Date(NOW.getTime() - 44_000).toISOString() } });
-    const chips = healthChips(fresh, msg, NOW);
+    const chips = healthChips(fresh, msg, NOW, "en");
     expect(chips.map((c) => c.text)).toEqual([msg("stream.health.ingest.connected"), msg("stream.health.fps", { n: 30 }), msg("stream.health.bitrate", { n: "2.9" }), msg("stream.health.beat", { s: 44 })]);
     expect(chips[3]!.stale).toBe(false);
     const stale = view({ health: { fps: 30, bitrateKbps: 2900, lastBeatAt: new Date(NOW.getTime() - BEAT_STALE_SECONDS * 1000).toISOString() } });
-    expect(healthChips(stale, msg, NOW)[3]!.stale).toBe(true);
+    expect(healthChips(stale, msg, NOW, "en")[3]!.stale).toBe(true);
   });
 
-  it("health chips, the empty and edge cases: no ingest read → 'unknown'; a composed session has no ingest chip; no beat yet → stale; a beat stamped ahead of this clock reads 0 s, never negative", () => {
-    expect(healthChips(view({ ingest: null }), msg, NOW).map((c) => c.text)).toEqual([msg("stream.health.ingest.unknown")]);
-    expect(healthChips(view({ ingest: { state: "disconnected", protocol: null } }), msg, NOW).map((c) => c.text)).toEqual([msg("stream.health.ingest.disconnected")]);
+  it("health chips, the empty and edge cases: no ingest read → 'unknown'; a composed session has no ingest chip; no beat yet → its OWN copy, stale; a beat stamped ahead of this clock reads 0 s, never negative", () => {
+    expect(healthChips(view({ ingest: null }), msg, NOW, "en").map((c) => c.text)).toEqual([msg("stream.health.ingest.unknown")]);
+    expect(healthChips(view({ ingest: { state: "disconnected", protocol: null } }), msg, NOW, "en").map((c) => c.text)).toEqual([msg("stream.health.ingest.disconnected")]);
     // Composed: the server never reads the ingest for it (stream-sessions.ts currentSession), so "unknown" would be a
     // permanent false alarm — the heartbeat chips alone describe the relay.
-    const composed = healthChips(view({ mode: "composed", ingest: null, health: { fps: 25, bitrateKbps: 4000, lastBeatAt: NOW.toISOString() } }), msg, NOW);
+    const composed = healthChips(view({ mode: "composed", ingest: null, health: { fps: 25, bitrateKbps: 4000, lastBeatAt: NOW.toISOString() } }), msg, NOW, "en");
     expect(composed.map((c) => c.text)).toEqual([msg("stream.health.fps", { n: 25 }), msg("stream.health.bitrate", { n: "4.0" }), msg("stream.health.beat", { s: 0 })]);
-    expect(healthChips(view({ mode: "composed", ingest: null }), msg, NOW)).toEqual([]);
-    const noBeat = healthChips(view({ health: { fps: null, bitrateKbps: null, lastBeatAt: null } }), msg, NOW);
-    expect(noBeat.at(-1)).toEqual({ text: msg("stream.health.beat", { s: 0 }), stale: true });
-    const skewed = healthChips(view({ health: { fps: 30, bitrateKbps: 2900, lastBeatAt: new Date(NOW.getTime() + 3_000).toISOString() } }), msg, NOW);
+    expect(healthChips(view({ mode: "composed", ingest: null }), msg, NOW, "en")).toEqual([]);
+    // m1 (Task 13 review): a heartbeat that carried no beat is "no beat yet" — never "beat 0 s ago", which claims a beat
+    // arrived this very second — and it is still stale (amber): the relay has said nothing about its liveness.
+    const noBeat = healthChips(view({ health: { fps: 30, bitrateKbps: 2900, lastBeatAt: null } }), msg, NOW, "en");
+    expect(noBeat.at(-1)).toEqual({ text: msg("stream.health.beat.none"), stale: true });
+    expect(noBeat.at(-1)!.text, "the no-beat copy is not the zero-seconds sentence").not.toBe(msg("stream.health.beat", { s: 0 }));
+    const skewed = healthChips(view({ health: { fps: 30, bitrateKbps: 2900, lastBeatAt: new Date(NOW.getTime() + 3_000).toISOString() } }), msg, NOW, "en");
     expect(skewed.at(-1)).toEqual({ text: msg("stream.health.beat", { s: 0 }), stale: false });
+  });
+
+  it("m1: a heartbeat field the relay did not send is ABSENT — never a false '0 fps' / '0.0 Mbps' — each omitted on its own, the others kept", () => {
+    const beat = new Date(NOW.getTime() - 4_000).toISOString();
+    const texts = (health: { fps: number | null; bitrateKbps: number | null; lastBeatAt: string | null }) =>
+      healthChips(view({ health }), msg, NOW, "en").map((c) => c.text);
+    const ingest = msg("stream.health.ingest.connected");
+    const fps = msg("stream.health.fps", { n: 30 });
+    const mbps = msg("stream.health.bitrate", { n: "2.9" });
+    const beat4 = msg("stream.health.beat", { s: 4 });
+    // The positive pair first: every field present renders every chip.
+    expect(texts({ fps: 30, bitrateKbps: 2900, lastBeatAt: beat })).toEqual([ingest, fps, mbps, beat4]);
+    expect(texts({ fps: null, bitrateKbps: 2900, lastBeatAt: beat })).toEqual([ingest, mbps, beat4]);
+    expect(texts({ fps: 30, bitrateKbps: null, lastBeatAt: beat })).toEqual([ingest, fps, beat4]);
+    expect(texts({ fps: null, bitrateKbps: null, lastBeatAt: null })).toEqual([ingest, msg("stream.health.beat.none")]);
+    // A genuine zero is a reading, not an absence: 0 fps from a frozen camera must still show.
+    expect(texts({ fps: 0, bitrateKbps: 0, lastBeatAt: beat })).toEqual([ingest, msg("stream.health.fps", { n: 0 }), msg("stream.health.bitrate", { n: "0.0" }), beat4]);
+    for (const l of LOCALES) expect(dict(l)["stream.health.beat.none"], `${l} stream.health.beat.none`).toBeTruthy();
+  });
+
+  it("m2: the bitrate is formatted in the ACTIVE locale — a decimal comma in es/fr/nl, a point in en (2900 kbps)", () => {
+    // The rulebook is CLDR's decimal separator for each locale, typed here — never re-derived through the code's own
+    // formatter, which would pass with any separator at all.
+    const EXPECTED: Record<(typeof LOCALES)[number], string> = { en: "2.9", es: "2,9", fr: "2,9", nl: "2,9" };
+    const live = view({ health: { fps: 30, bitrateKbps: 2900, lastBeatAt: NOW.toISOString() } });
+    let checked = 0;
+    for (const l of LOCALES) {
+      const bitrate = healthChips(live, msg, NOW, l)[2]!;
+      expect(bitrate.text, l).toBe(msg("stream.health.bitrate", { n: EXPECTED[l] }));
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 
   it("elapsed: m:ss under an hour, h:mm:ss from the hour; no start (or a start ahead of this clock) is 0:00", () => {

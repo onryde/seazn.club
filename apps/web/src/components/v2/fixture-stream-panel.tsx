@@ -28,19 +28,51 @@
 //     overlay endpoint the stage itself polls. The seed is why a fixture whose
 //     public endpoint is unreachable still previews instead of showing an
 //     empty strip.
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Check, Copy, Video } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from "react";
+import { Check, Copy, Smartphone, Video } from "lucide-react";
+import QRCode from "qrcode";
+import { useSearchParams } from "next/navigation";
+import { EmbeddedCheckout, EmbeddedCheckoutProvider } from "@stripe/react-stripe-js";
+import { Modal } from "@/components/modal";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { useConfirm } from "@/components/ui/confirm-provider";
 import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import { STREAM_CREDIT_PACKS, formatGbp, perMatchGbp, type StreamPackSize } from "@/lib/stream-credit-packs";
+import { destinationRefusal } from "@/lib/stream-destinations";
+import {
+  DESTINATION_REFUSAL_KEYS,
+  END_REASON_KEYS,
+  FAIL_REASON_KEYS,
+  STATE_PILL_KEYS,
+  STEP_KEYS,
+  STREAM_POLL_MS,
+  createErrorCode,
+  createErrorHolder,
+  createErrorText,
+  elapsedLabel,
+  healthChips,
+  phoneTabState,
+  qrText,
+  stepFor,
+  targetRefusalRule,
+  type CreateErrorCode,
+  type CreateErrorHolder,
+  type PhoneTabState,
+  type StreamSessionView,
+} from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
+import { stripePromise } from "@/lib/stripe-browser";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+// TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
+import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 
 /** The authored canvas every theme is drawn on — the OBS browser-source size
  *  `overlay-stage.tsx` fixes and `_THEMES.md` measures every inset against. */
@@ -88,28 +120,6 @@ export function previewScaleFor(stripWidth: number): number {
   return Math.min(w, PREVIEW_MAX_W_PX) / CANVAS_W;
 }
 
-/**
- * §8b, picked option A ("Three tiles", owner 2026-09-08). SANDBOX PLACEHOLDERS
- * — spec §5.2; the real prices are an owner ruling before the GA flip, and R1
- * replaces this constant with the live pack catalogue plus a working Checkout.
- * Exported so a test asserts the rendered tiles against THIS table rather than
- * against a second copy typed into the test.
- */
-export const CREDIT_PACKS: readonly {
-  matches: number;
-  labelKey: MessageKey;
-  price: string;
-  perMatch: string;
-  /** §8b: the 5-pack carries `border-purple-500` and the "Most clubs" chip.
-   *  Declared on every row rather than left off two, so the flag is a fact
-   *  about the table and not the absence of one. */
-  popular: boolean;
-}[] = [
-  { matches: 1, labelKey: "stream.credits.pack1", price: "£6", perMatch: "£6", popular: false },
-  { matches: 5, labelKey: "stream.credits.pack5", price: "£25", perMatch: "£5", popular: true },
-  { matches: 20, labelKey: "stream.credits.pack20", price: "£80", perMatch: "£4", popular: false },
-];
-
 /** What the panel needs off the row. Structurally a subset of
  *  `RunSheetFixture`, declared narrowly so the panel does not import the run
  *  sheet's own shape and become un-mountable anywhere else. */
@@ -142,13 +152,50 @@ export interface StreamPanelContext {
   sportKey: string;
   overlayDict: Record<string, string>;
   viewerPlan: ViewerPlan;
+  /** The org the fixture belongs to — the stream-targets and relay-checkout routes address it. */
+  orgId: string;
+  /** C1 — the org's match-credit balance as the SERVER resolved it. The projection's `balance` only exists once a
+   *  session does, so this is the idle tab's only source; without it a club that has just bought credits reads 0 and
+   *  is shown the buy card again. */
+  streamBalance: number;
+}
+
+/**
+ * Owner ruling 4 (re-ruled on C19): a return from checkout carries `?stream=open&fixture=<id>` and lands with THIS
+ * row's panel open on the Phone tab. Both readers — which tab the panel opens on, and whether the row opens at all —
+ * ask this one function, so they cannot disagree about which row the URL names. `useSearchParams` can be null outside
+ * the app router, hence the `?.`.
+ */
+function checkoutReturnFor(params: { get(name: string): string | null } | null, fixtureId: string): boolean {
+  return params?.get("stream") === "open" && params.get("fixture") === fixtureId;
 }
 
 /** The row's own control. Separate from the panel body because the two mount in
  *  different places: the toggle sits beside the run sheet's time cell, the body
  *  spans the row underneath it. The open state therefore lives in the row. */
-export function FixtureStreamToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+export function FixtureStreamToggle({
+  open,
+  onToggle,
+  fixtureId,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  fixtureId: string;
+}) {
   const msg = useMsg();
+  // The MOUNTING half of the checkout return. The read belongs to the panel module, not to `run-sheet-row.tsx` — the
+  // row's whole contribution is the `fixtureId` prop. Fired once per mount and only while CLOSED, so a customer who
+  // lands on the URL, reads the panel and shuts it does not have it spring back open under them. The row hands a fresh
+  // `onToggle` every render, so this effect re-runs on each: the ref is what keeps it to ONE open (class 13 — and
+  // `open` is what keeps a manual close sticky).
+  const searchParams = useSearchParams();
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current || open) return;
+    if (!checkoutReturnFor(searchParams, fixtureId)) return;
+    autoOpened.current = true;
+    onToggle();
+  }, [searchParams, fixtureId, open, onToggle]);
   return (
     <button
       type="button"
@@ -184,7 +231,10 @@ export function FixtureStreamPanel({
   const locale = useLocaleOrDefault();
 
   const themes = themesForSport(stream.sportKey);
-  const [tab, setTab] = useState<"obs" | "phone">("obs");
+  // The TAB half of the checkout return: a lazy initialiser, so the URL picks the opening tab and never overrides the
+  // organiser's own choice afterwards.
+  const searchParams = useSearchParams();
+  const [tab, setTab] = useState<"obs" | "phone">(() => (checkoutReturnFor(searchParams, fixture.id) ? "phone" : "obs"));
   // OPENS ON the sport's own default, resolved through the registry — a lazy
   // initialiser so a re-render never re-seeds it over the organiser's choice.
   const [style, setStyle] = useState<ThemeId>(() => defaultThemeFor(stream.sportKey));
@@ -338,7 +388,9 @@ export function FixtureStreamPanel({
     }`;
 
   return (
-    <section data-testid="stream-panel" className="card mt-2 p-5">
+    // §8a: the Phone tab's card drops to `p-4` below 768 (the QR box lives inside it, and `p-5` costs the symbol 8 CSS
+    // px at 320); §8's OBS card keeps `p-5` at every width. The two tabs are never side by side.
+    <section data-testid="stream-panel" className={`card mt-2 ${tab === "phone" ? "p-4 md:p-5" : "p-5"}`}>
       <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
         <Video className="h-4 w-4 text-purple-500" strokeWidth={1.75} />
         {msg("stream.title")}
@@ -523,49 +575,923 @@ export function FixtureStreamPanel({
           {!stream.relayEntitled ? (
             <UpgradeGate feature="streaming.relay" compact viewerPlan={stream.viewerPlan} />
           ) : (
-            <>
-              <h4 className="text-sm font-semibold text-slate-700">{msg("stream.credits.title")}</h4>
-              <p className="mt-1 text-xs text-slate-500">{msg("stream.credits.line")}</p>
-              <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
-                {CREDIT_PACKS.map((pack) => (
-                  <button
-                    key={pack.matches}
-                    type="button"
-                    disabled
-                    data-testid="stream-credit-pack"
-                    data-pack={pack.matches}
-                    className={`min-h-11 w-full rounded-lg border p-3 text-left ${
-                      pack.popular ? "border-purple-500" : "border-purple-200"
-                    }`}
-                  >
-                    <span className="block text-lg font-semibold text-slate-800">
-                      {msg(pack.labelKey)}
-                    </span>
-                    <span className="block text-sm text-slate-600">{pack.price}</span>
-                    <span className="block text-[11px] text-slate-500">
-                      {msg("stream.credits.perMatch", { price: pack.perMatch })}
-                    </span>
-                    {pack.popular && (
-                      <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-[10px] text-purple-800">
-                        {msg("stream.credits.popular")}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                disabled
-                data-testid="stream-buy-soon"
-                className="btn btn-primary mt-2 h-11 w-full md:h-10 md:w-auto"
-              >
-                {msg("stream.credits.soon")}
-              </button>
-              <p className="mt-2 text-[11px] text-slate-500">{msg("stream.credits.footnote")}</p>
-            </>
+            <PhoneTab
+              fixtureId={fixture.id}
+              orgId={stream.orgId}
+              streamBalance={stream.streamBalance}
+              viewerPlan={stream.viewerPlan}
+            />
           )}
         </div>
       )}
     </section>
+  );
+}
+
+// ─── The Phone tab (Streaming R1, lane D) ─────────────────────────────────────────────────────────────────────────────
+// §8a option A ("Stepper") and §8b option A ("Three tiles"), values from `_THEMES.md`. Three pieces, each tested where
+// it CAN be in a node harness: `PhoneTab` (the container — fetch, poll, reveal and every action), `PhoneTabBody` (pure:
+// every state is a function of its props) and `TargetForm` (the destination form, which holds its own fields).
+
+/** §7.6 via §8a's `QR encoding` row: EC-M and a 4-module quiet zone. `width` is the RASTER size — twice §8a's 264 CSS
+ *  px box, so the symbol stays crisp on a 2× screen; the box, not this number, decides the painted size. */
+export const QR_RENDER_OPTIONS = { errorCorrectionLevel: "M", margin: 4, width: 528 } as const;
+
+/** §8a's QR box: 264 CSS px of symbol + its `p-3` twice + its 1-px border twice. The paste-code field takes the SAME
+ *  class, which is what "the QR box's own width, not the card's" means — two elements that cannot drift apart. */
+const QR_COLUMN_W = "w-full max-w-[290px]";
+
+/** The platform select's options, in the `StreamTargetKind` enum's order. A client-safe copy — the schema module is
+ *  server code — held EQUAL to the enum by the panel test, so a kind added there reds here. */
+export const TARGET_KINDS = ["youtube", "facebook", "twitch", "kick", "custom_rtmp"] as const satisfies readonly StreamTargetKind[];
+
+/** Brand names are not copy. `custom_rtmp` is labelled from the dictionary with the services it covers (Vimeo,
+ *  Restream, Cloudflare Stream — the allowlist's other providers), never with its enum id. No LinkedIn: it is not on the
+ *  allowlist (lib/stream-destinations.ts). */
+const KIND_BRAND: Record<Exclude<StreamTargetKind, "custom_rtmp">, string> = {
+  youtube: "YouTube",
+  facebook: "Facebook",
+  twitch: "Twitch",
+  kick: "Kick",
+};
+
+/**
+ * Arrow-key movement through a radiogroup (WAI-ARIA radio pattern): Right/Down forward, Left/Up back, wrapping, and
+ * over the ENABLED options only — composed ("With scorebug") is disabled this wave, so an arrow never selects it. Any
+ * other key leaves the selection where it is. Pure, so the node harness can pin it.
+ */
+export function stepRadio(options: readonly { id: string; enabled: boolean }[], current: string, key: string): string {
+  const dir = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
+  if (dir === 0) return current;
+  const enabled = options.filter((o) => o.enabled);
+  const at = enabled.findIndex((o) => o.id === current);
+  if (at === -1) return enabled[0]?.id ?? current;
+  return enabled[(at + dir + enabled.length) % enabled.length]!.id;
+}
+
+type FeedMode = "clean" | "scorebug";
+const MODE_OPTIONS = [
+  { id: "clean", enabled: true },
+  { id: "scorebug", enabled: false },
+] as const;
+const ARROW = /^Arrow(Up|Down|Left|Right)$/;
+
+type CreateError = { code: CreateErrorCode; holder: CreateErrorHolder | null };
+/** D13: which sentence a refused checkout gets — keyed on the route's STATUS (`CheckoutSecretResult` has no code). */
+type CheckoutError = "owner" | "unknown";
+type TargetFormValues = { kind: StreamTargetKind; label: string; rtmpUrl: string; streamKey: string; watchUrl: string };
+
+/**
+ * The Phone tab's container: fetch + poll + actions. Everything visible is `PhoneTabBody`, so the node harness renders
+ * every state without a network. Polls `current` at STREAM_POLL_MS while a session is not terminal — the SERVER flips
+ * warming → live on that read; the client never decides.
+ */
+export function PhoneTab({
+  fixtureId,
+  orgId,
+  streamBalance,
+  viewerPlan,
+}: {
+  fixtureId: string;
+  orgId: string;
+  streamBalance: number;
+  viewerPlan: ViewerPlan;
+}) {
+  const msg = useMsg();
+  const confirm = useConfirm();
+  const [view, setView] = useState<StreamSessionView | null>(null);
+  // "Start another" / "Try again" put the tab back to idle WITHOUT forgetting the server's answer. `current` returns
+  // the LATEST session in any state, terminal ones included, so every later read (the refresh after a refused create,
+  // in particular) would otherwise resurrect the finished card over the refusal it was meant to explain.
+  const [dismissedId, setDismissedId] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [targets, setTargets] = useState<StreamTarget[]>([]);
+  const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
+  const [mode, setMode] = useState<FeedMode>("clean");
+  const [busy, setBusy] = useState(false);
+  const [createError, setCreateError] = useState<CreateError | null>(null);
+  const [checkoutError, setCheckoutError] = useState<CheckoutError | null>(null);
+  const [checkoutSecret, setCheckoutSecret] = useState<string | null>(null);
+  // C22 / D12: the ORG's plan lost the feature between the page load and the tap (a downgrade, an override expiring).
+  const [planGate, setPlanGate] = useState(false);
+  const [qrImage, setQrImage] = useState<{ text: string; url: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [showTargetForm, setShowTargetForm] = useState(false);
+  const [showBuy, setShowBuy] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  // `reveal` marks a read as the organiser DISCLOSING the credentials rather than the 5-second poll (De). Only two
+  // things set it: the first showing of a session's QR, and a tap on Copy. Mount, poll and post-action reads are polls.
+  const refresh = useCallback(
+    async (reveal = false) => {
+      const cur = await apiV1<StreamSessionView | null>(
+        `/api/v1/fixtures/${fixtureId}/stream-sessions/current${reveal ? "?reveal=1" : ""}`,
+      );
+      setView(cur);
+      setLoaded(true);
+      setNow(new Date());
+    },
+    [fixtureId],
+  );
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        await refresh();
+      } catch {
+        setLoaded(true); // an unreadable first read still leaves the tab usable: idle, from the page's balance
+      }
+    })();
+    void (async () => {
+      try {
+        // created_at order (listStreamTargets), so the first is the org's oldest destination.
+        const list = await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`);
+        setTargets(list);
+        setSelectedTargetId((cur) => cur ?? list[0]?.id ?? null);
+      } catch {
+        // an unreadable list reads as none: the select says to add one and Go live stays disabled
+      }
+    })();
+  }, [refresh, orgId]);
+
+  const shown = view && view.id !== dismissedId ? view : null;
+  const state = phoneTabState(shown);
+  const terminal = state === "idle" || state === "ended" || state === "failed";
+  useEffect(() => {
+    if (terminal) return;
+    const id = setInterval(() => {
+      void refresh().catch(() => {});
+    }, STREAM_POLL_MS);
+    return () => clearInterval(id);
+  }, [terminal, refresh]);
+
+  // The elapsed clock ticks every second while live, rather than jumping by the poll interval.
+  useEffect(() => {
+    if (state !== "live") return;
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, [state]);
+
+  // The QR is rendered CLIENT-SIDE from the projection — never in page HTML. Every poll is a fresh object off the
+  // wire, so this effect re-runs on each; the ref is what keeps the reveal to ONCE per session (De), not once per poll.
+  const qr = shown?.qr ?? null;
+  const sessionId = shown?.id ?? null;
+  const revealedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!qr || !sessionId) return;
+    if (revealedFor.current !== sessionId) {
+      revealedFor.current = sessionId;
+      void refresh(true).catch(() => {});
+    }
+    const text = qrText(qr);
+    let cancelled = false;
+    void QRCode.toDataURL(text, QR_RENDER_OPTIONS)
+      .then((url) => {
+        if (!cancelled) setQrImage({ text, url });
+      })
+      .catch(() => {
+        // the paste code below the box is always rendered (§8a), so a failed encode still leaves a way in
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [qr, sessionId, refresh]);
+  const qrPayload = qr ? qrText(qr) : null;
+  const qrDataUrl = qrImage && qrImage.text === qrPayload ? qrImage.url : null;
+
+  // C1: with a session, the projection's `balance` is the fresher number. With NO session there is no projection at
+  // all, so the server-resolved one is the only source.
+  const balance = view ? view.balance : streamBalance;
+
+  const onGoLive = async () => {
+    if (!selectedTargetId) return;
+    setBusy(true);
+    setCreateError(null);
+    try {
+      await apiV1(`/api/v1/fixtures/${fixtureId}/stream-sessions`, {
+        method: "POST",
+        json: { mode: "passthrough", targetId: selectedTargetId },
+      });
+    } catch (err) {
+      const code = createErrorCode(err);
+      // D12: "your plan, not your credits" is the upgrade surface, never a retry sentence.
+      if (code === "plan_lacks_relay") {
+        setPlanGate(true);
+        setBusy(false);
+        return;
+      }
+      setCreateError({ code, holder: createErrorHolder(err) });
+    }
+    // Either way the server's state is the answer: the new session, or — after a refusal — whatever is there (an
+    // `active_session` refusal's running session IS the explanation; a dismissed card stays dismissed).
+    await refresh().catch(() => {});
+    setBusy(false);
+  };
+
+  const stop = async (ask: boolean) => {
+    if (!shown) return;
+    if (ask) {
+      const ok = await confirm({
+        title: msg("stream.phone.stop.title"),
+        body: msg("stream.phone.stop.body"),
+        confirmLabel: msg("stream.phone.stop"),
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setBusy(true);
+    setCreateError(null);
+    try {
+      setView(
+        await apiV1<StreamSessionView>(`/api/v1/fixtures/${fixtureId}/stream-sessions/${shown.id}/stop`, {
+          method: "POST",
+        }),
+      );
+    } catch {
+      // D14: a refused stop is most often a session that has already ended (409 not_active) — read the server again
+      // and show what is there. Only when that read fails too is there nothing true to show but "try again".
+      try {
+        await refresh();
+      } catch {
+        setCreateError({ code: "unknown", holder: null });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // EMBEDDED Checkout (owner ruling 8) — the buy-credits.tsx shape: fetch the client_secret UP FRONT and mount
+  // <EmbeddedCheckout> only once it resolves; Stripe returns the buyer to the route's return_url (this row, Phone tab).
+  const onBuy = async (pack: StreamPackSize) => {
+    setBusy(true);
+    setCheckoutError(null);
+    const result = await fetchRelayCheckoutClientSecret({ orgId, fixtureId, pack });
+    setBusy(false);
+    if (result.ok) {
+      setCheckoutSecret(result.clientSecret);
+      setShowBuy(false);
+      return;
+    }
+    // C22: the route's 402 IS plan_lacks_relay — the SAME UpgradeGate the entitled check renders, so there is one
+    // upgrade surface. Keyed on STATUS: `CheckoutSecretResult` has no code field (D13).
+    if (result.status === 402) {
+      setPlanGate(true);
+      return;
+    }
+    setCheckoutError(result.status === 403 ? "owner" : "unknown");
+  };
+
+  const onCopy = async () => {
+    if (!shown?.qr) return;
+    try {
+      await navigator.clipboard.writeText(qrText(shown.qr));
+    } catch {
+      return; // a browser that refuses the clipboard leaves the field selectable; nothing was taken
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+    void refresh(true).catch(() => {}); // De: taking the paste code IS a reveal
+  };
+
+  const onSaveTarget = async (form: TargetFormValues) => {
+    const watchUrl = form.watchUrl.trim();
+    const made = await apiV1<StreamTarget>(`/api/v1/orgs/${orgId}/stream-targets`, {
+      method: "POST",
+      json: {
+        kind: form.kind,
+        label: form.label,
+        rtmpUrl: form.rtmpUrl,
+        streamKey: form.streamKey,
+        ...(watchUrl ? { watchUrl } : {}),
+      },
+    });
+    // D11: A19 answers a re-save of the SAME destination with the existing row — replace it by id, never append a twin
+    // (a duplicate option and a duplicate React key).
+    setTargets((list) =>
+      list.some((t) => t.id === made.id) ? list.map((t) => (t.id === made.id ? made : t)) : [...list, made],
+    );
+    setSelectedTargetId(made.id);
+    setShowTargetForm(false);
+  };
+
+  if (planGate) return <UpgradeGate feature="streaming.relay" compact viewerPlan={viewerPlan} />;
+  if (!loaded) {
+    return (
+      <p data-testid="stream-loading" aria-busy="true" className="text-xs text-slate-500">
+        …
+      </p>
+    );
+  }
+  return (
+    <>
+      <PhoneTabBody
+        view={shown}
+        balance={balance}
+        targets={targets}
+        busy={busy}
+        createError={createError}
+        checkoutError={checkoutError}
+        selectedTargetId={selectedTargetId}
+        mode={mode}
+        qrDataUrl={qrDataUrl}
+        now={now}
+        copied={copied}
+        showTargetForm={showTargetForm}
+        showBuy={showBuy}
+        onSelectTarget={setSelectedTargetId}
+        onAddTarget={() => setShowTargetForm((v) => !v)}
+        onMode={setMode}
+        onGoLive={() => void onGoLive()}
+        onStop={() => void stop(true)}
+        // Cancel on the QR asks nothing: nothing is on air yet, so "the broadcast ends for everyone watching" would be
+        // false — and no credit has been consumed before live.
+        onCancel={() => void stop(false)}
+        onBuy={(pack) => void onBuy(pack)}
+        onAgain={() => {
+          setDismissedId(view?.id ?? null);
+          setCreateError(null);
+          setCheckoutError(null);
+        }}
+        onCopy={() => void onCopy()}
+        onShowBuy={() => setShowBuy((v) => !v)}
+        onSaveTarget={onSaveTarget}
+      />
+      {checkoutSecret && (
+        // Same chrome as buy-credits.tsx: Stripe's iframe self-sizes; Modal caps it at 85vh.
+        <Modal title={msg("stream.credits.title")} size="lg" onClose={() => setCheckoutSecret(null)}>
+          <div data-testid="stream-checkout-modal">
+            <EmbeddedCheckoutProvider stripe={stripePromise} options={{ clientSecret: checkoutSecret }}>
+              <EmbeddedCheckout />
+            </EmbeddedCheckoutProvider>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+export interface PhoneTabBodyProps {
+  view: StreamSessionView | null;
+  balance: number;
+  targets: StreamTarget[];
+  busy: boolean;
+  createError: CreateError | null;
+  checkoutError: CheckoutError | null;
+  selectedTargetId: string | null;
+  mode: FeedMode;
+  qrDataUrl: string | null;
+  now: Date;
+  copied: boolean;
+  showTargetForm: boolean;
+  showBuy: boolean;
+  onSelectTarget: (id: string) => void;
+  onAddTarget: () => void;
+  onMode: (m: FeedMode) => void;
+  onGoLive: () => void;
+  onStop: () => void;
+  onCancel: () => void;
+  onBuy: (pack: StreamPackSize) => void;
+  onAgain: () => void;
+  onCopy: () => void;
+  onShowBuy: () => void;
+  onSaveTarget: (form: TargetFormValues) => Promise<void>;
+}
+
+const PILL: Record<PhoneTabState, string> = {
+  idle: "bg-slate-100 text-slate-600",
+  provisioning: "bg-amber-100 text-amber-800",
+  warming: "bg-amber-100 text-amber-800",
+  live: "bg-red-100 text-red-700",
+  ending: "bg-slate-100 text-slate-600",
+  ended: "bg-emerald-100 text-emerald-800",
+  failed: "bg-red-50 text-red-700",
+};
+
+const CHIP = "rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700";
+/** A select or input: the 44-px phone floor, and `.input`'s own focus ring (globals.css) — no new focus style. */
+const FIELD =
+  "mt-1 min-h-11 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200 md:min-h-10";
+
+/** §8a option A (Stepper) + §8b option A (Three tiles) — values from the sheet. Pure. */
+export function PhoneTabBody(p: PhoneTabBodyProps) {
+  const msg = useMsg();
+  const locale = useLocaleOrDefault();
+  const state = phoneTabState(p.view);
+  const step = stepFor(state);
+  const credits =
+    p.balance === 1 ? msg("stream.phone.credits.one") : msg("stream.phone.credits.other", { n: p.balance });
+  // The chooser opens either because the org cannot start without credits, or because the organiser asked for it
+  // from "Buy more" — mid-session included.
+  const buyCard = (state === "idle" && p.balance < 1) || p.showBuy;
+
+  const onModeKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!ARROW.test(e.key)) return;
+    e.preventDefault();
+    const next = stepRadio(MODE_OPTIONS, p.mode, e.key) as FeedMode;
+    if (next === p.mode) return;
+    p.onMode(next);
+    e.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <Smartphone aria-hidden className="h-4 w-4 text-purple-500" strokeWidth={1.75} />
+          {msg("stream.phone.title")}
+        </h4>
+        <span
+          data-testid="stream-state-pill"
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${PILL[state]}`}
+        >
+          {state === "live" && (
+            <span data-testid="stream-live-dot" aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+          )}
+          {msg(STATE_PILL_KEYS[state])}
+        </span>
+        {p.balance >= 1 && (
+          <span
+            data-testid="stream-balance"
+            className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-800"
+          >
+            {credits}
+          </span>
+        )}
+        {p.balance >= 1 && (
+          // Opens the CHOOSER, never a pack: a mid-match top-up that picked the 5-pack sent the organiser to a Stripe
+          // sheet for a pack they never chose.
+          <button
+            type="button"
+            data-testid="stream-buy-more"
+            aria-expanded={p.showBuy}
+            onClick={p.onShowBuy}
+            className="min-h-11 rounded text-xs text-purple-700 underline hover:text-purple-800 md:min-h-0"
+          >
+            {msg("stream.phone.buyMore")}
+          </button>
+        )}
+      </div>
+
+      {/* Steps: the ol at ≥ 768, ONE line below — same tree, two branches (§8a). */}
+      <ol data-testid="stream-steps" className="mt-3 space-y-1 text-[13px] text-slate-700 max-md:hidden">
+        {STEP_KEYS.map((k, i) => {
+          const n = i + 1;
+          const cls = n === step ? "font-semibold text-purple-800" : n < step ? "text-slate-500" : "";
+          return (
+            <li key={k} aria-current={n === step ? "step" : undefined} className={`flex items-center gap-2 ${cls}`}>
+              <span
+                aria-hidden
+                className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] ${
+                  n === step ? "bg-purple-100" : "bg-slate-100"
+                }`}
+              >
+                {n < step ? <Check className="h-3.5 w-3.5" strokeWidth={2} /> : n}
+              </span>
+              {msg(k)}
+            </li>
+          );
+        })}
+      </ol>
+      <p data-testid="stream-step" className="mt-3 text-[13px] font-semibold text-purple-800 md:hidden">
+        {msg("stream.phone.stepOf", { n: step, label: msg(STEP_KEYS[step - 1]) })}
+      </p>
+
+      {p.view?.fixtureDecided && (state === "live" || state === "ending") && (
+        <p
+          data-testid="stream-decided-chip"
+          className="mt-2 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800"
+        >
+          {msg("stream.phone.decided")}
+        </p>
+      )}
+
+      {buyCard && (
+        <div className="mt-3">
+          <h5 className="text-sm font-semibold text-slate-700">{msg("stream.credits.title")}</h5>
+          <p className="mt-1 text-xs text-slate-500">{msg("stream.credits.line")}</p>
+          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+            {STREAM_CREDIT_PACKS.map((pack) => (
+              <button
+                key={pack.size}
+                type="button"
+                disabled={p.busy}
+                data-testid={`stream-buy-pack-${pack.size}`}
+                onClick={() => p.onBuy(pack.size)}
+                className={`min-h-11 w-full rounded-lg border p-3 text-left hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  pack.popular ? "border-purple-500" : "border-purple-200"
+                }`}
+              >
+                <span className="block text-lg font-semibold text-slate-800">{msg(pack.labelKey)}</span>
+                <span className="block text-sm text-slate-600">{formatGbp(pack.gbpPence)}</span>
+                <span className="block text-[11px] text-slate-500">
+                  {msg("stream.credits.perMatch", { price: perMatchGbp(pack) })}
+                </span>
+                {pack.popular && (
+                  <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-[10px] text-purple-800">
+                    {msg("stream.credits.popular")}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          {p.checkoutError && (
+            <p data-testid="stream-checkout-error" role="alert" className="mt-2 text-xs text-red-600">
+              {msg(p.checkoutError === "owner" ? "stream.credits.error.owner" : "stream.credits.error.unknown")}
+            </p>
+          )}
+          <p className="mt-2 text-[11px] text-slate-500">{msg("stream.credits.footnote")}</p>
+        </div>
+      )}
+
+      {state === "idle" && !buyCard && (
+        <div className="mt-3 space-y-3">
+          <label className="block text-xs text-slate-500">
+            {msg("stream.phone.destination")}
+            <select
+              data-testid="stream-target"
+              value={p.selectedTargetId ?? ""}
+              onChange={(e) => p.onSelectTarget(e.target.value)}
+              className={FIELD}
+            >
+              {p.targets.length === 0 && <option value="">{msg("stream.phone.destination.none")}</option>}
+              {p.targets.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            data-testid="stream-target-add"
+            aria-expanded={p.showTargetForm}
+            onClick={p.onAddTarget}
+            className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
+          >
+            {msg("stream.phone.addDestination")}
+          </button>
+          {p.showTargetForm && <TargetForm onSave={p.onSaveTarget} onCancel={p.onAddTarget} />}
+          <div
+            role="radiogroup"
+            aria-label={msg("stream.phone.mode")}
+            data-testid="stream-mode"
+            onKeyDown={onModeKey}
+            className="grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={p.mode === "clean"}
+              tabIndex={p.mode === "clean" ? 0 : -1}
+              data-mode="clean"
+              data-testid="stream-mode-clean"
+              onClick={() => p.onMode("clean")}
+              className={`min-h-11 rounded text-sm md:min-h-9 ${
+                p.mode === "clean" ? "bg-white font-semibold text-slate-800 shadow-sm" : "text-slate-600"
+              }`}
+            >
+              {msg("stream.phone.mode.clean")}
+            </button>
+            {/* Composed is R2's: the seam is VISIBLE (disabled, captioned) rather than absent. */}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={p.mode === "scorebug"}
+              tabIndex={-1}
+              disabled
+              data-mode="scorebug"
+              data-testid="stream-mode-scorebug"
+              title={msg("stream.phone.mode.soon")}
+              className="min-h-11 cursor-not-allowed rounded px-1 text-sm leading-tight text-slate-400 md:min-h-9"
+            >
+              {msg("stream.phone.mode.scorebug")}
+              <span className="block text-[10px]">{msg("stream.phone.mode.soon")}</span>
+            </button>
+          </div>
+          <button
+            type="button"
+            data-testid="stream-go-live"
+            disabled={p.busy || !p.selectedTargetId}
+            onClick={p.onGoLive}
+            className="btn btn-primary min-h-11 w-full md:min-h-10"
+          >
+            {msg("stream.phone.goLive")}
+          </button>
+        </div>
+      )}
+
+      {(state === "provisioning" || state === "warming") && (
+        // §8a: ONE CENTRED COLUMN — the QR box, then the paste code at the box's own width, the caption and Cancel.
+        <div data-testid="stream-qr-column" className="mt-3 flex flex-col items-center gap-2 text-center">
+          <div data-testid="stream-qr-box" className={`${QR_COLUMN_W} rounded-lg border border-purple-100 bg-white p-3`}>
+            {p.qrDataUrl ? (
+              // A data: URL encoded in the browser — nothing for next/image to optimise, and never in page HTML.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                data-testid="stream-qr"
+                src={p.qrDataUrl}
+                alt={msg("stream.phone.qr.alt")}
+                className="mx-auto block aspect-square h-auto w-[min(264px,100%)]"
+              />
+            ) : (
+              <div
+                aria-hidden
+                className="mx-auto aspect-square w-[min(264px,100%)] animate-pulse rounded bg-slate-100 motion-reduce:animate-none"
+              />
+            )}
+          </div>
+          {p.view?.qr && (
+            <div data-testid="stream-qr-field" className={`relative ${QR_COLUMN_W}`}>
+              <input
+                data-testid="stream-qr-text"
+                readOnly
+                aria-label={msg("stream.phone.qr.field")}
+                value={qrText(p.view.qr)}
+                onFocus={(e) => e.currentTarget.select()}
+                className="h-11 w-full rounded-lg border border-purple-100 bg-slate-950 px-3 font-mono text-[11px] text-slate-100 outline-none focus:ring-2 focus:ring-purple-200 md:h-10 md:pr-10"
+              />
+              {/* §8's copy-button rule: 28 px inside the field at ≥ 768 (its name is the sr-only label), full width
+                  and 44 px beneath it below. */}
+              <button
+                type="button"
+                data-testid="stream-qr-copy"
+                onClick={p.onCopy}
+                className="btn btn-ghost mt-1.5 h-11 w-full text-xs md:absolute md:right-1.5 md:top-1.5 md:mt-0 md:h-7 md:w-7 md:p-0"
+              >
+                {p.copied ? (
+                  <Check aria-hidden className="h-3.5 w-3.5 text-green-600" />
+                ) : (
+                  <Copy aria-hidden className="h-3.5 w-3.5" />
+                )}
+                <span aria-live="polite" className="md:sr-only">
+                  {p.copied ? msg("stream.phone.qr.copied") : msg("stream.phone.qr.copy")}
+                </span>
+              </button>
+            </div>
+          )}
+          <p className="text-xs text-slate-500">{msg("stream.phone.qr.caption")}</p>
+          <button
+            type="button"
+            data-testid="stream-cancel"
+            disabled={p.busy}
+            onClick={p.onCancel}
+            className={`btn btn-ghost min-h-11 ${QR_COLUMN_W} md:min-h-10 md:w-auto`}
+          >
+            {msg("stream.phone.cancel")}
+          </button>
+        </div>
+      )}
+
+      {(state === "live" || state === "ending") && p.view && (
+        <div className="mt-3 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              data-testid="stream-rec"
+              className="inline-flex items-center gap-1 rounded-full bg-red-600 px-2.5 py-1 text-[11px] font-semibold text-white"
+            >
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-white motion-reduce:animate-none"
+              />
+              {msg("stream.phone.rec")}
+            </span>
+            <span data-testid="stream-elapsed" className="font-mono text-sm tabular-nums text-slate-700">
+              {elapsedLabel(p.view.startedAt, p.now)}
+            </span>
+          </div>
+          <div data-testid="stream-health" className="flex flex-wrap gap-1">
+            {healthChips(p.view, msg, p.now, locale).map((c, i) => (
+              <span
+                key={i}
+                data-testid="stream-health-chip"
+                className={`rounded-md px-2 py-1 text-[11px] ${
+                  c.stale ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
+                }`}
+              >
+                {c.text}
+              </span>
+            ))}
+          </div>
+          {state === "ending" ? (
+            <p data-testid="stream-ending" className="text-xs text-slate-500">
+              {msg("stream.phone.ending", { destination: p.view.target.label })}
+            </p>
+          ) : (
+            // §8a: solid red, deliberately NOT `.btn-danger` (a white outline) — the one irreversible control on a
+            // panel that is on air. It opens the repo's confirm dialog.
+            <button
+              type="button"
+              data-testid="stream-stop"
+              disabled={p.busy}
+              onClick={p.onStop}
+              className="min-h-11 w-full rounded-md bg-red-600 px-3 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10 md:w-auto"
+            >
+              {msg("stream.phone.stop")}
+            </button>
+          )}
+        </div>
+      )}
+
+      {state === "ended" && p.view && (
+        <div data-testid="stream-ended" className="mt-3 space-y-2">
+          <div className="flex flex-wrap gap-1">
+            <span className={CHIP}>
+              {msg("stream.phone.ended.duration", {
+                duration: elapsedLabel(p.view.startedAt, p.view.endedAt ? new Date(p.view.endedAt) : p.now),
+              })}
+            </span>
+            {/* D3: only when THIS session's consume still stands — a restart inside the reuse window, or a refunded
+                consume, used nothing, and the chip must not claim it did. */}
+            {p.view.creditUsed && (
+              <span data-testid="stream-credit-used" className={CHIP}>
+                {msg("stream.phone.ended.credits")}
+              </span>
+            )}
+            {p.view.endReason && (
+              <span data-testid="stream-end-reason" className={CHIP}>
+                {msg(END_REASON_KEYS[p.view.endReason])}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-col gap-2 md:flex-row">
+            {p.view.replayUrl && (
+              <a
+                data-testid="stream-replay"
+                href={p.view.replayUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
+              >
+                {msg("stream.phone.replay")}
+              </a>
+            )}
+            <button
+              type="button"
+              data-testid="stream-again"
+              onClick={p.onAgain}
+              className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
+            >
+              {msg("stream.phone.again")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {state === "failed" && p.view && (
+        <div className="mt-3 space-y-2">
+          <p
+            data-testid="stream-fail-reason"
+            className="rounded-lg border border-red-200 bg-red-50 p-3 text-[13px] text-red-800"
+          >
+            {msg(FAIL_REASON_KEYS[p.view.failReason ?? "machine_crash"])}
+          </p>
+          <button
+            type="button"
+            data-testid="stream-retry"
+            onClick={p.onAgain}
+            className="btn btn-primary min-h-11 w-full md:min-h-10 md:w-auto"
+          >
+            {msg("stream.phone.retry")}
+          </button>
+        </div>
+      )}
+
+      {/* A refused create (or D14's unreadable stop) — in whatever state the refusal left the tab. */}
+      {p.createError && (
+        <p data-testid="stream-create-error" role="alert" className="mt-3 text-xs text-red-600">
+          {createErrorText(p.createError, msg)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The destination form (D10). The platform is LABELLED, never an enum id; the ingest URL is checked BEFORE it is sent,
+ * by the same validator the server applies (lib/stream-destinations.ts), and a server 422 DESTINATION_NOT_ALLOWED maps
+ * to the SAME rule sentence — so the two can never disagree about why a URL was refused.
+ */
+export function TargetForm({ onSave, onCancel }: { onSave: PhoneTabBodyProps["onSaveTarget"]; onCancel: () => void }) {
+  const msg = useMsg();
+  const [kind, setKind] = useState<StreamTargetKind>("youtube");
+  const [label, setLabel] = useState("");
+  const [rtmpUrl, setRtmpUrl] = useState("");
+  const [streamKey, setStreamKey] = useState("");
+  const [watchUrl, setWatchUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    // The server trims before it judges (Task 9 minor 7), so a pasted trailing space is not a refusal here either.
+    const refused = destinationRefusal(rtmpUrl.trim());
+    if (refused) {
+      setError(msg(DESTINATION_REFUSAL_KEYS[refused]));
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave({ kind, label, rtmpUrl, streamKey, watchUrl });
+    } catch (err) {
+      const rule = targetRefusalRule(err);
+      setError(msg(rule ? DESTINATION_REFUSAL_KEYS[rule] : "stream.target.error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form data-testid="stream-target-form" onSubmit={submit} className="space-y-2 rounded-lg border border-slate-200 p-3">
+      <label className="block text-xs text-slate-500">
+        {msg("stream.target.label")}
+        <input
+          data-testid="stream-target-label"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          required
+          maxLength={80}
+          autoComplete="off"
+          className={FIELD}
+        />
+      </label>
+      <label className="block text-xs text-slate-500">
+        {msg("stream.target.kind")}
+        <select
+          data-testid="stream-target-kind"
+          value={kind}
+          onChange={(e) => setKind(e.target.value as StreamTargetKind)}
+          className={FIELD}
+        >
+          {TARGET_KINDS.map((k) => (
+            <option key={k} value={k}>
+              {k === "custom_rtmp" ? msg("stream.target.kind.other") : KIND_BRAND[k]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-xs text-slate-500">
+        {msg("stream.target.rtmp")}
+        <input
+          data-testid="stream-target-rtmp"
+          value={rtmpUrl}
+          onChange={(e) => setRtmpUrl(e.target.value)}
+          required
+          maxLength={500}
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          className={FIELD}
+        />
+      </label>
+      <label className="block text-xs text-slate-500">
+        {msg("stream.target.key")}
+        <input
+          data-testid="stream-target-key"
+          type="password"
+          value={streamKey}
+          onChange={(e) => setStreamKey(e.target.value)}
+          required
+          maxLength={200}
+          autoComplete="off"
+          className={FIELD}
+        />
+      </label>
+      <label className="block text-xs text-slate-500">
+        {msg("stream.target.watch")}
+        <input
+          data-testid="stream-target-watch"
+          value={watchUrl}
+          onChange={(e) => setWatchUrl(e.target.value)}
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          className={FIELD}
+        />
+      </label>
+      {error !== null && (
+        <p data-testid="stream-target-error" role="alert" className="text-xs text-red-600">
+          {error}
+        </p>
+      )}
+      <div className="flex flex-col gap-2 md:flex-row">
+        <button
+          type="submit"
+          data-testid="stream-target-save"
+          disabled={saving}
+          className="btn btn-primary min-h-11 w-full md:min-h-10 md:w-auto"
+        >
+          {msg("stream.target.save")}
+        </button>
+        <button
+          type="button"
+          data-testid="stream-target-cancel"
+          onClick={onCancel}
+          className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
+        >
+          {msg("stream.target.cancel")}
+        </button>
+      </div>
+    </form>
   );
 }

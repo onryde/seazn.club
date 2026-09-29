@@ -24,6 +24,7 @@
 //   DESTINATION_REFUSAL_KEYS — which allowlist rule refused an ingest URL
 //                       (D2), total over the validator's own DESTINATION_REFUSALS.
 import type { CaptureQrV1 } from "@/lib/capture-qr";
+import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, type DestinationRefusal } from "@/lib/stream-destinations";
 import type { StreamEndReason, StreamFailReason, StreamSessionCurrent } from "@/server/api-v1/schemas";
@@ -203,15 +204,28 @@ export const INGEST_STATE_KEYS: Record<"connected" | "disconnected" | "unknown",
 /** C6: the first chip is the INGEST STATE as the port reported it — passthrough only: the server reads the ingest for
  *  passthrough alone (stream-sessions.ts `currentSession`), so a composed session's `ingest` is always null and an
  *  "unknown" chip there would be a permanent false alarm. fps / Mbps / beat chips exist only once a heartbeat has
- *  arrived. The beat age is clamped at 0: `lastBeatAt` is the server's clock and `now` the browser's. */
-export function healthChips(view: StreamSessionView, msg: Msg, now: Date): { text: string; stale: boolean }[] {
+ *  arrived. The beat age is clamped at 0: `lastBeatAt` is the server's clock and `now` the browser's.
+ *
+ *  m1 (Task 13 review): each heartbeat field is OPTIONAL on the relay's wire (`RelayHeartbeat`), so an absent one is
+ *  stored NULL — and a NULL is not a zero. A missing fps / bitrate omits its chip rather than claim "0 fps"; a missing
+ *  beat says so in its own words ("no beat yet") instead of "beat 0 s ago", and stays stale (amber). A real 0 is a
+ *  reading and still shows. m2: the bitrate is formatted in the ACTIVE locale (a decimal comma in es/fr/nl). */
+export function healthChips(view: StreamSessionView, msg: Msg, now: Date, locale: string): { text: string; stale: boolean }[] {
   const chips: { text: string; stale: boolean }[] = [];
   if (view.mode === "passthrough") chips.push({ text: msg(INGEST_STATE_KEYS[view.ingest?.state ?? "unknown"]), stale: false });
   if (view.health) {
-    const beatAgo = view.health.lastBeatAt ? Math.max(0, Math.floor((now.getTime() - new Date(view.health.lastBeatAt).getTime()) / 1000)) : null;
-    chips.push({ text: msg("stream.health.fps", { n: view.health.fps ?? 0 }), stale: false });
-    chips.push({ text: msg("stream.health.bitrate", { n: ((view.health.bitrateKbps ?? 0) / 1000).toFixed(1) }), stale: false });
-    chips.push({ text: msg("stream.health.beat", { s: beatAgo ?? 0 }), stale: beatAgo === null || beatAgo >= BEAT_STALE_SECONDS });
+    const { fps, bitrateKbps, lastBeatAt } = view.health;
+    if (typeof fps === "number") chips.push({ text: msg("stream.health.fps", { n: fps }), stale: false });
+    if (typeof bitrateKbps === "number") {
+      const mbps = fmtNumber(locale, bitrateKbps / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      chips.push({ text: msg("stream.health.bitrate", { n: mbps }), stale: false });
+    }
+    if (lastBeatAt) {
+      const beatAgo = Math.max(0, Math.floor((now.getTime() - new Date(lastBeatAt).getTime()) / 1000));
+      chips.push({ text: msg("stream.health.beat", { s: beatAgo }), stale: beatAgo >= BEAT_STALE_SECONDS });
+    } else {
+      chips.push({ text: msg("stream.health.beat.none"), stale: true });
+    }
   }
   return chips;
 }
