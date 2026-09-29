@@ -63,9 +63,9 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
   return {
     entitled: true,
     relayEntitled: false,
+    relayDisabled: false,
     sportKey: "football",
     overlayDict: {},
-    viewerPlan: "community",
     orgId: "o-1",
     streamBalance: 0,
     streamSplit: null,

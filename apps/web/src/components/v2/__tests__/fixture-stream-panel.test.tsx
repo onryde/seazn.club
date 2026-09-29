@@ -35,8 +35,8 @@ import type { ReactElement } from "react";
 import { EmbeddedCheckoutProvider } from "@stripe/react-stripe-js";
 import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
-import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport } from "@/components/overlay/theme-registry";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { CaptureQrV1 } from "@/lib/capture-qr";
@@ -169,9 +169,9 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
   return {
     entitled: true,
     relayEntitled: false,
+    relayDisabled: false,
     sportKey: "football",
     overlayDict: {},
-    viewerPlan: "community",
     orgId: "o-1",
     streamBalance: 3,
     streamSplit: null,
@@ -539,12 +539,15 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     return island;
   };
 
-  it("without streaming.relay it is the UpgradeGate for THAT key — plus the stop-only probe ABOVE it (G2), never the full tab", () => {
+  it("I4: without streaming.relay it is the SWITCHED-OFF state (staff turned it off; since V426 every plan grants it) — plus the stop-only probe ABOVE it (G2), never the full tab", () => {
     const tree = phone({ relayEntitled: false }).tree();
     expect(byTestId(tree, "stream-phone-gate"), "the gate card").toBeDefined();
-    const gate = tree.find((el) => el.type === UpgradeGate);
-    expect(gate, "no <UpgradeGate>").toBeDefined();
-    expect(propsOf(gate!).feature).toBe("streaming.relay");
+    const gate = byTestId(tree, "stream-switched-off");
+    expect(gate, "no switched-off state").toBeDefined();
+    expect(textOf(gate!)).toContain(m("stream.phone.switchedOff"));
+    // Direction, not mood: the way back is a real address.
+    const mail = tree.find((el) => el.type === "a" && String(attr(el, "href")).startsWith("mailto:"));
+    expect(attr(mail!, "href")).toBe("mailto:support@seazn.club");
     expect(tree.find((el) => el.type === PhoneTab), "no container behind the gate").toBeUndefined();
     // G2: a stream started while the org HAD the relay must stay stoppable after it lost it (lane C C1: "Stop not
     // stopping a youth broadcast is a safety defect"). The probe reads THIS row's fixture, and it comes first.
@@ -552,17 +555,38 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(probe, "nothing can stop a live stream on an unentitled org").toBeDefined();
     expect(propsOf(probe!).fixtureId).toBe(FIXTURE.id);
     expect(tree.indexOf(probe!), "the probe renders above the gate").toBeLessThan(tree.indexOf(gate!));
+    expect(byTestId(tree, "stream-phone-unavailable"), "switched off is not 'unavailable'").toBeUndefined();
     // …and an entitled tab has no probe: the container owns the session there.
     expect(phone({ relayEntitled: true }).tree().find((el) => el.type === PhoneStopProbe)).toBeUndefined();
   });
 
-  it("B4: the gate's wrapper lets the compact pill wrap inside it — the overflow is the pill's own inline-flex row, fixed from OUTSIDE the shared component", () => {
-    // The browser pass measured the compact UpgradeGate at 233 px inside a 220 px box at 320. The pill is
-    // upgrade-gate.tsx's `inline-flex` <a>, which never wraps; restyling that shared component is out of bounds, so the
-    // wrapper sets the pill's wrap and cap through a direct-child variant. A class assertion is all a node harness can
-    // pin; the browser pass re-measures.
-    const cls = String(attr(byTestId(phone({ relayEntitled: false }).tree(), "stream-phone-gate")!, "className")).split(/\s+/);
-    for (const c of ["min-w-0", "[&>a]:flex-wrap", "[&>a]:max-w-full"]) expect(cls, c).toContain(c);
+  it("I4: a switched-off org is never sold a plan — no upgrade gate, no upgrade link and no price anywhere in the tab", () => {
+    // An override outranks every plan, so "Go Pro — £X/mo" sold a plan that could not lift the switch-off.
+    const tree = phone({ relayEntitled: false, streamBalance: 0 }).tree();
+    expect(byTestId(tree, "stream-switched-off"), "premise: the switched-off state rendered").toBeDefined();
+    expect(tree.find((el) => el.type === UpgradeGate), "an upgrade gate").toBeUndefined();
+    const links = tree.filter((el) => el.type === "a" || typeof attr(el, "href") === "string").map((el) => String(attr(el, "href")));
+    expect(links.length, "premise: the tab's links were collected").toBeGreaterThan(0);
+    for (const href of links) expect(href, "an upgrade link").not.toMatch(/\/settings\/billing|\/upgrade/);
+    const text = textOf(tree[0]!);
+    for (const sign of ["£", "$", "€", "₹", "/mo"]) expect(text, sign).not.toContain(sign);
+    expect(text).not.toContain(m("stream.credits.title"));
+  });
+
+  it("I2: a deployment with NO relay shows 'unavailable' in place of the whole tab — no buy tiles, no Go live — and keeps the stop probe; a switched-off org still sees its own state", () => {
+    const tree = phone({ relayEntitled: true, relayDisabled: true, streamBalance: 4 }).tree();
+    expect(textAt(tree, "stream-phone-unavailable")).toBe(m("stream.phone.unavailable"));
+    expect(tree.find((el) => el.type === PhoneTab), "no buy tiles and no Go live behind it").toBeUndefined();
+    const probe = tree.find((el) => el.type === PhoneStopProbe);
+    expect(probe, "a leftover stream must stay stoppable").toBeDefined();
+    expect(propsOf(probe!).fixtureId).toBe(FIXTURE.id);
+    expect(tree.indexOf(probe!)).toBeLessThan(tree.indexOf(byTestId(tree, "stream-phone-unavailable")!));
+    // Both at once: the org-specific state wins — it says how to get streaming back.
+    const both = phone({ relayEntitled: false, relayDisabled: true }).tree();
+    expect(byTestId(both, "stream-switched-off")).toBeDefined();
+    expect(byTestId(both, "stream-phone-unavailable")).toBeUndefined();
+    // The positive pair: the relay back on is the real tab.
+    expect(phone({ relayEntitled: true, relayDisabled: false }).tree().find((el) => el.type === PhoneTab)).toBeDefined();
   });
 
   it("B1: the W1 lead line is the OBS tab's — the Phone tab has no scorebug and nothing to paste back (§8a's frame has no lead)", () => {
@@ -577,12 +601,12 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
 
   it("with streaming.relay it mounts the container with THIS row's fixture and the page's org, balance and plan", () => {
     const split = { monthly: 1, pack: 3, total: 4 };
-    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, viewerPlan: "pro", currency: "inr" }).tree();
-    expect(tree.find((el) => el.type === UpgradeGate), "no upsell once entitled").toBeUndefined();
+    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr" }).tree();
+    expect(byTestId(tree, "stream-switched-off"), "no refusal once entitled").toBeUndefined();
     const tab = tree.find((el) => el.type === PhoneTab);
     expect(tab, "the Phone tab body is not the container").toBeDefined();
     // Each value differs from ctx()'s default, so a prop wired to the wrong field (or a constant) cannot pass.
-    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, viewerPlan: "pro", currency: "inr" });
+    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, streamSplit: split, monthlyAllowance: 5, currency: "inr" });
   });
 
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
@@ -871,7 +895,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
-  planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0,
+  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0,
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {}, onTileIntent: () => {},
 };
@@ -1246,17 +1270,14 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(checked).toBe(STREAM_CREDIT_PACKS.length);
   });
 
-  it("I1: a plan refusal mid-session renders the gate in the BUY slot and keeps every session control — Stop above all", () => {
+  it("I1/I4: a relay refusal mid-session renders the switched-off state in the BUY slot and keeps every session control — Stop above all", () => {
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
     const tree = body({ view: live, balance: 2, planGate: true, showBuy: true });
     expect(byTestId(tree, "stream-stop"), "a plan refusal took Stop away from a live stream").toBeDefined();
     expect(byTestId(tree, "stream-rec")).toBeDefined();
     const slot = byTestId(tree, "stream-plan-gate")!;
     expect(slot, "no gate in the buy slot").toBeDefined();
-    const gate = tree.find((el) => el.type === UpgradeGate)!;
-    expect(propsOf(gate)).toMatchObject({ feature: "streaming.relay", compact: true, viewerPlan: "pro" });
-    // B4's wrapper: the compact pill may wrap inside the slot.
-    for (const c of ["min-w-0", "[&>a]:flex-wrap", "[&>a]:max-w-full"]) expect(String(attr(slot, "className")).split(/\s+/)).toContain(c);
+    expect(textOf(byTestId(tree, "stream-switched-off")!)).toContain(m("stream.phone.switchedOff"));
     // The tiles and Buy more are gone: buying is exactly what the plan refused.
     expect(byTestId(tree, "stream-buy-pack-5")).toBeUndefined();
     expect(byTestId(tree, "stream-buy-more")).toBeUndefined();
@@ -1535,7 +1556,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     stop?: () => unknown;
     saveTarget?: (json: unknown) => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, viewerPlan: "pro" as const, currency: "eur" as const };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
 
   function serve(s: Server): Server {
@@ -1725,7 +1746,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(plainPolls(), "a terminal session is still being polled").toBe(settled);
   });
 
-  it("refusals: target_in_use carries the holder (D12); a plan refusal from CREATE is the UpgradeGate, never a retry", async () => {
+  it("refusals: target_in_use carries the holder (D12); a plan refusal from CREATE is the switched-off state (I4), never a retry", async () => {
     const s = serve({ current: null, targets: TARGETS });
     s.create = () => { throw new ApiV1Error("in use", 409, "target_in_use", { holder: { fixtureId: "f-9", courtName: "Court 3", label: "Club" } }); };
     const inUse = track(await mount(s));
@@ -1738,9 +1759,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const gated = track(await mount(plan));
     bodyOf(gated).onGoLive();
     await settle();
-    const gate = gated.tree().find((el) => el.type === UpgradeGate);
-    expect(gate, "the plan refusal is not the upgrade surface").toBeDefined();
-    expect(propsOf(gate!)).toMatchObject({ feature: "streaming.relay", compact: true, viewerPlan: "pro" });
+    expect(byTestId(gated.tree(), "stream-switched-off"), "the plan refusal is not the switched-off state").toBeDefined();
     expect(gated.tree().find((el) => el.type === PhoneTabBody)).toBeUndefined();
   });
 
@@ -1790,7 +1809,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onShowBuy();
     bodyOf(island).onBuy(5);
     await settle();
-    expect(island.tree().find((el) => el.type === UpgradeGate), "the refusal replaced a live tab").toBeUndefined();
+    expect(byTestId(island.tree(), "stream-switched-off"), "the refusal replaced a live tab").toBeUndefined();
     const b = bodyOf(island);
     expect(b.planGate).toBe(true);
     expect(b.view?.state).toBe("live");
@@ -1805,10 +1824,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
     await settle();
     expect(bodyOf(island).view?.state, "the poll read the ended session").toBe("completed");
-    expect(island.tree().find((el) => el.type === UpgradeGate), "an ended card is still a session to show").toBeUndefined();
+    expect(byTestId(island.tree(), "stream-switched-off"), "an ended card is still a session to show").toBeUndefined();
     expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-again"), "Start another is on the ended card").toBeDefined();
     bodyOf(island).onAgain();
-    expect(island.tree().find((el) => el.type === UpgradeGate), "idle + a plan refusal is the gate").toBeDefined();
+    expect(byTestId(island.tree(), "stream-switched-off"), "idle + a plan refusal is the switched-off state").toBeDefined();
   });
 
   it("B6: Buy more and Close are one toggle, and closing drops a stale checkout refusal", async () => {
@@ -1963,7 +1982,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const gated = track(await mount({ current: null, targets: TARGETS }));
     bodyOf(gated).onBuy(20);
     await settle();
-    expect(propsOf(gated.tree().find((el) => el.type === UpgradeGate)!)).toMatchObject({ feature: "streaming.relay", viewerPlan: "pro" });
+    // I4: the checkout's 402 is the switched-off state, never a priced upgrade.
+    expect(byTestId(gated.tree(), "stream-switched-off")).toBeDefined();
+    expect(gated.tree().find((el) => el.type === UpgradeGate)).toBeUndefined();
   });
 
   it("P1: the container hands the body the PAGE's currency — the one the checkout route resolves for the same request", async () => {

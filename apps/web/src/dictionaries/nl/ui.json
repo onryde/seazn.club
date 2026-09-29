@@ -5431,6 +5431,8 @@
   "stream.target.refused.path": "De ingest-URL heeft het pad van de dienst nodig, zoals /live2, zonder spaties.",
   "stream.phone.title": "Streamen vanaf telefoon",
   "stream.phone.loading": "Telefoonstream laden…",
+  "stream.phone.unavailable": "Streamen vanaf telefoon is nu niet beschikbaar. De overlay voor OBS werkt nog wel.",
+  "stream.phone.switchedOff": "Streamen is uitgeschakeld voor deze organisatie. Neem contact met ons op om het weer aan te zetten.",
   "stream.phone.stepOf": "Stap {n} van 4 · {label}",
   "stream.phone.destination": "Bestemming",
   "stream.phone.destination.none": "Voeg een bestemming toe om live te gaan.",

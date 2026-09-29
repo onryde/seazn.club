@@ -5431,6 +5431,8 @@
   "stream.target.refused.path": "The ingest URL needs the service's path, such as /live2, with no spaces.",
   "stream.phone.title": "Phone stream",
   "stream.phone.loading": "Loading the phone stream…",
+  "stream.phone.unavailable": "Phone streaming is unavailable right now. The OBS overlay still works.",
+  "stream.phone.switchedOff": "Streaming is switched off for this organisation. Contact us to turn it back on.",
   "stream.phone.stepOf": "Step {n} of 4 · {label}",
   "stream.phone.destination": "Destination",
   "stream.phone.destination.none": "Add a destination to go live.",

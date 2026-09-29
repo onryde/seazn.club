@@ -32,6 +32,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { openStreamFixtureIds, relayCredits } from "@/server/usecases/stream-sessions";
+import { relayDrivers } from "@/server/relay/drivers";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
@@ -526,6 +527,10 @@ export default async function DivisionPage({
     streamOffered && (await hasFeature(auth.orgId, "streaming.overlay", competition.id));
   const streamRelayEntitled =
     streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id));
+  // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production) refuses every start and
+  // every pack checkout, so the Phone tab shows that instead of buy tiles and Go live. It also skips the credits read
+  // below: that read GRANTS the month's free credits, and a relay-less deployment has no business writing them.
+  const streamRelayDisabled = streamRelayEntitled && relayDrivers().disabled === true;
   // G1 (Task 14 fix round 1): the match-credit checkout returns HERE (`?checkout=success&session_id=…`), and this render
   // can beat Stripe's webhook — so reconcile the session before reading the balance, exactly as the billing, upgrade and
   // registration pages do on their own returns. Best-effort and idempotent (it and the webhook converge on one ledger
@@ -537,13 +542,14 @@ export default async function DivisionPage({
   // cookies/headers read — so they run together, not one after the other. Both only with the relay (D9's query budget).
   // Task 14b (R3b): `relayCredits` grants this month's free match credits BEFORE it reads (idempotent), and answers the
   // balance split by bucket beside the plan's monthly allowance — the chip stays the total.
-  const [streamCredits, streamCurrency] = streamRelayEntitled
+  const [streamCredits, streamCurrency] = streamRelayEntitled && !streamRelayDisabled
     ? await Promise.all([relayCredits(auth, auth.orgId), preferredCurrency(auth.orgId)])
     : [null, "gbp" as const];
   const streamPanel = streamOffered
     ? {
         entitled: streamEntitled,
         relayEntitled: streamRelayEntitled,
+        relayDisabled: streamRelayDisabled,
         // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before
         // any session exists (C1). Read only when the relay gate is open — the tab shows the UpgradeGate otherwise.
         orgId: auth.orgId,
@@ -566,7 +572,6 @@ export default async function DivisionPage({
               ),
             ) as Record<string, string>)
           : {},
-        viewerPlan,
       }
     : undefined;
   // F1 (Task 14 fix round 2): a BILLING freeze takes the stream panel away with everything else editable, but it must not

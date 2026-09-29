@@ -5431,6 +5431,8 @@
   "stream.target.refused.path": "La URL de ingesta necesita la ruta del servicio, como /live2, sin espacios.",
   "stream.phone.title": "Transmisión desde el móvil",
   "stream.phone.loading": "Cargando la transmisión desde el móvil…",
+  "stream.phone.unavailable": "La transmisión desde el móvil no está disponible ahora mismo. El rótulo para OBS sigue funcionando.",
+  "stream.phone.switchedOff": "La emisión está desactivada para esta organización. Contáctanos para volver a activarla.",
   "stream.phone.stepOf": "Paso {n} de 4 · {label}",
   "stream.phone.destination": "Destino",
   "stream.phone.destination.none": "Añade un destino para emitir.",

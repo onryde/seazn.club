@@ -119,6 +119,7 @@ import DivisionPage from "../page";
 import { hasFeature } from "@/lib/entitlements";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
+import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -231,6 +232,24 @@ describe("Task 14b: the Phone tab is handed the split and the monthly allowance 
     expect(stream?.streamBalance).toBe(7);
     expect(stream?.streamSplit).toEqual({ monthly: 2, pack: 5, total: 7 });
     expect(stream?.monthlyAllowance).toBe(20);
+  });
+
+  it("I2: a deployment with NO relay (R5's disabled drivers) tells the tab so, and reads no credits — that read GRANTS; the relay back on reads them again", async () => {
+    relay.balance.mockResolvedValue(3);
+    relay.split.mockReturnValue({ monthly: 1, pack: 2, monthlyAllowance: 1 });
+    type Stream = { relayEntitled?: unknown; relayDisabled?: unknown; streamBalance?: unknown; streamSplit?: unknown };
+    const streamOf = async () => (find(await render({ tab: "fixtures" }), StagesPanel)!.props as { stream?: Stream }).stream;
+    setRelayDriversForTest(disabledRelayDrivers());
+    try {
+      const off = await streamOf();
+      expect(off).toMatchObject({ relayEntitled: true, relayDisabled: true, streamBalance: 0, streamSplit: null });
+      expect(relay.balance, "no grant-and-read on a relay-less deployment").not.toHaveBeenCalled();
+    } finally {
+      setRelayDriversForTest(null);
+    }
+    // The positive pair: the default (fake) drivers — the tab is live and the credits are read.
+    expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 3 });
+    expect(relay.balance).toHaveBeenCalledTimes(1);
   });
 
   it("without the relay: no credits read, and the tab gets no split and no allowance — the empty case", async () => {

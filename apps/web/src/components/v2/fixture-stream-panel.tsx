@@ -38,7 +38,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
-import { UpgradeGate } from "@/components/upgrade-gate";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
@@ -74,7 +73,6 @@ import {
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
-import type { ViewerPlan } from "@/lib/viewer-plan";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 
@@ -192,11 +190,15 @@ export interface StreamPanelContext {
   /** `streaming.overlay`, competition-scoped. False ⇒ no panel and no toggle
    *  at all — never an upsell here (ruling 5: the OBS-side upsell is R1's). */
   entitled: boolean;
-  /** `streaming.relay`, competition-scoped — the §5.3 gate the Phone tab reads. */
+  /** `streaming.relay`, competition-scoped — the §5.3 gate the Phone tab reads. Since V426 every plan grants it, so
+   *  false means staff switched it off for this org (I4): the tab says so, and never sells a plan. */
   relayEntitled: boolean;
+  /** I2 (Task 14b review): this deployment has no relay at all (R5 — drivers.ts `disabledRelayDrivers`), so every start
+   *  and every pack checkout is refused. The Phone tab shows that instead of buy tiles and Go live; the stop probe
+   *  stays, so a stream left over from before still has its way out. */
+  relayDisabled: boolean;
   sportKey: string;
   overlayDict: Record<string, string>;
-  viewerPlan: ViewerPlan;
   /** The org the fixture belongs to — the stream-targets and relay-checkout routes address it. */
   orgId: string;
   /** C1 — the org's match-credit balance as the SERVER resolved it. The projection's `balance` only exists once a
@@ -666,20 +668,18 @@ export function FixtureStreamPanel({
           <p className="mt-2 text-[11px] text-slate-500">{msg("stream.footnote")}</p>
         </>
       ) : (
-        // B4: at 320 the compact UpgradeGate pill measured 233 px in a 220-px box. The pill is upgrade-gate.tsx's own
-        // `inline-flex` <a>, which never wraps; that shared component is not restyled from here, so its direct-child
-        // <a> is capped and allowed to wrap by this wrapper instead.
-        <div data-testid="stream-phone-gate" className="mt-3 min-w-0 [&>a]:max-w-full [&>a]:flex-wrap">
+        <div data-testid="stream-phone-gate" className="mt-3 min-w-0">
           {/* Spec §5.3. The "no `streaming.overlay`" row of that table cannot be
               reached from here — without it there is no toggle and no panel —
               so the gate this tab actually reads is the relay one. */}
-          {!stream.relayEntitled ? (
+          {!stream.relayEntitled || stream.relayDisabled ? (
             <>
               {/* G2: a stream started while the org HAD the relay stays stoppable after it lost it — the current and
                   stop routes gate on fixture write access, not on the entitlement. Renders nothing without a session
-                  that is still up. */}
+                  that is still up. The same holds for a deployment whose relay is off (I2). */}
               <PhoneStopProbe fixtureId={fixture.id} />
-              <UpgradeGate feature="streaming.relay" compact viewerPlan={stream.viewerPlan} />
+              {/* The org-specific state first: a switched-off org is told how to get it back, whatever the deployment. */}
+              {!stream.relayEntitled ? switchedOff(msg) : relayUnavailable(msg)}
             </>
           ) : (
             <PhoneTab
@@ -688,7 +688,6 @@ export function FixtureStreamPanel({
               streamBalance={stream.streamBalance}
               streamSplit={stream.streamSplit}
               monthlyAllowance={stream.monthlyAllowance}
-              viewerPlan={stream.viewerPlan}
               currency={stream.currency}
             />
           )}
@@ -955,7 +954,6 @@ export function PhoneTab({
   streamBalance,
   streamSplit,
   monthlyAllowance,
-  viewerPlan,
   currency,
 }: {
   fixtureId: string;
@@ -963,7 +961,6 @@ export function PhoneTab({
   streamBalance: number;
   streamSplit: StreamCreditSplit | null;
   monthlyAllowance: number;
-  viewerPlan: ViewerPlan;
   currency: Currency;
 }) {
   const msg = useMsg();
@@ -1100,8 +1097,8 @@ export function PhoneTab({
       return;
     }
     buying.current = false;
-    // C22: the route's 402 IS plan_lacks_relay — the SAME UpgradeGate the entitled check renders, so there is one
-    // upgrade surface. Keyed on STATUS: `CheckoutSecretResult` has no code field (D13). I1: it replaces the tab only at
+    // C22: the route's 402 IS plan_lacks_relay — the SAME switched-off state the entitled check renders (I4), so there
+    // is one surface for it. Keyed on STATUS: `CheckoutSecretResult` has no code field (D13). I1: it replaces the tab only at
     // idle — mid-session the body shows it in the buy slot and keeps every session control.
     if (result.status === 402) {
       setPlanGate(true);
@@ -1146,7 +1143,7 @@ export function PhoneTab({
 
   // I1: a plan refusal REPLACES the tab only when there is nothing to protect. With a session up, Stop (and Cancel)
   // must survive it — the body renders the gate in the buy slot instead.
-  if (planGate && state === "idle") return <UpgradeGate feature="streaming.relay" compact viewerPlan={viewerPlan} />;
+  if (planGate && state === "idle") return switchedOff(msg);
   if (!session.loaded) {
     return (
       <p data-testid="stream-loading" role="status" aria-busy="true" className="text-xs text-slate-500">
@@ -1172,7 +1169,6 @@ export function PhoneTab({
         showTargetForm={showTargetForm}
         showBuy={showBuy}
         planGate={planGate}
-        viewerPlan={viewerPlan}
         stopFailed={session.stopFailed}
         checkoutOpen={checkoutSecret !== null}
         currency={currency}
@@ -1250,9 +1246,9 @@ export interface PhoneTabBodyProps {
   copied: boolean;
   showTargetForm: boolean;
   showBuy: boolean;
-  /** I1: the org's plan refused (a create or a checkout) while a session is up — the gate takes the buy slot. */
+  /** I1: the relay was refused (a create or a checkout: plan_lacks_relay) while a session is up — the switched-off state
+   *  (I4) takes the buy slot. */
   planGate: boolean;
-  viewerPlan: ViewerPlan;
   /** m1: a stop that neither landed nor could be confirmed by a re-read. */
   stopFailed: boolean;
   /** N2: a checkout sheet is open — or still loading its chunk — so no tile may start a second Checkout Session. */
@@ -1301,6 +1297,32 @@ type Msg = ReturnType<typeof useMsg>;
 // the caller's tree (the node harness expands one level, and so do the tests that pin these testids).
 
 /** The §8a state pill. `aria-live` (m9): a state change — warming → live, live → ending — is announced. */
+/** I4 (Task 14b review, controller ruling 2026-09-29): since V426 every plan grants `streaming.relay`, so an org without
+ *  it was switched off by staff (an override set to false), and an override outranks every plan. A priced upgrade here
+ *  sold a plan that could not lift it. One state for every place the relay is refused: the entitled check, a create's
+ *  plan_lacks_relay and the checkout's 402. The address is the house support inbox (help-menu.tsx). */
+const SUPPORT_EMAIL = "support@seazn.club";
+function switchedOff(msg: Msg) {
+  return (
+    <p data-testid="stream-switched-off" className="text-xs text-slate-600">
+      {msg("stream.phone.switchedOff")}{" "}
+      <a href={`mailto:${SUPPORT_EMAIL}`} className="font-medium text-purple-700 underline">
+        {SUPPORT_EMAIL}
+      </a>
+    </p>
+  );
+}
+
+/** I2: the deployment has no relay. Its own line rather than `stream.error.ingest_unavailable`, whose "Try again in a
+ *  minute" promises a recovery this state does not have; it points at what still works (the OBS tab). */
+function relayUnavailable(msg: Msg) {
+  return (
+    <p data-testid="stream-phone-unavailable" role="status" className="text-xs text-slate-600">
+      {msg("stream.phone.unavailable")}
+    </p>
+  );
+}
+
 function statePill(msg: Msg, state: PhoneTabState) {
   return (
     <span
@@ -1470,9 +1492,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       )}
 
       {p.planGate && (
-        // I1 (and B4's wrapper, for the same compact pill): the gate where the buy card goes.
-        <div data-testid="stream-plan-gate" className="mt-3 min-w-0 [&>a]:max-w-full [&>a]:flex-wrap">
-          <UpgradeGate feature="streaming.relay" compact viewerPlan={p.viewerPlan} />
+        // I1: the refusal where the buy card goes — the switched-off state (I4), never a priced upgrade.
+        <div data-testid="stream-plan-gate" className="mt-3 min-w-0">
+          {switchedOff(msg)}
         </div>
       )}
 

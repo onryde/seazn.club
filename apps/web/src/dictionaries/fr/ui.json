@@ -5431,6 +5431,8 @@
   "stream.target.refused.path": "L'URL d'ingestion doit contenir le chemin du service, par exemple /live2, sans espaces.",
   "stream.phone.title": "Diffusion depuis le téléphone",
   "stream.phone.loading": "Chargement de la diffusion depuis le téléphone…",
+  "stream.phone.unavailable": "La diffusion depuis le téléphone est indisponible pour le moment. L'habillage pour OBS fonctionne toujours.",
+  "stream.phone.switchedOff": "La diffusion est désactivée pour cette organisation. Contactez-nous pour la réactiver.",
   "stream.phone.stepOf": "Étape {n} sur 4 · {label}",
   "stream.phone.destination": "Destination",
   "stream.phone.destination.none": "Ajoutez une destination pour diffuser.",
