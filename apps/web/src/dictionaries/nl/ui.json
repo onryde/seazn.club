@@ -5458,6 +5458,7 @@
   "stream.phone.stop.body": "De uitzending stopt voor iedereen die kijkt.",
   "stream.phone.ending": "De laatste seconden gaan naar {destination}",
   "stream.phone.ended.duration": "Duur {duration}",
+  "stream.phone.ended.neverLive": "Beëindigd voordat de stream live ging",
   "stream.phone.ended.credits": "1 tegoed gebruikt",
   "stream.phone.replay": "Herhaling bekijken",
   "stream.phone.again": "Nog een starten",

@@ -1048,6 +1048,35 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(waived, "stream-replay")).toBeUndefined();
   });
 
+  it("P6: a session that ENDED BEFORE GOING LIVE says so — never 'Duration 0:00' — and keeps its end reason; one that went live keeps its duration", () => {
+    // `startedAt` is stamped only on the live transition (relay/domain/session.ts, the same signal replayFill reads), so
+    // an ended session without one never went live: a Cancel on the QR, a camera that never connected.
+    let checked = 0;
+    for (const endReason of ["stopped", "max_duration"] as const) {
+      const never = body({ view: session({ state: "completed", qr: null, startedAt: null, endedAt: "2026-09-14T11:45:00Z", endReason, creditUsed: false }), balance: 1 });
+      expect(textAt(never, "stream-ended-never-live"), endReason).toBe(m("stream.phone.ended.neverLive"));
+      expect(byTestId(never, "stream-ended-duration"), `${endReason}: no duration chip`).toBeUndefined();
+      expect(textAt(never, "stream-ended"), endReason).not.toContain(m("stream.phone.ended.duration", { duration: "0:00" }));
+      expect(textAt(never, "stream-end-reason"), endReason).toBe(m(END_REASON_KEYS[endReason]));
+      expect(byTestId(never, "stream-again"), endReason).toBeDefined();
+      // The positive pair: the same card once it went live shows the duration and no "before going live" line.
+      const went = body({ view: session({ state: "completed", qr: null, startedAt: "2026-09-14T11:44:45Z", endedAt: "2026-09-14T11:45:00Z", endReason, creditUsed: true }), balance: 1 });
+      expect(textAt(went, "stream-ended-duration"), endReason).toBe(m("stream.phone.ended.duration", { duration: "0:15" }));
+      expect(byTestId(went, "stream-ended-never-live"), endReason).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The copy exists in all four locales, and differs from the English in each of the other three.
+    let locales = 0;
+    for (const l of ["en", "es", "fr", "nl"]) {
+      const dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>;
+      expect(dict["stream.phone.ended.neverLive"]?.length, l).toBeGreaterThan(0);
+      if (l !== "en") expect(dict["stream.phone.ended.neverLive"], l).not.toBe(m("stream.phone.ended.neverLive"));
+      locales++;
+    }
+    expect(locales).toBe(4);
+  });
+
   it("failed: the reason copy, Try again — and no end-reason chip (P1-F-b: a failed row carries none)", () => {
     const failed = body({ view: session({ state: "failed", qr: null, failReason: "target_rejected" }), balance: 1 });
     expect(textAt(failed, "stream-fail-reason")).toBe(m(FAIL_REASON_KEYS.target_rejected));

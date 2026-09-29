@@ -1620,11 +1620,20 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {state === "ended" && p.view && (
         <div data-testid="stream-ended" className="mt-3 space-y-2">
           <div className="flex flex-wrap gap-1">
-            <span className={CHIP}>
-              {msg("stream.phone.ended.duration", {
-                duration: elapsedLabel(p.view.startedAt, p.view.endedAt ? new Date(p.view.endedAt) : p.now),
-              })}
-            </span>
+            {/* P6: `startedAt` is stamped only when a session goes live (relay/domain/session.ts), so an ended one
+                without it never went live — a Cancel on the QR, a camera that never connected. "Duration 0:00" read
+                as a broadcast that happened; this says what did. */}
+            {p.view.startedAt === null ? (
+              <span data-testid="stream-ended-never-live" className={CHIP}>
+                {msg("stream.phone.ended.neverLive")}
+              </span>
+            ) : (
+              <span data-testid="stream-ended-duration" className={CHIP}>
+                {msg("stream.phone.ended.duration", {
+                  duration: elapsedLabel(p.view.startedAt, p.view.endedAt ? new Date(p.view.endedAt) : p.now),
+                })}
+              </span>
+            )}
             {/* D3: only when THIS session's consume still stands — a restart inside the reuse window, or a refunded
                 consume, used nothing, and the chip must not claim it did. */}
             {p.view.creditUsed && (

@@ -5458,6 +5458,7 @@
   "stream.phone.stop.body": "La diffusion s'arrête pour tous les spectateurs.",
   "stream.phone.ending": "Envoi des dernières secondes vers {destination}",
   "stream.phone.ended.duration": "Durée {duration}",
+  "stream.phone.ended.neverLive": "Terminée avant le direct",
   "stream.phone.ended.credits": "1 crédit utilisé",
   "stream.phone.replay": "Voir le replay",
   "stream.phone.again": "En lancer une autre",

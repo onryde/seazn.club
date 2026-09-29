@@ -6233,6 +6233,7 @@ export type DictionaryKey =
   | "stream.phone.destination.none"
   | "stream.phone.ended.credits"
   | "stream.phone.ended.duration"
+  | "stream.phone.ended.neverLive"
   | "stream.phone.ended.reason.max_duration"
   | "stream.phone.ended.reason.stopped"
   | "stream.phone.ending"
