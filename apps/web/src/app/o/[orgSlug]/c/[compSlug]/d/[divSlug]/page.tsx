@@ -32,6 +32,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
 import { relayBalance } from "@/server/usecases/stream-sessions";
+import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
@@ -88,9 +89,9 @@ export default async function DivisionPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; checkout?: string; session_id?: string }>;
 }) {
-  const [{ orgSlug, compSlug, divSlug }, { tab: rawTab }] = await Promise.all([
+  const [{ orgSlug, compSlug, divSlug }, { tab: rawTab, checkout, session_id: checkoutSessionId }] = await Promise.all([
     params,
     searchParams,
   ]);
@@ -522,6 +523,13 @@ export default async function DivisionPage({
     streamOffered && (await hasFeature(auth.orgId, "streaming.overlay", competition.id));
   const streamRelayEntitled =
     streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id));
+  // G1 (Task 14 fix round 1): the match-credit checkout returns HERE (`?checkout=success&session_id=…`), and this render
+  // can beat Stripe's webhook — so reconcile the session before reading the balance, exactly as the billing, upgrade and
+  // registration pages do on their own returns. Best-effort and idempotent (it and the webhook converge on one ledger
+  // row), it never throws, and it grants only a COMPLETE match-credit session that names this org.
+  if (checkout === "success" && checkoutSessionId) {
+    await reconcileStreamCreditsCheckout(auth.orgId, checkoutSessionId);
+  }
   const streamPanel = streamOffered
     ? {
         entitled: streamEntitled,
