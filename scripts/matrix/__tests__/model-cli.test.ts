@@ -348,7 +348,9 @@ describe("model.ts", () => {
     expect(await runModel(d, ["--run-id", "tb", "--report-dir", dir, ...ONE])).toBe(1);
     expect(io.out()).toMatch(/\n {4}seed=-?\d+ path=\d+ replayPath=\S+, TIME BOX HIT \(unshrunk\)\n/);
     expect(io.out()).toMatch(/model: 1 cell\(s\) — [^\n]*, 1 TIME BOX HIT/);
-    expect(/replay caveat: [^\n]*/.exec(io.out())?.[0]).toMatch(/fences on/);
+    // Ruling Q1: the stub names no fence, so --regressions replays it fenced as
+    // found — the caveat is for the day a fence is named for it.
+    expect(/replay caveat: [^\n]*/.exec(io.out())?.[0]).toMatch(/found with fences on and never shrunk \(the time box\): --regressions replays it fenced only while its "fence" is null/);
     const rep = JSON.parse(readFileSync(join(dir, "tb", "model-report.json"), "utf8")) as { cells: { interrupted: boolean; verdict: string }[] };
     expect(rep.cells.map((c) => [c.verdict, c.interrupted])).toEqual([["new-failure", true]]);
   });
@@ -690,9 +692,12 @@ describe("model.ts", () => {
       const d = deps({ regs: [a, b], driverFor: () => (++drivers === 1 ? new RefusingPosts() : new ModelFakeDriver({ fault879: true })) });
       expect(await runModel(d, ["--run-id", "rab", "--report-dir", dir, "--regressions"])).toBe(0);
       expect(drivers).toBe(2);
-      const rep = JSON.parse(readFileSync(join(dir, "rab", "model-report.json"), "utf8")) as { settings: { maxCommands: number | null; regressions: boolean }; cells: { replayOf: string | null; verdict: string; maxCommands: number }[] };
-      // What each replay ran with is what runCell recorded from its input.
-      expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.maxCommands])).toEqual([["MB-003", "known-failure", 7], ["MB-001", "known-failure", MODEL_DEFAULTS.maxCommands]]);
+      const rep = JSON.parse(readFileSync(join(dir, "rab", "model-report.json"), "utf8")) as { settings: { maxCommands: number | null; regressions: boolean }; cells: { replayOf: string | null; verdict: string; maxCommands: number; fences: boolean }[] };
+      // What each replay ran with is what runCell recorded from its input. The
+      // fences follow ruling Q1: A was found fenced and names no fence of its
+      // own, so it replays fenced; B was found unfenced, so it replays unfenced.
+      expect(a.fence).toBeNull();
+      expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.maxCommands, c.fences])).toEqual([["MB-003", "known-failure", 7, true], ["MB-001", "known-failure", MODEL_DEFAULTS.maxCommands, false]]);
       expect(rep.settings).toMatchObject({ maxCommands: null, regressions: true });
     });
 

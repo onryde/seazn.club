@@ -16,7 +16,7 @@ import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
-  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions,
+  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
 } from "../lib/scenario-catalogue.ts";
 import { productMessageOf } from "../lib/driver/types.ts";
 import { FENCES } from "../lib/model/fences.ts";
@@ -368,6 +368,46 @@ describe("regression cases (R29)", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+  // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its
+  // finding, so honouring it would fence out the very command the case exists
+  // to reproduce. Expected values are the ruling's three branches, not the code.
+  it("replay fences (ruling Q1): found fenced and naming no fence → on; found fenced but naming its own fence → off; found unfenced → off", () => {
+    expect(FENCES.length, "no fence to name — the fenced-case branch would be vacuous").toBeGreaterThan(0);
+    // (1) fencesOn true, fence null → on.
+    expect(replayFences(parseRegressions(file({ ...base, fencesOn: true, fence: null }))[0]!)).toBe(true);
+    // (3) fencesOn false → off, with or without a fence of its own.
+    expect(replayFences(parseRegressions(file({ ...base, fencesOn: false, fence: null }))[0]!)).toBe(false);
+    let checked = 0;
+    for (const f of FENCES) {
+      // (2) fencesOn true, fence set → off: every fence the model has, not one sample.
+      expect(replayFences(parseRegressions(file({ ...base, fencesOn: true, fence: f.id }))[0]!), f.id).toBe(false);
+      expect(replayFences(parseRegressions(file({ ...base, fencesOn: false, fence: f.id }))[0]!), f.id).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(FENCES.length);
+  });
+  it("under the replay rule the committed cases replay with the fences the committed 5/5-known replays ran (truth-runs w1b-model-final, ruling Q1)", () => {
+    // The evidence: w1b-model-final's --regressions reports, every committed
+    // case known-failure. The rule must reproduce the fences those replays
+    // ran with — a replay that fences out a case's own command goes NOT REPRODUCED.
+    const dir = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final");
+    type Rep = { runId: string; settings: { regressions: boolean }; cells: { replayOf: string | null; verdict: string; fences: boolean }[] };
+    const reps = readdirSync(dir).filter((n) => /^model-report-regressions.*\.json$/.test(n)).map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as Rep);
+    expect(reps.length, "no committed replay report — the check would be vacuous").toBeGreaterThan(0);
+    const cases = loadRegressions();
+    expect(cases.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const rep of reps) {
+      expect(rep.settings.regressions, rep.runId).toBe(true);
+      for (const r of cases) {
+        const cell = rep.cells.find((c) => c.replayOf === r.id);
+        if (cell === undefined) throw new Error(`${rep.runId}: no replay of ${r.id}`);
+        expect([cell.verdict, replayFences(r)], `${rep.runId} ${r.id}`).toEqual(["known-failure", cell.fences]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(reps.length * cases.length);
   });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();

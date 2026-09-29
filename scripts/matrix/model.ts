@@ -15,7 +15,8 @@
 // — derived, logged and written, never read from a clock. --regressions
 // replays every committed regression on the cells instead, each at its own
 // seed, path, replayPath and command bound (its maxCommands, W1b carry b), one
-// run, fences off.
+// run, with the fences it was found at unless it names a fence of its own
+// (replayFences, W1c T2 ruling Q1).
 //
 // Exit codes, each with one meaning:
 //   0  report written, and every cell is ok: no failure, nothing vacuous, or a
@@ -59,7 +60,7 @@ import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
-import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, type RegressionCase } from "./lib/scenario-catalogue.ts";
+import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, replayFences, type RegressionCase } from "./lib/scenario-catalogue.ts";
 import { DataDirMismatch, DataDirUnset, caseOrgSlug, ownerEmail, requireOwnDataDir } from "./lib/seed-org.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "./lib/slice.ts";
 import { variantKeys } from "./lib/sport-cfg.ts";
@@ -306,13 +307,15 @@ function printStub(c: ModelCell, runId: string): void {
   }
   // A replay regenerates the counterexample from the seed. The committed case
   // records the bound and the fences it was found at (W1b carry b), and
-  // --regressions replays at that bound. It still runs fences off, which
-  // replays a SHRUNK counterexample the same (it holds only commands that
-  // ran, and a fence only ever stops one) — not an unshrunk one the time box
-  // cut short.
+  // --regressions replays at that bound with those fences — unless the case
+  // names a fence, which then replays unfenced (replayFences, ruling Q1: a
+  // fence named for a case post-dates it and would fence out its own
+  // command). Unfenced replays a SHRUNK counterexample the same (it holds
+  // only commands that ran, and a fence only ever stops one) — not an
+  // unshrunk one the time box cut short, so that one is caveated.
   const caveats = [
     ...(f.path === "" ? ["it has no replay path"] : []),
-    ...(c.fences && c.interrupted ? ["it was found with fences on and never shrunk (the time box), and --regressions replays with fences off"] : []),
+    ...(c.fences && c.interrupted ? ["it was found with fences on and never shrunk (the time box): --regressions replays it fenced only while its \"fence\" is null — name one and it replays unfenced, which may not reproduce it"] : []),
   ];
   if (caveats.length > 0) say(`  replay caveat: ${caveats.join("; ")} — check that --regressions reproduces it before committing it`);
 }
@@ -343,8 +346,9 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     ? regressions.flatMap((r) => {
       const c = chosen.get(r.cell);
       // W1b carry (b): the bound the case was found at — the counterexample is
-      // regenerated from the seed, and the bound shapes what it generates.
-      return c === undefined ? [] : [{ ...c, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, maxCommands: r.maxCommands, fences: false, replay: r }];
+      // regenerated from the seed, and the bound shapes what it generates. The
+      // fences: ruling Q1 (replayFences).
+      return c === undefined ? [] : [{ ...c, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, maxCommands: r.maxCommands, fences: replayFences(r), replay: r }];
     })
     : cli.cells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, maxCommands: cli.maxCommands, fences: cli.fences, replay: null }));
   if (jobs.length === 0) { warn("model: nothing to run — --regressions found no committed case on these cells"); return EXIT.NO_SIGNAL; }
