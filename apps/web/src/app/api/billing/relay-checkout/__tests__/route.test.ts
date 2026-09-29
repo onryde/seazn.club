@@ -19,10 +19,13 @@
 //       createRelayCheckout call → "the checkout is opened for the RESOLVED org"
 //   RT5 return_url shape    drop the `"fixtures"` tab argument / the stream=open pair
 //                           → "the return_url reopens the Phone tab on that fixture"
+//   RT7 disabled drivers    the `relayDrivers().disabled` gate deleted (Task 14b review I2)
+//                           → "I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED"
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
+import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 
 const { requireUserMock, requireBillingOwnerMock, createRelayCheckoutMock, preferredCurrencyMock } =
   vi.hoisted(() => ({
@@ -161,6 +164,26 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     // The whole point of the gate order: nobody pays for a tier they cannot use,
     // and the refusal costs no Stripe round-trip.
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+  });
+
+  it("I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED — before the entitlement read and any Stripe call; the same org buys once they are back", async () => {
+    // R5: a production process with RELAY_DRIVERS unset runs the disabled pair and refuses every start (createSession's
+    // 503). Selling a pack meanwhile takes real money for a credit nothing can spend.
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    const body = { orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 };
+    setRelayDriversForTest(disabledRelayDrivers());
+    try {
+      const res = await post(body);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ ok: false, code: "ingest_unavailable" });
+      expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+    } finally {
+      setRelayDriversForTest(null);
+    }
+    // The positive pair: the same caller, the same body, on the default (fake) drivers.
+    expect((await post(body)).status).toBe(200);
+    expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a body naming another organisation (400), before the fixture is even looked up", async () => {

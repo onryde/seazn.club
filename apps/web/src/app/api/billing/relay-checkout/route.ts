@@ -11,6 +11,7 @@ import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
 import { NextResponse } from "next/server";
 import { captureError } from "@/lib/sentry";
+import { relayDrivers } from "@/server/relay/drivers";
 import { log } from "@/server/logger";
 
 /** Every error the Stripe SDK raises for a request carries a `type` of `Stripe…Error` (invalid request, API, connection,
@@ -48,7 +49,9 @@ const schema = z
  * `orgId` must EQUAL the resolved org (400): the resolver reads a cookie, and
  * a stale one must not buy credits for a different organisation. Then the
  * fixture must be that org's (404, never "forbidden"). Then — BEFORE any
- * Stripe call — the org's resolved `streaming.relay` must be true, or 402
+ * Stripe call — the deployment must have a relay at all (503
+ * `ingest_unavailable`, Task 14b review I2), and the org's resolved
+ * `streaming.relay` must be true, or 402
  * `plan_lacks_relay`: nobody pays for a tier they cannot use. Never a redirect
  * (R8): JSON with the secret.
  *
@@ -74,6 +77,15 @@ export async function POST(req: Request) {
         join organizations o on o.id = c.org_id
        where f.id = ${body.fixtureId} and o.id = ${orgId}`;
     if (!fx) throw new HttpError(404, "fixture not found");
+
+    // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production, drivers.ts
+    // `disabledRelayDrivers`) refuses every start with this same 503, so a pack sold meanwhile is real money for a
+    // credit nothing can spend. Refused BEFORE the entitlement read and any Stripe call, with the code the Phone tab
+    // already reads ("The streaming service is unavailable"). After the ownership checks: a fixture that is not this
+    // org's stays 404 whatever the deployment.
+    if (relayDrivers().disabled) {
+      throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+    }
 
     if (!(await hasFeature(orgId, "streaming.relay", fx.competition_id))) {
       throw new HttpError(402, "This plan does not include phone streaming", "plan_lacks_relay");
