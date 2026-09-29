@@ -1175,6 +1175,100 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("warming");
   });
 
+  // I1 (lane C final review): a passthrough session stays `warming` until something OBSERVES its ingest connected. The
+  // organiser's poll did that only AFTER the expiry had run, and another court's create never did — so a phone that
+  // connected at +1 min and was read by nobody was failed `no_inbound_timeout` at +10 min WHILE it streamed: no consume
+  // row, a false reason, and the destination handed to the next court. The expiry now observes a passthrough warming
+  // session's ingest before it expires it — only when an expiry is DUE, so a read with nothing due still asks no provider
+  // anything. The rig's fake ingest connects `connectAfterMs` after its create on the rig's own clock, which `tick` moves,
+  // so "connected at +1 min, no poll in between, read at +11 min" is exactly one tick and one read.
+  const I1_CONNECT_MS = 60_000;
+  const I1_PAST_TIMEOUT_MS = (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
+  const consumesOf = async (sid: string) => (await sql<{ n: number }[]>`
+    select count(*)::int as n from org_stream_credits where session_id = ${sid} and reason = 'consume'`)[0]!.n;
+  const falseTimeoutRows = async (sid: string) => (await sql<{ n: number }[]>`
+    select count(*)::int as n from fixture_stream_events where session_id = ${sid} and payload::text like '%no_inbound_timeout%'`)[0]!.n;
+
+  it("I1: a passthrough phone that CONNECTED at +1 min and was read by nobody is LIVE at the organiser's +11 min read — exactly one consume row, never no_inbound_timeout (mutant: expiry before the observation → failed no_inbound_timeout, 0 consumes)", async () => {
+    expect(I1_CONNECT_MS).toBeLessThan(WARMING_TIMEOUT_MINUTES * 60_000);   // the premise: it connected INSIDE the window
+    const r = await rig({ credits: 1, connectAfterMs: I1_CONNECT_MS });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");          // nothing has observed it yet
+    r.tick(I1_PAST_TIMEOUT_MS);                                      // past the warming timeout, no read in between
+    const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(cur.state).toBe("live");
+    expect(cur.failReason).toBeNull();
+    expect((await r.row(sessionId)).fail_reason).toBeNull();
+    expect(await consumesOf(sessionId)).toBe(1);                     // it streamed, so it paid — once
+    expect(await falseTimeoutRows(sessionId)).toBe(0);
+    // The sequence: a second read changes nothing and charges nothing.
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    expect(await consumesOf(sessionId)).toBe(1);
+  });
+
+  it("I1 via ANOTHER court's create: fixture A's phone connected at +1 min and was never polled; before the warming timeout B's start on the same destination is refused asking NO provider anything, and after it B's start OBSERVES A first — A goes LIVE (one consume) and B is still refused 409 target_in_use (mutant: expiry before the observation → A failed no_inbound_timeout and B admitted)", async () => {
+    const r = await rig({ credits: 2, fixtures: 2, connectAfterMs: I1_CONNECT_MS });
+    const [a, b] = r.fixtureIds;
+    const held = await createSession(r.auth, a!, body(r.target.id), r.deps);
+    const reads = vi.spyOn(r.ingest, "inputStatus");
+    try {
+      r.tick(I1_CONNECT_MS);                                         // connected, but nothing is DUE
+      await expect(createSession(r.auth, b!, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+      expect(reads).toHaveBeenCalledTimes(0);                        // nothing due → no provider read (G-T1's promise kept)
+      expect((await r.row(held.sessionId)).state).toBe("warming");
+      r.tick(I1_PAST_TIMEOUT_MS - I1_CONNECT_MS);                    // now past the timeout, still unpolled
+      await expect(createSession(r.auth, b!, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+      expect(reads).toHaveBeenCalledTimes(1);                        // ONE observation, of the holder
+    } finally {
+      reads.mockRestore();
+    }
+    expect(await r.row(held.sessionId)).toMatchObject({ state: "live", fail_reason: null });
+    expect(await consumesOf(held.sessionId)).toBe(1);
+    expect(await falseTimeoutRows(held.sessionId)).toBe(0);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b!}`;
+    expect(n).toBe(0);
+  });
+
+  it("I1 guard: an ingest that cannot be OBSERVED is not expired — the provider read failing at +11 min fails that read and leaves the session warming (never a false no_inbound_timeout); the next read, provider back, finds it live and charges once (mutant: swallow the observation's failure → failed no_inbound_timeout)", async () => {
+    const r = await rig({ credits: 1, connectAfterMs: I1_CONNECT_MS });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(I1_PAST_TIMEOUT_MS);
+    const down = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      inputStatus: async () => { throw new Error("cloudflare input status: HTTP 503"); },
+    });
+    const downDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, ingest: down } };
+    await expect(currentSession(r.auth, r.fixtureId, downDeps)).rejects.toThrow("HTTP 503");
+    expect(await r.row(sessionId)).toMatchObject({ state: "warming", fail_reason: null });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    expect(await consumesOf(sessionId)).toBe(1);
+    expect(await falseTimeoutRows(sessionId)).toBe(0);
+  });
+
+  it("I1 negative pair: a phone that NEVER connected is still failed no_inbound_timeout at +11 min after one observation — and a session with no input row to observe falls through to the same expiry without asking the provider", async () => {
+    const r = await rig({ credits: 1, connectAfterMs: 24 * 3_600_000 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const reads = vi.spyOn(r.ingest, "inputStatus");
+    try {
+      r.tick(I1_PAST_TIMEOUT_MS);
+      await applyExpiry(sessionId, r.deps);
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(await r.row(sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+      expect(await consumesOf(sessionId)).toBe(0);
+
+      const r2 = await rig({ credits: 1, connectAfterMs: I1_CONNECT_MS });
+      const s2 = await createSession(r2.auth, r2.fixtureId, body(r2.target.id), r2.deps);
+      await sql`delete from fixture_stream_inputs where session_id = ${s2.sessionId}`;
+      const reads2 = vi.spyOn(r2.ingest, "inputStatus");
+      r2.tick(I1_PAST_TIMEOUT_MS);
+      await applyExpiry(s2.sessionId, r2.deps);
+      expect(reads2).toHaveBeenCalledTimes(0);
+      expect(await r2.row(s2.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+      reads2.mockRestore();
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   it("live composed, beat 2 min stale → the organiser's poll retries INLINE (lost → force destroy → destroy_ok → new Machine, retries 1); a replacement that never beats → failed(machine_crash), destroyed (mutant: delete reconcileSession in currentSession → red)", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);

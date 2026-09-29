@@ -466,8 +466,34 @@ export async function destroyListedMachine(
   return forceDestroy(toSession(row), machine.runnerId, "sweep", { machineId: machine.runnerId, machineName: machine.name, reason: "sweep" }, deps);
 }
 
-/** The lazy expiry path (recommendation B). */
+/** I1 (lane C final review). A passthrough session leaves `warming` only when something OBSERVES its ingest connected —
+ *  the organiser's poll in `currentSession`. That poll ran AFTER this expiry, and another court's create (targetHolderFor)
+ *  and the daily backstop never observed at all, so a phone that connected at +1 min and was read by nobody was failed
+ *  `no_inbound_timeout` at the timeout WHILE it streamed: no consume row, a false reason, the destination handed on. So
+ *  before any expiry of a passthrough `warming` session, the ingest is read ONCE and a connected one goes live through
+ *  the ordinary `ingest_connected` decision (which consumes the credit, or refuses it) — the expiry then finds nothing due.
+ *
+ *  Only when an expiry is DUE: a read with nothing to expire still asks no provider anything (G-T1's zero-call refusal).
+ *  An ingest that cannot be observed — the provider read throws — is NOT expired: the error propagates, nothing is
+ *  written, and the next read retries; failing it would be exactly the false reason this exists to stop. A session with no
+ *  input row has nothing to observe and falls through to the expiry as before. Same input reader as the poll (one
+ *  authority for which input a session has). */
+async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): Promise<void> {
+  const row = await readRow(sessionId);
+  if (!row || row.mode !== "passthrough" || row.state !== "warming") return;
+  if (evaluate(toSession(row), deps.now()).kind === "none") return;
+  const input = (await sql.begin((tx) => readFirstInput(tx, sessionId))) as Awaited<ReturnType<typeof readFirstInput>>;
+  const inputId = input?.ingestInputId ?? null;
+  if (!inputId) return;
+  const status = await deps.drivers.ingest.inputStatus(inputId);
+  if (status.state !== "connected") return;
+  await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${sessionId}`;
+  await apply(sessionId, (s) => (s.mode === "passthrough" && s.state === "warming" ? { type: "ingest_connected" } : null), deps);
+}
+
+/** The lazy expiry path (recommendation B). I1: a passthrough warming session's ingest is observed first. */
 export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise<Session | null> {
+  await observeIngestBeforeExpiry(sessionId, deps);
   // `none` is the T5-a null command — write nothing, run nothing (post-2C-post plan sync). The committed domain REFUSES
   // `expire none` on a TERMINAL session (C27's negative pair: only `grace_expired` passes its guard), and `reconcileSession`
   // runs this on terminal rows by design — the sweep's backstop selects every terminal row whose runner is still alive, and
