@@ -5,8 +5,9 @@
 //     [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences]
 //     [--regressions] [--time-limit MS] [--base URL] [--root DIR]
 //
-// --root redirects where regressions.json is read from (default: this
-// checkout), like gen-catalogue's.
+// --seed takes a negative seed as `--seed -N` as well as `--seed=-N`: the
+// run prints `seed=-N`, and a copied seed must replay. --root redirects where
+// regressions.json is read from (default: this checkout), like gen-catalogue's.
 //
 // Each cell gets one case org and a competition; each property run builds a
 // fresh division in it (runCell), and the cell moves to a fresh competition
@@ -124,9 +125,26 @@ interface Cli {
   root: string | undefined;
 }
 
+/** `--seed -N` → `--seed=-N`: parseArgs reads a value starting with `-` as an
+ *  option, and the run prints negative seeds (T15 fix round 2). Only an
+ *  integer is joined; anything else is left for parseArgs to refuse. */
+function joinNegativeSeed(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const next = args[i + 1];
+    if (a === undefined) continue;
+    if (a === "--seed" && next !== undefined && /^-\d+$/.test(next)) {
+      out.push(`--seed=${next}`);
+      i++;
+    } else out.push(a);
+  }
+  return out;
+}
+
 function parseCli(argv: string[]): Cli | { usage: string } {
   // pnpm passes one `--` through to the script; npm swallows it.
-  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const args = joinNegativeSeed(argv[0] === "--" ? argv.slice(1) : argv);
   const parse = (a: string[]) => parseArgs({ args: a, options: {
     "run-id": { type: "string" }, "report-dir": { type: "string" }, cell: { type: "string", multiple: true },
     runs: { type: "string" }, "max-commands": { type: "string" }, seed: { type: "string" }, path: { type: "string" }, "replay-path": { type: "string" },

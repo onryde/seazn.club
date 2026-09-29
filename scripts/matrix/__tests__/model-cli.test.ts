@@ -140,6 +140,9 @@ describe("model.ts", () => {
       ["--path", "0:1"],
       ["--seed", "1", "--replay-path", "CC:B"],
       ["--seed", "1.5"],
+      ["--seed", "-1.5"],
+      ["--seed", "-x"],
+      ["--seed", "-4294967296"],
       ["--seed", "4294967296"],
       ["--seed", "1", "--path", "0:x"],
       ["--regressions", "--seed", "1"],
@@ -331,6 +334,22 @@ describe("model.ts", () => {
     const io2 = capture();
     expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd, openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(0);
     expect(failureLine(io2.out())).toMatch(/\(known MB-003\)/);
+  });
+
+  it("T15 fix round 2: --seed takes a negative seed as `--seed -N` too (the logs print `seed=-N`), the same as `--seed=-N`", async () => {
+    capture();
+    type Rep = { cells: { seed: number }[] };
+    const seedOf = (dir: string, id: string) => (JSON.parse(readFileSync(join(dir, id, "model-report.json"), "utf8")) as Rep).cells.map((c) => c.seed);
+    const a = reportDir();
+    const b = reportDir();
+    expect(await runModel(deps(), ["--run-id", "neg", "--report-dir", a, "--cell", CELL, "--runs", "1", "--max-commands", "1", "--seed", "-355591138"])).toBe(1);
+    expect(await runModel(deps(), ["--run-id", "neg", "--report-dir", b, "--cell", CELL, "--runs", "1", "--max-commands", "1", "--seed=-355591138"])).toBe(1);
+    expect(seedOf(a, "neg")).toEqual([-355591138]);
+    expect(seedOf(b, "neg")).toEqual([-355591138]);
+    // …and the path that goes with it, as a replay is copied from a log.
+    const c = reportDir();
+    expect(await runModel(deps(), ["--run-id", "negp", "--report-dir", c, "--cell", CELL, "--runs", "1", "--seed", "-7", "--path", "0"])).not.toBe(2);
+    expect(seedOf(c, "negp")).toEqual([-7]);
   });
 
   it("fix round 1, I-1: a NEW failure met while shrinking toward a KNOWN one is reported NEW and exits 1 (the reviewer's probe)", async () => {
