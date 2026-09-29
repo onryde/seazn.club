@@ -65,6 +65,7 @@ const LOADER_REF = "a module loader named outside a call is refused — an alias
 const GLOBAL_REF = "the global object named outside a member read is refused — an alias would hide a clock or entropy read";
 const NOT_TS = "a relative import must name its .ts file (the house strip-types rule) — an extensionless or suffixed specifier hides which file loads";
 const CONSTRUCTOR_REF = "a `.constructor` read is refused — it reaches Function without naming it";
+const TOKEN_ALIAS = "a nondeterministic global (Date, Math, process, performance, crypto, Temporal) named outside a member read is refused — an alias or Reflect.get would hide a clock or entropy read";
 
 describe("reference boundary gate (ruling 27: statement-form import type from @seazn/engine/core only)", () => {
   it("empty case first: a src dir with no .ts files scans zero — the CLI refuses that", () => {
@@ -191,6 +192,10 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
     ].join("\n") })).toEqual([
       `1 getBuiltinModule: ${LOADER_REF}`,
       `2 getBuiltinModule: ${LOADER_REF}`,
+      // W1b carry (a): `process` owns the hrtime token, so destructuring it or
+      // handing it to Reflect.get is also an alias of a nondeterministic global.
+      `2 process: ${TOKEN_ALIAS}`,
+      `3 process: ${TOKEN_ALIAS}`,
       `3 getBuiltinModule: ${LOADER_REF}`,
       "4 node:module: getBuiltinModule() is refused",
     ]);
@@ -377,6 +382,32 @@ describe("nondeterministic tokens are judged on the syntax tree (review M-2)", (
       `4 globalThis: ${GLOBAL_REF}`,
       `5 global: ${GLOBAL_REF}`,
     ]);
+  });
+  it("refused: a nondeterministic global named outside a member read — an alias would hide the read (W1b carry a)", () => {
+    expect(judged({ "a.ts": [
+      `const p = performance;`,
+      `export const a = p.now();`,
+      `const { now } = performance;`,
+      `export const b = Reflect.get(Date, "now");`,
+      `export const c = [Math][0].random();`,
+      `const cr = crypto;`,
+    ].join("\n") })).toEqual([
+      `1 performance: ${TOKEN_ALIAS}`,
+      `3 performance: ${TOKEN_ALIAS}`,
+      `4 Date: ${TOKEN_ALIAS}`,
+      `5 Math: ${TOKEN_ALIAS}`,
+      `6 crypto: ${TOKEN_ALIAS}`,
+    ]);
+  });
+  it("…while member reads the gate already judges stay as they were, and the harmless members stay allowed", () => {
+    expect(judged({ "a.ts": [
+      `export const a = Math.max(1, 2);`,
+      `export const b = Date.UTC(2026, 0, 1);`,
+      `export const c = (r: { performance: number }) => r.performance;`,
+      `export const d = { Date: 1, Math: 2 };`,
+      `export type T = typeof Math.PI;`,
+    ].join("\n") })).toEqual([]);
+    expect(judged({ "a.ts": `export const x = performance.now();` })).toEqual([`1 performance.now: ${TOKEN}`]);
   });
 });
 
