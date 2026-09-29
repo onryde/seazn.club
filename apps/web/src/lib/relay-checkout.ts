@@ -67,9 +67,10 @@ export function buildRelayCheckoutParams(args: {
 /**
  * The live Stripe price id for a pack, resolved by `lookup_key` at request
  * time (the donor's `resolveCreditPackPriceId` shape — there is no plans row
- * to cache a price id on). 503 when `scripts/stripe-stream-packs.ts` has not
- * been run against this Stripe account yet, matching the plan/pass/pack
- * checkout routes' own "Billing is not yet configured" refusal.
+ * to cache a price id on). 503 when `pnpm stripe:sync` (scripts/stripe-sync.ts)
+ * has not created the pack prices on this Stripe account yet — or skipped them,
+ * on a live key while `STREAM_PACK_PRICES_FINAL` is false — matching the
+ * plan/pass/pack checkout routes' own "Billing is not yet configured" refusal.
  */
 export async function resolveStreamPackPriceId(pack: StreamCreditPack): Promise<string> {
   const found = await getStripe().prices.list({ lookup_keys: [pack.lookupKey], limit: 1 });

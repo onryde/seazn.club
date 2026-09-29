@@ -12,9 +12,15 @@
 //   * `/api/billing/relay-checkout` → lib/relay-checkout.ts: `size` → the pack,
 //     `lookupKey` → the live Stripe price, `credits` → the grant snapshot;
 //   * the webhook's catalogue fallback: `size` and `credits`;
-//   * scripts/stripe-stream-packs.ts: creates each price FROM
-//     `streamPackPriceAmounts` and refuses a live one `streamPackPriceDrift`
-//     finds different (M3).
+//   * scripts/stripe-sync.ts (`pnpm stripe:sync`, Addendum S — it replaced the
+//     one-off scripts/stripe-stream-packs.ts): creates each price FROM
+//     `streamPackPriceAmounts`, reuses a live one only when
+//     `streamPackPriceDrift` finds nothing, and otherwise RE-MINTS it (a new
+//     price with the lookup key, the old one archived) — the same policy every
+//     other price in that script follows. `STREAM_PACK_PRICES_FINAL` gates it
+//     on a live key;
+//   * lib/relay-checkout.ts `resolveStreamPackPriceId`: the PROD drift guard,
+//     which refuses to charge a price `streamPackPriceDrift` finds different.
 //
 // ONE table, for however many readers arrive (P14: the panel's own
 // CREDIT_PACKS display table was a second authority and is gone). Sandbox
@@ -34,7 +40,7 @@ export type StreamPackSize = 1 | 5 | 20;
  * The three `ui.*` dictionary keys the tiles are captioned from.
  *
  * Declared here as a local union rather than imported as `MessageKey`, and
- * that is NOT a shortcut: `scripts/stripe-stream-packs.ts` imports this
+ * that is NOT a shortcut: `scripts/stripe-sync.ts` imports this
  * catalogue (one authority for the lookup keys), which drags this file into
  * `tsconfig.scripts.json` — `moduleResolution: "nodenext"`, where `@/lib/…`
  * does not resolve without an extension, and where `@/lib/messages.ts` DOES
@@ -62,6 +68,14 @@ export interface StreamCreditPack {
   popular: boolean;
 }
 
+/**
+ * Addendum S (owner, 2026-09-29): are the prices in this table the REAL ones? While false they are sandbox
+ * placeholders, and `pnpm stripe:sync` run with a LIVE key (`sk_live_…` / `rk_live_…`) SKIPS the stream packs and
+ * says so loudly — a placeholder must never become a live price because someone synced plans. With a test key the
+ * packs always sync. The owner flips this to true in the same change that sets the real prices, then runs sync.
+ */
+export const STREAM_PACK_PRICES_FINAL = false;
+
 export const STREAM_CREDIT_PACKS: readonly StreamCreditPack[] = [
   { size: 1, credits: 1, lookupKey: "seazn_stream_pack_1", gbpPence: 600, labelKey: "stream.credits.pack1", popular: false },
   { size: 5, credits: 5, lookupKey: "seazn_stream_pack_5", gbpPence: 2500, labelKey: "stream.credits.pack5", popular: true },
@@ -82,8 +96,8 @@ export function streamPack(size: number): StreamCreditPack | undefined {
  * multipliers on the GBP amount. PLACEHOLDERS, like the GBP prices above, and
  * superseded by the owner's pre-GA pricing ruling.
  *
- * It lives HERE rather than in `scripts/stripe-stream-packs.ts`, which is its
- * only reader, for one reason: the key set has to stay equal to
+ * It lives HERE rather than in `scripts/stripe-sync.ts`, which reads it
+ * through `streamPackPriceAmounts`, for one reason: the key set has to stay equal to
  * `SUPPORTED_CURRENCIES` minus `gbp`, and the script CANNOT import
  * `lib/currency.ts` to check that itself. Measured 2026-09-28 under
  * `tsconfig.scripts.json` (`moduleResolution: "nodenext"`): that import reds
@@ -104,7 +118,7 @@ export const STREAM_PACK_FX: Readonly<Record<string, number>> = {
 
 /**
  * P1 (Task 14 fix round 2): THE amounts a pack's Stripe price is created with — the GBP base plus one option per
- * `STREAM_PACK_FX` currency. `scripts/stripe-stream-packs.ts` spreads this into `stripe.prices.create`, and the
+ * `STREAM_PACK_FX` currency. `scripts/stripe-sync.ts` spreads this into `stripe.prices.create`, and the
  * checkout charges the option for the buyer's `preferredCurrency` (`adaptive_pricing` off), so a tile that quotes
  * anything but these numbers quotes a price the buyer is not charged. The tiles read it back through
  * `streamPackAmountMinor`; nothing else computes a pack's price.
@@ -135,7 +149,7 @@ export interface StreamPackPriceDrift {
  * M3 (Task 14 fix round 4): how a live Stripe price differs from what `streamPackPriceAmounts(pack)` says it is — empty
  * when it charges exactly the table's amounts. The tiles quote the table while a checkout charges the live price found by
  * lookup_key, so a price minted before a table change, or edited by hand, would silently disagree with every tile; the
- * price script refuses to reuse one this reports anything for.
+ * sync (`pnpm stripe:sync`) re-mints one this reports anything for rather than reuse it.
  *
  * Compared per currency: the price's own currency at `unit_amount`, plus every `currency_options` entry (Stripe echoes
  * the base currency there once expanded — the base amount wins). A missing option, an option the table does not declare

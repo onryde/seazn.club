@@ -5,8 +5,6 @@
 // (_THEMES.md §8b), so they are the one place a literal is the oracle rather
 // than a retyped copy of one (S10).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   STREAM_CREDIT_PACKS, STREAM_PACK_FX, streamPack, streamPackAmountMinor, streamPackPerMatchMinor, streamPackPriceAmounts,
   streamPackPriceDrift,
@@ -192,11 +190,8 @@ describe("STREAM_CREDIT_PACKS", () => {
     });
   });
 
-  it("P1: the price script creates each price FROM streamPackPriceAmounts — it computes no amount of its own", () => {
-    const src = readFileSync(join(__dirname, "..", "..", "..", "..", "..", "scripts", "stripe-stream-packs.ts"), "utf8");
-    expect(src).toMatch(/\.\.\.streamPackPriceAmounts\(pack\)/);
-    expect(src, "a second amount computation beside the shared one").not.toMatch(/unit_amount|gbpPence \*/);
-  });
+  // Addendum S: "the price sync creates each price FROM streamPackPriceAmounts" moved with the sync — see
+  // src/__tests__/stripe-sync-stream-packs.test.ts ("the sync computes no amount of its own").
 });
 
 describe("buildRelayCheckoutParams", () => {
@@ -264,7 +259,7 @@ describe("buildRelayCheckoutParams", () => {
   });
 });
 
-// `scripts/stripe-stream-packs.ts` writes ONE Stripe price per pack carrying a
+// `pnpm stripe:sync` (scripts/stripe-sync.ts) writes ONE Stripe price per pack carrying a
 // `currency_options` entry per non-GBP currency. If that key set ever falls
 // short of what the platform quotes, `preferredCurrency` hands
 // `buildRelayCheckoutParams` a currency the price has no option for, Stripe
