@@ -234,6 +234,12 @@ const RegressionSchema = z.strictObject({
    *  seed + path alone the shrunk command list may not reproduce (R-PF9).
    *  null only when the counterexample carried none. */
   replayPath: z.string().min(1).nullable(),
+  /** The command bound the finding run used (`--max-commands`). Replay uses it:
+   *  a shorter bound may never reach the failing command (W1b carry b). */
+  maxCommands: z.number().int().min(1),
+  /** Whether the finding run had its fences on (its report's cell `fences`).
+   *  Recorded, as the run's own evidence (W1b carry b). */
+  fencesOn: z.boolean(),
   fence: z.string().min(1).nullable(),
   /** Text that must appear in the product's own words (its refusal message,
    *  or a server assertion it carries — never RefusedCall's request line, never

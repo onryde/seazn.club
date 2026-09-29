@@ -14,7 +14,8 @@
 // before the plan's per-competition division cap (DIVISION_CAP_KEY). A cell's seed is FNV-1a of `${runId}|${cell}`
 // — derived, logged and written, never read from a clock. --regressions
 // replays every committed regression on the cells instead, each at its own
-// seed, path and replayPath, one run, fences off.
+// seed, path, replayPath and command bound (its maxCommands, W1b carry b), one
+// run, fences off.
 //
 // Exit codes, each with one meaning:
 //   0  report written, and every cell is ok: no failure, nothing vacuous, or a
@@ -181,7 +182,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if (v.seed !== undefined && !(/^-?\d+$/.test(v.seed) && seed === ((seed ?? 0) | 0))) return { usage: "--seed takes a 32-bit integer" };
   if (v.path !== undefined && (v.seed === undefined || !/^\d+(:\d+)*$/.test(v.path))) return { usage: "--path takes a fast-check path (0:1:…) and needs --seed" };
   if (v["replay-path"] !== undefined && v.path === undefined) return { usage: "--replay-path needs --path (and --seed)" };
-  if (v.regressions === true && (v.seed !== undefined || v.path !== undefined || v["replay-path"] !== undefined)) return { usage: "--regressions replays each committed case at its own seed and path; it takes no --seed, --path or --replay-path" };
+  if (v.regressions === true && (v.seed !== undefined || v.path !== undefined || v["replay-path"] !== undefined || v["max-commands"] !== undefined)) return { usage: "--regressions replays each committed case at its own seed, path and command bound; it takes no --seed, --path, --replay-path or --max-commands" };
   // Final batch F-5: no default. The case orgs' slugs (m-<runId>-<n>, unique
   // in organizations) and every cell's seed (seedFor) derive from the run id,
   // so a constant default made a second run abort on a duplicate slug, or
@@ -227,7 +228,7 @@ function checkRegressionVariants(regressions: readonly RegressionCase[]): void {
   }
 }
 
-interface Job extends SliceCell { seed: number; path?: string; replayPath?: string; runs: number; fences: boolean; replay: RegressionCase | null }
+interface Job extends SliceCell { seed: number; path?: string; replayPath?: string; runs: number; maxCommands: number; fences: boolean; replay: RegressionCase | null }
 
 export type Verdict = "ok" | "vacuous" | "known-failure" | "new-failure" | "not-reproduced" | "aborted";
 export type ModelCell = CellReport & { replayOf: string | null; verdict: Verdict };
@@ -293,7 +294,8 @@ function printStub(c: ModelCell, runId: string): void {
   for (const check of Object.keys(c.maskedNew)) say(`  no stub for ${check}: it was passed over while shrinking toward ${f.check}, so it has no replay path — re-find it once ${f.check} is fixed or fenced`);
   if (f.known !== null) return;
   const matchRequired = (MATCH_REQUIRED_CHECKS as readonly string[]).includes(f.check);
-  say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, match: matchRequired ? "" : null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
+  // maxCommands and fencesOn: how this run found it (W1b carry b), from the cell's own settings.
+  say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, maxCommands: c.maxCommands, fencesOn: c.fences, fence: null, match: matchRequired ? "" : null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
   if (matchRequired) {
     // Final batch FB-3: a match reads the product's own words alone, so the
     // owed line quotes those — never RefusedCall's request line around them.
@@ -302,14 +304,14 @@ function printStub(c: ModelCell, runId: string): void {
     else if (words === null) say(`  match owed: ${f.check} names no single failure, and the product's answer carries no words past its request line to match — it cannot be committed as a case: ${f.said}`);
     else say(`  match owed: ${f.check} names no single failure — set "match" to at least ${MATCH_MIN_LENGTH} characters of the product's own words below (never the request line, never the model's own line), or regressions.json is refused: ${words}`);
   }
-  // A replay regenerates the counterexample from the seed; the committed case
-  // records neither --max-commands nor the fences. --regressions honours
-  // --max-commands and always runs fences off, which replays a SHRUNK
-  // counterexample the same (it holds only commands that ran, and a fence
-  // only ever stops one) — not an unshrunk one the time box cut short.
+  // A replay regenerates the counterexample from the seed. The committed case
+  // records the bound and the fences it was found at (W1b carry b), and
+  // --regressions replays at that bound. It still runs fences off, which
+  // replays a SHRUNK counterexample the same (it holds only commands that
+  // ran, and a fence only ever stops one) — not an unshrunk one the time box
+  // cut short.
   const caveats = [
     ...(f.path === "" ? ["it has no replay path"] : []),
-    ...(c.maxCommands === MODEL_DEFAULTS.maxCommands ? [] : [`it was found at --max-commands ${c.maxCommands}, and the committed case does not record it: replay it with --regressions --max-commands ${c.maxCommands}`]),
     ...(c.fences && c.interrupted ? ["it was found with fences on and never shrunk (the time box), and --regressions replays with fences off"] : []),
   ];
   if (caveats.length > 0) say(`  replay caveat: ${caveats.join("; ")} — check that --regressions reproduces it before committing it`);
@@ -340,9 +342,11 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   const jobs: Job[] = cli.regressions
     ? regressions.flatMap((r) => {
       const c = chosen.get(r.cell);
-      return c === undefined ? [] : [{ ...c, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, fences: false, replay: r }];
+      // W1b carry (b): the bound the case was found at — the counterexample is
+      // regenerated from the seed, and the bound shapes what it generates.
+      return c === undefined ? [] : [{ ...c, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, maxCommands: r.maxCommands, fences: false, replay: r }];
     })
-    : cli.cells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, fences: cli.fences, replay: null }));
+    : cli.cells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, maxCommands: cli.maxCommands, fences: cli.fences, replay: null }));
   if (jobs.length === 0) { warn("model: nothing to run — --regressions found no committed case on these cells"); return EXIT.NO_SIGNAL; }
 
   const cells: ModelCell[] = [];
@@ -374,9 +378,9 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         const org = await deps.prepareCaseOrg({ base, session, userId, plan }, { name: `Matrix model ${cli.runId} ${i + 1}`, slug: caseOrgSlug(cli.runId, i + 1) });
         const real = deps.driverFor(base, session, org.orgId);
         const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
-        say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
+        say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} maxCommands=${job.maxCommands} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
         const rep = await runCell({
-          cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: cli.maxCommands, seed: job.seed, fences: job.fences,
+          cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: job.maxCommands, seed: job.seed, fences: job.fences,
           timeLimitMs: cli.timeLimitMs, regressions,
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
@@ -396,7 +400,8 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
 
-  const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells };
+  // A replay has no run-wide bound: each cell records the one its case was found at (W1b carry b).
+  const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.regressions ? null : cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells };
   // The secret scan reads the report BEFORE the base is scrubbed (FB-1).
   const secrets = stringsIn(out).flatMap((s) => findSecrets(s));
   if (secrets.length > 0) { warn(`model: ${new SecretInResults(secrets.length).message}`); return EXIT.ABORTED; }

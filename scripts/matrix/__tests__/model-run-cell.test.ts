@@ -116,7 +116,7 @@ const FOLD = "model-fold-parity";
 const N = (check: string): FailureKey => ({ check, known: null });
 const K = (check: string, id = "MB-009"): FailureKey => ({ check, known: id });
 /** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
-const openReg = (id: string, check: string, match: string | null = null) => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
+const openReg = (id: string, check: string, match: string | null = null) => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, maxCommands: 30, fencesOn: false, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
 /** The words both fake post refusals give (RefusingPosts, GatedLiar) — the
  *  product's message, after RefusedCall's `METHOD path → HTTP status CODE: `
  *  request line, which a match never reads (final batch FB-3) — what those
@@ -420,7 +420,7 @@ describe("runCell", () => {
   });
 
   it("a failure matching an OPEN committed regression on the same cell and check is known, by id; a FIXED one, or another cell or check, is not", async () => {
-    const reg = { id: "MB-001", title: "#879", issue: "#879", cell: CELL, variant: "score", check: I7, seed: 1, path: "0", replayPath: null, fence: FENCE_879, match: null, status: "open" as const, found: "2026-09-28", runId: "t" };
+    const reg = { id: "MB-001", title: "#879", issue: "#879", cell: CELL, variant: "score", check: I7, seed: 1, path: "0", replayPath: null, maxCommands: 30, fencesOn: false, fence: FENCE_879, match: null, status: "open" as const, found: "2026-09-28", runId: "t" };
     const r = await runCell(input({ fault879: true, fences: false, regressions: [reg] }));
     expect(r.failure?.known).toBe("MB-001");
     const fixed = await runCell(input({ fault879: true, fences: false, regressions: [{ ...reg, status: "fixed" }] }));
@@ -534,7 +534,7 @@ describe("runCell", () => {
     // The displaced NEW failure is kept with its commands even when the refusal is NEW too (RR-1).
     expect(Object.keys(displaced.maskedNew)).toEqual([I7]);
     // A regression on the displaced check does not make the unexpected refusal known.
-    const reg = { id: "MB-001", title: "#879", issue: "#879", cell: CELL, variant: "score", check: I7, seed: 1, path: "0", replayPath: null, fence: FENCE_879, match: null, status: "open" as const, found: "2026-09-28", runId: "t" };
+    const reg = { id: "MB-001", title: "#879", issue: "#879", cell: CELL, variant: "score", check: I7, seed: 1, path: "0", replayPath: null, maxCommands: 30, fencesOn: false, fence: FENCE_879, match: null, status: "open" as const, found: "2026-09-28", runId: "t" };
     expect((await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [reg] }))).failure?.known).toBeNull();
     // Fix round 3 (M-3/M-5): the backstop carries no product answer — its
     // evidence is the harness's own sentence and what it displaced — so no case

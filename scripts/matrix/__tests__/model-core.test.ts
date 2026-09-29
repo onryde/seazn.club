@@ -1404,7 +1404,7 @@ describe("the product's own answer rides every refusal violation as `said` — t
   // single-sport: the four refusal sites read the product's refusal, not a sport.
   const CELL = "t|generic";
   const caseFor = (id: string, check: string, match: string) =>
-    ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
+    ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, maxCommands: 30, fencesOn: false, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
   /** The product's NEXT_MATCH_STARTED sentence after its label (fed-seats.ts through lib/next-match-started.ts), read from the product. */
   const nextTail = (() => {
     const [, tail] = nextMatchStartedText().message("|").split("|");

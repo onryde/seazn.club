@@ -45,7 +45,7 @@ const CELL = "league|generic";
 const I7 = "I7-rr-no-pair-over-legs";
 const FOLD = "model-fold-parity";
 /** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
-const openReg = (id: string, check: string, match: string | null = null): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open", found: "2026-09-29", runId: "t" });
+const openReg = (id: string, check: string, match: string | null = null): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, maxCommands: MODEL_DEFAULTS.maxCommands, fencesOn: false, fence: null, match, status: "open", found: "2026-09-29", runId: "t" });
 /** Posts a LateRefusal takes before it refuses: enough for a 40-run walk at
  *  the defaults to cover every command and check first (final batch F-1). */
 const LATE_POSTS = 60;
@@ -169,6 +169,8 @@ describe("model.ts", () => {
       ["--seed", "4294967296"],
       ["--seed", "1", "--path", "0:x"],
       ["--regressions", "--seed", "1"],
+      // W1b carry (b): each case replays at its own recorded bound — a run-wide one would be ignored.
+      ["--regressions", "--max-commands", "7"],
       ["--run-id", "!!!"],
       ["extra"],
       ["--bogus"],
@@ -313,20 +315,24 @@ describe("model.ts", () => {
     const reg = completedStub(io.out());
     expect(reg).toMatchObject({ cell: CELL, variant: "score", check: I7, seed: seedFor("mr2", CELL), status: "open", runId: "mr2" });
     expect(reg.replayPath).toMatch(/\S/);
-    // Found at the defaults, unfenced: exactly how --regressions replays it.
+    // W1b carry (b): the stub records how the failure was found — the default bound, unfenced.
+    expect(stubOf(io.out())).toMatchObject({ maxCommands: MODEL_DEFAULTS.maxCommands, fencesOn: false });
+    expect(reg).toMatchObject({ maxCommands: MODEL_DEFAULTS.maxCommands, fencesOn: false });
     expect(io.out()).not.toContain("replay caveat");
     const rep = JSON.parse(readFileSync(join(dir, "mr2", "model-report.json"), "utf8")) as { cells: { verdict: string; fences: boolean; maxCommands: number }[] };
     expect(rep.cells.map((x) => [x.verdict, x.fences, x.maxCommands])).toEqual([["new-failure", false, MODEL_DEFAULTS.maxCommands]]);
   });
 
-  it("fix round 1, M-6: a stub for a failure found at another --max-commands says how to replay it; a SHRUNK failure found with fences on carries no fences caveat", async () => {
+  it("W1b carry (b), superseding fix round 1 M-6: a stub records the --max-commands and the fences its failure was found at, so a failure found at another bound owes no caveat — replay uses the recorded bound", async () => {
     const io = capture();
     expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "mc", "--report-dir", reportDir(), ...ONE, "--max-commands", "12"])).toBe(1);
-    const caveat = /replay caveat: [^\n]*/.exec(io.out())?.[0] ?? "";
-    expect(caveat).toMatch(/found at --max-commands 12, and the committed case does not record it: replay it with --regressions --max-commands 12/);
-    // The shrinker keeps only commands that ran, and a fence only ever stops
-    // one: a shrunk counterexample replays the same with fences off.
-    expect(caveat).not.toMatch(/fence/);
+    expect(stubOf(io.out())).toMatchObject({ maxCommands: 12, fencesOn: true });
+    // A shrunk counterexample with a replay path: nothing is owed, for the bound or the fences.
+    expect(io.out()).not.toContain("replay caveat");
+    // The pair: a failure found at the default bound records that, not 12.
+    const io2 = capture();
+    expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "mc2", "--report-dir", reportDir(), ...ONE])).toBe(1);
+    expect(stubOf(io2.out())).toMatchObject({ maxCommands: MODEL_DEFAULTS.maxCommands, fencesOn: true });
   });
 
   it("fix round 1, M-4/M-6: a failure the time box cut short says TIME BOX HIT on its own line and in the tally, and its unshrunk stub carries the fences caveat", async () => {
@@ -669,6 +675,27 @@ describe("model.ts", () => {
       expect(io3.out()).toMatch(/NOT REPRODUCED MB-001/);
     });
 
+    it("W1b carry (b): each case replays at its OWN recorded command bound — two cases found at different bounds each replay at theirs, as the report records; a replay run has no run-wide bound", async () => {
+      // Case A: found at --max-commands 7 (fences on). Case B: at the default, fences off.
+      const ioA = capture();
+      expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "ra", "--report-dir", reportDir(), ...ONE, "--max-commands", "7"])).toBe(1);
+      const a = completedStub(ioA.out(), { id: "MB-003", issue: null, fence: null, match: "refuses every result" });
+      const ioB = capture();
+      expect(await runModel(deps({ fault879: true }), ["--run-id", "rb", "--report-dir", reportDir(), ...ONE, "--no-fences"])).toBe(1);
+      const b = completedStub(ioB.out());
+      expect([a.maxCommands, a.fencesOn, b.maxCommands, b.fencesOn], "the premise: the two cases' settings differ").toEqual([7, true, MODEL_DEFAULTS.maxCommands, false]);
+      capture();
+      const dir = reportDir();
+      let drivers = 0;
+      const d = deps({ regs: [a, b], driverFor: () => (++drivers === 1 ? new RefusingPosts() : new ModelFakeDriver({ fault879: true })) });
+      expect(await runModel(d, ["--run-id", "rab", "--report-dir", dir, "--regressions"])).toBe(0);
+      expect(drivers).toBe(2);
+      const rep = JSON.parse(readFileSync(join(dir, "rab", "model-report.json"), "utf8")) as { settings: { maxCommands: number | null; regressions: boolean }; cells: { replayOf: string | null; verdict: string; maxCommands: number }[] };
+      // What each replay ran with is what runCell recorded from its input.
+      expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.maxCommands])).toEqual([["MB-003", "known-failure", 7], ["MB-001", "known-failure", MODEL_DEFAULTS.maxCommands]]);
+      expect(rep.settings).toMatchObject({ maxCommands: null, regressions: true });
+    });
+
     it("fix round 1, M-3: a replay that fails on ANOTHER open case's check did not reproduce its own — NOT REPRODUCED (exit 1), never known", async () => {
       const lies = () => new ModelFakeDriver({ lieOutcome: true });
       const io = capture();
@@ -719,7 +746,7 @@ describe("model.ts", () => {
 
     it("carry G-2: a committed case whose variant is not its sport's is refused (exit 2) before the DB", async () => {
       const io = capture();
-      const bad: RegressionCase = { id: "MB-009", title: "t", issue: null, cell: CELL, variant: "bwf", check: I7, seed: 1, path: "0", replayPath: null, fence: null, match: null, status: "open", found: "2026-09-29", runId: "t" };
+      const bad: RegressionCase = { id: "MB-009", title: "t", issue: null, cell: CELL, variant: "bwf", check: I7, seed: 1, path: "0", replayPath: null, maxCommands: MODEL_DEFAULTS.maxCommands, fencesOn: false, fence: null, match: null, status: "open", found: "2026-09-29", runId: "t" };
       expect(await runModel(deps({ openDb: noDb(), regs: [bad] }), ["--run-id", "g2", "--report-dir", reportDir(), "--regressions"])).toBe(2);
       expect(await runModel(deps({ openDb: noDb(), regs: [bad] }), ["--run-id", "g2", "--report-dir", reportDir(), ...ONE])).toBe(2);
       expect(io.err()).toMatch(/MB-009.*'bwf'.*generic/);
