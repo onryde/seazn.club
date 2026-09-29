@@ -1,0 +1,598 @@
+{
+  "schemaVersion": 1,
+  "runId": "w1b-model-final",
+  "harnessCommit": "e9cda4a38",
+  "settings": {
+    "maxCommands": 30,
+    "timeLimitMs": 300000,
+    "regressions": false
+  },
+  "cells": [
+    {
+      "cell": "league|generic",
+      "variant": "score",
+      "seed": -396057224,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 13,
+          "accepted": 13,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 28,
+          "accepted": 20,
+          "refused": 0,
+          "expected": 8,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 11,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 16,
+          "accepted": 16,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 18,
+          "accepted": 18,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 14,
+          "accepted": 14,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 6,
+          "accepted": 6,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 19,
+          "accepted": 19,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 22,
+          "accepted": 6,
+          "refused": 16,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 14,
+          "accepted": 14,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 1236,
+        "I8-generate-named": 165,
+        "model-rr-orientation": 1236
+      },
+      "foldParity": 235,
+      "fenced": {},
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 8,
+          "evidence": [
+            "AddEntrant(21,0): POST /api/v1/divisions/55aa1207-f2dd-4017-923b-c6eb89e1ffc0/entrants → 422 ERROR",
+            "AddEntrant(30,0): POST /api/v1/divisions/55aa1207-f2dd-4017-923b-c6eb89e1ffc0/entrants → 422 ERROR",
+            "AddEntrant(47,1): POST /api/v1/divisions/55aa1207-f2dd-4017-923b-c6eb89e1ffc0/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 137,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    },
+    {
+      "cell": "league|badminton",
+      "variant": "bwf",
+      "seed": -1248422361,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 13,
+          "accepted": 13,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 34,
+          "accepted": 23,
+          "refused": 0,
+          "expected": 11,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 6,
+          "accepted": 6,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 9,
+          "accepted": 9,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 13,
+          "accepted": 13,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 10,
+          "accepted": 10,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 8,
+          "accepted": 8,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 33,
+          "accepted": 33,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 18,
+          "accepted": 13,
+          "refused": 5,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 16,
+          "accepted": 16,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 1296,
+        "I8-generate-named": 191,
+        "model-rr-orientation": 1296
+      },
+      "foldParity": 161,
+      "fenced": {
+        "late-entry-then-generate": 2
+      },
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 11,
+          "evidence": [
+            "AddEntrant(41,0): POST /api/v1/divisions/3c8ffc1a-09e9-4ccd-9d44-b59f363f2f1a/entrants → 422 ERROR",
+            "AddEntrant(8,0): POST /api/v1/divisions/36eb86b1-4817-4334-8ecd-5d811effb1ef/entrants → 422 ERROR",
+            "AddEntrant(20,0): POST /api/v1/divisions/36eb86b1-4817-4334-8ecd-5d811effb1ef/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 144,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    },
+    {
+      "cell": "knockout|generic",
+      "variant": "score",
+      "seed": 894875997,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 13,
+          "accepted": 13,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 29,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 18,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 10,
+          "accepted": 10,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 18,
+          "accepted": 18,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 8,
+          "accepted": 8,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 11,
+          "accepted": 7,
+          "refused": 0,
+          "expected": 4,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 12,
+          "accepted": 6,
+          "refused": 4,
+          "expected": 2,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 29,
+          "accepted": 29,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 29,
+          "accepted": 13,
+          "refused": 16,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 11,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 241,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 166,
+      "fenced": {},
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 4
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 18,
+          "evidence": [
+            "AddEntrant(43,0): POST /api/v1/divisions/61d9c91a-0372-40ce-848d-09b0900ef5e9/entrants → 422 ERROR",
+            "AddEntrant(9,1): POST /api/v1/divisions/291b1f03-236c-48ed-af4b-cb7a5645d07b/entrants → 422 ERROR",
+            "AddEntrant(20,0): POST /api/v1/divisions/291b1f03-236c-48ed-af4b-cb7a5645d07b/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 126,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    },
+    {
+      "cell": "knockout|badminton",
+      "variant": "bwf",
+      "seed": -1682490066,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 2,
+      "executions": 24,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 1,
+          "accepted": 1,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 12,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 1,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 1,
+          "accepted": 1,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 1,
+          "accepted": 1,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 2,
+          "accepted": 2,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 3,
+          "accepted": 2,
+          "refused": 0,
+          "expected": 1,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 3,
+          "accepted": 2,
+          "refused": 0,
+          "expected": 1,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 35,
+          "accepted": 29,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 0,
+          "accepted": 0,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 1,
+          "accepted": 1,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 54,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 18,
+      "fenced": {},
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 1,
+          "evidence": [
+            "AddEntrant(33,0): POST /api/v1/divisions/933c0735-44bb-4f51-90af-8d70e7980094/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 50,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": {
+        "check": "model-refusal-named",
+        "seed": -1682490066,
+        "path": "1:2:3:3:3:3",
+        "replayPath": "DSO:F",
+        "commands": [
+          "Generate(0,0)",
+          "AddEntrant(0,0)",
+          "Generate(0,0)"
+        ],
+        "evidence": [
+          "Generate(0,0): POST /api/v1/stages/67ce89bb-52f4-4ee1-a245-c79b030874de/generate → 500 INTERNAL",
+          "POST /api/v1/stages/67ce89bb-52f4-4ee1-a245-c79b030874de/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) f2a0ee92-6224-46cb-a944-b35aa76b59ac instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present"
+        ],
+        "said": "POST /api/v1/stages/67ce89bb-52f4-4ee1-a245-c79b030874de/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) f2a0ee92-6224-46cb-a944-b35aa76b59ac instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present",
+        "known": "MB-005"
+      },
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "known-failure"
+    },
+    {
+      "cell": "swiss|generic",
+      "variant": "score",
+      "seed": 1377112074,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 14,
+          "accepted": 14,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 29,
+          "accepted": 10,
+          "refused": 0,
+          "expected": 19,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 5,
+          "accepted": 5,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 7,
+          "accepted": 7,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 7,
+          "accepted": 7,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 6,
+          "accepted": 6,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 3,
+          "accepted": 3,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 35,
+          "accepted": 24,
+          "refused": 11,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 11,
+          "accepted": 10,
+          "refused": 1,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 20,
+          "accepted": 20,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 175,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 232,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 63,
+      "fenced": {},
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 19,
+          "evidence": [
+            "AddEntrant(9,1): POST /api/v1/divisions/94334163-aeaa-44df-acd0-84ac1a3a4709/entrants → 422 ERROR",
+            "AddEntrant(11,0): POST /api/v1/divisions/42911e3f-57c0-4bc6-ba9b-c6f0d23a8c03/entrants → 422 ERROR",
+            "AddEntrant(40,1): POST /api/v1/divisions/42911e3f-57c0-4bc6-ba9b-c6f0d23a8c03/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 106,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    }
+  ]
+}
