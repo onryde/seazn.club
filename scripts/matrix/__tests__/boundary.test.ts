@@ -116,6 +116,87 @@ describe("scripts/matrix import boundary", () => {
   });
 });
 
+// W1c Task 4, ruling 38: the bench's tap helpers are imported — but only the
+// sport-blind parts of scorer.ts and tap-play.ts.
+describe("ruling 38: what the matrix may take from the bench", () => {
+  // Ruling 38: the bench's match loop fixes the widths (organiser 1280, scorer 390) and always
+  // finalizes, which breaks HTTP parity. Refused by name wherever it is imported from.
+  const REFUSED_BENCH_EXPORTS = ["playMatchByTaps", "createTapPlayer", "browserTapPlayer"];
+  it.each(MODULES.map((f) => [relative(MATRIX, f), f]))("%s never imports the bench match loop", (_rel, file) => {
+    const src = readFileSync(file, "utf8");
+    for (const name of REFUSED_BENCH_EXPORTS) expect(new RegExp(`\\b${name}\\b`).test(src), name).toBe(false);
+  });
+
+  // Transitively: everything a real load of every shipped module reaches.
+  //
+  // One forbidden name IS reached today, and was before W1c (found by this
+  // test, Task 4): run.ts imports bench plan.ts (provisionPlan, allowed since
+  // W1a), and plan.ts value-imports seed.ts for its defaultTransport. That one
+  // chain is pinned by its importer, so any NEW way into seed.ts — or into any
+  // other forbidden file — reds; routed to the controller for a ruling.
+  const TRANSITIVE_FORBIDDEN = ["run-suite", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
+  const KNOWN_TRANSITIVE: Readonly<Record<string, readonly string[]>> = { "scripts/bench/lib/seed.ts": ["scripts/bench/lib/plan.ts"] };
+  /** Within `files`, the ones that value-import `target`. */
+  const importersOf = (files: ReadonlySet<string>, target: string) => [...files]
+    .filter((f) => importsOf(f).some((i) => !i.typeOnly && i.spec.startsWith(".") && resolve(dirname(f), i.spec) === resolve(REPO, target)))
+    .map((f) => relative(REPO, f)).sort();
+  it("the value-import closure of every shipped module stays clear of the bench's suite runner, seeding and pack validation", () => {
+    const files = closure(MODULES);
+    const reached = [...files].map((f) => relative(REPO, f)).sort();
+    console.info(`boundary: the shipped matrix modules' value-import closure reaches ${reached.length} files`);
+    expect(reached.length).toBeGreaterThan(50);
+    const bad = reached.filter((f) => TRANSITIVE_FORBIDDEN.some((x) => f.includes(x)));
+    expect(bad).toEqual(Object.keys(KNOWN_TRANSITIVE));
+    for (const f of bad) expect(importersOf(files, f), `${f} is reached through a new importer`).toEqual(KNOWN_TRANSITIVE[f]);
+  });
+  // pack-schema is reached through scorer.ts/tap-play.ts -> simulate.ts, which
+  // ruling 38 accepts by name. It is ALSO reached through plan.ts -> seed.ts
+  // (above), so "pack-schema is visited" alone could not witness the ruling-38
+  // chain; this pins simulate.ts as one of its importers. If a refactor drops
+  // that load, this reds and the ruling-38 comment is re-read.
+  it("pack-schema is reached through simulate.ts, the chain ruling 38 accepts by name", () => {
+    const files = closure(MODULES);
+    expect(importersOf(files, "scripts/bench/lib/pack-schema.ts")).toContain("scripts/bench/lib/simulate.ts");
+    expect(importersOf(files, "scripts/bench/lib/simulate.ts")).toContain("scripts/bench/lib/drivers/scorer.ts");
+  });
+
+  // So the L3 path never loads a browser: only the browser layer may import
+  // playwright — directly, or through a bench module that imports it at its
+  // top (tap-play.ts). Type-only imports count too: they are refused here
+  // because nothing outside the browser layer has a reason to name a Page.
+  const BROWSER_LAYER = (rel: string) => rel.startsWith("lib/browser/") || rel.startsWith("lib/pads/") || rel === "lib/driver/browser-driver.ts";
+  function everyTs(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) { if (e.name !== "node_modules") everyTs(full, out); continue; }
+      if (e.name.endsWith(".ts")) out.push(full);
+    }
+    return out;
+  }
+  it("no file under scripts/matrix outside lib/browser, lib/pads and lib/driver/browser-driver.ts imports playwright", () => {
+    const files = everyTs(MATRIX);
+    expect(files.length).toBeGreaterThan(MODULES.length);
+    const bad = files.filter((f) => !BROWSER_LAYER(relative(MATRIX, f)) && importsOf(f).some((i) => i.spec === "playwright")).map((f) => relative(MATRIX, f));
+    expect(bad).toEqual([]);
+    // Positive pair: the scan does see the browser layer's own import.
+    expect(importsOf(join(MATRIX, "lib/browser/session.ts")).some((i) => i.spec === "playwright")).toBe(true);
+  });
+  // Found by this test (Task 4), pre-existing since W1a: bench env.ts imports
+  // playwright's `chromium` at its top (its preflight resolves the Chromium
+  // executable), and run.ts imports env.ts for runPreflight — so the L3 entry
+  // point already loads the playwright LIBRARY (it never launches a browser).
+  // Pinned exactly, so a new path reds; routed to the controller.
+  const KNOWN_PLAYWRIGHT_LOADS = ["run.ts -> ../bench/lib/env.ts"];
+  it("no shipped module outside the browser layer imports a bench module that loads playwright, beyond the one known preflight import", () => {
+    const loadsPlaywright = [...ALLOWED_BENCH].filter((rel) => importsOf(resolve(REPO, rel)).some((i) => i.spec === "playwright" && !i.typeOnly)).sort();
+    expect(loadsPlaywright).toEqual(["scripts/bench/lib/env.ts", "scripts/bench/lib/tap-play.ts"]);
+    const bad = MODULES.filter((f) => !BROWSER_LAYER(relative(MATRIX, f))).flatMap((f) => importsOf(f)
+      .filter((i) => !i.typeOnly && i.spec.startsWith(".") && loadsPlaywright.includes(relative(REPO, resolve(dirname(f), i.spec))))
+      .map((i) => `${relative(MATRIX, f)} -> ${i.spec}`));
+    expect(bad).toEqual(KNOWN_PLAYWRIGHT_LOADS);
+  });
+});
+
 // W1c Task 4 (Task 3 review, controller ruling): the harness's widths live in
 // a leaf, so the browser path reads them without loading pairs.ts — which
 // pulls in the catalogue, the engine and apps/web's match-rules table.

@@ -53,6 +53,21 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(MODULES.some((f) => f.endsWith("lib/catalogue.ts"))).toBe(true);
   });
 
+  // W1c Task 4's modules, named: the walker finds them today, and a move or a
+  // rename that dropped one out of the walk would otherwise shrink the list
+  // below silently. The browser ones load playwright (a bare import) and the
+  // bench's tap helpers, so their load also proves those resolve.
+  const W1C_T4 = [
+    "lib/widths.ts", "lib/driver/envelope.ts", "lib/pads/execute.ts",
+    "lib/browser/budget.ts", "lib/browser/viewports.ts", "lib/browser/selectors.ts",
+    "lib/browser/session.ts", "lib/browser/respond.ts", "lib/browser/evidence.ts",
+  ];
+  it("W1c Task 4's modules are all in the walk", () => {
+    const missing = W1C_T4.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T4.length).toBe(9);
+    expect(missing).toEqual([]);
+  });
+
   it.each(MODULES)("%s", (file) => {
     const r = spawnSync(
       process.execPath,
