@@ -36,13 +36,23 @@ import Stripe from "stripe";
 import { apiJson, invalidateOrgEntitlements } from "../helpers";
 import { grantRigPackCredits, seedOverlayFixture, setRigPlan, type OverlayRig } from "../overlay-kit";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
-import { FakeIngest } from "../../src/server/relay/fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
+import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
 /** lib/currency.ts `PASS_KEYS`, restated: that module cannot be imported here — it pulls `@/config/stripe-plans.json`
  *  without an import attribute, and the spec then collects ZERO tests. The B1 registry test pins this list against the
  *  catalogue, so a rung added there and not here reds that test rather than going unswept. */
 const PASS_KEYS = ["event_pass", "event_pass_l"] as const;
+/** Each pass rung's durable Stripe identity, read from the seed `stripe:sync` pushes (src/config/stripe-plans.json,
+ *  read as data for the same import-attribute reason) — the lookup key a real pass session's price carries. */
+const PASS_LOOKUP_KEYS: Record<string, string | undefined> = Object.fromEntries(
+  (
+    JSON.parse(readFileSync(fileURLToPath(new URL("../../src/config/stripe-plans.json", import.meta.url)), "utf8")) as {
+      passes?: { key: string; price?: { lookup_key?: string } }[];
+    }
+  ).passes?.map((p) => [p.key, p.price?.lookup_key]) ?? [],
+);
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Budget — derived, never a flat literal (AGENTS.md class 20). Each test states its own counts as its FIRST act.
@@ -56,8 +66,18 @@ const ACT_MS = 5_000;
 const SEED_MS = 45_000;
 /** One signed webhook POST, through runEvent and the ledger writer. */
 const HOOK_MS = 5_000;
-/** The fake ingest's connect delay plus the organiser poll that observes it (B6 only). */
-const LIVE_MS = 30_000;
+/** The fake ingest reads "connected" this long after its input was created (server/relay/fakes.ts). A server started
+ *  with FAKE_INGEST_CONNECT_AFTER_MS overrides it — CI sets it on the server AND this process (e2e.yml), so export the
+ *  server's value here too. Parsed as strictly as fakes.ts parses it (stream-relay.spec.ts's pattern), so a junk value
+ *  fails here rather than budgeting from NaN. */
+const FAKE_CONNECT_MS = ((): number => {
+  const raw = process.env.FAKE_INGEST_CONNECT_AFTER_MS;
+  if (raw === undefined) return FAKE_CONNECT_AFTER_MS_DEFAULT;
+  if (!/^\d+$/.test(raw)) throw new Error(`FAKE_INGEST_CONNECT_AFTER_MS must be whole milliseconds, got ${JSON.stringify(raw)}`);
+  return Number(raw);
+})();
+/** The fake's connect delay, then two organiser polls (the one in flight and the one that sees it), plus slack (B6). */
+const LIVE_MS = FAKE_CONNECT_MS + 2 * STREAM_POLL_MS + 5_000;
 const budget = (c: { seeds: number; navs: number; acts: number; hooks?: number; lives?: number }): number =>
   Math.max(
     60_000,
@@ -233,11 +253,24 @@ const monthlyKey = (orgId: string, period: string): string => `stream-monthly:${
 /** V426 addendum P's pass grant key: `stream-pass:{paymentIntent ?? competitionId}`. */
 const passKeyOf = (anchor: string): string => `stream-pass:${anchor}`;
 
-/** A guard, not a comment: every expectation in a test names ONE month. A run that straddles a UTC month turn would
- *  read as a rollover defect; this says what actually happened instead. */
-function expectSameMonth(period: string): void {
-  expect(periodOf(new Date()), `the test ran across a UTC month turn (started in ${period}); re-run it`).toBe(period);
-}
+/** Every expectation in a test names ONE month (its keys, its expire row). A run that straddles a UTC month turn fails
+ *  as a rollover defect it is not — so a FAILED test says, on itself, when the month turned under it. A passing test
+ *  is left alone: it held its month's keys to the end, so the turn cannot have touched it. */
+let startedPeriod = "";
+test.beforeEach(() => {
+  startedPeriod = periodOf(new Date());
+});
+test.afterEach(() => {
+  const info = test.info();
+  if (info.status === info.expectedStatus) return;
+  const now = periodOf(new Date());
+  if (now !== startedPeriod) {
+    info.annotations.push({
+      type: "month-turn",
+      description: `started in ${startedPeriod}, ended in ${now}: this failure may be the month turning, not a defect — re-run it`,
+    });
+  }
+});
 
 /** Spend ONE free monthly credit — what going live writes (File A drives the real thing). A `consume` row in the
  *  monthly bucket, `balance_after` the org total after it, as every ledger writer keeps it. */
@@ -343,19 +376,35 @@ const shot = (page: Page, name: string) => page.screenshot({ path: test.info().o
 
 /** The "Now playing" strip's accessible name — how the recorded defect below is found, from the dictionary. */
 const NOW_PLAYING = en("schedule.nowPlaying");
+/** The checkout sheet's close button — the shared `Modal`'s header close, whose accessible name is HARDCODED English
+ *  (`components/modal.tsx`: `aria-label="Close"`), not a dictionary key. So there is no dictionary value to read: a key
+ *  that happens to say "Close" elsewhere would be a coincidence, not the source. Recorded in walkthrough-report-B.md
+ *  (an untranslated screen-reader label in every locale); the day it moves into the dictionaries, read it from there. */
+const MODAL_CLOSE_LABEL = "Close";
+
+/** D1's measured geometry: stages-panel.tsx:778-815, clipped by html overflow-x:clip. At 320 px the "Now playing"
+ *  strip's content reaches 56 px past the viewport, every run (two `max-w-[9rem]` names in a non-wrapping
+ *  `inline-flex` — a bounded width, so a fixed number). The exemption holds for THAT much and no more: a strip that
+ *  grows, or a second thing overflowing inside it, reds instead of hiding behind the recorded defect. */
+const D1_OVERFLOW_PX = 56;
+/** Sub-pixel rounding and font metrics between machines — not room for a second defect. */
+const D1_SLACK_PX = 4;
 
 /**
- * No horizontal page scroll — `helpers.ts expectNoHorizontalScroll`'s measurement and containment rule, with ONE
- * named, CHECKED exemption, and the stream panel held strictly on top.
+ * No content past the viewport — `helpers.ts expectNoHorizontalScroll`'s measurement and containment rule, with ONE
+ * named, CHECKED, CAPPED exemption, and the stream panel held strictly on top.
+ *
+ * The page cannot actually SCROLL sideways: `html, body { overflow-x: clip }` (globals.css) cuts off anything wider
+ * than the viewport. So the measurement lifts the clip for one read — what it finds is content the organiser cannot
+ * see, which is the defect class, whether or not a scrollbar would have shown it.
  *
  * DEFECT D1 (walkthrough-report-B.md; pre-existing, NOT this lane's code, and already noticed by
- * stream-overlay.spec.ts's community test): at 320 px the division page overflows by ~56 px from the "Now playing"
- * strip (`stages-panel.tsx:778-815`) — an in-play fixture's two `max-w-[9rem]` names sit side by side in a
- * non-wrapping `inline-flex`, wider than the phone. Every rig here is a LIVE hockey fixture, so the strip is always on
- * the page. Rather than go red for a strip this file cannot move — or scope the check to the panel and stop seeing the
- * page at all — an overflow is excused ONLY when every uncontained box past the viewport sits inside that strip
- * (AGENTS.md class 23: an exemption nobody checks hides the next overflow). The day D1 is fixed, the exemption simply
- * stops being used; its use is annotated on the test so a run says when it leaned on it.
+ * stream-overlay.spec.ts's community test): at 320 px the "Now playing" strip's content is clipped by D1_OVERFLOW_PX.
+ * Every rig here is a LIVE hockey fixture, so the strip is always on the page. Rather than go red for a strip this
+ * file cannot move — or scope the check to the panel and stop seeing the page at all — clipped content is excused
+ * ONLY when every uncontained box past the viewport sits inside that strip AND the amount is D1's own (AGENTS.md class
+ * 23: an exemption nobody checks hides the next overflow). The day D1 is fixed, the exemption simply stops being used;
+ * its use is annotated on the test so a run says when it leaned on it.
  */
 async function expectNoPageScroll(page: Page): Promise<void> {
   const seen = await page.evaluate((nowPlaying) => {
@@ -399,13 +448,18 @@ async function expectNoPageScroll(page: Page): Promise<void> {
   // Anti-vacuity: a check of a panel that is not there is no check.
   expect(seen.panelChecked, `${seen.vw}: no stream panel box was measured`).toBeGreaterThan(10);
   expect(seen.panelPast, `${seen.vw}: a stream panel box reaches past the viewport`).toEqual([]);
-  expect(seen.outside, `${seen.vw}: the page overflows by ${seen.overflowPx}px from outside the recorded D1 strip`).toEqual([]);
+  expect(seen.outside, `${seen.vw}: ${seen.overflowPx}px of content is clipped from outside the recorded D1 strip`).toEqual([]);
   if (seen.overflowPx > 1) {
     // Excused only because EVERY offender is in the strip — and there must be one, or the overflow is unexplained.
-    expect(seen.excused, `${seen.vw}: ${seen.overflowPx}px of page overflow with no offender found at all`).toBeGreaterThan(0);
+    expect(seen.excused, `${seen.vw}: ${seen.overflowPx}px of content clipped with no offender found at all`).toBeGreaterThan(0);
+    // …and only as much as D1 itself clips: growth is a new defect, not D1.
+    expect(
+      seen.overflowPx,
+      `${seen.vw}: the Now-playing strip clips ${seen.overflowPx}px, more than D1's measured ${D1_OVERFLOW_PX}px`,
+    ).toBeLessThanOrEqual(D1_OVERFLOW_PX + D1_SLACK_PX);
     test.info().annotations.push({
       type: "known-defect",
-      description: `D1: the Now-playing strip overflows the page by ${seen.overflowPx}px at ${seen.vw}px (${seen.excused} boxes)`,
+      description: `D1: the Now-playing strip's content is clipped by ${seen.overflowPx}px at ${seen.vw}px (${seen.excused} boxes)`,
     });
   }
 }
@@ -541,7 +595,6 @@ for (const { plan, width } of B1_PLANS) {
     }
     await expectNoPageScroll(page);
     await shot(page, `b1-${plan}-${width}-spent.png`);
-    expectSameMonth(period);
   });
 }
 
@@ -624,7 +677,6 @@ test("B2 · a new month at 320px: last month's UNSPENT free credits expire and t
   await openPhoneTab(page, rig);
   await expectBalance(page, rate + bought);
   expect(await ledger(rig.orgId), "a second load rolled the month again").toEqual(after);
-  expectSameMonth(period);
 });
 
 // =====================================================================================================================
@@ -685,7 +737,6 @@ test("B3 · an upgrade mid-month at 1280px tops the month up by the DIFFERENCE, 
   await openPhoneTab(page, rig);
   await expectBalance(page, higher);
   expect(await ledger(rig.orgId), "a return to the same plan topped the month up twice").toEqual(topped);
-  expectSameMonth(period);
 });
 
 // =====================================================================================================================
@@ -707,7 +758,6 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
   if (unusable) console.warn(`::warning::B4 NOT RUN — the match-credit pack purchase was not exercised: ${unusable}`);
   test.skip(unusable !== null, `B4 needs a real Stripe test key and the server's webhook secret: ${unusable}`);
 
-  const period = periodOf(new Date());
   const { rig, rate } = await planRig(page, "community");
   expect(rate).toBeGreaterThanOrEqual(1);
   // TODAY's match — the one a club buys credits to stream. The seed leaves its fixture untimed, and on a match day the
@@ -825,12 +875,15 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
   await expectBalance(page, pack.credits);
   await expectSplit(page, { monthly: 0, pack: pack.credits });
   await expect(page.locator('[data-testid="stream-go-live"]'), "credits in hand: the tab offers Go live").toBeVisible();
-  await expect(page.locator('[data-testid="stream-buy-pack-1"]'), "no longer forced to buy").toHaveCount(0);
+  await expect(
+    page.locator(`[data-testid="stream-buy-pack-${STREAM_CREDIT_PACKS[0]!.size}"]`),
+    "no longer forced to buy",
+  ).toHaveCount(0);
   await expectNoPageScroll(page);
   await shot(page, "b4-returned-320.png");
-  // The return's own reconcile found the session not yet complete at Stripe and wrote nothing: still the ONE row.
-  expect((await purchases()).length, "the return credited the pack a second time").toBe(1);
-  expectSameMonth(period);
+  // No "the return credited it twice" check here, deliberately: the session is still OPEN at Stripe (no card was
+  // entered), so the return's reconcile has nothing to credit whatever its guard does — such a check cannot fail.
+  // The return path's own idempotency is a stated gap (walkthrough-report-B.md).
 });
 
 // =====================================================================================================================
@@ -840,8 +893,7 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
 test("B5 · an Event Pass grants its rung's declared credits into the bought bucket ONCE per pass — the same event replayed and the same payment redelivered grant nothing more; a no-intent (promotion-code) pass is keyed on its competition; the tab shows the sum", async ({
   page,
 }) => {
-  test.setTimeout(budget({ seeds: 1, navs: 2, acts: 12, hooks: 6 }));
-  const period = periodOf(new Date());
+  test.setTimeout(budget({ seeds: 1, navs: 2, acts: 14, hooks: 7 }));
   const rig = await seedOverlayFixture(page);
   // A SECOND competition in the same org, for the second rung — a competition holds one pass. Created on the seed's
   // plan, before the move below.
@@ -863,7 +915,27 @@ test("B5 · an Event Pass grants its rung's declared credits into the bought buc
   await openPhoneTab(page, rig);
   await expectBalance(page, rate);
 
-  const passSession = (competitionId: string, passKey: string, paymentIntent: string | null) => ({
+  // THE PRICE THE SESSION WAS BUILT ON — the mint guard (lib/billing.ts `passSessionRungMatchesPrice`) compares the
+  // session's one line item against the rung's `plans.stripe_price_id_onetime` before any pass or credit is minted.
+  // The line item is built from THAT row and the seed's lookup key, so the price-checked path is the one exercised: a
+  // session with no expanded line items would make the server ask Stripe for them, and Stripe answers 404 for a
+  // hand-built session id — the guard then logs "minting … unverified" and mints unchecked (its fail-open branch).
+  // That branch is only a server log line, invisible from here; what IS visible is the check itself, below.
+  const priceRows = await withDb(
+    (sql) => sql<{ key: string; price_id: string | null }[]>`
+      select key, stripe_price_id_onetime as price_id from plans where key in ${sql([...PASS_KEYS])}`,
+  );
+  const priceOf = (passKey: string) => priceRows.find((r) => r.key === passKey)?.price_id ?? null;
+  // Unconfigured (no `stripe:sync` into this database — a laptop; CI syncs the walkthrough leg): the guard returns
+  // before it reads a line item, so no price is compared on this run. Said on the test, not assumed.
+  const priced = PASS_KEYS.every((k) => priceOf(k) !== null);
+  if (!priced) {
+    console.warn("::warning::B5: plans.stripe_price_id_onetime is unset here — the pass price check was NOT exercised");
+    test.info().annotations.push({ type: "price-check-unconfigured", description: "run stripe:sync into this database to exercise the pass price check" });
+  }
+  // `priceRung` is the rung whose PRICE the session was built on — its id and its lookup key together, as Stripe
+  // returns a real price. It defaults to the rung the metadata names; the refusal case below builds a mismatch.
+  const passSession = (competitionId: string, passKey: string, paymentIntent: string | null, priceRung = passKey) => ({
     id: `cs_e2e_${randomBytes(8).toString("hex")}`,
     object: "checkout.session",
     mode: "payment",
@@ -875,8 +947,39 @@ test("B5 · an Event Pass grants its rung's declared credits into the bought buc
     currency: "gbp",
     amount_total: paymentIntent ? 1 : 0,
     metadata: { org_id: rig.orgId, competition_id: competitionId, pass_key: passKey },
+    // Exactly one line item, as buildPassCheckoutParams builds it — carried expanded, so the guard reads it here.
+    ...(priceOf(priceRung)
+      ? {
+          line_items: {
+            object: "list",
+            has_more: false,
+            data: [{ object: "item", quantity: 1, price: { id: priceOf(priceRung), lookup_key: PASS_LOOKUP_KEYS[priceRung] ?? null } }],
+          },
+        }
+      : {}),
   });
-  const passRows = async () => (await ledger(rig.orgId)).filter((r) => r.idempotency_key?.startsWith("stream-pass:"));
+  // EVERY bought-bucket grant the org holds — not only rows carrying the pass key's shape, so a grant written under
+  // the wrong key (or none) is still counted, and a double shows as two rows whatever it is keyed on.
+  const passRows = async () => (await ledger(rig.orgId)).filter((r) => r.reason === "grant" && r.bucket === "pack");
+
+  // The check is LIVE (priced databases only — see above): M's metadata on a session built on L's price — the $44.99
+  // charge filed under the cheaper rung — is REFUSED: no pass, no credit, one refusal row naming L's price. The
+  // unverified fail-open branch would have minted it. (Not a made-up price id with M's lookup key: the guard accepts a
+  // price whose lookup key names the rung, by design — a stale `plans` row after a `stripe:sync` price replacement.)
+  if (priced) {
+    const wrongIntent = `pi_e2e_${randomBytes(6).toString("hex")}`;
+    const wrong = passSession(rig.competitionId, "event_pass", wrongIntent, "event_pass_l");
+    expect(priceOf("event_pass_l"), "the two rungs are two different prices").not.toBe(priceOf("event_pass"));
+    expect(await deliver(page, signedEvent("checkout.session.completed", wrong)), "a refused pass is still ACKed").toBe(200);
+    expect(await passRows(), "a pass on the wrong price minted credits").toEqual([]);
+    const refused = await withDb(
+      (sql) => sql<{ pass_key: string; reason: string; actual_price_id: string | null }[]>`
+        select pass_key, reason, actual_price_id from pass_mint_refusals where stripe_ref = ${wrongIntent}`,
+    );
+    expect(refused, "the refusal is recorded, naming the price it saw").toEqual([
+      { pass_key: "event_pass", reason: "price_mismatch", actual_price_id: priceOf("event_pass_l") },
+    ]);
+  }
 
   // The M rung, paid by card: keyed on its payment intent.
   const intent = `pi_e2e_${randomBytes(6).toString("hex")}`;
@@ -919,7 +1022,6 @@ test("B5 · an Event Pass grants its rung's declared credits into the bought buc
   await expectSplit(page, { monthly: rate, pack: m + l });
   await expectNoPageScroll(page);
   await shot(page, "b5-passes-768.png");
-  expectSameMonth(period);
 });
 
 // =====================================================================================================================
@@ -1024,7 +1126,7 @@ test("B6 · mid-stream at 320px, a checkout sheet whose code cannot load says so
   if (answered.ok()) {
     // A real key: the sheet opens over the tab. Close it to get back to Stop.
     await expect(page.locator('[data-testid="stream-checkout-modal"]')).toBeVisible({ timeout: NAV_MS });
-    await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: MODAL_CLOSE_LABEL }).click();
     await expect(page.locator('[data-testid="stream-checkout-modal"]')).toHaveCount(0);
   } else {
     // The CI dummy key: Stripe refuses, and the tab says so in the same words.
