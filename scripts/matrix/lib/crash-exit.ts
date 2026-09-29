@@ -7,9 +7,10 @@
 // it evaluates — happens before any CLI code runs, and node exits 1. A preload
 // runs first, so it is the one place that can see those: any exception nothing
 // caught becomes exit 3. Only a preload: imported into a vitest worker, this
-// handler would take over the worker's own crashes. A bare
-// `node --experimental-strip-types <cli>` run has no preload, and a load
-// failure there still exits 1 — run the package script.
+// handler would take over the worker's own crashes. Run each CLI through its
+// package script (`pnpm run matrix:l3`, …): a run without this preload exits 1
+// on a load failure, and cli-invocation.test.ts refuses any documented
+// invocation that skips it (W1b carry e).
 import { basename } from "node:path";
 
 process.on("uncaughtException", (e: unknown) => {

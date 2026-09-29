@@ -1,6 +1,6 @@
 // The fast-check model over W1a's slice, run live (design §7.5, R29):
 //
-//   node --experimental-strip-types scripts/matrix/model.ts
+//   pnpm run matrix:model --
 //     --run-id ID [--report-dir DIR] [--cell row|sport]... [--runs N]
 //     [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences]
 //     [--regressions] [--time-limit MS] [--base URL] [--root DIR]
@@ -42,8 +42,10 @@
 //      It outranks 1: the run is incomplete, whatever else it found (RR-2).
 //   (3 also: a crash while the CLI LOADS, before any of its code runs — a
 //   strip-types parse error, a missing export, a module that throws — through
-//   `pnpm matrix:model`, whose preload lib/crash-exit.ts maps it; a bare `node …`
-//   run exits 1 on one. Final batch F-6.)
+//   `pnpm run matrix:model`, whose preload lib/crash-exit.ts maps it. Run it
+//   only through that script: without the preload a load crash exits 1
+//   (cli-invocation.test.ts refuses a documented run that skips it). Final
+//   batch F-6, W1b carry e.)
 //
 // Every line printed, and every string written, passes through redact() (R14a).
 import { mkdirSync, writeFileSync } from "node:fs";
