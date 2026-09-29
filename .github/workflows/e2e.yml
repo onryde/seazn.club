@@ -758,9 +758,11 @@ jobs:
           LOG_LEVEL: warn
           # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
           # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
-          # the Phone tab on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
-          # and an explicit fake is allowed only there, on "local" or on "ci".
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
+          ENV_NAME: ci
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1187,9 +1189,11 @@ jobs:
           LOG_LEVEL: warn
           # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
           # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
-          # the Phone tab on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
-          # and an explicit fake is allowed only there, on "local" or on "ci".
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
+          ENV_NAME: ci
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1520,9 +1524,11 @@ jobs:
           LOG_LEVEL: warn
           # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
           # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
-          # the Phone tab on the fake drivers, so it says so explicitly; ENV_NAME stays unset,
-          # and an explicit fake is allowed only there, on "local" or on "ci".
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
+          ENV_NAME: ci
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

@@ -51,19 +51,26 @@ describe("relayDriverMode — unset is fake outside production (a process not to
 //   * RELAY_DRIVERS=live → live, whatever else is set;
 //   * unset or empty → "disabled" under NODE_ENV=production (nothing faked; createSession answers ingest_unavailable),
 //     and fake anywhere else (dev and test keep today's behaviour);
-//   * explicit fake → only when ENV_NAME is unset, "local" or "ci" — stg, prod or any other name REFUSES;
+//   * explicit fake → only when ENV_NAME is "local" or "ci" — stg, prod or any other name REFUSES. An UNSET (or blank)
+//     ENV_NAME is allowed outside production only (m2, lane-close fix, ruled 2026-09-29): a production server that
+//     cannot name itself as a developer's machine or CI refuses the fake, since an unnamed production build is exactly
+//     what a deployment missing its ENV_NAME secret looks like;
 //   * anything else → refused, as before.
 // The expected column is that rule written out, never the function's output: every cell of the table is enumerated.
 describe("R5: relayDriverMode over every NODE_ENV × RELAY_DRIVERS × ENV_NAME", () => {
   const NODE_ENVS = ["production", "development", "test", undefined] as const;
   const DRIVERS = [undefined, "", "fake", "live", "junk"] as const;
   const ENV_NAMES = [undefined, "", "   ", "local", "ci", "stg", "prod", "preview"] as const;
-  const FAKE_ALLOWED = new Set<string | undefined>([undefined, "", "   ", "local", "ci"]);   // blank reads as unset (envNameOf trims)
+  const FAKE_NAMED = new Set<string | undefined>(["local", "ci"]);
+  const UNNAMED = new Set<string | undefined>([undefined, "", "   "]);   // blank reads as unset (envNameOf trims)
   type Want = "fake" | "live" | "disabled" | RegExp;
   const rule = (node: string | undefined, drivers: string | undefined, envName: string | undefined): Want => {
     if (drivers === "live") return "live";
     if (drivers === undefined || drivers === "") return node === "production" ? "disabled" : "fake";
-    if (drivers === "fake") return FAKE_ALLOWED.has(envName) ? "fake" : /RELAY_DRIVERS=fake is refused on ENV_NAME/;
+    if (drivers === "fake") {
+      if (UNNAMED.has(envName)) return node === "production" ? /RELAY_DRIVERS=fake under NODE_ENV=production needs ENV_NAME/ : "fake";
+      return FAKE_NAMED.has(envName) ? "fake" : /RELAY_DRIVERS=fake is refused on ENV_NAME/;
+    }
     return /RELAY_DRIVERS must be "fake" or "live"/;
   };
 
@@ -89,11 +96,33 @@ describe("R5: relayDriverMode over every NODE_ENV × RELAY_DRIVERS × ENV_NAME",
     }
     expect(checked).toBe(NODE_ENVS.length * DRIVERS.length * ENV_NAMES.length);
     // Anti-vacuity: a table whose every cell landed on one answer would pass on a constant function.
-    expect([...seen].sort()).toEqual(["RELAY_DRIVERS must be \"fake\" or \"live\"", "RELAY_DRIVERS=fake is refused on ENV_NAME", "disabled", "fake", "live"].sort());
+    expect([...seen].sort()).toEqual([
+      "RELAY_DRIVERS must be \"fake\" or \"live\"",
+      "RELAY_DRIVERS=fake is refused on ENV_NAME",
+      "RELAY_DRIVERS=fake under NODE_ENV=production needs ENV_NAME",
+      "disabled",
+      "fake",
+      "live",
+    ].sort());
   });
 
   it("the refusal of fake on a deployment names the variable, the environment and the way out", () => {
     expect(() => relayDriverMode({ RELAY_DRIVERS: "fake", ENV_NAME: "prod" })).toThrow(/ENV_NAME="prod".*RELAY_DRIVERS=live/s);
+  });
+
+  it("m2: under production an UNSET ENV_NAME refuses explicit fake, naming the two names it accepts and the way out — and the same process named local or ci fakes", () => {
+    let checked = 0;
+    for (const ENV_NAME of [undefined, "", "   "]) {
+      expect(() => relayDriverMode({ NODE_ENV: "production", RELAY_DRIVERS: "fake", ENV_NAME }), JSON.stringify(ENV_NAME))
+        .toThrow(/needs ENV_NAME "local" or "ci".*RELAY_DRIVERS=live/s);
+      checked++;
+    }
+    // The positive pair on the same production process: naming it is the whole fix.
+    for (const ENV_NAME of ["local", "ci", " ci "]) {
+      expect(relayDriverMode({ NODE_ENV: "production", RELAY_DRIVERS: "fake", ENV_NAME }), ENV_NAME).toBe("fake");
+      checked++;
+    }
+    expect(checked).toBe(6);
   });
 
   it("disabled is production-only: the same unset variable under every other NODE_ENV is fake", () => {
@@ -198,6 +227,13 @@ describe("R5: the boot hook refuses a faking deployment", () => {
       booted++;
     }
     expect(booted).toBe(4);
+    // m2: a PRODUCTION server (server.js) with an explicit fake and no ENV_NAME refuses to start; named ci, it starts.
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RELAY_DRIVERS", "fake");
+    vi.stubEnv("ENV_NAME", "");
+    await expect(register()).rejects.toThrow(/RELAY_DRIVERS=fake under NODE_ENV=production needs ENV_NAME/);
+    vi.stubEnv("ENV_NAME", "ci");
+    await expect(register()).resolves.toBeUndefined();
     // The edge runtime serves no relay route; the same bad configuration does not stop it.
     vi.stubEnv("NEXT_RUNTIME", "edge");
     vi.stubEnv("RELAY_DRIVERS", "fake");
