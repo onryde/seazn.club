@@ -40,12 +40,17 @@ export function Modal({
   onClose,
   footer,
   size = "md",
+  bleed = false,
 }: {
   title: string;
   children?: React.ReactNode;
   onClose: () => void;
   footer?: React.ReactNode;
   size?: "md" | "lg";
+  /** Below `md`, run the body edge to edge — for a sheet whose only content is an embedded iframe that lays itself out
+   *  (Stripe's EmbeddedCheckout: at 320 the default `p-6` left it 270 px and clipped its form). The header keeps a
+   *  16-px inset and the close grows to a 44-px target. Every class it changes is `max-md:`, so ≥768 is untouched. */
+  bleed?: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // Read the LATEST onClose via a ref so the mount effect below can stay
@@ -112,6 +117,9 @@ export function Modal({
   }, []);
 
   const maxW = size === "lg" ? "sm:max-w-2xl" : "sm:max-w-md";
+  const bleedDialog = bleed ? " max-md:px-0" : "";
+  const bleedInset = bleed ? " max-md:px-4" : "";
+  const bleedClose = bleed ? " max-md:h-11 max-md:w-11" : "";
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -121,18 +129,18 @@ export function Modal({
         // 85dvh, not 85vh: `vh` is the LARGE viewport and ignores retractable
         // mobile browser chrome, so the panel was measured against a box taller
         // than the visible one and the footer sat under the chrome at 320×568.
-        className={`flex max-h-[85dvh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6`}
+        className={`flex max-h-[85dvh] w-full ${maxW} flex-col rounded-t-2xl border border-purple-100 bg-white p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-2xl sm:pb-6${bleedDialog}`}
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
       >
         <span className="sheet-handle" aria-hidden />
-        <div className="mb-3 flex shrink-0 items-center justify-between">
+        <div className={`mb-3 flex shrink-0 items-center justify-between${bleedInset}`}>
           <h3 className="text-lg font-semibold text-purple-900">{title}</h3>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-purple-50 hover:text-purple-700"
+            className={`grid h-7 w-7 place-items-center rounded-full text-slate-400 hover:bg-purple-50 hover:text-purple-700${bleedClose}`}
           >
             ×
           </button>

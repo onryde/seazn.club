@@ -1740,6 +1740,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const modal = inner.find((el) => el.type === Modal);
     expect(modal, "no Modal").toBeDefined();
     expect(propsOf(modal!).title).toBe(m("stream.credits.title"));
+    // P2: edge to edge on a phone — Stripe's form was clipped inside the default padding at 320.
+    expect(propsOf(modal!).bleed, "the checkout sheet bleeds below md").toBe(true);
     expect(byTestId(inner, "stream-checkout-modal")).toBeDefined();
     const provider = inner.find((el) => el.type === EmbeddedCheckoutProvider);
     expect(propsOf(provider!).options).toEqual({ clientSecret: "cs_test_secret_1" });
