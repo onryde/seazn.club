@@ -711,7 +711,13 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
 
   await streamSlot(2); // its own stream + the room the refused starts are admitted into (see streamSlot)
   await body1.getByTestId("stream-go-live").click();
-  await expect(body1.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+  // Any running state will do — the double start is the subject, not the QR. (Under heavy load the create plus the
+  // tab's first read can outlast FAKE_CONNECT_MS, and the tab then shows LIVE without ever drawing the QR.)
+  await expect(body1.getByTestId("stream-state-pill")).toHaveText(
+    eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming", "stream.phone.state.live"),
+    { timeout: POLL_WAIT_MS },
+  );
+  expect((await sessionsOf({ fixtureId: f1.id })).length, "tab 1's tap made the session").toBe(1);
   // Tab 2 still shows idle (idle does not poll), and its tap is the double start.
   await expect(body2.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
   await body2.getByTestId("stream-go-live").click();
