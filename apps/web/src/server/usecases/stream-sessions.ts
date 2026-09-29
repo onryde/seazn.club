@@ -1231,8 +1231,8 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   const hb = row.last_heartbeat as { fps?: number | null; bitrateKbps?: number | null } | null;
   // D3: the session's OWN net spend — its consume row, less any refund linked to it. Neither a restart inside the reuse
   // window (no consume row) nor a refunded consume is "a credit used". Unlinked refunds name no session and never count.
-  // Org-scoped as reuseWindowOpen's arithmetic is — and that rides the (org_id, created_at) index on every poll, where
-  // session_id alone has none.
+  // Org-scoped as reuseWindowOpen's arithmetic is; the lookup itself rides V425's partial (session_id) index on every
+  // poll rather than walking the org's whole ledger through (org_id, created_at).
   const [spend] = await sql<{ net: number }[]>`
     select coalesce(sum(delta), 0)::int as net from org_stream_credits
      where org_id = ${row.org_id} and session_id = ${row.id} and reason in ('consume', 'refund')`;

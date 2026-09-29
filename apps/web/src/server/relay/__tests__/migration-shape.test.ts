@@ -353,6 +353,24 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     );
   });
 
+  it("org_stream_credits_session_id (V425) exists and is PARTIAL on the null test — a session's rows are looked up by session", async () => {
+    // Three readers ask for one session's ledger rows: the organiser's 5-second poll (currentSession's creditUsed sum),
+    // the linked-refund cap and reuseWindowOpen (stream-credits.ts), and Postgres itself — session_id is a foreign key
+    // with no ON DELETE action, so deleting a session row (provisionSession's ingest-refusal cleanup) checks this table
+    // with no org in the predicate. V410 indexed none of them by session.
+    //
+    // Pinned as TEXT for V420's reason: on a small test table the planner seq-scans whether or not the index exists, so
+    // an EXPLAIN assertion would pass with it dropped. PARTIAL on `is not null` keeps purchases, grants and unlinked
+    // refunds — which carry no session and are never looked up by one — out of it.
+    const [idx] = await sql<{ indexdef: string }[]>`
+      select indexdef from pg_indexes
+       where schemaname = current_schema() and tablename = 'org_stream_credits'
+         and indexname = 'org_stream_credits_session_id'`;
+    expect(idx?.indexdef, "org_stream_credits_session_id is missing or renamed").toMatch(
+      /^CREATE INDEX org_stream_credits_session_id ON \w+\.org_stream_credits USING btree \(session_id\) WHERE \(session_id IS NOT NULL\)$/,
+    );
+  });
+
   it("org_stream_credits.stripe_event_id and stripe_checkout_session_id say what they hold (V424, lane B carry M7): a Checkout Session id, the purchase idempotency key, NOT a Stripe event id — each naming its twin", async () => {
     // The column NAME says "event id"; the writer stores the Checkout SESSION id (billing-events.ts recordPurchase
     // `stripeEventId: session.id`), and the link column holds the same value. That FACT is pinned through the real webhook
