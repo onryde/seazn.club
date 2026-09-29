@@ -89,12 +89,23 @@ const EDIT_TABS = [...TABS, "discipline", "settings"] as const;
 type Tab = (typeof EDIT_TABS)[number];
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
+/** A search param as `URLSearchParams.get` reads it: the first value of a repeated key (D2 — see `checkoutReturn`). */
+function firstParam(v: string | string[] | undefined): string | undefined {
+  return typeof v === "string" ? v : v?.[0];
+}
+
 export default async function DivisionPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string; checkout?: string; session_id?: string; stream?: string; fixture?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    checkout?: string;
+    session_id?: string;
+    stream?: string | string[];
+    fixture?: string | string[];
+  }>;
 }) {
   const [
     { orgSlug, compSlug, divSlug },
@@ -894,7 +905,9 @@ export default async function DivisionPage({
               stream={streamPanel}
               // D2 — a stream-credit checkout returns with `?stream=open&fixture=<id>`; the panel decides (through
               // `checkoutReturnFor`) which row that names and mounts the run sheet on a filter that renders it.
-              checkoutReturn={{ stream: streamParam, fixture: fixtureParam }}
+              // A repeated key reaches a server component as string[]; the panel's auto-open reads
+              // `useSearchParams().get`, which answers the FIRST value — so the filter is derived from the same one.
+              checkoutReturn={{ stream: firstParam(streamParam), fixture: firstParam(fixtureParam) }}
             />
           </>
         )}

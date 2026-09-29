@@ -154,7 +154,7 @@ const PAGE = {
   org: { id: "org-1", slug: "org", name: "Org One", role: "owner", timezone: "UTC" },
 };
 
-const render = (sp: Record<string, string>) =>
+const render = (sp: Record<string, string | string[]>) =>
   DivisionPage({
     params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
     searchParams: Promise.resolve(sp),
@@ -532,7 +532,7 @@ describe("D2: the page hands StagesPanel the URL's checkout-return params", () =
     scene.entrants = [];
   });
 
-  const checkoutReturnOf = async (sp: Record<string, string>): Promise<unknown> => {
+  const checkoutReturnOf = async (sp: Record<string, string | string[]>): Promise<unknown> => {
     const panel = find(await render(sp), StagesPanel);
     expect(panel, "no StagesPanel on the fixtures tab").not.toBeNull();
     return (panel!.props as { checkoutReturn?: unknown }).checkoutReturn;
@@ -542,6 +542,16 @@ describe("D2: the page hands StagesPanel the URL's checkout-return params", () =
     expect(
       await checkoutReturnOf({ tab: "fixtures", fixture: "fx-1", stream: "open", checkout: "success", session_id: "cs_test_d2" }),
     ).toEqual({ stream: "open", fixture: "fx-1" });
+  });
+
+  it("a REPEATED key (Next hands a string[]): the panel gets the FIRST value, as useSearchParams().get does", async () => {
+    // fixture-stream-panel's auto-open reads `useSearchParams().get("fixture")` — URLSearchParams.get answers the FIRST
+    // value — so the filter must be derived from the same one, or the two readers disagree about which row is named.
+    const url = new URLSearchParams("tab=fixtures&stream=open&fixture=fx-1&fixture=fx-2&stream=closed");
+    expect([url.get("stream"), url.get("fixture")], "the premise: get() answers the first of each").toEqual(["open", "fx-1"]);
+    expect(
+      await checkoutReturnOf({ tab: "fixtures", stream: url.getAll("stream"), fixture: url.getAll("fixture") }),
+    ).toEqual({ stream: url.get("stream"), fixture: url.get("fixture") });
   });
 
   it("an ordinary visit: the panel is handed no stream and no fixture (the positive pair's other half)", async () => {
