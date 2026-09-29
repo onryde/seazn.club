@@ -2,16 +2,19 @@
 // _THEMES.md §8b). Client-safe on purpose, because the tiles are meant to be
 // rendered by a client component.
 //
-// INERT, as of this commit. The tile fields — `labelKey`, `popular`,
-// `gbpPence` — have NO production consumer: nothing renders a tile, and
-// `/api/billing/relay-checkout` and `fetchRelayCheckoutClientSecret` have no
-// caller either. Lane C wires the Phone tab and is what makes any of this
-// reachable by a buyer; until it lands, no real purchase can reach the
-// webhook branch. The only fields with live readers today are `lookupKey`
-// (scripts/stripe-stream-packs.ts creates the prices; relay-checkout.ts
-// resolves them), `size` and `credits` (the webhook's catalogue fallback).
-// Stated plainly on purpose: this repo has six recorded cases of a seam left
-// unwired because a comment described the plan as if it had already happened.
+// Its readers, as of Task 14 fix round 4 (re-state this list whenever it
+// changes — this header once called the tile fields INERT for a lane after the
+// Phone tab had wired them, and this repo has six recorded cases of a comment
+// describing the plan as if it had already happened):
+//   * the Phone tab's credit tiles (components/v2/fixture-stream-panel.tsx):
+//     `labelKey`, `popular`, and the amounts through `streamPackAmountMinor` /
+//     `streamPackPerMatchMinor`;
+//   * `/api/billing/relay-checkout` → lib/relay-checkout.ts: `size` → the pack,
+//     `lookupKey` → the live Stripe price, `credits` → the grant snapshot;
+//   * the webhook's catalogue fallback: `size` and `credits`;
+//   * scripts/stripe-stream-packs.ts: creates each price FROM
+//     `streamPackPriceAmounts` and refuses a live one `streamPackPriceDrift`
+//     finds different (M3).
 //
 // ONE table, for however many readers arrive (P14: the panel's own
 // CREDIT_PACKS display table was a second authority and is gone). Sandbox
@@ -118,6 +121,50 @@ export function streamPackPriceAmounts(pack: StreamCreditPack): {
       Object.entries(STREAM_PACK_FX).map(([code, rate]) => [code, { unit_amount: Math.round(pack.gbpPence * rate) }]),
     ),
   };
+}
+
+/** One way a LIVE Stripe price differs from `streamPackPriceAmounts`: `at` is the currency whose amount differs (or
+ *  "base currency"), `live` / `want` the two values — null where one side has no amount at all. */
+export interface StreamPackPriceDrift {
+  at: string;
+  live: number | string | null;
+  want: number | string | null;
+}
+
+/**
+ * M3 (Task 14 fix round 4): how a live Stripe price differs from what `streamPackPriceAmounts(pack)` says it is — empty
+ * when it charges exactly the table's amounts. The tiles quote the table while a checkout charges the live price found by
+ * lookup_key, so a price minted before a table change, or edited by hand, would silently disagree with every tile; the
+ * price script refuses to reuse one this reports anything for.
+ *
+ * Compared per currency: the price's own currency at `unit_amount`, plus every `currency_options` entry (Stripe echoes
+ * the base currency there once expanded — the base amount wins). A missing option, an option the table does not declare
+ * and a non-flat (null) amount are all drift. `currency_options` absent reads as every option MISSING, never as a match:
+ * the caller must list the price with `expand: ["data.currency_options"]`.
+ */
+export function streamPackPriceDrift(
+  pack: StreamCreditPack,
+  live: {
+    currency: string;
+    unit_amount: number | null;
+    currency_options?: Record<string, { unit_amount: number | null }> | null;
+  },
+): StreamPackPriceDrift[] {
+  const want = streamPackPriceAmounts(pack);
+  const wantBy = new Map<string, number>([
+    [want.currency, want.unit_amount],
+    ...Object.entries(want.currency_options).map(([c, o]) => [c, o.unit_amount] as [string, number]),
+  ]);
+  const liveBy = new Map<string, number | null>([[live.currency, live.unit_amount]]);
+  for (const [c, o] of Object.entries(live.currency_options ?? {})) if (!liveBy.has(c)) liveBy.set(c, o.unit_amount);
+  const drift: StreamPackPriceDrift[] = [];
+  if (live.currency !== want.currency) drift.push({ at: "base currency", live: live.currency, want: want.currency });
+  for (const c of new Set([...wantBy.keys(), ...liveBy.keys()])) {
+    const l = liveBy.has(c) ? liveBy.get(c)! : null;
+    const w = wantBy.has(c) ? wantBy.get(c)! : null;
+    if (l !== w) drift.push({ at: c, live: l, want: w });
+  }
+  return drift;
 }
 
 /** The pack's price in `currency`'s minor unit — the amount the checkout's line charges — or undefined for a currency

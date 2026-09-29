@@ -1,10 +1,14 @@
 // scripts/stripe-stream-packs.ts — create the SANDBOX product and its three
 // prices for match credits (streaming R1, design §5.2), idempotent by
-// lookup_key exactly as scripts/stripe-sync.ts's ensurePrice is. One drift,
-// deliberate: stripe-sync.ts constructs `new Stripe(key)` with NO apiVersion,
-// so the pin below follows apps/web/src/lib/stripe.ts instead — the app's own
-// pin, which is what actually reads these prices back. Run once per Stripe
-// sandbox:
+// lookup_key. Unlike scripts/stripe-sync.ts's ensurePrice, an existing price is
+// reused ONLY when it charges exactly what `streamPackPriceAmounts` says (M3,
+// Task 14 fix round 4): the Phone tab's tiles quote that table while a checkout
+// charges the live price, so a mismatch fails the run LOUDLY with the diff and
+// changes nothing in Stripe — re-minting a price is the owner's call, never a
+// side effect of a sync. One drift from stripe-sync.ts, deliberate: it
+// constructs `new Stripe(key)` with NO apiVersion, so the pin below follows
+// apps/web/src/lib/stripe.ts instead — the app's own pin, which is what
+// actually reads these prices back. Run once per Stripe sandbox:
 //
 //   STRIPE_SECRET_KEY=sk_test_… node --experimental-strip-types scripts/stripe-stream-packs.ts
 //
@@ -14,15 +18,24 @@
 // RETYPES nothing: both the lookup keys and the currency multipliers come out
 // of apps/web/src/lib/stream-credit-packs.ts, which is the authority, so the
 // two cannot drift.
+import { fileURLToPath } from "node:url";
 import Stripe from "stripe";
-import { STREAM_CREDIT_PACKS, streamPackPriceAmounts, type StreamCreditPack } from "../apps/web/src/lib/stream-credit-packs.ts";
+import {
+  STREAM_CREDIT_PACKS,
+  streamPackPriceAmounts,
+  streamPackPriceDrift,
+  type StreamCreditPack,
+} from "../apps/web/src/lib/stream-credit-packs.ts";
 
-const key = process.env.STRIPE_SECRET_KEY;
-if (!key) throw new Error("STRIPE_SECRET_KEY (a sandbox sk_test_ key) is required");
-if (!key.startsWith("sk_test_")) {
-  throw new Error("refusing: this script creates PLACEHOLDER prices and runs against the sandbox only");
+/** The sandbox client — read only by main(), so importing this module (the tests do) needs no key and calls nothing. */
+function requireSandboxStripe(): Stripe {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error("STRIPE_SECRET_KEY (a sandbox sk_test_ key) is required");
+  if (!key.startsWith("sk_test_")) {
+    throw new Error("refusing: this script creates PLACEHOLDER prices and runs against the sandbox only");
+  }
+  return new Stripe(key, { apiVersion: "2026-06-24.dahlia" });
 }
-const stripe = new Stripe(key, { apiVersion: "2026-06-24.dahlia" });
 
 const PRODUCT_NAME = "Seazn Club Match Credits";
 
@@ -34,7 +47,7 @@ const PRODUCT_NAME = "Seazn Club Match Credits";
  *  immediately consistent, so the tag below is matched client-side instead.
  *  The tag, not the name: a renamed product must still be found, or the next
  *  run orphans its prices onto a fresh one. */
-async function ensureProduct(): Promise<Stripe.Product> {
+async function ensureProduct(stripe: Stripe): Promise<Stripe.Product> {
   // The OLDEST match, not the first page entry: `products.list` returns
   // newest-first, so if a duplicate ever does exist, "first" flips between
   // runs and the next new pack size lands on whichever product happened to be
@@ -54,10 +67,26 @@ async function ensureProduct(): Promise<Stripe.Product> {
   });
 }
 
-async function ensurePrice(productId: string, pack: StreamCreditPack): Promise<string> {
+/** The pack's price: the existing one when it matches the table, a new one when there is none — and a thrown Error,
+ *  naming the pack and every differing currency, when the existing one does not match. Takes its client as a
+ *  PARAMETER so a stub can prove every call (scripts/__tests__/stripe-stream-packs.test.ts). */
+export async function ensurePrice(stripe: Stripe, productId: string, pack: StreamCreditPack): Promise<string> {
   const { lookupKey, credits } = pack;
-  const existing = await stripe.prices.list({ lookup_keys: [lookupKey], limit: 1 });
-  if (existing.data[0]) return `${lookupKey} = ${existing.data[0].id} (existing)`;
+  // `currency_options` is omitted from the default response; without the expand every option would read as missing.
+  const existing = await stripe.prices.list({ lookup_keys: [lookupKey], limit: 1, expand: ["data.currency_options"] });
+  const live = existing.data[0];
+  if (live) {
+    const drift = streamPackPriceDrift(pack, live);
+    if (drift.length > 0) {
+      const diff = drift.map((d) => `${d.at}: live ${d.live ?? "none"}, table ${d.want ?? "none"}`).join("; ");
+      throw new Error(
+        `${lookupKey} (${credits} match credit${credits === 1 ? "" : "s"}): live price ${live.id} does not charge ` +
+          `what streamPackPriceAmounts says — ${diff}. Nothing was changed. Re-mint it by hand (a new price with ` +
+          `transfer_lookup_key, then archive ${live.id}), or fix the table.`,
+      );
+    }
+    return `${lookupKey} = ${live.id} (existing, amounts match)`;
+  }
   const price = await stripe.prices.create({
     product: productId,
     lookup_key: lookupKey,
@@ -81,8 +110,25 @@ async function ensurePrice(productId: string, pack: StreamCreditPack): Promise<s
   return `${lookupKey} = ${price.id} (created)`;
 }
 
-const product = await ensureProduct();
-console.log(`product ${product.id}`);
-for (const pack of STREAM_CREDIT_PACKS) {
-  console.log(await ensurePrice(product.id, pack));
+/** Every pack is checked before the run fails, so one run reports every drifted price rather than the first. */
+async function main(): Promise<number> {
+  const stripe = requireSandboxStripe();
+  const product = await ensureProduct(stripe);
+  console.log(`product ${product.id}`);
+  const failures: string[] = [];
+  for (const pack of STREAM_CREDIT_PACKS) {
+    try {
+      console.log(await ensurePrice(stripe, product.id, pack));
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+  for (const f of failures) console.error(`DRIFT ${f}`);
+  return failures.length === 0 ? 0 : 1;
+}
+
+// Only run when invoked as a script (stripe-connect-fixture.ts's guard), so the tests can import ensurePrice.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const code = await main();
+  if (code !== 0) process.exit(code);
 }

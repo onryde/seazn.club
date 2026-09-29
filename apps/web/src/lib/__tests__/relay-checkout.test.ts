@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   STREAM_CREDIT_PACKS, STREAM_PACK_FX, streamPack, streamPackAmountMinor, streamPackPerMatchMinor, streamPackPriceAmounts,
+  streamPackPriceDrift,
 } from "../stream-credit-packs";
 import { messages, type MessageKey } from "@/lib/messages";
 import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
@@ -105,6 +106,76 @@ describe("STREAM_CREDIT_PACKS", () => {
       expect(streamPackAmountMinor(streamPack(5)!, c), c).toBeUndefined();
       expect(streamPackPerMatchMinor(streamPack(5)!, c), c).toBeUndefined();
     }
+  });
+
+  // M3 (fix round 4): the tiles quote `streamPackPriceAmounts`, but the checkout charges the LIVE Stripe price found by
+  // lookup_key — and the price script reused any existing price by key without looking at it. `streamPackPriceDrift` is
+  // the comparison the script now refuses on. The live price is built here from the authority, then moved one amount at
+  // a time, so every currency of every pack is witnessed.
+  describe("M3: streamPackPriceDrift", () => {
+    /** A live price exactly as the table wants it — Stripe echoes the base currency in an expanded currency_options. */
+    const livePrice = (pack: (typeof STREAM_CREDIT_PACKS)[number]) => {
+      const want = streamPackPriceAmounts(pack);
+      return {
+        currency: want.currency as string,
+        unit_amount: want.unit_amount as number | null,
+        currency_options: { [want.currency]: { unit_amount: want.unit_amount }, ...want.currency_options } as Record<string, { unit_amount: number | null }>,
+      };
+    };
+
+    it("a price equal to the table has NO drift — with or without Stripe's echo of the base currency", () => {
+      let checked = 0;
+      for (const pack of STREAM_CREDIT_PACKS) {
+        expect(streamPackPriceDrift(pack, livePrice(pack)), pack.lookupKey).toEqual([]);
+        const { currency_options: opts, ...rest } = livePrice(pack);
+        const noEcho = { ...rest, currency_options: Object.fromEntries(Object.entries(opts).filter(([c]) => c !== rest.currency)) };
+        expect(streamPackPriceDrift(pack, noEcho), `${pack.lookupKey} without the echo`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(STREAM_CREDIT_PACKS.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("ONE amount moved, in any currency of any pack, is reported — naming that currency, the live and the table amount", () => {
+      let checked = 0;
+      for (const pack of STREAM_CREDIT_PACKS) {
+        const want = streamPackPriceAmounts(pack);
+        const table: Record<string, number> = {
+          [want.currency]: want.unit_amount,
+          ...Object.fromEntries(Object.entries(want.currency_options).map(([c, o]) => [c, o.unit_amount])),
+        };
+        for (const [currency, amount] of Object.entries(table)) {
+          const live = livePrice(pack);
+          if (currency === live.currency) live.unit_amount = amount + 1;
+          else live.currency_options[currency] = { unit_amount: amount + 1 };
+          expect(streamPackPriceDrift(pack, live), `${pack.lookupKey} ${currency}`).toEqual([{ at: currency, live: amount + 1, want: amount }]);
+          checked++;
+        }
+      }
+      // 3 packs × (the GBP base + one option per STREAM_PACK_FX currency).
+      expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + Object.keys(STREAM_PACK_FX).length));
+      expect(checked).toBe(12);
+    });
+
+    it("a missing option, an option the table does not declare, a non-flat amount and another base currency are each drift", () => {
+      const pack = streamPack(5)!;
+      const want = streamPackPriceAmounts(pack);
+      const missing = livePrice(pack);
+      delete missing.currency_options.inr;
+      expect(streamPackPriceDrift(pack, missing)).toEqual([{ at: "inr", live: null, want: want.currency_options.inr!.unit_amount }]);
+      const extra = livePrice(pack);
+      extra.currency_options.jpy = { unit_amount: 500 };
+      expect(streamPackPriceDrift(pack, extra)).toEqual([{ at: "jpy", live: 500, want: null }]);
+      const tiered = livePrice(pack);
+      tiered.unit_amount = null;
+      expect(streamPackPriceDrift(pack, tiered)).toEqual([{ at: "gbp", live: null, want: want.unit_amount }]);
+      // An UNEXPANDED currency_options (absent) reads as every option missing — never as "matches".
+      const bare = livePrice(pack) as { currency: string; unit_amount: number | null; currency_options?: Record<string, { unit_amount: number | null }> };
+      delete bare.currency_options;
+      expect(streamPackPriceDrift(pack, bare).map((d) => d.at).sort()).toEqual(Object.keys(STREAM_PACK_FX).sort());
+      const usdBase = { ...livePrice(pack), currency: "usd" };
+      expect(streamPackPriceDrift(pack, usdBase)).toContainEqual({ at: "base currency", live: "usd", want: "gbp" });
+    });
   });
 
   it("P1: the price script creates each price FROM streamPackPriceAmounts — it computes no amount of its own", () => {
