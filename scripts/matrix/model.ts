@@ -1,7 +1,7 @@
 // The fast-check model over W1a's slice, run live (design §7.5, R29):
 //
 //   node --experimental-strip-types scripts/matrix/model.ts
-//     [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N]
+//     --run-id ID [--report-dir DIR] [--cell row|sport]... [--runs N]
 //     [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences]
 //     [--regressions] [--time-limit MS] [--base URL] [--root DIR]
 //
@@ -64,7 +64,7 @@ export type ModelDeps = Pick<RunDeps, "env" | "harnessCommit" | "preflight" | "o
   now?: () => number;
 };
 
-export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences] [--regressions] [--time-limit MS] [--base URL] [--root DIR]";
+export const MODEL_USAGE = "usage: model.ts --run-id ID [--report-dir DIR] [--cell row|sport]... [--runs N] [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences] [--regressions] [--time-limit MS] [--base URL] [--root DIR]";
 
 /** The defaults, chosen on the model fake (Task 14 report): fast-check's own
  *  size gives ~1.6 accepted steps per run; `size: "max"` (run-cell.ts) with 30
@@ -174,7 +174,12 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if (v.path !== undefined && (v.seed === undefined || !/^\d+(:\d+)*$/.test(v.path))) return { usage: "--path takes a fast-check path (0:1:…) and needs --seed" };
   if (v["replay-path"] !== undefined && v.path === undefined) return { usage: "--replay-path needs --path (and --seed)" };
   if (v.regressions === true && (v.seed !== undefined || v.path !== undefined || v["replay-path"] !== undefined)) return { usage: "--regressions replays each committed case at its own seed and path; it takes no --seed, --path or --replay-path" };
-  const slugged = (v["run-id"] ?? "w1b-model").toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  // Final batch F-5: no default. The case orgs' slugs (m-<runId>-<n>, unique
+  // in organizations) and every cell's seed (seedFor) derive from the run id,
+  // so a constant default made a second run abort on a duplicate slug, or
+  // re-walk the same seeds on a fresh DB.
+  if (v["run-id"] === undefined) return { usage: "--run-id is required: the case orgs' slugs and every cell's seed derive from it, so each run needs its own" };
+  const slugged = v["run-id"].toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
   return {

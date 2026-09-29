@@ -22,7 +22,7 @@
 // (which needs two cells) — the model fake is a round-robin product and #879
 // is a league fault (the slice's sports are swept in model-run-cell.test.ts).
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,7 +173,8 @@ describe("model.ts", () => {
       ["extra"],
       ["--bogus"],
     ];
-    for (const argv of refused) expect(await runModel(d, [...argv]), argv.join(" ")).toBe(2);
+    // Each carries a run id (final batch F-5), so what refuses is its own reason.
+    for (const argv of refused) expect(await runModel(d, ["--run-id", "rf", ...argv]), argv.join(" ")).toBe(2);
     expect(io.err()).toContain(MODEL_USAGE);
     expect(MODEL_USAGE).toMatch(/--no-fences/);
     expect(MODEL_USAGE).toMatch(/--replay-path/);
@@ -181,20 +182,47 @@ describe("model.ts", () => {
   });
 
   it("environment refusals exit 2 before any DB work: no base, no own-DB proof, a failed or throwing preflight", async () => {
+    const io = capture();
+    const id = ["--run-id", "env", ...ONE];
+    expect(await runModel(deps({ openDb: noDb(), env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg" } }), id)).toBe(2);
+    expect(await runModel(deps({ openDb: noDb(), env: { SMOKE_BASE: "http://localhost:3999" } }), id)).toBe(2);
+    expect(await runModel(deps({ openDb: noDb(), preflight: async () => ({ ok: false, refusals: [{ reason: "x", detail: "y" }] }) }), id)).toBe(2);
+    expect(await runModel(deps({ openDb: noDb(), preflight: async () => { throw new Error("down"); } }), id)).toBe(2);
+    // Refused for those reasons, never for a usage error (final batch F-5 made --run-id required).
+    expect(io.err()).not.toContain("usage: model.ts");
+  });
+
+  it("final batch F-5: --run-id is required — without it the CLI refuses (exit 2) naming it, before git, the base, the preflight or the DB; the usage says so", async () => {
+    const io = capture();
+    const touched: string[] = [];
+    const d = deps({
+      openDb: noDb(),
+      harnessCommit: async () => { touched.push("git"); return "abc1234"; },
+      preflight: async () => { touched.push("preflight"); return { ok: true, refusals: [] }; },
+    });
+    let checked = 0;
+    for (const argv of [[...ONE], ["--regressions"], [...ONE, "--seed", "1"]]) {
+      expect(await runModel(d, argv), argv.join(" ")).toBe(2);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(touched).toEqual([]);
+    expect(io.err()).toContain("model: --run-id is required");
+    expect(io.err()).toContain("the case orgs' slugs and every cell's seed derive from it");
+    expect(MODEL_USAGE).toMatch(/^usage: model\.ts --run-id ID /);
+    // The pair: the same argv with a run id gets past the parser (it runs, on the fakes).
     capture();
-    expect(await runModel(deps({ openDb: noDb(), env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg" } }), [...ONE])).toBe(2);
-    expect(await runModel(deps({ openDb: noDb(), env: { SMOKE_BASE: "http://localhost:3999" } }), [...ONE])).toBe(2);
-    expect(await runModel(deps({ openDb: noDb(), preflight: async () => ({ ok: false, refusals: [{ reason: "x", detail: "y" }] }) }), [...ONE])).toBe(2);
-    expect(await runModel(deps({ openDb: noDb(), preflight: async () => { throw new Error("down"); } }), [...ONE])).toBe(2);
+    expect(await runModel(deps(), ["--run-id", "f5", "--report-dir", reportDir(), ...ONE])).toBe(0);
   });
 
   // Ruling R-h: a test that says "the CLI refuses" runs the CLI. Through a
   // symlinked path, so a CLI that skipped its main would exit 0 here, silently.
   const SPAWNED: readonly (readonly [string, readonly string[]])[] = [
-    ["--runs 0", ["--runs", "0"]],
-    ["an unknown cell", ["--cell", "nope|generic"]],
-    ["--replay-path without --path", ["--seed", "1", "--replay-path", "CC:B"]],
-    ["a positional", ["extra"]],
+    ["--runs 0", ["--run-id", "sp", "--runs", "0"]],
+    ["an unknown cell", ["--run-id", "sp", "--cell", "nope|generic"]],
+    ["--replay-path without --path", ["--run-id", "sp", "--seed", "1", "--replay-path", "CC:B"]],
+    ["a positional", ["--run-id", "sp", "extra"]],
+    ["no --run-id (final batch F-5)", ["--cell", "league|generic"]],
   ];
   it.each(SPAWNED)("the CLI itself refuses %s: exit 2, the usage on stderr, nothing written", (_why, args) => {
     const via = join(scratch, `link-model-${args.join("-").replace(/[^a-z0-9]+/gi, "_")}.ts`);
@@ -203,7 +231,7 @@ describe("model.ts", () => {
     const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via, "--report-dir", dir, ...args], { cwd: REPO, encoding: "utf8", timeout: 25_000, env: { PATH: process.env.PATH ?? "" } });
     expect(r.stderr, "main never ran").toContain("usage: model.ts");
     expect(r.status, r.stderr).toBe(2);
-    expect(existsSync(join(dir, "w1b-model"))).toBe(false);
+    expect(readdirSync(dir), "nothing written").toEqual([]);
   });
 
   // T15 fix round 2 (R-h): the loader refuses a case on a generic check with
@@ -219,8 +247,8 @@ describe("model.ts", () => {
       const via = join(root, "link-model.ts");
       symlinkSync(MODEL, via);
       const dir = reportDir();
-      const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via, "--report-dir", dir, "--root", root, "--regressions"], { cwd: REPO, encoding: "utf8", timeout: 25_000, env: { PATH: process.env.PATH ?? "" } });
-      return { ...r, wrote: existsSync(join(dir, "w1b-model")) };
+      const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", via, "--run-id", "loader", "--report-dir", dir, "--root", root, "--regressions"], { cwd: REPO, encoding: "utf8", timeout: 25_000, env: { PATH: process.env.PATH ?? "" } });
+      return { ...r, wrote: readdirSync(dir).length > 0 };
     };
     const stripped = committed.regressions.map((r) => {
       if (r.check !== UNEXPECTED_REFUSAL) return r;
