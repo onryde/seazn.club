@@ -82,8 +82,9 @@ import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 // `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships on every organiser fixtures
 // tab, so nothing below may import `@stripe/*` or `@/lib/stripe-browser` statically (fixture-stream-panel.test.tsx walks
 // the whole static graph to hold that). The chunk is fetched on the FIRST sign of a hand on a credit tile (M2: a
-// pointerenter, a focus or a touchstart — never the chooser merely being open), or else when a checkout's secret mounts
-// the sheet. N2: both go through the ONE loader in `stream-checkout-sheet-loader.ts`, so they name one chunk.
+// pointerenter, a focus or a touchstart — never the chooser merely being open), and a tap AWAITS it before asking for a
+// Checkout Session (R5a), so the lazy sheet below only ever mounts over code already in hand. N2: all of them go through
+// the ONE loader in `stream-checkout-sheet-loader.ts`, so they name one chunk.
 const StreamCheckoutModal = dynamic(loadCheckoutSheet, { ssr: false });
 
 /**
@@ -1059,6 +1060,16 @@ export function PhoneTab({
     buying.current = true;
     setBusy(true);
     setCheckoutError(null);
+    // R5a: the sheet's code FIRST. A chunk that cannot load opens no Checkout Session — the lock frees and the
+    // checkout's own copy shows — and the loader forgets the failure, so the next tap really fetches it again.
+    try {
+      await loadCheckoutSheet();
+    } catch {
+      buying.current = false;
+      setBusy(false);
+      setCheckoutError("unknown");
+      return;
+    }
     const result = await fetchRelayCheckoutClientSecret({ orgId, fixtureId, pack });
     setBusy(false);
     if (result.ok) {

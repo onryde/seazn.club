@@ -28,7 +28,7 @@
 //
 // One sport, on purpose: the Phone tab reads no sport (the relay is
 // sport-agnostic); the W1 style-strip describes above sweep three.
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ReactElement } from "react";
@@ -232,6 +232,13 @@ const SHEET_PATH = join(
 const DICT_DIR = join(__dirname, "..", "..", "..", "dictionaries");
 const uiDict = (locale: string): Record<string, string> =>
   JSON.parse(readFileSync(join(DICT_DIR, locale, "ui.json"), "utf8"));
+
+// R5a: a tap now AWAITS the sheet's code before its POST. The first real `import()` of a module in this runner is file
+// I/O (vite transforms it), which the fake-timer `settle()` below cannot wait out — in a browser that is the chunk fetch.
+// So the module is loaded once up front; every later `import()` of it resolves in microtasks, as a cached chunk does.
+beforeAll(async () => {
+  await sheetLoader.real();
+});
 
 beforeEach(() => {
   sheetLoader.load.mockReset();
@@ -583,7 +590,7 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel. M2: its one loader
     // is its own module (so the warm-up is countable), and the panel hands that loader to dynamic().
     const loaderSrc = readFileSync(join(__dirname, "..", "stream-checkout-sheet-loader.ts"), "utf8");
-    expect(loaderSrc).toMatch(/export const loadCheckoutSheet = \(\) => import\("\.\/stream-checkout-modal"\);/);
+    expect(loaderSrc).toMatch(/export const loadCheckoutSheet = makeSheetLoader\(\(\) => import\("\.\/stream-checkout-modal"\)\);/);
     expect(src).toMatch(/import \{ loadCheckoutSheet \} from "\.\/stream-checkout-sheet-loader";/);
     expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
     expect(sheet).toMatch(/EmbeddedCheckoutProvider/);
@@ -1995,6 +2002,52 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(checkout.fetch, "the purchase lock stuck").toHaveBeenCalledTimes(2);
     expect(island.tree().find((el) => el.type === CheckoutSheetBoundary), "a new sheet, a new boundary").toBeDefined();
+  });
+
+  // R5a (fix round 5). M1's boundary caught a chunk that failed to load, but only AFTER the Checkout Session had been
+  // opened — and `next/dynamic` is React.lazy, which pins a rejected load for the page's lifetime, so "Try again" failed
+  // again at once and opened another Session each time. The sheet's code is now fetched FIRST: no code, no Session.
+  it("R5a: a sheet whose code cannot load opens NO Checkout Session — the lock frees, the copy says so, and Try again really retries", async () => {
+    checkout.fetch.mockResolvedValue({ ok: true, clientSecret: "cs_test_secret_1" });
+    sheetLoader.load.mockRejectedValueOnce(new Error("Failed to load chunk static/chunks/sheet.js"));
+    const island = track(renderIsland(PhoneTab, { ...TAB, streamBalance: 0 }));
+    await settle();
+    bodyOf(island).onBuy(5);
+    await settle();
+    expect(sheetLoader.load, "the sheet's code was asked for").toHaveBeenCalledTimes(1);
+    expect(checkout.fetch, "a Checkout Session opened for a sheet that cannot load").toHaveBeenCalledTimes(0);
+    expect(bodyOf(island).checkoutError, "the checkout's own copy").toBe("unknown");
+    expect(bodyOf(island).createError).toBeNull();
+    expect(bodyOf(island).busy, "the tiles are live again").toBe(false);
+    expect(bodyOf(island).checkoutOpen).toBe(false);
+    expect(lazySheet(island.tree()), "no sheet mounted over a failed load").toBeUndefined();
+    // Try again: the loader is asked AGAIN (it dropped the failure), and this time exactly one Session opens.
+    bodyOf(island).onBuy(5);
+    await settle();
+    expect(sheetLoader.load, "the retry never re-asked for the code").toHaveBeenCalledTimes(2);
+    expect(checkout.fetch, "one Session for the retry").toHaveBeenCalledTimes(1);
+    expect(checkout.fetch).toHaveBeenCalledWith({ orgId: "o-1", fixtureId: "f-1", pack: 5 });
+    expect(lazySheet(island.tree()), "the sheet").toBeDefined();
+    expect(bodyOf(island).checkoutError).toBeNull();
+  });
+
+  it("R5a: the sheet's code is in hand BEFORE the Checkout Session is asked for — and a double tap meanwhile is still one POST", async () => {
+    checkout.fetch.mockResolvedValue({ ok: true, clientSecret: "cs_test_secret_1" });
+    let arrive: () => void = () => {};
+    sheetLoader.load.mockImplementationOnce(() => new Promise<void>((r) => { arrive = r; }).then(() => sheetLoader.real()));
+    const island = track(renderIsland(PhoneTab, { ...TAB, streamBalance: 0 }));
+    await settle();
+    const first = bodyOf(island);
+    first.onBuy(1);
+    first.onBuy(1);
+    await settle();
+    expect(checkout.fetch, "a Session asked for before the sheet's code arrived").toHaveBeenCalledTimes(0);
+    expect(bodyOf(island).busy, "the tiles are dead while it loads").toBe(true);
+    arrive();
+    await settle();
+    expect(checkout.fetch, "N2: one POST for a double tap").toHaveBeenCalledTimes(1);
+    expect(sheetLoader.load, "N2: one load for a double tap").toHaveBeenCalledTimes(1);
+    expect(lazySheet(island.tree())).toBeDefined();
   });
 
   it("M1: the boundary itself — renders its sheet until something below it throws, then nothing, and reports once", () => {
