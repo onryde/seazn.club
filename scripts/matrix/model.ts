@@ -5,8 +5,9 @@
 //     [--max-commands N] [--seed N [--path P [--replay-path R]]] [--no-fences]
 //     [--regressions] [--time-limit MS] [--base URL]
 //
-// Each cell gets one case org and one competition; each property run builds a
-// fresh division in it (runCell). A cell's seed is FNV-1a of `${runId}|${cell}`
+// Each cell gets one case org and a competition; each property run builds a
+// fresh division in it (runCell), and the cell moves to a fresh competition
+// before the plan's per-competition division cap (DIVISION_CAP_KEY). A cell's seed is FNV-1a of `${runId}|${cell}`
 // — derived, logged and written, never read from a clock. --regressions
 // replays every committed regression on the cells instead, each at its own
 // seed, path and replayPath, one run, fences off.
@@ -37,6 +38,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ROW_KEYS, SPORT_KEYS, builderDefaultVariant, cellId, type RowKey } from "./lib/catalogue.ts";
 import { isMainModule } from "./lib/main-module.ts";
+import type { OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
 import { findSecrets, redact } from "./lib/redact.ts";
@@ -62,6 +64,28 @@ export const MODEL_USAGE = "usage: model.ts [--run-id ID] [--report-dir DIR] [--
  *  commands gives ~6.3, and ran every command kind within 20 runs on every
  *  seed probed. The time box is per cell. */
 export const MODEL_DEFAULTS = Object.freeze({ runs: 20, maxCommands: 30, timeLimitMs: 300_000 });
+
+/** The product's per-competition division quota: the key createDivision's
+ *  gate reads (divisions.ts getLimit; pinned by model-cli.test.ts). */
+export const DIVISION_CAP_KEY = "divisions.per_competition.max";
+
+/** Hands each property run a competition with a division slot left. The
+ *  first is created up front; a fresh one replaces it before `cap` divisions
+ *  (null = unlimited) — the 402 at cap+1 would otherwise surface as a
+ *  model-error and silently truncate the cell's shrink (T15 fix round 1). */
+async function competitionSlots(d: OrganiserDriver, cap: number | null, input: (k: number) => { name: string; slug: string }): Promise<() => Promise<string>> {
+  let k = 1;
+  let current = (await d.createCompetition(input(k))).id;
+  let used = 0;
+  return async () => {
+    if (cap !== null && used >= cap) {
+      current = (await d.createCompetition(input(++k))).id;
+      used = 0;
+    }
+    used++;
+    return current;
+  };
+}
 
 /** Every model cell: W1a's slice, in registry order. */
 const SLICE_CELLS: ReadonlyMap<string, { row: RowKey; sport: string }> = new Map(
@@ -269,7 +293,9 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         if (variant === undefined) throw new Error(`model: no variant read for ${job.sport}`);
         const org = await deps.prepareCaseOrg({ base, session, userId, plan }, { name: `Matrix model ${cli.runId} ${i + 1}`, slug: caseOrgSlug(cli.runId, i + 1) });
         const real = deps.driverFor(base, session, org.orgId);
-        const comp = await real.createCompetition({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}` });
+        const cap = await db.planLimit(plan, DIVISION_CAP_KEY);
+        if (cap !== null && cap < 1) throw new Error(`the case org's plan ${plan} allows ${cap} division(s) per competition (${DIVISION_CAP_KEY}) — the model builds one per property run`);
+        const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
         say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
         const rep = await runCell({
           cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: cli.maxCommands, seed: job.seed, fences: job.fences,
@@ -277,7 +303,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),
-          newDriverState: async (n) => ({ real, model: await newModelState({ driver: real, row: job.row, sport: job.sport, variant, entrants: 4, tag: `${cli.runId}-${i + 1}-${n}`, competitionId: comp.id }) }),
+          newDriverState: async (n) => ({ real, model: await newModelState({ driver: real, row: job.row, sport: job.sport, variant, entrants: 4, tag: `${cli.runId}-${i + 1}-${n}`, competitionId: await competitionFor() }) }),
         });
         const cell: ModelCell = redactAll({ ...rep, replayOf: job.replay?.id ?? null, verdict: verdictOf(rep, job.replay) });
         cells.push(cell);

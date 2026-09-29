@@ -42,6 +42,12 @@ export interface MatrixSql {
    *  pinned by seed-org.test.ts). An org on the plan with no pass and no
    *  override holds exactly these. */
   planGrants(planKey: string): Promise<string[]>;
+  /** W1b T15 fix round 1 (b): a plan's numeric limit for one feature, read as
+   *  the product's getLimit reads it (lib/entitlements.ts; pinned by
+   *  seed-org.test.ts): its ONE `plan_entitlements` row's int_value, where a
+   *  null is UNLIMITED (null here) and no row at all is 0. A case org on the
+   *  plan with no pass, no override and no add-on holds exactly this. */
+  planLimit(planKey: string, featureKey: string): Promise<number | null>;
 }
 
 export class DataDirUnset extends Error {
@@ -81,6 +87,7 @@ export function gateOnOwnDataDir(inner: MatrixSql, readDataDir: () => Promise<st
     async variantKeysInBuilderOrder(sportKey) { await proven(); return inner.variantKeysInBuilderOrder(sportKey); },
     async denyFeature(input) { await proven(); return inner.denyFeature(input); },
     async planGrants(planKey) { await proven(); return inner.planGrants(planKey); },
+    async planLimit(planKey, featureKey) { await proven(); return inner.planLimit(planKey, featureKey); },
   };
 }
 
@@ -237,6 +244,14 @@ export function matrixSqlOver(db: ReturnType<typeof postgres>, expectedDataDir: 
       return (await db<{ feature_key: string }[]>`
         select feature_key from plan_entitlements where plan_key = ${planKey} and bool_value = true
         order by feature_key`).map((r) => r.feature_key);
+    },
+    async planLimit(planKey, featureKey) {
+      const [row] = await db<{ int_value: number | null }[]>`
+        select int_value from plan_entitlements where plan_key = ${planKey} and feature_key = ${featureKey}`;
+      if (row === undefined) return 0;
+      const v = row.int_value;
+      if (v !== null && !Number.isInteger(v)) throw new Error(redact(`seed-org: plan ${planKey}'s ${featureKey} int_value is ${JSON.stringify(v)}, not an integer or null`));
+      return v;
     },
     async variantKeysInBuilderOrder(sportKey) {
       // The division builder (app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx)

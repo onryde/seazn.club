@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
+import { DIVISION_CAP_KEY, MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
 import { ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
@@ -88,6 +88,7 @@ const deps = (over: Over = {}): ModelDeps => {
       variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
       chooseTopPublicPlan: async () => "pro",
       planGrants: async () => [],
+      planLimit: async () => null,
       dispose: async () => {},
     }),
     signIn: async () => ({ cookies: {} }),
@@ -448,7 +449,7 @@ describe("model.ts", () => {
     const io = capture();
     let orgs = 0;
     const d = deps({
-      openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async () => ["win_loss"], chooseTopPublicPlan: async () => "pro", planGrants: async () => [], dispose: async () => {} }),
+      openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async () => ["win_loss"], chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
       prepareCaseOrg: async (_c, i) => { orgs++; return { orgId: "o", orgSlug: i.slug, denied: [] }; },
     });
     expect(await runModel(d, ["--run-id", "bd", "--report-dir", reportDir(), ...ONE])).toBe(2);
@@ -482,5 +483,85 @@ describe("model.ts", () => {
   it("package.json runs the CLI under strip-types", () => {
     const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
     expect(pkg.scripts["matrix:model"]).toBe("node --experimental-strip-types scripts/matrix/model.ts");
+  });
+});
+
+// W1b Task 15, fix round 1 (b): live, one competition per cell met the plan's
+// `divisions.per_competition.max` at its 21st property run — a 402 the shrink
+// then masked as a model-error, silently truncating it. The model now reads
+// the cap from the case org's plan entitlement (plan_entitlements, read as
+// the product's getLimit reads it) and moves to a fresh
+// competition before it is reached.
+describe("the per-competition division cap (T15 fix round 1)", () => {
+  /** The key the product's createDivision gate reads (divisions.ts), lifted from its source — never typed. */
+  const DIVISIONS_TS = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
+  const PRODUCT_KEY = /const divisionCap = await getLimit\(\s*auth\.orgId,\s*"([^"]+)",\s*competitionId,?\s*\)/.exec(DIVISIONS_TS)?.[1];
+  /** The product's gate as the fake enforces it: the (cap+1)-th division in ONE competition is a 402 naming the key. */
+  class CappedDivisions extends ModelFakeDriver {
+    readonly cap: number | null;
+    comps = 0;
+    readonly perComp = new Map<string, number>();
+    constructor(cap: number | null) { super(); this.cap = cap; }
+    override createCompetition(i: { name: string; slug: string }) {
+      return super.createCompetition(i).then((c) => ({ ...c, id: `c${++this.comps}` }));
+    }
+    override createDivision(c: string, i: Parameters<ModelFakeDriver["createDivision"]>[1]) {
+      const n = this.perComp.get(c) ?? 0;
+      if (this.cap !== null && n >= this.cap) return Promise.reject(new RefusedCall("POST", `/api/v1/competitions/${c}/divisions`, 402, "PAYMENT_REQUIRED", `${PRODUCT_KEY ?? "?"} reached`));
+      this.perComp.set(c, n + 1);
+      return super.createDivision(c, i);
+    }
+  }
+  /** The plan the case org is provisioned on (deps: chooseTopPublicPlan). */
+  const PLAN = "pro";
+  type Rep = { cells: { verdict: string; executions: number; failure: { check: string } | null }[] };
+  const run = async (cap: number | null, runId: string) => {
+    const reads: [string, string][] = [];
+    const fake = new CappedDivisions(cap);
+    const dir = reportDir();
+    const exit = await runModel(deps({
+      openDb: async () => ({ ...(await deps().openDb()), planLimit: async (planKey: string, key: string) => { reads.push([planKey, key]); return cap; } }),
+      driverFor: () => fake,
+    }), ["--run-id", runId, "--report-dir", dir, ...ONE]);
+    const rep = existsSync(join(dir, runId, "model-report.json")) ? JSON.parse(readFileSync(join(dir, runId, "model-report.json"), "utf8")) as Rep : null;
+    return { exit, reads, fake, rep };
+  };
+
+  it("the premise: the model reads the key the product's division gate reads", () => {
+    expect(PRODUCT_KEY, "divisions.ts no longer reads its cap as getLimit(auth.orgId, \"<key>\", competitionId)").toBeDefined();
+    expect(DIVISION_CAP_KEY).toBe(PRODUCT_KEY);
+  });
+
+  it("empty case first: an UNLIMITED cap (a null int_value) keeps the cell in one competition", async () => {
+    capture();
+    const { exit, reads, fake, rep } = await run(null, "cp0");
+    expect(exit).toBe(0);
+    expect(reads).toEqual([[PLAN, DIVISION_CAP_KEY]]);
+    expect(fake.comps).toBe(1);
+    expect(rep?.cells[0]?.executions).toBe(fake.perComp.get("c1"));
+  });
+
+  it.each([2, 3])("a cap of %i, read from the case org's plan: every competition stays within it, and the cell runs past it (execution cap+1 and on)", async (cap) => {
+    capture();
+    const { exit, reads, fake, rep } = await run(cap, `cp${cap}`);
+    const [cell] = rep?.cells ?? [];
+    expect(cell?.failure ?? null).toBeNull();
+    expect(cell?.verdict).toBe("ok");
+    expect(exit).toBe(0);
+    expect(reads).toEqual([[PLAN, DIVISION_CAP_KEY]]);
+    const executions = cell?.executions ?? 0;
+    // Anti-vacuity: the rotation had to fire — the cell ran past the cap.
+    expect(executions).toBeGreaterThan(cap);
+    expect([...fake.perComp.values()].every((n) => n <= cap)).toBe(true);
+    expect([...fake.perComp.values()].reduce((a, b) => a + b, 0)).toBe(executions);
+    expect(fake.comps).toBe(Math.ceil(executions / cap));
+  });
+
+  it("a plan that allows NO division (the key absent from its matrix reads as 0, getLimit) aborts the cell before any competition", async () => {
+    const io = capture();
+    const { exit, fake } = await run(0, "cpz");
+    expect(exit).toBe(3);
+    expect(fake.comps).toBe(0);
+    expect(io.err()).toMatch(/divisions\.per_competition\.max/);
   });
 });

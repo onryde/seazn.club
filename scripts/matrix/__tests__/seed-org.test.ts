@@ -44,6 +44,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
       async variantKeysInBuilderOrder() { calls.push("variantKeysInBuilderOrder"); return ["bwf"]; },
       async denyFeature() { calls.push("denyFeature"); },
       async planGrants() { calls.push("planGrants"); return ["formats.double_elim"]; },
+      async planLimit() { calls.push("planLimit"); return 20; },
     };
     return { calls, inner };
   };
@@ -54,6 +55,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     () => sql.variantKeysInBuilderOrder("badminton"),
     () => sql.denyFeature({ orgId: "o1", featureKey: "formats.advanced", reason: "r" }),
     () => sql.planGrants("pro"),
+    () => sql.planLimit("pro", "divisions.per_competition.max"),
   ];
 
   it("a blank expected dir refuses at construction", () => {
@@ -77,7 +79,7 @@ describe("gateOnOwnDataDir — every query waits on show data_directory (Review 
     let reads = 0;
     const sql = gateOnOwnDataDir(inner, async () => { reads++; return "/tmp/pg-fm"; }, "/tmp/pg-fm");
     for (const call of everyMethod(sql)) await call();
-    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature", "planGrants"]);
+    expect(calls).toEqual(["userIdForEmail", "insertCaseOrg", "listPlanKeys", "variantKeysInBuilderOrder", "denyFeature", "planGrants", "planLimit"]);
     expect(reads).toBe(1);
     expect(await sql.insertCaseOrg({ userId: "u1", name: "n", slug: "m-r-1" })).toEqual({ orgId: "o1", orgSlug: "m-r-1" });
   });
@@ -229,6 +231,33 @@ describe("matrixSqlOver — the real queries, driven over a fake client", () => 
   it("…a plan with no granted key reads as an empty list (the guard then refuses every gate), not an error", async () => {
     const { db } = fakeClient("/tmp/pg-fm", () => []);
     expect(await matrixSqlOver(db, "/tmp/pg-fm").planGrants("community")).toEqual([]);
+  });
+
+  // W1b T15 fix round 1 (b): a plan's numeric limit, read as getLimit reads it.
+  const intParts = /^select \w+, (\w+) from (\w+) where (\w+) = \$\{planKey\} and (\w+) = \$\{featureKey\}$/.exec(planRead);
+  const getLimit = /export async function getLimit\([\s\S]*?\n}\n/.exec(ENT)?.[0] ?? "";
+  const CAP = "divisions.per_competition.max";
+  it("text pin: getLimit reads the plan row's int column, a missing row as 0 and a null int as unlimited", () => {
+    expect(intParts, `resolveFromDb's plan read changed shape: ${planRead}`).not.toBeNull();
+    expect(getLimit).toMatch(new RegExp(`const base = row \\? row\\.${intParts?.[1] ?? "?"} : 0;`));
+    expect(getLimit).toMatch(/if \(base === null\) return null;/);
+  });
+  it("planLimit reads the plan's ONE row's int column — the resolver's own table, columns and predicate — as a number", async () => {
+    const [, intCol, table, planCol, featureCol] = intParts ?? [];
+    const want = `select ${intCol} from ${table} where ${planCol} = $ and ${featureCol} = $`;
+    const { db, seen } = fakeClient("/tmp/pg-fm", (text) => (text === want ? [{ [intCol ?? "?"]: 20 }] : []));
+    expect(await matrixSqlOver(db, "/tmp/pg-fm").planLimit("pro", CAP)).toBe(20);
+    expect(seen[1]).toEqual({ via: "db", text: want, values: ["pro", CAP] });
+  });
+  it("…a null int is UNLIMITED (null), and no row at all is 0 — never a default", async () => {
+    const unlimited = fakeClient("/tmp/pg-fm", () => [{ int_value: null }]);
+    expect(await matrixSqlOver(unlimited.db, "/tmp/pg-fm").planLimit("pro", CAP)).toBeNull();
+    const absent = fakeClient("/tmp/pg-fm", () => []);
+    expect(await matrixSqlOver(absent.db, "/tmp/pg-fm").planLimit("community", CAP)).toBe(0);
+  });
+  it("…an int column that is not an integer is refused by name, never read as a cap", async () => {
+    const { db } = fakeClient("/tmp/pg-fm", () => [{ int_value: "20" }]);
+    await expect(matrixSqlOver(db, "/tmp/pg-fm").planLimit("pro", CAP)).rejects.toThrow(/not an integer or null/);
   });
 });
 
@@ -471,6 +500,7 @@ describe("prepareCaseOrg", () => {
     async variantKeysInBuilderOrder() { return []; },
     async denyFeature(i) { order.push(`deny ${i.orgId} ${i.featureKey}`); },
     async planGrants() { return []; },
+    async planLimit() { return null; },
   });
 
   it("inserts, switches, then provisions — in that order", async () => {

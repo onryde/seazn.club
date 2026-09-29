@@ -64,6 +64,7 @@ function deps(over: Partial<RunDeps> = {}): Deps {
       variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
       chooseTopPublicPlan: async () => "pro",
       planGrants: async (k: string) => { planReads.push(k); return [...ALL_GATES]; },
+      planLimit: async () => null,
       dispose: async () => { order.push("dispose"); },
     }; },
     signIn: async (_b, e) => { order.push("signIn"); emails.push(`signIn ${e}`); return session; },
@@ -765,6 +766,7 @@ describe("runSlice — aborts after the start gates", () => {
     variantKeysInBuilderOrder: async (s: string) => lists(s),
     chooseTopPublicPlan: async () => "pro",
     planGrants: async () => [...ALL_GATES],
+    planLimit: async () => null,
     dispose: async () => {},
   }) });
   it("Review Focus 5: a live builder default that differs from the offline one refuses (exit 2) naming both keys, before any case", async () => {
@@ -893,6 +895,16 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
     expect(await (await realDeps(f).openDb()).planGrants("pro")).toEqual(["formats.double_elim"]);
     expect(log).toEqual(["m.planGrants pro"]);
   });
+  it("realDeps wires planLimit to the gated MatrixSql (T15 fix round 1: the seam is not inert)", async () => {
+    const log: string[] = [];
+    const sql = { planLimit: async (k: string, f: string) => { log.push(`m.planLimit ${k} ${f}`); return 20; } };
+    const f: DbFactories = {
+      matrixSql: () => ({ sql: sql as never, dispose: async () => {} }),
+      planSql: () => ({ sql: {} as never, dispose: async () => {} }),
+    };
+    expect(await (await realDeps(f).openDb()).planLimit("pro", "divisions.per_competition.max")).toBe(20);
+    expect(log).toEqual(["m.planLimit pro divisions.per_competition.max"]);
+  });
 });
 
 describe("summariseRun (PF4) — empty first", () => {
@@ -947,6 +959,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
       variantKeysInBuilderOrder: async () => [],
       denyFeature: async () => { log.push("m.denyFeature"); },
       planGrants: async () => { log.push("m.planGrants"); return ["formats.double_elim"]; },
+      planLimit: async () => null,
     };
     const f: DbFactories = {
       matrixSql: () => { log.push("m.open"); return { sql, dispose: async () => { log.push("m.dispose"); if (opts.mThrows) throw new Error("m end timed out"); } }; },
@@ -1006,6 +1019,7 @@ describe("realDeps wiring (Task 7 M3)", () => {
         variantKeysInBuilderOrder: async () => [],
         denyFeature: async (i) => { log.push(`m.deny ${i.orgId} ${i.featureKey}`); },
         planGrants: async () => [],
+        planLimit: async () => null,
       };
       const p = {
         getOrgSubscriptionId: async (o: string) => { log.push(`p.subscription? ${o}`); return "sub1"; },

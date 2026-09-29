@@ -81,6 +81,8 @@ export interface RunDb {
   chooseTopPublicPlan(): Promise<string>;
   /** The feature keys `planKey` grants (seed-org.ts MatrixSql.planGrants). */
   planGrants(planKey: string): Promise<readonly string[]>;
+  /** `planKey`'s numeric limit for `featureKey`, null = unlimited (seed-org.ts MatrixSql.planLimit). */
+  planLimit(planKey: string, featureKey: string): Promise<number | null>;
   dispose(): Promise<void>;
 }
 
@@ -547,6 +549,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
         variantKeysInBuilderOrder: (s) => m.sql.variantKeysInBuilderOrder(s),
         chooseTopPublicPlan: async () => chooseTopPublicPlan(await p.sql.planCandidateInfo(await m.sql.listPlanKeys())),
         planGrants: (k) => m.sql.planGrants(k),
+        planLimit: (k, f) => m.sql.planLimit(k, f),
         dispose: () => closeHandles(m, p),
       };
       resolve(db);
