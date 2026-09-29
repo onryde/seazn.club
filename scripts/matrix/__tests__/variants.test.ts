@@ -458,7 +458,7 @@ describe("scorability (the generatability sweep)", () => {
     // Positive pair: the same call shape with a refusal the engine declares is a reason.
     expect(scorable({ ...vc, overrides: { resultMode: "no-such-mode" } })).toMatch(/^cfg: CfgInvalid: /);
   });
-  it("final batch FB-13: scorable asks only for wins, so an OutcomeUnreachable (the registry's DRAW guard) is a harness fault and is rethrown, never a reason", () => {
+  it("final batch FB-13 (premise): scorable asks only for wins, across the registry — OutcomeUnreachable is the registry's DRAW guard, so on a win it can only be a harness fault", () => {
     // Registry sweep: record what scorable actually requests, per sport.
     const asked: string[] = [];
     let judged = 0;
@@ -473,6 +473,8 @@ describe("scorability (the generatability sweep)", () => {
     expect([...new Set(asked)], "the premise: only wins are ever requested").toEqual(["win"]);
     // The engine's draw guard is where the registry throws it (the only throw site).
     expect(src("scripts/matrix/lib/streams/index.ts").match(/throw new OutcomeUnreachable\(/g)?.length).toBe(1);
+  });
+  it("final batch FB-13: a stubbed OutcomeUnreachable on a win is rethrown, while the declared GeneratorUnsupported gap stays a reason", () => {
     // single-sport: the fault is the harness's; generic's default preset is the plainest carrier.
     const vc = { id: "x", sport: "generic", row: "league" as const, preset: offlineBuilderDefault("generic"), classes: {}, values: {}, overrides: {}, scorable: null };
     const unreachableWin = () => { throw new OutcomeUnreachable("generic", "win-home", "a win the registry cannot reach"); };
