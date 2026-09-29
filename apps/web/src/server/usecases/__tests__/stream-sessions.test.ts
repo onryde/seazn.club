@@ -484,6 +484,26 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       .rejects.toMatchObject({ code: "23505", constraint_name: "fixture_stream_sessions_one_active" });
   });
 
+  it("F-A5 (owner 2026-09-29), through the real createSession: with the storage pool FULL, a second start on the SAME fixture answers 409 active_session carrying the running id — not 503 storage_exhausted; a SIBLING fixture on its own destination is refused 503 storage_exhausted, so the pool really is full (mutant: the old admit order → the same-fixture start reads storage_exhausted)", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const [f1, f2] = r.fixtureIds as [string, string];
+    const first = await createSession(r.auth, f1, body(r.target.id), r.deps);
+    // Full: one minute of headroom before any reservation — below one more booking whatever else the DB holds.
+    r.ingest.storage = { ...r.ingest.storage, totalStorageMinutesLimit: r.ingest.storage.totalStorageMinutes + 1 };
+    await expect(createSession(r.auth, f1, body(r.target.id), r.deps)).rejects.toMatchObject({
+      status: 409, code: "active_session", extra: { sessionId: first.sessionId },
+    });
+    // The positive pair: the same full pool refuses a start that has no running stream to name. Its own destination, so
+    // the destination guard (decided before admission) is not what answers.
+    const own = await createStreamTarget(r.auth, r.auth.orgId, {
+      kind: "youtube", label: "Court 2", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key-court-2",
+    });
+    await expect(createSession(r.auth, f2, body(own.id), r.deps)).rejects.toMatchObject({ status: 503, code: "storage_exhausted" });
+    const rows = await sql<{ id: string; fixture_id: string }[]>`
+      select id, fixture_id from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(rows, "ONE session — the running one; neither refusal wrote a row").toEqual([{ id: first.sessionId, fixture_id: f1 }]);
+  });
+
   // Note 4 (the brief's hazard, raised at Step 4): the FIXTURE index's 23505 used to be mapped INSIDE `sql.begin`, where
   // postgres.js rethrows the query error at the transaction boundary (Task 7's staffRow measured it). Both indexes are
   // now mapped on the boundary; this is the race that reaches it. Flaky-shaped by construction — WHICH guard refuses the
