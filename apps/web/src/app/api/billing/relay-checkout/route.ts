@@ -51,7 +51,8 @@ const schema = z
  * fixture must be that org's (404, never "forbidden"). Then — BEFORE any
  * Stripe call — the deployment must have a relay at all (503
  * `ingest_unavailable`, Task 14b review I2), and the org's resolved
- * `streaming.relay` must be true, or 402
+ * `streaming.overlay` and `streaming.relay` must both be true — the two keys
+ * createSession admits on, in its order (m5) — or 402 `plan_lacks_overlay` /
  * `plan_lacks_relay`: nobody pays for a tier they cannot use. Never a redirect
  * (R8): JSON with the secret.
  *
@@ -88,7 +89,16 @@ export async function POST(req: Request) {
       throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
     }
 
-    if (!(await hasFeature(orgId, "streaming.relay", fx.competition_id))) {
+    // m5 (lane-close review): the same TWO keys createSession admits on, in admit's order — without the overlay no start
+    // is admitted whatever the relay says, so a pack sold then is a credit nothing can spend.
+    const [overlay, relay] = await Promise.all([
+      hasFeature(orgId, "streaming.overlay", fx.competition_id),
+      hasFeature(orgId, "streaming.relay", fx.competition_id),
+    ]);
+    if (!overlay) {
+      throw new HttpError(402, "This plan does not include the stream overlay", "plan_lacks_overlay");
+    }
+    if (!relay) {
       throw new HttpError(402, "This plan does not include phone streaming", "plan_lacks_relay");
     }
 

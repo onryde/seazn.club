@@ -1116,8 +1116,8 @@ export function PhoneTab({
       return;
     }
     buying.current = false;
-    // C22: the route's 402 IS plan_lacks_relay — the SAME switched-off state the entitled check renders (I4), so there
-    // is one surface for it. Keyed on STATUS: `CheckoutSecretResult` has no code field (D13). I1: it replaces the tab only at
+    // C22: the route's 402 IS plan_lacks_relay (or, m5, plan_lacks_overlay — a stale tab after the overlay went off) —
+    // the SAME switched-off state the entitled check renders (I4), so there is one surface for it. Keyed on STATUS: `CheckoutSecretResult` has no code field (D13). I1: it replaces the tab only at
     // idle — mid-session the body shows it in the buy slot and keeps every session control.
     if (result.status === 402) {
       setPlanGate(true);

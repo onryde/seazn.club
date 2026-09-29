@@ -25,6 +25,8 @@
 //                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…" (the 500 it throws)
 //   RT9 m1 secret check      `relayUnavailable()` reverted to the mode alone (lane-close review m1)
 //                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…"
+//   RT10 m5 overlay key      the `streaming.overlay` gate deleted (lane-close review m5)
+//                           → "m5: refuses an org whose streaming.overlay is switched OFF…"
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -168,6 +170,36 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     // The whole point of the gate order: nobody pays for a tier they cannot use,
     // and the refusal costs no Stripe round-trip.
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+  });
+
+  // m5 (lane-close review): createSession admits only with BOTH keys (admit: no overlay → 402 on streaming.overlay,
+  // whatever the relay says), so a pack sold to an org whose overlay is off is a credit nothing can spend. The checkout
+  // asks the same two keys, overlay first, as admit does.
+  it("m5: refuses an org whose streaming.overlay is switched OFF with 402 plan_lacks_overlay — with the relay on or off — and never calls Stripe; the relay's own refusal is unchanged", async () => {
+    const cases: { name: string; overlay: boolean; relay: boolean; status: number; code?: string }[] = [
+      { name: "overlay off, relay on", overlay: false, relay: true, status: 402, code: "plan_lacks_overlay" },
+      { name: "both off (overlay first, as admit orders them)", overlay: false, relay: false, status: 402, code: "plan_lacks_overlay" },
+      { name: "overlay on, relay off", overlay: true, relay: false, status: 402, code: "plan_lacks_relay" },
+      { name: "both on", overlay: true, relay: true, status: 200 },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const rig = await streamRig();
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${rig.orgId}, 'streaming.overlay', ${c.overlay}, 'm5 route test'), (${rig.orgId}, 'streaming.relay', ${c.relay}, 'm5 route test')`;
+      await callerFor(rig.orgId);
+      const res = await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 });
+      expect(res.status, c.name).toBe(c.status);
+      if (c.code) {
+        expect(await res.json(), c.name).toMatchObject({ ok: false, code: c.code });
+        expect(createRelayCheckoutMock, c.name).not.toHaveBeenCalled();
+      } else {
+        expect(createRelayCheckoutMock, c.name).toHaveBeenCalledTimes(1);
+      }
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED — before the entitlement read and any Stripe call; the same org buys once they are back", async () => {
