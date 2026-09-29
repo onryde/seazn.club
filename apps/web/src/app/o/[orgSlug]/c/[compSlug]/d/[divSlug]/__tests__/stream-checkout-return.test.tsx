@@ -7,7 +7,7 @@
 // server component called directly, its element tree walked — no jsdom here),
 // so what is pinned is the page's REAL wiring: which usecase it calls, with
 // what, in which order, and what the Phone tab is handed as a result.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -120,6 +120,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { verifyOverlayKey } from "@/server/overlay/overlay-key";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -444,5 +445,61 @@ describe("P1: the Phone tab is handed the currency the checkout will charge", ()
     } finally {
       vi.mocked(hasFeature).mockImplementation(async () => true);
     }
+  });
+});
+
+// RT (lane-close fix, ruled 2026-09-29): the page mints each row's signed overlay key for the OBS URL its panel copies —
+// the grant a community org's overlay presents at the realtime-token route. Folded through the REAL key module on both
+// ends: what the page hands the panel must be what the route's `verifyOverlayKey` accepts, for THAT fixture only.
+describe("RT: the page hands the panel one signed overlay key per fixture — and only with the panel", () => {
+  const fx = (id: string) => ({
+    id, stage_id: "st-1", pool_id: null, round_no: 1, seq_in_round: 1, fixture_no: 1,
+    home_entrant_id: null, away_entrant_id: null, home_slot_label: null, away_slot_label: null,
+    scheduled_at: null, status: "scheduled", outcome: null,
+  });
+  const IDS = ["0b6c3a55-0000-4000-8000-000000000001", "0b6c3a55-0000-4000-8000-000000000002", "0b6c3a55-0000-4000-8000-000000000003"];
+  const keysOf = async (sp: Record<string, string>) =>
+    (find(await render(sp), StagesPanel)!.props as { stream?: { overlayKeys?: Record<string, string> } }).stream?.overlayKeys;
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    relay.balance.mockReset().mockResolvedValue(1);
+    relay.open.mockReset().mockResolvedValue([]);
+    scene.frozen = false;
+    scene.fixtures = IDS.map(fx);
+    scene.entrants = [];
+    vi.stubEnv("AUTH_SECRET", "rt-page-unit-secret-0123456789abcdef");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("every listed fixture gets a key the route verifies for IT and for no other listed fixture", async () => {
+    const keys = await keysOf({ tab: "fixtures" });
+    expect(Object.keys(keys ?? {}).sort(), "one key per fixture, none missing").toEqual([...IDS].sort());
+    let own = 0;
+    let crossed = 0;
+    for (const a of IDS) {
+      for (const b of IDS) {
+        expect(verifyOverlayKey(b, keys![a]), `${a}'s key on ${b}`).toBe(a === b);
+        if (a === b) own++; else crossed++;
+      }
+    }
+    expect(own).toBe(IDS.length);
+    expect(crossed).toBe(IDS.length * (IDS.length - 1));
+  });
+
+  it("no panel (overlay switched off) → no keys on the flight; no signing secret → no keys, and the page still renders", async () => {
+    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.overlay");
+    try {
+      expect(await keysOf({ tab: "fixtures" }), "switched off").toEqual({});
+    } finally {
+      vi.mocked(hasFeature).mockImplementation(async () => true);
+    }
+    vi.stubEnv("AUTH_SECRET", "");
+    expect(await keysOf({ tab: "fixtures" }), "no AUTH_SECRET").toEqual({});
+    // The positive pair, the secret back: the keys are back.
+    vi.stubEnv("AUTH_SECRET", "rt-page-unit-secret-0123456789abcdef");
+    expect(Object.keys((await keysOf({ tab: "fixtures" })) ?? {})).toHaveLength(IDS.length);
   });
 });

@@ -71,6 +71,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     streamSplit: null,
     monthlyAllowance: 0,
     currency: "gbp",
+    overlayKeys: {},
     ...o,
   };
 }

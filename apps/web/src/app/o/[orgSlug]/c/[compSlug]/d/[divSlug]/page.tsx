@@ -33,6 +33,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 import { listVenues } from "@/server/usecases/venues";
 import { openStreamFixtureIds, relayCredits } from "@/server/usecases/stream-sessions";
 import { relayIsDisabled } from "@/server/relay/drivers";
+import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
@@ -568,6 +569,17 @@ export default async function DivisionPage({
         // relay there are no tiles, and nothing reads it.
         currency: streamCurrency,
         sportKey: division.sport_key,
+        // RT (lane-close fix, ruled 2026-09-29): each row's signed overlay key, for the OBS URL its panel copies — the
+        // grant a community org's overlay presents to the realtime-token route. Only with the panel (`streamEntitled`);
+        // a fixture the server cannot sign for (no AUTH_SECRET) is left out and its URL goes keyless.
+        overlayKeys: streamEntitled
+          ? Object.fromEntries(
+              fixtures.flatMap((f) => {
+                const key = overlayKeyFor(f.id);
+                return key ? [[f.id, key] as const] : [];
+              }),
+            )
+          : {},
         overlayDict: streamEntitled
           ? (Object.fromEntries(
               Object.entries(await getDictionary(locale, "public")).filter(([k]) =>

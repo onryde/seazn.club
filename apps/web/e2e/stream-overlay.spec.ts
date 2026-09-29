@@ -33,15 +33,14 @@ import {
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
 import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
 import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "../src/components/public-site/live-score-data";
+import { OVERLAY_KEY_PARAM } from "../src/lib/realtime-purpose";
+import { watchFixtureRealtime } from "./realtime-propagation-kit";
 import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
   clearStreamingOverride,
-  deleteRigStreamSession,
   denyOverlay,
-  endRigStreamSession,
   grantRigPackCredits,
-  openRigStreamSession,
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
@@ -848,7 +847,8 @@ test.describe("the Phone tab on a community org (V426)", () => {
     }
   });
 
-  async function openPhoneTab(page: Page): Promise<void> {
+  /** The row's stream panel, open on its default OBS tab. */
+  async function openPanel(page: Page): Promise<void> {
     await page.goto(`/o/${community.orgSlug}/c/${community.compSlug}/d/${community.divSlug}?tab=fixtures`);
     await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1);
     // The sheet opens on "Today" and the seed does not schedule for today (the
@@ -857,6 +857,10 @@ test.describe("the Phone tab on a community org (V426)", () => {
     const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
     await expect(toggle, "community holds streaming.overlay (V426), so the row offers the panel").toHaveCount(1);
     await toggle.click();
+  }
+
+  async function openPhoneTab(page: Page): Promise<void> {
+    await openPanel(page);
     await page.locator('[data-testid="stream-tab-phone"]').click();
   }
 
@@ -934,38 +938,100 @@ test.describe("the Phone tab on a community org (V426)", () => {
     }
   });
 
-  // Addendum RT (Task 14b fix round 2; owner 2026-09-29): community orgs get REAL-TIME overlays. The plan-wide
-  // `realtime` stays off — a spectator keeps the poll — and the overlay page's own client, which declares its purpose,
-  // is minted a token while the fixture is being streamed. Driven through the real overlay page in a real browser:
-  // the request it makes is the seam (the route's unit table owns every other combination).
-  test("addendum RT: the overlay's OWN token request is granted while the fixture is streamed — the purpose alone is not, a spectator never is, and a finished broadcast is not", async ({
+  // RT (lane-close fix, ruled 2026-09-29; supersedes addendum RT's session-based bypass): community orgs get REAL-TIME
+  // overlays through the SIGNED KEY the organiser's panel puts in the OBS URL it copies. The plan-wide `realtime` stays
+  // off — a spectator keeps the poll. Driven on the PRODUCT path, end to end: the organiser copies the OBS URL from the
+  // panel, OBS (an anonymous browser) opens exactly that URL, and what is asserted is the overlay's own token request and
+  // the subscription it leads to. Nothing is seeded — no session is needed any more, and none exists here. The route's
+  // unit table (realtime-token/__tests__/route.test.ts) owns every other combination.
+  test("RT: the OBS URL copied from the panel earns the overlay a realtime subscription — the same URL with its key tampered does not", async ({
     browser,
   }) => {
-    test.setTimeout(120_000);
-    const anon = await anonPage(browser);
-    const ask = (purpose?: typeof OVERLAY_REALTIME_PURPOSE) => anon.request.get(realtimeTokenPath(community.fixtureId, purpose));
-    let sessionId: string | null = null;
+    test.setTimeout(150_000);
+    // The project's storageState (the pre-dismissed cookie banner), as the Phone-tab test above.
+    const owner = await browser.newContext();
+    const page = await owner.newPage();
+    const obs = await anonPage(browser);
+    const tamperedObs = await anonPage(browser);
     try {
-      expect((await ask()).status(), "premise: community has no `realtime`, so a spectator is refused").toBe(403);
-      expect((await ask(OVERLAY_REALTIME_PURPOSE)).status(), "the declared purpose alone never mints").toBe(403);
+      await signInAs(page, community.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openPanel(page);
 
-      sessionId = await openRigStreamSession(community);
-      const overlayPath = realtimeTokenPath(community.fixtureId, OVERLAY_REALTIME_PURPOSE);
-      const asked = anon.waitForResponse((r) => r.url().endsWith(overlayPath), { timeout: 30_000 });
-      await anon.goto(`/overlay/fixtures/${community.fixtureId}?style=bug`);
-      await expect(anon.locator('[data-testid="ovl-root"]')).toHaveCount(1, { timeout: 30_000 });
-      const res = await asked;
-      expect(res.status(), "the overlay page's own request, declaring its purpose, is minted a token").toBe(200);
-      const body = (await res.json()) as { data?: { channel?: string; token?: string } };
-      expect(body.data?.channel).toBe(`fixture:${community.fixtureId}`);
-      expect(body.data?.token, "a token").toBeTruthy();
-      expect((await ask()).status(), "the spectator path is unchanged while streaming").toBe(403);
+      // Copy, as the organiser does — the button, not just the value it would copy.
+      const origin = new URL(page.url()).origin;
+      await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+      const field = page.locator('[data-testid="stream-link"]');
+      // Anchored on the ORIGIN too: the panel fills it in after hydration, and a copy taken before that is a path OBS
+      // cannot open.
+      const escaped = origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      await expect(field).toHaveValue(new RegExp(`^${escaped}/overlay/fixtures/${community.fixtureId}\\?`), { timeout: 30_000 });
+      await page.locator('[data-testid="stream-copy"]').click();
+      await expect(page.locator('[data-testid="stream-copy"]')).toContainText(en("stream.copied"));
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copied, "Copy writes the field's own URL").toBe(await field.inputValue());
+      const url = new URL(copied);
+      expect(url.origin, "a URL OBS can open: this deployment's own origin").toBe(origin);
+      expect(url.pathname).toBe(`/overlay/fixtures/${community.fixtureId}`);
+      const key = url.searchParams.get(OVERLAY_KEY_PARAM);
+      expect(key, "the copied OBS URL carries the fixture's signed key").toMatch(/^[A-Za-z0-9_-]{22}$/);
 
-      await endRigStreamSession(sessionId);
-      expect((await ask(OVERLAY_REALTIME_PURPOSE)).status(), "a finished broadcast is no longer being streamed").toBe(403);
+      // Premise, and the spectator path unchanged: community has no `realtime`, and the declared purpose alone is refused.
+      expect((await obs.request.get(realtimeTokenPath(community.fixtureId))).status(), "a spectator is refused").toBe(403);
+      expect(
+        (await obs.request.get(realtimeTokenPath(community.fixtureId, OVERLAY_REALTIME_PURPOSE))).status(),
+        "the declared purpose without its key never mints",
+      ).toBe(403);
+
+      // OBS opens the copied URL. The watch is armed BEFORE the navigation: the token request fires from a mount effect.
+      const watch = await watchFixtureRealtime(obs, community.fixtureId);
+      await obs.setViewportSize({ width: 1920, height: 1080 });
+      await obs.goto(copied);
+      const ovl = obs.locator('[data-testid="ovl-root"]');
+      await expect(ovl).toHaveCount(1, { timeout: 30_000 });
+      await expect
+        .poll(() => watch.tokenStatuses.length, { message: "the overlay never asked the realtime-token door", timeout: 30_000 })
+        .toBeGreaterThan(0);
+      expect(watch.tokenStatuses[0], "the overlay's own keyed request is minted a token").toBe(200);
+
+      // The subscription. A stub Supabase host (CI) mints but never dials — the hook's own stub guard — so there the
+      // join cannot happen and the overlay stays on the poll; E2E_REQUIRE_REALTIME=1 says this environment HAS realtime,
+      // and turns that degradation into the failure.
+      const subscribed = await obs
+        .waitForFunction(
+          () => document.querySelector('[data-testid="ovl-root"]')?.getAttribute("data-transport") === "realtime",
+          undefined,
+          { timeout: 15_000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      if (subscribed) {
+        expect(watch.joined(), "the DOM says realtime, and a Phoenix join for THIS fixture's channel confirmed it").toBe(true);
+      } else {
+        expect(
+          process.env.E2E_REQUIRE_REALTIME === "1",
+          "E2E_REQUIRE_REALTIME=1: this environment is supposed to have realtime, and the keyed overlay never subscribed",
+        ).toBe(false);
+        await expect(ovl, "no subscription: the stub-host fallback is the poll, anything else is a crash").toHaveAttribute("data-transport", "poll");
+        test.info().annotations.push({ type: "realtime-unavailable", description: "RT: minted 200, but no websocket joined (stub host)" });
+      }
+
+      // The pair: the SAME URL with one character of its key changed. Asked, refused, and on the poll.
+      const bad = new URL(copied);
+      bad.searchParams.set(OVERLAY_KEY_PARAM, (key![0] === "A" ? "B" : "A") + key!.slice(1));
+      const badWatch = await watchFixtureRealtime(tamperedObs, community.fixtureId);
+      await tamperedObs.goto(bad.toString());
+      await expect(tamperedObs.locator('[data-testid="ovl-root"]')).toHaveCount(1, { timeout: 30_000 });
+      await expect
+        .poll(() => badWatch.tokenStatuses.length, { message: "the tampered overlay never asked", timeout: 30_000 })
+        .toBeGreaterThan(0);
+      expect(badWatch.tokenStatuses[0], "a tampered key takes the normal path: refused").toBe(403);
+      await expect(tamperedObs.locator('[data-testid="ovl-root"]')).toHaveAttribute("data-transport", "poll");
+      expect(badWatch.joined(), "no channel join on a refused token").toBe(false);
     } finally {
-      if (sessionId) await deleteRigStreamSession(sessionId);
-      await anon.context().close();
+      await owner.close();
+      await obs.context().close();
+      await tamperedObs.context().close();
     }
   });
 

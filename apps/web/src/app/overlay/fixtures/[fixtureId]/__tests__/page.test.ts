@@ -18,6 +18,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
+import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE } from "@/lib/realtime-purpose";
 
 const publicFixtureSlugs = vi.fn();
 const getPublicFixture = vi.fn();
@@ -141,5 +142,47 @@ describe("OverlayPage — slateMeta uses stages.name, not division.name", () => 
       competition: "Southend Premier League 2026",
     });
     expect(slateMetaPropOf(el)?.stage).toBeUndefined();
+  });
+});
+
+// RT (lane-close fix, ruled 2026-09-29): the OBS URL the panel copies carries a signed `?key=`. The page hands the stage
+// that key WITH the overlay purpose, as props — the stage declares nothing of its own (overlay-stage-realtime-purpose
+// .test.tsx), so without this the key would stop at the page. Read under the route's own parameter name.
+describe("OverlayPage — the OBS URL's signed key reaches <OverlayStage> with the overlay purpose (RT)", () => {
+  async function renderWith(query: Record<string, string | string[]>): Promise<ReactElement> {
+    publicFixtureSlugs.mockResolvedValue({ orgSlug: "test-org", compSlug: "test-comp", divSlug: "open" });
+    getPublicFixture.mockResolvedValue(baseFixtureData());
+    hasFeature.mockResolvedValue(true);
+    loadOverlayLiveData.mockResolvedValue(baseInitial);
+    const { default: OverlayPage } = await import("../page");
+    return (await OverlayPage({
+      params: Promise.resolve({ fixtureId: "f1" }),
+      searchParams: Promise.resolve(query),
+    })) as unknown as ReactElement;
+  }
+  const rtProps = (el: ReactElement) => {
+    const p = el.props as { realtimePurpose?: unknown; overlayKey?: unknown; realtime?: unknown };
+    return { realtimePurpose: p.realtimePurpose, overlayKey: p.overlayKey, realtime: p.realtime };
+  };
+
+  it("a key in the URL → the stage gets it AND the overlay purpose; `realtime` stays the org's own", async () => {
+    const el = await renderWith({ style: "bug", [OVERLAY_KEY_PARAM]: "KEY_abc-123" });
+    expect(rtProps(el)).toEqual({ realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey: "KEY_abc-123", realtime: false });
+  });
+
+  it("no key, an empty key or a REPEATED key → neither prop: the stage asks as a spectator would (and polls)", async () => {
+    const cases: [string, Record<string, string | string[]>][] = [
+      ["absent", {}],
+      ["empty", { [OVERLAY_KEY_PARAM]: "" }],
+      ["repeated", { [OVERLAY_KEY_PARAM]: ["a", "b"] }],
+    ];
+    let checked = 0;
+    for (const [name, query] of cases) {
+      const el = await renderWith(query);
+      expect("realtimePurpose" in (el.props as object), `${name}: no purpose prop`).toBe(false);
+      expect("overlayKey" in (el.props as object), `${name}: no key prop`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 });

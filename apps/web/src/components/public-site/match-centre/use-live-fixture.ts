@@ -37,11 +37,15 @@ export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
    *  NO SOONER, not "exactly": the drain is a fixed `DRAIN_MS` tick, so the
    *  wait is in `[delayMs, delayMs + DRAIN_MS)` (review MINOR 2). */
   delayMs?: number;
-  /** Addendum RT (Task 14b fix round 2): the purpose this caller DECLARES on its realtime-token request. The stream
-   *  overlay sends `overlay`, and asks even when `realtime` is false — the route grants a community org's overlay while
-   *  the fixture is being streamed and refuses otherwise, and a refusal leaves the hook on the poll exactly as before.
-   *  A string, so a caller that re-mints its options object every render never re-subscribes. */
+  /** RT (lane-close fix, ruled 2026-09-29): the purpose this caller DECLARES on its realtime-token request — the OBS
+   *  overlay's `overlay`, passed down from its page. Only WITH `overlayKey` does it make the hook ask when `realtime` is
+   *  false: the route grants a community org's overlay on a key that verifies and refuses otherwise, so a purpose
+   *  without a key would be a request certain to 403. A refusal leaves the hook on the poll exactly as before. A string,
+   *  so a caller that re-mints its options object every render never re-subscribes. */
   realtimePurpose?: RealtimePurpose;
+  /** RT: the signed overlay key from the OBS URL (server/overlay/overlay-key.ts), sent beside the purpose. A string for
+   *  the same reason. The route verifies it; the client never can. */
+  overlayKey?: string;
 }
 
 export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureData> {
@@ -172,8 +176,8 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
 
   const live = data.status === "in_play" || data.status === "scheduled";
 
-  // Realtime push (entitled orgs; and the stream overlay, which declares its
-  // purpose — addendum RT). Any failure — no entitlement (403), env missing,
+  // Realtime push (entitled orgs; and the OBS stream overlay, which declares
+  // its purpose with its signed key — RT). Any failure — no entitlement (403), env missing,
   // websocket refused — leaves `subscribed` false and polling takes over.
   //
   // Private channel + setAuth (scorepad shape). Mint is ES256 via
@@ -182,8 +186,11 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // Polling stays as safety net; publishFixtureUpdate still fans a public twin.
   const [subscribed, setSubscribed] = useState(false);
   const realtimePurpose = options.realtimePurpose;
+  const overlayKey = options.overlayKey;
+  // RT: a declared purpose asks only WITH its key — both, or it is a spectator's hook and `realtime` alone decides.
+  const overlayAsk = Boolean(realtimePurpose && overlayKey);
   useEffect(() => {
-    if ((!realtime && !realtimePurpose) || !live) return;
+    if ((!realtime && !overlayAsk) || !live) return;
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
     if (!supabaseUrl) return;
     // CI's stub host has no Realtime websocket. Still mint (the e2e asserts
@@ -198,7 +205,11 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     (async () => {
       let token: { token: string; channel: string };
       try {
-        token = await fetchPublicRealtimeToken(fixtureId, realtimePurpose);
+        token = await fetchPublicRealtimeToken(
+          fixtureId,
+          overlayAsk ? realtimePurpose : undefined,
+          overlayAsk ? overlayKey : undefined,
+        );
       } catch {
         return; // not entitled or server error → polling
       }
@@ -228,7 +239,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       channel?.unsubscribe();
       setSubscribed(false);
     };
-  }, [fixtureId, realtime, realtimePurpose, live, refresh]);
+  }, [fixtureId, realtime, overlayAsk, realtimePurpose, overlayKey, live, refresh]);
 
   // Drain the delay buffer every DRAIN_MS: present the newest snapshot whose
   // receivedAt ≤ now − delayMs, drop everything older. One interval, armed only

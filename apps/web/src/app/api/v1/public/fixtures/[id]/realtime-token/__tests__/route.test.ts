@@ -1,15 +1,17 @@
-// Addendum RT (Task 14b fix round 2; owner decision 2026-09-29): a community org's STREAM OVERLAY gets real-time
-// scores. The plan-wide `realtime` entitlement is unchanged — a community spectator page keeps its 15 s poll. The
-// overlay bypass mints `fixture:{id}` without `realtime` only when ALL THREE hold:
-//   - the caller declares the overlay purpose (the overlay client's `?purpose=overlay`),
-//   - the fixture has a stream session in ACTIVE_STATES (it is being broadcast),
+// RT (lane-close fix, ruled 2026-09-29; supersedes addendum RT's session-based bypass): a community org's STREAM
+// OVERLAY gets real-time scores through a SIGNED KEY the organiser's panel puts in the OBS URL it copies. The plan-wide
+// `realtime` entitlement is unchanged — a community spectator page keeps its 15 s poll. The route mints `fixture:{id}`
+// without `realtime` only when ALL THREE hold:
+//   - the caller declares the overlay purpose (`?purpose=overlay`),
+//   - `?key=` verifies for THIS fixture (server/overlay/overlay-key.ts, constant-time),
 //   - the org has `streaming.overlay` (the overlay page's own gate, competition-scoped).
-// The purpose is a REQUEST, never an authorisation: every other combination follows today's path.
+// A keyless or bad-key request takes today's normal path. Whether a stream session is up no longer matters at all.
 //
-// Driven through the REAL route handler and the real entitlement and session reads on Postgres. Doubled: the JWT
-// mint (a spy — the decision is under test, not the signature, and the key is environment-dependent) and the signed-in
-// user (null: an anonymous OBS browser source; the officials bypass has its own suites). The request URL is the one
-// the overlay CLIENT builds (`realtimeTokenPath`), so the producer's query string is folded through this consumer.
+// Driven through the REAL route handler, the real key module and the real entitlement reads on Postgres. Doubled: the
+// JWT mint (a spy — the decision is under test, not the signature) and the signed-in user (null: an anonymous OBS
+// browser source; the officials bypass has its own suites). The request URL is the one the overlay CLIENT builds
+// (`realtimeTokenPath`), and the key the one the PANEL's page mints (`overlayKeyFor`), so producer and consumer are
+// folded through this route rather than a query string typed here.
 //
 // Expected values come from the ruling's rule above, never from the route. Skipped without DATABASE_URL.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,8 +33,9 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { ACTIVE_STATES, TERMINAL_STATES, type SessionState } from "@/server/relay/domain/session";
+import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "@/components/public-site/live-score-data";
+import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { GET } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -80,26 +83,28 @@ async function seed(opts: { overlay: boolean; realtime: boolean; visibility?: "p
   return { orgId, fixtureId };
 }
 
-/** A stream session on the fixture in `state` — a precondition row, not a seam under test (the target's envelope is
- *  never read here). Its columns derive from the fixture's own division, as stream-sessions.test.ts's raw inserts do. */
-async function session(fx: Seeded, state: SessionState): Promise<void> {
+/** A stream session on the fixture in `state` — used only to show that a session no longer matters either way. */
+async function session(fx: Seeded, state: string): Promise<void> {
   const [{ id: targetId }] = await sql<{ id: string }[]>`
     insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${fx.orgId}, 'youtube', 'Club', '\\x00'::bytea) returning id`;
   await sql`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, fail_reason, ended_at, target_id, created_by,
                                          sport_key, competition_id, division_id, entitlement_via_override)
     select ${fx.fixtureId}, ${fx.orgId}, 'passthrough', ${state}, ${state === "failed" ? "no_inbound_timeout" : null},
-           ${TERMINAL_STATES.includes(state) ? new Date() : null}, ${targetId}, ${randomUUID()},
+           ${(TERMINAL_STATES as readonly string[]).includes(state) ? new Date() : null}, ${targetId}, ${randomUUID()},
            d.sport_key, d.competition_id, f.division_id, true
       from fixtures f join divisions d on d.id = f.division_id where f.id = ${fx.fixtureId}`;
 }
 
-async function ask(fixtureId: string, purpose?: string): Promise<{ status: number; minted: boolean }> {
+/** A bad key that LOOKS right: the fixture's own key with its first character changed — same length, same alphabet. */
+const tampered = (key: string): string => (key[0] === "A" ? "B" : "A") + key.slice(1);
+
+async function ask(fixtureId: string, purpose?: string, key?: string): Promise<{ status: number; minted: boolean }> {
   seams.mint.mockClear();
-  // The client's own path for the two values it sends; a hand-built one only for a value no client sends.
-  const path = purpose === undefined ? realtimeTokenPath(fixtureId)
-    : purpose === OVERLAY_REALTIME_PURPOSE ? realtimeTokenPath(fixtureId, OVERLAY_REALTIME_PURPOSE)
-    : `/api/v1/public/fixtures/${fixtureId}/realtime-token?purpose=${encodeURIComponent(purpose)}`;
+  // The client's own path for the values it sends; a hand-built one only for a purpose no client sends.
+  const path = purpose === undefined || purpose === OVERLAY_REALTIME_PURPOSE
+    ? realtimeTokenPath(fixtureId, purpose as typeof OVERLAY_REALTIME_PURPOSE | undefined, key)
+    : `/api/v1/public/fixtures/${fixtureId}/realtime-token?purpose=${encodeURIComponent(purpose)}${key ? `&key=${encodeURIComponent(key)}` : ""}`;
   const res = await GET(new Request(`http://app.test${path}`), { params: Promise.resolve({ id: fixtureId }) });
   const minted = seams.mint.mock.calls.length === 1;
   if (res.status === 200) {
@@ -109,11 +114,15 @@ async function ask(fixtureId: string, purpose?: string): Promise<{ status: numbe
   return { status: res.status, minted };
 }
 
+const SECRET = "rt-route-unit-secret-0123456789abcdef";
 beforeEach(() => {
   seams.mint.mockClear();
+  // The key module signs with AUTH_SECRET; pinned so the table never depends on the shell that ran it.
+  vi.stubEnv("AUTH_SECRET", SECRET);
 });
 
 afterAll(async () => {
+  vi.unstubAllEnvs();
   if (!HAS_DB) return;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
   const client = g._sql;
@@ -121,70 +130,97 @@ afterAll(async () => {
   await client?.end();
 });
 
-describe.skipIf(!HAS_DB)("realtime-token: the overlay bypass (addendum RT)", () => {
-  it("the whole table — purpose × active session × streaming.overlay × realtime: mints iff `realtime`, or ALL THREE of the overlay conditions", async () => {
+const MINT = { status: 200, minted: true } as const;
+const REFUSE = { status: 403, minted: false } as const;
+
+describe.skipIf(!HAS_DB)("realtime-token: the overlay's signed key (RT)", () => {
+  it("the whole table — purpose × key valid/invalid/absent × streaming.overlay × realtime: mints iff `realtime`, or ALL THREE overlay conditions", async () => {
+    const KEYS = ["valid", "invalid", "absent"] as const;
     let checked = 0;
     let minted = 0;
     for (const purpose of [false, true]) {
-      for (const active of [false, true]) {
+      for (const key of KEYS) {
         for (const overlay of [false, true]) {
           for (const realtime of [false, true]) {
-            const cell = `purpose=${purpose} active=${active} overlay=${overlay} realtime=${realtime}`;
+            const cell = `purpose=${purpose} key=${key} overlay=${overlay} realtime=${realtime}`;
             const fx = await seed({ overlay, realtime });
-            if (active) await session(fx, "live");
-            const expected = realtime || (purpose && active && overlay);
-            const got = await ask(fx.fixtureId, purpose ? OVERLAY_REALTIME_PURPOSE : undefined);
-            expect(got, cell).toEqual(expected ? { status: 200, minted: true } : { status: 403, minted: false });
+            const own = overlayKeyFor(fx.fixtureId)!;
+            const sent = key === "valid" ? own : key === "invalid" ? tampered(own) : undefined;
+            const expected = realtime || (purpose && key === "valid" && overlay);
+            expect(await ask(fx.fixtureId, purpose ? OVERLAY_REALTIME_PURPOSE : undefined, sent), cell).toEqual(expected ? MINT : REFUSE);
             if (expected) minted++;
             checked++;
           }
         }
       }
     }
-    expect(checked, "every cell of the 2×2×2×2 table").toBe(16);
-    // Both answers were exercised: 8 realtime cells + the one overlay cell with realtime off.
-    expect(minted).toBe(9);
+    expect(checked, "every cell of the 2×3×2×2 table").toBe(24);
+    // Both answers exercised: the 12 realtime cells, and the ONE overlay cell with realtime off.
+    expect(minted).toBe(13);
   });
 
-  it("the purpose flag ALONE never mints — nor with only one of the other two conditions", async () => {
-    const cells: { name: string; overlay: boolean; state: SessionState | null }[] = [
-      { name: "the flag alone", overlay: false, state: null },
-      { name: "flag + streaming.overlay, nothing being streamed", overlay: true, state: null },
-      { name: "flag + a live session, no streaming.overlay", overlay: false, state: "live" },
+  it("a FORGED purpose never mints — no key, an empty key, a tampered key, another fixture's key", async () => {
+    const fx = await seed({ overlay: true, realtime: false });
+    const other = await seed({ overlay: true, realtime: false });
+    const forgeries: [string, string | undefined][] = [
+      ["no key", undefined],
+      ["empty key", ""],
+      ["tampered key", tampered(overlayKeyFor(fx.fixtureId)!)],
+      ["the other fixture's key", overlayKeyFor(other.fixtureId)!],
+      ["a key minted under another secret", "AAAAAAAAAAAAAAAAAAAAAA"],
     ];
     let checked = 0;
-    for (const c of cells) {
-      const fx = await seed({ overlay: c.overlay, realtime: false });
-      if (c.state) await session(fx, c.state);
-      expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE), c.name).toEqual({ status: 403, minted: false });
+    for (const [name, key] of forgeries) {
+      expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE, key), name).toEqual(REFUSE);
       checked++;
     }
-    expect(checked).toBe(cells.length);
+    expect(checked).toBe(forgeries.length);
+    // The positive pair on the SAME fixture and org: its own key mints.
+    expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(fx.fixtureId)!)).toEqual(MINT);
   });
 
-  it("every ACTIVE state mints for the overlay; every TERMINAL state refuses — a finished broadcast is no longer being streamed", async () => {
+  it("the key is FIXTURE-BOUND: fixture A's key fails for fixture B of the same org, and B's own key mints", async () => {
+    const a = await seed({ overlay: true, realtime: false });
+    const b = await seed({ overlay: true, realtime: false });
+    expect(await ask(b.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(a.fixtureId)!), "A's key on B").toEqual(REFUSE);
+    expect(await ask(a.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(b.fixtureId)!), "B's key on A").toEqual(REFUSE);
+    expect(await ask(b.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(b.fixtureId)!), "B's own").toEqual(MINT);
+    expect(await ask(a.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(a.fixtureId)!), "A's own").toEqual(MINT);
+  });
+
+  it("the session-based bypass is GONE: a keyed overlay mints with no session and after one ended; a live session without the key refuses", async () => {
+    const noSession = await seed({ overlay: true, realtime: false });
+    expect(await ask(noSession.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(noSession.fixtureId)!), "no session ever").toEqual(MINT);
     let checked = 0;
     for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
       const fx = await seed({ overlay: true, realtime: false });
       await session(fx, state);
-      const expected = ACTIVE_STATES.includes(state);
-      expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE), state).toEqual(expected ? { status: 200, minted: true } : { status: 403, minted: false });
+      expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE), `${state}, no key`).toEqual(REFUSE);
+      expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(fx.fixtureId)!), `${state}, keyed`).toEqual(MINT);
       checked++;
     }
-    expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
     expect(ACTIVE_STATES.length).toBeGreaterThan(0);
     expect(TERMINAL_STATES.length).toBeGreaterThan(0);
+    expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
   });
 
-  it("an UNKNOWN purpose is no purpose, and a PRIVATE competition's fixture is refused even with all three conditions", async () => {
+  it("an UNKNOWN purpose is no purpose even with a valid key, and a PRIVATE competition's fixture is refused even with all three", async () => {
     const other = await seed({ overlay: true, realtime: false });
-    await session(other, "live");
-    expect(await ask(other.fixtureId, "scorepad"), "unknown purpose").toEqual({ status: 403, minted: false });
-    // The positive pair on the same fixture: the declared overlay purpose mints.
-    expect(await ask(other.fixtureId, OVERLAY_REALTIME_PURPOSE)).toEqual({ status: 200, minted: true });
+    const key = overlayKeyFor(other.fixtureId)!;
+    expect(await ask(other.fixtureId, "scorepad", key), "unknown purpose").toEqual(REFUSE);
+    // The positive pair on the same fixture: the declared overlay purpose with the same key mints.
+    expect(await ask(other.fixtureId, OVERLAY_REALTIME_PURPOSE, key)).toEqual(MINT);
 
     const hidden = await seed({ overlay: true, realtime: false, visibility: "private" });
-    await session(hidden, "live");
-    expect(await ask(hidden.fixtureId, OVERLAY_REALTIME_PURPOSE), "private competition").toEqual({ status: 403, minted: false });
+    expect(await ask(hidden.fixtureId, OVERLAY_REALTIME_PURPOSE, overlayKeyFor(hidden.fixtureId)!), "private competition").toEqual(REFUSE);
+  });
+
+  it("no AUTH_SECRET on the server: nothing verifies, so a keyed overlay takes the normal path (and `realtime` still mints)", async () => {
+    const fx = await seed({ overlay: true, realtime: false });
+    const key = overlayKeyFor(fx.fixtureId)!;
+    vi.stubEnv("AUTH_SECRET", "");
+    expect(await ask(fx.fixtureId, OVERLAY_REALTIME_PURPOSE, key)).toEqual(REFUSE);
+    const paid = await seed({ overlay: true, realtime: true });
+    expect(await ask(paid.fixtureId, OVERLAY_REALTIME_PURPOSE, key), "the normal path is untouched").toEqual(MINT);
   });
 });

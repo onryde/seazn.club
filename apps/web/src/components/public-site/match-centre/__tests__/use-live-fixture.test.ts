@@ -410,12 +410,12 @@ describe("useLiveFixture", () => {
   });
 });
 
-// Addendum RT (Task 14b fix round 2; owner decision 2026-09-29): the stream overlay DECLARES its purpose when it asks
-// for a realtime token, and asks even when the org's plan has no `realtime` — the token route decides (a community
-// org's overlay is granted while the fixture is being streamed). A refusal leaves it on the poll, exactly as today. The
+// RT (lane-close fix, ruled 2026-09-29): the OBS overlay DECLARES its purpose and sends its signed key when it asks for a
+// realtime token, and asks even when the org's plan has no `realtime` — the token route decides (a community org's
+// overlay is granted on a key that verifies). A refusal leaves it on the poll, exactly as today. The
 // hook only dials when the Supabase URL is configured, so each case sets one: the CI stub host, on which the hook
 // still MINTS (the e2e asserts the token) but never dials — the token request is the whole seam under test here.
-describe("useLiveFixture — the overlay's declared realtime purpose (addendum RT)", () => {
+describe("useLiveFixture — the overlay's declared realtime purpose and signed key (RT)", () => {
   const inPlay = { status: "in_play", summary: null, outcome: null } as LiveFixtureData;
   beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://stub.supabase.co");
@@ -425,10 +425,10 @@ describe("useLiveFixture — the overlay's declared realtime purpose (addendum R
     vi.unstubAllEnvs();
   });
 
-  it("a hook declaring the overlay purpose asks for a token WITHOUT `realtime`, sending the purpose — and a refusal leaves it polling", async () => {
-    const hook = mount("fx-1", inPlay, false, { realtimePurpose: OVERLAY_REALTIME_PURPOSE });
+  it("a hook declaring the overlay purpose WITH its key asks for a token without `realtime`, sending both — and a refusal leaves it polling", async () => {
+    const hook = mount("fx-1", inPlay, false, { realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey: "KEY" });
     await vi.advanceTimersByTimeAsync(0);
-    expect(vi.mocked(fetchPublicRealtimeToken).mock.calls).toEqual([["fx-1", OVERLAY_REALTIME_PURPOSE]]);
+    expect(vi.mocked(fetchPublicRealtimeToken).mock.calls).toEqual([["fx-1", OVERLAY_REALTIME_PURPOSE, "KEY"]]);
     // The mock refuses (403 "not entitled"): the transport stays the poll, which keeps its 15 s cadence.
     expect(hook.current.transport).toBe("poll");
     const polls = vi.mocked(fetchLiveFixture).mock.calls.length;
@@ -442,18 +442,35 @@ describe("useLiveFixture — the overlay's declared realtime purpose (addendum R
     expect(fetchPublicRealtimeToken).not.toHaveBeenCalled();
   });
 
+  it("RT: a purpose WITHOUT its key (or a key without its purpose) never asks — the route would refuse it, so the request is never made", async () => {
+    let checked = 0;
+    const cases: UseLiveFixtureOptions<LiveFixtureData>[] = [
+      { realtimePurpose: OVERLAY_REALTIME_PURPOSE },
+      { overlayKey: "KEY" },
+      { realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey: "" },
+    ];
+    for (const options of cases) {
+      vi.mocked(fetchPublicRealtimeToken).mockClear();
+      mount("fx-1", inPlay, false, options);
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(fetchPublicRealtimeToken, JSON.stringify(options)).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("an entitled hook with no purpose asks as it always has — no purpose on the request", async () => {
     mount("fx-1", inPlay, true);
     await vi.advanceTimersByTimeAsync(0);
-    expect(vi.mocked(fetchPublicRealtimeToken).mock.calls).toEqual([["fx-1", undefined]]);
+    expect(vi.mocked(fetchPublicRealtimeToken).mock.calls).toEqual([["fx-1", undefined, undefined]]);
   });
 
   it("a caller that re-mints its options object every render does NOT re-ask — the purpose is a value, not an object identity", async () => {
-    const hook = mount("fx-1", inPlay, false, { realtimePurpose: OVERLAY_REALTIME_PURPOSE });
+    const hook = mount("fx-1", inPlay, false, { realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey: "KEY" });
     await vi.advanceTimersByTimeAsync(0);
     let renders = 0;
     for (let i = 0; i < 3; i++) {
-      hook.rerender({ realtimePurpose: OVERLAY_REALTIME_PURPOSE });
+      hook.rerender({ realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey: "KEY" });
       await vi.advanceTimersByTimeAsync(0);
       renders++;
     }

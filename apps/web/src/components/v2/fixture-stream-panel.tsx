@@ -45,6 +45,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
+import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
 import {
@@ -214,6 +215,11 @@ export interface StreamPanelContext {
   /** P1 — the currency the relay-checkout route will CHARGE (`preferredCurrency`, resolved by the page for the same
    *  org and browser), so the tiles quote the amount the checkout's line shows — never a GBP number above a USD sheet. */
   currency: Currency;
+  /** RT (lane-close fix, ruled 2026-09-29) — each listed fixture's signed overlay key (server/overlay/overlay-key.ts),
+   *  minted by the page. The OBS URL this panel copies carries its row's key, and that key is what earns a community
+   *  org's overlay real-time scores at the token route. A fixture missing here (no signing secret on the server) gets a
+   *  keyless URL, and its overlay polls. */
+  overlayKeys: Record<string, string>;
 }
 
 /**
@@ -398,7 +404,12 @@ export function FixtureStreamPanel({
 
   const previewScale = previewScaleFor(stripWidth ?? PREVIEW_MAX_W_PX);
 
-  const overlayUrl = `${origin}/overlay/fixtures/${fixture.id}?style=${style}`;
+  // RT: the row's OWN key rides the URL the organiser pastes into OBS — never another fixture's, and none when the page
+  // minted none (the overlay then polls).
+  const overlayKey = stream.overlayKeys[fixture.id];
+  const overlayUrl = `${origin}/overlay/fixtures/${fixture.id}?style=${style}${
+    overlayKey ? `&${OVERLAY_KEY_PARAM}=${encodeURIComponent(overlayKey)}` : ""
+  }`;
 
   const sideOf = (entrantId: string | null, fallback: string): OverlaySideInput => ({
     id: entrantId ?? fallback,
@@ -582,6 +593,7 @@ export function FixtureStreamPanel({
                 key={live === null ? "seed" : "live"}
                 fixtureId={fixture.id}
                 initial={live ?? seed}
+                // m6/R1 (RT): no realtime, no declared purpose, no key — the console preview never mints a token.
                 realtime={false}
                 sportKey={stream.sportKey}
                 style={style}

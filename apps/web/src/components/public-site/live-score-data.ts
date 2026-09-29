@@ -3,7 +3,7 @@
 // endpoint's `data` — unwrapping it twice was a live bug: every 15 s poll
 // replaced the score with `undefined`).
 import { api } from "@/lib/client";
-import { OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM, type RealtimePurpose } from "@/lib/realtime-purpose";
+import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM, type RealtimePurpose } from "@/lib/realtime-purpose";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
@@ -127,16 +127,22 @@ export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiv
 
 export { OVERLAY_REALTIME_PURPOSE, type RealtimePurpose };
 
-/** The token route's path. A declared `purpose` (addendum RT: the stream overlay's) travels as a query parameter
- *  whose name and value live in lib/realtime-purpose.ts, the route's own source for them. */
-export function realtimeTokenPath(fixtureId: string, purpose?: RealtimePurpose): string {
+/** The token route's path. A declared `purpose` (the stream overlay's) and its signed `key` (RT) travel as query
+ *  parameters whose names and value live in lib/realtime-purpose.ts, the route's own source for them. Neither → the bare
+ *  path, exactly as a spectator page has always asked. */
+export function realtimeTokenPath(fixtureId: string, purpose?: RealtimePurpose, key?: string): string {
   const path = `/api/v1/public/fixtures/${fixtureId}/realtime-token`;
-  return purpose ? `${path}?${REALTIME_PURPOSE_PARAM}=${encodeURIComponent(purpose)}` : path;
+  const q = new URLSearchParams();
+  if (purpose) q.set(REALTIME_PURPOSE_PARAM, purpose);
+  if (key) q.set(OVERLAY_KEY_PARAM, key);
+  const qs = q.toString();
+  return qs ? `${path}?${qs}` : path;
 }
 
 export async function fetchPublicRealtimeToken(
   fixtureId: string,
   purpose?: RealtimePurpose,
+  key?: string,
 ): Promise<PublicRealtimeToken> {
-  return api<PublicRealtimeToken>(realtimeTokenPath(fixtureId, purpose));
+  return api<PublicRealtimeToken>(realtimeTokenPath(fixtureId, purpose, key));
 }

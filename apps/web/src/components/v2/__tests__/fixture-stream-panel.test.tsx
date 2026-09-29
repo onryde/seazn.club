@@ -44,6 +44,7 @@ import { messages, type MessageKey } from "@/lib/messages";
 import { STREAM_CREDIT_PACKS, streamPack, streamPackPriceAmounts } from "@/lib/stream-credit-packs";
 import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { LOCALES } from "@/lib/i18n-constants";
+import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
 import {
@@ -179,6 +180,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     streamSplit: null,
     monthlyAllowance: 0,
     currency: "gbp",
+    overlayKeys: { [FIXTURE.id]: "KEY_for-f-1_0123456789" },
     ...o,
   };
 }
@@ -324,6 +326,32 @@ describe("the strip OPENS on the sport's own default, not merely on something", 
   });
 });
 
+describe("RT: the OBS URL the panel copies carries THIS fixture's signed overlay key", () => {
+  it("the link is the overlay route with the style AND the page's key for this row's fixture — and Copy writes exactly that", async () => {
+    const writes: string[] = [];
+    vi.stubGlobal("navigator", { clipboard: { writeText: async (t: string) => { writes.push(t); } } });
+    try {
+      const island = open({ sportKey: "football" });
+      const link = String(propsOf(byTestId(island.tree(), "stream-link")!).value);
+      const url = new URL(link, "http://origin.test");
+      expect(url.pathname).toBe(`/overlay/fixtures/${FIXTURE.id}`);
+      expect(url.searchParams.get("style")).toBe(defaultThemeFor("football"));
+      expect(url.searchParams.get(OVERLAY_KEY_PARAM), "the key, under the route's own parameter name").toBe(ctx().overlayKeys[FIXTURE.id]);
+      await (propsOf(byTestId(island.tree(), "stream-copy")!).onClick as () => Promise<void>)();
+      expect(writes, "Copy puts the keyed URL on the clipboard").toEqual([link]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a key for ANOTHER fixture is never used, and no key for this row leaves the link keyless (the overlay then polls)", () => {
+    const island = open({ overlayKeys: { "f-other": "KEY_other" } });
+    const url = new URL(String(propsOf(byTestId(island.tree(), "stream-link")!).value), "http://origin.test");
+    expect(url.searchParams.has(OVERLAY_KEY_PARAM)).toBe(false);
+    expect(url.searchParams.get("style"), "the positive pair: the rest of the link is intact").toBe(defaultThemeFor("football"));
+  });
+});
+
 describe("the preview is the real stage, seeded from the row", () => {
   it("renders <OverlayStage> inside the strip, on the row's own fixture", () => {
     const tree = open().tree();
@@ -332,6 +360,10 @@ describe("the preview is the real stage, seeded from the row", () => {
     expect(propsOf(stage).fixtureId).toBe(FIXTURE.id);
     expect(propsOf(stage).fit, "the console preview scales its own wrapper").toBeFalsy();
     expect(propsOf(stage).realtime, "the console never opens a realtime channel").toBe(false);
+    // RT (m6/R1): nor does it DECLARE the overlay purpose or carry the key — `realtime={false}` means what it says, and
+    // the preview never mints a token. Absent as props, not merely falsy: the stage passes them straight to the hook.
+    expect("realtimePurpose" in propsOf(stage), "the preview declares no realtime purpose").toBe(false);
+    expect("overlayKey" in propsOf(stage), "the preview carries no overlay key").toBe(false);
     const initial = propsOf(stage).initial as { status: string; venueTz: string };
     expect(initial.status, "seeded from the row, so a dead endpoint still previews").toBe(
       FIXTURE.status,

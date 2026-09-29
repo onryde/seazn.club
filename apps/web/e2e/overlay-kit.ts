@@ -599,43 +599,6 @@ export async function grantRigPackCredits(orgId: string, n: number): Promise<num
   });
 }
 
-/** Put a stream session on this rig's fixture in `live` — the "is being broadcast" precondition of the overlay's
- *  realtime bypass (Task 14b addendum RT), seeded as a row rather than driven through the relay: the seam under test
- *  is the overlay page's own token request, not how a session goes live (stream-sessions.test.ts owns that). A target
- *  row of its own (its envelope is never read here), and every derived column from the fixture's division, as the
- *  usecase writes them. Returns the session id for `endRigStreamSession` / `deleteRigStreamSession`. */
-export async function openRigStreamSession(rig: OverlayRig): Promise<string> {
-  return withDb(async (sql) => {
-    const [target] = await sql<{ id: string }[]>`
-      insert into org_stream_targets (org_id, kind, label, rtmp_enc)
-      values (${rig.orgId}, 'youtube', 'e2e overlay realtime', '\\x00'::bytea) returning id`;
-    const [row] = await sql<{ id: string }[]>`
-      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, started_at, target_id, created_by,
-                                           sport_key, competition_id, division_id, entitlement_via_override)
-      select f.id, ${rig.orgId}, 'passthrough', 'live', now(), ${target!.id}, gen_random_uuid(),
-             d.sport_key, d.competition_id, f.division_id, true
-        from fixtures f join divisions d on d.id = f.division_id where f.id = ${rig.fixtureId}
-      returning id`;
-    if (!row) throw new Error(`openRigStreamSession: fixture ${rig.fixtureId} not found`);
-    return row.id;
-  });
-}
-
-/** End a session `openRigStreamSession` made: `completed`, a terminal state — no longer being broadcast. */
-export async function endRigStreamSession(sessionId: string): Promise<void> {
-  const ended = await withDb((sql) => sql`
-    update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now() where id = ${sessionId} returning 1`);
-  if (ended.length !== 1) throw new Error(`endRigStreamSession: no session ${sessionId}`);
-}
-
-/** Remove a session `openRigStreamSession` made, and its target, so no later test on the rig meets it. */
-export async function deleteRigStreamSession(sessionId: string): Promise<void> {
-  await withDb(async (sql) => {
-    const [row] = await sql<{ target_id: string }[]>`delete from fixture_stream_sessions where id = ${sessionId} returning target_id`;
-    if (row) await sql`delete from org_stream_targets where id = ${row.target_id}`;
-  });
-}
-
 /** Move this rig's org onto `planKey` — the SQL-flip convention the kit's own
  *  seed uses (`subscriptions.plan_key`), for a caller that needs the fixture
  *  seeded on `pro` and then viewed on another plan. Same invalidation

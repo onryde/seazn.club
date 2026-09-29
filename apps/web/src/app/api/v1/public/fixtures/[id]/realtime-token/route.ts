@@ -2,8 +2,9 @@ import { v1, reply } from "@/server/api-v1/http";
 import { HttpError } from "@/lib/errors";
 import { getCurrentUser, getOrgRole } from "@/lib/auth";
 import { publicRateLimit } from "@/server/usecases/public";
-import { fixtureOverlayRealtimeEligible, fixtureRealtimeEligible } from "@/server/public-site/data";
-import { OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM } from "@/lib/realtime-purpose";
+import { fixtureOverlayEntitled, fixtureRealtimeEligible } from "@/server/public-site/data";
+import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM } from "@/lib/realtime-purpose";
+import { verifyOverlayKey } from "@/server/overlay/overlay-key";
 import { fixtureScope, acceptedOfficialCovers } from "@/server/usecases/scorers";
 import { mintPublicFixtureToken } from "@/lib/realtime";
 
@@ -15,22 +16,27 @@ type Ctx = { params: Promise<{ id: string }> };
  * the 15 s polling fallback. Enforced here (service layer), not in the UI.
  * Exception (doc 13 §6): the fixture's own officials — editors and covering
  * scorers — get realtime regardless of plan; they are producing the data.
- * Exception (addendum RT, owner 2026-09-29): the STREAM OVERLAY, which
- * declares `?purpose=overlay`, gets realtime regardless of plan while the
- * fixture is being streamed and the org has `streaming.overlay`
- * (`fixtureOverlayRealtimeEligible`). The declaration only asks — it is never
- * read as a grant — and a spectator page, which never sends it, keeps the poll.
+ * Exception (RT, ruled 2026-09-29): the STREAM OVERLAY gets realtime
+ * regardless of plan when it declares `?purpose=overlay` AND its `?key=`
+ * verifies for THIS fixture (server/overlay/overlay-key.ts, constant-time —
+ * the organiser's panel puts it in the OBS URL it copies) AND the org has
+ * `streaming.overlay` (`fixtureOverlayEntitled`). The purpose only asks; the
+ * key is the grant. A keyless or bad-key request takes the normal path above,
+ * and a spectator page, which sends neither, keeps the poll.
  */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicRateLimit(req);
     const { id } = await params;
-    const overlay = new URL(req.url).searchParams.get(REALTIME_PURPOSE_PARAM) === OVERLAY_REALTIME_PURPOSE;
+    const query = new URL(req.url).searchParams;
+    // Both halves before any read: the declared purpose, and a key that verifies for the fixture in the PATH.
+    const overlay =
+      query.get(REALTIME_PURPOSE_PARAM) === OVERLAY_REALTIME_PURPOSE && verifyOverlayKey(id, query.get(OVERLAY_KEY_PARAM));
     const eligible =
       (await fixtureRealtimeEligible(id)) ||
       (await isFixtureOfficial(id)) ||
       (await isFixtureDeviceLink(req, id)) ||
-      (overlay && (await fixtureOverlayRealtimeEligible(id)));
+      (overlay && (await fixtureOverlayEntitled(id)));
     if (!eligible) throw new HttpError(403, "realtime not available for this competition");
     const token = await mintPublicFixtureToken(id);
     return reply(200, { token, channel: `fixture:${id}` });
