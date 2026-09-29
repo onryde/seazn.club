@@ -5454,7 +5454,7 @@
   "stream.phone.credits.other": "{n} créditos",
   "stream.phone.buyMore": "Comprar más",
   "stream.phone.goLive": "Emitir",
-  "stream.phone.restartFree": "Reiniciar este partido es gratis durante 24 horas desde que empezó a emitirse.",
+  "stream.phone.restartFree": "Reiniciar este partido es gratis dentro de las 24 horas siguientes a su primera emisión en directo.",
   "stream.phone.qr.caption": "Apunta el móvil a este código",
   "stream.phone.qr.copy": "Copiar",
   "stream.phone.qr.copied": "Copiado",

@@ -5454,7 +5454,7 @@
   "stream.phone.credits.other": "{n} crédits",
   "stream.phone.buyMore": "Acheter",
   "stream.phone.goLive": "Passer en direct",
-  "stream.phone.restartFree": "Relancer ce match est gratuit pendant 24 heures après son passage en direct.",
+  "stream.phone.restartFree": "Relancer ce match est gratuit dans les 24 heures qui suivent son premier passage en direct.",
   "stream.phone.qr.caption": "Pointez le téléphone vers ce code",
   "stream.phone.qr.copy": "Copier",
   "stream.phone.qr.copied": "Copié",

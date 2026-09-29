@@ -1296,6 +1296,15 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     for (const v of up) expect(byTestId(body({ view: v, balance: 0, restartFree: true }), "stream-restart-free"), v.state).toBeUndefined();
   });
 
+  /** The free-restart copy M-4 retired, per locale: it said the window ran "after it went live", as if each restart
+   *  opened a new one. */
+  const RETIRED_RESTART_FREE_COPY: Readonly<Record<string, string>> = {
+    en: "Restarting this match is free for 24 hours after it went live.",
+    es: "Reiniciar este partido es gratis durante 24 horas desde que empezó a emitirse.",
+    fr: "Relancer ce match est gratuit pendant 24 heures après son passage en direct.",
+    nl: "Deze wedstrijd opnieuw starten is gratis tot 24 uur nadat hij live ging.",
+  };
+
   it("I-1: the free-restart line says the reuse window's own hours, in every locale", () => {
     // Taken from the relay's declaration (config.ts CREDIT_REUSE_HOURS — the hours `withinReuseWindow` counts), never
     // typed here: a window moved to 12 h leaves every locale's "24" a lie, and this is where that shows.
@@ -1305,9 +1314,16 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       expect(line?.length, `${l}: the key exists`).toBeGreaterThan(0);
       expect(line, `${l} names the window's hours`).toMatch(new RegExp(`\\b${CREDIT_REUSE_HOURS}\\b`));
       if (l !== "en") expect(line, `${l} is translated`).not.toBe(uiDict("en")["stream.phone.restartFree"]);
+      // M-4 (lane-close re-review): the window is anchored on the FIRST go-live, and a restart does not extend it. The
+      // retired copy ("free for 24 hours after it went live") read as a fresh window per restart; no locale keeps it.
+      expect(line, `${l} still carries the retired copy`).not.toBe(RETIRED_RESTART_FREE_COPY[l]);
       locales++;
     }
     expect(locales).toBe(4);
+    // The owner-ruled English, with the digit taken from the declaration as above.
+    expect(uiDict("en")["stream.phone.restartFree"]).toBe(
+      `Restarting this match is free within ${CREDIT_REUSE_HOURS} hours of first going live.`,
+    );
   });
 
   it("B6: an OPENED chooser has a visible Close that hands back the idle controls; a FORCED one (balance 0) has none", () => {
