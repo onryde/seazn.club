@@ -3,7 +3,7 @@
 One page to sequence ACROSS programmes. Session content lives in each
 programme's own `_INDEX.md` + prompts — never duplicated here. Update
 this file whenever a programme's status or a cross-gate changes.
-Last updated: 2026-09-27 (format-matrix programme added; B17 folded into it; B07a merged #792). Previously: 2026-09-16 (bench row — B06b MERGED; B07a done, this wave; B07 split into B07a/B07b).
+Last updated: 2026-09-29 (format-matrix: W1a merged #896 on 2026-09-28; W1b's final-review fix batch on `feat/format-matrix-w1b`). Previously: 2026-09-27 (format-matrix programme added; B17 folded into it; B07a merged #792).
 
 ## The four active programmes
 

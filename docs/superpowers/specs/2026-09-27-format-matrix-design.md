@@ -127,45 +127,45 @@ Catalogue (70 scenario IDs, more atomic cases):
 
 **R — roster**
 - R1 late entry before Start · R2 late entry after Start
-- R3 withdrawal before Start · R4 withdrawal mid-event after some results (expunge vs keep, incl. already-finalized fixtures) · R5 withdrawal after the entrant has played all their matches · R6 withdrawal of an entrant already drawn into a later bracket/playoff slot
-- R7 disqualification (today: status only, no fixture cascade) · R8 entrant deleted · R9 pair/team rename or lineup change mid-event
-- R10 waitlist promotion after the draw · R11 duplicate entrant (same person twice, or in two partnerships in one division) · R12 doubles partner withdraws → substitute or pair dissolved · R13 entrant moved to another division after the draw
+- R3 withdrawal before Start · R4 withdrawal mid-event after some results (expunge vs keep, incl. already-finalized fixtures): under half the entrant's matches played, none finalized (R4a) / half or more played (R4b) / under half played, some fixtures already finalized (R4c) · R5 withdrawal after the entrant has played all their matches · R6 withdrawal of an entrant already drawn into a later bracket/playoff slot
+- R7 disqualification (today: status only, no fixture cascade) · R8 entrant deleted · R9 pair/team rename (R9a) or lineup change (R9b) mid-event
+- R10 waitlist promotion after the draw · R11 duplicate entrant: the same person twice (R11a), or in two partnerships in one division (R11b) · R12 doubles partner withdraws → substitute (R12a) or pair dissolved (R12b) · R13 entrant moved to another division after the draw
 - R14 retires from one match, continues in the next · R15 entrant leaves after their last match and is still paired next round · R16 substitute / different lineup in a team match (stats attribution)
 
 **M — single match**
 - M1 walkover in only one match · M2 double walkover · M3 retirement mid-match (partial score) · M4 abandoned: with no result (M4a) vs with a result, e.g. a cricket DLS decision or a football award-policy abandon (M4b) — ruling 30
 - M5 draw in a stage that cannot end level · M6 tie after regulation → decider (shoot-out, super over, extra time, chess tiebreak)
-- M7 void a decided result, before and after the next match started · M8 correct a finalized score (winner stays / winner flips) · M9 forfeit/award by the organiser
+- M7 void a decided result, before (M7a) and after (M7b) the next match started · M8 correct a finalized score: winner stays (M8a) / winner flips (M8b) · M9 forfeit (M9a) / award (M9b) by the organiser
 - M10 disqualification mid-match · M11 a rules change attempted mid-match — **must refuse** (ruling 12)
 - M12 player injured mid-match (team sport): a substitute comes on and the match continues (M12a) / no replacement, the team plays short (M12b) / a cricket batter retires hurt, then resumes (M12c) — ruling 30
 
 **F — field shape**
 - F1 odd field (byes) · F2 field below the format's minimum · F3 non-power-of-two bracket · F4 unequal pools
-- F5 two-way and 3+-way ties · F6 everyone level · F7 tie falling through to lots · F8 protected seeds
+- F5 two-way (F5a) and 3+-way (F5b) ties · F6 everyone level · F7 tie falling through to lots · F8 protected seeds
 
 **D — draw and structure**
-- D1 two divisions merged · D2 one division split · D3 seeding changed after the draw is published · D4 same-club / same-country separation
-- D5 re-draw after fixtures are published or timed · D6 format changed after entries close · D7 stage rules changed after Start
+- D1 two divisions merged · D2 one division split · D3 seeding changed after the draw is published · D4 same-club (D4a) / same-country (D4b) separation
+- D5 re-draw after fixtures are published (D5a) or timed (D5b) · D6 format changed after entries close · D7 stage rules changed after Start
 
 **P — progression**
 - P1 complete a stage with a fixture pending · P2 group → knockout with a qualifying tie unresolved · P3 Generate after a roster change · P4 Rebuild after results exist
-- P5 undo Generate / Pair next round · P6 per-stage rule override (a best-of-3 final) · P7 rank override
+- P5 undo Generate (P5a) / Pair next round (P5b) · P6 per-stage rule override (a best-of-3 final) · P7 rank override
 
 **Q — qualification and placing**
-- Q1 qualifier decided by lots/organiser, then a correction changes it after the knockout draw · Q2 group winner withdraws after qualifying → promote next or bye
-- Q3 third-place match skipped → shared 3rd · Q4 final not played → joint winners or decided by table · Q5 plate entrant withdraws / a main-draw loser declines the plate
+- Q1 qualifier decided by lots (Q1a) / organiser (Q1b), then a correction changes it after the knockout draw · Q2 group winner withdraws after qualifying → promote next or bye
+- Q3 third-place match skipped → shared 3rd · Q4 final not played → joint winners (Q4a) or decided by table (Q4b) · Q5 plate entrant withdraws (Q5a) / a main-draw loser declines the plate (Q5b)
 
 **X — disruption**
-- X1 weather stops play mid-round; resumed next day or cancelled · X2 event cut short: remaining rounds cancelled, standings and winner from an incomplete table
-- X3 a round shortened on the fly (fixture-level format override before start) · X4 a match resumed from its saved score vs replayed from scratch; replayed after a protest
+- X1 weather stops play mid-round; resumed next day (X1a) or cancelled (X1b) · X2 event cut short: remaining rounds cancelled, standings and winner from an incomplete table
+- X3 a round shortened on the fly (fixture-level format override before start) · X4 a match resumed from its saved score (X4a) vs replayed from scratch (X4b); replayed after a protest (X4c)
 
 **C — corrections**
-- C1 scores swapped home/away · C2 result entered on the wrong match · C3 protest upheld: overturn or replay a day later
+- C1 scores swapped home/away · C2 result entered on the wrong match · C3 protest upheld: overturn (C3a) or replay a day later (C3b)
 - C4 ineligible player → retroactive forfeits across the table · C5 points deduction (conduct) applied to the table
-- C6 late correction after the stage or event is complete (reopen, recompute ranks) · C7 result annulled weeks later
+- C6 late correction after the stage (C6a) or event (C6b) is complete (reopen, recompute ranks) · C7 result annulled weeks later
 
 **E — entry path** (how results reach the ledger)
-- E1 phone pad · E2 single-event result over the API (there is no separate quick-result endpoint) · E3 Bo1 points editor · E4 device link / printed scorer-sheet scan
+- E1 phone pad · E2 single-event result over the API (there is no separate quick-result endpoint) · E3 Bo1 points editor · E4 device link (E4a) / printed scorer-sheet scan (E4b)
 
 **Known 🚫 at design time** (no route or screen today): D1, D2, D4, R13, Q4,
 C5 (`carry_deltas` exists only through stage PUT, `FORMAT_LOCKED` once fixtures

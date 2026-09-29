@@ -121,22 +121,23 @@ describe("atomic cases", () => {
     }
     expect(split).toBeGreaterThan(0);
   });
-  it("the atomisation is the reviewed W1b plan's (Task 4 PARENTS block): every atom id, in order", () => {
-    // Until design §4 names every split parent's atoms (as it does for M4 and
-    // M12), the reviewed plan is the written source of the atomisation.
-    const start = PLAN.indexOf("export const PARENTS");
-    expect(start, "the plan's Task 4 PARENTS block is gone").toBeGreaterThan(-1);
-    const block = PLAN.slice(start, PLAN.indexOf("\n]);", start));
-    const planned: { id: string; atoms: string[] }[] = [];
-    for (const m of block.matchAll(/\bP\("([A-Z]\d{1,2})"|\bA\("([a-c])"/g)) {
-      if (m[1] !== undefined) planned.push({ id: m[1], atoms: [] });
-      else planned.at(-1)!.atoms.push(m[2]!);
+  it("the atomisation is design §4's (final batch FB-15): every split parent names its atoms, (Xa)…(Xc) in order, and ATOMIC is exactly those", () => {
+    // T4 review M-4: deleting an atom (R4c, X4c) must red, so each split
+    // parent's atom ids are read from its own design text, never from the
+    // plan or from catalogue.ts.
+    const texts = designTexts();
+    const named = [...texts].map(([id, text]) => ({ id, suffixes: [...text.matchAll(new RegExp(`\\((${id})([a-c])\\)`, "g"))].map((m) => m[2]!) }));
+    // The parse is pinned to the design's parent list, so a broken one cannot pass as "no atoms".
+    expect(named.map((p) => p.id)).toEqual(PARENTS.map((p) => p.id));
+    let split = 0;
+    for (const p of named) {
+      if (p.suffixes.length === 0) continue;
+      split++;
+      expect(p.suffixes, `${p.id}: atoms named in order, from a`).toEqual(["a", "b", "c"].slice(0, p.suffixes.length));
     }
-    // The plan parse is itself pinned to the design's parent list, so a broken
-    // parse cannot pass as "no atoms".
-    expect(planned.map((p) => p.id)).toEqual([...designTexts().keys()]);
-    const ids = planned.flatMap((p) => (p.atoms.length === 0 ? [p.id] : p.atoms.map((s) => `${p.id}${s}`)));
-    expect(ids.length).toBeGreaterThan(planned.length); // some parent is split
+    expect(split, "design §4 names no atom").toBeGreaterThan(0);
+    expect(split).toBe(PARENTS.filter((p) => p.atoms.length > 0).length);
+    const ids = named.flatMap((p) => (p.suffixes.length === 0 ? [p.id] : p.suffixes.map((x) => `${p.id}${x}`)));
     expect(ATOMIC.map((a) => a.id)).toEqual(ids);
   });
   it("every atom id the design or ruling 26 names exists (M4a/M4b, M12a–c, E4a/E4b as of 2026-09-28)", () => {
