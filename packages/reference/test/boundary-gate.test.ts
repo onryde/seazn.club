@@ -58,6 +58,9 @@ const TRIPLE_SLASH = "triple-slash reference is refused (use `import type`)";
 const SYMLINK = "symlink in src is refused — the gate judges real files only";
 const EVAL = "code built from a string (eval / Function) is refused — the gate cannot judge it";
 const LOADER_REF = "a module loader named outside a call is refused — an alias would hide the call";
+const GLOBAL_REF = "the global object named outside a member read is refused — an alias would hide a clock or entropy read";
+const NOT_TS = "a relative import must name its .ts file (the house strip-types rule) — an extensionless or suffixed specifier hides which file loads";
+const CONSTRUCTOR_REF = "a `.constructor` read is refused — it reaches Function without naming it";
 
 describe("reference boundary gate (ruling 27: statement-form import type from @seazn/engine/core only)", () => {
   it("empty case first: a src dir with no .ts files scans zero — the CLI refuses that", () => {
@@ -342,6 +345,91 @@ describe("nondeterministic tokens are judged on the syntax tree (review M-2)", (
   });
   it("the positive pair: a Date built from an argument, Date.UTC, and other Math members are deterministic — clean", () => {
     expect(judged({ "a.ts": `export const a = new Date(0);\nexport const b = Date.UTC(2026, 0, 1);\nexport const c = Math.max(1, 2);\nexport const d: Date | null = null;\n` })).toEqual([]);
+  });
+  it("final batch FB-2: a member NAMED like a global is no token — a FIDE performance rating reads clean", () => {
+    // Review RR-4: the owner was the rightmost name, so `r.performance.rating`
+    // (a tournament performance rating, a Swiss tiebreak) read as the clock.
+    expect(judged({ "a.ts": [
+      `interface Row { performance: { rating: number }; crypto: { id: string }; Date: { now: number }; Math: { random: number } }`,
+      `export const f = (r: Row) => [r.performance.rating, r.crypto.id, r.Date.now, r.Math.random, r["performance"]["rating"]];`,
+      `export const g = (r: { stats: Row }) => r.stats.performance.rating;`,
+      `export const h = { global: 1, globalThis: 2 };`,
+      `export const i = (r: { global: number }) => r.global;`,
+      `export const k = (m: { Date: new () => object }) => new m.Date();`,
+    ].join("\n") })).toEqual([]);
+  });
+  it("…while the global itself stays refused, through globalThis and global too — and the global object may not be aliased", () => {
+    expect(judged({ "a.ts": [
+      `export const a = globalThis.performance.now();`,
+      `export const b = globalThis["crypto"].randomUUID();`,
+      `export const c = global.Math.random();`,
+      `const g = globalThis;`,
+      `export const d = Reflect.get(global, "performance");`,
+      `export const e = g;`,
+    ].join("\n") })).toEqual([
+      `1 performance.now: ${TOKEN}`,
+      `2 crypto.randomUUID: ${TOKEN}`,
+      `3 Math.random: ${TOKEN}`,
+      `4 globalThis: ${GLOBAL_REF}`,
+      `5 global: ${GLOBAL_REF}`,
+    ]);
+  });
+});
+
+describe("final batch FB-9: the three escapes task 12 re-review measured (RR-1..RR-3)", () => {
+  it("RR-1: a relative specifier that does not end in .ts is refused — the extensionless and suffixed relays among them", () => {
+    expect(judged({
+      "a.ts": [
+        `import { buildStandings } from "./relay.test";`,
+        `import { raw } from "./relay.test.ts?raw";`,
+        `import { b } from "./b";`,
+        `import type { C } from "./sub";`,
+        `import { d } from "./sub/";`,
+        `export { buildStandings, raw, b, d };`,
+        `export type { C };`,
+      ].join("\n"),
+      "relay.test.ts": `export { buildStandings } from "@seazn/engine/core";\n`,
+      "b.ts": "export const b = 1;\n",
+      "sub/index.ts": "export type C = 1;\nexport const d = 1;\n",
+    })).toEqual([
+      `1 ./relay.test: ${NOT_TS}`,
+      `2 ./relay.test.ts?raw: ${NOT_TS}`,
+      `3 ./b: ${NOT_TS}`,
+      `4 ./sub: ${NOT_TS}`,
+      `5 ./sub/: ${NOT_TS}`,
+    ]);
+  });
+  it("RR-1, the positive pair: a relative .ts import inside src stays clean — a `.ts` inside the name is no suffix", () => {
+    expect(judged({ "a.ts": `import { b } from "./b.ts";\nimport type { T } from "./x.types.ts";\nexport { b };\nexport type { T };\n`, "b.ts": "export const b = 1;\n", "x.types.ts": "export type T = 1;\n" })).toEqual([]);
+  });
+  it("RR-2: Function reached through `.constructor` — arrow, async function, element access — is refused", () => {
+    expect(judged({ "a.ts": [
+      `const F = (() => {}).constructor;`,
+      `const A = Object.getPrototypeOf(async function () {}).constructor;`,
+      `const G = (function () {})["constructor"];`,
+      `export { F, A, G };`,
+    ].join("\n") })).toEqual([
+      `1 constructor: ${CONSTRUCTOR_REF}`,
+      `2 constructor: ${CONSTRUCTOR_REF}`,
+      `3 constructor: ${CONSTRUCTOR_REF}`,
+    ]);
+  });
+  it("RR-3: Temporal.Now, and a Date whose arguments are only a spread (possibly none), are nondeterministic — refused", () => {
+    expect(judged({ "a.ts": [
+      `export const a = Temporal.Now.instant();`,
+      `export const b = new Date(...[]);`,
+      `const xs: number[] = [];`,
+      `export const c = new Date(...xs);`,
+      `export const d = globalThis.Temporal.Now.plainDateISO();`,
+    ].join("\n") })).toEqual([
+      `1 Temporal.Now: ${TOKEN}`,
+      `2 new Date: ${TOKEN}`,
+      `4 new Date: ${TOKEN}`,
+      `5 Temporal.Now: ${TOKEN}`,
+    ]);
+  });
+  it("RR-3, the positive pair: a Date given a fixed argument beside a spread, and Temporal's pure constructors, are clean", () => {
+    expect(judged({ "a.ts": `const xs: number[] = [1];\nexport const a = new Date(2026, ...xs);\nexport const b = Temporal.PlainDate.from("2026-09-29");\n` })).toEqual([]);
   });
 });
 

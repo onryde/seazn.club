@@ -6,8 +6,13 @@
 // import engine runtime values, trap 3), a relative path into packages/engine,
 // a relay through a test file (tests are not scanned), dynamic import() of any
 // argument, require / createRequire / getBuiltinModule (called or merely
-// named), import-equals, triple-slash references, eval / Function, and
-// nondeterministic tokens — is a violation. Zero files scanned is a refusal.
+// named), import-equals, triple-slash references, eval / Function (named, or
+// reached through `.constructor`), a relative specifier that does not end in
+// `.ts`, and nondeterministic tokens — is a violation. A token is a read of
+// the GLOBAL (`performance.now`, `globalThis.Date.now`), never a member that
+// merely shares its name (`r.performance.rating`, a FIDE performance rating —
+// final batch FB-2); so the global object itself may be named only as the
+// owner of a member read. Zero files scanned is a refusal.
 //
 // The judge walks each file's TypeScript syntax tree, so comments, strings,
 // line breaks and ASI cannot hide a statement from it (review I-1 measured ten
@@ -50,6 +55,9 @@ const R = {
   importEquals: "`import … = require()` is refused",
   tripleSlash: "triple-slash reference is refused (use `import type`)",
   loaderRef: "a module loader named outside a call is refused — an alias would hide the call",
+  globalRef: "the global object named outside a member read is refused — an alias would hide a clock or entropy read",
+  constructorRef: "a `.constructor` read is refused — it reaches Function without naming it",
+  notTs: "a relative import must name its .ts file (the house strip-types rule) — an extensionless or suffixed specifier hides which file loads",
   eval: "code built from a string (eval / Function) is refused — the gate cannot judge it",
   token: "nondeterministic token (the reference must answer the same way every time)",
   symlink: "symlink in src is refused — the gate judges real files only",
@@ -63,8 +71,10 @@ const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
 const LOADERS: ReadonlySet<string> = new Set(["require", "createRequire", "getBuiltinModule"]);
 /** Names that run a string as code — refused wherever they are named (a call names them too). */
 const EVALS: ReadonlySet<string> = new Set(["eval", "Function"]);
-/** `owner.member` reads that answer differently per call; `*` = every member. */
-const TOKENS: ReadonlyMap<string, string> = new Map([["Date", "now"], ["Math", "random"], ["process", "hrtime"], ["performance", "*"], ["crypto", "*"]]);
+/** `owner.member` reads of a GLOBAL that answer differently per call; `*` = every member. */
+const TOKENS: ReadonlyMap<string, string> = new Map([["Date", "now"], ["Math", "random"], ["process", "hrtime"], ["performance", "*"], ["crypto", "*"], ["Temporal", "Now"]]);
+/** The global object's names in node: `globalThis.performance` is `performance`. */
+const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(["globalThis", "global"]);
 
 /** The engine's real directory; a missing one is refused, never read as "nothing is the engine". */
 export function engineDir(p: string = fileURLToPath(new URL("../packages/engine", import.meta.url))): string {
@@ -110,6 +120,32 @@ function nameNode(e: TS.Expression): TS.Identifier | TS.StringLiteralLike | unde
   return undefined;
 }
 const nameOf = (e: TS.Expression) => nameNode(e)?.text;
+const unparen = (e: TS.Expression): TS.Expression => (ts.isParenthesizedExpression(e) ? unparen(e.expression) : e);
+/** The global an expression names: a bare identifier, or a member of the
+ *  global object (`globalThis.performance`, `global["crypto"]`) — never a
+ *  member of anything else (`r.performance` names no global, FB-2). */
+function globalNamed(e: TS.Expression): string | undefined {
+  const x = unparen(e);
+  if (ts.isIdentifier(x)) return x.text;
+  if (ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) {
+    const o = unparen(x.expression);
+    if (ts.isIdentifier(o) && GLOBAL_OBJECTS.has(o.text)) return nameOf(x);
+  }
+  return undefined;
+}
+/** Where a name is a member or a key, not a reference: `x.global`, `{ global: 1 }`, `interface R { global: … }`, `{ global: g } = x`. */
+function namesNoBinding(node: TS.Identifier): boolean {
+  const p = node.parent;
+  return ((ts.isPropertyAccessExpression(p) || ts.isPropertyAssignment(p) || ts.isPropertySignature(p) || ts.isPropertyDeclaration(p) || ts.isMethodDeclaration(p) || ts.isMethodSignature(p)) && p.name === node)
+    || (ts.isBindingElement(p) && p.propertyName === node);
+}
+/** `node` is the owner of a member read (`globalThis.x`, `(globalThis)["x"]`). */
+function ownsMemberRead(node: TS.Node): boolean {
+  let n = node;
+  while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+  const p = n.parent;
+  return (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === n;
+}
 const literal = (e: TS.Expression | undefined) => (e === undefined ? "<none>" : ts.isStringLiteralLike(e) ? e.text : "<computed>");
 
 type Kind = "type" | "inline" | "value" | "side-effect";
@@ -147,6 +183,9 @@ function judgeFile(file: string, root: string, rel: string): Violation[] {
       const target = realish(resolve(dirname(file), spec));
       if (within(target, ENGINE)) add(pos, spec, R.intoEngine);
       else if (!target.startsWith(root + sep)) add(pos, spec, R.trap3);
+      // FB-9 (RR-1): `./relay.test` and `./relay.test.ts?raw` load a test file
+      // the relay check below cannot see; the house rule names the .ts file.
+      else if (!spec.endsWith(".ts")) add(pos, spec, R.notTs);
       else if (TEST_FILE.test(target)) add(pos, spec, R.relay);
       return;
     }
@@ -192,16 +231,23 @@ function judgeFile(file: string, root: string, rel: string): Violation[] {
     } else if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
       const nn = nameNode(node.expression);
       const name = nn?.text;
+      const args = node.arguments ?? [];
       if (nn !== undefined && name !== undefined && LOADERS.has(name)) { handled.add(nn); add(nn.getStart(sf), literal(node.arguments?.[0]), `${name}() is refused`); }
-      else if (name === "Date" && (ts.isCallExpression(node) || (node.arguments ?? []).length === 0)) add(node.getStart(sf), ts.isCallExpression(node) ? "Date()" : "new Date", R.token);
+      // The GLOBAL Date (FB-2); a spread-only argument list may be empty at runtime (FB-9, RR-3).
+      else if (globalNamed(node.expression) === "Date" && (ts.isCallExpression(node) || args.every((a) => ts.isSpreadElement(a)))) add(node.getStart(sf), ts.isCallExpression(node) ? "Date()" : "new Date", R.token);
     } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-      const owner = nameOf(node.expression);
+      // The owner must BE the global (FB-2): `r.performance.rating` reads a field.
+      const owner = globalNamed(node.expression);
       const member = nameOf(node);
       const want = owner === undefined ? undefined : TOKENS.get(owner);
       if (want !== undefined && member !== undefined && (want === "*" || want === member)) add(node.getStart(sf), `${owner ?? ""}.${member}`, R.token);
+      // FB-9 (RR-2): `(() => {}).constructor` is Function, never named.
+      else if (member === "constructor") add(node.getStart(sf), member, R.constructorRef);
     } else if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && !handled.has(node)) {
       if (LOADERS.has(node.text)) add(node.getStart(sf), node.text, R.loaderRef);
       else if (EVALS.has(node.text)) add(node.getStart(sf), node.text, R.eval);
+      // Only as a member read's owner: `const g = globalThis` would hide `g.performance.now()`.
+      else if (ts.isIdentifier(node) && GLOBAL_OBJECTS.has(node.text) && !ownsMemberRead(node) && !namesNoBinding(node)) add(node.getStart(sf), node.text, R.globalRef);
     }
     ts.forEachChild(node, visit);
   };
