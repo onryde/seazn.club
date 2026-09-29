@@ -145,6 +145,38 @@ export class FakeIngest implements IngestProvider {
     return [...(this.inputs.get(inputId)?.outputs ?? [])];
   }
 
+  /** C1: every removeOutput call's output uid, in order — a repeat and an unknown uid included. */
+  readonly removedOutputs: string[] = [];
+
+  /** C1: Cloudflare's "Delete an output". An output already gone (or an input the fake never made) is its 404 — success,
+   *  and nothing changes. Only the named output leaves; its neighbours stay. */
+  async removeOutput(inputId: string, outputId: string): Promise<void> {
+    this.record("removeOutput", "DELETE", `/live_inputs/${inputId}/outputs/${outputId}`, [inputId, outputId], outputId);
+    this.removedOutputs.push(outputId);
+    const row = this.inputs.get(inputId);
+    const i = row ? row.outputUids.indexOf(outputId) : -1;
+    if (!row || i === -1) return;
+    row.outputUids.splice(i, 1);
+    row.outputs.splice(i, 1);
+  }
+
+  /** C1: the outputs still simulcasting from ONE input — none once the input is deleted (Cloudflare drops them with it). */
+  liveOutputCount(inputId: string): number {
+    const row = this.inputs.get(inputId);
+    return row && !row.deleted ? row.outputs.length : 0;
+  }
+
+  /** C1: the outputs still pushing to ONE destination (url + key) across EVERY live input — what "exactly one publisher
+   *  on the organiser's key" means, since each session opens its own input. */
+  liveOutputsTo(target: IngestTarget): number {
+    let n = 0;
+    for (const row of this.inputs.values()) {
+      if (row.deleted) continue;
+      n += row.outputs.filter((o) => o.url === target.url && o.streamKey === target.streamKey).length;
+    }
+    return n;
+  }
+
   async outputState(inputId: string): Promise<OutputState> {
     this.record("outputState", "GET", `/live_inputs/${inputId}/outputs`, [inputId], inputId);
     const row = this.inputs.get(inputId);

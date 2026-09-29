@@ -63,6 +63,10 @@ export interface IngestProvider {
   inputStatus(inputId: string): Promise<IngestStatus>;            // C5: the per-input GET
   addOutput(inputId: string, target: IngestTarget): Promise<string>; // passthrough only, exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
   outputState(inputId: string): Promise<OutputState>;             // target_rejected source
+  /** C1 (lane C final review): takes the passthrough output off its input, which is what stops Cloudflare simulcasting
+   *  to the destination — the ONE teardown of a passthrough broadcast. Idempotent: an output already gone is success.
+   *  Never `deleteInput` for this (the input carries the recording — C2). */
+  removeOutput(inputId: string, outputId: string): Promise<void>;
   deleteInput(inputId: string): Promise<void>;                    // LEAKS recordings (C2) — videos first
   storageUsage(): Promise<StorageUsage>;                          // C3: raw usage; headroom is the usecase's
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;

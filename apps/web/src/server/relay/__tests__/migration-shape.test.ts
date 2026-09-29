@@ -538,4 +538,40 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(accepted).toBe(TERMINAL_STATES.length);
     expect(refused * accepted).toBeGreaterThan(0);
   });
+
+  it("output_released_at (V423, C1): NULLABLE timestamptz with no default, so every existing row reads 'not released'; the mark is REFUSED on every ACTIVE state and on a row that never held an output, and accepted on every TERMINAL row that did — both state lists the domain's own", async () => {
+    const r = await rig();
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'output_released_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    const release = (sid: string) => sql`update fixture_stream_sessions set output_released_at = now() where id = ${sid}`;
+    const REFUSAL = { code: "23514", constraint_name: "fixture_stream_sessions_output_released" };
+    let refused = 0;
+    for (const state of ACTIVE_STATES) {
+      const sid = await insertSession(r, state);
+      await sql`update fixture_stream_sessions set output_uid = 'out-1' where id = ${sid}`;
+      const [fresh] = await sql<{ m: Date | null }[]>`select output_released_at as m from fixture_stream_sessions where id = ${sid}`;
+      expect(fresh!.m, `${state}: a new row is not released`).toBeNull();
+      await expect(release(sid), state).rejects.toMatchObject(REFUSAL);   // a live broadcast is never marked released
+      refused++;
+      await sql`update fixture_stream_sessions set state = 'failed' where id = ${sid}`;   // frees the one-active slot
+    }
+    let accepted = 0, noOutput = 0;
+    for (const state of TERMINAL_STATES) {
+      const bare = await insertSession(r, state);
+      await expect(release(bare), `${state} with no output`).rejects.toMatchObject(REFUSAL);   // nothing was added, nothing to release
+      noOutput++;
+      const sid = await insertSession(r, state);
+      await sql`update fixture_stream_sessions set output_uid = 'out-1' where id = ${sid}`;
+      await release(sid);
+      const [row] = await sql<{ m: Date | null }[]>`select output_released_at as m from fixture_stream_sessions where id = ${sid}`;
+      expect(row!.m, state).toBeInstanceOf(Date);
+      accepted++;
+    }
+    expect(refused).toBe(ACTIVE_STATES.length);
+    expect(accepted).toBe(TERMINAL_STATES.length);
+    expect(noOutput).toBe(TERMINAL_STATES.length);
+    expect(refused * accepted).toBeGreaterThan(0);
+  });
 });

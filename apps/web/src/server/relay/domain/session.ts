@@ -32,6 +32,11 @@ export interface Session {
   // that acted on a missing beat (the stale-beat arm) or booted a replacement (the retry arm) restarts the window here.
   // `evaluate` times the beat from the later of the two. Persisted as beat_window_at (Task 7's V410 amend, Task 10).
   beatWindowAt: Date | null;
+  /** C1 (lane C final review): the Cloudflare OUTPUT this passthrough session added to its live input (Dg, persisted as
+   *  output_uid by the `add_output` effect). It is the domain's proof that there is a broadcast to take down: a session
+   *  stopped in `requested` or `provisioning` also passes through `ending`, so the STATE alone cannot say an output exists.
+   *  Only the usecase writes it; `decide` never changes it. */
+  outputUid: string | null;
 }
 
 // ---- admission (§6.3 order; E5: storage_exhausted is a refusal, never a state)
@@ -73,7 +78,8 @@ export type DomainEvent =
 export type Effect =
   | { type: "consume_credit" } | { type: "add_output" }
   | { type: "runner"; effect: RunnerEffect } | { type: "retry_runner" }
-  | { type: "complete_now" } | { type: "fill_replay" };
+  | { type: "complete_now" } | { type: "fill_replay" }
+  | { type: "release_output" };   // C1: remove the passthrough output — never the input (deleting it leaks recordings, C2)
 
 export interface Decision { next: Session; events: DomainEvent[]; effects: Effect[] }
 
@@ -248,7 +254,23 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
  *  other runner state still refuses it, so adding it here widens what a terminal session can BECOME by nothing at all. */
 export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["create_ok", "create_failed", "callback_stopped", "observed", "destroy_ok", "grace_expired", "orphan_listed"];
 
+/** C1 (lane C final review; orchestrator ruling — ONE predicate, never per arm). A passthrough broadcast is Cloudflare
+ *  simulcasting the phone's input to the destination through the output `add_output` created, and nothing else stops it:
+ *  failing or completing the ROW left the stream running (unpaid after a credit refusal, still public after a Stop). So
+ *  EVERY passthrough decision that lands in a terminal state and holds an output releases it — stop and wall clock
+ *  through their completion, credit_refused, target_rejected, every timeout. It is judged on the decision's OUTCOME, so a
+ *  new way to end a session is covered without an edit here. A terminal session never re-enters: `decideCell` refuses
+ *  every passthrough command on one. The release goes FIRST, ahead of the replay fill, so a failing later effect cannot
+ *  skip it. Killer: session.test.ts "C1 (lane C final review) … the sweep". */
+const releasesOutput = (before: Session, d: Decision): boolean =>
+  before.mode === "passthrough" && before.outputUid !== null && isTerminal(d.next.state);
+
 export function decide(s: Session, c: Command, now: Date): Decision {
+  const d = decideCell(s, c, now);
+  return releasesOutput(s, d) ? { ...d, effects: [{ type: "release_output" }, ...d.effects] } : d;
+}
+
+function decideCell(s: Session, c: Command, now: Date): Decision {
   const illegal = () => new InvalidTransition(s.state, c.type);
   if (isTerminal(s.state)) {
     const cleanup =

@@ -101,6 +101,13 @@ function cfReply(c: Call): Reply {
   if (c.init.method === "GET" && /\/live_inputs\/in_gone$/.test(c.url))
     return { status: 404, body: { success: false, errors: [{ code: 10003, message: "not found" }] } };
   if (c.init.method === "POST" && /\/outputs$/.test(c.url)) return { status: 200, body: { success: true, result: { uid: "out_1" } } };
+  // C1: "Delete an output" answers HTTP 200 with the body `{}` (Cloudflare API docs, fetched 2026-09-29) — no `success`
+  // envelope. `out_gone` is an output already removed (Cloudflare's 404), `out_boom` a provider fault.
+  if (c.init.method === "DELETE" && /\/outputs\/out_gone$/.test(c.url))
+    return { status: 404, body: { success: false, errors: [{ code: 10005, message: "output not found" }] } };
+  if (c.init.method === "DELETE" && /\/outputs\/out_boom$/.test(c.url))
+    return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error for tok" }] } };
+  if (c.init.method === "DELETE" && /\/outputs\/[^/]+$/.test(c.url)) return { status: 200, body: {} };
   if (c.init.method === "GET" && /\/outputs$/.test(c.url))
     return { status: 200, body: { success: true, result: [{ uid: "out_1", enabled: true, status: { current: { state: "error", reason: "destination refused" } } }] } };
   if (c.init.method === "GET" && c.url.endsWith("/storage-usage"))
@@ -241,6 +248,21 @@ describe("CloudflareIngest", () => {
     // N-2: and the two envelope guards, so no branch is covered only by another.
     expect(await ingest.outputState("in_noresult")).toBe("unknown");
     expect(await ingest.outputState("in_failed")).toBe("unknown");
+  });
+
+  it("C1: removeOutput DELETEs live_inputs/{input}/outputs/{output} — Cloudflare's \"Delete an output\" — with no body; 200 `{}` and 404 both resolve (the removal is idempotent), a 5xx throws with the token redacted; every call recorded", async () => {
+    await expect(ingest.removeOutput("in_abc", "out_1")).resolves.toBeUndefined();
+    await expect(ingest.removeOutput("in_abc", "out_gone")).resolves.toBeUndefined();   // already removed: success
+    const boom = await ingest.removeOutput("in_abc", "out_boom").then(() => null, (e: Error) => e);
+    expect(boom?.message).toMatch(/^cloudflare remove output: HTTP 500 code 10000/);
+    expect(boom?.message).not.toContain("tok");                                           // the account token never rides out
+    expect(rec.calls.map((x) => [x.init.method, x.url.split("/stream")[1], x.init.body])).toEqual([
+      ["DELETE", "/live_inputs/in_abc/outputs/out_1", undefined],
+      ["DELETE", "/live_inputs/in_abc/outputs/out_gone", undefined],
+      ["DELETE", "/live_inputs/in_abc/outputs/out_boom", undefined],
+    ]);
+    // Never the input: deleting it leaks the recording (C2), and the recording is the replay.
+    expect(rec.calls.some((x) => /\/live_inputs\/in_abc$/.test(x.url))).toBe(false);
   });
 
   it("storageUsage returns the three fields raw — no headroom arithmetic in the adapter (C3)", async () => {
@@ -482,13 +504,13 @@ describe("CloudflareIngest", () => {
 describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
   type Shape = { operation: string; method: string; template: string; idCount: number; subject: string };
 
-  function shapes(calls: readonly ProviderCallRecord[], known: { input: string; video: string }): Shape[] {
+  function shapes(calls: readonly ProviderCallRecord[], known: { input: string; video: string; output: string }): Shape[] {
     return calls.map((c) => ({
       operation: c.operation,
       method: c.method,
       template: pathTemplate(c.url, c.ids),
       idCount: c.ids.length,
-      subject: c.subjectId == null ? "none" : c.subjectId === known.input ? "input" : c.subjectId === known.video ? "video" : "other",
+      subject: c.subjectId == null ? "none" : c.subjectId === known.input ? "input" : c.subjectId === known.video ? "video" : c.subjectId === known.output ? "output" : "other",
     }));
   }
 
@@ -500,8 +522,9 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     const real = new CloudflareIngest({ fetchImpl: recorder(cfReply).fetchImpl, accountId: "acct", token: "tok", recorder: realPort });
     const realCreds = await real.createLiveInput({ sessionId: "s1", slot: 0 });
     await real.inputStatus(realCreds.inputId);
-    await real.addOutput(realCreds.inputId, TARGET);
+    const realOut = await real.addOutput(realCreds.inputId, TARGET);
     await real.outputState(realCreds.inputId);
+    await real.removeOutput(realCreds.inputId, realOut);
     await real.storageUsage();
     await real.listVideos({ createdBefore: BEFORE });
     await real.deleteVideo("v_done");
@@ -512,27 +535,29 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     const fakeCreds = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
     fake.addVideo({ videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false });
     await fake.inputStatus(fakeCreds.inputId);
-    await fake.addOutput(fakeCreds.inputId, TARGET);
+    const fakeOut = await fake.addOutput(fakeCreds.inputId, TARGET);
     await fake.outputState(fakeCreds.inputId);
+    await fake.removeOutput(fakeCreds.inputId, fakeOut);
     await fake.storageUsage();
     await fake.listVideos({ createdBefore: BEFORE });
     await fake.deleteVideo("v_done");
     await fake.deleteInput(fakeCreds.inputId);
 
     await new Promise((r) => setImmediate(r));
-    const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done" });
-    const fakeShapes = shapes(fakePort.calls, { input: fakeCreds.inputId, video: "v_done" });
-    // Present twin for the comparison's own vacuity: eight operations, in order,
+    const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
+    const fakeShapes = shapes(fakePort.calls, { input: fakeCreds.inputId, video: "v_done", output: fakeOut });
+    // Present twin for the comparison's own vacuity: nine operations, in order,
     // and the templates really are Cloudflare's account-scoped Stream paths.
     expect(realShapes.map((s) => s.operation)).toEqual([
-      "createLiveInput", "inputStatus", "addOutput", "outputState", "storageUsage", "listVideos", "deleteVideo", "deleteInput",
+      "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "storageUsage", "listVideos", "deleteVideo", "deleteInput",
     ]);
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
-    expect(realShapes[5]!.template).toBe("/client/v4/accounts/{id}/stream");
-    expect(realShapes[6]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
+    expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
+    expect(realShapes[6]!.template).toBe("/client/v4/accounts/{id}/stream");
+    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
     // m4: the subject id per operation. The adapter is the authority — the
-    // object the call is ABOUT — and the fake already agrees on all eight.
-    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "none", "none", "video", "input"]);
+    // object the call is ABOUT — and the fake agrees on all nine (C1: the removal is about the OUTPUT).
+    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "none", "none", "video", "input"]);
     expect(fakeShapes).toEqual(realShapes);
   });
 });

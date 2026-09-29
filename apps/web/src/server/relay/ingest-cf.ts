@@ -279,6 +279,20 @@ export class CloudflareIngest implements IngestProvider {
     return states.length === 0 ? "unknown" : "ok";
   }
 
+  /** C1 (lane C final review): "Delete an output" — `DELETE /accounts/{account_id}/stream/live_inputs/{live_input_
+   *  identifier}/outputs/{output_identifier}`, "Deletes an output and removes it from the associated live input". PINNED
+   *  2026-09-29 against Cloudflare's OpenAPI spec (the Cloudflare MCP `search` over `spec.paths`) and the public page
+   *  https://developers.cloudflare.com/api/resources/stream/subresources/live_inputs/subresources/outputs/methods/delete/ ,
+   *  whose documented success is HTTP 200 with the body `{}` — no `success` envelope, so a 2xx is success on its own
+   *  (the DELETE tolerance below, I-3). A 404 is an output already gone: success, so every retry (the daily sweep, the
+   *  next admission on the destination) is idempotent. The subject is the OUTPUT — the object the call is about. */
+  async removeOutput(inputId: string, outputId: string): Promise<void> {
+    const r = await this.call("DELETE", `/live_inputs/${encodeURIComponent(inputId)}/outputs/${encodeURIComponent(outputId)}`, undefined,
+      { operation: "removeOutput", ids: [inputId, outputId], subjectId: outputId });
+    if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
+    this.fail("remove output", r);
+  }
+
   /** `meta.sessionId` is an ADDITION to the port's signature (an optional
    *  second argument, so `IngestProvider` is still satisfied): it exists so the
    *  create's own cleanup delete records a row that joins to its session. Every

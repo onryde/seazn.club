@@ -62,6 +62,7 @@ interface Row {
   runner_state: Session["runner"]["state"]; runner_name: string | null; runner_stop_requested_at: string | null;
   runner_exit_code: number | null; runner_oom_killed: boolean | null; runner_requested_stop: boolean | null;
   created_by: string; created_at: string;
+  output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
 }
 /** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
  *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no
@@ -70,7 +71,7 @@ interface Row {
 const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
-  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at`;
+  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -96,6 +97,7 @@ function toSession(r: Row): Session {
     // is silent — `endingAt` reads null forever and the policy quietly falls back to the wall clock,
     // which is the exact stranding F22 exists to end. The round-trip test is the only witness.
     endingAt: d(r.ending_at),
+    outputUid: r.output_uid,
     runner: {
       // C3: ONE authority for the attempt — the persisted `runner_attempts` (create calls MADE).
       // Deriving it as `runner_retries + (state === "none" ? 0 : 1)` disagrees with the row after an
@@ -414,6 +416,44 @@ async function forceDestroy(
   }
 }
 
+/** C1 (lane C final review; orchestrator ruling): WHERE a passthrough output release runs. `decision` is the terminal
+ *  decision's own `release_output` effect; `late_add` an output whose add returned after the session ended; `admission`
+ *  and `sweep` are the two retry owners of a release that failed. */
+type ReleaseSite = "decision" | "late_add" | "admission" | "sweep";
+
+/** C1: takes a passthrough session's Cloudflare OUTPUT off its input — the one thing that stops the simulcast — and marks
+ *  the row `output_released_at` (V423). Never the input: it carries the recording (C2). `true` when there is nothing left
+ *  to release (no output was ever recorded, or it is already released) or the removal was confirmed (a 404 counts).
+ *
+ *  A failure NEVER throws (orchestrator ruling): the terminal transition that asked for it has committed and stays, and
+ *  the reader whose Stop or poll ran it gets its answer, not a 500. It is recorded (the `release_output` effect row, like
+ *  every port effect), REPORTED to Sentry — a broadcast that may still be running is an alarm, the forceDestroy precedent
+ *  — and left unmarked, which is exactly what the two retry owners select: the next admission on the same fixture or
+ *  destination (`releasePriorOutputs`) and the daily sweep. The alarm names the session and the output uid (not a
+ *  secret, Dg) — never the destination, its key or any URL. */
+export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: SessionDeps): Promise<boolean> {
+  const [row] = await sql<(Row & { output_released_at: string | null; ingest_input_uid: string | null })[]>`
+    select ${cols()}, output_released_at, ingest_input_uid from fixture_stream_sessions where id = ${sessionId}`;
+  if (!row || row.output_uid === null || row.output_released_at !== null) return true;
+  const s = toSession(row);
+  const outputUid = row.output_uid;
+  const extra = { sessionId, outputUid, inputUid: row.ingest_input_uid, site };
+  try {
+    // An output recorded with no input is not a state any writer produces (both are written by the provision/add pair);
+    // a guard, not an assumption — it is reported like any failed removal rather than silently marked released.
+    const inputId = row.ingest_input_uid;
+    if (!inputId) throw new Error("stream session: an output is recorded with no live input to remove it from");
+    await recordEffect(s, "release_output", site === "sweep" ? "sweep" : "output", () => deps.drivers.ingest.removeOutput(inputId, outputUid),
+      { inputUid: inputId, outputUid, reason: site });
+    await sql`update fixture_stream_sessions set output_released_at = coalesce(output_released_at, ${deps.now()}) where id = ${sessionId}`;
+    return true;
+  } catch (err) {
+    captureError(err, { orgId: s.orgId, route: "relay.release_output", extra });
+    log.error({ ...extra, err: String(err) }, "stream session: passthrough output release failed — the broadcast may still be running; recorded and reported; the next admission on this fixture or destination and the daily sweep retry it");
+    return false;
+  }
+}
+
 /** Task 12's orphan pass (A22(b)): destroy a Machine the provider LISTS under `sessionId` that its row does not own,
  *  through the shared forceDestroy above (site `sweep`) — recorded on that session's own ledger and alarmed on failure,
  *  never duplicated here. The row is read fresh for the ledger's attempt. `null` when the row no longer exists: a
@@ -478,10 +518,17 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
           // Dg: the slot-0 destination output's uid, beside ingest_input_uid (not a secret). The port
           // RETURNS it (Tasks 3/4); throwing that return away is what would leave the column inert.
           // coalesce so a re-run of an idempotent effect cannot move a recorded uid.
-          await sql`update fixture_stream_sessions set output_uid = coalesce(output_uid, ${outputUid}) where id = ${current.id}`;
+          const [after] = await sql<{ state: Session["state"] }[]>`
+            update fixture_stream_sessions set output_uid = coalesce(output_uid, ${outputUid}) where id = ${current.id} returning state`;
+          // C1: the session ENDED while this call was out (a Stop tapped during the add): its terminal decision read no
+          // output and released nothing, so the output just made would simulcast for a session that is over. Released now.
+          if (after && isTerminal(after.state)) await releaseOutput(current.id, "late_add", deps);
         }
         break;
       }
+      case "release_output":
+        await releaseOutput(current.id, "decision", deps);   // C1: never throws — a failure is reported and retried
+        break;
       case "runner":
         current = await runRunnerEffect(current, e.effect, deps);
         break;
@@ -782,6 +829,39 @@ async function tearDownPriorMachines(
   return { sameFixture: null, otherFixture: null };
 }
 
+/** C1 (lane C final review; orchestrator ruling — mirror tearDownPriorMachines). A passthrough session that ended with
+ *  its output release FAILED may still be simulcasting to its destination, and V421's one-active index covers active
+ *  states only — so a new session on the same destination would add a SECOND output to the same key while the first
+ *  phone still publishes. Admission therefore retries the release first, for every terminal passthrough session of THIS
+ *  fixture or on THIS destination (inside the caller's org) whose output is recorded and not released, and refuses only
+ *  when the retry fails: this fixture's → `active_session` naming it, another fixture's → `target_in_use` naming its
+ *  court — the same two refusals, for the same reason, as a Machine that survived its destroy. The provider is asked
+ *  only when such a row exists, so an ordinary start makes no extra call. */
+async function releasePriorOutputs(
+  fixtureId: string, targetId: string, orgId: string, deps: SessionDeps,
+): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
+  const prior = await sql<{ id: string; fixture_id: string | null; holder_label: string; holder_court: string | null }[]>`
+    select s.id, s.fixture_id, t.label as holder_label, c.name as holder_court
+      from fixture_stream_sessions s
+      join org_stream_targets t on t.id = s.target_id
+      left join fixtures f on f.id = s.fixture_id
+      left join courts c on c.id = f.court_id
+     where s.org_id = ${orgId} and (s.fixture_id = ${fixtureId} or s.target_id = ${targetId})
+       and s.mode = 'passthrough' and s.state in ${sql([...TERMINAL_STATES])}
+       and s.output_uid is not null and s.output_released_at is null
+     order by s.created_at`;
+  for (const p of prior) {
+    if (await releaseOutput(p.id, "admission", deps)) continue;
+    if (p.fixture_id !== fixtureId) {
+      log.warn({ sid: p.id, fixtureId, holderFixtureId: p.fixture_id, targetId }, "stream session: another fixture's ended passthrough session may still be broadcasting on this destination and its output release failed — start refused");
+      return { sameFixture: null, otherFixture: { sessionId: p.id, label: p.holder_label, courtName: p.holder_court, holderFixtureId: p.fixture_id } };
+    }
+    log.warn({ sid: p.id, fixtureId }, "stream session: this fixture's previous passthrough session may still be broadcasting and its output release failed — start refused");
+    return { sameFixture: p.id, otherFixture: null };
+  }
+  return { sameFixture: null, otherFixture: null };
+}
+
 /** The `target_in_use` refusal, ONE shape for both holders — an active session (`targetHolderFor`) and another fixture's
  *  ended session whose still-listed Machine admission could not destroy (I1). `code` is what the client acts on (Task
  *  13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
@@ -847,7 +927,10 @@ export async function createSession(
   // when that destroy fails is the start `target_in_use`, naming its court, like an active holder.
   const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
   if (prior.otherFixture) throw targetInUse(prior.otherFixture);
-  const priorMachineSessionId = prior.sameFixture;
+  // C1: the passthrough twin — an ended session whose output release failed is released now, refused only if it fails again.
+  const priorOutput = await releasePriorOutputs(fixtureId, body.targetId, orgId, deps);
+  if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
+  const priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
 
   const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),

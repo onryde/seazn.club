@@ -136,6 +136,30 @@ describe("FakeIngest", () => {
     expect(fake.outputsFor(b.inputId)).toHaveLength(1);
   });
 
+  it("C1: removeOutput takes exactly that output off its input — a repeat (Cloudflare's 404) resolves and changes nothing; the LIVE count per input and per destination only counts outputs on inputs that still exist", async () => {
+    const fake = new FakeIngest();
+    const dest = { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };
+    const other = { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "other" };
+    expect(fake.liveOutputsTo(dest)).toBe(0);                          // the empty case
+    const a = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    const outA1 = await fake.addOutput(a.inputId, dest);
+    const outA2 = await fake.addOutput(a.inputId, other);
+    const b = await fake.createLiveInput({ sessionId: "s2", slot: 0 });
+    await fake.addOutput(b.inputId, dest);
+    expect([fake.liveOutputCount(a.inputId), fake.liveOutputCount(b.inputId), fake.liveOutputsTo(dest)]).toEqual([2, 1, 2]);
+    await fake.removeOutput(a.inputId, outA1);
+    expect(fake.outputsFor(a.inputId)).toEqual([other]);              // the named one, not its neighbour
+    expect([fake.liveOutputCount(a.inputId), fake.liveOutputsTo(dest)]).toEqual([1, 1]);
+    await expect(fake.removeOutput(a.inputId, outA1)).resolves.toBeUndefined();   // already gone: success, idempotent
+    await expect(fake.removeOutput("fake-in-unknown", "fake-out-x")).resolves.toBeUndefined();
+    expect(fake.liveOutputCount(a.inputId)).toBe(1);
+    expect(fake.removedOutputs).toEqual([outA1, outA1, "fake-out-x"]);   // every call is visible to a test
+    await fake.deleteInput(b.inputId);                                 // Cloudflare drops an input's outputs with it
+    expect([fake.liveOutputCount(b.inputId), fake.liveOutputsTo(dest)]).toEqual([0, 0]);
+    expect(fake.liveOutputsTo(other)).toBe(1);
+    void outA2;
+  });
+
   it("listVideos carries Cloudflare's recording facts, and a LIVE recording reads unknown — never a finalised-looking zero (Dd)", async () => {
     const fake = new FakeIngest();
     // The live row deliberately PASSES numbers: the fake must drop them. A fake
@@ -364,8 +388,9 @@ describe("the provider-call recorder seam (ruling 13)", () => {
     const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
     ingest.addVideo({ videoId: "vid-a", inputId, createdAt: new Date(0).toISOString(), inProgress: false });
     await ingest.inputStatus(inputId);
-    await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
+    const out = await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
     await ingest.outputState(inputId);
+    await ingest.removeOutput(inputId, out);
     await ingest.storageUsage();
     await ingest.listVideos({ createdBefore: new Date(1) });
     await ingest.deleteVideo("vid-a");
@@ -383,6 +408,7 @@ describe("the provider-call recorder seam (ruling 13)", () => {
       ["cloudflare", "inputStatus", "GET", `${cf}/live_inputs/{id}`, inputId, null],
       ["cloudflare", "addOutput", "POST", `${cf}/live_inputs/{id}/outputs`, inputId, null],
       ["cloudflare", "outputState", "GET", `${cf}/live_inputs/{id}/outputs`, inputId, null],
+      ["cloudflare", "removeOutput", "DELETE", `${cf}/live_inputs/{id}/outputs/{id}`, out, null],   // C1: about the OUTPUT
       ["cloudflare", "storageUsage", "GET", `${cf}/storage-usage`, null, null],
       ["cloudflare", "listVideos", "GET", cf, null, null],
       ["cloudflare", "deleteVideo", "DELETE", `${cf}/{id}`, "vid-a", null],

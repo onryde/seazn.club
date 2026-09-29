@@ -1318,7 +1318,7 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
       "requested>provisioning", "provisioning>warming", "warming>live", "live>ending", "ending>completed",
     ]);
     expect(rows.filter((x) => x.kind === "action").map((x) => [x.type, x.actor_user_id, x.source])).toEqual([["create", r.auth.userId, "client"], ["stop", r.auth.userId, "client"]]);
-    expect(rows.filter((x) => x.kind === "effect").map((x) => [x.type, x.result])).toEqual([["create_live_input", "ok"], ["add_output", "ok"], ["fill_replay", "ok"]]);
+    expect(rows.filter((x) => x.kind === "effect").map((x) => [x.type, x.result])).toEqual([["create_live_input", "ok"], ["add_output", "ok"], ["release_output", "ok"], ["fill_replay", "ok"]]);   // C1: the output is removed at the completion, before the replay fill
     expect(rows.filter((x) => x.kind === "observed").map((x) => [x.type, x.to_state])).toEqual([["ingest_status", "connected"]]);
     expect(rows.some((x) => x.kind === "runner_transition")).toBe(false);
   });
@@ -2329,4 +2329,155 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
     expect(reached.has("live"), "no drawn or pinned ordering reached live").toBe(true);
     expect([...reached].some((st) => TERMINAL_STATES.includes(st as (typeof TERMINAL_STATES)[number])), "no ordering reached a terminal state").toBe(true);
   }, 180_000);
+});
+
+// C1 (lane C final review, Critical): a passthrough broadcast is Cloudflare simulcasting the phone's input to the
+// destination through the ONE output the session added — and nothing removed it. Stop, the wall clock, a credit refusal
+// and every failure marked the ROW terminal while the stream kept going. The destination the fake counts is the rig's
+// own saved target (url + key), never read back from the code under test.
+describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is removed on every way it ends", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  const destOf = (host = "a.rtmps.youtube.com") => ({ url: `rtmps://${host}/live2`, streamKey: "yt-key" });
+  const facts = async (sid: string) => (await sql<{ state: string; fail_reason: string | null; end_reason: string | null; output_uid: string | null; output_released_at: Date | null }[]>`
+    select state, fail_reason, end_reason, output_uid, output_released_at from fixture_stream_sessions where id = ${sid}`)[0]!;
+  const releaseRows = (sid: string) => sql<{ result: string; source: string; reason: string | null; output: string | null }[]>`
+    select result, source, payload->>'reason' as reason, payload->>'outputUid' as output from fixture_stream_events
+     where session_id = ${sid} and kind = 'effect' and type = 'release_output' order by seq`;
+  const releaseAlarms = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.release_output");
+  /** A Cloudflare that refuses the removal while `down.on` — every other call is the rig's own fake. */
+  const flakyRemoval = (r: Rig) => {
+    const down = { on: true, err: Object.assign(new Error("cloudflare remove output: HTTP 503 code 10000"), { status: 503 }) };
+    const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async removeOutput(inputId: string, outputId: string) {
+        if (down.on) throw down.err;
+        return FakeIngest.prototype.removeOutput.call(r.ingest, inputId, outputId);
+      },
+    });
+    return { down, deps: { ...r.deps, drivers: { ...r.deps.drivers, ingest } } as SessionDeps };
+  };
+  const goLive = async (r: Rig, fixtureId = r.fixtureId) => {
+    r.tick(3000);
+    expect((await currentSession(r.auth, fixtureId, r.deps))!.state).toBe("live");
+  };
+
+  // Every terminal path the brief names, each driven through the REAL readers (the organiser's Stop and poll).
+  const PATHS: { name: string; host?: string; connectAfterMs?: number; drive: (r: Rig, sid: string) => Promise<unknown>; ends: Record<string, string | null> }[] = [
+    { name: "the organiser's Stop", drive: async (r, sid) => { await goLive(r); return stopSession(r.auth, r.fixtureId, sid, r.deps); },
+      ends: { state: "completed", end_reason: "stopped", fail_reason: null } },
+    { name: "a credit refused at go-live", drive: async (r) => {
+      await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.auth.orgId}, -1, 'consume', 0)`;
+      r.tick(3000);
+      return currentSession(r.auth, r.fixtureId, r.deps);
+    }, ends: { state: "failed", fail_reason: "no_credits", end_reason: null } },
+    { name: "the wall clock (max duration)", drive: async (r) => {
+      await goLive(r);
+      r.tick((MAX_DURATION_MINUTES * 60 + 60) * 1000);
+      return currentSession(r.auth, r.fixtureId, r.deps);
+    }, ends: { state: "completed", end_reason: "max_duration", fail_reason: null } },
+    { name: "the warming timeout (no inbound video)", connectAfterMs: 24 * 3_600_000, drive: async (r) => {
+      r.tick((WARMING_TIMEOUT_MINUTES * 60 + 60) * 1000);
+      return currentSession(r.auth, r.fixtureId, r.deps);
+    }, ends: { state: "failed", fail_reason: "no_inbound_timeout", end_reason: null } },
+    { name: "a destination that rejects the output", host: "reject.restream.io", drive: (r) => currentSession(r.auth, r.fixtureId, r.deps),
+      ends: { state: "failed", fail_reason: "target_rejected", end_reason: null } },
+  ];
+
+  it("every terminal path — Stop, credit refused, wall clock, warming timeout, target rejected — leaves ZERO live outputs on the destination, the output released on the row, and one ok release_output effect row (mutants: drop the domain predicate; drop the runEffects case → red at every path)", async () => {
+    let paths = 0;
+    for (const p of PATHS) {
+      const r = await rig({ credits: 1, ...(p.host ? { targetHost: p.host } : {}), ...(p.connectAfterMs ? { connectAfterMs: p.connectAfterMs } : {}) });
+      const dest = destOf(p.host);
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      expect(r.ingest.liveOutputsTo(dest), `${p.name}: the positive pair — the broadcast's output exists before it ends`).toBe(1);
+      await p.drive(r, sessionId);
+      const f = await facts(sessionId);
+      expect(f, p.name).toMatchObject(p.ends);
+      expect(r.ingest.liveOutputsTo(dest), `${p.name}: still simulcasting after the session ended`).toBe(0);
+      expect(f.output_released_at, p.name).toBeInstanceOf(Date);
+      expect(r.ingest.removedOutputs, p.name).toEqual([f.output_uid]);
+      expect(await releaseRows(sessionId), p.name).toEqual([{ result: "ok", source: "output", reason: "decision", output: f.output_uid }]);
+      paths++;
+    }
+    expect(paths).toBe(PATHS.length);
+    expect(paths).toBeGreaterThanOrEqual(5);
+  });
+
+  it("the SAME destination restarted after a Stop — on the same fixture, then on another — carries exactly ONE live output each time, never a second publisher on the key", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const dest = destOf();
+    const [f1, f2] = r.fixtureIds as [string, string];
+    const a = await createSession(r.auth, f1, body(r.target.id), r.deps);
+    await goLive(r, f1);
+    await stopSession(r.auth, f1, a.sessionId, r.deps);
+    expect(r.ingest.liveOutputsTo(dest)).toBe(0);
+    const b = await createSession(r.auth, f1, body(r.target.id), r.deps);   // the same match restarted (reuse window)
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);
+    await goLive(r, f1);
+    await stopSession(r.auth, f1, b.sessionId, r.deps);
+    await createSession(r.auth, f2, body(r.target.id), r.deps);             // the next match on that court's destination
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);
+  });
+
+  it("a FAILED removal at the Stop never 500s and never undoes the Stop: completed stands, the output stays recorded and unreleased, the failure is on the ledger and ALARMED in Sentry naming the session and output (and nothing that could hold the key)", async () => {
+    const r = await rig({ credits: 1 });
+    const dest = destOf();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const cf = flakyRemoval(r);
+    sentry.captureError.mockClear();
+    const done = await stopSession(r.auth, r.fixtureId, sessionId, cf.deps);    // resolves: the organiser gets an answer
+    expect(done).toMatchObject({ id: sessionId, state: "completed", endReason: "stopped" });
+    const f = await facts(sessionId);
+    expect(f).toMatchObject({ state: "completed", end_reason: "stopped", output_released_at: null });
+    expect(f.output_uid).not.toBeNull();
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);                                 // the truth: it may still be broadcasting
+    expect(await releaseRows(sessionId)).toEqual([{ result: "failed", source: "output", reason: "decision", output: f.output_uid }]);
+    const alarms = releaseAlarms();
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0]![0]).toBe(cf.down.err);
+    expect(alarms[0]![1]).toMatchObject({ orgId: r.auth.orgId, extra: { sessionId, outputUid: f.output_uid, site: "decision" } });
+    expect(JSON.stringify(alarms[0]![1])).not.toContain("yt-key");
+  });
+
+  it("ADMISSION backstop: a start on the destination of an ended session whose release FAILED retries the release first — while it keeps failing, another fixture is refused 409 target_in_use and this fixture 409 active_session, nothing created; once it succeeds the old output is released (reason admission) and the new start carries the ONE live output (mutant: drop the releasePriorOutputs call → 201 with TWO live outputs)", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const dest = destOf();
+    const [f1, f2] = r.fixtureIds as [string, string];
+    const { sessionId: old } = await createSession(r.auth, f1, body(r.target.id), r.deps);
+    await goLive(r, f1);
+    const cf = flakyRemoval(r);
+    await stopSession(r.auth, f1, old, cf.deps);
+    expect((await facts(old)).output_released_at).toBeNull();
+
+    await expect(createSession(r.auth, f2, body(r.target.id), cf.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+    await expect(createSession(r.auth, f1, body(r.target.id), cf.deps)).rejects.toMatchObject({ status: 409, code: "active_session", extra: { sessionId: old } });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id}`;
+    expect(n).toBe(1);                                                            // no second session, no second input
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);
+
+    cf.down.on = false;
+    await createSession(r.auth, f2, body(r.target.id), cf.deps);
+    expect((await facts(old)).output_released_at).toBeInstanceOf(Date);
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);                                 // the NEW session's, alone
+    expect((await releaseRows(old)).map((x) => `${x.result}:${x.reason}`)).toEqual(["failed:decision", "failed:admission", "failed:admission", "ok:admission"]);
+  });
+
+  it("a Stop that lands WHILE the output is still being added: the terminal decision read no output, so the output the add then returns is released at once — never left simulcasting for a session that is over (mutant: drop the late-add release → red)", async () => {
+    const r = await rig({ credits: 1 });
+    const dest = destOf();
+    const racing = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async addOutput(inputId: string, target: { url: string; streamKey: string }) {
+        const [held] = await sql<{ id: string }[]>`select id from fixture_stream_sessions where fixture_id = ${r.fixtureId} and state = 'warming'`;
+        await stopSession(r.auth, r.fixtureId, held!.id, r.deps);                // the organiser's tap, mid-add
+        return FakeIngest.prototype.addOutput.call(r.ingest, inputId, target);
+      },
+    });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), { ...r.deps, drivers: { ...r.deps.drivers, ingest: racing } });
+    const f = await facts(sessionId);
+    expect(f).toMatchObject({ state: "completed", end_reason: "stopped" });
+    expect(f.output_uid).not.toBeNull();                                          // the add DID land
+    expect(r.ingest.liveOutputsTo(dest)).toBe(0);
+    expect(f.output_released_at).toBeInstanceOf(Date);
+    expect(await releaseRows(sessionId)).toEqual([{ result: "ok", source: "output", reason: "late_add", output: f.output_uid }]);
+  });
 });

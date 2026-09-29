@@ -8,6 +8,7 @@ import "server-only";
 //      see a Machine that died WITHOUT our stop, or one already auto-destroyed. A TERMINAL row still `lost` after the
 //      reconcile gets its force_destroy re-issued (2C-post m1). One visit that throws is counted and reported; the pass
 //      goes on.
+//   1b. OUTPUTS (C1) — every ended passthrough session whose Cloudflare output release failed is released again.
 //   2. ORPHANS — every Machine the runner lists that its session does not own is destroyed through stream-sessions.ts's
 //      shared forceDestroy (A22(b)): no session, a TERMINAL session (A22(a), on every pass), or a live session whose row
 //      names another Machine — and ONLY a Machine stamped with this environment's identity (I1): an untagged or foreign
@@ -31,7 +32,7 @@ import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
 import {
   ACTIVE_STATES, TERMINAL_STATES, type SessionDeps,
-  apply, destroyListedMachine, estimateCostMinor, reconcileSession, storageHeadroomMinutes, storageUsageForColumns,
+  apply, destroyListedMachine, estimateCostMinor, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns,
 } from "./stream-sessions";
 
 export interface SweepResult {
@@ -57,6 +58,8 @@ export interface SweepResult {
   foreignRunnersSkipped: number;   // I1: orphan-shaped Machines this environment cannot PROVE it created — never destroyed
   runnerGoneConfirmed: number;     // V422 marks written THIS pass
   runnerGoneDeferred: number;      // m1: gone from the first listing, but not yet from a confirming second one
+  outputsReleased: number;         // C1: an ended passthrough session's output whose release had FAILED, removed this pass
+  outputReleasesFailed: number;    // C1: one whose removal failed AGAIN - reported, and retried by tomorrow's pass
   videosListed: number; listingTruncated: boolean;
   videosDeleted: number; videosDeferred: number; inputsDeleted: number; inputsDeferred: number; retentionFailed: number;
   foreignVideosSkipped: number;    // I1(c): past retention, but traceable to no input this database owns — never deleted
@@ -190,7 +193,7 @@ export async function sweepStreamSessions(
       retried: 0, crashed: 0, wallClockEnded: 0, terminalRunnersSettled: 0, otherFailures: 0,
     },
     runnerListing: "not_needed", machinesListed: 0, orphansDestroyed: 0, orphanDestroysFailed: 0, foreignRunnersSkipped: 0,
-    runnerGoneConfirmed: 0, runnerGoneDeferred: 0,
+    runnerGoneConfirmed: 0, runnerGoneDeferred: 0, outputsReleased: 0, outputReleasesFailed: 0,
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
@@ -237,6 +240,20 @@ export async function sweepStreamSessions(
       captureError(err, { orgId: c.org_id, route: "relay.sweep.backstop", extra: { sessionId: c.id } });
       log.error({ sid: c.id, err: String(err) }, "relay sweep: a backstop visit failed — counted and reported; the pass goes on");
     }
+  }
+
+  // 1b. OUTPUTS (C1, lane C final review). A passthrough session's terminal decision removes its Cloudflare output; a
+  //     removal that FAILED leaves the row terminal, `output_uid` set and `output_released_at` null (V423) — a broadcast
+  //     that may still be simulcasting. Retried here for every such row, AFTER the backstop (whose visits can end a session
+  //     and fail its release) and before retention. `releaseOutput` never throws: a failure is recorded, alarmed and
+  //     counted, and tomorrow's pass selects the row again. The other retry owner is the next admission on the destination.
+  const unreleased = await sql<{ id: string }[]>`
+    select id from fixture_stream_sessions
+     where mode = 'passthrough' and state in ${sql([...TERMINAL_STATES])} and output_uid is not null and output_released_at is null ${inScope()}
+     order by created_at`;
+  for (const u of unreleased) {
+    if (await releaseOutput(u.id, "sweep", deps)) out.outputsReleased++;
+    else out.outputReleasesFailed++;
   }
 
   // 2. ORPHANS. The provider is asked only once a composed session in scope has EVER held a runner: composed is disabled

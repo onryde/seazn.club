@@ -16,7 +16,7 @@ const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", mac
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "warming", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
-  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, ...over,
+  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null, ...over,
 });
 
 describe("evaluate", () => {

@@ -945,6 +945,35 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(g).toEqual(f);
   });
 
+  it("C1 SWEEP backstop: an ended passthrough session whose output release FAILED is released by the daily pass — counted, marked, recorded with reason sweep; a pass whose removal fails again counts it failed and leaves it for tomorrow; a pass with nothing unreleased selects nothing (mutant: drop the pass → red)", async () => {
+    const r = await rig();   // passthrough, warming: add_output has run
+    const dest = { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };   // the rig's own saved target
+    const [{ out }] = await sql<{ out: string | null }[]>`select output_uid as out from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(out).not.toBeNull();
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);
+    // The session ended and the decision's own release failed (stream-sessions.test drives that path): SEEDED here as the
+    // row that failure leaves — terminal, output recorded, not released.
+    await sql`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', end_reason = 'stopped', ended_at = now() where id = ${r.sessionId}`;
+    const released = async () => (await sql<{ at: Date | null }[]>`select output_released_at as at from fixture_stream_sessions where id = ${r.sessionId}`)[0]!.at;
+    const rows = async () => (await sql<{ r: string }[]>`
+      select result || ':' || source || ':' || (payload->>'reason') as r from fixture_stream_events
+       where session_id = ${r.sessionId} and kind = 'effect' and type = 'release_output' order by seq`).map((x) => x.r);
+
+    const failing = Object.assign(Object.create(r.ingest) as FakeIngest, { async removeOutput(): Promise<never> { throw new Error("cloudflare remove output: HTTP 503"); } });
+    expect(await sweep(r, { ingest: failing })).toMatchObject({ outputsReleased: 0, outputReleasesFailed: 1 });
+    expect(await released()).toBeNull();
+    expect(r.ingest.liveOutputsTo(dest)).toBe(1);
+
+    expect(await sweep(r)).toMatchObject({ outputsReleased: 1, outputReleasesFailed: 0 });
+    expect(await released()).toBeInstanceOf(Date);
+    expect(r.ingest.liveOutputsTo(dest)).toBe(0);
+    expect(r.ingest.removedOutputs).toEqual([out]);
+    expect(await rows()).toEqual(["failed:sweep:sweep", "ok:sweep:sweep"]);
+
+    expect(await sweep(r)).toMatchObject({ outputsReleased: 0, outputReleasesFailed: 0 });   // idempotent: nothing left to select
+    expect(r.ingest.removedOutputs).toEqual([out]);
+  });
+
   it("m3: the UNSCOPED production path — no orgIds, the cron route's own call — over a seeded database runs every phase with exact counts; the sweep's clock, set before every other file's rows, is what confines it to this test's two", async () => {
     // Every other test here is scoped (header). This one is not, so it cannot share the present with other files: its two
     // rows are moved 30 years back (every timestamptz column, so their relations hold), the sweep runs on a clock there,
