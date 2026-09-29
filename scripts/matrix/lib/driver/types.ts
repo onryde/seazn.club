@@ -7,7 +7,7 @@
 // FixtureState, AppendEventResponse, CompleteResult; usecases/withdrawal.ts
 // WithdrawCascadeOut; usecases/public.ts publicStandings).
 import type { StagePostBody } from "../catalogue.ts";
-import { redact } from "../redact.ts";
+import { mapStrings, redact } from "../redact.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
 export type EntrantKind = "individual" | "pair" | "team";
@@ -111,14 +111,18 @@ export function productMessageOf(said: string): string | null {
 /** A product answer outside 2xx (or a 2xx with no data). Carries what I4's
  *  named-refusal check reads (observed.ts isNamedRefusal: status + code) and
  *  what a reader needs to find the call (method + path). Message and path are
- *  redacted (R14a). `featureKey` is a 402's `feature_key` (Task 9), else null. */
+ *  redacted (R14a). `featureKey` is a 402's `feature_key` (Task 9), else null.
+ *  `extra` is every other field of the product's error envelope — e.g. a
+ *  NEXT_MATCH_STARTED refusal's `next_match` (W1b carry c) — with every string
+ *  in it redacted, or null when there is none. */
 export class RefusedCall extends Error {
   readonly method: string;
   readonly path: string;
   readonly status: number;
   readonly code: string | null;
   readonly featureKey: string | null;
-  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null) {
+  readonly extra: Readonly<Record<string, unknown>> | null;
+  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null, extra: Readonly<Record<string, unknown>> | null = null) {
     super(redact(`${method} ${path} → HTTP ${status} ${code ?? NO_CODE}: ${message ?? NO_MESSAGE}`));
     this.name = "RefusedCall";
     this.method = method;
@@ -126,7 +130,16 @@ export class RefusedCall extends Error {
     this.status = status;
     this.code = code;
     this.featureKey = featureKey;
+    this.extra = extra === null ? null : mapStrings(extra, redact);
   }
+}
+
+/** The fixture a refusal says the result fed, or null (W1b carry c): the
+ *  product's NEXT_MATCH_STARTED names it as `next_match.fixture_id`
+ *  (fed-seats.ts boardRef; pinned by product-text.ts). */
+export function nextMatchFixtureId(e: RefusedCall): string | null {
+  const nm = e.extra?.next_match;
+  return typeof nm === "object" && nm !== null && typeof (nm as { fixture_id?: unknown }).fixture_id === "string" ? (nm as { fixture_id: string }).fixture_id : null;
 }
 
 /** The harness asked the driver for something it must never do. */

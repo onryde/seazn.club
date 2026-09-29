@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded } from "../lib/driver/types.ts";
+import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
+import { nextMatchStartedText } from "./product-text.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
 function fake(replies: ((c: Call) => RawResult | undefined)[]): { t: Transport; calls: Call[] } {
@@ -299,6 +300,94 @@ describe("HttpDriver — denied stages (Task 9)", () => {
     expect(await d.replaceStagesProbe("d1", body)).toEqual({ status: 500, code: "INTERNAL", featureKey: null });
     expect(await d.replaceStagesProbe("d2", body)).toEqual({ status: 409, code: "FORMAT_LOCKED", featureKey: null });
     expect(d.callCount).toBe(2);
+  });
+});
+
+// W1b carry (c): a refusal's other envelope fields ride on RefusedCall.extra.
+// The one the model reads is NEXT_MATCH_STARTED's `next_match`: the fed
+// fixture the product refused over. Its code, status, key and id field are
+// read from the product's source (product-text.ts), never typed here.
+describe("HttpDriver — a refusal's other envelope fields (W1b carry c)", () => {
+  const next = nextMatchStartedText();
+  /** fed-seats.ts boardRef's shape: the fed fixture's id, its round and seq. */
+  const ref = { [next.wire.idField]: "f-9", round: 2, seq: 1 };
+  /** postStream's read of the tip, then the product's answer to the post. */
+  const refusingPost = (answer: RawResult) => fake([
+    (c) => (c.method === "GET" ? ok({ status: "decided", last_seq: 3, outcome: { kind: "win", winner: "h" } }) : undefined),
+    () => answer,
+  ]);
+  it("the product's next-match refusal on a post: RefusedCall carries the ref as extra, and nextMatchFixtureId names the fed fixture", async () => {
+    const { t, calls } = refusingPost(err(next.status, next.code, { [next.wire.key]: ref }));
+    const e = await drv(t).postStream("f1", [START], "p").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    const r = e as RefusedCall;
+    expect([r.status, r.code]).toEqual([next.status, next.code]);
+    expect(r.extra).toEqual({ [next.wire.key]: ref });
+    expect(nextMatchFixtureId(r)).toBe("f-9");
+    // One post: the refusal is not SEQ_CONFLICT, so nothing was retried.
+    expect(posts(calls)).toHaveLength(1);
+  });
+  it("empty case: an envelope carrying only RefusedCall's own fields (code, message, current_seq, feature_key) — or a bare string — has a null extra and names no next match", async () => {
+    const answers: RawResult[] = [
+      err(422, "STAGE_NOT_READY"),
+      err(409, "UNDO_TARGET_MISSING", { current_seq: 4 }),
+      err(402, "PAYMENT_REQUIRED", { feature_key: "formats.double_elim" }),
+      { status: 502, json: { ok: false, error: "no json" } },
+      { status: 500, json: null as never },
+    ];
+    let checked = 0;
+    for (const a of answers) {
+      const { t } = fake([() => a]);
+      const e = (await drv(t).generate("s1").catch((x: unknown) => x)) as RefusedCall;
+      expect(e, JSON.stringify(a.json)).toBeInstanceOf(RefusedCall);
+      expect(e.extra, JSON.stringify(a.json)).toBeNull();
+      expect(nextMatchFixtureId(e)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(answers.length);
+  });
+  it("every other field rides along whole — a 402's `feature` and `reason` too — and every string in it is redacted (R14a)", async () => {
+    const secret = "token=abc123secret";
+    const { t } = fake([() => err(402, "PAYMENT_REQUIRED", { feature_key: "formats.double_elim", feature: "formats.double_elim", reason: `upgrade ${secret}`, [next.wire.key]: { ...ref, code: { key: "rounds.final", params: { name: secret } } } })]);
+    const e = (await drv(t).generate("s1").catch((x: unknown) => x)) as RefusedCall;
+    expect(e.featureKey).toBe("formats.double_elim");
+    expect(Object.keys(e.extra ?? {}).sort()).toEqual(["feature", "reason", next.wire.key].sort());
+    expect(e.extra?.feature).toBe("formats.double_elim");
+    expect(JSON.stringify(e.extra)).not.toContain("abc123secret");
+    expect(JSON.stringify(e.extra)).toContain("upgrade ");
+    expect(nextMatchFixtureId(e)).toBe("f-9");
+  });
+  it("a second refusal is read afresh: the first one's extra never leaks into the next", async () => {
+    const { t } = fake([(c) => (c.path.endsWith("/s1/generate") ? err(next.status, next.code, { [next.wire.key]: ref }) : undefined), () => err(422, "STAGE_NOT_READY")]);
+    const d = drv(t);
+    const first = (await d.generate("s1").catch((x: unknown) => x)) as RefusedCall;
+    const second = (await d.generate("s2").catch((x: unknown) => x)) as RefusedCall;
+    expect(nextMatchFixtureId(first)).toBe("f-9");
+    expect(second.extra).toBeNull();
+    expect(nextMatchFixtureId(second)).toBeNull();
+  });
+  it("nextMatchFixtureId: only a next_match object carrying a string fixture id names one", () => {
+    const at = (extra: Record<string, unknown> | null) => nextMatchFixtureId(new RefusedCall("POST", "/x", 409, next.code, "m", null, extra));
+    const ROWS: [Record<string, unknown> | null, string | null][] = [
+      [null, null],
+      [{}, null],
+      [{ [next.wire.key]: null }, null],
+      [{ [next.wire.key]: "f-9" }, null],
+      [{ [next.wire.key]: { [next.wire.idField]: 9 } }, null],
+      [{ [next.wire.key]: { id: "f-9" } }, null],
+      [{ other: { [next.wire.idField]: "f-9" } }, null],
+      [{ [next.wire.key]: { [next.wire.idField]: "f-9" } }, "f-9"],
+    ];
+    let checked = 0;
+    for (const [extra, want] of ROWS) {
+      expect(at(extra), JSON.stringify(extra)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+  it("a RefusedCall built with the six original arguments carries a null extra", () => {
+    expect(new RefusedCall("GET", "/x", 400, "X", "m").extra).toBeNull();
+    expect(new RefusedCall("GET", "/x", 402, "PAYMENT_REQUIRED", "m", "k").extra).toBeNull();
   });
 });
 

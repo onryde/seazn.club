@@ -41,15 +41,28 @@ export interface HttpDriverOptions {
 export const REQUEST_TIMEOUT_MS = 60_000;
 
 /** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
- *  `{ok:false, error:{code, message, current_seq?, feature_key?}}` (a 402
- *  carries `feature_key`). A non-v1 or non-JSON answer can carry a bare string
- *  `error`; it then yields no code. */
-interface Envelope { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; current_seq?: number; feature_key?: string } | string }
+ *  `{ok:false, error:{code, message, ...extra}}` — errorResponse spreads an
+ *  error's extra beside code and message: `current_seq` (a SEQ_CONFLICT),
+ *  `feature_key` (a 402), `next_match` (NEXT_MATCH_STARTED), and more. A
+ *  non-v1 or non-JSON answer can carry a bare string `error`; it then yields
+ *  no code. */
+interface Envelope { ok?: boolean; data?: unknown; error?: Record<string, unknown> | string | null }
+
+/** The envelope's error fields RefusedCall carries as its own; every other one is its `extra` (W1b carry c). */
+const OWN_ERROR_FIELDS: ReadonlySet<string> = new Set(["code", "message", "current_seq", "feature_key"]);
+
+const errorFieldsOf = (r: RawResult): Record<string, unknown> | string | null => (r.json as unknown as Envelope | null)?.error ?? null;
 
 function errorOf(r: RawResult): { code?: string; message?: string; current_seq?: number; feature_key?: string } {
-  const e = (r.json as unknown as Envelope | null)?.error;
+  const e = errorFieldsOf(r);
   if (typeof e === "string") return { message: e };
-  return e ?? {};
+  if (e === null || typeof e !== "object") return {};
+  const out: { code?: string; message?: string; current_seq?: number; feature_key?: string } = {};
+  if (typeof e.code === "string") out.code = e.code;
+  if (typeof e.message === "string") out.message = e.message;
+  if (typeof e.current_seq === "number") out.current_seq = e.current_seq;
+  if (typeof e.feature_key === "string") out.feature_key = e.feature_key;
+  return out;
 }
 
 const is2xx = (r: RawResult) => r.status >= 200 && r.status < 300;
@@ -99,7 +112,11 @@ export class HttpDriver implements OrganiserDriver {
   #unwrap<T>(method: string, path: string, r: RawResult): T {
     if (!is2xx(r)) {
       const e = errorOf(r);
-      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null, e.feature_key ?? null);
+      // Every other field of the error rides on the refusal as `extra` (W1b
+      // carry c: NEXT_MATCH_STARTED's `next_match`); RefusedCall redacts it.
+      const fields = errorFieldsOf(r);
+      const rest = typeof fields === "object" && fields !== null ? Object.entries(fields).filter(([k]) => !OWN_ERROR_FIELDS.has(k)) : [];
+      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null, e.feature_key ?? null, rest.length === 0 ? null : Object.fromEntries(rest));
     }
     const data = (r.json as unknown as Envelope | null)?.data;
     if (data === undefined) throw new RefusedCall(method, path, r.status, "NO_DATA", "response carried no data");
