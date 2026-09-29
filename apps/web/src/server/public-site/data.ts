@@ -11,6 +11,7 @@ import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
+import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
 import { resolveVenueTz } from "@/lib/tz";
 import { venueTzRow } from "@/server/venue-tz";
@@ -1822,6 +1823,28 @@ export async function fixtureRealtimeEligible(fixtureId: string): Promise<boolea
     join public_competitions_v c on c.id = d.competition_id
     where f.id = ${fixtureId} limit 1`;
   return row?.realtime === true;
+}
+
+/**
+ * Addendum RT (Task 14b fix round 2; owner decision 2026-09-29): a community org's STREAM OVERLAY gets real-time
+ * scores. Answers whether THIS fixture's overlay may have a realtime token without the plan's `realtime`: the fixture
+ * is public (the same views as `fixtureRealtimeEligible`, so a private competition never qualifies), it has a stream
+ * session in `ACTIVE_STATES` (it is being broadcast — the partial unique index `fixture_stream_sessions_one_active`
+ * holds exactly these states), and the org has `streaming.overlay`, read as the overlay page reads it: `hasFeature`,
+ * competition-scoped. The caller's declared purpose is the route's to check; this never sees it.
+ */
+export async function fixtureOverlayRealtimeEligible(fixtureId: string): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return false;
+  const [row] = await sql<{ org_id: string; competition_id: string }[]>`
+    select c.org_id, c.id as competition_id
+    from public_fixtures_v f
+    join public_divisions_v d on d.id = f.division_id
+    join public_competitions_v c on c.id = d.competition_id
+    where f.id = ${fixtureId}
+      and exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.state in ${sql([...ACTIVE_STATES])})
+    limit 1`;
+  if (!row) return false;
+  return hasFeature(row.org_id, "streaming.overlay", row.competition_id);
 }
 
 /** Sitemap source: every `public` competition past draft, with its division

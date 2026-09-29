@@ -16,7 +16,7 @@ import { OverlayMomentSlab } from "./overlay-moment";
 import { OverlayEndOfOverCard } from "./overlay-end-of-over";
 import { OverlayTossCard } from "./overlay-toss-card";
 import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
-import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
+import { fetchOverlayFixture, OVERLAY_REALTIME_PURPOSE, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import {
   hasDetailBand,
   overlayModel,
@@ -103,10 +103,14 @@ export function OverlayStage(props: OverlayStageProps) {
   // stage's fetcher; `MatchCentre` keeps the public JSON. `presentationNowOffsetMs`
   // is `props.delayMs` (Task 5d's `?delay=`, resolved server-side in
   // page.tsx) — 0 when absent, exactly as before Task 5d; the clock
-  // subtracts it either way.
+  // subtracts it either way. Addendum RT (Task 14b fix round 2): the stage
+  // DECLARES the overlay purpose, so it asks for realtime even when the org's
+  // plan has none — the token route grants a community org's overlay while the
+  // fixture is being streamed, and a refusal leaves the stage on the poll.
   const { data, transport, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
     delayMs: props.delayMs,
+    realtimePurpose: OVERLAY_REALTIME_PURPOSE,
   });
   // The ONE timer in the overlay (Step 8a; _THEMES.md §6; owner 2026-09-06:
   // the clock TICKS). Formatted here, handed to the pure model as a string.

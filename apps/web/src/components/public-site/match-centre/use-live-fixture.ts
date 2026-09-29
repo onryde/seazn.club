@@ -5,7 +5,7 @@
 // legacy `LiveScore` scoreboard share ONE transport instead of two copies of
 // the same wiring. `LiveScore` now delegates here (see `../live-score.tsx`).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData } from "../live-score-data";
+import { fetchLiveFixture, fetchPublicRealtimeToken, type LiveFixtureData, type RealtimePurpose } from "../live-score-data";
 
 export const POLL_MS = 15_000;
 
@@ -37,6 +37,11 @@ export interface UseLiveFixtureOptions<T extends LiveFixtureData> {
    *  NO SOONER, not "exactly": the drain is a fixed `DRAIN_MS` tick, so the
    *  wait is in `[delayMs, delayMs + DRAIN_MS)` (review MINOR 2). */
   delayMs?: number;
+  /** Addendum RT (Task 14b fix round 2): the purpose this caller DECLARES on its realtime-token request. The stream
+   *  overlay sends `overlay`, and asks even when `realtime` is false — the route grants a community org's overlay while
+   *  the fixture is being streamed and refuses otherwise, and a refusal leaves the hook on the poll exactly as before.
+   *  A string, so a caller that re-mints its options object every render never re-subscribes. */
+  realtimePurpose?: RealtimePurpose;
 }
 
 export interface UseLiveFixtureResult<T extends LiveFixtureData = LiveFixtureData> {
@@ -167,7 +172,8 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
 
   const live = data.status === "in_play" || data.status === "scheduled";
 
-  // Realtime push (Pro orgs). Any failure — no entitlement (403), env missing,
+  // Realtime push (entitled orgs; and the stream overlay, which declares its
+  // purpose — addendum RT). Any failure — no entitlement (403), env missing,
   // websocket refused — leaves `subscribed` false and polling takes over.
   //
   // Private channel + setAuth (scorepad shape). Mint is ES256 via
@@ -175,8 +181,9 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
   // realtime.messages binds topic to JWT fixture_id claim (proved 2026-09-13).
   // Polling stays as safety net; publishFixtureUpdate still fans a public twin.
   const [subscribed, setSubscribed] = useState(false);
+  const realtimePurpose = options.realtimePurpose;
   useEffect(() => {
-    if (!realtime || !live) return;
+    if ((!realtime && !realtimePurpose) || !live) return;
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
     if (!supabaseUrl) return;
     // CI's stub host has no Realtime websocket. Still mint (the e2e asserts
@@ -191,7 +198,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
     (async () => {
       let token: { token: string; channel: string };
       try {
-        token = await fetchPublicRealtimeToken(fixtureId);
+        token = await fetchPublicRealtimeToken(fixtureId, realtimePurpose);
       } catch {
         return; // not entitled or server error → polling
       }
@@ -221,7 +228,7 @@ export function useLiveFixture<T extends LiveFixtureData = LiveFixtureData>(
       channel?.unsubscribe();
       setSubscribed(false);
     };
-  }, [fixtureId, realtime, live, refresh]);
+  }, [fixtureId, realtime, realtimePurpose, live, refresh]);
 
   // Drain the delay buffer every DRAIN_MS: present the newest snapshot whose
   // receivedAt ≤ now − delayMs, drop everything older. One interval, armed only

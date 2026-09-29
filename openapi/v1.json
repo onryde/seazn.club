@@ -58919,7 +58919,7 @@
     },
     "/api/v1/public/fixtures/{id}/realtime-token": {
       "get": {
-        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement)",
+        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted while the fixture has an active stream session and the org has streaming.overlay)",
         "tags": [
           "public"
         ],
@@ -58931,6 +58931,17 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "overlay"
+              ]
             }
           }
         ],

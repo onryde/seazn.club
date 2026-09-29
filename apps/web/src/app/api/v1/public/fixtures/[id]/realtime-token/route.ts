@@ -2,7 +2,8 @@ import { v1, reply } from "@/server/api-v1/http";
 import { HttpError } from "@/lib/errors";
 import { getCurrentUser, getOrgRole } from "@/lib/auth";
 import { publicRateLimit } from "@/server/usecases/public";
-import { fixtureRealtimeEligible } from "@/server/public-site/data";
+import { fixtureOverlayRealtimeEligible, fixtureRealtimeEligible } from "@/server/public-site/data";
+import { OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM } from "@/lib/realtime-purpose";
 import { fixtureScope, acceptedOfficialCovers } from "@/server/usecases/scorers";
 import { mintPublicFixtureToken } from "@/lib/realtime";
 
@@ -14,15 +15,22 @@ type Ctx = { params: Promise<{ id: string }> };
  * the 15 s polling fallback. Enforced here (service layer), not in the UI.
  * Exception (doc 13 §6): the fixture's own officials — editors and covering
  * scorers — get realtime regardless of plan; they are producing the data.
+ * Exception (addendum RT, owner 2026-09-29): the STREAM OVERLAY, which
+ * declares `?purpose=overlay`, gets realtime regardless of plan while the
+ * fixture is being streamed and the org has `streaming.overlay`
+ * (`fixtureOverlayRealtimeEligible`). The declaration only asks — it is never
+ * read as a grant — and a spectator page, which never sends it, keeps the poll.
  */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     await publicRateLimit(req);
     const { id } = await params;
+    const overlay = new URL(req.url).searchParams.get(REALTIME_PURPOSE_PARAM) === OVERLAY_REALTIME_PURPOSE;
     const eligible =
       (await fixtureRealtimeEligible(id)) ||
       (await isFixtureOfficial(id)) ||
-      (await isFixtureDeviceLink(req, id));
+      (await isFixtureDeviceLink(req, id)) ||
+      (overlay && (await fixtureOverlayRealtimeEligible(id)));
     if (!eligible) throw new HttpError(403, "realtime not available for this competition");
     const token = await mintPublicFixtureToken(id);
     return reply(200, { token, channel: `fixture:${id}` });

@@ -32,12 +32,16 @@ import {
 } from "../src/components/overlay/moment-timing";
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
 import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
+import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "../src/components/public-site/live-score-data";
 import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
   clearStreamingOverride,
+  deleteRigStreamSession,
   denyOverlay,
+  endRigStreamSession,
   grantRigPackCredits,
+  openRigStreamSession,
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
@@ -927,6 +931,41 @@ test.describe("the Phone tab on a community org (V426)", () => {
       expect(widths).toBe(3);
     } finally {
       await owner.close();
+    }
+  });
+
+  // Addendum RT (Task 14b fix round 2; owner 2026-09-29): community orgs get REAL-TIME overlays. The plan-wide
+  // `realtime` stays off — a spectator keeps the poll — and the overlay page's own client, which declares its purpose,
+  // is minted a token while the fixture is being streamed. Driven through the real overlay page in a real browser:
+  // the request it makes is the seam (the route's unit table owns every other combination).
+  test("addendum RT: the overlay's OWN token request is granted while the fixture is streamed — the purpose alone is not, a spectator never is, and a finished broadcast is not", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const anon = await anonPage(browser);
+    const ask = (purpose?: typeof OVERLAY_REALTIME_PURPOSE) => anon.request.get(realtimeTokenPath(community.fixtureId, purpose));
+    let sessionId: string | null = null;
+    try {
+      expect((await ask()).status(), "premise: community has no `realtime`, so a spectator is refused").toBe(403);
+      expect((await ask(OVERLAY_REALTIME_PURPOSE)).status(), "the declared purpose alone never mints").toBe(403);
+
+      sessionId = await openRigStreamSession(community);
+      const overlayPath = realtimeTokenPath(community.fixtureId, OVERLAY_REALTIME_PURPOSE);
+      const asked = anon.waitForResponse((r) => r.url().endsWith(overlayPath), { timeout: 30_000 });
+      await anon.goto(`/overlay/fixtures/${community.fixtureId}?style=bug`);
+      await expect(anon.locator('[data-testid="ovl-root"]')).toHaveCount(1, { timeout: 30_000 });
+      const res = await asked;
+      expect(res.status(), "the overlay page's own request, declaring its purpose, is minted a token").toBe(200);
+      const body = (await res.json()) as { data?: { channel?: string; token?: string } };
+      expect(body.data?.channel).toBe(`fixture:${community.fixtureId}`);
+      expect(body.data?.token, "a token").toBeTruthy();
+      expect((await ask()).status(), "the spectator path is unchanged while streaming").toBe(403);
+
+      await endRigStreamSession(sessionId);
+      expect((await ask(OVERLAY_REALTIME_PURPOSE)).status(), "a finished broadcast is no longer being streamed").toBe(403);
+    } finally {
+      if (sessionId) await deleteRigStreamSession(sessionId);
+      await anon.context().close();
     }
   });
 

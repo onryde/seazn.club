@@ -3,7 +3,7 @@
 // polling replaced the scoreboard with `undefined` and the realtime-token
 // flow threw "Cannot read properties of undefined (reading 'token')".
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchLiveFixture, fetchPublicRealtimeToken } from "../live-score-data";
+import { fetchLiveFixture, fetchPublicRealtimeToken, OVERLAY_REALTIME_PURPOSE } from "../live-score-data";
 
 function stubFetch(payload: unknown, ok = true, status = 200) {
   vi.stubGlobal(
@@ -39,6 +39,16 @@ describe("fetchPublicRealtimeToken", () => {
     const res = await fetchPublicRealtimeToken("fx-1");
     expect(res.token).toBe("jwt");
     expect(res.channel).toBe("fixture:fx-1");
+  });
+
+  it("addendum RT: a declared purpose travels on the request's query string; without one the URL is unchanged", async () => {
+    stubFetch({ ok: true, data: { token: "jwt", channel: "fixture:fx-1" } });
+    await fetchPublicRealtimeToken("fx-1", OVERLAY_REALTIME_PURPOSE);
+    await fetchPublicRealtimeToken("fx-1");
+    const urls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toMatch(/\/api\/v1\/public\/fixtures\/fx-1\/realtime-token\?purpose=overlay$/);
+    expect(urls[1]).toMatch(/\/api\/v1\/public\/fixtures\/fx-1\/realtime-token$/);
   });
 
   it("throws when the org is not entitled (403)", async () => {

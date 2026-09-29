@@ -3,6 +3,7 @@
 // endpoint's `data` — unwrapping it twice was a live bug: every 15 s poll
 // replaced the score with `undefined`).
 import { api } from "@/lib/client";
+import { OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM, type RealtimePurpose } from "@/lib/realtime-purpose";
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
@@ -124,8 +125,18 @@ export async function fetchOverlayFixture(fixtureId: string): Promise<OverlayLiv
   });
 }
 
+export { OVERLAY_REALTIME_PURPOSE, type RealtimePurpose };
+
+/** The token route's path. A declared `purpose` (addendum RT: the stream overlay's) travels as a query parameter
+ *  whose name and value live in lib/realtime-purpose.ts, the route's own source for them. */
+export function realtimeTokenPath(fixtureId: string, purpose?: RealtimePurpose): string {
+  const path = `/api/v1/public/fixtures/${fixtureId}/realtime-token`;
+  return purpose ? `${path}?${REALTIME_PURPOSE_PARAM}=${encodeURIComponent(purpose)}` : path;
+}
+
 export async function fetchPublicRealtimeToken(
   fixtureId: string,
+  purpose?: RealtimePurpose,
 ): Promise<PublicRealtimeToken> {
-  return api<PublicRealtimeToken>(`/api/v1/public/fixtures/${fixtureId}/realtime-token`);
+  return api<PublicRealtimeToken>(realtimeTokenPath(fixtureId, purpose));
 }
