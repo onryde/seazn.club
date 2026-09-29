@@ -28,10 +28,18 @@ import { recordPurchase } from "@/server/usecases/stream-credits";
  * Grant a `kind: "stream_credits"` session's credits to `orgId` — the session's own IMMUTABLE `metadata.org_id`, which
  * both callers establish before calling (the webhook's enclosing gate reads it; the reconcile compares it). True once
  * the ledger holds this purchase — written now, or already written by the other path — and false when nothing is owed
- * (not settled) or nothing could be granted (logged, and a human paged). A transient database fault THROWS: the webhook
- * wants a redelivery, and the reconcile catches it.
+ * (not settled) or nothing could be granted (logged, and — from the webhook — a human paged). A transient database fault
+ * THROWS: the webhook wants a redelivery, and the reconcile catches it.
+ *
+ * N4: `alertStaff` is REQUIRED so each caller states it. Only the webhook pages: it meets a session once per event,
+ * behind runEvent's claim. The reconcile runs on every return render — a refresh, a second tab — so it logs and never
+ * pages; the webhook's own delivery of the same session is the one alert.
  */
-export async function fulfilStreamCreditsCheckout(orgId: string, session: Stripe.Checkout.Session): Promise<boolean> {
+export async function fulfilStreamCreditsCheckout(
+  orgId: string,
+  session: Stripe.Checkout.Session,
+  { alertStaff }: { alertStaff: boolean },
+): Promise<boolean> {
   // TWO settled states, written as two comparisons so each is killable on
   // its own. `paid` is the ordinary charge. `no_payment_required` is what
   // Stripe reports when a 100%-off promotion code leaves nothing to
@@ -94,7 +102,7 @@ export async function fulfilStreamCreditsCheckout(orgId: string, session: Stripe
           // (billing-events.ts's credit_pack, pass and size_pack limbs). The buyer was
           // charged and holds nothing; only a manual grant fixes it.
           const alertTo = process.env.STAFF_ALERT_EMAIL;
-          if (alertTo) {
+          if (alertStaff && alertTo) {
             void sendStreamCreditGrantFailedAlertEmail({
               to: alertTo,
               sessionId: session.id,
@@ -123,7 +131,7 @@ export async function fulfilStreamCreditsCheckout(orgId: string, session: Stripe
       // Same reasoning as the mismatch limb above: acknowledged, unretryable,
       // and invisible to everyone unless somebody is told.
       const alertTo = process.env.STAFF_ALERT_EMAIL;
-      if (alertTo) {
+      if (alertStaff && alertTo) {
         void sendStreamCreditGrantFailedAlertEmail({
           to: alertTo,
           sessionId: session.id,
@@ -158,7 +166,8 @@ export async function reconcileStreamCreditsCheckout(orgId: string, sessionId: s
     if (session.metadata?.kind !== "stream_credits") return false;
     if (session.metadata.org_id !== orgId) return false;
     if (session.status !== "complete") return false;
-    return await fulfilStreamCreditsCheckout(orgId, session);
+    // N4: logs, never pages — the webhook's delivery of this session is the one alert.
+    return await fulfilStreamCreditsCheckout(orgId, session, { alertStaff: false });
   } catch (err) {
     log.error({ err, orgId, sessionId }, "billing: stream_credits reconcile-on-return failed — the webhook will grant");
     return false;

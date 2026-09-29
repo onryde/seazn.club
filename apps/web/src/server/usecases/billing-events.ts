@@ -332,7 +332,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   if (session.metadata?.kind === "stream_credits") {
     // G1 (Task 14 fix round 1): the branch lives in stream-credits-checkout.ts so reconcile-on-return runs the SAME
     // settled gate, credits derivation and idempotent writer — the two converge on one ledger row.
-    await fulfilStreamCreditsCheckout(orgId, session);
+    await fulfilStreamCreditsCheckout(orgId, session, { alertStaff: true });
     return;
   }
 

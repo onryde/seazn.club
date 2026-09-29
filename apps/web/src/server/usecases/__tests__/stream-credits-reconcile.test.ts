@@ -26,6 +26,8 @@ import { creditBalance } from "../stream-credits";
 import { reconcileStreamCreditsCheckout } from "../stream-credits-checkout";
 import { buildRelayCheckoutParams } from "@/lib/relay-checkout";
 import { streamPack } from "@/lib/stream-credit-packs";
+import { sendStreamCreditGrantFailedAlertEmail } from "@/lib/email";
+import { log } from "@/server/logger";
 
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
@@ -95,6 +97,7 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
   });
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("THIS org's settled relay session: one purchase row for the pack's credits, and the balance moves", async () => {
@@ -178,5 +181,59 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
     retrieve.mockRejectedValueOnce(new Error("socket hang up"));
     await expect(reconcileStreamCreditsCheckout(auth.orgId, "cs_test_outage")).resolves.toBe(false);
     expect(await purchaseRows(auth.orgId)).toEqual([]);
+  });
+  // N4: the two paid-but-UNGRANTED limbs page a human — but only the WEBHOOK's call may. Reconcile runs on every return
+  // render (a refresh, a second tab, a back button), so a page from it would repeat per render; it logs instead, and
+  // the webhook — once per event, behind runEvent's claim — is the one caller that alerts.
+  describe("N4: a terminal refusal pages staff from the WEBHOOK only — reconcile logs it and stays quiet", () => {
+    const alertMock = vi.mocked(sendStreamCreditGrantFailedAlertEmail);
+    beforeEach(() => {
+      alertMock.mockClear();
+      vi.stubEnv("STAFF_ALERT_EMAIL", "billing-ops@example.test");
+    });
+
+    it("the ungranted limb (no credits snapshot, no resolvable pack): reconcile logs and sends 0 alerts; the webhook sends 1", async () => {
+      const { auth } = await seedOrg();
+      const sid = `cs_test_rec_ungranted_${auth.orgId.slice(0, 8)}`;
+      const base = relaySession(auth.orgId, sid);
+      const metadata = { ...base.metadata, pack: "999" } as Record<string, string>;
+      delete metadata.credits;
+      const session = { ...base, metadata } as Stripe.Checkout.Session;
+      stripeHolds.set(sid, session);
+      const errors = vi.spyOn(log, "error");
+
+      expect(await reconcileStreamCreditsCheckout(auth.orgId, sid)).toBe(false);
+      expect(alertMock, "reconcile never pages").not.toHaveBeenCalled();
+      expect(errors.mock.calls.some(([, text]) => /paid but ungranted/.test(String(text))), "…but it does log").toBe(true);
+      expect(await purchaseRows(auth.orgId)).toEqual([]);
+
+      expect(await runEvent(completedEvent(structuredClone(session)))).toBe(true);
+      expect(alertMock, "the webhook pages, once").toHaveBeenCalledTimes(1);
+      expect(alertMock.mock.calls[0]![0]).toMatchObject({ to: "billing-ops@example.test", sessionId: sid, orgId: auth.orgId });
+    });
+
+    it("the org-mismatch limb (the session id already recorded for another org): reconcile logs and sends 0 alerts; the webhook sends 1", async () => {
+      const first = (await seedOrg()).auth;
+      const second = (await seedOrg()).auth;
+      const sid = `cs_test_rec_mismatch_${first.orgId.slice(0, 8)}`;
+      expect(await runEvent(completedEvent(relaySession(first.orgId, sid)))).toBe(true);
+      expect(await purchaseRows(first.orgId)).toHaveLength(1);
+      // Stripe now "holds" the same id carrying the SECOND org's metadata, so reconcile passes its own org check and
+      // reaches the writer, which refuses the table-wide duplicate.
+      const collide = relaySession(second.orgId, sid);
+      stripeHolds.set(sid, collide);
+      const errors = vi.spyOn(log, "error");
+
+      expect(await reconcileStreamCreditsCheckout(second.orgId, sid)).toBe(false);
+      expect(alertMock, "reconcile never pages").not.toHaveBeenCalled();
+      expect(errors.mock.calls.some(([, text]) => /already recorded for another organisation/.test(String(text))), "…but it does log").toBe(true);
+      expect(await purchaseRows(second.orgId)).toEqual([]);
+
+      const ev = completedEvent(structuredClone(collide));
+      (ev as unknown as { id: string }).id = `evt_rec_mismatch_${second.orgId.slice(0, 8)}`;
+      expect(await runEvent(ev)).toBe(true);
+      expect(alertMock, "the webhook pages, once").toHaveBeenCalledTimes(1);
+      expect(alertMock.mock.calls[0]![0]).toMatchObject({ sessionId: sid, orgId: second.orgId });
+    });
   });
 });
