@@ -3,7 +3,7 @@
 // from W1b Task 5, the match-rules table the variant set is built from), and
 // the invariant layer is type-only so W1b's fast-check model and W10's shadow
 // checks can reuse it.
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -42,6 +42,26 @@ const SPEC = /(?:^|\n)\s*(import|export)\s+(type\s+)?[^;]*?from\s+["']([^"']+)["
 function importsOf(file: string): { spec: string; typeOnly: boolean }[] {
   const src = readFileSync(file, "utf8");
   return [...src.matchAll(SPEC)].map((m) => ({ spec: (m[3] ?? m[4] ?? m[5])!, typeOnly: m[2] !== undefined }));
+}
+
+/** Every `.ts` file a real load reaches from `roots`: relative VALUE imports
+ *  only (a type import is erased under strip-types and loads nothing), and
+ *  only specs that name an existing `.ts` file — exactly what node follows.
+ *  Bare packages and apps/web's `@/` alias are not walked. */
+function closure(roots: readonly string[]): Set<string> {
+  const seen = new Set<string>();
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const file = stack.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const { spec, typeOnly } of importsOf(file)) {
+      if (typeOnly || !spec.startsWith(".")) continue;
+      const target = resolve(dirname(file), spec);
+      if (target.endsWith(".ts") && existsSync(target)) stack.push(target);
+    }
+  }
+  return seen;
 }
 
 const MODULES = shipped(MATRIX).sort();
@@ -86,5 +106,31 @@ describe("scripts/matrix import boundary", () => {
       }
     }
     expect(files).toBe(TYPE_ONLY.size);
+  });
+});
+
+// W1c Task 4 (Task 3 review, controller ruling): the harness's widths live in
+// a leaf, so the browser path reads them without loading pairs.ts — which
+// pulls in the catalogue, the engine and apps/web's match-rules table.
+describe("the widths leaf", () => {
+  const WIDTHS = join(MATRIX, "lib/widths.ts");
+  it("lib/widths.ts is a shipped module that imports nothing at all", () => {
+    expect(MODULES).toContain(WIDTHS);
+    expect(importsOf(WIDTHS)).toEqual([]);
+    // Positive pair for the parse: the file does export the constants, so an
+    // empty import list is a real "none", not a regex that read nothing.
+    expect(readFileSync(WIDTHS, "utf8")).toMatch(/export const L2_WIDTHS\b[\s\S]*export const BROWSER_WIDTHS\b/);
+  });
+  it("pairs.ts and results.ts read their widths from the leaf (one authority)", () => {
+    for (const rel of ["lib/pairs.ts", "lib/results.ts"]) {
+      const specs = importsOf(join(MATRIX, rel)).map((i) => i.spec);
+      expect(specs, rel).toContain("./widths.ts");
+    }
+    // Transitively too: results.ts (and render.ts through it) loads neither
+    // pairs.ts nor the catalogue. The positive pair (the leaf IS reached)
+    // proves the walk read the file.
+    const reached = [...closure([join(MATRIX, "lib/results.ts")])].map((f) => relative(MATRIX, f));
+    expect(reached).toContain("lib/widths.ts");
+    expect(reached.filter((f) => f === "lib/pairs.ts" || f === "lib/catalogue.ts"), "results.ts must not load pairs.ts for a constant").toEqual([]);
   });
 });

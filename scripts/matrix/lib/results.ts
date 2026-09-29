@@ -13,24 +13,22 @@
 // driver and the browser width (null over HTTP), and per run its layer and
 // driver. parseResults reads v2 (the committed W1a/W1b evidence) and v3;
 // writeResults writes v3 only. The browser widths are the harness's declared
-// set — 1280 (ruling 39) and pairs.ts's L2_WIDTHS — so this module loads
-// pairs.ts (and through it the catalogue) for that one constant; it never
-// reads the catalogue's rows or sports.
+// set — 1280 (ruling 39) and L2_WIDTHS — read from the leaf widths.ts (W1c
+// Task 4), so this module no longer loads pairs.ts and the catalogue for them.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { L2_WIDTHS } from "./pairs.ts";
 import { baseScrubber, findSecrets, mapStrings } from "./redact.ts";
+import { BROWSER_WIDTHS } from "./widths.ts";
+
+// Re-exported so every existing `from "./results.ts"` import keeps working.
+export { BROWSER_WIDTHS } from "./widths.ts";
+export type { BrowserWidth } from "./widths.ts";
 
 export const LAYERS = ["L1", "L2", "L3"] as const;
 export type Layer = (typeof LAYERS)[number];
 export const DRIVER_KINDS = ["http", "browser"] as const;
 export type DriverKind = (typeof DRIVER_KINDS)[number];
-
-/** Every width a browser case may run at: 1280 first (ruling 39: L1 runs
- *  there), then L2's seven in their own order. Task 4's viewports read it. */
-export const BROWSER_WIDTHS = Object.freeze([1280, ...L2_WIDTHS] as const);
-export type BrowserWidth = (typeof BROWSER_WIDTHS)[number];
 
 export const CASE_STATES = ["works", "refused", "red", "later", "needs_ruling", "no_path", "not_run"] as const;
 export type CaseState = (typeof CASE_STATES)[number];

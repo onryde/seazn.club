@@ -17,10 +17,12 @@ import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
 import { MissingRule, RULES, decide, type Rule } from "./applicability.ts";
 import { l2Atomic } from "./scenario-catalogue.ts";
 import type { SportVariants } from "./variants.ts";
+import { L2_WIDTHS, type L2Width } from "./widths.ts";
 
-/** apps/web/playwright.config.ts mobile projects (pinned by pairs.test.ts). */
-export const L2_WIDTHS = Object.freeze([320, 360, 375, 390, 430, 768, 834] as const);
-export type L2Width = (typeof L2_WIDTHS)[number];
+// The widths live in the leaf widths.ts (W1c Task 4); re-exported here so
+// every existing `from "./pairs.ts"` import of them keeps working.
+export { L2_WIDTHS } from "./widths.ts";
+export type { L2Width } from "./widths.ts";
 
 export interface L2Run {
   readonly n: number;
