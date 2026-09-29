@@ -15,7 +15,10 @@ import { getStripe } from "@/lib/stripe";
 import { HttpError } from "@/lib/errors";
 import { canonicalJson } from "@/lib/canonical-json";
 import { CHECKOUT_BRANDING, CUSTOMER_UPDATE_FOR_TAX } from "@/lib/billing";
-import { type StreamCreditPack, type StreamPackSize, streamPack } from "@/lib/stream-credit-packs";
+import { type StreamCreditPack, type StreamPackSize, streamPack, streamPackPriceDrift } from "@/lib/stream-credit-packs";
+import { sendStreamPackPriceDriftAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
 
 /** Stable per-integration tag (stripe skill: `integration_identifier`) so this
  *  checkout surface is distinguishable from the plan/pass/AI-pack ones in the
@@ -74,10 +77,47 @@ export function buildRelayCheckoutParams(args: {
  * plan/pass/pack checkout routes' own "Billing is not yet configured" refusal.
  */
 export async function resolveStreamPackPriceId(pack: StreamCreditPack): Promise<string> {
-  const found = await getStripe().prices.list({ lookup_keys: [pack.lookupKey], limit: 1 });
+  // Parked (c): the options expanded, so the drift guard below sees every currency (unexpanded reads as all missing).
+  const found = await getStripe().prices.list({ lookup_keys: [pack.lookupKey], limit: 1, expand: ["data.currency_options"] });
   const price = found.data[0];
   if (!price) throw new HttpError(503, "Billing is not yet configured. Please contact support.");
+  // PROD drift guard (parked c; Task 14 re-review 3 R). The tiles quote the table while this price is what the checkout
+  // charges. `pnpm stripe:sync` keeps them equal (Addendum S), so a difference here is a hand-edit in the Stripe
+  // dashboard — and a price that differs is NEVER charged: the checkout is refused before any Session exists.
+  const drift = streamPackPriceDrift(pack, price);
+  if (drift.length > 0) {
+    const diff = drift.map((d) => `${d.at}: live ${d.live ?? "none"}, table ${d.want ?? "none"}`).join("; ");
+    const err = new StreamPackPriceDriftError(pack.lookupKey, price.id, diff);
+    log.error({ lookupKey: pack.lookupKey, priceId: price.id, drift: diff }, "relay-checkout: pack price differs from the table — checkout refused");
+    alertDriftOnce(err);
+    throw err;
+  }
   return price.id;
+}
+
+/** The drift guard's refusal: 502 `checkout_unavailable`, the code the Phone tab already reads as "Checkout didn't
+ *  open. Try again." Typed so the route answers it without reporting it a second time (it is reported here, once). */
+export class StreamPackPriceDriftError extends HttpError {
+  constructor(
+    readonly lookupKey: string,
+    readonly priceId: string,
+    readonly drift: string,
+  ) {
+    super(502, "Checkout could not be opened. Please try again.", "checkout_unavailable");
+  }
+}
+
+/** Drifted prices already reported by THIS process. Every checkout for a drifted pack meets the guard, so without it
+ *  staff would get an email per tap; once per price per server process is the page, the log line is every refusal. */
+const driftAlerted = new Set<string>();
+function alertDriftOnce(err: StreamPackPriceDriftError): void {
+  if (driftAlerted.has(err.priceId)) return;
+  driftAlerted.add(err.priceId);
+  captureError(err, { route: "billing/relay-checkout.price_drift", extra: { lookupKey: err.lookupKey, priceId: err.priceId, drift: err.drift } });
+  const to = process.env.STAFF_ALERT_EMAIL;
+  if (to) {
+    void sendStreamPackPriceDriftAlertEmail({ to, lookupKey: err.lookupKey, priceId: err.priceId, drift: err.drift }).catch(() => {});
+  }
 }
 
 /**

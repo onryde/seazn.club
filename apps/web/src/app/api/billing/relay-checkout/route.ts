@@ -5,7 +5,7 @@ import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { baseUrl } from "@/lib/oauth";
 import { hasFeature } from "@/lib/entitlements";
-import { createRelayCheckout } from "@/lib/relay-checkout";
+import { createRelayCheckout, StreamPackPriceDriftError } from "@/lib/relay-checkout";
 import { preferredCurrency } from "@/lib/currency-server";
 import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
@@ -127,6 +127,12 @@ export async function POST(req: Request) {
       // didn't open. Try again." Returned rather than thrown: `handler` captures every HttpError ≥ 500 itself, which
       // would report the same failure twice. This route's own typed refusals (the 503 for unsynced pack prices) and a
       // genuine bug keep their paths.
+      // Parked (c): the PROD drift guard refused a pack whose live price differs from the table. It has already logged
+      // and reported that once (lib/relay-checkout.ts); answered here with the same 502 code, and not re-thrown, which
+      // would have `handler` report it again on every tap.
+      if (err instanceof StreamPackPriceDriftError) {
+        return NextResponse.json({ ok: false, error: err.message, code: err.code }, { status: err.status });
+      }
       const stripe = stripeRequestError(err);
       if (!stripe) throw err;
       captureError(err, {

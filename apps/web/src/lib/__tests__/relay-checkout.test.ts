@@ -22,9 +22,28 @@ vi.mock("@/lib/stripe", () => ({
     checkout: { sessions: { create: stripeMock.sessionsCreate } },
   }),
 }));
+// Parked (c): the drift guard's two reporting seams — the one-time staff email and the error report.
+const alertMock = vi.hoisted(() => ({
+  email: vi.fn<(opts: { to: string; lookupKey: string; priceId: string; drift: string }) => Promise<boolean>>(async () => true),
+  capture: vi.fn(),
+}));
+vi.mock("@/lib/email", () => ({ sendStreamPackPriceDriftAlertEmail: alertMock.email }));
+vi.mock("@/lib/sentry", () => ({ captureError: alertMock.capture }));
+
+/** A live Stripe price that charges EXACTLY the table's amounts for `size` — what `stripe:sync` leaves behind — as
+ *  `prices.list` returns it with `data.currency_options` expanded (Stripe echoes the base currency there). */
+function synced(size: number, id: string): { id: string; currency: string; unit_amount: number; currency_options: Record<string, { unit_amount: number | null }> } {
+  const want = streamPackPriceAmounts(streamPack(size)!);
+  return {
+    id,
+    currency: want.currency,
+    unit_amount: want.unit_amount,
+    currency_options: { [want.currency]: { unit_amount: want.unit_amount }, ...want.currency_options },
+  };
+}
 
 import {
-  buildRelayCheckoutParams, createRelayCheckout, relayCheckoutIdempotencyKey, resolveStreamPackPriceId,
+  buildRelayCheckoutParams, createRelayCheckout, relayCheckoutIdempotencyKey, resolveStreamPackPriceId, StreamPackPriceDriftError,
 } from "../relay-checkout";
 
 describe("STREAM_CREDIT_PACKS", () => {
@@ -297,7 +316,7 @@ describe("createRelayCheckout", () => {
   });
 
   it("resolves the price by lookup key and buckets the idempotency key to 30 s", async () => {
-    stripeMock.pricesList.mockResolvedValue({ data: [{ id: "price_5" }] });
+    stripeMock.pricesList.mockResolvedValue({ data: [synced(5, "price_5")] });
     stripeMock.sessionsCreate.mockResolvedValue({ id: "cs_1", client_secret: "cs_1_secret_abc" });
     const s = await createRelayCheckout({
       orgId: "org-1",
@@ -310,6 +329,8 @@ describe("createRelayCheckout", () => {
     expect(stripeMock.pricesList).toHaveBeenCalledWith({
       lookup_keys: [streamPack(5)!.lookupKey],
       limit: 1,
+      // Parked (c): without the expand every currency option reads as missing and every price as drifted.
+      expand: ["data.currency_options"],
     });
     const [sent, opts] = stripeMock.sessionsCreate.mock.calls[0]!;
     expect(sent.line_items).toEqual([{ price: "price_5", quantity: 1 }]);
@@ -358,7 +379,7 @@ describe("createRelayCheckout", () => {
     };
     /** One call, the price id Stripe resolves the pack's lookup key to, and the key and params it was sent with. */
     async function keyFor(args: Args, priceId = "price_5"): Promise<{ key: string; sent: Record<string, unknown> }> {
-      stripeMock.pricesList.mockResolvedValueOnce({ data: [{ id: priceId }] });
+      stripeMock.pricesList.mockResolvedValueOnce({ data: [synced(args.size, priceId)] });
       stripeMock.sessionsCreate.mockResolvedValueOnce({ id: "cs", client_secret: "cs_secret" });
       await createRelayCheckout(args);
       const [sent, opts] = stripeMock.sessionsCreate.mock.calls.at(-1)!;
@@ -441,7 +462,98 @@ describe("createRelayCheckout", () => {
     await expect(resolveStreamPackPriceId(streamPack(1)!)).rejects.toMatchObject({ status: 503 });
     // …and the refusal owes its accept (S2): the same call with a synced price
     // returns the id and never throws.
-    stripeMock.pricesList.mockResolvedValue({ data: [{ id: "price_1" }] });
+    stripeMock.pricesList.mockResolvedValue({ data: [synced(1, "price_1")] });
     await expect(resolveStreamPackPriceId(streamPack(1)!)).resolves.toBe("price_1");
+  });
+
+  // Parked (c), Task 14 re-review 3 R: the tiles quote the table while a checkout charges the live price its lookup key
+  // resolves to. `stripe:sync` keeps the two equal (Addendum S), so what is left to catch is a hand-edit in the Stripe
+  // dashboard. The resolver already lists the price on every checkout; it now compares it, and a price that differs is
+  // never charged.
+  describe("PROD drift guard: a drifted price is refused, never charged, and staff hear once", () => {
+    const OLD_ALERT = process.env.STAFF_ALERT_EMAIL;
+    beforeEach(() => {
+      alertMock.email.mockClear();
+      alertMock.capture.mockClear();
+      process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    });
+    afterEach(() => {
+      if (OLD_ALERT === undefined) delete process.env.STAFF_ALERT_EMAIL;
+      else process.env.STAFF_ALERT_EMAIL = OLD_ALERT;
+    });
+    const args = (size: 1 | 5 | 20) => ({ orgId: "org-1", fixtureId: "fx-1", size, returnUrl: "https://a/?x", currency: "eur" });
+
+    it("any currency off the table — base, option, or missing — is a 502 checkout_unavailable and NO Session is created; the equal price beside it checks out", async () => {
+      let checked = 0;
+      for (const pack of STREAM_CREDIT_PACKS) {
+        const variants: [string, ReturnType<typeof synced>][] = [];
+        const base = synced(pack.size, `price_base_${pack.size}`);
+        base.unit_amount = base.unit_amount + 1;
+        variants.push(["base amount", base]);
+        for (const c of Object.keys(STREAM_PACK_FX)) {
+          const off = synced(pack.size, `price_${c}_${pack.size}`);
+          off.currency_options[c] = { unit_amount: off.currency_options[c]!.unit_amount! + 1 };
+          variants.push([`${c} amount`, off]);
+          const gone = synced(pack.size, `price_no_${c}_${pack.size}`);
+          delete gone.currency_options[c];
+          variants.push([`${c} missing`, gone]);
+        }
+        for (const [name, live] of variants) {
+          stripeMock.sessionsCreate.mockClear();
+          stripeMock.pricesList.mockResolvedValueOnce({ data: [live] });
+          const label = `${pack.lookupKey} ${name}`;
+          await expect(createRelayCheckout(args(pack.size)), label).rejects.toMatchObject({ status: 502, code: "checkout_unavailable" });
+          expect(stripeMock.sessionsCreate, `${label}: a drifted price was charged`).not.toHaveBeenCalled();
+          checked++;
+        }
+        // The positive pair: the price stripe:sync leaves behind opens a Session on that very price.
+        stripeMock.pricesList.mockResolvedValueOnce({ data: [synced(pack.size, `price_ok_${pack.size}`)] });
+        stripeMock.sessionsCreate.mockResolvedValueOnce({ id: "cs", client_secret: "cs_secret" });
+        await createRelayCheckout(args(pack.size));
+        expect(stripeMock.sessionsCreate.mock.calls.at(-1)![0].line_items).toEqual([{ price: `price_ok_${pack.size}`, quantity: 1 }]);
+      }
+      expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + 2 * Object.keys(STREAM_PACK_FX).length));
+    });
+
+    it("staff are alerted ONCE per drifted price — the same price refused again sends nothing, another drifted price alerts on its own", async () => {
+      const drifted = (id: string) => {
+        const p = synced(5, id);
+        p.currency_options.eur = { unit_amount: 1 };
+        return p;
+      };
+      let refused = 0;
+      for (let i = 0; i < 3; i++) {
+        stripeMock.pricesList.mockResolvedValueOnce({ data: [drifted("price_once_a")] });
+        await expect(createRelayCheckout(args(5))).rejects.toMatchObject({ status: 502 });
+        refused++;
+      }
+      expect(refused).toBe(3);
+      expect(alertMock.email, "three refusals of one price, one email").toHaveBeenCalledTimes(1);
+      expect(alertMock.email).toHaveBeenCalledWith(expect.objectContaining({
+        to: "ops@seazn.test", lookupKey: streamPack(5)!.lookupKey, priceId: "price_once_a",
+        drift: expect.stringContaining(`eur: live 1, table ${streamPackPriceAmounts(streamPack(5)!).currency_options.eur!.unit_amount}`),
+      }));
+      expect(alertMock.capture, "and one error report").toHaveBeenCalledTimes(1);
+      stripeMock.pricesList.mockResolvedValueOnce({ data: [drifted("price_once_b")] });
+      await expect(createRelayCheckout(args(5))).rejects.toMatchObject({ status: 502 });
+      expect(alertMock.email, "a different drifted price is news").toHaveBeenCalledTimes(2);
+      expect(alertMock.email.mock.calls.at(-1)![0]).toMatchObject({ priceId: "price_once_b" });
+      // No STAFF_ALERT_EMAIL: nothing to send, but the price is still refused and still reported once.
+      delete process.env.STAFF_ALERT_EMAIL;
+      stripeMock.pricesList.mockResolvedValueOnce({ data: [drifted("price_once_c")] });
+      await expect(createRelayCheckout(args(5))).rejects.toMatchObject({ status: 502, code: "checkout_unavailable" });
+      expect(alertMock.email).toHaveBeenCalledTimes(2);
+      expect(alertMock.capture).toHaveBeenCalledTimes(3);
+    });
+
+    it("the refusal is the typed StreamPackPriceDriftError (the route answers it without re-reporting), naming the price and the difference", async () => {
+      const live = synced(20, "price_typed");
+      live.unit_amount = 1;
+      stripeMock.pricesList.mockResolvedValueOnce({ data: [live] });
+      const err = await resolveStreamPackPriceId(streamPack(20)!).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(StreamPackPriceDriftError);
+      expect(err).toMatchObject({ status: 502, code: "checkout_unavailable", priceId: "price_typed" });
+      expect((err as StreamPackPriceDriftError).drift).toContain(`gbp: live 1, table ${streamPack(20)!.gbpPence}`);
+    });
   });
 });

@@ -27,6 +27,8 @@
 //                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…"
 //   RT10 m5 overlay key      the `streaming.overlay` gate deleted (lane-close review m5)
 //                           → "m5: refuses an org whose streaming.overlay is switched OFF…"
+//   RT11 drift refusal       the `instanceof StreamPackPriceDriftError` branch deleted (parked c)
+//                           → "the drift guard's refusal is a 502 checkout_unavailable, answered WITHOUT a second report…"
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -54,8 +56,10 @@ vi.mock("@/server/usecases/billing-manage", async (importOriginal) => ({
 // The ONLY Stripe seam. Bare factory on purpose — if the route ever imports a
 // second symbol from here, this test fails loudly rather than silently letting
 // a real Stripe call through.
-vi.mock("@/lib/relay-checkout", () => ({
+vi.mock("@/lib/relay-checkout", async (importOriginal) => ({
   createRelayCheckout: (args: unknown) => createRelayCheckoutMock(args),
+  // Parked (c): the drift guard's typed refusal, which the route answers — the real class, so `instanceof` is honest.
+  StreamPackPriceDriftError: (await importOriginal<typeof import("@/lib/relay-checkout")>()).StreamPackPriceDriftError,
 }));
 // `preferredCurrency` reads `cookies()`, which throws outside a Next request
 // scope — an environment limit of unit-testing a route, not a route defect.
@@ -356,5 +360,35 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     createRelayCheckoutMock.mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { type: "system" }));
     expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(500);
     expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  // Parked (c): the PROD drift guard (lib/relay-checkout.ts resolveStreamPackPriceId) refuses a pack whose live price
+  // differs from the table, and reports it ONCE itself. The route answers the typed refusal with the Phone tab's
+  // "Checkout didn't open" code — and does not report it again on every tap, which `handler` would do for any thrown
+  // HttpError ≥ 500.
+  it("the drift guard's refusal is a 502 checkout_unavailable, answered WITHOUT a second report per tap", async () => {
+    const { StreamPackPriceDriftError } = await import("@/lib/relay-checkout");
+    const { log } = await import("@/server/logger");
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    captureErrorMock.mockReset();
+    // `handler`'s own report of an HttpError ≥ 500 (Sentry.captureException beside this log line, lib/http.ts).
+    const logged: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((_o: unknown, msg?: string) => { logged.push(String(msg)); }) as never);
+    let checked = 0;
+    try {
+      for (let i = 0; i < 2; i++) {
+        createRelayCheckoutMock.mockRejectedValueOnce(new StreamPackPriceDriftError("seazn_stream_pack_5", "price_drifted", "eur: live 1, table 2925"));
+        const res = await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 5 });
+        expect(res.status).toBe(502);
+        expect(await res.json()).toMatchObject({ ok: false, code: "checkout_unavailable" });
+        checked++;
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    expect(checked).toBe(2);
+    expect(captureErrorMock, "reported by the guard once, never by the route per tap").not.toHaveBeenCalled();
+    expect(logged.filter((m) => m.includes("HttpError reached 500")), "handler re-reported the typed refusal").toEqual([]);
   });
 });
