@@ -553,7 +553,8 @@ export default async function DivisionPage({
         relayEntitled: streamRelayEntitled,
         relayDisabled: streamRelayDisabled,
         // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before
-        // any session exists (C1). Read only when the relay gate is open — the tab shows the UpgradeGate otherwise.
+        // any session exists (C1). Read only when the relay is entitled and running — otherwise the tab shows its
+        // switched-off or unavailable state (fixture-stream-panel.tsx), which reads no balance.
         orgId: auth.orgId,
         streamBalance: streamCredits?.total ?? 0,
         // Task 14b (R4): the split behind the chip ("{m} free this month · {p} bought") and the plan's monthly allowance
