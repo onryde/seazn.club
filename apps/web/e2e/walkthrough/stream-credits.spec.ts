@@ -748,7 +748,7 @@ test("B3 · an upgrade mid-month at 1280px tops the month up by the DIFFERENCE, 
 test("B4 · a pack bought from the forced chooser: no Stripe request until the tap, the tap mounts the REAL sheet on the session the route opened, its signed completion credits the pack ONCE (a replay and a redelivery add nothing), and the return lands on the new balance with Go live offered", async ({
   page,
 }) => {
-  test.setTimeout(budget({ seeds: 1, navs: 4, acts: 28, hooks: 3 }));
+  test.setTimeout(budget({ seeds: 1, navs: 8, acts: 40, hooks: 3 }));
   // Skip LOUDLY, never quietly: without a real test key there is no Checkout Session to mount, and without the
   // server's webhook secret there is no completion to sign. CI's non-walkthrough dummy is the usual cause.
   const unusable =
@@ -762,11 +762,9 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
 
   const { rig, rate } = await planRig(page, "community");
   expect(rate).toBeGreaterThanOrEqual(1);
-  // TODAY's match — the one a club buys credits to stream. The seed leaves its fixture untimed, and on a match day the
-  // run sheet opens on "Today", which hides an untimed row: the checkout return then has no row to reopen, and the
-  // Phone tab never comes back (DEFECT D2, walkthrough-report-B.md — recorded, not fixed here). Timed for now, the row
-  // is on the sheet the return lands on, which is the path this case exists to drive.
-  await withDb((sql) => sql`update fixtures set scheduled_at = now() where id = ${rig.fixtureId}`);
+  // The seed's fixture is LIVE (in play) and UNTIMED, as a walk-up match is: the division is on its match day, and the
+  // run sheet mounts on "Today" — which keeps only a TIMED fixture. That is D2's shape (walkthrough-report-B.md, fixed
+  // 2026-09-29): the return below must still land on this row. Left untimed deliberately — do not schedule it.
 
   // Reach "no credits left": the page's first read grants the month, and the month is then spent.
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -866,23 +864,44 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
   expect((await purchases()).length, "a redelivered session credited the pack twice").toBe(1);
   expect(await buckets(rig.orgId)).toEqual({ monthly: 0, pack: pack.credits, total: pack.credits });
 
+  // D2's premise, witnessed rather than assumed: an ORDINARY visit mounts this match day's sheet on "Today", and this
+  // live, untimed row is not on it. Without this, the return's row below could be on the page for any reason at all.
+  const [{ fixture_no: fixtureNo }] = await withDb(
+    (sql) => sql<{ fixture_no: number }[]>`select fixture_no from fixtures where id = ${rig.fixtureId}`,
+  );
+  const row = page.locator(`[data-testid="run-sheet"] li[data-fixture-no="${fixtureNo}"]`);
+  await page.goto(divisionPath(rig));
+  await expect(page.locator('[data-testid="run-sheet"]')).toHaveCount(1, { timeout: NAV_MS });
+  await expect(page.locator('[data-testid="run-sheet-filter"] [data-filter="today"]')).toHaveAttribute("aria-pressed", "true");
+  await expect(row, "an ordinary visit shows the untimed row, so D2 has nothing to prove here").toHaveCount(0);
+
   // THE RETURN, as Stripe sends the buyer back: the session's own return_url with its id filled in.
   const back = session.return_url!.replace("{CHECKOUT_SESSION_ID}", sessionId);
   expect(new URL(back).searchParams.get("session_id")).toBe(sessionId);
-  await page.goto(back);
-  // The return names this row, so its panel opens by itself on the Phone tab — nothing is tapped to get there.
-  await expect(page.locator('[data-testid="stream-phone-gate"] [data-phone-body]'), "the return reopens the Phone tab").toHaveCount(1, {
-    timeout: NAV_MS,
-  });
-  await expectBalance(page, pack.credits);
-  await expectSplit(page, { monthly: 0, pack: pack.credits });
-  await expect(page.locator('[data-testid="stream-go-live"]'), "credits in hand: the tab offers Go live").toBeVisible();
-  await expect(
-    page.locator(`[data-testid="stream-buy-pack-${STREAM_CREDIT_PACKS[0]!.size}"]`),
-    "no longer forced to buy",
-  ).toHaveCount(0);
-  await expectNoPageScroll(page);
-  await shot(page, "b4-returned-320.png");
+  expect(new URL(back).searchParams.get("fixture"), "the return names THIS row").toBe(rig.fixtureId);
+  // At each width (the tap was at 320): a fresh landing each time, since the panel strips the return's params (G5).
+  let returnsChecked = 0;
+  for (const width of [320, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(back);
+    // D2: the return renders its fixture's row though "Today" would hide it, and THAT row's panel opens by itself on
+    // the Phone tab — nothing is tapped to get there.
+    await expect(row, `${width}: the return renders its fixture's row (D2)`).toBeVisible({ timeout: NAV_MS });
+    await expect(row.locator('[data-testid="stream-phone-gate"] [data-phone-body]'), `${width}: the return reopens THIS row's Phone tab`).toHaveCount(1, {
+      timeout: NAV_MS,
+    });
+    await expectBalance(page, pack.credits);
+    await expectSplit(page, { monthly: 0, pack: pack.credits });
+    await expect(page.locator('[data-testid="stream-go-live"]'), "credits in hand: the tab offers Go live").toBeVisible();
+    await expect(
+      page.locator(`[data-testid="stream-buy-pack-${STREAM_CREDIT_PACKS[0]!.size}"]`),
+      "no longer forced to buy",
+    ).toHaveCount(0);
+    await expectNoPageScroll(page);
+    await shot(page, `b4-returned-${width}.png`);
+    returnsChecked++;
+  }
+  expect(returnsChecked, "the return at three widths").toBe(3);
   // No "the return credited it twice" check here, deliberately: the session is still OPEN at Stripe (no card was
   // entered), so the return's reconcile has nothing to credit whatever its guard does — such a check cannot fail.
   // The return path's own idempotency is a stated gap (walkthrough-report-B.md).
