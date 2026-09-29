@@ -12,7 +12,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | --- | --- | --- |
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
-| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Planning 2026-09-29** in worktree `format-matrix-w1c` (branch `docs/format-matrix-w1c-plan`). Ruling 37: `BrowserDriver` inside the matrix runner. Plan next, then owner review. |
+| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Planning 2026-09-29** in worktree `format-matrix-w1c` (branch `docs/format-matrix-w1c-plan`). Ruling 37: `BrowserDriver` inside the matrix runner; ruling 38: bench tap helpers imported. Plan next, then owner review. |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | not started (ruling 28) |
 | W2 | Sport scoring fidelity | not started |
@@ -483,6 +483,32 @@ a peer session as the other.
       recommended option 1 because a browser green and an HTTP green then mean
       the same check set, parity is a JSON diff, and W1d can shard L1/L2 like
       L3 without editing `e2e.yml`, which runs only on a push to `main`.
+38. **W1c borrows the bench's tap helpers by import** (2026-09-29). Asked
+    "import, or copy?", the owner answered "1" (import).
+    - **What it means.** `scripts/matrix` may import four more bench modules:
+      `scripts/bench/lib/ledger.ts`; the sport-blind exports of
+      `scripts/bench/lib/drivers/scorer.ts` (`TapStep`, `selectorForTapStep`,
+      the chassis testids, `TAP_PACING_MS`, `PadPage`, `organiserStepsFor`);
+      `scripts/bench/lib/drivers/adapters/generic.ts` (`genericAdapter`); and
+      the pure helpers of `scripts/bench/lib/tap-play.ts` (consent seed,
+      device-link mint and pad URL, `waitForStartRow`,
+      `reloadConsoleBeforeAction`). The private `executeStep` is copied.
+      `playMatchByTaps` and `createTapPlayer` are not used: they fix the
+      scorer at 390 px and the organiser at 1280 px, and always finalize,
+      which the HTTP path never does.
+    - **This extends ruling 23.** `scorer.ts` loads the pack schema a second
+      way, through `simulate.ts`; ruling 23 had accepted that load only
+      through `plan.ts`. R3 still holds: this programme never edits those
+      bench files, and a change to one is coordinated with the bench's index
+      first.
+    - **Rejected alternative:** import only `ledger.ts` and copy the rest with
+      the matrix's own pins — no ruling-23 extension, but two copies of the
+      tap vocabulary to keep in step.
+    - *Controller note (context, not the owner's words):* the bench-reuse
+      scout (2026-09-29) also found that the badminton, table tennis and
+      volleyball pads write the coarse `*.summary` event through a `setScore`
+      tile, so the matrix pads can replay generated events one for one in the
+      bench's `TapAdapter` shape. Found by reading, not yet driven.
 
 ## Recommendations (mine — not rulings)
 
