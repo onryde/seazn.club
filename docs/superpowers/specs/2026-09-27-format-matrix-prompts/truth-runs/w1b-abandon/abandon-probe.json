@@ -1,0 +1,225 @@
+{
+  "runId": "w1b-abandon-0928a",
+  "judged": 4,
+  "control": "void-correct",
+  "stG1": "CONFIRMED",
+  "legs": [
+    {
+      "leg": "badminton-control",
+      "atom": "M4a",
+      "sport": "badminton",
+      "variant": "bwf",
+      "engineOutcome": null,
+      "declared": null,
+      "product": {
+        "fixtureStatus": "abandoned",
+        "outcome": null,
+        "home": {
+          "entrantId": "151dd87d-6aec-4671-9216-0cbe5018a633",
+          "played": 0,
+          "won": 0,
+          "drawn": 0,
+          "lost": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "seed",
+            "with": [
+              "ad2b1243-4dc8-40ce-9aad-9a87ba3f3df2"
+            ]
+          },
+          "tieUnbroken": true,
+          "rank": 1
+        },
+        "away": {
+          "entrantId": "ad2b1243-4dc8-40ce-9aad-9a87ba3f3df2",
+          "played": 0,
+          "won": 0,
+          "drawn": 0,
+          "lost": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "seed",
+            "with": [
+              "151dd87d-6aec-4671-9216-0cbe5018a633"
+            ]
+          },
+          "tieUnbroken": true,
+          "rank": 2
+        }
+      },
+      "verdict": "void-correct"
+    },
+    {
+      "leg": "cricket-no-result",
+      "atom": "M4a",
+      "sport": "cricket",
+      "variant": "t20",
+      "engineOutcome": {
+        "kind": "no_result"
+      },
+      "declared": {
+        "home": 1,
+        "away": 1
+      },
+      "product": {
+        "fixtureStatus": "abandoned",
+        "outcome": {
+          "kind": "no_result"
+        },
+        "home": {
+          "won": 0,
+          "lost": 0,
+          "rank": 1,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "seed",
+            "with": [
+              "c71d1b76-1b84-4e26-b4db-2d3906c0021d"
+            ]
+          },
+          "entrantId": "65414ae7-2190-4a61-a413-f3fde7de8803"
+        },
+        "away": {
+          "won": 0,
+          "lost": 0,
+          "rank": 2,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "seed",
+            "with": [
+              "65414ae7-2190-4a61-a413-f3fde7de8803"
+            ]
+          },
+          "entrantId": "c71d1b76-1b84-4e26-b4db-2d3906c0021d"
+        }
+      },
+      "verdict": "voided"
+    },
+    {
+      "leg": "cricket-test-draw",
+      "atom": "M4b",
+      "sport": "cricket",
+      "variant": "test",
+      "engineOutcome": {
+        "kind": "draw"
+      },
+      "declared": {
+        "home": 1,
+        "away": 1
+      },
+      "product": {
+        "fixtureStatus": "abandoned",
+        "outcome": {
+          "kind": "draw"
+        },
+        "home": {
+          "won": 0,
+          "lost": 0,
+          "rank": 1,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "seed",
+            "with": [
+              "cf04b3d6-5e5b-4b2c-bd18-7b2883614c35"
+            ]
+          },
+          "entrantId": "88512f8f-85d0-4797-9568-562a81ec1607"
+        },
+        "away": {
+          "won": 0,
+          "lost": 0,
+          "rank": 2,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "seed",
+            "with": [
+              "88512f8f-85d0-4797-9568-562a81ec1607"
+            ]
+          },
+          "entrantId": "cf04b3d6-5e5b-4b2c-bd18-7b2883614c35"
+        }
+      },
+      "verdict": "voided"
+    },
+    {
+      "leg": "football-award",
+      "atom": "M4b",
+      "sport": "football",
+      "variant": "11-a-side",
+      "engineOutcome": {
+        "kind": "award",
+        "winner": "e41200f8-b20e-4d26-b441-ab3a89e73016",
+        "score": {
+          "home": 1,
+          "away": 0
+        }
+      },
+      "declared": {
+        "home": 3,
+        "away": 0
+      },
+      "product": {
+        "fixtureStatus": "abandoned",
+        "outcome": {
+          "kind": "award",
+          "score": {
+            "away": 0,
+            "home": 1
+          },
+          "winner": "e41200f8-b20e-4d26-b441-ab3a89e73016"
+        },
+        "home": {
+          "won": 0,
+          "lost": 0,
+          "rank": 1,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "4828f880-2e82-47b7-8150-19ff34924d61"
+            ]
+          },
+          "entrantId": "e41200f8-b20e-4d26-b441-ab3a89e73016",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        "away": {
+          "won": 0,
+          "lost": 0,
+          "rank": 2,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "e41200f8-b20e-4d26-b441-ab3a89e73016"
+            ]
+          },
+          "entrantId": "4828f880-2e82-47b7-8150-19ff34924d61",
+          "rankLocked": true,
+          "tieUnbroken": true
+        }
+      },
+      "verdict": "voided"
+    }
+  ]
+}

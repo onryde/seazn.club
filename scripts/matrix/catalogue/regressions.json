@@ -1,4 +1,20 @@
 {
   "schemaVersion": 1,
-  "regressions": []
+  "regressions": [
+    {
+      "id": "MB-001",
+      "title": "late entrant then Generate duplicates round-robin pairs",
+      "issue": "#879",
+      "cell": "league|generic",
+      "variant": "score",
+      "check": "I7-rr-no-pair-over-legs",
+      "seed": 752674687,
+      "path": "1:2:3:3:3",
+      "replayPath": "BAABABCL:qC",
+      "fence": "late-entry-then-generate",
+      "status": "open",
+      "found": "2026-09-29",
+      "runId": "w1b-model-0928b"
+    }
+  ]
 }

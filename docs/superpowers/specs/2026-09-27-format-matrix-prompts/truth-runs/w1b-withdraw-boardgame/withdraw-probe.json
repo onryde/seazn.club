@@ -1,0 +1,951 @@
+{
+  "runId": "w1b-withdraw-0928a",
+  "cdT13": "CONFIRMED",
+  "byShape": {
+    "brief": "REFUTED",
+    "walkover": "CONFIRMED"
+  },
+  "controlsClean": true,
+  "legs": {
+    "boardgame-brief": {
+      "leg": "boardgame-brief",
+      "sport": "boardgame",
+      "shape": "brief",
+      "variant": "blitz",
+      "start": {
+        "division_id": "18cd2d90-33f5-425a-a319-7e6ca135ec73",
+        "status": "active",
+        "started": true,
+        "generated": 6
+      },
+      "fixtureCount": 6,
+      "target": "03080922-e185-4dbb-be8f-527db4371634",
+      "completedFixtures": [
+        "452277bb-d70d-4bac-971e-5ec2df2fd099"
+      ],
+      "before": [
+        {
+          "id": "de5d8db2-ca0e-4572-a51d-3df27a13be74",
+          "round_no": 1,
+          "home": "03080922-e185-4dbb-be8f-527db4371634",
+          "away": "a884f4c4-b534-4a0a-8fb5-47ff7f10a79c",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "c5d3db17-89c1-4817-863e-f97f37415386",
+          "round_no": 2,
+          "home": "dbd0f290-6922-4dd0-b60c-6313f74ea6e9",
+          "away": "03080922-e185-4dbb-be8f-527db4371634",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "8cdfe091-b7d6-46c4-affc-2bee1cb12c8e",
+          "round_no": 3,
+          "home": "deed81b8-5c7f-4a05-8755-50aa0884948f",
+          "away": "03080922-e185-4dbb-be8f-527db4371634",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        }
+      ],
+      "policyInput": {
+        "played": 0,
+        "pending": 3,
+        "fraction": 0,
+        "expectedPolicy": "expunge"
+      },
+      "withdraw": {
+        "http": "2xx",
+        "body": {
+          "entrant_id": "03080922-e185-4dbb-be8f-527db4371634",
+          "status": "withdrawn",
+          "policy": "expunge",
+          "walkovers": 0,
+          "voided": 3,
+          "skipped_finalized": 0
+        }
+      },
+      "after": [
+        {
+          "id": "de5d8db2-ca0e-4572-a51d-3df27a13be74",
+          "round_no": 1,
+          "home": "03080922-e185-4dbb-be8f-527db4371634",
+          "away": "a884f4c4-b534-4a0a-8fb5-47ff7f10a79c",
+          "status": "abandoned",
+          "outcome": null,
+          "last_seq": 1
+        },
+        {
+          "id": "c5d3db17-89c1-4817-863e-f97f37415386",
+          "round_no": 2,
+          "home": "dbd0f290-6922-4dd0-b60c-6313f74ea6e9",
+          "away": "03080922-e185-4dbb-be8f-527db4371634",
+          "status": "abandoned",
+          "outcome": null,
+          "last_seq": 1
+        },
+        {
+          "id": "8cdfe091-b7d6-46c4-affc-2bee1cb12c8e",
+          "round_no": 3,
+          "home": "deed81b8-5c7f-4a05-8755-50aa0884948f",
+          "away": "03080922-e185-4dbb-be8f-527db4371634",
+          "status": "abandoned",
+          "outcome": null,
+          "last_seq": 1
+        }
+      ],
+      "changedFixtures": [
+        "de5d8db2-ca0e-4572-a51d-3df27a13be74",
+        "c5d3db17-89c1-4817-863e-f97f37415386",
+        "8cdfe091-b7d6-46c4-affc-2bee1cb12c8e"
+      ],
+      "pendingChanged": "3/3",
+      "partial": false,
+      "entrantStatusAfter": "withdrawn",
+      "standings": [
+        {
+          "won": 1,
+          "lost": 0,
+          "rank": 1,
+          "drawn": 0,
+          "played": 1,
+          "points": 2,
+          "metrics": {
+            "wins": 1,
+            "black": 0,
+            "white": 1
+          },
+          "entrantId": "deed81b8-5c7f-4a05-8755-50aa0884948f"
+        },
+        {
+          "won": 0,
+          "lost": 0,
+          "rank": 2,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "dbd0f290-6922-4dd0-b60c-6313f74ea6e9",
+              "a884f4c4-b534-4a0a-8fb5-47ff7f10a79c"
+            ]
+          },
+          "entrantId": "03080922-e185-4dbb-be8f-527db4371634",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 1,
+          "rank": 3,
+          "drawn": 0,
+          "played": 1,
+          "points": 0,
+          "metrics": {
+            "wins": 0,
+            "black": 1,
+            "white": 0
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "03080922-e185-4dbb-be8f-527db4371634",
+              "a884f4c4-b534-4a0a-8fb5-47ff7f10a79c"
+            ]
+          },
+          "entrantId": "dbd0f290-6922-4dd0-b60c-6313f74ea6e9",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 0,
+          "rank": 4,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "dbd0f290-6922-4dd0-b60c-6313f74ea6e9",
+              "03080922-e185-4dbb-be8f-527db4371634"
+            ]
+          },
+          "entrantId": "a884f4c4-b534-4a0a-8fb5-47ff7f10a79c",
+          "rankLocked": true,
+          "tieUnbroken": true
+        }
+      ],
+      "clean": true,
+      "outcome": "ran"
+    },
+    "generic-brief-control": {
+      "leg": "generic-brief-control",
+      "sport": "generic",
+      "shape": "brief",
+      "variant": "score",
+      "start": {
+        "division_id": "1fea39d9-cca7-4e82-a07a-45add5cff66d",
+        "status": "active",
+        "started": true,
+        "generated": 6
+      },
+      "fixtureCount": 6,
+      "target": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+      "completedFixtures": [
+        "ce1c66e7-af26-4031-92ca-454f311b616f"
+      ],
+      "before": [
+        {
+          "id": "3069d403-a3b6-49ad-88b8-843979deec1f",
+          "round_no": 1,
+          "home": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "away": "fd018ad4-2680-4568-b088-99a29e5551e9",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "c2f7eb9e-5eec-40ba-bccf-9e7d00cc2cfb",
+          "round_no": 2,
+          "home": "89c8768b-f66d-484c-a2cd-d651d3e61c1d",
+          "away": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "8326befa-2a6a-4885-b520-3af92461d3cb",
+          "round_no": 3,
+          "home": "d02d0bb9-1b71-4cfd-81b9-37285b109f75",
+          "away": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        }
+      ],
+      "policyInput": {
+        "played": 0,
+        "pending": 3,
+        "fraction": 0,
+        "expectedPolicy": "expunge"
+      },
+      "withdraw": {
+        "http": "2xx",
+        "body": {
+          "entrant_id": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "status": "withdrawn",
+          "policy": "expunge",
+          "walkovers": 0,
+          "voided": 3,
+          "skipped_finalized": 0
+        }
+      },
+      "after": [
+        {
+          "id": "3069d403-a3b6-49ad-88b8-843979deec1f",
+          "round_no": 1,
+          "home": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "away": "fd018ad4-2680-4568-b088-99a29e5551e9",
+          "status": "abandoned",
+          "outcome": {
+            "kind": "no_result"
+          },
+          "last_seq": 1
+        },
+        {
+          "id": "c2f7eb9e-5eec-40ba-bccf-9e7d00cc2cfb",
+          "round_no": 2,
+          "home": "89c8768b-f66d-484c-a2cd-d651d3e61c1d",
+          "away": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "status": "abandoned",
+          "outcome": {
+            "kind": "no_result"
+          },
+          "last_seq": 1
+        },
+        {
+          "id": "8326befa-2a6a-4885-b520-3af92461d3cb",
+          "round_no": 3,
+          "home": "d02d0bb9-1b71-4cfd-81b9-37285b109f75",
+          "away": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "status": "abandoned",
+          "outcome": {
+            "kind": "no_result"
+          },
+          "last_seq": 1
+        }
+      ],
+      "changedFixtures": [
+        "3069d403-a3b6-49ad-88b8-843979deec1f",
+        "c2f7eb9e-5eec-40ba-bccf-9e7d00cc2cfb",
+        "8326befa-2a6a-4885-b520-3af92461d3cb"
+      ],
+      "pendingChanged": "3/3",
+      "partial": false,
+      "entrantStatusAfter": "withdrawn",
+      "standings": [
+        {
+          "won": 1,
+          "lost": 0,
+          "rank": 1,
+          "drawn": 0,
+          "played": 1,
+          "points": 3,
+          "metrics": {
+            "for": 3,
+            "diff": 2,
+            "against": 1
+          },
+          "entrantId": "d02d0bb9-1b71-4cfd-81b9-37285b109f75"
+        },
+        {
+          "won": 0,
+          "lost": 1,
+          "rank": 2,
+          "drawn": 0,
+          "played": 1,
+          "points": 0,
+          "metrics": {
+            "for": 1,
+            "diff": -2,
+            "against": 3
+          },
+          "tieBreak": {
+            "key": "diff",
+            "with": [
+              "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+              "fd018ad4-2680-4568-b088-99a29e5551e9"
+            ]
+          },
+          "entrantId": "89c8768b-f66d-484c-a2cd-d651d3e61c1d"
+        },
+        {
+          "won": 0,
+          "lost": 0,
+          "rank": 3,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "fd018ad4-2680-4568-b088-99a29e5551e9"
+            ]
+          },
+          "entrantId": "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 0,
+          "rank": 4,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "a91f4cb3-e2c0-4871-9b6d-1bd70178b0d7"
+            ]
+          },
+          "entrantId": "fd018ad4-2680-4568-b088-99a29e5551e9",
+          "rankLocked": true,
+          "tieUnbroken": true
+        }
+      ],
+      "clean": true,
+      "outcome": "ran"
+    },
+    "boardgame-walkover": {
+      "leg": "boardgame-walkover",
+      "sport": "boardgame",
+      "shape": "walkover",
+      "variant": "blitz",
+      "start": {
+        "division_id": "a43e8468-0ec2-470b-8ba6-b4a1f3f7d161",
+        "status": "active",
+        "started": true,
+        "generated": 15
+      },
+      "fixtureCount": 15,
+      "target": "999c6680-c9ef-42ce-b626-a10584237ddf",
+      "completedFixtures": [
+        "49acfbc3-49a4-4cb9-9905-b11e88cf08b5",
+        "468fce17-dc05-436d-a59d-0914342b7734",
+        "51ae6b7e-9535-4fdb-9355-3cb7f3f395f4"
+      ],
+      "before": [
+        {
+          "id": "49acfbc3-49a4-4cb9-9905-b11e88cf08b5",
+          "round_no": 1,
+          "home": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "away": "4d21375e-d738-40d5-93e6-fb26be796c40",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "4d21375e-d738-40d5-93e6-fb26be796c40",
+            "method": "checkmate",
+            "winner": "999c6680-c9ef-42ce-b626-a10584237ddf"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "468fce17-dc05-436d-a59d-0914342b7734",
+          "round_no": 2,
+          "home": "d343fe79-562a-4427-913f-2f1da26af41a",
+          "away": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "999c6680-c9ef-42ce-b626-a10584237ddf",
+            "method": "checkmate",
+            "winner": "d343fe79-562a-4427-913f-2f1da26af41a"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "51ae6b7e-9535-4fdb-9355-3cb7f3f395f4",
+          "round_no": 3,
+          "home": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "away": "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841",
+            "method": "checkmate",
+            "winner": "999c6680-c9ef-42ce-b626-a10584237ddf"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "02955530-67ec-46e8-af30-ba6c79d6c8c3",
+          "round_no": 4,
+          "home": "0ebb1b4e-b651-42cb-8344-b24cb1c1bbf3",
+          "away": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "30c55478-45b1-4711-b6d3-94163e12a911",
+          "round_no": 5,
+          "home": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "away": "8f35e284-10ff-47d9-a638-25c839347bf0",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        }
+      ],
+      "policyInput": {
+        "played": 3,
+        "pending": 2,
+        "fraction": 0.6,
+        "expectedPolicy": "walkover"
+      },
+      "withdraw": {
+        "http": 422,
+        "code": "WRONG_PHASE",
+        "message": "POST /api/v1/entrants/999c6680-c9ef-42ce-b626-a10584237ddf/withdraw → HTTP 422 WRONG_PHASE: forfeit not allowed in phase \"pre\""
+      },
+      "after": [
+        {
+          "id": "49acfbc3-49a4-4cb9-9905-b11e88cf08b5",
+          "round_no": 1,
+          "home": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "away": "4d21375e-d738-40d5-93e6-fb26be796c40",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "4d21375e-d738-40d5-93e6-fb26be796c40",
+            "method": "checkmate",
+            "winner": "999c6680-c9ef-42ce-b626-a10584237ddf"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "468fce17-dc05-436d-a59d-0914342b7734",
+          "round_no": 2,
+          "home": "d343fe79-562a-4427-913f-2f1da26af41a",
+          "away": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "999c6680-c9ef-42ce-b626-a10584237ddf",
+            "method": "checkmate",
+            "winner": "d343fe79-562a-4427-913f-2f1da26af41a"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "51ae6b7e-9535-4fdb-9355-3cb7f3f395f4",
+          "round_no": 3,
+          "home": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "away": "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841",
+            "method": "checkmate",
+            "winner": "999c6680-c9ef-42ce-b626-a10584237ddf"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "02955530-67ec-46e8-af30-ba6c79d6c8c3",
+          "round_no": 4,
+          "home": "0ebb1b4e-b651-42cb-8344-b24cb1c1bbf3",
+          "away": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "30c55478-45b1-4711-b6d3-94163e12a911",
+          "round_no": 5,
+          "home": "999c6680-c9ef-42ce-b626-a10584237ddf",
+          "away": "8f35e284-10ff-47d9-a638-25c839347bf0",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        }
+      ],
+      "changedFixtures": [],
+      "pendingChanged": "0/2",
+      "partial": false,
+      "entrantStatusAfter": "registered",
+      "standings": [
+        {
+          "won": 2,
+          "lost": 1,
+          "rank": 1,
+          "drawn": 0,
+          "played": 3,
+          "points": 4,
+          "metrics": {
+            "wins": 2,
+            "black": 1,
+            "white": 2
+          },
+          "entrantId": "999c6680-c9ef-42ce-b626-a10584237ddf"
+        },
+        {
+          "won": 1,
+          "lost": 0,
+          "rank": 2,
+          "drawn": 0,
+          "played": 1,
+          "points": 2,
+          "metrics": {
+            "wins": 1,
+            "black": 0,
+            "white": 1
+          },
+          "entrantId": "d343fe79-562a-4427-913f-2f1da26af41a"
+        },
+        {
+          "won": 0,
+          "lost": 1,
+          "rank": 3,
+          "drawn": 0,
+          "played": 1,
+          "points": 0,
+          "metrics": {
+            "wins": 0,
+            "black": 1,
+            "white": 0
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "4d21375e-d738-40d5-93e6-fb26be796c40",
+              "8f35e284-10ff-47d9-a638-25c839347bf0",
+              "0ebb1b4e-b651-42cb-8344-b24cb1c1bbf3"
+            ]
+          },
+          "entrantId": "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 1,
+          "rank": 4,
+          "drawn": 0,
+          "played": 1,
+          "points": 0,
+          "metrics": {
+            "wins": 0,
+            "black": 1,
+            "white": 0
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "8f35e284-10ff-47d9-a638-25c839347bf0",
+              "0ebb1b4e-b651-42cb-8344-b24cb1c1bbf3",
+              "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841"
+            ]
+          },
+          "entrantId": "4d21375e-d738-40d5-93e6-fb26be796c40",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 0,
+          "rank": 5,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "4d21375e-d738-40d5-93e6-fb26be796c40",
+              "0ebb1b4e-b651-42cb-8344-b24cb1c1bbf3",
+              "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841"
+            ]
+          },
+          "entrantId": "8f35e284-10ff-47d9-a638-25c839347bf0",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 0,
+          "rank": 6,
+          "drawn": 0,
+          "played": 0,
+          "points": 0,
+          "metrics": {},
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "4d21375e-d738-40d5-93e6-fb26be796c40",
+              "8f35e284-10ff-47d9-a638-25c839347bf0",
+              "f9dfa333-55d6-4e9c-a3e8-b42eac5ee841"
+            ]
+          },
+          "entrantId": "0ebb1b4e-b651-42cb-8344-b24cb1c1bbf3",
+          "rankLocked": true,
+          "tieUnbroken": true
+        }
+      ],
+      "clean": false,
+      "outcome": "ran"
+    },
+    "generic-walkover-control": {
+      "leg": "generic-walkover-control",
+      "sport": "generic",
+      "shape": "walkover",
+      "variant": "score",
+      "start": {
+        "division_id": "381f3769-6be3-4683-8c24-ef6dddb9a991",
+        "status": "active",
+        "started": true,
+        "generated": 15
+      },
+      "fixtureCount": 15,
+      "target": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+      "completedFixtures": [
+        "049385fc-aa6c-438a-82fb-6d6e2b2b63a4",
+        "8a71b915-a6c9-458b-841c-12310d762d84",
+        "72dbd33d-fcda-4d4c-82a6-ca104d3afc79"
+      ],
+      "before": [
+        {
+          "id": "049385fc-aa6c-438a-82fb-6d6e2b2b63a4",
+          "round_no": 1,
+          "home": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "away": "6b479435-0d91-4309-8c95-4e0fd9ff546e",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "6b479435-0d91-4309-8c95-4e0fd9ff546e",
+            "method": "regulation",
+            "winner": "4f856361-1920-47ba-a4bc-cafb62a2d956"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "8a71b915-a6c9-458b-841c-12310d762d84",
+          "round_no": 2,
+          "home": "5d911877-3aa3-4ab3-9f18-0b4d04773426",
+          "away": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+            "method": "regulation",
+            "winner": "5d911877-3aa3-4ab3-9f18-0b4d04773426"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "72dbd33d-fcda-4d4c-82a6-ca104d3afc79",
+          "round_no": 3,
+          "home": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "away": "3efbe7c3-3528-4c1d-880b-53b4b73a540f",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "3efbe7c3-3528-4c1d-880b-53b4b73a540f",
+            "method": "regulation",
+            "winner": "4f856361-1920-47ba-a4bc-cafb62a2d956"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "f6c50402-97c3-41f5-89ce-c669b888ef6c",
+          "round_no": 4,
+          "home": "b6d0f467-6641-434c-ae7e-07cde480fb23",
+          "away": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        },
+        {
+          "id": "d0f592e5-871e-423e-a447-22cb7f4cc166",
+          "round_no": 5,
+          "home": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "away": "4f1f657d-08bc-4dcf-8d6c-218a45c5c83c",
+          "status": "scheduled",
+          "outcome": null,
+          "last_seq": 0
+        }
+      ],
+      "policyInput": {
+        "played": 3,
+        "pending": 2,
+        "fraction": 0.6,
+        "expectedPolicy": "walkover"
+      },
+      "withdraw": {
+        "http": "2xx",
+        "body": {
+          "entrant_id": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "status": "withdrawn",
+          "policy": "walkover",
+          "walkovers": 2,
+          "voided": 0,
+          "skipped_finalized": 0
+        }
+      },
+      "after": [
+        {
+          "id": "049385fc-aa6c-438a-82fb-6d6e2b2b63a4",
+          "round_no": 1,
+          "home": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "away": "6b479435-0d91-4309-8c95-4e0fd9ff546e",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "6b479435-0d91-4309-8c95-4e0fd9ff546e",
+            "method": "regulation",
+            "winner": "4f856361-1920-47ba-a4bc-cafb62a2d956"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "8a71b915-a6c9-458b-841c-12310d762d84",
+          "round_no": 2,
+          "home": "5d911877-3aa3-4ab3-9f18-0b4d04773426",
+          "away": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+            "method": "regulation",
+            "winner": "5d911877-3aa3-4ab3-9f18-0b4d04773426"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "72dbd33d-fcda-4d4c-82a6-ca104d3afc79",
+          "round_no": 3,
+          "home": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "away": "3efbe7c3-3528-4c1d-880b-53b4b73a540f",
+          "status": "decided",
+          "outcome": {
+            "kind": "win",
+            "loser": "3efbe7c3-3528-4c1d-880b-53b4b73a540f",
+            "method": "regulation",
+            "winner": "4f856361-1920-47ba-a4bc-cafb62a2d956"
+          },
+          "last_seq": 2
+        },
+        {
+          "id": "f6c50402-97c3-41f5-89ce-c669b888ef6c",
+          "round_no": 4,
+          "home": "b6d0f467-6641-434c-ae7e-07cde480fb23",
+          "away": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "status": "forfeited",
+          "outcome": {
+            "kind": "award",
+            "method": "entrant withdrew",
+            "winner": "b6d0f467-6641-434c-ae7e-07cde480fb23"
+          },
+          "last_seq": 1
+        },
+        {
+          "id": "d0f592e5-871e-423e-a447-22cb7f4cc166",
+          "round_no": 5,
+          "home": "4f856361-1920-47ba-a4bc-cafb62a2d956",
+          "away": "4f1f657d-08bc-4dcf-8d6c-218a45c5c83c",
+          "status": "forfeited",
+          "outcome": {
+            "kind": "award",
+            "method": "entrant withdrew",
+            "winner": "4f1f657d-08bc-4dcf-8d6c-218a45c5c83c"
+          },
+          "last_seq": 1
+        }
+      ],
+      "changedFixtures": [
+        "f6c50402-97c3-41f5-89ce-c669b888ef6c",
+        "d0f592e5-871e-423e-a447-22cb7f4cc166"
+      ],
+      "pendingChanged": "2/2",
+      "partial": false,
+      "entrantStatusAfter": "withdrawn",
+      "standings": [
+        {
+          "won": 2,
+          "lost": 3,
+          "rank": 1,
+          "drawn": 0,
+          "played": 5,
+          "points": 6,
+          "metrics": {
+            "for": 7,
+            "diff": 2,
+            "against": 5
+          },
+          "entrantId": "4f856361-1920-47ba-a4bc-cafb62a2d956"
+        },
+        {
+          "won": 1,
+          "lost": 0,
+          "rank": 2,
+          "drawn": 0,
+          "played": 1,
+          "points": 3,
+          "metrics": {
+            "for": 3,
+            "diff": 2,
+            "against": 1
+          },
+          "tieBreak": {
+            "key": "diff",
+            "with": [
+              "4f1f657d-08bc-4dcf-8d6c-218a45c5c83c",
+              "b6d0f467-6641-434c-ae7e-07cde480fb23"
+            ]
+          },
+          "entrantId": "5d911877-3aa3-4ab3-9f18-0b4d04773426"
+        },
+        {
+          "won": 1,
+          "lost": 0,
+          "rank": 3,
+          "drawn": 0,
+          "played": 1,
+          "points": 3,
+          "metrics": {
+            "for": 0,
+            "diff": 0,
+            "against": 0
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "b6d0f467-6641-434c-ae7e-07cde480fb23"
+            ]
+          },
+          "entrantId": "4f1f657d-08bc-4dcf-8d6c-218a45c5c83c",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 1,
+          "lost": 0,
+          "rank": 4,
+          "drawn": 0,
+          "played": 1,
+          "points": 3,
+          "metrics": {
+            "for": 0,
+            "diff": 0,
+            "against": 0
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "4f1f657d-08bc-4dcf-8d6c-218a45c5c83c"
+            ]
+          },
+          "entrantId": "b6d0f467-6641-434c-ae7e-07cde480fb23",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 1,
+          "rank": 5,
+          "drawn": 0,
+          "played": 1,
+          "points": 0,
+          "metrics": {
+            "for": 1,
+            "diff": -2,
+            "against": 3
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "3efbe7c3-3528-4c1d-880b-53b4b73a540f"
+            ]
+          },
+          "entrantId": "6b479435-0d91-4309-8c95-4e0fd9ff546e",
+          "rankLocked": true,
+          "tieUnbroken": true
+        },
+        {
+          "won": 0,
+          "lost": 1,
+          "rank": 6,
+          "drawn": 0,
+          "played": 1,
+          "points": 0,
+          "metrics": {
+            "for": 1,
+            "diff": -2,
+            "against": 3
+          },
+          "tieBreak": {
+            "key": "lots",
+            "with": [
+              "6b479435-0d91-4309-8c95-4e0fd9ff546e"
+            ]
+          },
+          "entrantId": "3efbe7c3-3528-4c1d-880b-53b4b73a540f",
+          "rankLocked": true,
+          "tieUnbroken": true
+        }
+      ],
+      "clean": true,
+      "outcome": "ran"
+    }
+  }
+}
