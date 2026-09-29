@@ -34,7 +34,6 @@ import {
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
   relayEnvironment,
 } from "@/server/relay/config";
-import { LIST_VIDEOS_PAGE_LIMIT } from "@/server/relay/ingest-cf";
 import { machineNameFor } from "@/server/relay/domain/runner";
 import { type FailReason, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { mintRelayToken } from "@/server/relay/tokens";
@@ -552,32 +551,52 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(r.ingest.deletedInputs).toEqual([inp!.ingest_input_id]);
   });
 
-  it("A13: a FULL page (exactly LIST_VIDEOS_PAGE_LIMIT) is flagged and warned — and no input is deleted on a listing that may be missing its videos; one short of it is not flagged, lists once, and the input goes", async () => {
+  it("A13: a FULL page (exactly the provider's declared page size) is flagged and warned — and no input is deleted on a listing that may be missing its videos; one short of it is not flagged, lists once, and the input goes", async () => {
     const r = await rig();
+    const PAGE = r.ingest.capabilities.listVideosPageLimit;   // m2: the PORT's page size — the one the sweep reads
+    expect(PAGE, "the fake lists in the real adapter's page size (fakes.test pins it)").toBeGreaterThan(1);
     await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
     await sql`update fixture_stream_sessions set ended_at = now() - make_interval(days => ${RECORDING_RETENTION_DAYS + 1}) where id = ${r.sessionId}`;
     const recent = new Date(r.deps.now().getTime() - 3600_000).toISOString();
-    for (let i = 0; i < LIST_VIDEOS_PAGE_LIMIT; i++) r.ingest.addVideo({ videoId: `page-${i}`, inputId: null, createdAt: recent, inProgress: false });
+    for (let i = 0; i < PAGE; i++) r.ingest.addVideo({ videoId: `page-${i}`, inputId: null, createdAt: recent, inProgress: false });
     const listed = vi.spyOn(r.ingest, "listVideos");
     const warn = vi.spyOn(log, "warn");
     const truncation = () => warn.mock.calls.filter(([, msg]) => typeof msg === "string" && /full page/.test(msg));
     try {
       const full = await sweep(r);
       expect(listed).toHaveBeenCalledTimes(1);
-      expect(full).toMatchObject({ videosListed: LIST_VIDEOS_PAGE_LIMIT, listingTruncated: true, inputsDeleted: 0, inputsDeferred: 1 });
+      expect(full).toMatchObject({ videosListed: PAGE, listingTruncated: true, inputsDeleted: 0, inputsDeferred: 1 });
       expect(r.ingest.deletedInputs).toEqual([]);
       expect(truncation()).toHaveLength(1);
-      expect(truncation()[0]![0]).toMatchObject({ videosListed: LIST_VIDEOS_PAGE_LIMIT, pageLimit: LIST_VIDEOS_PAGE_LIMIT });
+      expect(truncation()[0]![0]).toMatchObject({ videosListed: PAGE, pageLimit: PAGE });
 
       await r.ingest.deleteVideo("page-0");   // one short of a page
       warn.mockClear();
       const short = await sweep(r);
       expect(listed).toHaveBeenCalledTimes(2);   // once per pass: no second page is asked for
-      expect(short).toMatchObject({ videosListed: LIST_VIDEOS_PAGE_LIMIT - 1, listingTruncated: false, inputsDeleted: 1, inputsDeferred: 0 });
+      expect(short).toMatchObject({ videosListed: PAGE - 1, listingTruncated: false, inputsDeleted: 1, inputsDeferred: 0 });
       expect(truncation()).toHaveLength(0);
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("m2: the full-page rule reads the page size of the PROVIDER it is talking to — one that declares 3 on the port is flagged at 3 videos and nothing is deleted on it, while the same 3 against the fake's own page size are not flagged (mutant: the sweep reads the Cloudflare constant again → the small provider's full page is read as the whole set)", async () => {
+    const r = await rig();
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await sql`update fixture_stream_sessions set ended_at = now() - make_interval(days => ${RECORDING_RETENTION_DAYS + 1}) where id = ${r.sessionId}`;
+    const recent = new Date(r.deps.now().getTime() - 3600_000).toISOString();
+    const SMALL = 3;
+    expect(SMALL, "the differential needs the small page to differ from the fake's").toBeLessThan(r.ingest.capabilities.listVideosPageLimit);
+    for (let i = 0; i < SMALL; i++) r.ingest.addVideo({ videoId: `small-${i}`, inputId: null, createdAt: recent, inProgress: false });
+    const small = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      capabilities: { ...r.ingest.capabilities, listVideosPageLimit: SMALL },
+    });
+    const flagged = await sweep(r, { ingest: small });
+    expect(flagged).toMatchObject({ videosListed: SMALL, listingTruncated: true, inputsDeleted: 0 });
+    expect(r.ingest.deletedInputs).toEqual([]);
+    const plain = await sweep(r);
+    expect(plain).toMatchObject({ videosListed: SMALL, listingTruncated: false });
   });
 
   it("the sweep lock: a session held by another sweep's transaction is skipped; released → visited", async () => {

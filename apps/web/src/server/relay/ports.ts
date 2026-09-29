@@ -56,6 +56,10 @@ export interface IngestCapabilities {
   deleteRecordingAfterDays: number;
   /** C2/C8: declared per transport; SRT is UNMEASURED (H-P5-1) and stays null. */
   holdWindowSeconds: { rtmps: number; srt: number | null };
+  /** m2 (lane C final review): the most videos ONE `listVideos` call returns — the adapter's own page size. A listing of
+   *  exactly this many may be missing its tail (A13), so the sweep judges "full page" by the provider it is talking to,
+   *  read here, never by importing an adapter's module. */
+  listVideosPageLimit: number;
 }
 export interface IngestProvider {
   readonly capabilities: IngestCapabilities;

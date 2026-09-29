@@ -1143,6 +1143,145 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(s.state).toBe("live");
     expect(await creditBalance(sql, r.auth.orgId)).toBe(0);
   });
+
+  // m1 (lane C final review): four sites decided on an UNLOCKED read and then applied a plain command — the organiser's
+  // poll (ingest_connected / target_rejected), Stop, and the Machine's beat (callback_playing / callback_stopped). A row
+  // another request moved in between reached `decide` in a state that refuses the command, and InvalidTransition was a 500.
+  // Each now applies the T5-a function form: the command is re-decided on the LOCKED row, and one that no longer applies
+  // writes nothing and answers the projection. Each race below is driven deterministically: the provider read the poll
+  // makes between its read and its apply ends the session through the real Stop (a real second writer), or the test holds
+  // the org's money lock — which every apply takes first (A7) — while it ends the row, so the waiting apply meets it ended.
+  const endUnderHeldLock = async (r: { auth: { orgId: string } }, sessionId: string, run: () => Promise<unknown>, end: string) => {
+    let release!: () => void;
+    const mayCommit = new Promise<void>((res) => (release = res));
+    let signalHeld!: () => void;
+    const held = new Promise<void>((res) => (signalHeld = res));
+    const holder = sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${orgMoneyLockKey(r.auth.orgId)}))`;
+      signalHeld();
+      await mayCommit;
+      await tx.unsafe(end, [sessionId]);
+    });
+    await held;
+    const pending = run().then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    let waiting = 0;
+    for (let i = 0; i < 100 && waiting === 0; i++) {
+      await new Promise((res) => setTimeout(res, 20));
+      [{ n: waiting }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`;
+    }
+    expect(waiting, "the call never reached the org lock — the race was not staged").toBeGreaterThan(0);
+    release();
+    await holder;
+    return pending;
+  };
+
+  it("m1 RACE (the poll): a Stop that lands between the poll's ingest read and its apply — the poll saw `warming` and a connected ingest — answers the ENDED projection, never a 500; nothing goes live and nothing is charged (mutant: plain ingest_connected apply → InvalidTransition)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);                                                    // the fake ingest is connected from here on
+    let stopped = 0;
+    const racing = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      inputStatus: async (id: string) => {
+        await stopSession(r.auth, r.fixtureId, sessionId, r.deps);   // the second writer, through the real Stop
+        stopped++;
+        return r.ingest.inputStatus(id);
+      },
+    });
+    const cur = (await currentSession(r.auth, r.fixtureId, { ...r.deps, drivers: { ...r.deps.drivers, ingest: racing } }))!;
+    expect(stopped, "the race was staged once").toBe(1);
+    expect(cur.state).toBe("completed");
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`;
+    expect(n).toBe(0);
+  });
+
+  it("m1 RACE (the poll, rejected): a Stop that lands between the poll's output read and its apply — the poll saw `rejected` — answers the ENDED projection (completed, not failed target_rejected), never a 500 (mutant: plain target_rejected apply → InvalidTransition)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    let stopped = 0;
+    const racing = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      outputState: async () => {
+        await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+        stopped++;
+        return "rejected" as const;
+      },
+    });
+    const cur = (await currentSession(r.auth, r.fixtureId, { ...r.deps, drivers: { ...r.deps.drivers, ingest: racing } }))!;
+    expect(stopped).toBe(1);
+    expect(cur).toMatchObject({ state: "completed", failReason: null });
+  });
+
+  it("m1 RACE (Stop): a session another writer ENDS while the organiser's Stop waits for the lock answers the ended projection, 200, and records no tap — a finished session's tap asks for nothing (mutant: plain stop apply → InvalidTransition)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const out = await endUnderHeldLock(r, sessionId, () => stopSession(r.auth, r.fixtureId, sessionId, r.deps),
+      "update fixture_stream_sessions set state = 'failed', fail_reason = 'no_inbound_timeout', ended_at = now() where id = $1");
+    expect(out.ok ? "resolved" : String((out as { e: unknown }).e)).toBe("resolved");
+    expect((out as { v: { state: string } }).v.state).toBe("failed");
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'action' and type = 'stop'`;
+    expect(n).toBe(0);
+  });
+
+  it("m1 RACE (the beat): a composed session that another writer ENDS while its Machine's `playing` beat waits for the lock answers the beat, never a 500, and writes no runner transition (mutant: plain callback_playing apply → InvalidTransition on the terminal row)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    const jobToken = r.runner.created[0]!.jobToken;
+    const [{ rs }] = await sql<{ rs: string }[]>`select runner_state as rs from fixture_stream_sessions where id = ${sessionId}`;
+    expect(["booting", "playing"], "the premise: the beat's pre-check passes").toContain(rs);
+    const [{ n: before }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition'`;
+    const out = await endUnderHeldLock(r, sessionId, () => heartbeat(sessionId, jobToken, { state: "playing" }, r.deps),
+      "update fixture_stream_sessions set state = 'failed', fail_reason = 'machine_crash', ended_at = now() where id = $1");
+    expect(out.ok ? "resolved" : String((out as { e: unknown }).e)).toBe("resolved");
+    const [{ n: after }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition'`;
+    expect(after).toBe(before);
+    expect((await r.row(sessionId)).runner_state).toBe(rs);
+  });
+
+  it("m1 RACE (the beat, between its two applies): a `stopped` beat whose runner another writer takes to `destroyed` AFTER the beat's expiry and BEFORE its callback answers the beat, never a 500 (mutant: plain callback_stopped apply → destroyed × callback_stopped is refused)", async () => {
+    // The window is the gap between the beat's two applies. Postgres queues advisory-lock waiters in arrival order, so:
+    // the test holds the org lock; the beat queues on it (its expiry); a second writer queues BEHIND the beat; release —
+    // the beat's expiry runs and commits, its callback apply then queues behind the writer, and the writer's update lands
+    // first. The callback meets a runner the pre-check never saw.
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    const jobToken = r.runner.created[0]!.jobToken;
+    const [{ rs }] = await sql<{ rs: string }[]>`select runner_state as rs from fixture_stream_sessions where id = ${sessionId}`;
+    expect(["stopping", "playing", "booting"], "the premise: the beat's pre-check passes").toContain(rs);
+    const lockKey = orgMoneyLockKey(r.auth.orgId);
+    const waiters = async (want: number) => {
+      let n = 0;
+      for (let i = 0; i < 100 && n < want; i++) {
+        await new Promise((res) => setTimeout(res, 20));
+        [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from pg_locks where locktype = 'advisory' and not granted`;
+      }
+      return n;
+    };
+    let release!: () => void;
+    const mayCommit = new Promise<void>((res) => (release = res));
+    let signalHeld!: () => void;
+    const held = new Promise<void>((res) => (signalHeld = res));
+    const holder = sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      signalHeld();
+      await mayCommit;
+    });
+    await held;
+    const beat = heartbeat(sessionId, jobToken, { state: "stopped" }, r.deps).then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e }));
+    expect(await waiters(1), "the beat never queued on the org lock").toBeGreaterThanOrEqual(1);
+    const writer = sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${lockKey}))`;
+      await tx`update fixture_stream_sessions set runner_state = 'destroyed' where id = ${sessionId}`;
+    });
+    expect(await waiters(2), "the second writer never queued behind the beat").toBeGreaterThanOrEqual(2);
+    release();
+    await holder;
+    await writer;
+    const out = await beat;
+    expect(out.ok ? "resolved" : String((out as { e: unknown }).e)).toBe("resolved");
+    expect((await r.row(sessionId)).runner_state).toBe("destroyed");   // the writer's state stands; the beat wrote no step
+  });
 });
 
 describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sweep call (recommendation B)", () => {
@@ -1674,15 +1813,26 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(estimateCostMinor({ recordingSeconds: 60, machineSeconds: 100, guestCpus: null, guestMemoryMb: 4096, guestCpuClass: "dedicated" })).toBeNull();
   });
 
-  it("Dg: output_uid is the uid addOutput RETURNED, and a repeat never moves it", async () => {
+  // m4 (lane C final review): the title claimed "the uid addOutput RETURNED" while the body asserted only a non-null
+  // string, and "a repeat" while the body drove a later READ. The spy now pins the returned value itself, and the title
+  // names the read it actually drives.
+  it("Dg: output_uid is EXACTLY the uid addOutput returned (one call, spied), and a later read — the organiser's poll — never moves it", async () => {
     const r = await rig({ credits: 1 });
-    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const added = vi.spyOn(r.ingest, "addOutput");
+    let sessionId!: string;
+    let returned!: string;
+    try {
+      ({ sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps));
+      expect(added).toHaveBeenCalledTimes(1);
+      returned = await (added.mock.results[0]!.value as Promise<string>);
+    } finally {
+      added.mockRestore();
+    }
     const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId}`;
     const [row] = await sql<{ output_uid: string | null }[]>`select output_uid from fixture_stream_sessions where id = ${sessionId}`;
-    expect(row!.output_uid).not.toBeNull();
     expect(r.ingest.outputsFor(inp!.ingest_input_id)).toHaveLength(1);
     // the uid the port handed back, not one the usecase invented
-    expect(typeof row!.output_uid).toBe("string");
+    expect(row!.output_uid).toBe(returned);
     await currentSession(r.auth, r.fixtureId, r.deps);
     expect((await sql<{ output_uid: string | null }[]>`select output_uid from fixture_stream_sessions where id = ${sessionId}`)[0]!.output_uid).toBe(row!.output_uid);
   });

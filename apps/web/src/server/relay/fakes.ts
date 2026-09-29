@@ -21,6 +21,7 @@ import {
   DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
 } from "./config";
 import { machineNameFor } from "./domain/runner";   // T5-a: the fake names a Machine exactly as FlyRunner does
+import { LIST_VIDEOS_PAGE_LIMIT } from "./ingest-cf"; // m2: the fake lists in the REAL adapter's page size (A13 runs as in production)
 import { FlyApiError } from "./fly-client";           // A3: a create failure's PROOF is the adapter's own error type…
 import { runnerCreateErrorFrom } from "./runner-fly";  // …mapped onto the port's RunnerCreateError by the REAL adapter mapping (A23)
 import { NOOP_RECORDER } from "./ports";
@@ -62,6 +63,7 @@ export class FakeIngest implements IngestProvider {
     timeoutSeconds: INGEST_TIMEOUT_SECONDS,
     deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     holdWindowSeconds: { rtmps: INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS, srt: null },
+    listVideosPageLimit: LIST_VIDEOS_PAGE_LIMIT,
   };
   readonly deletedInputs: string[] = [];
   readonly deletedVideos: string[] = [];

@@ -136,18 +136,40 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
   // The guard's reach: the insert CONFLICTED (no row returned) and the read-back found nothing — the row was deleted
   // between the two statements. No production path deletes a target today, so a real database cannot reach this
   // window on demand; a scripted transaction answers both statements with nothing, which is exactly that window.
-  it("A19 guard: a destination that conflicts and then cannot be read back is refused BY NAME — never an undefined row handed to the caller", async () => {
+  //
+  // m6 (lane C final review): the refusal used to be the END — nothing mapped it, so a lost race was a 500, and the comment
+  // promised a retry nobody made. The retry is now made HERE, once, in the same transaction: under READ COMMITTED the
+  // second insert is a new statement with a new snapshot, so it sees the conflicting row gone and lands. Only a second
+  // vanish in a row — the same destination re-created AND deleted again inside that retry — is still refused by name.
+  const INSERT_SQL = /^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null do nothing/;
+  const SELECT_SQL = /^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \?$/;
+  const scripted = (answers: unknown[][]) => {
     const statements: string[] = [];
-    const vanished = ((strings: TemplateStringsArray) => {
+    const tx = ((strings: TemplateStringsArray) => {
       statements.push(strings.join("?").replace(/\s+/g, " ").trim());
-      return Promise.resolve([]);
+      return Promise.resolve(answers[statements.length - 1] ?? []);
     }) as unknown as Tx;
-    const err = await insertStreamTarget(vanished, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() })
+    return { tx, statements };
+  };
+
+  it("A19 guard + m6: a destination that conflicts and cannot be read back is RETRIED once in the same transaction, and the retry's insert lands — the caller gets the new row, never a 500 (mutant: no retry → StreamTargetVanishedError)", async () => {
+    const landed = { id: randomUUID(), kind: "youtube", label: "x", watch_url: null, created_at: new Date() };
+    const { tx, statements } = scripted([[], [], [landed]]);   // conflict, gone, then the retry's insert returns the row
+    const out = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() });
+    expect(out).toMatchObject({ id: landed.id, kind: "youtube", label: "x", watchUrl: null });
+    expect(statements).toHaveLength(3);
+    expect(statements[0]).toMatch(INSERT_SQL);
+    expect(statements[1]).toMatch(SELECT_SQL);
+    expect(statements[2]).toMatch(INSERT_SQL);
+  });
+
+  it("A19 guard: a destination that vanishes on the retry TOO is refused BY NAME — never an undefined row handed to the caller, and never a third attempt (mutant: retry forever / no refusal)", async () => {
+    const { tx, statements } = scripted([]);                   // every statement answers nothing: vanished twice
+    const err = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() })
       .then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(StreamTargetVanishedError);
-    expect(statements).toHaveLength(2);
-    expect(statements[0]).toMatch(/^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null do nothing/);
-    expect(statements[1]).toMatch(/^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \?$/);
+    expect(statements).toHaveLength(4);
+    expect(statements.map((s) => (INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "select" : s))).toEqual(["insert", "select", "insert", "select"]);
   });
 
   it("A19: an undialable destination is refused BEFORE anything is written — no fingerprint means no row", async () => {

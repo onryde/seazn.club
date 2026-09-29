@@ -70,6 +70,7 @@ export class CloudflareIngest implements IngestProvider {
     timeoutSeconds: INGEST_TIMEOUT_SECONDS,
     deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     holdWindowSeconds: { rtmps: INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS, srt: null },
+    listVideosPageLimit: LIST_VIDEOS_PAGE_LIMIT,   // m2: the `limit` listVideos sends, declared on the port for the sweep
   };
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;

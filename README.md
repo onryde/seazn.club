@@ -168,7 +168,9 @@ Stream-scoped token:
 
 `RELAY_KEK` is required in both modes (it seals every stored stream key). Live mode also
 refuses without `ENV_NAME`, and live composed streams need `FLY_API_TOKEN`,
-`FLY_RELAY_APP` and `RELAY_IMAGE`; the relay block of the root
+`FLY_RELAY_APP` and `RELAY_IMAGE`. These refusals are LAZY: each fires at the first relay
+call that needs the value (a composed start's Machine, the daily sweep), not at boot — a
+deploy missing one starts and serves until then. The relay block of the root
 [`.env.example`](.env.example) documents each one.
 
 Two facts worth knowing before reading the design:

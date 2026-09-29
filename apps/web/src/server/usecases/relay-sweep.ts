@@ -27,7 +27,6 @@ import { EST_COST_CURRENCY, MAX_DURATION_MINUTES, SAMPLE_RETENTION_DAYS, relayEn
 import { retentionPlan, type RetainedInput, type RetainedVideo } from "@/server/relay/domain/retention";
 import { machineNameFor, type RunnerState } from "@/server/relay/domain/runner";
 import { isTerminal, type FailReason, type SessionState } from "@/server/relay/domain/session";
-import { LIST_VIDEOS_PAGE_LIMIT } from "@/server/relay/ingest-cf";
 import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
 import {
@@ -381,11 +380,13 @@ export async function sweepStreamSessions(
   //    AND the video facts (step 5): a second list doubles a paid call every day.
   const listedVideos: IngestVideo[] = await deps.drivers.ingest.listVideos({ createdBefore: now });
   out.videosListed = listedVideos.length;
-  // A13 (owner-confirmed 2026-09-28): the adapter sends `limit = LIST_VIDEOS_PAGE_LIMIT` and paging is UNMEASURED, so a
+  // A13 (owner-confirmed 2026-09-28): the adapter sends its page size as `limit` and paging is UNMEASURED, so a
   // FULL page means "there may be more", never "that is all". Flagged and warned — never read as the whole set.
-  out.listingTruncated = listedVideos.length >= LIST_VIDEOS_PAGE_LIMIT;
+  // m2: the page size is the PROVIDER's, read through the port (IngestCapabilities), never imported from an adapter.
+  const pageLimit = deps.drivers.ingest.capabilities.listVideosPageLimit;
+  out.listingTruncated = listedVideos.length >= pageLimit;
   if (out.listingTruncated) {
-    log.warn({ videosListed: listedVideos.length, pageLimit: LIST_VIDEOS_PAGE_LIMIT }, "relay sweep: the video listing came back a full page — the tail may be missing; no input is deleted on it");
+    log.warn({ videosListed: listedVideos.length, pageLimit }, "relay sweep: the video listing came back a full page — the tail may be missing; no input is deleted on it");
   }
   const videos: RetainedVideo[] = listedVideos.map((v) => ({ videoId: v.videoId, inputId: v.inputId, createdAt: new Date(v.createdAt), inProgress: v.inProgress }));
   // I1(c): the Stream account is shared the same way the Fly app can be, so a recording is deleted ONLY when it traces to a

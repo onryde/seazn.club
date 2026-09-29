@@ -39066,7 +39066,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions/{sid}/stop": {
       "post": {
-        "summary": "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and writes nothing; 409 not_active when the fixture has since started a newer session",
+        "summary": "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and decides nothing (no transition, no provider call) — a tap on a session still ending is recorded as the organiser's action, one on an ended session writes nothing; 409 not_active when the fixture has since started a newer session",
         "tags": [
           "fixtures"
         ],

@@ -488,7 +488,14 @@ async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): 
   const status = await deps.drivers.ingest.inputStatus(inputId);
   if (status.state !== "connected") return;
   await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${sessionId}`;
-  await apply(sessionId, (s) => (s.mode === "passthrough" && s.state === "warming" ? { type: "ingest_connected" } : null), deps);
+  await apply(sessionId, connectIfWarming, deps);
+}
+
+/** `ingest_connected` as a T5-a command function: only a passthrough session still `warming` on the LOCKED row goes live
+ *  on an observed connection; a row that moved on (stopped, expired, already live) writes nothing. Both observers use it:
+ *  the expiry's (I1, above) and the organiser's poll (m1). */
+function connectIfWarming(s: Session): Command | null {
+  return s.mode === "passthrough" && s.state === "warming" ? { type: "ingest_connected" } : null;
 }
 
 /** The lazy expiry path (recommendation B). I1: a passthrough warming session's ingest is observed first. */
@@ -1141,8 +1148,10 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       if (status.state === "connected") {
         await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
       }
-      if (output === "rejected") await apply(row.id, { type: "target_rejected" }, deps);
-      else if (row.state === "warming" && status.state === "connected") await apply(row.id, { type: "ingest_connected" }, deps);
+      // m1 (lane C final review): both re-decided on the LOCKED row (T5-a) — a Stop or an expiry that landed after the
+      // unlocked read above leaves a row these no longer apply to, and a plain apply of either was InvalidTransition, a 500.
+      if (output === "rejected") await apply(row.id, (s) => (s.state === "warming" || s.state === "live" ? { type: "target_rejected" } : null), deps);
+      else if (row.state === "warming" && status.state === "connected") await apply(row.id, connectIfWarming, deps);
       row = (await latestRow(fixtureId))!;
     }
   }
@@ -1220,7 +1229,10 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
     }
     return (await currentSession(auth, fixtureId, deps))!;
   }
-  await apply(sessionId, { type: "stop" }, deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
+  // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)
+  // writes nothing — no decision, no tap, the same as the finished-session branch above — and the projection answers.
+  // `ending` is still decided: `ending × stop` is identity, and it records the tap (n5).
+  await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "stop" }), deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
   return (await currentSession(auth, fixtureId, deps))!;
 }
 
@@ -1245,11 +1257,17 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   await sampleBeat(sessionId, before.org_id, body, deps);
   let s = (await applyExpiry(sessionId, deps))!;
   // The runner's own callbacks are lifecycle triggers (plan §"Fly machine lifecycle"): playing/stopped, nothing else moves the table from a beat.
+  // m1 (lane C final review): each callback is re-decided on the LOCKED row (T5-a) — another writer may have moved the row
+  // since `s` was read, and a plain apply the table no longer accepts was InvalidTransition, a 500 on the Machine's beat.
+  // callback_playing is refused on a TERMINAL session (it is not a runner cleanup trigger); callback_stopped is one, so a
+  // terminal row still takes it.
   if (s.mode === "composed" && (s.runner.state === "booting" || s.runner.state === "playing") && body.state === "playing") {
-    s = (await apply(sessionId, { type: "runner", trigger: { type: "callback_playing" } }, deps))!;
+    s = (await apply(sessionId, (cur) => (cur.mode === "composed" && !isTerminal(cur.state) && (cur.runner.state === "booting" || cur.runner.state === "playing")
+      ? { type: "runner", trigger: { type: "callback_playing" } } : null), deps)) ?? s;
   }
   if (s.mode === "composed" && body.state === "stopped" && (s.runner.state === "stopping" || s.runner.state === "playing" || s.runner.state === "booting")) {
-    s = (await apply(sessionId, { type: "runner", trigger: { type: "callback_stopped" } }, deps))!;
+    s = (await apply(sessionId, (cur) => (cur.mode === "composed" && (cur.runner.state === "stopping" || cur.runner.state === "playing" || cur.runner.state === "booting")
+      ? { type: "runner", trigger: { type: "callback_stopped" } } : null), deps)) ?? s;
   }
   return { desiredState: s.desiredState };
 }

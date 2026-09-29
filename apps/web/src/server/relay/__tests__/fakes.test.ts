@@ -190,12 +190,13 @@ describe("FakeIngest", () => {
     expect((await fake.storageUsage()).totalStorageMinutes).toBe(999);
   });
 
-  it("capabilities come from config.ts, SRT hold unmeasured (C8)", () => {
+  it("capabilities come from config.ts, SRT hold unmeasured (C8); the listing page size is the REAL adapter's, so the sweep's full-page rule (A13) runs against the fake exactly as it does against Cloudflare (m2)", () => {
     const fake = new FakeIngest();
     expect(fake.capabilities).toEqual({
       timeoutSeconds: INGEST_TIMEOUT_SECONDS,
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
       holdWindowSeconds: { rtmps: INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS, srt: null },
+      listVideosPageLimit: 1000,   // a literal, as ingest-cf.test.ts pins it: never the constant supplying both sides
     });
   });
 });

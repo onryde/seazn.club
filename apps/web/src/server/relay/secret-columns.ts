@@ -107,23 +107,29 @@ export async function insertStreamTarget(
   args: { orgId: string; kind: string; label: string; watchUrl: string | null; rtmp: { url: string; streamKey: string } },
 ): Promise<StoredStreamTarget> {
   const fingerprint = fingerprintDestination(args.rtmp.url, args.rtmp.streamKey);
-  // The conflict target names the partial index's predicate so Postgres INFERS
-  // org_stream_targets_org_dest_fingerprint. A concurrent insert of the same
-  // destination makes this one WAIT for it; once it commits, this is a no-op and
-  // the read below — a new statement, so a new READ COMMITTED snapshot — sees it.
-  const [row] = await tx<TargetRow[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc, watch_url, dest_fingerprint)
-    values (${args.orgId}, ${args.kind}, ${args.label}, ${seal(JSON.stringify(args.rtmp))}, ${args.watchUrl}, ${fingerprint})
-    on conflict (org_id, dest_fingerprint) where dest_fingerprint is not null do nothing
-    returning id, kind, label, watch_url, created_at`;
-  if (row) return storedTarget(row);
-  const [existing] = await tx<TargetRow[]>`
-    select id, kind, label, watch_url, created_at from org_stream_targets
-     where org_id = ${args.orgId} and dest_fingerprint = ${fingerprint}`;
-  // The conflicting row was deleted between the two statements. Refused by name rather than handing back an
-  // undefined row; the caller's retry lands the insert.
-  if (!existing) throw new StreamTargetVanishedError();
-  return storedTarget(existing);
+  // m6 (lane C final review): ONE retry, here. The conflicting row can be deleted between the insert and the read-back;
+  // nothing above this function mapped that refusal, so the lost race was a 500. A second attempt in the same transaction
+  // is a new statement — a new READ COMMITTED snapshot — so it sees that row gone and its insert lands. Only a second
+  // vanish in a row (the same destination re-created AND deleted again inside the retry) is still refused by name.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    // The conflict target names the partial index's predicate so Postgres INFERS
+    // org_stream_targets_org_dest_fingerprint. A concurrent insert of the same
+    // destination makes this one WAIT for it; once it commits, this is a no-op and
+    // the read below — a new statement, so a new READ COMMITTED snapshot — sees it.
+    const [row] = await tx<TargetRow[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc, watch_url, dest_fingerprint)
+      values (${args.orgId}, ${args.kind}, ${args.label}, ${seal(JSON.stringify(args.rtmp))}, ${args.watchUrl}, ${fingerprint})
+      on conflict (org_id, dest_fingerprint) where dest_fingerprint is not null do nothing
+      returning id, kind, label, watch_url, created_at`;
+    if (row) return storedTarget(row);
+    const [existing] = await tx<TargetRow[]>`
+      select id, kind, label, watch_url, created_at from org_stream_targets
+       where org_id = ${args.orgId} and dest_fingerprint = ${fingerprint}`;
+    if (existing) return storedTarget(existing);
+    // The conflicting row was deleted between the two statements: go round once more.
+  }
+  // Vanished on the retry too. Refused by name rather than handing back an undefined row.
+  throw new StreamTargetVanishedError();
 }
 
 /** The STORED target's public fields — the row that now answers for this destination, which on a repeat is the
@@ -136,7 +142,7 @@ const storedTarget = (r: TargetRow): StoredStreamTarget =>
   ({ id: r.id, kind: r.kind, label: r.label, watchUrl: r.watch_url, createdAt: new Date(r.created_at) });
 
 /** `insertStreamTarget` found the destination already saved, then could not read it back — the row was deleted in
- *  between. Carries no org, url or key. */
+ *  between — on its first attempt AND on its one retry (m6). Carries no org, url or key. */
 export class StreamTargetVanishedError extends Error {
   constructor() {
     super("stream target changed while it was being saved; try again");

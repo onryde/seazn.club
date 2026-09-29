@@ -211,6 +211,8 @@ describe("CloudflareIngest", () => {
     expect(ingest.capabilities.holdWindowSeconds).toEqual({ rtmps: INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS, srt: null });
     expect(ingest.capabilities.timeoutSeconds).toBe(INGEST_TIMEOUT_SECONDS);
     expect(ingest.capabilities.deleteRecordingAfterDays).toBe(DELETE_RECORDING_AFTER_DAYS);
+    // m2: the page size the sweep reads through the PORT is the one this adapter sends as `limit` — a literal pin.
+    expect(ingest.capabilities.listVideosPageLimit).toBe(1000);
   });
 
   it("inputStatus reads the PER-INPUT GET and its status.current shape, carrying reason through (Dh); absent status is disconnected; 404 is unknown (C5)", async () => {
