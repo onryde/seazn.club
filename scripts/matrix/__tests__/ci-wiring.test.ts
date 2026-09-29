@@ -253,29 +253,63 @@ describe("matrix CI wiring", () => {
   });
 
   describe("R26: the single-sport ratchet", () => {
-    const SS_STEP = "      - run: pnpm matrix:single-sport --check";
+    const SS_STEP = "      - run: pnpm matrix:single-sport --check --against HEAD^1";
     const lines = ci.split("\n");
+    const isComment = (l: string) => /^\s*#/.test(l);
+    // the job a line sits in: the last two-space job key at or above it
+    const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+    const gatesAt = lines.indexOf("  gates:");
+    const gatesEnd = gatesAt + 1 + lines.slice(gatesAt + 1).findIndex((l) => /^ {2}[a-z][\w-]*:$/.test(l));
 
-    it("the gates job runs it right after engine:boundary, exactly once, through pnpm", () => {
+    it("the gates job runs it as the next step after engine:boundary, exactly once, through pnpm, against HEAD^1", () => {
       const boundary = lines.indexOf("      - run: npm run engine:boundary");
       expect(boundary).toBeGreaterThan(0);
-      expect(lines[boundary + 1]).toBe(SS_STEP);
-      expect(lines.filter((l) => l.includes("matrix:single-sport"))).toEqual([SS_STEP]);
-      // same job: the step sits inside `gates:`, before the next job key
-      const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
-      expect(jobAt(boundary + 1)).toBe("  gates:");
+      let next = boundary + 1;
+      while (next < lines.length && isComment(lines[next]!)) next++;
+      expect(lines[next]).toBe(SS_STEP);
+      expect(lines.filter((l) => l.includes("matrix:single-sport") && !isComment(l))).toEqual([SS_STEP]);
+      expect(jobAt(next)).toBe("  gates:");
       expect(pkg.scripts["matrix:single-sport"]).toBe("node --experimental-strip-types scripts/matrix/single-sport.ts");
       expect(existsSync(resolve(REPO, "scripts/matrix/single-sport.ts"))).toBe(true);
     });
 
-    it("the step's command as ci.yml spells it, run the way CI runs it, reaches --check and passes on this tree", () => {
-      const step = lines.find((l) => l.includes("matrix:single-sport"));
+    it("nothing can turn the step off or make it advisory: no key under it, and no `if:` or continue-on-error on the gates job (review M-2)", () => {
+      const at = lines.indexOf(SS_STEP);
+      expect(at).toBeGreaterThan(0);
+      // the very next line starts another step or is a comment — a key under the
+      // step (`if:`, `continue-on-error:`, `env:`, …) would sit at indent 8
+      expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);
+      expect(gatesAt).toBeGreaterThan(0);
+      expect(gatesEnd).toBeGreaterThan(gatesAt);
+      const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+      expect(header.length).toBeGreaterThan(0);
+      for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+    });
+
+    it("the gates checkout fetches deep enough for HEAD^1 to exist (fetch-depth 0 or at least 2)", () => {
+      const job = lines.slice(gatesAt, gatesEnd);
+      const checkouts = job.flatMap((l, i) => (l === "      - uses: actions/checkout@v5" ? [i] : []));
+      expect(checkouts).toHaveLength(1);
+      const c = checkouts[0]!;
+      let end = c + 1;
+      while (end < job.length && (isComment(job[end]!) || indentOf(job[end]!) >= 8)) end++;
+      const depths = job.slice(c + 1, end).flatMap((l) => /^ {10}fetch-depth: (\d+)$/.exec(l)?.slice(1) ?? []).map(Number);
+      expect(depths).toHaveLength(1);
+      const depth = depths[0]!;
+      expect(depth === 0 || depth >= 2, `fetch-depth ${depth}`).toBe(true);
+      // and it sits before the ratchet step, in the same job
+      expect(gatesAt + c).toBeLessThan(lines.indexOf(SS_STEP));
+    });
+
+    it("the step's command as ci.yml spells it, run the way CI runs it (the ref as HEAD, so no history is needed), reaches --check --against and passes on this tree", () => {
+      const step = lines.find((l) => l.includes("matrix:single-sport") && !isComment(l));
       expect(step).toBeDefined();
       const cmd = (step ?? "").trim().replace(/^- run: /, "");
-      const r = spawnSync("bash", ["-c", cmd], { cwd: REPO, encoding: "utf8", timeout: 60_000 });
+      expect(cmd).toContain(" --against HEAD^1");
+      const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: 60_000 });
       expect(r.status, r.stderr).toBe(0);
-      // only --check prints this line: the flag reached the CLI through pnpm
-      expect(r.stdout).toMatch(/single-sport: check passed against scripts\/matrix\/catalogue\/single-sport-baseline\.json/);
+      // only --check --against prints this line: both flags reached the CLI through pnpm
+      expect(r.stdout).toMatch(/single-sport: check passed against scripts\/matrix\/catalogue\/single-sport-baseline\.json and HEAD$/m);
     });
   });
 

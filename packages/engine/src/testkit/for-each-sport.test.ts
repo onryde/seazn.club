@@ -1,11 +1,14 @@
 // R26: the shared sport sweep. What it owes a caller, in the order a reviewer
 // asks: the empty case (a refusal, never a zero-iteration pass), registry order
 // (WAVE order — never sorted; AGENTS.md class 18), an honest count, a second
-// call that sees the same registry, and a failure that names its sport.
+// call that sees the same registry, and a failure that names its sport. Fix
+// round 1 (review I-5, M-3): an async body is refused by name (it would run
+// nothing before the count came back), forEachSportAsync awaits each sport in
+// turn, and a wrapped assertion keeps vitest's diff fields.
 import { describe, expect, it } from "vitest";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
-import { EmptySportRegistry, forEachSport, sportCases, type SportCase } from "./for-each-sport.ts";
+import { AsyncBody, EmptySportRegistry, forEachSport, forEachSportAsync, sportCases, type SportCase } from "./for-each-sport.ts";
 import * as testkit from "./index.ts";
 
 // The registry's order as `sports/index.ts` declares it at W1b: the order the
@@ -108,9 +111,94 @@ describe("forEachSport (R26)", () => {
     expect(() => forEachSport((c) => { if (c.index === 0) throw "plain"; })).toThrow(`sport ${builtinModules[0]!.key}: plain`);
   });
 
+  it("a failing expect inside the sweep keeps vitest's diff fields (actual / expected / showDiff) on the wrapper (M-3)", () => {
+    let caught: unknown;
+    try {
+      forEachSport((c) => { expect(c.index).toBe(-1); });
+    } catch (e) {
+      caught = e;
+    }
+    const w = caught as Record<string, unknown> & Error;
+    expect(w.message).toMatch(new RegExp(`^sport ${builtinModules[0]!.key}: `));
+    expect(w.actual).toBe(0);
+    expect(w.expected).toBe(-1);
+    expect(w.showDiff).toBe(true);
+    expect((w.cause as Error).name).toBe("AssertionError");
+  });
+
+  it("an async body is refused by name at the first sport — never a count for bodies nobody awaited (I-5)", async () => {
+    let started = 0;
+    let finished = 0;
+    let caught: unknown;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the misuse IS the case under test
+      forEachSport(async () => { started++; await Promise.resolve(); finished++; });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(AsyncBody);
+    expect((caught as AsyncBody).sport).toBe(builtinModules[0]!.key);
+    expect((caught as Error).message).toMatch(/forEachSportAsync/);
+    expect(started).toBe(1);
+    // A bare thenable is refused the same way.
+    expect(() => forEachSport(() => ({ then() {} }) as unknown as void)).toThrow(AsyncBody);
+    // The refused body's own rejection is handled, not left to surface as an
+    // unattributed unhandledRejection.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (r: unknown) => { unhandled.push(r); };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the misuse IS the case under test
+      expect(() => forEachSport(async () => { throw new Error("late"); })).toThrow(AsyncBody);
+      await new Promise((r) => setTimeout(r, 20));
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+    expect(unhandled).toEqual([]);
+    expect(finished).toBe(1);
+  });
+
+  it("forEachSportAsync: awaits each sport in turn, in registry order, and resolves the count only after every body settled", async () => {
+    const log: string[] = [];
+    const n = await forEachSportAsync(async (c) => {
+      log.push(`start ${c.key}`);
+      await new Promise((r) => setTimeout(r, 1));
+      log.push(`end ${c.key}`);
+    });
+    expect(n).toBe(builtinModules.length);
+    expect(n).toBeGreaterThan(0);
+    expect(log).toEqual(builtinModules.flatMap((m) => [`start ${m.key}`, `end ${m.key}`]));
+    // sync bodies are fine too
+    expect(await forEachSportAsync(() => undefined)).toBe(builtinModules.length);
+  });
+
+  it("forEachSportAsync: the empty registry is refused; a rejection names its sport, keeps the cause and the diff, and stops there", async () => {
+    await expect(forEachSportAsync(async () => {}, [])).rejects.toBeInstanceOf(EmptySportRegistry);
+    const at = 2;
+    const visited: string[] = [];
+    let caught: unknown;
+    try {
+      await forEachSportAsync(async (c) => {
+        visited.push(c.key);
+        await Promise.resolve();
+        if (c.index === at) expect(c.key).toBe("not-a-sport");
+      });
+    } catch (e) {
+      caught = e;
+    }
+    const w = caught as Record<string, unknown> & Error;
+    expect(w.message).toMatch(new RegExp(`^sport ${builtinModules[at]!.key}: `));
+    expect((w.cause as Error).name).toBe("AssertionError");
+    expect(w.actual).toBe(builtinModules[at]!.key);
+    expect(w.expected).toBe("not-a-sport");
+    expect(visited).toEqual(builtinModules.slice(0, at + 1).map((m) => m.key));
+  });
+
   it("is published through the testkit barrel (@seazn/engine/testkit)", () => {
     expect(testkit.forEachSport).toBe(forEachSport);
+    expect(testkit.forEachSportAsync).toBe(forEachSportAsync);
     expect(testkit.sportCases).toBe(sportCases);
     expect(testkit.EmptySportRegistry).toBe(EmptySportRegistry);
+    expect(testkit.AsyncBody).toBe(AsyncBody);
   });
 });

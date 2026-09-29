@@ -1,9 +1,10 @@
-// R26: the single-sport ratchet. The scanner's grammar (what a pin is, where a
-// `// single-sport:` reason counts), its scope, and the CLI's exit codes. Every
-// claim about what the CLI does is checked by RUNNING it (pre-flight ruling
-// R-h); only the crash mapping is driven in-process, through an injected scan.
+// R26: the single-sport ratchet. The scanner's grammar (what a pin is, what a
+// sweep is, where a `// single-sport:` reason counts), its scope, the counted
+// ratchet (and --against, --move), and the CLI's exit codes. Every claim about
+// what the CLI does is checked by RUNNING it (pre-flight ruling R-h); only the
+// crash mapping is driven in-process, through an injected scan.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,11 +13,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BASELINE_PATH,
   checkRatchet,
+  ceilingIn,
+  countsOf,
   EmptySportList,
   loadBaseline,
   main,
   NAME_ROOTS,
+  parseBaseline,
   pinsIn,
+  raisedAbove,
+  Refusal,
   scanSingleSport,
   SCOPE_DIRS,
   SCOPE_NAME,
@@ -56,23 +62,40 @@ function cli(args: string[], script = CLI) {
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
+function git(root: string, ...args: string[]): void {
+  const r = spawnSync("git", ["-C", root, "-c", "user.email=matrix@example.invalid", "-c", "user.name=Matrix", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+}
+/** Commit everything in `root` as one commit (a fresh repo on the first call). */
+function commitAll(root: string, message: string): void {
+  if (!existsSync(join(root, ".git"))) git(root, "init", "-q");
+  git(root, "add", "-A");
+  git(root, "commit", "-q", "--allow-empty", "-m", message);
+}
+
 const baselineOf = (root: string): string => readFileSync(join(root, BASELINE_PATH), "utf8");
+const pinsOf = (root: string): Record<string, number> => (JSON.parse(baselineOf(root)) as { pins: Record<string, number> }).pins;
+function writeBaseline(root: string, pins: Record<string, number>, moves: Record<string, string> = {}): void {
+  mkdirSync(dirname(join(root, BASELINE_PATH)), { recursive: true });
+  writeFileSync(join(root, BASELINE_PATH), `${JSON.stringify({ schemaVersion: 2, generatedBy: "test", pins, moves }, null, 2)}\n`);
+}
 const at = (pins: Pin[]) => pins.map((p) => [p.line, p.sport, p.reasoned]);
+const live = (pins: Pin[]) => pins.filter((p) => !p.swept).map((p) => p.sport);
 
 describe("single-sport scanner (R26)", () => {
   it("premise: the sport keys these fixtures use are registry keys, and the negatives are not", () => {
     expect(REGISTRY.length).toBeGreaterThan(0);
-    for (const k of ["generic", "badminton", "tennis", "football", "cricket"]) expect(REGISTRY).toContain(k);
-    for (const k of ["padel", "chess"]) expect(REGISTRY).not.toContain(k);
+    for (const k of ["generic", "badminton", "tennis", "football", "cricket", "volleyball", "carrom", "hockey", "icehockey"]) expect(REGISTRY).toContain(k);
+    for (const k of ["padel", "chess", "setbased", "index"]) expect(REGISTRY).not.toContain(k);
   });
 
-  it("empty case first: a tree with nothing in scope scans zero files — and the CLI, run for real, refuses it with exit 2", () => {
+  it("empty case first: a tree with nothing in scope scans zero files — and the CLI, run for real, refuses it with exit 2 in every mode", () => {
     const root = tree({ "README.md": "x" });
     const r = scanSingleSport(root);
     expect(r.scanned).toBe(0);
     expect(r.pins).toEqual([]);
     expect(Object.values(r.perRoot)).toEqual([...SCOPE_DIRS, ...NAME_ROOTS].map(() => 0));
-    for (const args of [["--check"], [], ["--write"], ["--init"]]) {
+    for (const args of [["--check"], [], ["--write"], ["--init"], ["--move", "a.test.ts", "b.test.ts"]]) {
       const c = cli([...args, "--root", root]);
       expect({ args, status: c.status }).toEqual({ args, status: 2 });
       expect(c.stderr).toMatch(/ZERO/);
@@ -96,13 +119,13 @@ describe("single-sport scanner (R26)", () => {
       expect({ drop, status: c.status }).toEqual({ drop, status: 2 });
       expect(c.stderr).toMatch(/ZERO/);
     }
-    // and the full tree is accepted (the refusal above is about the dropped root)
     expect(cli(["--root", tree(FULL)]).status).toBe(0);
   });
 
-  it("finds a quoted registry key in each in-scope file, in any quote; out-of-scope files and non-keys are not pins", () => {
+  it("scope: .test.ts AND .test.tsx under the scope dirs and the name roots; the name is the file's; out-of-scope files are not read", () => {
     const root = tree({
       "packages/engine/src/scheduling/a.test.ts": `const x = "badminton";\nconst y = 'generic';\nconst z = \`tennis\`;\nconst n = "padel";\nconst m = "generic';\n`,
+      "packages/engine/src/scheduling/b.test.tsx": `const el = <Table sport="hockey" />;\n`,
       "packages/engine/src/competition/__tests__/deep.test.ts": `f("cricket");\n`,
       "packages/engine/src/competition/helper.ts": `f("cricket");\n`, // not a test file
       "packages/engine/src/stats/tiebreak-order.test.ts": `f("football");\n`, // named in, outside the scope dirs
@@ -110,21 +133,63 @@ describe("single-sport scanner (R26)", () => {
       "apps/web/src/server/usecases/__tests__/stage-progression.test.ts": "sportKey: `tennis`\n",
       "apps/web/src/server/usecases/__tests__/other.test.ts": `const z = "football";\n`,
       "apps/web/src/standings/inner.test.ts": `const z = "football";\n`, // the NAME is the file's, not a directory's
-      "apps/web/src/components/standings-table.test.tsx": `const z = "football";\n`, // .test.ts only
+      "apps/web/src/components/standings-table.test.tsx": `const z = render(<T sport="volleyball" />);\n`, // .tsx is in (review I-1)
       "apps/web/src/node_modules/x/progression.test.ts": `const z = "football";\n`,
       "scripts/standings.test.ts": `const z = "football";\n`, // outside both name roots
     });
     const r = scanSingleSport(root);
-    expect(r.scanned).toBe(4);
-    expect(r.pins.map((p) => [p.file, p.line, p.sport, p.reasoned])).toEqual([
-      ["apps/web/src/server/usecases/__tests__/stage-progression.test.ts", 1, "tennis", false],
-      ["packages/engine/src/competition/__tests__/deep.test.ts", 1, "cricket", false],
-      ["packages/engine/src/scheduling/a.test.ts", 1, "badminton", false],
-      ["packages/engine/src/scheduling/a.test.ts", 2, "generic", false],
-      ["packages/engine/src/scheduling/a.test.ts", 3, "tennis", false],
-      ["packages/engine/src/stats/tiebreak-order.test.ts", 1, "football", false],
+    expect(r.scanned).toBe(6);
+    expect(r.pins.map((p) => [p.file, p.line, p.sport, p.via])).toEqual([
+      ["apps/web/src/components/standings-table.test.tsx", 1, "volleyball", "literal"],
+      ["apps/web/src/server/usecases/__tests__/stage-progression.test.ts", 1, "tennis", "literal"],
+      ["packages/engine/src/competition/__tests__/deep.test.ts", 1, "cricket", "literal"],
+      ["packages/engine/src/scheduling/a.test.ts", 1, "badminton", "literal"],
+      ["packages/engine/src/scheduling/a.test.ts", 2, "generic", "literal"],
+      ["packages/engine/src/scheduling/a.test.ts", 3, "tennis", "literal"],
+      ["packages/engine/src/scheduling/b.test.tsx", 1, "hockey", "literal"],
+      ["packages/engine/src/stats/tiebreak-order.test.ts", 1, "football", "literal"],
     ]);
-    expect(r.perRoot).toEqual({ "packages/engine/src/scheduling": 1, "packages/engine/src/competition": 1, "packages/engine/src": 1, "apps/web/src": 1 });
+    expect(r.perRoot).toEqual({ "packages/engine/src/scheduling": 2, "packages/engine/src/competition": 1, "packages/engine/src": 1, "apps/web/src": 2 });
+  });
+
+  it("a key quoted INSIDE a string or template counts (the SQL seeding idiom); a key merely mentioned in one does not", () => {
+    const text = [
+      "await sql`",
+      "  insert into sports (key, name) values ('generic', 'Generic')",
+      "  on conflict (key) do nothing`;",
+      "await sql`update divisions set sport_key = ${'tennis'} where x = 'cricket'`;",
+      `const s = "a 'football' row";`,
+      `const t = "payload A: badminton";`,
+      "const u = `the ${kind} for volleyball`;",
+    ].join("\n");
+    expect(pinsIn(text, "t.test.ts").map((p) => [p.line, p.sport])).toEqual([[2, "generic"], [4, "tennis"], [4, "cricket"], [5, "football"]]);
+  });
+
+  it("an import of one sport's module is a pin of that sport (review I-3); the registry and other modules are not", () => {
+    const text = [
+      `import { generic, type GenericCfg } from "../sports/generic/generic.ts";`,
+      `import { icehockey } from "../sports/icehockey/index.ts";`,
+      `import { badminton } from "../sports/setbased/badminton.ts";`,
+      `import type { CricketCfg } from "../../sports/cricket/cricket.ts";`,
+      `import { tennis as t, builtinModules } from "@seazn/engine/sports";`,
+      `import { football } from "@seazn/engine/sports/football";`,
+      `import { registerBuiltins } from "../sports/index.ts";`,
+      `import { setbasedShared } from "../sports/setbased/index.ts";`,
+      `import type { AnySportModule } from "../sport/module.ts";`,
+      `const hockey = await import("../sports/hockey/index.ts");`,
+    ].join("\n");
+    expect(pinsIn(text, "t.test.ts").map((p) => [p.line, p.sport, p.via])).toEqual([
+      [1, "generic", "import"],
+      [2, "icehockey", "import"],
+      [3, "badminton", "import"],
+      [4, "cricket", "import"],
+      [5, "tennis", "import"],
+      [6, "football", "import"],
+      [10, "hockey", "import"],
+    ]);
+    // a reason directly above an import covers that import, and only it
+    const reasoned = pinsIn(`// single-sport: cricket's award alias is the rule under test\nimport { cricket } from "../sports/cricket/cricket.ts";\nimport { tennis } from "../sports/tennis/index.ts";\n`, "t.test.ts");
+    expect(at(reasoned)).toEqual([[2, "cricket", true], [3, "tennis", false]]);
   });
 
   describe("where a `// single-sport:` reason counts", () => {
@@ -138,7 +203,7 @@ describe("single-sport scanner (R26)", () => {
       expect(at(pinsIn(text, "t.test.ts"))).toEqual([[2, "generic", true], [3, "badminton", false]]);
     });
 
-    it("on its own line — the house convention is the test body's first line: the rest of that block, and nothing after it closes", () => {
+    it("as the first line of a test body — the house convention: that body, and nothing after it closes", () => {
       const text = [
         `describe("d", () => {`,
         `  it("a", () => {`,
@@ -164,12 +229,22 @@ describe("single-sport scanner (R26)", () => {
       ]);
     });
 
-    it("the line directly above a statement (the brief's shape) — and a pin BEFORE the reason stays unreasoned", () => {
-      const text = `const x = "badminton";\n// single-sport: bracket shape is sport-free\nconst y = 'generic';\n`;
-      expect(at(pinsIn(text, "t.test.ts"))).toEqual([[1, "badminton", false], [3, "generic", true]]);
+    it("at indent 0 (and on a file's first line): the NEXT statement only, never the rest of the file (review M-1)", () => {
+      const brief = `const x = "badminton";\n// single-sport: bracket shape is sport-free\nconst y = 'generic';\n`;
+      expect(at(pinsIn(brief, "t.test.ts"))).toEqual([[1, "badminton", false], [3, "generic", true]]);
+      const text = [
+        `// single-sport: fixture default`,
+        `const SPORT = "generic";`,
+        `it("a", () => f("badminton"));`,
+        ``,
+        `it("b", () => {`,
+        `  f("cricket");`,
+        `});`,
+      ].join("\n");
+      expect(at(pinsIn(text, "t.test.ts"))).toEqual([[2, "generic", true], [3, "badminton", false], [6, "cricket", false]]);
     });
 
-    it("directly above a test call: that call only — it.each tables included — and the next sibling is unreasoned", () => {
+    it("directly above a test call — even at the top of a describe body: that call only, it.each tables and the closing line included", () => {
       const text = [
         `describe("d", () => {`,
         `  // single-sport: the table is the point`,
@@ -202,7 +277,30 @@ describe("single-sport scanner (R26)", () => {
       ]);
     });
 
-    it("an empty reason, a missing colon or a block comment is not a reason", () => {
+    it("a blank line never widens a reason: after it, the reason still covers only the next call; before it, the reason no longer heads the body (review M-1 P2)", () => {
+      const gap = [
+        `describe("d", () => {`,
+        `  it("x", () => {});`,
+        `  // single-sport: only the next test`,
+        ``,
+        `  it("a", () => f("generic"));`,
+        `  it("b", () => f("tennis"));`,
+        `  it("c", () => f("cricket"));`,
+        `});`,
+      ].join("\n");
+      expect(at(pinsIn(gap, "t.test.ts"))).toEqual([[5, "generic", true], [6, "tennis", false], [7, "cricket", false]]);
+      const detached = [
+        `it("a", () => {`,
+        ``,
+        `  // single-sport: not the body's first line any more`,
+        `  f("generic");`,
+        `  f("tennis");`,
+        `});`,
+      ].join("\n");
+      expect(at(pinsIn(detached, "t.test.ts"))).toEqual([[4, "generic", true], [5, "tennis", false]]);
+    });
+
+    it("an empty reason, a missing colon, a block comment, or reason TEXT inside a string or template is not a reason (review M-1 P13)", () => {
       const text = [
         `// single-sport:`,
         `f("generic");`,
@@ -212,8 +310,14 @@ describe("single-sport scanner (R26)", () => {
         `f("generic");`,
         `/* single-sport: block comments do not count */`,
         `f("generic");`,
+        "const doc = `",
+        "// single-sport: this is template text, not a comment",
+        "`;",
+        `f("generic");`,
+        `const s = "// single-sport: a string";`,
+        `f("generic");`,
       ].join("\n");
-      expect(at(pinsIn(text, "t.test.ts"))).toEqual([[2, "generic", false], [4, "generic", false], [6, "generic", false], [8, "generic", false]]);
+      expect(at(pinsIn(text, "t.test.ts"))).toEqual([[2, "generic", false], [4, "generic", false], [6, "generic", false], [8, "generic", false], [12, "generic", false], [14, "generic", false]]);
     });
 
     it("accepts the repo's own `// single-sport:` comments as written (Task 7 M-2 and earlier): every pin in the block they head is reasoned", () => {
@@ -250,17 +354,94 @@ describe("single-sport scanner (R26)", () => {
     });
   });
 
-  it("a quoted key inside a full-line comment is not a pin", () => {
-    expect(pinsIn(`// was "generic" before the sweep\n  // and 'tennis'\nf(1);\n`, "t.test.ts")).toEqual([]);
+  it("a quoted key in a comment is not a pin — full-line, trailing, JSDoc or block", () => {
+    const text = [`// was "generic" before the sweep`, `  // and 'tennis'`, `f(1); // not "cricket"`, `/** "football" */`, `/* 'hockey' */`, `f(2);`].join("\n");
+    expect(pinsIn(text, "t.test.ts")).toEqual([]);
   });
 
-  it("a file whose code sweeps (forEachSport / sportCases / SPORT_KEYS / builtinModules) is not a pin; one that only NAMES a sweep in a comment still is", () => {
-    for (const word of ["forEachSport", "sportCases", "SPORT_KEYS", "builtinModules"]) {
-      const root = tree({ "packages/engine/src/competition/b.test.ts": `${word}.length;\nconst k = "generic";\n` });
-      expect({ word, pins: scanSingleSport(root).pins }).toEqual({ word, pins: [] });
-    }
-    const root = tree({ "packages/engine/src/competition/b.test.ts": `// TODO: sweep with forEachSport\nconst k = "generic";\n` });
-    expect(scanSingleSport(root).pins.map((p) => p.sport)).toEqual(["generic"]);
+  describe("a sweep is a call shape, scoped to its test block (review I-2)", () => {
+    const inTest = (head: string, body = "") => [head, `it("t", () => {`, `  ${body}`, `  expect(render("generic")).toBe(1);`, `});`].join("\n");
+
+    it("a mention is not a sweep: comments, JSDoc, a test title, an unused import, a .find pick, an index, .length — the pin stays", () => {
+      const shapes: Array<[string, string, string]> = [
+        ["a trailing comment", "", "f(1); // TODO: forEachSport"],
+        ["JSDoc", "/** swept with forEachSport over builtinModules */", ""],
+        ["a block comment", "", "/* sportCases() */"],
+        ["an unused import", `import { forEachSport, sportCases } from "@seazn/engine/testkit";`, ""],
+        ["a .find pick", `import { builtinModules } from "@seazn/engine/sports";`, `const m = builtinModules.find((x) => x.key === "x");`],
+        ["an index pick", "", "const m = builtinModules[0];"],
+        [".length", "", "expect(SPORT_KEYS.length).toBeGreaterThan(0);"],
+      ];
+      for (const [name, head, body] of shapes) expect({ name, live: live(pinsIn(inTest(head, body), "t.test.ts")) }).toEqual({ name, live: ["generic"] });
+      // a test TITLE naming a sweep
+      expect(live(pinsIn(`it("uses forEachSport and SPORT_KEYS.map", () => { f("generic"); });`, "t.test.ts"))).toEqual(["generic"]);
+      console.info(`single-sport sweeps: ${shapes.length + 1} non-sweep shapes`);
+    });
+
+    it("a call or an iteration over the registry IS a sweep: the pins in that test block are exempt", () => {
+      const shapes: Array<[string, string]> = [
+        ["forEachSport(", "forEachSport((c) => { g(c); });"],
+        ["forEachSportAsync(", "void forEachSportAsync(async (c) => { g(c); });"],
+        ["sportCases()", "const cs = sportCases();"],
+        ["for…of builtinModules", "for (const m of builtinModules) g(m);"],
+        ["for…of SPORT_KEYS", "for (const k of SPORT_KEYS) g(k);"],
+        ["builtinModules.map(", "const ks = builtinModules.map((m) => m.key);"],
+        ["SPORT_KEYS.forEach(", "SPORT_KEYS.forEach(g);"],
+        ["[...builtinModules].filter(", "const d = [...builtinModules].filter((m) => m.supportsDraws);"],
+        ["x.SPORT_KEYS.flatMap(", "const f2 = catalogue.SPORT_KEYS.flatMap((k) => [k]);"],
+        ["builtinModules.filter(…).map(", "const k2 = builtinModules.filter((m) => m.variants).map((m) => m.key);"],
+      ];
+      for (const [name, body] of shapes) expect({ name, live: live(pinsIn(inTest("", body), "t.test.ts")) }).toEqual({ name, live: [] });
+      // it.each over the registry sweeps its own block (the table and the body)
+      expect(live(pinsIn(`it.each(SPORT_KEYS)("%s", (k) => { expect(k === "generic").toBeDefined(); });`, "t.test.ts"))).toEqual([]);
+      console.info(`single-sport sweeps: ${shapes.length + 1} sweep shapes`);
+    });
+
+    it("the exemption is the sweep's own test block: a sibling, a nested test under a sweeping describe, and module level all keep their pins; a pin INSIDE a sweep is exempt anywhere", () => {
+      const text = [
+        `describe("d", () => {`,
+        `  const all = builtinModules.map((m) => m.key);`,
+        `  it("sweeps", () => {`,
+        `    for (const k of all) g(k);`,
+        `    forEachSport((c) => g(c));`,
+        `    expect(f("tennis")).toBe(1);`,
+        `  });`,
+        `  it("sibling", () => {`,
+        `    expect(f("generic")).toBe(1);`,
+        `  });`,
+        `  it("under a describe that maps the registry", () => {`,
+        `    expect(f("cricket")).toBe(1);`,
+        `  });`,
+        `});`,
+        `const picked = SPORT_KEYS.filter((k) => k !== "football");`,
+        `const fixture = "badminton";`,
+      ].join("\n");
+      const pins = pinsIn(text, "t.test.ts");
+      expect(pins.map((p) => [p.line, p.sport, p.swept])).toEqual([
+        [6, "tennis", true],
+        [9, "generic", false],
+        [12, "cricket", false],
+        [15, "football", true],
+        [16, "badminton", false],
+      ]);
+    });
+
+    it("the real standings-table-locale shape: a describe helper that PICKS one module with .find is not a sweep — its tests' keys are pins", () => {
+      const text = [
+        `import { builtinModules } from "@seazn/engine/sports";`,
+        `describe("every OTHER sport's metric headers", () => {`,
+        `  const specsOf = (key: string) => builtinModules.find((m) => m.key === key)!.metrics;`,
+        `  const render = (sport: string) => html(specsOf(sport));`,
+        `  it("badminton: games won", () => {`,
+        `    const out = render("badminton");`,
+        `  });`,
+        `  it("cricket: no-results", () => {`,
+        `    const out = render("cricket");`,
+        `  });`,
+        `});`,
+      ].join("\n");
+      expect(pinsIn(text, "standings-table-locale.test.tsx").map((p) => [p.line, p.sport, p.swept])).toEqual([[6, "badminton", false], [9, "cricket", false]]);
+    });
   });
 
   it("the sport list is the registry's (every registry key is found, one file each)", () => {
@@ -270,88 +451,259 @@ describe("single-sport scanner (R26)", () => {
     expect(r.pins.map((p) => p.sport).sort()).toEqual([...REGISTRY].sort());
   });
 
-  it("an empty sport list is refused by name — a pattern over no keys would match every empty string", () => {
+  it("an empty sport list is refused by name — a scan over no keys would find nothing and pass", () => {
     expect(() => pinsIn(`f("");\n`, "t.test.ts", [])).toThrow(EmptySportList);
   });
 
-  it("the ratchet: a new unreasoned pin and a stale baseline entry both fail; an identical set passes; a line move is no change", () => {
-    const pin: Pin = { file: "a.test.ts", line: 3, sport: "generic", reasoned: false };
-    expect(checkRatchet([pin], [])).toEqual({ added: ["a.test.ts:generic"], stale: [] });
-    expect(checkRatchet([], ["a.test.ts:generic"])).toEqual({ added: [], stale: ["a.test.ts:generic"] });
-    expect(checkRatchet([pin], ["a.test.ts:generic"])).toEqual({ added: [], stale: [] });
-    expect(checkRatchet([{ ...pin, reasoned: true }], [])).toEqual({ added: [], stale: [] });
-    expect(checkRatchet([{ ...pin, line: 90 }, { ...pin, line: 91 }], ["a.test.ts:generic"])).toEqual({ added: [], stale: [] });
-    // a reasoned pin does not keep a baseline entry alive
-    expect(checkRatchet([{ ...pin, reasoned: true }], ["a.test.ts:generic"])).toEqual({ added: [], stale: ["a.test.ts:generic"] });
+  describe("the counted ratchet (review I-4)", () => {
+    const pin = (line: number, sport = "generic", o: Partial<Pin> = {}): Pin => ({ file: "a.test.ts", line, sport, via: "literal", reasoned: false, swept: false, ...o });
+
+    it("counts unreasoned pins per file:sport; a line move is no change; reasoned and swept pins do not count", () => {
+      expect(countsOf([])).toEqual({});
+      expect(countsOf([pin(3), pin(9), pin(4, "tennis"), pin(5, "tennis", { reasoned: true }), pin(6, "cricket", { swept: true })])).toEqual({ "a.test.ts:generic": 2, "a.test.ts:tennis": 1 });
+      expect(countsOf([pin(90), pin(91)])).toEqual(countsOf([pin(3), pin(9)]));
+    });
+
+    it("checkRatchet: a new key and a risen count fail; a fall (to zero included) is reported, not failed; an identical set is clean", () => {
+      expect(checkRatchet({}, {})).toEqual({ added: [], rose: [], lowered: [] });
+      expect(checkRatchet({ k: 2 }, {})).toEqual({ added: [{ key: "k", was: 0, now: 2 }], rose: [], lowered: [] });
+      expect(checkRatchet({ k: 3 }, { k: 2 })).toEqual({ added: [], rose: [{ key: "k", was: 2, now: 3 }], lowered: [] });
+      expect(checkRatchet({ k: 1 }, { k: 2 })).toEqual({ added: [], rose: [], lowered: [{ key: "k", was: 2, now: 1 }] });
+      expect(checkRatchet({}, { k: 2 })).toEqual({ added: [], rose: [], lowered: [{ key: "k", was: 2, now: 0 }] });
+      expect(checkRatchet({ k: 2 }, { k: 2 })).toEqual({ added: [], rose: [], lowered: [] });
+    });
+
+    it("the ceiling at a base follows recorded moves back to the renamed file, and only as far as the base has it", () => {
+      const base = { pins: { "old.test.ts:generic": 3, "keep.test.ts:tennis": 1 }, moves: {} };
+      expect(ceilingIn(base, {}, "keep.test.ts:tennis")).toBe(1);
+      expect(ceilingIn(base, {}, "new.test.ts:generic")).toBe(0);
+      expect(ceilingIn(base, { "new.test.ts": "old.test.ts" }, "new.test.ts:generic")).toBe(3);
+      expect(ceilingIn(base, { "c.test.ts": "b.test.ts", "b.test.ts": "old.test.ts" }, "c.test.ts:generic")).toBe(3);
+      expect(ceilingIn(base, { "a.test.ts": "b.test.ts", "b.test.ts": "a.test.ts" }, "a.test.ts:generic")).toBe(0); // a cycle ends
+      const own = { pins: { "new.test.ts:generic": 3, "keep.test.ts:tennis": 2, "fresh.test.ts:cricket": 1 }, moves: { "new.test.ts": "old.test.ts" } };
+      expect(raisedAbove(own, base)).toEqual([{ key: "keep.test.ts:tennis", was: 1, now: 2 }, { key: "fresh.test.ts:cricket", was: 0, now: 1 }]);
+    });
+
+    it("a baseline that could double-count or mint a ceiling is refused by name", () => {
+      const v = (o: object) => JSON.stringify({ schemaVersion: 2, pins: {}, moves: {}, ...o });
+      expect(parseBaseline(v({ pins: { "a.test.ts:generic": 2 } }), "x")).toEqual({ pins: { "a.test.ts:generic": 2 }, moves: {} });
+      for (const bad of [
+        "not json",
+        JSON.stringify({ schemaVersion: 1, unreasoned: [] }),
+        v({ pins: [] }),
+        v({ pins: { "a.test.ts:generic": 0 } }),
+        v({ pins: { "a.test.ts:generic": 1.5 } }),
+        v({ pins: { "a.test.ts": 1 } }),
+        v({ moves: [] }),
+        v({ moves: { "b.test.ts": 3 } }),
+        v({ moves: { "b.test.ts": "a.test.ts", "c.test.ts": "a.test.ts" } }),
+        v({ pins: { "a.test.ts:generic": 1 }, moves: { "b.test.ts": "a.test.ts" } }),
+      ]) expect(() => parseBaseline(bad, "x"), bad).toThrow(Refusal);
+    });
   });
 
-  it("the ratchet, run for real: --init, a green --check, a new pin fails, --write refuses to add it, a reason clears it, a removed pin is stale, --write removes it", () => {
+  it("the ratchet, run for real: --init, a green --check; a risen count and a new sport fail, and --write refuses to record either", () => {
     const pinned = "packages/engine/src/scheduling/sched.test.ts";
-    const root = tree({ ...FULL, [pinned]: `f("generic");\n` });
+    const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
 
-    // --init writes the first baseline; --check agrees with it; twice is the same answer.
     expect(run("--init").status).toBe(0);
-    expect(JSON.parse(baselineOf(root))).toEqual({ schemaVersion: 1, generatedBy: "scripts/matrix/single-sport.ts", unreasoned: [`${pinned}:generic`] });
-    expect(run("--check").status).toBe(0);
-    const second = run("--check");
-    expect(second.status).toBe(0);
-    expect(second.stdout).toMatch(/check passed/);
+    expect(JSON.parse(baselineOf(root))).toEqual({ schemaVersion: 2, generatedBy: "scripts/matrix/single-sport.ts", pins: { [`${pinned}:generic`]: 2 }, moves: {} });
+    const green = run("--check");
+    expect(green.status).toBe(0);
+    expect(green.stdout).toMatch(/check passed/);
 
-    // A new unreasoned pin: --check exits 1 naming it; --write refuses (2) and leaves the file alone.
-    writeFileSync(join(root, pinned), `f("generic");\nf("tennis");\n`);
+    // One more pin of a baselined sport: the count rose (review I-4a).
+    writeFileSync(join(root, pinned), `f("generic");\nf("generic");\nf("generic");\n`);
     const before = baselineOf(root);
-    const bad = run("--check");
-    expect(bad.status).toBe(1);
-    expect(bad.stderr).toContain(`new unreasoned single-sport pin ${pinned}:tennis`);
+    const rose = run("--check");
+    expect(rose.status).toBe(1);
+    expect(rose.stderr).toContain(`rose ${pinned}:generic (2 → 3)`);
     const refused = run("--write");
     expect(refused.status).toBe(2);
-    expect(refused.stderr).toContain(`${pinned}:tennis`);
     expect(baselineOf(root)).toBe(before);
 
-    // A swap keeps the COUNT but still adds a pin: refused too.
-    writeFileSync(join(root, pinned), `f("tennis");\n`);
+    // A new sport, count otherwise equal: a new entry.
+    writeFileSync(join(root, pinned), `f("generic");\nf("generic");\nf("tennis");\n`);
+    const fresh = run("--check");
+    expect(fresh.status).toBe(1);
+    expect(fresh.stderr).toContain(`new unreasoned single-sport pin ${pinned}:tennis (0 → 1)`);
     expect(run("--write").status).toBe(2);
     expect(baselineOf(root)).toBe(before);
 
-    // Adding REASONED single-sport tests is fine: --check green, --write leaves the set alone.
-    writeFileSync(join(root, pinned), `f("generic");\n// single-sport: tennis is the pinned example\nf("tennis");\n`);
+  });
+
+  it("the ratchet, run for real: a reasoned new pin is fine; a fall passes with a notice and --write records it, down to zero", () => {
+    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\n` });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    expect(run("--init").status).toBe(0);
+
+    // Reasoned single-sport tests are fine.
+    writeFileSync(join(root, pinned), `f("generic");\nf("generic");\n// single-sport: tennis is the pinned example\nf("tennis");\n`);
+    expect(run("--check").status).toBe(0);
+
+    // A fall passes (with a notice) and --write records it; zero drops the entry.
+    writeFileSync(join(root, pinned), `f("generic");\n`);
+    const fell = run("--check");
+    expect(fell.status).toBe(0);
+    expect(fell.stdout).toContain(`${pinned}:generic (2 → 1) can be lowered`);
+    expect(run("--write").status).toBe(0);
+    expect(pinsOf(root)).toEqual({ [`${pinned}:generic`]: 1 });
+    writeFileSync(join(root, pinned), `f(1);\n`);
     expect(run("--check").status).toBe(0);
     expect(run("--write").status).toBe(0);
-    expect(baselineOf(root)).toBe(before);
-
-    // The pin goes away: its entry is stale (1), and --write removes it (the ratchet turns down).
-    writeFileSync(join(root, pinned), `f(1);\n`);
-    const stale = run("--check");
-    expect(stale.status).toBe(1);
-    expect(stale.stderr).toContain(`stale single-sport baseline entry ${pinned}:generic`);
-    expect(run("--write").status).toBe(0);
-    expect(JSON.parse(baselineOf(root)).unreasoned).toEqual([]);
+    expect(pinsOf(root)).toEqual({});
     expect(run("--check").status).toBe(0);
   });
 
-  it("--init refuses over an existing baseline; --check and --write refuse a missing or malformed one (the CLI, run for real)", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
-    const root = tree({ ...FULL, [pinned]: `f("tennis");\nf("generic");\n` });
+  it("--move transfers a renamed file's entries, and refuses a move that is not a rename (the CLI, run for real)", () => {
+    const old = "apps/web/src/server/usecases/__tests__/old-progression.test.ts";
+    const moved = "apps/web/src/server/usecases/__tests__/new-progression.test.ts";
+    const other = "packages/engine/src/scheduling/other.test.ts";
+    const root = tree({ ...FULL, [old]: `f("generic");\nf("generic");\n`, [other]: `f("tennis");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
-    for (const mode of ["--check", "--write"]) {
-      const c = run(mode);
+    expect(run("--init").status).toBe(0);
+
+    // not a rename yet: OLD still exists
+    expect(run("--move", old, moved).status).toBe(2);
+    renameSync(join(root, old), join(root, moved));
+    // the rename alone reads as a new entry
+    expect(run("--check").status).toBe(1);
+    for (const [from, to, why] of [
+      [other.replace("other", "gone"), moved, /no baseline entries/],
+      [old, other, /already has baseline entries/],
+      [old, "apps/web/src/server/usecases/__tests__/nowhere.test.ts", /not an in-scope test file/],
+    ] as const) {
+      const c = run("--move", from, to);
+      expect({ from, to, status: c.status }).toEqual({ from, to, status: 2 });
+      expect(c.stderr).toMatch(why);
+    }
+    const ok = run("--move", old, moved);
+    expect(ok.status).toBe(0);
+    expect(JSON.parse(baselineOf(root))).toMatchObject({ pins: { [`${moved}:generic`]: 2, [`${other}:tennis`]: 1 }, moves: { [moved]: old } });
+    expect(run("--check").status).toBe(0);
+    // --write keeps a live move, so a later --against still maps NEW back to OLD
+    expect(run("--write").status).toBe(0);
+    expect(JSON.parse(baselineOf(root))).toMatchObject({ moves: { [moved]: old } });
+    // moving a second time is refused: OLD has nothing left
+    expect(run("--move", old, moved).status).toBe(2);
+  });
+
+  it("--against REF: the baseline may not rise above REF's — a hand raise and an rm + --init reset both fail; a fall and a recorded move pass (the CLI, run for real)", () => {
+    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const root = tree({ ...FULL, [pinned]: `f("generic");\n` });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    expect(run("--init").status).toBe(0);
+    commitAll(root, "base");
+    expect(run("--check", "--against", "HEAD").status).toBe(0);
+
+    // A PR adds a pin AND hand-raises its own baseline to match: its own --check
+    // is green, and only the comparison with the base catches it.
+    writeFileSync(join(root, pinned), `f("generic");\nf("generic");\n`);
+    writeBaseline(root, { [`${pinned}:generic`]: 2 });
+    expect(run("--check").status).toBe(0);
+    const raised = run("--check", "--against", "HEAD");
+    expect(raised.status).toBe(1);
+    expect(raised.stderr).toContain(`raises ${pinned}:generic above HEAD's (1 → 2)`);
+
+    // The reset the review found: rm + --init absorbs new pins. Still caught.
+    writeFileSync(join(root, pinned), `f("generic");\nf("cricket");\n`);
+    rmSync(join(root, BASELINE_PATH));
+    expect(run("--init").status).toBe(0);
+    expect(run("--check").status).toBe(0);
+    const reset = run("--check", "--against", "HEAD");
+    expect(reset.status).toBe(1);
+    expect(reset.stderr).toContain(`raises ${pinned}:cricket above HEAD's (0 → 1)`);
+
+    // A fall passes against the base too.
+    writeFileSync(join(root, pinned), `f(1);\n`);
+    writeBaseline(root, {});
+    expect(run("--check", "--against", "HEAD").status).toBe(0);
+  });
+
+  it("--against REF maps a recorded move back to the base's entry, and refuses an unknown ref, a malformed base, or a non-repo root (the CLI, run for real)", () => {
+    const old = "packages/engine/src/scheduling/old.test.ts";
+    const moved = "packages/engine/src/scheduling/new.test.ts";
+    const root = tree({ ...FULL, [old]: `f("generic");\n` });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    // not a git checkout
+    expect(run("--init").status).toBe(0);
+    const norepo = run("--check", "--against", "HEAD");
+    expect(norepo.status).toBe(2);
+    expect(norepo.stderr).toMatch(/git checkout/);
+    commitAll(root, "base");
+
+    renameSync(join(root, old), join(root, moved));
+    expect(run("--move", old, moved).status).toBe(0);
+    expect(run("--check", "--against", "HEAD").status).toBe(0);
+    // a hand-made move from a file the base never had grants no ceiling
+    writeBaseline(root, { [`${moved}:generic`]: 1, "packages/engine/src/scheduling/sched.test.ts:tennis": 1 }, { [moved]: old, "packages/engine/src/scheduling/sched.test.ts": "packages/engine/src/scheduling/ghost.test.ts" });
+    writeFileSync(join(root, FULL_SCHED), `f("tennis");\n`);
+    expect(run("--check", "--against", "HEAD").status).toBe(1);
+
+    for (const ref of ["no-such-ref", "-p", "HEAD~5"]) {
+      const c = run("--check", ...(ref.startsWith("-") ? [`--against=${ref}`] : ["--against", ref]));
+      expect({ ref, status: c.status }).toEqual({ ref, status: 2 });
+    }
+    // a base whose baseline is malformed
+    writeFileSync(join(root, BASELINE_PATH), "not json");
+    commitAll(root, "broken base");
+    writeBaseline(root, { [`${moved}:generic`]: 1 }, { [moved]: old });
+    writeFileSync(join(root, FULL_SCHED), FULL[FULL_SCHED]!);
+    const broken = run("--check", "--against", "HEAD");
+    expect(broken.status).toBe(2);
+    expect(broken.stderr).toContain(`HEAD:${BASELINE_PATH} does not parse`);
+  });
+
+  it("--against a base with no baseline yet (the introducing PR) passes with a notice; --against applies to --check only (the CLI, run for real)", () => {
+    const root = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n` });
+    commitAll(root, "before the ratchet");
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    expect(run("--init").status).toBe(0);
+    const first = run("--check", "--against", "HEAD");
+    expect(first.status).toBe(0);
+    expect(first.stdout).toMatch(/::notice::.*has no .* yet/);
+    for (const mode of ["--write", "--init", ""]) {
+      const c = run(...[mode, "--against", "HEAD"].filter((a) => a !== ""));
       expect({ mode, status: c.status }).toEqual({ mode, status: 2 });
-      expect(c.stderr).toContain(BASELINE_PATH);
+      expect(c.stderr).toMatch(/--against applies to --check only/);
+    }
+  });
+
+  const MOVE = ["--move", "packages/engine/src/scheduling/gone.test.ts", "packages/engine/src/scheduling/sched.test.ts"];
+
+  it("--init writes sorted counts and refuses over an existing baseline; --check, --write and --move refuse a missing one (the CLI, run for real)", () => {
+    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const root = tree({ ...FULL, [pinned]: `f("tennis");\nf("generic");\nf("tennis");\n` });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    for (const mode of [["--check"], ["--write"], MOVE]) {
+      const c = run(...mode);
+      expect({ mode, status: c.status }).toEqual({ mode, status: 2 });
+      expect(c.stderr).toContain(`no baseline at ${BASELINE_PATH}`);
     }
     expect(existsSync(join(root, BASELINE_PATH))).toBe(false);
     expect(run("--init").status).toBe(0);
     const first = baselineOf(root);
-    // sorted, not in the order the pins were met (tennis came first in the file)
-    expect(JSON.parse(first).unreasoned).toEqual([`${pinned}:generic`, `${pinned}:tennis`]);
+    // sorted keys, counted
+    expect(Object.entries(JSON.parse(first).pins as Record<string, number>)).toEqual([[`${pinned}:generic`, 1], [`${pinned}:tennis`, 2]]);
     const again = run("--init");
     expect(again.status).toBe(2);
     expect(again.stderr).toMatch(/already exists/);
     expect(baselineOf(root)).toBe(first);
-    for (const body of ["not json", "{}", `{"schemaVersion":2,"unreasoned":[]}`, `{"schemaVersion":1,"unreasoned":[1]}`]) {
+  });
+
+  it("a malformed baseline is refused by --check, --write and --move, and left as it was (the CLI, run for real)", () => {
+    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const root = tree({ ...FULL, [pinned]: `f("tennis");\n` });
+    const run = (...args: string[]) => cli([...args, "--root", root]);
+    const bodies = ["not json", "{}", JSON.stringify({ schemaVersion: 1, unreasoned: [] }), JSON.stringify({ schemaVersion: 2, pins: { [`${pinned}:tennis`]: 0 }, moves: {} })];
+    for (const [i, body] of bodies.entries()) {
+      mkdirSync(dirname(join(root, BASELINE_PATH)), { recursive: true });
       writeFileSync(join(root, BASELINE_PATH), body);
-      for (const mode of ["--check", "--write"]) {
-        const c = run(mode);
+      // every mode on the first body; --check alone on the rest (spawns cost ~0.7 s)
+      for (const mode of i === 0 ? [["--check"], ["--write"], MOVE] : [["--check"]]) {
+        const c = run(...mode);
         expect({ body, mode, status: c.status }).toEqual({ body, mode, status: 2 });
       }
       expect(readFileSync(join(root, BASELINE_PATH), "utf8")).toBe(body);
@@ -360,7 +712,7 @@ describe("single-sport scanner (R26)", () => {
 
   it("bad arguments are refused with exit 2; pnpm's pass-through `--` is tolerated (the CLI, run for real)", () => {
     const root = tree(FULL);
-    for (const args of [["--bogus"], ["--check", "--write"], ["--write", "--init"], ["--check", "--init"], ["stray"], ["--root"]]) {
+    for (const args of [["--bogus"], ["--check", "--write"], ["--write", "--init"], ["--check", "--move", "a", "b"], ["stray"], ["--move", "a"], ["--move", "a", "b", "c"], ["--root"], ["--check", "--against"]]) {
       const c = cli(args.includes("--root") ? args : [...args, "--root", root]);
       expect({ args, status: c.status }).toEqual({ args, status: 2 });
       expect(c.stderr).toMatch(/usage/);
@@ -374,22 +726,35 @@ describe("single-sport scanner (R26)", () => {
     expect(code).toBe(3);
   });
 
-  it("the committed baseline equals today's repo: every scope root scanned files, --check (run for real) exits 0, and a second scan is identical", () => {
+  it("the real tree: the review's named pins are found (a .tsx pick, a .find pick, an engine module import, a SQL seed), and the committed baseline equals today's counts exactly", () => {
     const r = scanSingleSport(REPO);
     for (const d of [...SCOPE_DIRS, ...NAME_ROOTS]) expect({ d, n: (r.perRoot[d] ?? 0) > 0 }).toEqual({ d, n: true });
-    expect(r.scanned).toBeGreaterThan(0);
-    expect(checkRatchet(r.pins, loadBaseline(REPO))).toEqual({ added: [], stale: [] });
+    const counts = countsOf(r.pins);
+    // Witnesses read from the files by hand (review I-1..I-3), not from the scanner.
+    for (const key of [
+      "packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket",
+      "packages/engine/src/competition/tie-what-if.test.ts:carrom",
+      "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:badminton",
+      "apps/web/src/components/public-site/__tests__/standings-table-view-headers.test.tsx:carrom",
+      "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:tennis",
+      "apps/web/src/server/engine-db/__tests__/pooled-standings-null-snapshot.test.ts:generic",
+    ]) expect({ key, counted: (counts[key] ?? 0) > 0 }).toEqual({ key, counted: true });
+    const committed = loadBaseline(REPO);
+    expect(checkRatchet(counts, committed.pins)).toEqual({ added: [], rose: [], lowered: [] });
     expect(scanSingleSport(REPO)).toEqual(r);
     const c = cli(["--check"]);
     expect(c.status).toBe(0);
     expect(c.stdout).toMatch(/check passed/);
-    console.info(`single-sport: ${r.scanned} files, ${r.pins.length} pins, ${r.pins.filter((p) => !p.reasoned).length} unreasoned, ${loadBaseline(REPO).length} baseline entries`);
+    console.info(`single-sport: ${r.scanned} files, ${r.pins.length} pins, ${Object.keys(counts).length} entries`);
   });
 
-  it("constants: the baseline path, and the name filter reads the file name only", () => {
+  it("constants: the baseline path, and the name filter reads the file name only, .ts and .tsx", () => {
     expect(BASELINE_PATH).toBe("scripts/matrix/catalogue/single-sport-baseline.json");
     expect(SCOPE_NAME.test("apps/web/src/x/stage-progression.test.ts")).toBe(true);
+    expect(SCOPE_NAME.test("apps/web/src/x/standings.test.tsx")).toBe(true);
     expect(SCOPE_NAME.test("apps/web/src/standings/inner.test.ts")).toBe(false);
-    expect(SCOPE_NAME.test("apps/web/src/x/standings.test.tsx")).toBe(false);
+    expect(SCOPE_NAME.test("apps/web/src/x/standings.test.jsx")).toBe(false);
   });
 });
+
+const FULL_SCHED = "packages/engine/src/scheduling/sched.test.ts";

@@ -65,6 +65,9 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
+        # Depth 2 so the single-sport ratchet below can read HEAD^1's baseline.
+        with:
+          fetch-depth: 2
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
@@ -91,7 +94,14 @@ jobs:
       # line setting it, so this comment may name it plainly.
       - run: npx turbo run typecheck
       - run: npm run engine:boundary
-      - run: pnpm matrix:single-sport --check
+      # R26: no unreasoned single-sport pin count may rise — against the PR's
+      # own baseline, and that baseline against the base branch's (--against),
+      # so a PR cannot raise the ceiling it is checked against. HEAD^1: on a
+      # pull_request the checkout is the merge commit, whose first parent is
+      # the base tip (and on a push it would be the previous commit), which
+      # fetch-depth: 2 above makes present. No `if:`/continue-on-error:
+      # ci-wiring.test.ts pins that this step always runs and always gates.
+      - run: pnpm matrix:single-sport --check --against HEAD^1
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
