@@ -353,6 +353,28 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     );
   });
 
+  it("org_stream_credits.stripe_event_id and stripe_checkout_session_id say what they hold (V424, lane B carry M7): a Checkout Session id, the purchase idempotency key, NOT a Stripe event id — each naming its twin", async () => {
+    // The column NAME says "event id"; the writer stores the Checkout SESSION id (billing-events.ts recordPurchase
+    // `stripeEventId: session.id`), and the link column holds the same value. That FACT is pinned through the real webhook
+    // by stream-credits-webhook.test.ts ("writes ONE purchase row…": stripe_event_id === stripe_checkout_session_id ===
+    // the cs_ id). What only the catalogue can carry is the warning to the next reader — a comment nothing reads is not
+    // there, so this reads it back (col_description is null until V424 runs).
+    const rows = await sql<{ column: string; comment: string | null }[]>`
+      select a.attname as column, col_description(a.attrelid, a.attnum) as comment
+        from pg_attribute a
+       where a.attrelid = 'org_stream_credits'::regclass and a.attname in ('stripe_event_id', 'stripe_checkout_session_id')
+       order by a.attname`;
+    expect(rows.map((r) => r.column), "both columns are there to be described").toEqual(["stripe_checkout_session_id", "stripe_event_id"]);
+    const link = rows[0]!.comment;
+    const key = rows[1]!.comment;
+    expect(key, "stripe_event_id").toMatch(/Checkout Session id \(cs_…\)/);
+    expect(key).toMatch(/idempotency key/);
+    expect(key).toMatch(/NOT a Stripe event id/);
+    expect(key).toMatch(/stripe_checkout_session_id/);
+    expect(link, "stripe_checkout_session_id").toMatch(/Checkout Session id/);
+    expect(link).toMatch(/stripe_event_id/);
+  });
+
   it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is still 300 (the Task 7 amend, Task 2B review M4)", async () => {
     const r = await rig();
     const sid = await insertSession(r, "requested");
