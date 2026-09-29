@@ -5930,6 +5930,32 @@ That is a reading, not a run.
 
 **Where the probe lives.** Write it with the Write tool to `$TMPDIR/w1b-tie-ko-probe.mts`, alongside the Step 3b probe. Take its imports and shape from that probe: synthetic identities, `ownerEmail`, `requireOwnDataDir`, and a run id of `w1b-tie-ko-0928a`. Never commit it. Copy the evidence to `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-tie-ko/`, then run the same secret-shape grep as Step 3b (expect 0). Add the Step 3c verdict line (`CD-T6 <verdict> — control seated`) to the Step 6 commit message body.
 
+- [ ] **Step 3d: Withdrawing a board-game entrant after Start (finding CD-T13 / F1)**
+
+This step answers one question by driving the product: can an organiser withdraw a boardgame entrant once the division has started, without leaving it half-updated?
+
+**What is known before the run** (from reading the code plus an in-process fold, not a run; confirmed by the Task 13 review):
+- The product's withdrawal walkover posts a bare `core.forfeit` to each unplayed fixture (`withdrawal.ts:105-112`).
+- The boardgame module refuses a forfeit before `core.start` (`boardgame.ts:616-617`).
+- The Step 4 model cells are generic and badminton only, so nothing else in W1b drives this.
+
+**Setup.** One case org and one boardgame division at the builder-default variant (`builderDefaultVariant`, never typed). One league stage with **4** entrants. Start it, then generate. Complete exactly one fixture with an ordinary win, with the stream folded and guarded to `kind === "win"`. Then withdraw one entrant who has at least two unplayed fixtures, through the product's own withdraw endpoint.
+
+**Record** in `truth-runs/w1b-withdraw-boardgame/withdraw-probe.json`:
+- (a) the withdraw call's HTTP status and code;
+- (b) every fixture of the withdrawn entrant: its status and result before and after;
+- (c) whether any fixture was changed while another was not (a partial application);
+- (d) the standings rows read back.
+
+**Control.** The same shape on `generic` must withdraw cleanly, with every unplayed fixture of the entrant walked over. Without the control, the probe cannot tell a boardgame refusal from a broken withdraw.
+
+**Verdicts:**
+- **`CONFIRMED`:** the withdraw is refused or fails part-way on boardgame (a 4xx/5xx, or a partial application) while the control is clean. Record it in `_INDEX.md` as a finding, with the evidence path, **routed to W2 (does a boardgame forfeit before start count, and what is it worth) and W9 (the withdraw flow must be all-or-nothing)**. Change no product code.
+- **`REFUTED`:** boardgame withdraws cleanly. Record it as a refuted hypothesis in "False premises found", naming the rule that allowed it.
+- **`UNRESOLVED`:** anything else. Say exactly what was observed.
+
+**Probe mechanics.** Write the probe with the Write tool to `$TMPDIR/w1b-withdraw-probe.mts`, taking its shape from the Step 3b probe: synthetic identities, `ownerEmail`, `requireOwnDataDir`, run id `w1b-withdraw-0928a`. Never commit it. Copy the evidence to `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-withdraw-boardgame/`, then run the same secret-shape grep (expect 0). Add the line `CD-T13 <verdict> — control clean` to the Step 6 commit body.
+
 - [ ] **Step 4: The model on the slice, fences on**
 
 ```bash
