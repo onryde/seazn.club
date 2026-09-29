@@ -554,7 +554,8 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
     const sheet = readFileSync(join(__dirname, "..", "stream-checkout-modal.tsx"), "utf8");
     // I2: the sheet is its OWN chunk, fetched on first render — never a static import of the panel.
-    expect(src).toMatch(/dynamic\(\(\) => import\("\.\/stream-checkout-modal"\), \{ ssr: false \}\)/);
+    expect(src).toMatch(/const loadCheckoutSheet = \(\) => import\("\.\/stream-checkout-modal"\);/);
+    expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
     expect(sheet).toMatch(/EmbeddedCheckoutProvider/);
     expect(sheet).toMatch(/data-testid="stream-checkout-modal"/);
     expect(src).toMatch(/fetchRelayCheckoutClientSecret/);
@@ -830,7 +831,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
-  planGate: false, viewerPlan: "pro", stopFailed: false,
+  planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false,
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {},
 };
@@ -1140,6 +1141,24 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     // The positive pair: live, the same controls are live.
     const live = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true });
     for (const id of ids) expect(attr(byTestId(live, id)!, "disabled"), id).toBeFalsy();
+  });
+
+  it("N2: while a checkout sheet is open (or still loading) every tile is disabled; the positive pair enables them", () => {
+    const ids = STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`);
+    let checked = 0;
+    for (const [name, props] of [
+      ["forced, balance 0", { view: null, balance: 0 }],
+      ["Buy more opened, live", { view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true }],
+    ] as const) {
+      const open = body({ ...props, checkoutOpen: true });
+      const shut = body({ ...props, checkoutOpen: false });
+      for (const id of ids) {
+        expect(attr(byTestId(open, id)!, "disabled"), `${name}: ${id}`).toBe(true);
+        expect(attr(byTestId(shut, id)!, "disabled"), `${name}: ${id}`).toBeFalsy();
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
   });
 
   it("B7: each native select names its selection in a title, so a clipped option is still readable", () => {
@@ -1714,6 +1733,55 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(gated).onBuy(20);
     await settle();
     expect(propsOf(gated.tree().find((el) => el.type === UpgradeGate)!)).toMatchObject({ feature: "streaming.relay", viewerPlan: "pro" });
+  });
+
+  it("N2: ONE Checkout Session per sheet — a double tap, and a tap while the sheet's chunk loads, POST once; closing or a refusal frees the tiles", async () => {
+    let answer: (r: unknown) => void = () => {};
+    checkout.fetch.mockImplementation(() => new Promise((r) => { answer = r; }));
+    serve({ current: null, targets: TARGETS });
+    const island = track(renderIsland(PhoneTab, { ...TAB, streamBalance: 0 }));
+    await settle();
+    expect(bodyOf(island).checkoutOpen, "no sheet yet").toBe(false);
+    // A double tap lands on the SAME render's handler — before `busy` has disabled anything.
+    const first = bodyOf(island);
+    first.onBuy(5);
+    first.onBuy(5);
+    await settle();
+    expect(checkout.fetch, "a double tap before the tiles disable").toHaveBeenCalledTimes(1);
+    answer({ ok: true, clientSecret: "cs_test_secret_1" });
+    await settle();
+    // The sheet element is up but `next/dynamic` renders nothing until its chunk arrives; the forced chooser (balance 0)
+    // is still on screen behind it. Its tiles must be dead, and a tap that gets through anyway is refused.
+    expect(lazySheet(island.tree()), "the sheet").toBeDefined();
+    expect(bodyOf(island).checkoutOpen, "the tiles are told the sheet is open").toBe(true);
+    bodyOf(island).onBuy(1);
+    await settle();
+    expect(checkout.fetch, "a tap during the load window").toHaveBeenCalledTimes(1);
+    // Closing the sheet frees the tiles: the next tap is a new Checkout Session.
+    (propsOf(lazySheet(island.tree())!).onClose as () => void)();
+    await settle();
+    expect(bodyOf(island).checkoutOpen).toBe(false);
+    bodyOf(island).onBuy(20);
+    await settle();
+    expect(checkout.fetch, "after the sheet closed").toHaveBeenCalledTimes(2);
+    // …and a REFUSED attempt frees them too — the organiser can try again.
+    answer({ ok: false, error: "no", status: 503 });
+    await settle();
+    expect(bodyOf(island).checkoutError).toBe("unknown");
+    expect(bodyOf(island).checkoutOpen).toBe(false);
+    bodyOf(island).onBuy(20);
+    await settle();
+    expect(checkout.fetch, "after a refusal").toHaveBeenCalledTimes(3);
+  });
+
+  it("N2: the sheet's chunk is fetched when the chooser OPENS, from the same module the sheet loads — not on the tile tap", () => {
+    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const loaders = src.match(/import\("\.\/stream-checkout-modal"\)/g) ?? [];
+    expect(loaders.length, "one specifier, shared by dynamic() and the preload").toBe(1);
+    expect(src).toMatch(/const loadCheckoutSheet = \(\) => import\("\.\/stream-checkout-modal"\);/);
+    expect(src).toMatch(/dynamic\(loadCheckoutSheet, \{ ssr: false \}\)/);
+    // The preload runs in an effect keyed on the chooser being open.
+    expect(src).toMatch(/useEffect\(\(\) => \{\s*if \(chooserOpen\) void loadCheckoutSheet\(\)\.catch\(\(\) => \{\}\);\s*\}, \[chooserOpen\]\);/);
   });
 
   describe("PhoneStopProbe — an org without the relay can still stop what is on air (G2)", () => {

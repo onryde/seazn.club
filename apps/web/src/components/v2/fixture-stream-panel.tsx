@@ -75,8 +75,10 @@ import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 // I2: the embedded-checkout sheet, and Stripe.js with it, is its own chunk — fetched the first time a checkout opens,
 // never with the fixtures tab. `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships
 // on every organiser fixtures tab, so nothing below may import `@stripe/*` or `@/lib/stripe-browser` statically
-// (fixture-stream-panel.test.tsx walks the whole static graph to hold that).
-const StreamCheckoutModal = dynamic(() => import("./stream-checkout-modal"), { ssr: false });
+// (fixture-stream-panel.test.tsx walks the whole static graph to hold that). N2: the ONE loader, shared by `dynamic()`
+// and the preload the container fires when the chooser opens — so the chunk is usually in hand before a tile is tapped.
+const loadCheckoutSheet = () => import("./stream-checkout-modal");
+const StreamCheckoutModal = dynamic(loadCheckoutSheet, { ssr: false });
 
 /** The authored canvas every theme is drawn on — the OBS browser-source size
  *  `overlay-stage.tsx` fixes and `_THEMES.md` measures every inset against. */
@@ -912,6 +914,9 @@ export function PhoneTab({
   const [copied, setCopied] = useState(false);
   const [showTargetForm, setShowTargetForm] = useState(false);
   const [showBuy, setShowBuy] = useState(false);
+  // N2: one Checkout Session per sheet. Held from the tap until the sheet closes or the attempt is refused — a ref, so a
+  // double tap landing on ONE render's handler (before `busy` has disabled anything) is refused too.
+  const buying = useRef(false);
 
   useEffect(() => {
     void (async () => {
@@ -958,6 +963,11 @@ export function PhoneTab({
   // C1: with a session, the projection's `balance` is the fresher number. With NO session there is no projection at
   // all, so the server-resolved one is the only source — unless the server has since refused for want of credits (m2).
   const balance = view ? view.balance : noCredits ? 0 : streamBalance;
+  // N2: the body's own `buyCard` rule, read here only to warm the sheet's chunk while the organiser picks a pack.
+  const chooserOpen = !planGate && (showBuy || (state === "idle" && balance < 1));
+  useEffect(() => {
+    if (chooserOpen) void loadCheckoutSheet().catch(() => {});
+  }, [chooserOpen]);
 
   const onGoLive = async () => {
     if (!selectedTargetId) return;
@@ -992,15 +1002,19 @@ export function PhoneTab({
   // EMBEDDED Checkout (owner ruling 8) — the buy-credits.tsx shape: fetch the client_secret UP FRONT and mount the
   // lazily loaded sheet only once it resolves; Stripe returns the buyer to the route's return_url (this row, Phone tab).
   const onBuy = async (pack: StreamPackSize) => {
+    if (buying.current) return;
+    buying.current = true;
     setBusy(true);
     setCheckoutError(null);
     const result = await fetchRelayCheckoutClientSecret({ orgId, fixtureId, pack });
     setBusy(false);
     if (result.ok) {
+      // `buying` stays held: the sheet's chunk may still be loading, and a forced chooser is still on screen behind it.
       setCheckoutSecret(result.clientSecret);
       setShowBuy(false);
       return;
     }
+    buying.current = false;
     // C22: the route's 402 IS plan_lacks_relay — the SAME UpgradeGate the entitled check renders, so there is one
     // upgrade surface. Keyed on STATUS: `CheckoutSecretResult` has no code field (D13). I1: it replaces the tab only at
     // idle — mid-session the body shows it in the buy slot and keeps every session control.
@@ -1075,6 +1089,7 @@ export function PhoneTab({
         planGate={planGate}
         viewerPlan={viewerPlan}
         stopFailed={session.stopFailed}
+        checkoutOpen={checkoutSecret !== null}
         onSelectTarget={setSelectedTargetId}
         onAddTarget={() => setShowTargetForm((v) => !v)}
         onMode={setMode}
@@ -1103,7 +1118,13 @@ export function PhoneTab({
         onSaveTarget={onSaveTarget}
       />
       {checkoutSecret && (
-        <StreamCheckoutModal clientSecret={checkoutSecret} onClose={() => setCheckoutSecret(null)} />
+        <StreamCheckoutModal
+          clientSecret={checkoutSecret}
+          onClose={() => {
+            buying.current = false;
+            setCheckoutSecret(null);
+          }}
+        />
       )}
     </>
   );
@@ -1128,6 +1149,8 @@ export interface PhoneTabBodyProps {
   viewerPlan: ViewerPlan;
   /** m1: a stop that neither landed nor could be confirmed by a re-read. */
   stopFailed: boolean;
+  /** N2: a checkout sheet is open — or still loading its chunk — so no tile may start a second Checkout Session. */
+  checkoutOpen: boolean;
   onSelectTarget: (id: string) => void;
   onAddTarget: () => void;
   onMode: (m: FeedMode) => void;
@@ -1342,7 +1365,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               <button
                 key={pack.size}
                 type="button"
-                disabled={p.busy || frozen}
+                disabled={p.busy || frozen || p.checkoutOpen}
                 data-testid={`stream-buy-pack-${pack.size}`}
                 onClick={() => p.onBuy(pack.size)}
                 // B8: top-aligned, so the three tiles' first lines share a baseline however their text wraps.
