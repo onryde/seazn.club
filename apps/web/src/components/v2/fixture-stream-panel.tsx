@@ -28,7 +28,9 @@
 //     overlay endpoint the stage itself polls. The seed is why a fixture whose
 //     public endpoint is unreachable still previews instead of showing an
 //     empty strip.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from "react";
+import {
+  Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode,
+} from "react";
 import { Check, Copy, Smartphone, Video } from "lucide-react";
 import QRCode from "qrcode";
 import dynamic from "next/dynamic";
@@ -82,6 +84,29 @@ import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 // and the preload the container fires when the chooser opens — so the chunk is usually in hand before a tile is tapped.
 const loadCheckoutSheet = () => import("./stream-checkout-modal");
 const StreamCheckoutModal = dynamic(loadCheckoutSheet, { ssr: false });
+
+/**
+ * M1 (Task 14 fix round 4): the checkout sheet's OWN error boundary. `next/dynamic` is `React.lazy` over the loader, so a
+ * chunk that fails to load (a stale deploy is the usual way) throws during render — and without this the nearest
+ * boundary was the route's error.tsx: the whole division page replaced, an on-air Stop with it, and the purchase lock
+ * held for good. It wraps the sheet and nothing else; a failed sheet renders nothing and hands the failure to the
+ * container, which frees the lock and says checkout did not open. React has no hook for this — a class is the only way.
+ */
+export class CheckoutSheetBoundary extends Component<{ onFail: () => void; children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch() {
+    this.props.onFail();
+  }
+
+  override render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
 
 /** The authored canvas every theme is drawn on — the OBS browser-source size
  *  `overlay-stage.tsx` fixes and `_THEMES.md` measures every inset against. */
@@ -1141,13 +1166,24 @@ export function PhoneTab({
         onSaveTarget={onSaveTarget}
       />
       {checkoutSecret && (
-        <StreamCheckoutModal
-          clientSecret={checkoutSecret}
-          onClose={() => {
+        // M1: a sheet that cannot load is the same outcome as a refused checkout — the lock freed, the chooser back
+        // with its tiles, the checkout's own copy — and never the page's error screen.
+        <CheckoutSheetBoundary
+          onFail={() => {
             buying.current = false;
             setCheckoutSecret(null);
+            setShowBuy(true);
+            setCheckoutError("unknown");
           }}
-        />
+        >
+          <StreamCheckoutModal
+            clientSecret={checkoutSecret}
+            onClose={() => {
+              buying.current = false;
+              setCheckoutSecret(null);
+            }}
+          />
+        </CheckoutSheetBoundary>
       )}
     </>
   );

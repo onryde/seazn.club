@@ -54,6 +54,7 @@ import {
 } from "@/lib/stream-session-view";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import {
+  CheckoutSheetBoundary,
   FixtureStreamPanel,
   FixtureStreamToggle,
   PhoneStopProbe,
@@ -1875,6 +1876,76 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onBuy(20);
     await settle();
     expect(checkout.fetch, "after a refusal").toHaveBeenCalledTimes(3);
+  });
+
+  // M1 (Task 14 fix round 4). `next/dynamic` is `React.lazy` over the loader, so a chunk that fails to load — a stale
+  // deploy is the usual way — THROWS during render. Without a boundary of its own the nearest one was the route's
+  // error.tsx: the whole division page went, an on-air Stop with it, and the purchase lock stayed held. The node harness
+  // has no reconciler, so React's catch is driven by hand below: the boundary's OWN static and lifecycle methods, on an
+  // instance built from the element the container rendered — the order React runs them in (render phase, then commit).
+  it("M1: a sheet whose chunk FAILS to load takes down only the sheet — Stop stays, the lock and the tiles are freed, and it says so", async () => {
+    checkout.fetch.mockResolvedValue({ ok: true, clientSecret: "cs_test_secret_1" });
+    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", balance: 2 });
+    const island = track(await mount({ current: live, targets: TARGETS }));
+    bodyOf(island).onShowBuy();
+    bodyOf(island).onBuy(5);
+    await settle();
+    expect(checkout.fetch).toHaveBeenCalledTimes(1);
+    // The sheet sits INSIDE its own boundary, and the boundary holds nothing else.
+    const boundary = island.tree().find((el) => el.type === CheckoutSheetBoundary);
+    expect(boundary, "the sheet has no boundary of its own").toBeDefined();
+    const held = walk(propsOf(boundary!).children as ReactElement);
+    expect(held.filter((el) => lazy.made.some((d) => d.C === el.type)), "the lazy sheet inside the boundary").toHaveLength(1);
+    expect(held.some((el) => el.type === PhoneTabBody), "the boundary must not wrap the tab (Stop lives there)").toBe(false);
+    expect(bodyOf(island).checkoutOpen, "tiles dead while the sheet loads").toBe(true);
+
+    // React hands both methods the thrown error (a ChunkLoadError here); the boundary reads neither, so none is passed.
+    const inst = new CheckoutSheetBoundary(propsOf(boundary!) as ConstructorParameters<typeof CheckoutSheetBoundary>[0]);
+    expect(inst.render(), "before any failure the boundary renders its sheet").toBe(propsOf(boundary!).children);
+    inst.state = CheckoutSheetBoundary.getDerivedStateFromError();
+    expect(inst.render(), "a failed sheet renders nothing — never a crash screen over the tab").toBeNull();
+    inst.componentDidCatch();
+    await settle();
+
+    expect(lazySheet(island.tree()), "the failed sheet is unmounted").toBeUndefined();
+    expect(island.tree().find((el) => el.type === CheckoutSheetBoundary)).toBeUndefined();
+    const after = bodyOf(island);
+    expect(after.checkoutOpen, "the tiles are freed").toBe(false);
+    expect(after.checkoutError, "the checkout's own copy, never a create one").toBe("unknown");
+    expect(after.createError).toBeNull();
+    // Through the REAL body: Stop is on screen and live, the chooser is back with every tile enabled, and the copy says it.
+    const tree = walk(expandWithHooks(PhoneTabBody, after));
+    expect(byTestId(tree, "stream-stop"), "Stop survives a failed sheet").toBeDefined();
+    expect(attr(byTestId(tree, "stream-stop")!, "disabled")).toBeFalsy();
+    let tiles = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      const tile = byTestId(tree, `stream-buy-pack-${pack.size}`);
+      expect(tile, `tile ${pack.size}`).toBeDefined();
+      expect(attr(tile!, "disabled"), `tile ${pack.size}`).toBeFalsy();
+      tiles++;
+    }
+    expect(tiles).toBe(STREAM_CREDIT_PACKS.length);
+    expect(tiles).toBeGreaterThan(0);
+    expect(textAt(tree, "stream-checkout-error")).toBe(m("stream.credits.error.unknown"));
+    // The second call: the lock was released, so the next tap is a new Checkout Session — and a fresh boundary.
+    after.onBuy(1);
+    await settle();
+    expect(checkout.fetch, "the purchase lock stuck").toHaveBeenCalledTimes(2);
+    expect(island.tree().find((el) => el.type === CheckoutSheetBoundary), "a new sheet, a new boundary").toBeDefined();
+  });
+
+  it("M1: the boundary itself — renders its sheet until something below it throws, then nothing, and reports once", () => {
+    const onFail = vi.fn();
+    const sheet = <p data-testid="sheet" />;
+    const inst = new CheckoutSheetBoundary({ onFail, children: sheet });
+    expect(inst.state).toEqual({ failed: false });
+    expect(inst.render()).toBe(sheet);
+    expect(CheckoutSheetBoundary.getDerivedStateFromError()).toEqual({ failed: true });
+    inst.state = { failed: true };
+    expect(inst.render()).toBeNull();
+    expect(onFail).not.toHaveBeenCalled();
+    inst.componentDidCatch();
+    expect(onFail).toHaveBeenCalledTimes(1);
   });
 
   it("N2: the sheet's chunk is fetched when the chooser OPENS, from the same module the sheet loads — not on the tile tap", () => {
