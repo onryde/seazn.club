@@ -246,18 +246,23 @@ function printCell(c: ModelCell): void {
   if (Object.keys(c.masked).length > 0) say(`  masked while shrinking ${JSON.stringify(c.masked)}`);
 }
 
-/** The stub a person completes into regressions.json. "MB-NNN", "YYYY-MM-DD"
- *  and the empty title are ON PURPOSE: parseRegressions refuses them until
- *  someone names, dates and titles the case. */
+/** The stub a person completes into regressions.json. "MB-NNN", "YYYY-MM-DD",
+ *  the empty title and — on a check that requires one — the empty match are ON
+ *  PURPOSE: parseRegressions refuses them until someone names, dates, titles
+ *  and matches the case. Never `match: null` there: null would name every
+ *  failure on the check (T15 fix round 3, I-2). */
 function printStub(c: ModelCell, runId: string): void {
   const f = c.failure;
   if (f === null) return;
   // A NEW check passed over while shrinking has no path of its own to replay.
   for (const check of Object.keys(c.maskedNew)) say(`  no stub for ${check}: it was passed over while shrinking toward ${f.check}, so it has no replay path — re-find it once ${f.check} is fixed or fenced`);
   if (f.known !== null) return;
-  say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, match: null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
-  if ((MATCH_REQUIRED_CHECKS as readonly string[]).includes(f.check)) {
-    say(`  match owed: ${f.check} names no single failure — set "match" to text from the evidence that does (the product's message), or regressions.json is refused`);
+  const matchRequired = (MATCH_REQUIRED_CHECKS as readonly string[]).includes(f.check);
+  say(`regression stub for scripts/matrix/catalogue/regressions.json (name it, date it, link its issue):\n${JSON.stringify({ id: "MB-NNN", title: "", issue: null, cell: c.cell, variant: c.variant, check: f.check, seed: f.seed, path: f.path, replayPath: f.replayPath, fence: null, match: matchRequired ? "" : null, status: "open", found: "YYYY-MM-DD", runId }, null, 2)}`);
+  if (matchRequired) {
+    say(f.said === null
+      ? `  match owed: ${f.check} names no single failure, and this one carries no product answer to match — it is the harness's to fix, not a case to commit`
+      : `  match owed: ${f.check} names no single failure — set "match" to text from the product's answer (never the model's own line), or regressions.json is refused: ${f.said}`);
   }
   // A replay regenerates the counterexample from the seed; the committed case
   // records neither --max-commands nor the fences. --regressions honours

@@ -22,7 +22,7 @@ import { START, type StreamEvent } from "../streams/types.ts";
 import { fenceBlocking } from "./fences.ts";
 import { liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
-  COMMAND_KINDS, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
+  COMMAND_KINDS, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
   absorbFixtures, checkStep, fedCandidates, fedMatchStarted, markUnknown, recordFinding, rosterLocked,
   type CommandKind, type FixtureModel, type ModelState, type StepVerdict,
 } from "./state.ts";
@@ -149,13 +149,14 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
       if (!(e instanceof RefusedCall)) throw e;
       const line = `${this.toString()}: ${e.method} ${e.path} → ${e.status} ${e.code ?? "(no code)"}`;
       // The product's own words (redacted, RefusedCall): a committed case's
-      // `match` names its failure by them (T15 fix round 2).
+      // `match` names its failure by them, and by nothing else (T15 fix
+      // rounds 2 and 3). ModelViolation appends them to the evidence.
       const said = e.message;
       const named = isNamedRefusal(e.status, e.code);
       if (expected) {
         if (!named) {
           const finding = this.knownUnnamed(e);
-          if (finding === null) throw new ModelViolation("model-refusal-named", [line, said]);
+          if (finding === null) throw new ModelViolation(REFUSAL_NAMED, [line], said);
           recordFinding(m, finding, line);
         }
         c.expected++;
@@ -165,7 +166,7 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
         const j = await permitted.judge(d);
         if (j.kind === "unexpected") {
           c.unexpected++;
-          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — ${j.detail}`, said]);
+          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — ${j.detail}`], said);
         }
         if (j.kind === "expected") {
           c.expected++;
@@ -177,10 +178,10 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
           c.refused++;
         }
       } else {
-        if (!named) throw new ModelViolation("model-refusal-named", [line, said]);
+        if (!named) throw new ModelViolation(REFUSAL_NAMED, [line], said);
         if (must) {
           c.unexpected++;
-          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — the model holds ${this.kind} legal here`, said]);
+          throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — the model holds ${this.kind} legal here`], said);
         }
         c.refused++;
         verdict = "refused";

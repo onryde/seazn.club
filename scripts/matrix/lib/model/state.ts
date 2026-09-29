@@ -33,11 +33,19 @@ export interface FixtureModel { id: string; round: number | null; home: string |
 export class ModelViolation extends Error {
   readonly check: string;
   readonly evidence: string[];
-  constructor(check: string, evidence: string[]) {
-    super(`${check}: ${evidence.slice(0, 3).join("; ")}`);
+  /** The product's own answer when the product refused (RefusedCall.message,
+   *  redacted), appended to the evidence as its last line; null for a
+   *  violation the harness judged on its own. The ONLY text a committed
+   *  case's `match` is tested against (T15 fix round 3, M-3): never the
+   *  harness's own lines. */
+  readonly said: string | null;
+  constructor(check: string, evidence: string[], said: string | null = null) {
+    const all = said === null ? evidence : [...evidence, said];
+    super(`${check}: ${all.slice(0, 3).join("; ")}`);
     this.name = "ModelViolation";
     this.check = check;
-    this.evidence = evidence;
+    this.evidence = all;
+    this.said = said;
   }
 }
 
@@ -102,6 +110,9 @@ export const ORIENTATION_CHECK = "model-rr-orientation";
 export const ORIENTATION_STAGE_KINDS: readonly string[] = Object.freeze(["league", "group"]);
 /** A named refusal of a command the model holds legal (ruling I-1). */
 export const UNEXPECTED_REFUSAL = "model-unexpected-refusal";
+/** A refusal the product did not name (isNamedRefusal: any 5xx, a code-less
+ *  or generic-code 4xx) where no known finding explains it. */
+export const REFUSAL_NAMED = "model-refusal-named";
 /** The roster lock: a latecomer accepted after Start, or a refusal that still changed the roster. */
 export const ROSTER_LOCK_CHECK = "model-roster-lock";
 /** The roster lock's refusal carries no domain code (entrants.ts: a bare

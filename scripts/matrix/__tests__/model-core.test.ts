@@ -23,10 +23,10 @@ import { RefusedCall, RequestTimedOut, type FixtureRow, type GenerateOut, type P
 import { foldStream } from "../lib/fold.ts";
 import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
-import { vacuityOf } from "../lib/model/run-cell.ts";
+import { regressionFor, vacuityOf } from "../lib/model/run-cell.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import {
-  NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
+  NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
   absorbFixtures, fedCandidates, fedMatchStarted, informativeSteps, orientationBound, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
@@ -1294,5 +1294,116 @@ describe("model guards — assumptions are refusals, not comments", () => {
   });
   it("FakeLeagueDriver.rebuild refuses by name (the table fake models no rebuild)", async () => {
     await expect(new FakeLeagueDriver().rebuild("s1")).rejects.toMatchObject({ status: 422, code: "UNSUPPORTED_IN_FAKE" });
+  });
+});
+
+describe("the product's own answer rides every refusal violation as `said` — the only text a committed case's `match` is tested against (T15 fix round 3, I-1)", () => {
+  // single-sport: the four refusal sites read the product's refusal, not a sport.
+  const CELL = "t|generic";
+  const caseFor = (id: string, check: string, match: string) =>
+    ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
+  /** The product's NEXT_MATCH_STARTED sentence after its label (fed-seats.ts through lib/next-match-started.ts), read from the product. */
+  const nextTail = (() => {
+    const [, tail] = nextMatchStartedText().message("|").split("|");
+    if (tail === undefined || tail.trim() === "") throw new Error("test: the product's next-match sentence has no text after its label");
+    return tail;
+  })();
+  type Site = { site: string; check: string; product: string; drive: () => Promise<ModelViolation> };
+  const SITES: Site[] = [
+    {
+      site: "an expected refusal that is unnamed and not the known lock (commands.ts, expected branch)",
+      check: REFUSAL_NAMED,
+      product: "test: the roster write crashed",
+      drive: async () => {
+        class Crashing extends ModelFakeDriver {
+          override addEntrants(dv: string, es: Parameters<ModelFakeDriver["addEntrants"]>[1]): ReturnType<ModelFakeDriver["addEntrants"]> {
+            return super.addEntrants(dv, es).catch(() => { throw new RefusedCall("POST", `/api/v1/divisions/${dv}/entrants`, 500, "INTERNAL", "test: the roster write crashed"); });
+          }
+        }
+        const { m, d } = await fresh({}, {}, new Crashing());
+        await play(m, d, [["Start", 0]]);
+        return violation(play(m, d, [["AddEntrant", 0]]));
+      },
+    },
+    {
+      site: "a permitted refusal its judge holds unexpected (commands.ts, judge branch)",
+      check: UNEXPECTED_REFUSAL,
+      product: nextTail,
+      drive: async () => {
+        const { m: base, d } = await fresh({ fedSeatsFault: "always" }, { entrants: 6 });
+        if (d.stage === null) throw new Error("test: no stage");
+        d.stage.kind = "knockout";
+        const m: ModelState = { ...base, stageKind: "knockout" };
+        const [e1, e2, e3, e4, e5, e6] = m.entrants;
+        const f1 = d.seat(1, e1 ?? null, e2 ?? null);
+        const f2 = d.seat(2, null, e3 ?? null);
+        d.seat(3, e5 ?? null, e6 ?? null);
+        d.feed(f1.id, f2.id, 1);
+        d.seat(3, null, e4 ?? null);
+        await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+        return violation(play(m, d, [["Void", 0]]));
+      },
+    },
+    {
+      site: "an unnamed refusal of an ordinary command (commands.ts, the ordinary branch — the only path MB-004/005 are recognised by)",
+      check: REFUSAL_NAMED,
+      product: "test: the bulk UPDATE would strand home_slot_label",
+      drive: async () => {
+        class Crashing extends ModelFakeDriver {
+          override generate(): ReturnType<ModelFakeDriver["generate"]> {
+            return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, null, "test: the bulk UPDATE would strand home_slot_label"));
+          }
+        }
+        const { m, d } = await fresh({}, {}, new Crashing());
+        return violation(play(m, d, [["Generate", 0]]));
+      },
+    },
+    {
+      site: "a named refusal of a command the model holds legal (commands.ts, must-accept branch)",
+      check: UNEXPECTED_REFUSAL,
+      product: "test: refuses every result",
+      drive: async () => {
+        class RefusingPosts extends ModelFakeDriver {
+          override postStream(id: string): Promise<PostedEvent[]> {
+            return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "TEST_POST_REFUSED", "test: refuses every result"));
+          }
+        }
+        const { m, d } = await fresh({}, {}, new RefusingPosts());
+        await play(m, d, [["Start", 0]]);
+        return violation(play(m, d, [["Score", 0, 0]]));
+      },
+    },
+  ];
+
+  it("each refusal site: the product's answer is `said`, the evidence's last line, absent from the model's own lines — and a case matching it is recognised, while one matching only the model's line is not", async () => {
+    let checked = 0;
+    for (const s of SITES) {
+      const v = await s.drive();
+      expect(v.check, s.site).toBe(s.check);
+      expect(v.said, s.site).not.toBeNull();
+      expect(v.said ?? "", s.site).toContain(s.product);
+      expect(v.evidence.at(-1), `${s.site}: said is the evidence's last line`).toBe(v.said);
+      const own = v.evidence.slice(0, -1);
+      expect(own.length, s.site).toBeGreaterThan(0);
+      for (const line of own) expect(line, `${s.site}: the model's own line`).not.toContain(s.product);
+      expect(regressionFor([caseFor("MB-T", s.check, s.product)], CELL, v.check, v.said), s.site).toBe("MB-T");
+      // The command's own name is in the model's line and never in the product's answer.
+      const cmd = own[0]?.slice(0, own[0].indexOf(":")) ?? "";
+      expect(cmd.length, s.site).toBeGreaterThan(0);
+      expect(v.said ?? "", s.site).not.toContain(cmd);
+      expect(regressionFor([caseFor("MB-H", s.check, cmd)], CELL, v.check, v.said), `${s.site}: a match on the model's own line`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(SITES.length);
+    expect(checked).toBe(4);
+  });
+
+  it("a violation the harness judged on its own carries no `said`, and nothing matches it", async () => {
+    const { m, d } = await fresh({ rosterLock: "open" });
+    await play(m, d, [["Start", 0]]);
+    const v = await violation(play(m, d, [["AddEntrant", 0]]));
+    expect(v.check).toBe(ROSTER_LOCK_CHECK);
+    expect(v.said).toBeNull();
+    expect(regressionFor([caseFor("MB-T", v.check, "the product accepted")], CELL, v.check, v.said)).toBeNull();
   });
 });

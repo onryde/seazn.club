@@ -30,8 +30,9 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { DIVISION_CAP_KEY, MODEL_DEFAULTS, MODEL_USAGE, fnv1a32, runModel, seedFor, type ModelDeps } from "../model.ts";
 import { REQUEST_TIMEOUT_MS } from "../lib/driver/http-driver.ts";
 import { RefusedCall, RequestTimedOut, type FixtureRow, type PostedEvent } from "../lib/driver/types.ts";
-import { ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
-import { parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
+import { MODEL_ERROR } from "../lib/model/run-cell.ts";
+import { REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL } from "../lib/model/state.ts";
+import { MATCH_REQUIRED_CHECKS, parseRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
@@ -78,6 +79,22 @@ class GatedLiar extends ModelFakeDriver {
     return super.postStream(id, events, prefix);
   }
 }
+
+/** T15 fix round 3: every Generate refused 500 with no code — the shape of the
+ *  knockout bye-award crash (MB-004/005), which the model reads as
+ *  model-refusal-named through its ordinary refusal branch. */
+const STRAND = "test: the bulk UPDATE would strand home_slot_label";
+class CrashingGenerate extends ModelFakeDriver {
+  override generate(): ReturnType<ModelFakeDriver["generate"]> {
+    return Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 500, null, STRAND));
+  }
+}
+/** T15 fix round 3: a harness fault on every post — an Error that is no
+ *  refusal, so model-error with no product answer. */
+class BrokenPosts extends ModelFakeDriver {
+  override postStream(): Promise<PostedEvent[]> { return Promise.reject(new Error("test: the socket closed")); }
+}
+const stubOf = (printed: string): Record<string, unknown> => JSON.parse(/regression stub for [^\n]*\n(\{[\s\S]*?\n\})/.exec(printed)?.[1] ?? "{}") as Record<string, unknown>;
 
 type Over = Partial<ModelDeps> & { fault879?: boolean; regs?: RegressionCase[] };
 const deps = (over: Over = {}): ModelDeps => {
@@ -334,6 +351,60 @@ describe("model.ts", () => {
     const io2 = capture();
     expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd, openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(0);
     expect(failureLine(io2.out())).toMatch(/\(known MB-003\)/);
+  });
+
+  it("T15 fix round 3, I-1/I-2: an unnamed refusal (model-refusal-named — MB-004/005's only path) is known only by a case matching the product's answer; its stub prints the match EMPTY, owed, never null", async () => {
+    const io = capture();
+    expect(await runModel(deps({ driverFor: () => new CrashingGenerate() }), ["--run-id", "mg", "--report-dir", reportDir(), ...ONE])).toBe(1);
+    expect(failureLine(io.out())).toMatch(new RegExp(`^FAILURE ${REFUSAL_NAMED} \\(NEW\\): `));
+    expect(stubOf(io.out()).match).toBe("");
+    expect(io.out()).toContain(`\n  match owed: ${REFUSAL_NAMED} names no single failure — set "match" to text from the product's answer (never the model's own line), or regressions.json is refused: POST /api/v1/stages/s1/generate → HTTP 500 (no code): ${STRAND}\n`);
+    // As printed, the stub is refused; with the product's words as its match it is a valid case.
+    expect(() => completedStub(io.out(), { issue: null, fence: null })).toThrow(/match/);
+    const reg = completedStub(io.out(), { id: "MB-004", issue: null, fence: null, match: "would strand home_slot_label" });
+    const io2 = capture();
+    expect(await runModel(deps({ driverFor: () => new CrashingGenerate(), regs: [reg] }), ["--run-id", "mg", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(failureLine(io2.out())).toMatch(/\(known MB-004\)/);
+    // A case whose match is only in the model's own line stays NEW.
+    let checked = 0;
+    for (const harness of ["→ 500 (no code)", "Generate("]) {
+      const io3 = capture();
+      expect(await runModel(deps({ driverFor: () => new CrashingGenerate(), regs: [{ ...reg, match: harness }] }), ["--run-id", "mg", "--report-dir", reportDir(), ...ONE]), harness).toBe(1);
+      expect(io3.out(), `the premise: the model's line carries ${harness}`).toMatch(new RegExp(`\\n {4}evidence: [^\\n]*${harness.replace(/[()]/g, "\\$&")}`));
+      expect(failureLine(io3.out()), harness).toMatch(/\(NEW\)/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The committed case replays exactly.
+    capture();
+    expect(await runModel(deps({ driverFor: () => new CrashingGenerate(), regs: [reg] }), ["--run-id", "mgr", "--report-dir", reportDir(), "--regressions"])).toBe(0);
+  });
+
+  it("T15 fix round 3, I-2: on EVERY check that owes a match the printed stub carries an empty match and says what is owed — never `match: null`; a check that owes none (I7) prints null", async () => {
+    const producers: Record<string, () => ModelFakeDriver> = { [UNEXPECTED_REFUSAL]: () => new RefusingPosts(), [REFUSAL_NAMED]: () => new CrashingGenerate(), [MODEL_ERROR]: () => new BrokenPosts() };
+    expect(Object.keys(producers).sort(), "one producer per check that owes a match").toEqual([...MATCH_REQUIRED_CHECKS].sort());
+    let checked = 0;
+    for (const [i, check] of MATCH_REQUIRED_CHECKS.entries()) {
+      const io = capture();
+      expect(await runModel(deps({ driverFor: producers[check] }), ["--run-id", `ms${i}`, "--report-dir", reportDir(), ...ONE]), check).toBe(1);
+      expect(failureLine(io.out()), check).toMatch(new RegExp(`^FAILURE ${check} \\(NEW\\): `));
+      expect(stubOf(io.out()).match, check).toBe("");
+      expect(io.out(), check).not.toContain('"match": null');
+      expect(io.out(), check).toMatch(new RegExp(`\\n {2}match owed: ${check} names no single failure`));
+      expect(() => completedStub(io.out(), { issue: null, fence: null }), check).toThrow(/match/);
+      checked++;
+    }
+    expect(checked).toBe(MATCH_REQUIRED_CHECKS.length);
+    expect(checked).toBeGreaterThan(0);
+    // A harness fault carries no product answer: the owed line says so, rather than inviting a match.
+    const io = capture();
+    await runModel(deps({ driverFor: () => new BrokenPosts() }), ["--run-id", "msb", "--report-dir", reportDir(), ...ONE]);
+    expect(io.out()).toContain(`\n  match owed: ${MODEL_ERROR} names no single failure, and this one carries no product answer to match — it is the harness's to fix, not a case to commit\n`);
+    const io2 = capture();
+    expect(await runModel(deps({ fault879: true }), ["--run-id", "ms-i7", "--report-dir", reportDir(), ...ONE, "--no-fences"])).toBe(1);
+    expect(stubOf(io2.out()).check).toBe(I7);
+    expect(stubOf(io2.out()).match).toBeNull();
+    expect(io2.out()).not.toContain("match owed");
   });
 
   it("T15 fix round 2: --seed takes a negative seed as `--seed -N` too (the logs print `seed=-N`), the same as `--seed=-N`", async () => {

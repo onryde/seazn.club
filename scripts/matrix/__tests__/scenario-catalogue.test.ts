@@ -348,9 +348,11 @@ describe("regression cases (R29)", () => {
       checked++;
     }
     expect(checked).toBe(MATCH_REQUIRED_CHECKS.length);
-    // Any other check may leave it null — and may still carry one.
+    // Any other check may leave it null — and may still carry one (T15 fix
+    // round 3: model-refusal-named now owes one, so the example is I7's).
+    expect((MATCH_REQUIRED_CHECKS as readonly string[]).includes(base.check)).toBe(false);
     expect(parseRegressions(file({ ...base, match: null }))[0]!.match).toBeNull();
-    expect(parseRegressions(file({ ...base, check: "model-refusal-named", match: "would strand home_slot_label" }))[0]!.match).toBe("would strand home_slot_label");
+    expect(parseRegressions(file({ ...base, match: "the second leg" }))[0]!.match).toBe("the second leg");
   });
   it("the committed file: every case on a generic check carries a match", () => {
     const rs = loadRegressions();

@@ -3,8 +3,8 @@
 // cell), path-replayable, time-boxed. A shrunk failure reports its check,
 // seed, path, replayPath and the commands that RAN (R-PF9); it is KNOWN when
 // an open committed regression names the same cell and check (R29) and, when
-// the case carries one, its `match` is in the failure's evidence (T15 fix
-// round 2: regressionFor).
+// the case carries one, its `match` is in the product's own answer (`said`,
+// never the harness's lines — T15 fix rounds 2 and 3: regressionFor).
 // Anti-vacuity per cell, across runs (R25, vacuityOf): every command kind ran,
 // a Score was accepted, each step check its stage kind owes and fold parity
 // judged more than zero items, and at least one step was informative.
@@ -38,7 +38,7 @@
 //    starts, and the cell reports `timeout`; the CLI aborts it.
 import fc from "fast-check";
 import type { RowKey } from "../catalogue.ts";
-import { RequestTimedOut, type OrganiserDriver } from "../driver/types.ts";
+import { RefusedCall, RequestTimedOut, type OrganiserDriver } from "../driver/types.ts";
 import { STEP_INVARIANTS } from "../invariants.ts";
 import { MATCH_REQUIRED_CHECKS, type RegressionCase } from "../scenario-catalogue.ts";
 import { COMMAND_KINDS, ModelViolation, modelCommands } from "./commands.ts";
@@ -70,6 +70,9 @@ export interface CellFailure {
   /** Only the commands that RAN (CommandWrapper.hasRan, R-PF9), in order. */
   commands: string[];
   evidence: string[];
+  /** The product's own answer when the failure is its refusal (ModelViolation.said,
+   *  or an escaped RefusedCall's message); null when the harness judged it alone. */
+  said: string | null;
   known: string | null;
 }
 
@@ -124,23 +127,32 @@ export function shrinkTarget(current: FailureKey | null, thrown: FailureKey): Fa
   return null;
 }
 
-/** The open committed case that names a failure (R29; T15 fix round 2): the
- *  same cell and check, and — when the case carries a `match` — that text in
- *  the failure's evidence. A case with a null match names every failure on
- *  its check, which the loader refuses on MATCH_REQUIRED_CHECKS; a case that
- *  bypassed the loader without one there names nothing. */
-export function regressionFor(regressions: readonly RegressionCase[], cell: string, check: string, evidence: readonly string[]): string | null {
-  const names = (r: RegressionCase): boolean => {
+/** The open committed case that names a failure (R29; T15 fix rounds 2 and
+ *  3): the same cell and check, and — when the case carries a `match` — that
+ *  text in `said`, the product's own answer, never the harness's lines (a
+ *  failure the harness judged alone has none, so only a null match names it).
+ *  The most specific case wins: one whose match is in `said` outranks one with
+ *  a null match, whatever the file order (M-2). A null match names every
+ *  failure on its check, which the loader refuses on MATCH_REQUIRED_CHECKS; a
+ *  case that bypassed the loader with none there names nothing. */
+export function regressionFor(regressions: readonly RegressionCase[], cell: string, check: string, said: string | null): string | null {
+  const open = regressions.filter((r) => r.status === "open" && r.cell === cell && r.check === check);
+  const matching = open.find((r) => {
     const m: unknown = r.match;
-    if (typeof m === "string") return evidence.some((line) => line.includes(m));
-    return m === null && !(MATCH_REQUIRED_CHECKS as readonly string[]).includes(check);
-  };
-  return regressions.find((r) => r.status === "open" && r.cell === cell && r.check === check && names(r))?.id ?? null;
+    return typeof m === "string" && said !== null && said.includes(m);
+  });
+  if (matching !== undefined) return matching.id;
+  if ((MATCH_REQUIRED_CHECKS as readonly string[]).includes(check)) return null;
+  return open.find((r) => r.match === null)?.id ?? null;
 }
 
 /** The fast-check failure a run reports when fast-check gave up on skips. */
 export const MODEL_ERROR = "model-error";
 const checkOf = (e: unknown): string => (e instanceof ModelViolation ? e.check : MODEL_ERROR);
+/** The product's own answer a failure carries: a violation's `said`, or the
+ *  message of a refusal no command caught (a model-error). Anything else —
+ *  a harness error, an invariant — carries none. */
+const saidOf = (e: unknown): string | null => (e instanceof ModelViolation ? e.said : e instanceof RefusedCall ? e.message : null);
 const evidenceOf = (e: unknown): string[] => (e instanceof ModelViolation ? [...e.evidence] : [e instanceof Error ? `${e.name}: ${e.message}` : String(e)]);
 
 /** The shape fast-check 3.23 hands back as `counterexample[0]` for
@@ -195,7 +207,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const findings: Record<string, { count: number; evidence: string[] }> = {};
   const masked: Record<string, number> = {};
   const maskedNew: Record<string, string[]> = {};
-  const knownFor = (check: string, evidence: readonly string[]): string | null => regressionFor(input.regressions, input.cell, check, evidence);
+  const knownFor = (check: string, said: string | null): string | null => regressionFor(input.regressions, input.cell, check, said);
   const seen = { stageKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false, timeout: null as string | null };
   const absorb = (m: ModelState): void => {
     for (const k of COMMAND_KINDS) {
@@ -248,7 +260,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
         fc.pre(false);
       }
       const check = checkOf(e);
-      const thrown: FailureKey = { check, known: knownFor(check, evidenceOf(e)) };
+      const thrown: FailureKey = { check, known: knownFor(check, saidOf(e)) };
       const next = shrinkTarget(target, thrown);
       if (next === null) {
         masked[check] = (masked[check] ?? 0) + 1;
@@ -277,18 +289,19 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // A timeout skips runs the same way, and is reported as itself (RR-2).
   if (details.failed && shrunk === undefined && !seen.timeBoxed && seen.timeout === null) {
     const evidence = [`fast-check gave up after ${details.numSkips} skipped run(s) (${details.numRuns} ran) — only the time box may skip a run`];
-    failure = { check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [], evidence, known: knownFor(MODEL_ERROR, evidence) };
+    failure = { check: MODEL_ERROR, seed: details.seed, path: "", replayPath: null, commands: [], evidence, said: null, known: knownFor(MODEL_ERROR, null) };
   }
   if (details.failed && shrunk !== undefined) {
     const err: unknown = details.errorInstance;
     const check = checkOf(err);
     const evidence = evidenceOf(err);
+    const said = saidOf(err);
     failure = {
       check, seed: details.seed, path: details.counterexamplePath ?? "", replayPath: replayPathOf(shrunk),
       // Only the commands that ran: the shrunk iterable also holds generated
       // commands the failing run never reached (R-PF9).
       commands: shrunk.commands.filter((c) => c.hasRan).map((c) => c.toString()),
-      evidence, known: knownFor(check, evidence),
+      evidence, said, known: knownFor(check, said),
     };
   }
   // Backstop (T14 amendment): an unexpected refusal is a NEW failure, not a
@@ -302,7 +315,10 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
       `${unexpected} unexpected refusal(s) counted over the cell, yet the shrunk failure is ${failure === null ? "none" : failure.check} — an unexpected refusal outranks every other check`,
       ...(failure === null ? [] : [`displaced ${failure.check} (path ${failure.path}): ${failure.commands.join(" → ")} — ${failure.evidence.join("; ")}`]),
     ];
-    failure = { check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [], evidence, known: knownFor(UNEXPECTED_REFUSAL, evidence) };
+    // The backstop's evidence is the harness's own sentence (and whatever it
+    // displaced): no product answer, so no committed case can name it — a
+    // bypassed lock is a harness defect, reported NEW (T15 fix round 3, M-3/M-5).
+    failure = { check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [], evidence, said: null, known: knownFor(UNEXPECTED_REFUSAL, null) };
   }
 
   const vacuous = failure === null && seen.timeout === null

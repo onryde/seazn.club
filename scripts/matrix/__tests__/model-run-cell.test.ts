@@ -27,7 +27,7 @@ import { COMMAND_KINDS, ModelViolation, newModelState, type ModelState } from ".
 import { FENCES } from "../lib/model/fences.ts";
 import { MODEL_ERROR, regressionFor, runCell, shrinkTarget, vacuityOf, type FailureKey, type RunCellInput } from "../lib/model/run-cell.ts";
 import { MATCH_REQUIRED_CHECKS } from "../lib/scenario-catalogue.ts";
-import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
+import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
 import { STEP_INVARIANTS } from "../lib/invariants.ts";
 import { SLICE_SPORTS } from "../lib/slice.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
@@ -117,8 +117,10 @@ const N = (check: string): FailureKey => ({ check, known: null });
 const K = (check: string, id = "MB-009"): FailureKey => ({ check, known: id });
 /** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
 const openReg = (id: string, check: string, match: string | null = null) => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open" as const, found: "2026-09-29", runId: "t" });
-/** Text each fake refusal carries into the evidence: its code (in the model's line)
- *  and the backstop's own sentence — what those tests' open cases match. */
+/** A fake refusal's code, which the product's own answer carries (RefusedCall's
+ *  message: `METHOD path → HTTP status CODE: message`) — what those tests' open
+ *  cases match. The backstop's own sentence is the harness's, never matched (T15
+ *  fix round 3). */
 const POST_REFUSED = "TEST_POST_REFUSED";
 const BACKSTOP = "unexpected refusal(s) counted over the cell";
 
@@ -161,34 +163,75 @@ describe("shrinkTarget — which failure a cell's shrink is locked to", () => {
   });
 });
 
-describe("regressionFor — cell, check AND match (T15 fix round 2)", () => {
+describe("regressionFor — cell, check AND match, the match read from the product's answer only (T15 fix rounds 2 and 3)", () => {
   const TBD = "fixture has an unassigned entrant";
+  /** The model's own line (the harness's text) and the product's answer (`said`). */
   const line = "Withdraw(0,0): POST /api/v1/entrants/e1/withdraw → 422 WRONG_PHASE — the model holds Withdraw legal here";
-  const product = `POST /api/v1/entrants/e1/withdraw → HTTP 422 WRONG_PHASE: ${TBD} (bye/TBD)`;
-  it("empty case first: no committed case knows nothing", () => {
-    expect(regressionFor([], CELL, UNEXPECTED_REFUSAL, [line, product])).toBeNull();
+  const said = `POST /api/v1/entrants/e1/withdraw → HTTP 422 WRONG_PHASE: ${TBD} (bye/TBD)`;
+  it("empty case first: no committed case knows nothing, with or without a product answer", () => {
+    expect(regressionFor([], CELL, UNEXPECTED_REFUSAL, said)).toBeNull();
+    expect(regressionFor([], CELL, I7, null)).toBeNull();
   });
-  it("the premise: the checks whose cases must carry a match are the model's generic ones", () => {
-    expect([...MATCH_REQUIRED_CHECKS].sort()).toEqual([MODEL_ERROR, UNEXPECTED_REFUSAL].sort());
+  it("the premise: the checks whose cases must carry a match are the model's generic ones, the named-refusal check among them (fix round 3, I-2)", () => {
+    expect([...MATCH_REQUIRED_CHECKS].sort()).toEqual([MODEL_ERROR, REFUSAL_NAMED, UNEXPECTED_REFUSAL].sort());
   });
-  it("known only when cell, check and match all agree; a null match matches any evidence on its check", () => {
+  it("known only when cell, check and match all agree; a null match names any failure on a check that owes none", () => {
     const reg = openReg("MB-002", UNEXPECTED_REFUSAL, TBD);
-    expect(regressionFor([reg], CELL, UNEXPECTED_REFUSAL, [line, product])).toBe("MB-002");
+    expect(regressionFor([reg], CELL, UNEXPECTED_REFUSAL, said)).toBe("MB-002");
     // A different refusal on the same cell and check: NEW.
-    expect(regressionFor([reg], CELL, UNEXPECTED_REFUSAL, [line, "POST … → HTTP 422 WRONG_PHASE: forfeit not allowed in phase pre"])).toBeNull();
-    // The match is looked for in the evidence — no evidence, no match.
-    expect(regressionFor([reg], CELL, UNEXPECTED_REFUSAL, [])).toBeNull();
-    expect(regressionFor([reg], "league|badminton", UNEXPECTED_REFUSAL, [line, product])).toBeNull();
-    expect(regressionFor([reg], CELL, I7, [line, product])).toBeNull();
-    expect(regressionFor([{ ...reg, status: "fixed" as const }], CELL, UNEXPECTED_REFUSAL, [line, product])).toBeNull();
-    // Two cases on one check: the one whose match is in the evidence.
+    expect(regressionFor([reg], CELL, UNEXPECTED_REFUSAL, "POST … → HTTP 422 WRONG_PHASE: forfeit not allowed in phase pre")).toBeNull();
+    // No product answer, no match.
+    expect(regressionFor([reg], CELL, UNEXPECTED_REFUSAL, null)).toBeNull();
+    expect(regressionFor([reg], "league|badminton", UNEXPECTED_REFUSAL, said)).toBeNull();
+    expect(regressionFor([reg], CELL, I7, said)).toBeNull();
+    expect(regressionFor([{ ...reg, status: "fixed" as const }], CELL, UNEXPECTED_REFUSAL, said)).toBeNull();
+    // Two cases on one check: the one whose match is in the product's answer, either order.
     const other = openReg("MB-004", UNEXPECTED_REFUSAL, "would strand home_slot_label");
-    expect(regressionFor([other, reg], CELL, UNEXPECTED_REFUSAL, [line, product])).toBe("MB-002");
-    expect(regressionFor([openReg("MB-001", I7)], CELL, I7, ["anything at all"])).toBe("MB-001");
+    expect(regressionFor([other, reg], CELL, UNEXPECTED_REFUSAL, said)).toBe("MB-002");
+    expect(regressionFor([reg, other], CELL, UNEXPECTED_REFUSAL, said)).toBe("MB-002");
+    expect(regressionFor([openReg("MB-001", I7)], CELL, I7, "anything at all")).toBe("MB-001");
+    expect(regressionFor([openReg("MB-001", I7)], CELL, I7, null)).toBe("MB-001");
   });
-  it("a case that reached the matcher without its match (the schema bypassed) never matches", () => {
-    const { match: _m, ...bare } = openReg("MB-002", UNEXPECTED_REFUSAL, TBD);
-    expect(regressionFor([bare as never], CELL, UNEXPECTED_REFUSAL, [line, product, "undefined"])).toBeNull();
+  it("fix round 3, M-3: text only the model's own line carries never makes a failure known — the match is read from the product's answer alone", () => {
+    let checked = 0;
+    for (const harness of ["the model holds Withdraw legal here", "Withdraw(0,0)", "→ 422 WRONG_PHASE"]) {
+      expect(line, "the premise: the harness's line carries it").toContain(harness);
+      expect(said, "the premise: the product's answer does not").not.toContain(harness);
+      expect(regressionFor([openReg("MB-H", UNEXPECTED_REFUSAL, harness)], CELL, UNEXPECTED_REFUSAL, said), harness).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("fix round 3, M-2: a case whose match is in the answer outranks a null-match case on the same cell and check, whatever the file order; the null one names only what no match does", () => {
+    // I7 owes no match, so both shapes load there (the loader refuses a null one
+    // on MATCH_REQUIRED_CHECKS, where this shadow could not arise).
+    expect((MATCH_REQUIRED_CHECKS as readonly string[]).includes(I7)).toBe(false);
+    const any = openReg("MB-N", I7);
+    const specific = openReg("MB-S", I7, "home_slot_label");
+    let checked = 0;
+    for (const order of [[any, specific], [specific, any]]) {
+      expect(regressionFor(order, CELL, I7, "HTTP 500: would strand home_slot_label"), "the matching case wins").toBe("MB-S");
+      expect(regressionFor(order, CELL, I7, "HTTP 500: something else"), "no match: the null case").toBe("MB-N");
+      expect(regressionFor(order, CELL, I7, null), "no answer: the null case").toBe("MB-N");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("fix round 3, MR: a null-match case on a check that owes a match (the schema bypassed) names nothing — a missing key and an explicit null, on every such check", () => {
+    let checked = 0;
+    for (const check of MATCH_REQUIRED_CHECKS) {
+      const nulled = { ...openReg("MB-X", check, TBD), match: null };
+      const { match: _m, ...bare } = openReg("MB-Y", check, TBD);
+      for (const answer of [said, "undefined", "null", null]) {
+        expect(regressionFor([nulled], CELL, check, answer), `${check} null, ${String(answer)}`).toBeNull();
+        expect(regressionFor([bare as never], CELL, check, answer), `${check} missing, ${String(answer)}`).toBeNull();
+      }
+      // …and it never shadows the case that does match.
+      expect(regressionFor([nulled, openReg("MB-Z", check, TBD)], CELL, check, said), check).toBe("MB-Z");
+      checked++;
+    }
+    expect(checked).toBe(MATCH_REQUIRED_CHECKS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 
@@ -353,6 +396,9 @@ describe("runCell", () => {
     const matching = openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result");
     const known = (await runCell(input({ driver: () => new RefusingPosts(), regressions: [matching] }))).failure;
     expect(known?.evidence.join("\n")).toContain("HTTP 409 TEST_POST_REFUSED: test: refuses every result");
+    // Fix round 3: the product's answer is the failure's `said`, and its evidence's last line.
+    expect(known?.said).toContain("HTTP 409 TEST_POST_REFUSED: test: refuses every result");
+    expect(known?.evidence.at(-1)).toBe(known?.said);
     expect(known?.known).toBe("MB-003");
   });
 
@@ -364,9 +410,24 @@ describe("runCell", () => {
     expect(other.failure?.known).toBeNull();
     const both = await runCell(input({ driver: () => new RefusingPosts(), regressions: [tbd, openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }));
     expect(both.failure?.known).toBe("MB-003");
-    // The same run and the same case, its match text absent: the model's line alone never makes it known.
-    const lineOnly = await runCell(input({ driver: () => new RefusingPosts(), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, "the model holds Score legal here and more")] }));
-    expect(lineOnly.failure?.known).toBeNull();
+  });
+
+  it("fix round 3, M-3: a case whose match is only in the model's OWN line (never in the product's answer) leaves the failure NEW; the product's text makes it known", async () => {
+    let checked = 0;
+    for (const harness of ["the model holds", "→ 409 TEST_POST_REFUSED"]) {
+      const r = await runCell(input({ driver: () => new RefusingPosts(), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, harness)] }));
+      expect(r.failure?.check, harness).toBe(UNEXPECTED_REFUSAL);
+      // The premise, on this very failure: the harness's text carries the string, the product's answer does not.
+      expect(r.failure?.evidence.slice(0, -1).join("\n"), harness).toContain(harness);
+      expect(r.failure?.said, harness).not.toBeNull();
+      expect(r.failure?.said ?? "", harness).not.toContain(harness);
+      expect(r.failure?.known, harness).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive control: the same run, matched on the product's own words.
+    const own = await runCell(input({ driver: () => new RefusingPosts(), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }));
+    expect(own.failure?.known).toBe("MB-003");
   });
 
   it("backstop: unexpected refusals counted while the reported failure is another check (or none) still report model-unexpected-refusal, NEW, carrying what it displaced", async () => {
@@ -388,15 +449,26 @@ describe("runCell", () => {
     // A regression on the displaced check does not make the unexpected refusal known.
     const reg = { id: "MB-001", title: "#879", issue: "#879", cell: CELL, variant: "score", check: I7, seed: 1, path: "0", replayPath: null, fence: FENCE_879, match: null, status: "open" as const, found: "2026-09-28", runId: "t" };
     expect((await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [reg] }))).failure?.known).toBeNull();
-    // Fix round 2, RR-1: when the unexpected refusal IS known, the NEW failure it
-    // displaced is kept in maskedNew with its commands (#879's shape), not dropped.
-    const knownRefusal = await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, BACKSTOP)] }));
-    expect(knownRefusal.failure?.check).toBe(UNEXPECTED_REFUSAL);
-    expect(knownRefusal.failure?.known).toBe("MB-003");
-    expect(Object.keys(knownRefusal.maskedNew)).toEqual([I7]);
-    expectLateEntryShape(knownRefusal.maskedNew[I7] ?? []);
-    // A KNOWN displaced failure is not kept.
-    expect((await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, BACKSTOP), reg] }))).maskedNew).toEqual({});
+    // Fix round 3 (M-3/M-5): the backstop carries no product answer — its
+    // evidence is the harness's own sentence and what it displaced — so no case
+    // names it, not even one matching that sentence or the displaced text; the
+    // NEW failure it displaced is still kept with its commands (#879's shape).
+    expect(displaced.failure?.said).toBeNull();
+    let checked = 0;
+    for (const text of [BACKSTOP, I7, "displaced"]) {
+      expect(displaced.failure?.evidence.join("\n"), `the premise: the backstop's evidence carries ${text}`).toContain(text);
+      const matched = await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, text)] }));
+      expect(matched.failure?.check, text).toBe(UNEXPECTED_REFUSAL);
+      expect(matched.failure?.known, text).toBeNull();
+      expect(Object.keys(matched.maskedNew), text).toEqual([I7]);
+      expectLateEntryShape(matched.maskedNew[I7] ?? []);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // A KNOWN displaced failure is not kept; the backstop itself stays NEW.
+    const knownDisplaced = await runCell(input({ fences: false, newDriverState: seeded(true), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, BACKSTOP), reg] }));
+    expect(knownDisplaced.maskedNew).toEqual({});
+    expect(knownDisplaced.failure?.known).toBeNull();
   });
 
   it("the shrink stays on its first failure's check: a candidate failing another check is passed over, counted in masked, never reported", async () => {

@@ -188,12 +188,13 @@ export const HARNESS_SCENARIO: Readonly<Record<string, ScenarioKey>> = Object.fr
 // --- R29: shrunk fast-check failures as named regression cases ---------------
 export const REGRESSIONS_PATH = "scripts/matrix/catalogue/regressions.json";
 const CELLS = new Set(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s))));
-/** The model's generic checks — any refusal it held legal, any harness error —
- *  which name no single failure: a case on one must carry `match` (T15 fix
- *  round 2), or it would make every such failure on its cell "known". The
- *  names are run-cell.ts's (MODEL_ERROR) and state.ts's (UNEXPECTED_REFUSAL);
- *  model-run-cell.test.ts pins them. */
-export const MATCH_REQUIRED_CHECKS = ["model-unexpected-refusal", "model-error"] as const;
+/** The model's generic checks — any refusal it held legal, any refusal the
+ *  product did not name (every 5xx included), any harness error — which name
+ *  no single failure: a case on one must carry `match` (T15 fix rounds 2 and
+ *  3), or it would make every such failure on its cell "known". The names are
+ *  state.ts's (UNEXPECTED_REFUSAL, REFUSAL_NAMED) and run-cell.ts's
+ *  (MODEL_ERROR); model-run-cell.test.ts pins them. */
+export const MATCH_REQUIRED_CHECKS = ["model-unexpected-refusal", "model-refusal-named", "model-error"] as const;
 const matchRequired = (check: string): boolean => (MATCH_REQUIRED_CHECKS as readonly string[]).includes(check);
 const RegressionSchema = z.strictObject({
   id: z.string().regex(/^MB-\d{3}$/),
@@ -209,10 +210,12 @@ const RegressionSchema = z.strictObject({
    *  null only when the counterexample carried none. */
   replayPath: z.string().min(1).nullable(),
   fence: z.string().min(1).nullable(),
-  /** Text that must appear in the failure's evidence (the product's message,
-   *  or a server assertion it carries) for this case to name it: a failure is
-   *  known only when cell, check AND match agree. null names every failure on
-   *  the check — refused on MATCH_REQUIRED_CHECKS. */
+  /** Text that must appear in the product's own answer (its refusal message,
+   *  or a server assertion it carries — never the harness's lines) for this
+   *  case to name the failure: a failure is known only when cell, check AND
+   *  match agree. null names every failure on the check — refused on
+   *  MATCH_REQUIRED_CHECKS; a matching case outranks a null one (T15 fix
+   *  round 3). */
   match: z.string().min(1).nullable(),
   status: z.enum(["open", "fixed"]),
   found: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
