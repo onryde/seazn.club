@@ -16,7 +16,7 @@ Last updated: 2026-09-27 (format-matrix programme added; B17 folded into it; B07
 | Registration redesign | `../2026-08-16-registration-redesign-prompts/_INDEX.md` | RS001–RS011 | RS001–RS006 merged; RS007–RS011 + RS010 open |
 | Format progression | `../2026-08-17-format-progression-prompts/_INDEX.md` | F1–F5 | F1 + F2 authored (F1 also planned); F3–F5 written after F2 **merges**. **F1 waits for L3/#414** (shared `stages.ts`) |
 | Spectator surface (`/shared`) | `../2026-09-04-spectator-prompts/_INDEX.md` | W0–W5 | owner-requested 2026-09-04 (green-lit by the request); W0 CLOSED (Option A everywhere); W1 (match centre) executing on `feat/spectator-surface` — all tasks built and reviewed, the gate and the whole-branch review remaining, no PR until the owner asks; W2–W4 sequential after it, W5 designed after W4; no cross-programme gate — reads the engine, touches no organiser surface |
-| Format × sport matrix | `../2026-09-27-format-matrix-prompts/_INDEX.md` | W1–W10 | APPROVED 2026-09-27 (spec `../2026-09-27-format-matrix-design.md`); W1a plan being written. **Folds in bench B17** (owner ruling 8) and runs BEFORE the remaining bench suites, which become closing gates of its waves (see Cross-programme gates). |
+| Format × sport matrix | `../2026-09-27-format-matrix-prompts/_INDEX.md` | W1–W10 | APPROVED 2026-09-27 (spec `../2026-09-27-format-matrix-design.md`); W1a merged (#896); W1b Tasks 1–16 done on `feat/format-matrix-w1b`, final whole-branch review next (see the index's W1b row). **Folds in bench B17** (owner ruling 8) and runs BEFORE the remaining bench suites, which become closing gates of its waves (see Cross-programme gates). |
 
 ## Cross-programme gates
 
