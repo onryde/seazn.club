@@ -1293,9 +1293,11 @@ export const StreamFailReason = z.enum([
   // The two TIMED exits the domain's expiry owns (Task 2B `evaluate`): a create
   // that never finished (F16) and a row admitted but never provisioned (F18).
   // They belong HERE and not in StreamEndReason: a failed session carries no
-  // end reason at all (P1-F-b). Ten members — the copy map (Task 13) is total
+  // end reason at all (P1-F-b). Eleven members — the copy map (Task 13) is total
   // over this enum, so adding one here owes four dictionary keys there.
   "provision_timeout", "admission_timeout",
+  // M10 (Task 14b review): a deployment with no relay ended a session left up from before.
+  "relay_disabled",
 ]);
 /** How a COMPLETED session ended — the deadline is not a failure. */
 export const StreamEndReason = z.enum(["stopped", "max_duration"]);

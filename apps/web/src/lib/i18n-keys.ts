@@ -6213,6 +6213,7 @@ export type DictionaryKey =
   | "stream.fail.no_credits"
   | "stream.fail.no_inbound_timeout"
   | "stream.fail.provision_timeout"
+  | "stream.fail.relay_disabled"
   | "stream.fail.target_rejected"
   | "stream.fail.unknown"
   | "stream.footnote"

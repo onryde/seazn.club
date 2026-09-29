@@ -5408,6 +5408,7 @@
   "stream.fail.machine_oom": "The relay ran out of memory. Try again.",
   "stream.fail.provision_timeout": "Setting up the stream took too long. Try again.",
   "stream.fail.admission_timeout": "The stream never started. Try again.",
+  "stream.fail.relay_disabled": "Phone streaming is unavailable right now, so this stream was ended.",
   "stream.fail.unknown": "The stream failed. Try again.",
   "stream.phone.ended.reason.stopped": "Stopped by you",
   "stream.phone.ended.reason.max_duration": "Reached the 5-hour limit",

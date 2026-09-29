@@ -38513,7 +38513,8 @@
                                     "machine_oom",
                                     "machine_crash",
                                     "provision_timeout",
-                                    "admission_timeout"
+                                    "admission_timeout",
+                                    "relay_disabled"
                                   ]
                                 },
                                 {
@@ -39161,7 +39162,8 @@
                                 "machine_oom",
                                 "machine_crash",
                                 "provision_timeout",
-                                "admission_timeout"
+                                "admission_timeout",
+                                "relay_disabled"
                               ]
                             },
                             {

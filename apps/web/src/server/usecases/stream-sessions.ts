@@ -563,6 +563,12 @@ export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise
  *  (plan §"Fly machine lifecycle" — the `observed` trigger). Every read,
  *  heartbeat, poll and admission calls this; the daily backstop too. */
 export async function reconcileSession(sessionId: string, deps: SessionDeps): Promise<Session | null> {
+  // M10 (Task 14b review): a deployment with NO relay (R5) cannot observe, expire on evidence, or stop anything through
+  // a provider — every port of the disabled pair refuses. A session still up from before (the old fake default, or a
+  // live deployment switched off) is ENDED, failed(relay_disabled), on the locked row; a terminal one is left alone.
+  // Before this, a composed session's observation threw on every poll and the relay sweep skips a disabled deployment,
+  // so nothing ever ended it. Money follows the domain's rules (session.ts `relay_disabled`).
+  if (deps.drivers.disabled) return apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "relay_disabled" }), deps);
   const s = await applyExpiry(sessionId, deps);
   if (!s || s.mode !== "composed") return s;
   const r = s.runner;
@@ -1343,6 +1349,12 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
           occurredAt: deps.now(), payload: { state: locked?.state ?? row.state } });
       });
     }
+    return (await currentSession(auth, fixtureId, deps))!;
+  }
+  // M10: with no relay there is no provider to stop through — the reconcile ends the session (failed, relay_disabled),
+  // and the projection answers. Never the `stop` below, whose composed arm asks the runner and would throw.
+  if (deps.drivers.disabled) {
+    await reconcileSession(sessionId, deps);
     return (await currentSession(auth, fixtureId, deps))!;
   }
   // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)

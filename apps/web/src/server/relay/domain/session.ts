@@ -11,7 +11,7 @@ import {
 } from "./runner";
 
 export type SessionState = "requested" | "provisioning" | "warming" | "live" | "ending" | "completed" | "failed";
-export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "no_credits" | RunnerFailReason;
+export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "no_credits" | "relay_disabled" | RunnerFailReason;
 export type Mode = "passthrough" | "composed";
 
 export const ACTIVE_STATES: readonly SessionState[] = ["requested", "provisioning", "warming", "live", "ending"];
@@ -66,6 +66,7 @@ export type Command =
   | { type: "provision" } | { type: "provisioned" }
   | { type: "ingest_connected" } | { type: "credit_refused" }
   | { type: "target_rejected" } | { type: "stop" } | { type: "complete" }
+  | { type: "relay_disabled" }
   | { type: "expire"; expiry: Expiry }
   | { type: "runner"; trigger: RunnerTrigger };
 
@@ -319,6 +320,16 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
     case "complete":
       if (s.state !== "ending" && s.state !== "live") throw illegal();
       return complete(s, now);
+    case "relay_disabled":
+      // M10 (Task 14b review): this deployment has NO relay (R5 — config.ts relayDriverMode "disabled"), so a session
+      // still up from before cannot be observed, expired on evidence, or stopped through a provider: every port refuses,
+      // and a poll that asked threw on every tick. It ends here, failed, from any state that is still up (a terminal one
+      // was refused above). No runner effect — there is no provider to call; the runner is left as it stands, so the
+      // C27 cleanup can tear a real Machine down once a provider is back. The passthrough output release is `decide`'s
+      // one predicate (C1), and releaseOutput records and reports the port's refusal instead of throwing. Money follows
+      // the existing rules: a credit is consumed only at go-live, so a session that never went live was never charged,
+      // and one that did keeps its consume like every other failure after go-live.
+      return fail(s, "relay_disabled", now);
     case "expire":
       return expire(s, c.expiry, now, illegal);
     case "runner":

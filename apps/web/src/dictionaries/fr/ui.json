@@ -5408,6 +5408,7 @@
   "stream.fail.machine_oom": "Le relais a manqué de mémoire. Réessayez.",
   "stream.fail.provision_timeout": "La préparation de la diffusion a pris trop de temps. Réessayez.",
   "stream.fail.admission_timeout": "La diffusion n'a jamais démarré. Réessayez.",
+  "stream.fail.relay_disabled": "La diffusion depuis le téléphone est indisponible pour le moment, cette diffusion a donc été arrêtée.",
   "stream.fail.unknown": "La diffusion a échoué. Réessayez.",
   "stream.phone.ended.reason.stopped": "Arrêtée par vous",
   "stream.phone.ended.reason.max_duration": "Limite de 5 heures atteinte",

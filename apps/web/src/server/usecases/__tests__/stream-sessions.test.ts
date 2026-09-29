@@ -2169,6 +2169,69 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(sessionId).toBeTruthy();
   });
 
+  // M10 (Task 14b review): a session left up from before a deployment lost its relay (the old fake default in production,
+  // or a live one switched off) can no longer be observed: every port of the disabled pair refuses, a composed session's
+  // poll threw on every tick, and the relay sweep skips a disabled deployment — so nothing ever ended it.
+  const offDeps = (r: { deps: SessionDeps }): SessionDeps => ({ ...r.deps, drivers: disabledRelayDrivers() });
+  const failedTransitions = async (sessionId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'transition' and to_state = 'failed'`)[0]!.n;
+  const ledgerFor = async (sessionId: string) =>
+    (await sql<{ reason: string }[]>`select reason from org_stream_credits where session_id = ${sessionId} order by created_at`).map((x) => x.reason);
+
+  it("M10: a leftover WARMING session under disabled drivers is ended failed(relay_disabled) by the organiser's poll — once, and every later poll answers without a throw; it was never charged", async () => {
+    const r = await rig({ credits: 2 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);   // up, on the fake drivers
+    expect((await r.row(sessionId)).state, "premise: the leftover is still up").toBe("warming");
+    let checked = 0;
+    for (let i = 0; i < 3; i++) {   // polls two and three are the no-throw-loop witness
+      expect(await currentSession(r.auth, r.fixtureId, offDeps(r)), `poll ${i + 1}`).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The Machine's own reads (jobSession, the sweep) reconcile a row whatever its state: an ENDED one is left alone.
+    expect(await reconcileSession(sessionId, offDeps(r))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await failedTransitions(sessionId), "ended once, not once per poll").toBe(1);
+    expect(await ledgerFor(sessionId), "a before-live session consumed nothing, so nothing is owed back").toEqual([]);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(2);
+  });
+
+  it("M10: a leftover LIVE session keeps its consume, like every failure after go-live; its output release is refused by the port, reported once — and the poll still answers", async () => {
+    const r = await rig({ credits: 2 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "premise: live, charged").toBe("live");
+    expect((await r.row(sessionId)).state).toBe("live");
+    sentry.captureError.mockClear();
+    expect(await currentSession(r.auth, r.fixtureId, offDeps(r))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await ledgerFor(sessionId)).toEqual(["consume"]);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    const releases = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.release_output");
+    expect(releases, "the output the fake drivers added cannot be removed without a relay: recorded and reported").toHaveLength(1);
+  });
+
+  it("M10: a leftover COMPOSED session with a Machine up is ended WITHOUT asking the runner — its runner is left as it stands for a provider to clean up later", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    const before = await r.row(sessionId);
+    expect(before.machine_id, "premise: a Machine is up").toMatch(/^fake-machine-/);
+    expect(await currentSession(r.auth, r.fixtureId, offDeps(r))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    const after = await r.row(sessionId);
+    expect(after.runner_state, "no observation was made up").toBe(before.runner_state);
+    expect(after.machine_id).toBe(before.machine_id);
+  });
+
+  it("M10: Stop under disabled drivers answers the ended projection — never a 500 — and a second Stop is the same answer", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    let checked = 0;
+    for (let i = 0; i < 2; i++) {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, offDeps(r)), `stop ${i + 1}`).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await failedTransitions(sessionId)).toBe(1);
+  });
+
   it("V426 (R3b): relayCredits grants this month's free credits on the page's read, splits the balance by bucket beside the plan's allowance, a second read writes nothing, and another org's is 404", async () => {
     const r = await rig({ credits: 2, monthly: true });
     const rate = await monthlyRate("community");

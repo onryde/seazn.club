@@ -211,7 +211,7 @@ describe("a session whose fixture was deleted (fixtureId null)", () => {
 
 const PASSTHROUGH_COMMANDS: Command[] = [
   { type: "provision" }, { type: "provisioned" }, { type: "ingest_connected" }, { type: "credit_refused" },
-  { type: "target_rejected" }, { type: "stop" }, { type: "complete" },
+  { type: "target_rejected" }, { type: "stop" }, { type: "complete" }, { type: "relay_disabled" },
 ];
 const ALL_STATES: SessionState[] = [...ACTIVE_STATES, ...TERMINAL_STATES];
 
@@ -231,7 +231,41 @@ const PASSTHROUGH_LEGAL: Record<string, SessionState> = {
   "live × complete": "completed",
   "ending × stop": "ending",                                   // the benign repeat (identity)
   "ending × complete": "completed",
+  // M10 (Task 14b review): a deployment with no relay ends every leftover session that is still up, from any state.
+  "requested × relay_disabled": "failed",
+  "provisioning × relay_disabled": "failed",
+  "warming × relay_disabled": "failed",
+  "live × relay_disabled": "failed",
+  "ending × relay_disabled": "failed",
 };
+
+describe("decide — relay_disabled (M10, Task 14b review): a deployment with no relay ends a leftover session as failed", () => {
+  it("every ACTIVE state fails with reason relay_disabled — one SessionEnded, no end reason; a terminal one refuses", () => {
+    let checked = 0;
+    for (const state of ACTIVE_STATES) {
+      for (const mode of ["passthrough", "composed"] as const) {
+        const d = decide(S({ state, mode, startedAt: state === "live" || state === "ending" ? T0 : null }), { type: "relay_disabled" }, T0);
+        expect(d.next, `${mode} ${state}`).toMatchObject({ state: "failed", failReason: "relay_disabled", endReason: null, endedAt: T0 });
+        expect(d.events, `${mode} ${state}`).toEqual([{ type: "SessionEnded", reason: "relay_disabled" }]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(ACTIVE_STATES.length * 2);
+    for (const state of TERMINAL_STATES) expect(() => decide(S({ state }), { type: "relay_disabled" }, T0), state).toThrow(InvalidTransition);
+  });
+
+  it("asks NO provider for anything but the passthrough output's release — a composed runner is left as it stands, for the cleanup a provider can do later", () => {
+    const playing: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
+    const composed = decide(S({ mode: "composed", state: "live", startedAt: T0, runner: playing }), { type: "relay_disabled" }, T0);
+    expect(composed.effects, "a runner effect would be a call to a provider that does not exist").toEqual([]);
+    expect(composed.next.runner, "the runner is not faked into a state nobody observed").toEqual(playing);
+    // A passthrough session holding an output releases it (C1's one predicate) — the port refuses on a disabled
+    // deployment, and releaseOutput records and reports that rather than throwing.
+    expect(decide(S({ state: "live", startedAt: T0, outputUid: "o-1" }), { type: "relay_disabled" }, T0).effects).toEqual([{ type: "release_output" }]);
+    // The empty case: no output, nothing to release.
+    expect(decide(S({ state: "warming" }), { type: "relay_disabled" }, T0).effects).toEqual([]);
+  });
+});
 
 describe("decide — WHICH passthrough cells are legal (every state × every passthrough command)", () => {
   it("each listed cell lands on its state; every other cell throws InvalidTransition", () => {
@@ -1165,7 +1199,7 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
   const COMMANDS: Record<Command["type"], Command[]> = {
     provision: [{ type: "provision" }], provisioned: [{ type: "provisioned" }], ingest_connected: [{ type: "ingest_connected" }],
     credit_refused: [{ type: "credit_refused" }], target_rejected: [{ type: "target_rejected" }], stop: [{ type: "stop" }],
-    complete: [{ type: "complete" }],
+    complete: [{ type: "complete" }], relay_disabled: [{ type: "relay_disabled" }],
     expire: Object.values(EXPIRIES).map((expiry) => ({ type: "expire" as const, expiry })),
     runner: [{ type: "runner", trigger: { type: "observed", state: "destroyed" } }],
   };
@@ -1178,6 +1212,9 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     "warming × credit_refused", "warming × target_rejected", "warming × expire:warming_timeout",
     "live × target_rejected", "live × complete",
     "ending × complete", "ending × expire:ending_timeout",
+    // M10: a deployment with no relay ends a session from every state that is still up.
+    "requested × relay_disabled", "provisioning × relay_disabled", "warming × relay_disabled", "live × relay_disabled",
+    "ending × relay_disabled",
   ]);
 
   it("the sweep: every non-terminal state × every command × output held or not — release_output exactly once iff the cell enters a terminal state AND an output is held; never otherwise", () => {

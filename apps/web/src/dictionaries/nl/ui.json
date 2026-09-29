@@ -5408,6 +5408,7 @@
   "stream.fail.machine_oom": "De relay had te weinig geheugen. Probeer het opnieuw.",
   "stream.fail.provision_timeout": "Het opzetten van de stream duurde te lang. Probeer het opnieuw.",
   "stream.fail.admission_timeout": "De stream is nooit gestart. Probeer het opnieuw.",
+  "stream.fail.relay_disabled": "Streamen vanaf telefoon is nu niet beschikbaar, dus deze stream is beëindigd.",
   "stream.fail.unknown": "De stream is mislukt. Probeer het opnieuw.",
   "stream.phone.ended.reason.stopped": "Door jou gestopt",
   "stream.phone.ended.reason.max_duration": "Limiet van 5 uur bereikt",

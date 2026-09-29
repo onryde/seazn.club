@@ -93,6 +93,8 @@ export const FAIL_REASON_KEYS: Record<StreamFailReason, MessageKey> = {
   machine_exit_nonzero: "stream.fail.machine_exit_nonzero",
   machine_oom: "stream.fail.machine_oom",
   machine_crash: "stream.fail.machine_crash",
+  // M10 (Task 14b review): the deployment has no relay, so a session left up from before was ended.
+  relay_disabled: "stream.fail.relay_disabled",
 };
 
 /** How a COMPLETED session ended — shown as a chip in the ended state. */

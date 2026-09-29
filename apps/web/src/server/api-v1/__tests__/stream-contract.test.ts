@@ -55,15 +55,16 @@ describe("relay wire enums equal their declarations", () => {
     expect(sorted(S.StreamSessionState.options)).toEqual(sorted(domain));
   });
 
-  it("StreamFailReason is exactly the domain's FailReason — ten, and never storage_exhausted (E5: a refusal with no row)", () => {
+  it("StreamFailReason is exactly the domain's FailReason — eleven, and never storage_exhausted (E5: a refusal with no row)", () => {
     // Keyed by the DOMAIN type: tsc refuses this literal if FailReason gains or loses a member, so the runtime
     // comparison below always compares the wire enum against the domain's current declaration.
     const domain: Record<FailReason, true> = {
       no_inbound_timeout: true, provision_timeout: true, admission_timeout: true, target_rejected: true, no_credits: true,
       machine_create_failed: true, machine_boot_timeout: true, machine_exit_nonzero: true, machine_oom: true, machine_crash: true,
+      relay_disabled: true,
     };
     expect(sorted(S.StreamFailReason.options)).toEqual(sorted(Object.keys(domain)));
-    expect(S.StreamFailReason.options).toHaveLength(10);
+    expect(S.StreamFailReason.options).toHaveLength(11);
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("storage_exhausted");
     // A failed session carries no end reason: the two vocabularies never overlap.
     expect(S.StreamFailReason.options.filter((r) => (S.StreamEndReason.options as readonly string[]).includes(r))).toEqual([]);

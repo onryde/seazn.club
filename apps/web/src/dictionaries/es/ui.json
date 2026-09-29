@@ -5408,6 +5408,7 @@
   "stream.fail.machine_oom": "El relé se quedó sin memoria. Inténtalo de nuevo.",
   "stream.fail.provision_timeout": "La preparación de la emisión tardó demasiado. Inténtalo de nuevo.",
   "stream.fail.admission_timeout": "La emisión nunca se inició. Inténtalo de nuevo.",
+  "stream.fail.relay_disabled": "La transmisión desde el móvil no está disponible ahora mismo, así que esta emisión ha terminado.",
   "stream.fail.unknown": "La emisión falló. Inténtalo de nuevo.",
   "stream.phone.ended.reason.stopped": "Detenida por ti",
   "stream.phone.ended.reason.max_duration": "Alcanzó el límite de 5 horas",
