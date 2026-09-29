@@ -64,6 +64,9 @@ vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),
   orgPlanKey: vi.fn(async () => "community"),
 }));
+// Task 14 P1: the fixtures tab resolves the checkout's currency (`preferredCurrency` reads cookies/headers), which has
+// no request scope in a direct page call. Not what this suite pins.
+vi.mock("@/lib/currency-server", () => ({ preferredCurrency: vi.fn(async () => "gbp") }));
 vi.mock("@/server/usecases/teams", () => ({ listEntrantLogoUrls: vi.fn(async () => ({})) }));
 vi.mock("@/server/engine-db", () => ({
   resolveModule: vi.fn(() => ({

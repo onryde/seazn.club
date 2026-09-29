@@ -101,6 +101,9 @@ const relay = vi.hoisted(() => ({
 vi.mock("@/server/usecases/stream-credits-checkout", () => ({
   reconcileStreamCreditsCheckout: (orgId: string, sessionId: string) => relay.reconcile(orgId, sessionId),
 }));
+// P1: the currency the relay-checkout route charges — the page resolves the SAME function for the same org.
+const money = vi.hoisted(() => ({ preferredCurrency: vi.fn<(orgId: string | null, req?: Request) => Promise<string>>(async () => "gbp") }));
+vi.mock("@/lib/currency-server", () => ({ preferredCurrency: (orgId: string | null, req?: Request) => money.preferredCurrency(orgId, req) }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
   relayBalance: (auth: unknown, orgId: string) => relay.balance(auth, orgId),
   openStreamFixtureIds: (auth: unknown, fixtureIds: readonly string[]) => relay.open(auth, fixtureIds),
@@ -257,6 +260,34 @@ describe("F1: a billing-frozen competition still offers Stop for every stream on
       const tree = await render(sp as Record<string, string>);
       expect(relay.open, name).not.toHaveBeenCalled();
       expect(findAll(tree, PhoneStopProbe), name).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// P1 (Task 14 fix round 2): the tiles quoted GBP while `/api/billing/relay-checkout` charged `preferredCurrency(orgId,
+// req)` — capture pass 2 saw a £25 tile open a $33.25 checkout. The page now resolves the same function for the same org
+// and hands the Phone tab the result, so the tiles quote in the currency the checkout will charge.
+describe("P1: the Phone tab is handed the currency the checkout will charge", () => {
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([]);
+    relay.balance.mockReset().mockResolvedValue(3);
+    money.preferredCurrency.mockReset();
+    scene.frozen = false;
+    scene.fixtures = [];
+    scene.entrants = [];
+  });
+
+  it("resolves preferredCurrency for THIS org and passes it through — every non-GBP currency, not just one", async () => {
+    let checked = 0;
+    for (const currency of ["usd", "eur", "inr"]) {
+      money.preferredCurrency.mockClear().mockResolvedValue(currency);
+      const panel = find(await render({ tab: "fixtures" }), StagesPanel);
+      expect((panel!.props as { stream?: { currency?: unknown } }).stream?.currency, currency).toBe(currency);
+      expect(money.preferredCurrency).toHaveBeenCalledTimes(1);
+      expect(money.preferredCurrency.mock.calls[0]![0]).toBe(PAGE.auth.orgId);
       checked++;
     }
     expect(checked).toBe(3);

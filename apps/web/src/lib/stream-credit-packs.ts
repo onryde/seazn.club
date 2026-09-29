@@ -99,10 +99,37 @@ export const STREAM_PACK_FX: Readonly<Record<string, number>> = {
   inr: 111,
 };
 
-export function formatGbp(pence: number): string {
-  return pence % 100 === 0 ? `£${pence / 100}` : `£${(pence / 100).toFixed(2)}`;
+/**
+ * P1 (Task 14 fix round 2): THE amounts a pack's Stripe price is created with — the GBP base plus one option per
+ * `STREAM_PACK_FX` currency. `scripts/stripe-stream-packs.ts` spreads this into `stripe.prices.create`, and the
+ * checkout charges the option for the buyer's `preferredCurrency` (`adaptive_pricing` off), so a tile that quotes
+ * anything but these numbers quotes a price the buyer is not charged. The tiles read it back through
+ * `streamPackAmountMinor`; nothing else computes a pack's price.
+ */
+export function streamPackPriceAmounts(pack: StreamCreditPack): {
+  unit_amount: number;
+  currency: "gbp";
+  currency_options: Record<string, { unit_amount: number }>;
+} {
+  return {
+    unit_amount: pack.gbpPence,
+    currency: "gbp",
+    currency_options: Object.fromEntries(
+      Object.entries(STREAM_PACK_FX).map(([code, rate]) => [code, { unit_amount: Math.round(pack.gbpPence * rate) }]),
+    ),
+  };
 }
 
-export function perMatchGbp(pack: StreamCreditPack): string {
-  return formatGbp(Math.round(pack.gbpPence / pack.credits));
+/** The pack's price in `currency`'s minor unit — the amount the checkout's line charges — or undefined for a currency
+ *  the price carries no option for (the tile then quotes NO price, never a GBP one: see P1). */
+export function streamPackAmountMinor(pack: StreamCreditPack, currency: string): number | undefined {
+  const price = streamPackPriceAmounts(pack);
+  if (currency === price.currency) return price.unit_amount;
+  return Object.hasOwn(price.currency_options, currency) ? price.currency_options[currency]!.unit_amount : undefined;
+}
+
+/** §8b's "per match" line: the pack's price over its credits, rounded to the minor unit. */
+export function streamPackPerMatchMinor(pack: StreamCreditPack, currency: string): number | undefined {
+  const total = streamPackAmountMinor(pack, currency);
+  return total === undefined ? undefined : Math.round(total / pack.credits);
 }

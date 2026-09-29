@@ -15,7 +15,7 @@
 // of apps/web/src/lib/stream-credit-packs.ts, which is the authority, so the
 // two cannot drift.
 import Stripe from "stripe";
-import { STREAM_CREDIT_PACKS, STREAM_PACK_FX } from "../apps/web/src/lib/stream-credit-packs.ts";
+import { STREAM_CREDIT_PACKS, streamPackPriceAmounts, type StreamCreditPack } from "../apps/web/src/lib/stream-credit-packs.ts";
 
 const key = process.env.STRIPE_SECRET_KEY;
 if (!key) throw new Error("STRIPE_SECRET_KEY (a sandbox sk_test_ key) is required");
@@ -54,18 +54,12 @@ async function ensureProduct(): Promise<Stripe.Product> {
   });
 }
 
-async function ensurePrice(
-  productId: string,
-  lookupKey: string,
-  gbpPence: number,
-  credits: number,
-): Promise<string> {
+async function ensurePrice(productId: string, pack: StreamCreditPack): Promise<string> {
+  const { lookupKey, credits } = pack;
   const existing = await stripe.prices.list({ lookup_keys: [lookupKey], limit: 1 });
   if (existing.data[0]) return `${lookupKey} = ${existing.data[0].id} (existing)`;
   const price = await stripe.prices.create({
     product: productId,
-    unit_amount: gbpPence,
-    currency: "gbp",
     lookup_key: lookupKey,
     transfer_lookup_key: true,
     nickname: `${credits} match credit${credits === 1 ? "" : "s"}`,
@@ -77,12 +71,11 @@ async function ensurePrice(
     // --experimental-strip-types), so the table lives beside the catalogue and
     // `apps/web/src/lib/__tests__/relay-checkout.test.ts` holds it to the
     // authority.
-    currency_options: Object.fromEntries(
-      Object.entries(STREAM_PACK_FX).map(([code, rate]) => [
-        code,
-        { unit_amount: Math.round(gbpPence * rate) },
-      ]),
-    ),
+    //
+    // P1: the amounts come from `streamPackPriceAmounts` — the SAME function the
+    // Phone tab's tiles read back — so the price a tile quotes and the price
+    // this creates cannot disagree.
+    ...streamPackPriceAmounts(pack),
     metadata: { kind: "stream_credits", credits: String(credits) },
   });
   return `${lookupKey} = ${price.id} (created)`;
@@ -91,5 +84,5 @@ async function ensurePrice(
 const product = await ensureProduct();
 console.log(`product ${product.id}`);
 for (const pack of STREAM_CREDIT_PACKS) {
-  console.log(await ensurePrice(product.id, pack.lookupKey, pack.gbpPence, pack.credits));
+  console.log(await ensurePrice(product.id, pack));
 }

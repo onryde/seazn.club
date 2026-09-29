@@ -5,9 +5,13 @@
 // (_THEMES.md §8b), so they are the one place a literal is the oracle rather
 // than a retyped copy of one (S10).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STREAM_CREDIT_PACKS, STREAM_PACK_FX, formatGbp, perMatchGbp, streamPack } from "../stream-credit-packs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  STREAM_CREDIT_PACKS, STREAM_PACK_FX, streamPack, streamPackAmountMinor, streamPackPerMatchMinor, streamPackPriceAmounts,
+} from "../stream-credit-packs";
 import { messages, type MessageKey } from "@/lib/messages";
-import { SUPPORTED_CURRENCIES } from "@/lib/currency";
+import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 
 const stripeMock = vi.hoisted(() => ({
   pricesList: vi.fn(),
@@ -57,15 +61,54 @@ describe("STREAM_CREDIT_PACKS", () => {
     for (const k of labelKeys) expect(messages[k]?.length).toBeGreaterThan(0);
   });
   it("formats sandbox prices as the sheet shows them (§8b)", () => {
-    expect(STREAM_CREDIT_PACKS.map((p) => [formatGbp(p.gbpPence), perMatchGbp(p)])).toEqual([
+    expect(
+      STREAM_CREDIT_PACKS.map((p) => [
+        formatMinor(streamPackAmountMinor(p, "gbp")!, "gbp", "en"),
+        formatMinor(streamPackPerMatchMinor(p, "gbp")!, "gbp", "en"),
+      ]),
+    ).toEqual([
       ["£6", "£6"],
       ["£25", "£5"],
       ["£80", "£4"],
     ]);
-    // The pence branch: no pack uses it today, so without this the `% 100`
-    // test is a whole dead limb the moment the owner rules real prices.
-    expect(formatGbp(1999)).toBe("£19.99");
-    expect(formatGbp(50)).toBe("£0.50");
+  });
+
+  // P1 (Task 14 fix round 2): the tiles quoted GBP while the checkout charged the buyer's preferredCurrency — capture
+  // pass 2 saw a £25 tile open a $33.25 checkout. The tile's number and the Stripe price's number are now one function.
+  it("P1: every pack × every platform currency is quoted at EXACTLY the amount its Stripe price charges", () => {
+    let checked = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      const price = streamPackPriceAmounts(pack);
+      for (const c of SUPPORTED_CURRENCIES) {
+        const charged = c === price.currency ? price.unit_amount : price.currency_options[c]?.unit_amount;
+        expect(charged, `${pack.size} ${c}: the Stripe price carries no amount`).toBeTypeOf("number");
+        expect(streamPackAmountMinor(pack, c), `${pack.size} ${c}`).toBe(charged);
+        expect(streamPackPerMatchMinor(pack, c), `${pack.size} ${c} per match`).toBe(Math.round(charged! / pack.credits));
+        checked++;
+      }
+    }
+    expect(checked).toBe(STREAM_CREDIT_PACKS.length * SUPPORTED_CURRENCIES.length);
+    expect(checked).toBe(12);
+  });
+
+  it("P1: one amount a REAL checkout charged, and no amount at all for a currency the price has no option for", () => {
+    // Read off Stripe's embedded checkout in capture pass 2 (en-US, the 5-pack): $33.25. Not derived from the code.
+    expect(streamPackAmountMinor(streamPack(5)!, "usd")).toBe(3325);
+    // Per match is the NEAREST minor unit. Every sandbox price divides exactly, so a synthetic price is the only way to
+    // witness it: £25.03 over 5 is 500.6p → 501p (a floor would say 500p).
+    expect(streamPackPerMatchMinor({ ...streamPack(5)!, gbpPence: 2503 }, "gbp")).toBe(501);
+    expect(streamPackPerMatchMinor({ ...streamPack(5)!, gbpPence: 2502 }, "gbp")).toBe(500);
+    // No option ⇒ no quote — never the GBP number under another currency's sign, and never a prototype member.
+    for (const c of ["jpy", "GBP", "", "constructor", "toString"]) {
+      expect(streamPackAmountMinor(streamPack(5)!, c), c).toBeUndefined();
+      expect(streamPackPerMatchMinor(streamPack(5)!, c), c).toBeUndefined();
+    }
+  });
+
+  it("P1: the price script creates each price FROM streamPackPriceAmounts — it computes no amount of its own", () => {
+    const src = readFileSync(join(__dirname, "..", "..", "..", "..", "..", "scripts", "stripe-stream-packs.ts"), "utf8");
+    expect(src).toMatch(/\.\.\.streamPackPriceAmounts\(pack\)/);
+    expect(src, "a second amount computation beside the shared one").not.toMatch(/unit_amount|gbpPence \*/);
   });
 });
 

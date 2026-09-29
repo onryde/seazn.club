@@ -44,7 +44,10 @@ import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
-import { STREAM_CREDIT_PACKS, formatGbp, perMatchGbp, type StreamPackSize } from "@/lib/stream-credit-packs";
+import { formatMinor, type Currency } from "@/lib/currency";
+import {
+  STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
+} from "@/lib/stream-credit-packs";
 import { destinationRefusal } from "@/lib/stream-destinations";
 import {
   DESTINATION_REFUSAL_KEYS,
@@ -164,6 +167,9 @@ export interface StreamPanelContext {
    *  session does, so this is the idle tab's only source; without it a club that has just bought credits reads 0 and
    *  is shown the buy card again. */
   streamBalance: number;
+  /** P1 — the currency the relay-checkout route will CHARGE (`preferredCurrency`, resolved by the page for the same
+   *  org and browser), so the tiles quote the amount the checkout's line shows — never a GBP number above a USD sheet. */
+  currency: Currency;
 }
 
 /**
@@ -639,6 +645,7 @@ export function FixtureStreamPanel({
               orgId={stream.orgId}
               streamBalance={stream.streamBalance}
               viewerPlan={stream.viewerPlan}
+              currency={stream.currency}
             />
           )}
         </div>
@@ -899,11 +906,13 @@ export function PhoneTab({
   orgId,
   streamBalance,
   viewerPlan,
+  currency,
 }: {
   fixtureId: string;
   orgId: string;
   streamBalance: number;
   viewerPlan: ViewerPlan;
+  currency: Currency;
 }) {
   const msg = useMsg();
   const session = usePhoneSession(fixtureId);
@@ -1099,6 +1108,7 @@ export function PhoneTab({
         viewerPlan={viewerPlan}
         stopFailed={session.stopFailed}
         checkoutOpen={checkoutSecret !== null}
+        currency={currency}
         onSelectTarget={setSelectedTargetId}
         onAddTarget={() => setShowTargetForm((v) => !v)}
         onMode={setMode}
@@ -1160,6 +1170,8 @@ export interface PhoneTabBodyProps {
   stopFailed: boolean;
   /** N2: a checkout sheet is open — or still loading its chunk — so no tile may start a second Checkout Session. */
   checkoutOpen: boolean;
+  /** P1: the currency the checkout will charge; the tiles quote in it. */
+  currency: Currency;
   onSelectTarget: (id: string) => void;
   onAddTarget: () => void;
   onMode: (m: FeedMode) => void;
@@ -1370,7 +1382,12 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           <h5 className="text-sm font-semibold text-slate-700">{msg("stream.credits.title")}</h5>
           <p className="mt-1 text-xs text-slate-500">{msg("stream.credits.line")}</p>
           <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
-            {STREAM_CREDIT_PACKS.map((pack) => (
+            {STREAM_CREDIT_PACKS.map((pack) => {
+              // P1: the amount the pack's Stripe price charges in the checkout's currency. A currency the price has no
+              // option for quotes NOTHING rather than a GBP number under the wrong sign (the checkout would refuse it).
+              const total = streamPackAmountMinor(pack, p.currency);
+              const perMatch = streamPackPerMatchMinor(pack, p.currency);
+              return (
               <button
                 key={pack.size}
                 type="button"
@@ -1383,17 +1400,22 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 }`}
               >
                 <span className="block text-lg font-semibold text-slate-800">{msg(pack.labelKey)}</span>
-                <span className="block text-sm text-slate-600">{formatGbp(pack.gbpPence)}</span>
-                <span className="block text-[11px] text-slate-500">
-                  {msg("stream.credits.perMatch", { price: perMatchGbp(pack) })}
-                </span>
+                {total !== undefined && (
+                  <span className="block text-sm text-slate-600">{formatMinor(total, p.currency, locale)}</span>
+                )}
+                {perMatch !== undefined && (
+                  <span className="block text-[11px] text-slate-500">
+                    {msg("stream.credits.perMatch", { price: formatMinor(perMatch, p.currency, locale) })}
+                  </span>
+                )}
                 {pack.popular && (
                   <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-[10px] text-purple-800">
                     {msg("stream.credits.popular")}
                   </span>
                 )}
               </button>
-            ))}
+              );
+            })}
           </div>
           {p.checkoutError && (
             <p data-testid="stream-checkout-error" role="alert" className="mt-2 text-xs text-red-600">

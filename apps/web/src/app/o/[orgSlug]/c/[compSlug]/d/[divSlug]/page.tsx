@@ -35,6 +35,7 @@ import { openStreamFixtureIds, relayBalance } from "@/server/usecases/stream-ses
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
 import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
+import { preferredCurrency } from "@/lib/currency-server";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
@@ -540,6 +541,10 @@ export default async function DivisionPage({
         // any session exists (C1). Read only when the relay gate is open — the tab shows the UpgradeGate otherwise.
         orgId: auth.orgId,
         streamBalance: streamRelayEntitled ? await relayBalance(auth, auth.orgId) : 0,
+        // P1: the currency `/api/billing/relay-checkout` will CHARGE — the same `preferredCurrency` for the same org and
+        // browser (subscription → cookie → Accept-Language) — so the tiles quote the checkout's own amount. Without the
+        // relay there are no tiles, and nothing reads it.
+        currency: streamRelayEntitled ? await preferredCurrency(auth.orgId) : "gbp",
         sportKey: division.sport_key,
         overlayDict: streamEntitled
           ? (Object.fromEntries(

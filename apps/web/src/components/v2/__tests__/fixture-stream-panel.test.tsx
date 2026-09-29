@@ -41,7 +41,8 @@ import { defaultThemeFor, themesForSport } from "@/components/overlay/theme-regi
 import { ApiV1Error } from "@/lib/client-v1";
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
-import { STREAM_CREDIT_PACKS } from "@/lib/stream-credit-packs";
+import { STREAM_CREDIT_PACKS, streamPack, streamPackPriceAmounts } from "@/lib/stream-credit-packs";
+import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
 import {
   DESTINATION_REFUSAL_KEYS,
@@ -162,6 +163,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     viewerPlan: "community",
     orgId: "o-1",
     streamBalance: 3,
+    currency: "gbp",
     ...o,
   };
 }
@@ -540,12 +542,12 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
   });
 
   it("with streaming.relay it mounts the container with THIS row's fixture and the page's org, balance and plan", () => {
-    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, viewerPlan: "pro" }).tree();
+    const tree = phone({ relayEntitled: true, orgId: "o-77", streamBalance: 4, viewerPlan: "pro", currency: "inr" }).tree();
     expect(tree.find((el) => el.type === UpgradeGate), "no upsell once entitled").toBeUndefined();
     const tab = tree.find((el) => el.type === PhoneTab);
     expect(tab, "the Phone tab body is not the container").toBeDefined();
     // Each value differs from ctx()'s default, so a prop wired to the wrong field (or a constant) cannot pass.
-    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, viewerPlan: "pro" });
+    expect(propsOf(tab!)).toMatchObject({ fixtureId: FIXTURE.id, orgId: "o-77", streamBalance: 4, viewerPlan: "pro", currency: "inr" });
   });
 
   it("buying is the EMBEDDED checkout in the repo's Modal, never a navigation (owner ruling 8) — the source half", () => {
@@ -831,7 +833,7 @@ const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
-  planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false,
+  planGate: false, viewerPlan: "pro", stopFailed: false, checkoutOpen: false, currency: "gbp",
   onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {},
 };
@@ -879,6 +881,29 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(tree, "stream-go-live")).toBeUndefined();
     expect(byTestId(tree, "stream-balance")).toBeUndefined();
     expect(byTestId(tree, "stream-buy-more")).toBeUndefined();
+  });
+
+  it("P1: every tile quotes the pack in the CHECKOUT's currency — the amount its Stripe price charges, per pack × currency", () => {
+    let checked = 0;
+    for (const currency of SUPPORTED_CURRENCIES) {
+      const tree = body({ view: null, balance: 0, currency });
+      for (const pack of STREAM_CREDIT_PACKS) {
+        const price = streamPackPriceAmounts(pack);
+        const charged = currency === price.currency ? price.unit_amount : price.currency_options[currency]!.unit_amount;
+        const text = textAt(tree, `stream-buy-pack-${pack.size}`);
+        expect(text, `${pack.size} ${currency}`).toContain(formatMinor(charged, currency, "en"));
+        expect(text, `${pack.size} ${currency} per match`).toContain(
+          m("stream.credits.perMatch", { price: formatMinor(Math.round(charged / pack.credits), currency, "en") }),
+        );
+        checked++;
+      }
+    }
+    expect(checked).toBe(SUPPORTED_CURRENCIES.length * STREAM_CREDIT_PACKS.length);
+    // The regression itself, off a real checkout (capture pass 2, en-US): the 5-pack tile reads $33.25, never £25.
+    const usd = textAt(body({ view: null, balance: 0, currency: "usd" }), "stream-buy-pack-5");
+    expect(usd).toContain("$33.25");
+    expect(usd).not.toContain("£");
+    expect(streamPack(5)!.gbpPence).toBe(2500);
   });
 
   it("a tile click buys THAT pack — the size off the catalogue, never a default", () => {
@@ -1328,7 +1353,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     stop?: () => unknown;
     saveTarget?: (json: unknown) => unknown;
   };
-  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, viewerPlan: "pro" as const };
+  const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, viewerPlan: "pro" as const, currency: "eur" as const };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
 
   function serve(s: Server): Server {
@@ -1742,6 +1767,11 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(gated).onBuy(20);
     await settle();
     expect(propsOf(gated.tree().find((el) => el.type === UpgradeGate)!)).toMatchObject({ feature: "streaming.relay", viewerPlan: "pro" });
+  });
+
+  it("P1: the container hands the body the PAGE's currency — the one the checkout route resolves for the same request", async () => {
+    const island = track(await mount({ current: null, targets: TARGETS }));
+    expect(bodyOf(island).currency).toBe("eur");
   });
 
   it("N2: ONE Checkout Session per sheet — a double tap, and a tap while the sheet's chunk loads, POST once; closing or a refusal frees the tiles", async () => {
