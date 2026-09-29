@@ -22,10 +22,16 @@ export const HOLD_ENV = "NEXT_PUBLIC_SCOREPAD_HOLD_MS";
  *  negative one. Playwright reads a timeout of 0 as "wait forever", so a
  *  broken budget must stop here, by name, rather than reach it. */
 export class BadBudget extends Error {
-  constructor(field: string, value: number) {
-    super(`budget: ${field} must be a finite, non-negative number${field === "taps" || field === "holds" ? " (a whole count)" : ""}, got ${value}`);
+  constructor(field: string, value: number, rule = field === "taps" || field === "holds" ? "a whole, non-negative count" : "a finite, non-negative number") {
+    super(`budget: ${field} must be ${rule}, got ${value}`);
     this.name = "BadBudget";
   }
+}
+
+/** A wait's bound as handed to Playwright: finite and above 0 (0 there means
+ *  "no bound"). Refused by name otherwise. */
+export function assertWaitMs(field: string, ms: number): void {
+  if (!(Number.isFinite(ms) && ms > 0)) throw new BadBudget(field, ms, "a finite number of ms above 0 (Playwright reads 0 as no bound)");
 }
 
 /** The hold window the build under test was baked with. Mirrors the product's
