@@ -1,27 +1,38 @@
 // The reference boundary gate (ruling 27). State transitions and the empty
 // case first: a src with no .ts files (the CLI refuses it); the real package
-// (clean, scanned > 0); each allowed form; each refused form by name; and the
-// CLI itself, SPAWNED, going clean → violated → clean again on a scratch copy
-// of the real src — the deliberate-violation proof, run in CI, never a
+// (clean, scanned > 0); each allowed form; each refused form by name; the ten
+// runtime-load bypasses review I-1 measured against the old line judge; and
+// the CLI itself, SPAWNED, going clean → violated → clean again on a scratch
+// copy of the real src — the deliberate-violation proof, run in CI, never a
 // violating file committed into packages/reference/src.
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { checkReferenceBoundary } from "../../../scripts/reference-boundary.ts";
+import { checkReferenceBoundary, engineDir, parseDiagnosticsOf } from "../../../scripts/reference-boundary.ts";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const CLI = resolve(PKG, "..", "..", "scripts", "reference-boundary.ts");
+const REPO = resolve(PKG, "..", "..");
+const ENGINE = resolve(REPO, "packages", "engine");
+const CLI = resolve(REPO, "scripts", "reference-boundary.ts");
 function src(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "w1b-ref-"));
   for (const [p, t] of Object.entries(files)) { mkdirSync(dirname(join(root, p)), { recursive: true }); writeFileSync(join(root, p), t); }
   return root;
 }
 const reasons = (root: string) => { try { return checkReferenceBoundary(root).violations.map((v) => `${v.specifier}: ${v.reason}`); } finally { rmSync(root, { recursive: true, force: true }); } };
+/** `line specifier: reason` per violation; `setup` may add symlinks before the scan. */
+function judged(files: Record<string, string>, setup?: (root: string) => void): string[] {
+  const root = src(files);
+  try {
+    setup?.(root);
+    return checkReferenceBoundary(root).violations.map((v) => `${v.line} ${v.specifier}: ${v.reason}`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
 /** The CLI exactly as `npm run reference:boundary` starts it, optionally on another src dir. */
-const gate = (args: string[], cli = CLI) => spawnSync(process.execPath, ["--experimental-strip-types", cli, ...args], { cwd: resolve(PKG, "..", ".."), encoding: "utf8", timeout: 20_000, env: { PATH: process.env.PATH ?? "" } });
+const gate = (args: string[], cli = CLI) => spawnSync(process.execPath, ["--experimental-strip-types", cli, ...args], { cwd: REPO, encoding: "utf8", timeout: 20_000, env: { PATH: process.env.PATH ?? "" } });
 /** The package's non-test .ts sources, counted from the tree — never from the gate. */
 function sources(dir: string): number {
   let n = 0;
@@ -32,7 +43,21 @@ function sources(dir: string): number {
   }
   return n;
 }
+// Every reason spelled out here, never imported from the gate.
 const VALUE_IMPORT = "engine imports must be `import type { … }` statements (a value import couples the oracle to the code it checks)";
+const INLINE = "inline `{ type X }` is refused — strip-types keeps it as a runtime import of the engine";
+const OTHER_ENGINE = "only @seazn/engine/core types may be imported";
+const TRAP3 = "relative import leaves packages/reference/src (the bench pack types import engine runtime values — trap 3)";
+const INTO_ENGINE = "relative import resolves into packages/engine — the oracle must not load the code it checks";
+const NOT_ALLOWED = "not an allowed import (relative within src, or @seazn/engine/core types)";
+const DYNAMIC = "dynamic import() is refused";
+const RELAY = "relative import of a test file is refused — tests are not scanned, so a test could relay the engine";
+const TOKEN = "nondeterministic token (the reference must answer the same way every time)";
+const IMPORT_EQUALS = "`import … = require()` is refused";
+const TRIPLE_SLASH = "triple-slash reference is refused (use `import type`)";
+const SYMLINK = "symlink in src is refused — the gate judges real files only";
+const EVAL = "code built from a string (eval / Function) is refused — the gate cannot judge it";
+const LOADER_REF = "a module loader named outside a call is refused — an alias would hide the call";
 
 describe("reference boundary gate (ruling 27: statement-form import type from @seazn/engine/core only)", () => {
   it("empty case first: a src dir with no .ts files scans zero — the CLI refuses that", () => {
@@ -51,9 +76,21 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
       "b.ts": "export const b = 1;\n",
     }))).toEqual([]);
   });
-  it("allowed: a multi-line import type statement, and a relative import into a subdirectory", () => {
+  it("allowed: every erased statement form — multi-line, namespace, default, export type *, a type-level import(), and a subdirectory import", () => {
     expect(reasons(src({
-      "a.ts": `import type {\n  MatchOutcome,\n  StageKind,\n} from "@seazn/engine/core";\nimport { c } from "./sub/c.ts";\n`,
+      "a.ts": [
+        `import type {`,
+        `  MatchOutcome,`,
+        `  StageKind,`,
+        `} from "@seazn/engine/core";`,
+        `import type * as E from "@seazn/engine/core";`,
+        `export type * from "@seazn/engine/core";`,
+        `export type * as F from "@seazn/engine/core";`,
+        `export type K = import("@seazn/engine/core").StageKind;`,
+        `import { c } from "./sub/c.ts";`,
+        `export type Both = E.MatchOutcome | MatchOutcome | StageKind;`,
+        `export { c };`,
+      ].join("\n"),
       "sub/c.ts": `import type { MatchOutcome } from "@seazn/engine/core";\nexport const c: MatchOutcome | null = null;\n`,
     }))).toEqual([]);
   });
@@ -69,14 +106,14 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
       `const t = Date.now();`,
     ].join("\n") }));
     expect(got).toEqual([
-      "@seazn/engine/core: engine imports must be `import type { … }` statements (a value import couples the oracle to the code it checks)",
-      "@seazn/engine/core: inline `{ type X }` is refused — strip-types keeps it as a runtime import of the engine",
-      "@seazn/engine/competition: only @seazn/engine/core types may be imported",
-      "../../../scripts/bench/lib/pack-schema.ts: relative import leaves packages/reference/src (the bench pack types import engine runtime values — trap 3)",
-      "../../../apps/web/src/lib/match-rules.ts: relative import leaves packages/reference/src (the bench pack types import engine runtime values — trap 3)",
-      "postgres: not an allowed import (relative within src, or @seazn/engine/core types)",
-      "./b.ts: dynamic import() is refused",
-      "Date.now(: nondeterministic token (the reference must answer the same way every time)",
+      `@seazn/engine/core: ${VALUE_IMPORT}`,
+      `@seazn/engine/core: ${INLINE}`,
+      `@seazn/engine/competition: ${OTHER_ENGINE}`,
+      `../../../scripts/bench/lib/pack-schema.ts: ${TRAP3}`,
+      `../../../apps/web/src/lib/match-rules.ts: ${TRAP3}`,
+      `postgres: ${NOT_ALLOWED}`,
+      `./b.ts: ${DYNAMIC}`,
+      `Date.now: ${TOKEN}`,
     ]);
   });
   it("refused: the other shapes a runtime engine import can take", () => {
@@ -99,11 +136,66 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
       `@seazn/engine/core: ${VALUE_IMPORT}`,
       "@seazn/engine/core: side-effect import is refused",
       "@seazn/engine/core: require() is refused",
-      "@seazn/engine: only @seazn/engine/core types may be imported",
-      "../outside.ts: relative import leaves packages/reference/src (the bench pack types import engine runtime values — trap 3)",
+      `@seazn/engine: ${OTHER_ENGINE}`,
+      `../outside.ts: ${TRAP3}`,
     ]);
   });
-  it("an export with no `from` of its own never borrows a later statement's (the join stops at `;`): clean, and a later value import is judged ONCE, on its own line", () => {
+  it("refused: the remaining statement shapes — mixed and empty clauses, inline re-export, import-equals, triple-slash, a type-level import() of another subpath", () => {
+    expect(judged({ "a.ts": [
+      `/// <reference types="@seazn/engine" />`,
+      `/// <reference path="./b.ts" />`,
+      `/// <reference lib="es2022" />`,
+      `import { A, type B } from "@seazn/engine/core";`,
+      `import {} from "@seazn/engine/core";`,
+      `export { type StageKind } from "@seazn/engine/core";`,
+      `import X = require("@seazn/engine/core");`,
+      `export import E = require("@seazn/engine/core");`,
+      `import type T = require("@seazn/engine/core");`,
+      `export type C = import("@seazn/engine/competition").Anything;`,
+      `import type { G } from "@seazn/engine/core/../sports";`,
+      `import type { H } from "@seazn/engine-extras";`,
+      `import D, { type I } from "@seazn/engine/core";`,
+      `export {} from "@seazn/engine/core";`,
+      `export { A, B, X, T, G, H, D, I };`,
+    ].join("\n"), "b.ts": "export {};\n" })).toEqual([
+      `1 @seazn/engine: ${TRIPLE_SLASH}`,
+      `2 ./b.ts: ${TRIPLE_SLASH}`,
+      `3 es2022: ${TRIPLE_SLASH}`,
+      `4 @seazn/engine/core: ${VALUE_IMPORT}`,
+      `5 @seazn/engine/core: ${VALUE_IMPORT}`,
+      `6 @seazn/engine/core: ${INLINE}`,
+      `7 @seazn/engine/core: ${IMPORT_EQUALS}`,
+      `8 @seazn/engine/core: ${IMPORT_EQUALS}`,
+      `9 @seazn/engine/core: ${IMPORT_EQUALS}`,
+      `10 @seazn/engine/competition: ${OTHER_ENGINE}`,
+      `11 @seazn/engine/core/../sports: ${OTHER_ENGINE}`,
+      `12 @seazn/engine-extras: ${NOT_ALLOWED}`,
+      `13 @seazn/engine/core: ${VALUE_IMPORT}`,
+      `14 @seazn/engine/core: ${VALUE_IMPORT}`,
+    ]);
+  });
+  it("refused: a module loader reached without a plain call — a property read, a destructure, a string key, a string-keyed call", () => {
+    expect(judged({ "a.ts": [
+      `const g = process.getBuiltinModule;`,
+      `const { getBuiltinModule: h } = process;`,
+      `export const r: unknown = Reflect.get(process, "getBuiltinModule");`,
+      `export const e: unknown = process["getBuiltinModule"]("node:module");`,
+      `export { g, h };`,
+    ].join("\n") })).toEqual([
+      `1 getBuiltinModule: ${LOADER_REF}`,
+      `2 getBuiltinModule: ${LOADER_REF}`,
+      `3 getBuiltinModule: ${LOADER_REF}`,
+      "4 node:module: getBuiltinModule() is refused",
+    ]);
+  });
+  it("refused: code built from a string, which no static judge can read", () => {
+    expect(judged({ "a.ts": `export const v: unknown = eval("1");\nexport const F = new Function("return 1");\nexport const G = Function("return 1");\n` })).toEqual([
+      `1 eval: ${EVAL}`,
+      `2 Function: ${EVAL}`,
+      `3 Function: ${EVAL}`,
+    ]);
+  });
+  it("an export with no `from` of its own never borrows a later statement's: clean, and a later value import is judged ONCE, on its own line", () => {
     const body = [
       `export const A: readonly string[] = Object.freeze([]);`,
       `export class B extends Error {`,
@@ -118,20 +210,15 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
       `export type D = MatchOutcome;`,
     ];
     expect(reasons(src({ "a.ts": body.join("\n") }))).toEqual([]);
-    const root = src({ "a.ts": [...body, `import { buildStandings } from "@seazn/engine/core";`].join("\n") });
-    try {
-      expect(checkReferenceBoundary(root).violations.map((v) => `${v.line} ${v.specifier}: ${v.reason}`)).toEqual([`12 @seazn/engine/core: ${VALUE_IMPORT}`]);
-    } finally { rmSync(root, { recursive: true, force: true }); }
+    expect(judged({ "a.ts": [...body, `import { buildStandings } from "@seazn/engine/core";`].join("\n") })).toEqual([`12 @seazn/engine/core: ${VALUE_IMPORT}`]);
   });
-  it("refused: an import whose `from` is out of the join's reach is refused, never skipped", () => {
+  it("a long multi-line value import is one statement, judged whatever its length", () => {
     const names = Array.from({ length: 25 }, (_, n) => `  n${n},`);
-    expect(reasons(src({ "a.ts": [`import {`, ...names, `} from "@seazn/engine/core";`].join("\n") }))).toEqual([
-      "@seazn/engine/core: an import the gate could not judge (no import/export head within reach of its `from`) — refused, never skipped",
-    ]);
+    expect(judged({ "a.ts": [`import {`, ...names, `} from "@seazn/engine/core";`].join("\n") })).toEqual([`1 @seazn/engine/core: ${VALUE_IMPORT}`]);
   });
-  it("refused: a second import statement on one line (the gate judges one statement per line, so a hidden second is a refusal, not a pass)", () => {
-    expect(reasons(src({ "a.ts": `import type { A } from "@seazn/engine/core"; import { b } from "@seazn/engine/core";\n` }))).toEqual([
-      "@seazn/engine/core: more than one import on a line — the gate judges one statement per line",
+  it("two statements on one line are each judged: the type import passes, the value import is refused", () => {
+    expect(reasons(src({ "a.ts": `import type { A } from "@seazn/engine/core"; import { b } from "@seazn/engine/core";\nexport type { A };\nexport { b };\n` }))).toEqual([
+      `@seazn/engine/core: ${VALUE_IMPORT}`,
     ]);
   });
   it("refused: a source file the gate cannot scan (.mts/.tsx/.js …) — its imports would go unjudged", () => {
@@ -144,6 +231,117 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
         "sub/c.js: not a .ts source — the gate scans .ts only, so this file's imports would go unjudged",
       ]);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+  it("guards on the gate's own assumptions: a parse without a parseDiagnostics array, and a missing engine dir, each throw rather than pass", () => {
+    expect(() => parseDiagnosticsOf({})).toThrow(/parseDiagnostics is not an array/);
+    expect(() => parseDiagnosticsOf(null)).toThrow(/parseDiagnostics is not an array/);
+    expect(parseDiagnosticsOf({ parseDiagnostics: [] })).toEqual([]);
+    expect(() => engineDir(join(tmpdir(), "w1b-ref-no-such-engine"))).toThrow(/does not exist/);
+    expect(engineDir()).toBe(realpathSync(ENGINE));
+  });
+  it("refused: a file that does not parse — never judged on the parser's recovered tree", () => {
+    const root = src({ "a.ts": `import { buildStandings from "@seazn/engine/core";\nexport const x = buildStandings;\n`, "b.ts": "export const b = 1;\n" });
+    try {
+      const r = checkReferenceBoundary(root);
+      expect(r.scanned).toBe(2);
+      expect(r.violations).toHaveLength(1);
+      expect(r.violations[0]?.file).toBe("a.ts");
+      expect(r.violations[0]?.reason).toMatch(/^does not parse \(.+\) — refused, never judged on a recovered tree$/);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("review I-1: each runtime-load bypass the line judge passed is refused", () => {
+  // Each shape passed the pre-AST gate with 0 violations while loading
+  // @seazn/engine/core at runtime (measured by the review).
+  const CASES: ReadonlyArray<readonly [string, Record<string, string>, readonly string[]]> = [
+    ["(1) a comment between from and the specifier", { "a.ts": `import { buildStandings } from /* c */ "@seazn/engine/core";\nexport { buildStandings };\n` }, [`1 @seazn/engine/core: ${VALUE_IMPORT}`]],
+    ["(2) `//` inside an earlier string on the same line", { "a.ts": `const u = "//"; import { buildStandings } from "@seazn/engine/core";\nexport { u, buildStandings };\n` }, [`1 @seazn/engine/core: ${VALUE_IMPORT}`]],
+    ["(3a) an ASI type alias launders a comment-led import", { "a.ts": `export type Foo = string\n/* c */ import { buildStandings } from "@seazn/engine/core";\nexport { buildStandings };\n` }, [`2 @seazn/engine/core: ${VALUE_IMPORT}`]],
+    ["(3b) an ASI type alias launders an import after other statements", { "a.ts": `export type Foo = string\nconst y = 2; export { y }; import { buildStandings } from "@seazn/engine/core"\nexport { buildStandings }\n` }, [`2 @seazn/engine/core: ${VALUE_IMPORT}`]],
+    ["(4) a relay through an excluded .test.ts file", { "a.ts": `import { buildStandings } from "./relay.test.ts";\nexport const f = buildStandings;\n`, "relay.test.ts": `export { buildStandings } from "@seazn/engine/core";\n` }, [`1 ./relay.test.ts: ${RELAY}`]],
+    ["(5) import() of a template literal", { "a.ts": "export const m = import(`@seazn/engine/core`);\n" }, [`1 @seazn/engine/core: ${DYNAMIC}`]],
+    ["(6) import() of a computed specifier", { "a.ts": `const s = "@seazn/engine/core";\nexport const m = import(s);\n` }, [`2 <computed>: ${DYNAMIC}`]],
+    ["(7) import() with a comment before the specifier", { "a.ts": `export const m = import(/* c */ "@seazn/engine/core");\n` }, [`1 @seazn/engine/core: ${DYNAMIC}`]],
+    ["(8) import() with the specifier on the next line", { "a.ts": `export const m = import(\n  "@seazn/engine/core"\n);\n` }, [`1 @seazn/engine/core: ${DYNAMIC}`]],
+    ["(9) `//` in an earlier string, then an awaited import()", { "a.ts": `const u = "http://x"; const m = await import("@seazn/engine/core");\nexport { u, m };\n` }, [`1 @seazn/engine/core: ${DYNAMIC}`]],
+    ["(10) process.getBuiltinModule(…).createRequire(…)(…), one chain", { "a.ts": `export const e: unknown = process.getBuiltinModule("node:module").createRequire(import.meta.url)("@seazn/engine/core");\n` }, [`1 node:module: getBuiltinModule() is refused`, `1 <computed>: createRequire() is refused`]],
+    ["(10b) the same through a destructured createRequire", { "a.ts": `const { createRequire } = process.getBuiltinModule("node:module");\nexport const e: unknown = createRequire(import.meta.url)("@seazn/engine/core");\n` }, [`1 createRequire: ${LOADER_REF}`, `1 node:module: getBuiltinModule() is refused`, `2 <computed>: createRequire() is refused`]],
+  ];
+  it.each(CASES)("%s", (_label, files, expected) => {
+    expect(judged(files)).toEqual(expected);
+  });
+  it("the sweep above is not vacuous: ten measured bypasses, every one refused", () => {
+    expect(CASES.map(([l]) => l.replace(/^\((\d+)[ab]?\).*/, "$1")).filter((v, i, a) => a.indexOf(v) === i)).toHaveLength(10);
+    let refused = 0;
+    for (const [, files] of CASES) if (judged(files).length > 0) refused++;
+    expect(refused).toBe(CASES.length);
+  });
+  it("(11) a symlink in src — to an engine file or an engine directory — is refused, and the import through it resolves into the engine", () => {
+    const file = judged({ "a.ts": `import { x } from "./eng.ts";\nexport { x };\n` }, (root) => symlinkSync(join(ENGINE, "src", "core", "clock.ts"), join(root, "eng.ts")));
+    expect(file).toEqual([`1 ./eng.ts: ${INTO_ENGINE}`, `1 eng.ts: ${SYMLINK}`]);
+    // Line 2 names a file that does not exist: it is judged by where its
+    // path lands (the realpath of its nearest existing ancestor), so a
+    // missing file behind the link is still the engine.
+    const dir = judged({ "a.ts": `import type { C } from "./core/index.ts";\nimport type { N } from "./core/not-there.ts";\nexport type { C, N };\n` }, (root) => symlinkSync(join(ENGINE, "src", "core"), join(root, "core")));
+    expect(dir).toEqual([`1 ./core/index.ts: ${INTO_ENGINE}`, `2 ./core/not-there.ts: ${INTO_ENGINE}`, `1 core: ${SYMLINK}`]);
+  });
+  it("the positive pair: a relative import of a file not (yet) in src is judged by its path — inside src, allowed", () => {
+    expect(judged({ "a.ts": `import type { M } from "./sub/missing.ts";\nexport type { M };\n` })).toEqual([]);
+  });
+});
+
+describe("containment is by path SEGMENT, not by string prefix (review M-1)", () => {
+  it("a sibling whose name only starts with the src dir's name is outside src", () => {
+    const base = mkdtempSync(join(tmpdir(), "w1b-ref-sib-"));
+    try {
+      for (const [p, t] of Object.entries({ "src/a.ts": `import { x } from "../src-x/b.ts";\nimport { y } from "./in.ts";\nexport { x, y };\n`, "src/in.ts": "export const y = 1;\n", "src-x/b.ts": "export const x = 1;\n" })) {
+        mkdirSync(dirname(join(base, p)), { recursive: true });
+        writeFileSync(join(base, p), t);
+      }
+      expect(checkReferenceBoundary(join(base, "src")).violations.map((v) => `${v.specifier}: ${v.reason}`)).toEqual([`../src-x/b.ts: ${TRAP3}`]);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+  it("a sibling of packages/engine whose name only starts with `engine` is not the engine — and the engine itself is", () => {
+    const root = src({});
+    try {
+      // From the REAL root: node resolves a relative import from the file's
+      // real path, and the tmp dir is a symlink on macOS (/var → /private/var).
+      const real = realpathSync(root);
+      const extras = relative(real, join(REPO, "packages", "engine-extras", "x.ts"));
+      const engine = relative(real, join(ENGINE, "src", "core", "index.ts"));
+      writeFileSync(join(root, "a.ts"), `import type { X } from "${extras}";\nimport type { Y } from "${engine}";\nexport type { X, Y };\n`);
+      expect(checkReferenceBoundary(root).violations.map((v) => `${v.line}: ${v.reason}`)).toEqual([`1: ${TRAP3}`, `2: ${INTO_ENGINE}`]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("nondeterministic tokens are judged on the syntax tree (review M-2)", () => {
+  it("refused: every clock and entropy read, however it is spelled", () => {
+    expect(judged({ "a.ts": [
+      `export const a = Date.now ();`,
+      `export const b = new Date;`,
+      `export const c = performance.now();`,
+      `export const d = crypto.randomUUID();`,
+      `export const e = Math["random"]();`,
+      `export const f = globalThis.Date.now();`,
+      `export const g = Date();`,
+      `export const h = new Date();`,
+      `export const i = process.hrtime.bigint();`,
+    ].join("\n") })).toEqual([
+      `1 Date.now: ${TOKEN}`,
+      `2 new Date: ${TOKEN}`,
+      `3 performance.now: ${TOKEN}`,
+      `4 crypto.randomUUID: ${TOKEN}`,
+      `5 Math.random: ${TOKEN}`,
+      `6 Date.now: ${TOKEN}`,
+      `7 Date(): ${TOKEN}`,
+      `8 new Date: ${TOKEN}`,
+      `9 process.hrtime: ${TOKEN}`,
+    ]);
+  });
+  it("the positive pair: a Date built from an argument, Date.UTC, and other Math members are deterministic — clean", () => {
+    expect(judged({ "a.ts": `export const a = new Date(0);\nexport const b = Date.UTC(2026, 0, 1);\nexport const c = Math.max(1, 2);\nexport const d: Date | null = null;\n` })).toEqual([]);
   });
 });
 

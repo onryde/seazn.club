@@ -1,0 +1,15 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The lint is type-aware (recommendedTypeChecked) over @seazn/engine/core
+    // types, so its cache key must hold the engine's sources as typecheck's
+    // does: `^build` puts @seazn/engine#build (whose inputs are the engine
+    // package's files) in the hash. Without it an engine type change could
+    // restore a stale green lint from the remote cache (review M-4).
+    // Pinned by scripts/matrix/__tests__/workspace-wiring.test.ts.
+    "lint": {
+      "dependsOn": ["^build"]
+    }
+  }
+}

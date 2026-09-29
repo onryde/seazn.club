@@ -1,10 +1,17 @@
 // Lint config for @seazn/reference — packages/engine/eslint.config.mjs with
 // its engine-path blocks (the z3 bridge, the reflective walkers, the golden
 // corpora, the benchmarks) removed: the generic type-aware base, no-console
-// and ban-ts-comment, plus one rule that makes ruling 27's statement form a
-// lint error as well as a gate violation (scripts/reference-boundary.ts):
-// a type-only engine import must be a separate `import type { … }` statement,
-// never an inline `{ type X }`, which strip-types keeps as a runtime import.
+// and ban-ts-comment, plus two import rules for src. Ruling 27 is enforced by
+// scripts/reference-boundary.ts; lint is the second layer for one shape only:
+//   * no-import-type-side-effects makes an import whose every specifier is an
+//     inline `{ type X }` an error (strip-types keeps it as a runtime import of
+//     the module; `import type { X }` is erased). Pinned by
+//     test/eslint-inline-type.test.ts, which runs this config.
+//   * consistent-type-imports (separate-type-imports) flags a type-only name
+//     imported as a value. It does NOT refuse the inline form on its own —
+//     the rule above does.
+// Value imports of the engine, other subpaths and dynamic loads are the
+// gate's alone; lint does not try to judge them.
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import { defineConfig, globalIgnores } from "eslint/config";
@@ -53,5 +60,11 @@ export default defineConfig([
     },
   },
 
-  { files: ["src/**/*.ts"], rules: { "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports", fixStyle: "separate-type-imports" }] } },
+  {
+    files: ["src/**/*.ts"],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports", fixStyle: "separate-type-imports" }],
+      "@typescript-eslint/no-import-type-side-effects": "error",
+    },
+  },
 ]);
