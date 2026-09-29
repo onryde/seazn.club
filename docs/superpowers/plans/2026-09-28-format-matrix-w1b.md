@@ -6045,6 +6045,34 @@ When the controller has opened the PR, CI owes every job to completion, includin
 
 ## Task 16: `_INDEX.md` — real §6.2 counts, the W1b row, the rulings applied, false premises, routed findings
 
+**Controller amendment after Task 15 (binding; it overrides the step text below where they disagree).** The Task 15 report is gitignored, so `_INDEX.md` is the only lasting record. Read `truth-runs/**` and `regressions.json`, never memory, and record all of the following:
+
+- **Model run cited.** Cite the final HEAD model run `truth-runs/w1b-model-final/`, not `w1b-model-0928a`, which is pre-fix. Give its per-cell verdicts. swiss|badminton needs `--runs 40`; at the default run count it is honestly vacuous, and the run records that reason.
+- **Rulings made after this plan was written.** Record ruling 31 (VB/TT points floor 5 → W2), ruling 32 (tied T20 knockout checked live), ruling 33 (boardgame time control → W2), and the owner rulings of 2026-09-29:
+  - the PUT-stages data loss stays in W9;
+  - no browser/visual check in W1b (visuals → W1c);
+  - the Pro-for-all-formats change is parked.
+- **Regressions:** MB-001…MB-005 with their `match` text and owning wave:
+  - MB-001, #879, pre-Start `Generate → AddEntrant → Generate`, re-pointed to 0929f because the Step 5 shrink was cut short by the division cap;
+  - MB-002/003, a knockout withdraw of an entrant waiting for TBD → 422 → W9 + W4;
+  - MB-004/005, knockout Generate 500 "would strand home_slot_label" → W4 + W9. The `away_slot_label` twin assertion at stages.ts:2672 is not yet seen live and would read NEW.
+- **Routed findings (add these rows):**
+  - **Data loss:** false premise 8 CONFIRMED live. A PUT to stages with a gated format returns 402, but the existing stage is already deleted, on all 7 DENIED rows. Routes to W9 (owner ruling).
+  - **ST-G1:** CONFIRMED; routes to W5 + W2.
+  - **CD-T6:** CONFIRMED. A tied T20 knockout semi completes as `decided` and never feeds the final. Routes to W4 + W2.
+  - **CD-T13:** CONFIRMED. A board-game withdraw after Start is refused. It also half-applies when one fixture has already started. Routes to W2 + W9.
+  - **CD-T13b:** the roster-lock 422 carries no code. It was counted live on the league and knockout cells. Routes to W9.
+  - **CD-T8:** the boardgame time control is inert (ruling 33). Routes to W2.
+  - **cricket#001:** record what the product did. It is an editor question for W2.
+  - **`page_playoff_only` LIFECYCLE red:** this is a HARNESS defect (a fixed 8 entrants; a page playoff needs exactly 4), not a product ❌. The committed `truth-runs/w1b-probe/MATRIX.md` shows it as a product ❌; say so beside it. Routes to W1-driving.
+  - **P7:** the rank-override route has no stage-kind guard. Routes to W5.
+- **False premises found during execution (add these):**
+  - The Redis check `ps eww … | grep -c REDIS_URL` is vacuous, because next-server rewrites its process title. The replacement witness commands are in the Task 15 fix-round evidence.
+  - The #879 trigger is pre-Start, not post-Start (Task 13). The original plan's Start-first shape was false.
+  - The Step 3d brief shape reached only the expunge path; a walkover shape was added.
+  - `strip-types-loadable` needed no edit (Task 14).
+  - `single-sport.test.ts` was red from T14 until T15 fix round 2. A scoped-gate gap: record that the scoped gate must include `single-sport.test.ts` whenever a `// single-sport:` header is touched.
+
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md`
 
