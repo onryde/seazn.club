@@ -122,9 +122,12 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
   protected async afterExpectedRefusal(_m: ModelState, _d: OrganiserDriver): Promise<void> {}
   /** A named refusal the product may give here, or null (ruling RR-1). */
   protected permittedRefusal(_m: ModelState): PermittedRefusal | null { return null; }
+  /** The entrant this command would act on, when it picks one — what a fence
+   *  reads (fences.ts); null for a command that picks none. */
+  protected subject(_m: ModelState): string | null { return null; }
   check(m: Readonly<ModelState>): boolean {
     if (!this.ready(m)) return false;
-    const fence = fenceBlocking(m, this.kind, this.fences);
+    const fence = fenceBlocking(m, this.kind, this.fences, this.subject(m));
     if (fence !== null) {
       m.fenced.set(fence.id, (m.fenced.get(fence.id) ?? 0) + 1);
       return false;
@@ -268,8 +271,10 @@ class Withdraw extends Cmd {
   protected ready(m: ModelState) { return m.started && m.withdrawn.size === 0 && m.entrants.length > 2; }
   /** The first withdrawal of an active entrant is always the organiser's to make. */
   protected override mustAccept(m: ModelState) { return m.withdrawn.size === 0; }
+  /** The one pick both the fence and the act read, so they cannot disagree. */
+  protected override subject(m: ModelState): string { return pick(m.entrants, this.k, "entrant"); }
   protected async act(m: ModelState, d: OrganiserDriver) {
-    const id = pick(m.entrants, this.k, "entrant");
+    const id = this.subject(m);
     // The cascade posts events the model does not write (walkover forfeits,
     // voids, abandons) — even when it is refused part-way: unknown from here.
     for (const f of m.fixtures.values()) if (f.home === id || f.away === id) f.ledger = null;

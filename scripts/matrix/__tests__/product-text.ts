@@ -71,6 +71,16 @@ export function withdrawalReason(): string {
   return r[1];
 }
 
+/** lib/table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES: the fixtures a
+ *  withdrawal's cascade still acts on. */
+export function withdrawalPendingText(): string[] {
+  const m = /\nexport const WITHDRAWAL_PENDING_STATUSES: ReadonlySet<string> = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/lib/table-withdrawal.ts"));
+  if (m === null) throw new Error("product-text: table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES not found in the expected shape");
+  const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error("product-text: table-withdrawal.ts WITHDRAWAL_PENDING_STATUSES names no status");
+  return out;
+}
+
 export interface NextMatchText {
   status: number;
   /** The HttpError's code, resolved through fed-seats.ts's import. */

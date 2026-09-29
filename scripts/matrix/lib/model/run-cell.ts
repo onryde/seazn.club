@@ -323,7 +323,11 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     failure = { check: UNEXPECTED_REFUSAL, seed: input.seed, path: "", replayPath: null, commands: [], evidence, said: null, known: knownFor(UNEXPECTED_REFUSAL, null) };
   }
 
-  const vacuous = failure === null && seen.timeout === null
+  // Final batch F-1(a): a KNOWN failure never excuses a vacuous cell — fast-
+  // check stops at the first failure, so a known one can end the exploration
+  // after a run or two. Only a NEW failure (already failing) and a timeout
+  // (no verdict at all) go unjudged.
+  const vacuous = (failure === null || failure.known !== null) && seen.timeout === null
     ? vacuityOf({ counts, stepChecks, foldParity: seen.foldParity, informative: seen.informative, stageKind: seen.stageKind })
     : [];
   return {

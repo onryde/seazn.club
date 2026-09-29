@@ -35,7 +35,7 @@ import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 import { ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
-import { bracketRoundNoText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalReason } from "./product-text.ts";
+import { bracketRoundNoText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalPendingText, withdrawalReason } from "./product-text.ts";
 
 const I7 = "I7-rr-no-pair-over-legs";
 const I8 = "I8-generate-named";
@@ -353,7 +353,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
     expect(m.counts.Rebuild).toEqual(counts(1, { refused: 1 }));
     expect(m.lateEntry).toBe(true);
   });
-  it("the fence is for the product's round-robin kinds only (schedule.ts roundRobinStageIds): a late entry on a knockout or swiss stage leaves Generate offered", async () => {
+  it("the #879 fence is for the product's round-robin kinds only (schedule.ts roundRobinStageIds): a late entry on a swiss stage leaves Generate offered (a knockout's is MB-005's fence, below)", async () => {
     // single-sport: the fence reads stage kinds.
     const { m, d } = await fresh();
     await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);
@@ -361,11 +361,92 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
     let checked = 0;
     for (const stageKind of [...rr, "knockout", "swiss"]) {
       const s: ModelState = { ...m, stageKind };
-      expect(fenceBlocking(s, "Generate", true) !== null, stageKind).toBe(rr.includes(stageKind));
+      expect(fenceBlocking(s, "Generate", true)?.id === "late-entry-then-generate", stageKind).toBe(rr.includes(stageKind));
       checked++;
     }
     expect(checked).toBe(rr.length + 2);
     expect(rr.length).toBeGreaterThan(0);
+    expect(fenceBlocking({ ...m, stageKind: "swiss" }, "Generate", true)).toBeNull();
+  });
+});
+
+describe("final batch F-1(b): the knockout fences steer the walk off MB-002..005's triggers, and nothing else", () => {
+  const KO_TBD = "ko-withdraw-waiting-on-tbd";
+  const KO_GEN = "ko-generate-after-roster-change";
+  /** A started knockout, as the product lists it: e1 beat e4 and waits in the
+   *  final for the winner of e2 v e3 (a TBD seat). */
+  async function ko(finalStatus = "scheduled", side: "home" | "away" = "home"): Promise<ModelState> {
+    // single-sport: the fences read stage kind, seats and statuses, never the sport.
+    const { m } = await fresh();
+    const fx = (id: string, round: number, home: string | null, away: string | null, status: string): [string, FixtureModel] => [id, { id, round, home, away, status, ledger: null }];
+    const [e1, e2, e3, e4] = m.entrants;
+    if (e1 === undefined || e2 === undefined || e3 === undefined || e4 === undefined) throw new Error("test: four entrants");
+    const final = side === "home" ? fx("f3", 2, e1, null, finalStatus) : fx("f3", 2, null, e1, finalStatus);
+    return { ...m, stageKind: "knockout", started: true, fixtures: new Map([fx("f1", 1, e1, e4, "decided"), fx("f2", 1, e2, e3, "scheduled"), final]) };
+  }
+  it("the premise: the pending statuses the Withdraw fence reads are the product's (lib/table-withdrawal.ts)", () => {
+    expect([...PENDING_STATUSES].sort()).toEqual(withdrawalPendingText().sort());
+  });
+  it("the premise: both fences exist, and each is a committed OPEN case's fence (scenario-catalogue.test.ts pins the other direction)", () => {
+    expect(FENCES.map((f) => f.id)).toEqual(expect.arrayContaining([KO_TBD, KO_GEN]));
+    expect(FENCES.find((f) => f.id === KO_TBD)?.blocks).toBe("Withdraw");
+    expect(FENCES.find((f) => f.id === KO_GEN)?.blocks).toBe("Generate");
+  });
+  it("MB-002/003: Withdraw is withheld only for the entrant it would withdraw that waits on a TBD seat — either side, every pending status; the fence is counted", async () => {
+    let checked = 0;
+    for (const side of ["home", "away"] as const) {
+      for (const status of PENDING_STATUSES) {
+        const s = await ko(status, side);
+        expect(commandOf("Withdraw", 0, 0, true).check(s), `${side} ${status}`).toBe(false);
+        expect(s.fenced.get(KO_TBD), `${side} ${status}`).toBe(1);
+        expect(fenceBlocking(s, "Withdraw", true, s.entrants[0] ?? null)?.id).toBe(KO_TBD);
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * PENDING_STATUSES.length);
+    expect(PENDING_STATUSES.length).toBeGreaterThan(0);
+  });
+  it("MB-002/003: …and offered for everyone else — a seated pending match (e2), a decided one only (e4), a TBD final no longer pending, fences off, and any stage kind but knockout", async () => {
+    const s = await ko();
+    expect(commandOf("Withdraw", 1, 0, true).check(s), "e2: seated opponent").toBe(true);
+    expect(commandOf("Withdraw", 3, 0, true).check(s), "e4: out, decided only").toBe(true);
+    expect(commandOf("Withdraw", 0, 0, false).check(s), "fences off").toBe(true);
+    expect(fenceBlocking(s, "Withdraw", true, null), "no subject").toBeNull();
+    let checked = 0;
+    for (const status of TERMINAL_STATUSES) {
+      expect(commandOf("Withdraw", 0, 0, true).check(await ko(status)), status).toBe(true);
+      checked++;
+    }
+    for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "league", "swiss"]) {
+      expect(commandOf("Withdraw", 0, 0, true).check({ ...s, stageKind }), stageKind).toBe(true);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(TERMINAL_STATUSES.length + 2);
+    expect(s.fenced.get(KO_TBD) ?? 0).toBe(0);
+  });
+  it("MB-004/005: Generate is withheld on a knockout with fixtures once the roster changed — an entrant added (MB-005) or one withdrawn (MB-004)", async () => {
+    const s = await ko();
+    expect(commandOf("Generate", 0, 0, true).check(s), "no roster change").toBe(true);
+    const added: ModelState = { ...s, lateEntry: true, fenced: new Map() };
+    expect(commandOf("Generate", 0, 0, true).check(added)).toBe(false);
+    expect(added.fenced.get(KO_GEN)).toBe(1);
+    const e2 = s.entrants[1];
+    if (e2 === undefined) throw new Error("test: four entrants");
+    const withdrawn: ModelState = { ...s, withdrawn: new Set([e2]), fenced: new Map() };
+    expect(commandOf("Generate", 0, 0, true).check(withdrawn)).toBe(false);
+    expect(withdrawn.fenced.get(KO_GEN)).toBe(1);
+    expect(fenceBlocking(withdrawn, "Generate", false)).toBeNull();
+  });
+  it("MB-004/005: …and offered with no fixtures yet, and on every other stage kind but the round robins (#879's own fence)", async () => {
+    const s: ModelState = { ...(await ko()), lateEntry: true };
+    expect(commandOf("Generate", 0, 0, true).check({ ...s, fixtures: new Map(), fenced: new Map() }), "no fixtures").toBe(true);
+    const rr = roundRobinKindsText();
+    let checked = 0;
+    for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "swiss", ...rr]) {
+      expect(fenceBlocking({ ...s, stageKind }, "Generate", true)?.id ?? null, stageKind).toBe(rr.includes(stageKind) ? "late-entry-then-generate" : null);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(rr.length);
   });
 });
 
@@ -459,9 +540,10 @@ describe("model commands — each fault is caught at the step that causes it", (
     expect(m.stepChecks.size).toBeGreaterThan(0);
     expect([...m.stepChecks.values()].every((n) => n === 0)).toBe(true);
   });
-  it("FENCES is non-empty and each names an open issue", () => {
+  it("FENCES is non-empty; each names its GitHub issue, or null when none is filed (its witness is then the open committed case naming it: scenario-catalogue.test.ts)", () => {
     expect(FENCES.length).toBeGreaterThan(0);
-    for (const f of FENCES) expect(f.issue).toMatch(/^#\d+$/);
+    for (const f of FENCES) if (f.issue !== null) expect(f.issue, f.id).toMatch(/^#\d+$/);
+    expect(FENCES.filter((f) => f.issue !== null).length, "#879's fence keeps its issue").toBeGreaterThan(0);
   });
 });
 

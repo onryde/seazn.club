@@ -46,6 +46,9 @@ const I7 = "I7-rr-no-pair-over-legs";
 const FOLD = "model-fold-parity";
 /** An open committed regression on CELL for `check` (R29); `match` as the schema requires it. */
 const openReg = (id: string, check: string, match: string | null = null): RegressionCase => ({ id, title: "t", issue: null, cell: CELL, variant: "score", check, seed: 1, path: "0", replayPath: null, fence: null, match, status: "open", found: "2026-09-29", runId: "t" });
+/** Posts a LateRefusal takes before it refuses: enough for a 40-run walk at
+ *  the defaults to cover every command and check first (final batch F-1). */
+const LATE_POSTS = 60;
 /** The words both fake post refusals below give — the product's message, which
  *  a match reads (never RefusedCall's request line: final batch FB-3). */
 const POST_REFUSED = "test: refuses";
@@ -254,6 +257,8 @@ describe("model.ts", () => {
     };
     expect(rep.runId).toBe("mr");
     expect(rep.harnessCommit).toBe("abc1234");
+    // Final batch F-1(c): a clean walk says it ran every run it was given.
+    expect(io.out()).toMatch(/\n {2}ok — 40\/40 runs \(\d+ executions\)/);
     expect(rep.cells.map((c) => c.cell)).toEqual([CELL]);
     const [c] = rep.cells;
     if (c === undefined) throw new Error("unreachable");
@@ -314,14 +319,46 @@ describe("model.ts", () => {
     expect(rep.cells.map((c) => [c.verdict, c.interrupted])).toEqual([["new-failure", true]]);
   });
 
-  it("a failure an OPEN committed regression names is known: exit 0, and the run says which", async () => {
+  it("a failure an OPEN committed regression names is known, and the run says which — yet #879 ends the unfenced walk early, so the cell is VACUOUS (exit 1): a known failure never excuses it (final batch F-1(a))", async () => {
     const io = capture();
     await runModel(deps({ fault879: true }), ["--run-id", "mk", "--report-dir", reportDir(), ...ONE, "--no-fences"]);
     const reg = completedStub(io.out());
     const io2 = capture();
-    expect(await runModel(deps({ fault879: true, regs: [reg] }), ["--run-id", "mk", "--report-dir", reportDir(), ...ONE, "--no-fences"])).toBe(0);
+    const dir = reportDir();
+    expect(await runModel(deps({ fault879: true, regs: [reg] }), ["--run-id", "mk", "--report-dir", dir, ...ONE, "--no-fences"])).toBe(1);
     expect(failureLine(io2.out())).toMatch(/\(known MB-001\)/);
     expect(io2.out()).not.toContain("regression stub");
+    const rep = JSON.parse(readFileSync(join(dir, "mk", "model-report.json"), "utf8")) as { cells: { verdict: string; numRuns: number; runs: number; vacuous: string[] }[] };
+    const [c] = rep.cells;
+    expect(c?.verdict).toBe("vacuous");
+    expect(c?.vacuous.length).toBeGreaterThan(0);
+    expect(c?.numRuns ?? 40, "the premise: the known failure cut the walk short").toBeLessThan(c?.runs ?? 0);
+    // F-1(c): the verdict line says how far the walk got.
+    expect(io2.out()).toContain(`\n  VACUOUS: ${c?.vacuous.join("; ")} — ${c?.numRuns}/40 runs (`);
+    expect(io2.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 0 NEW, 1 vacuous,/);
+  });
+
+  it("final batch F-1(a)/(c): a known failure that fires only after the walk explored is known-failure, exit 0 — and its verdict line says numRuns/runs", async () => {
+    let posts = 0;
+    /** Results are taken until the cell has explored, then refused by name. */
+    class LateRefusal extends ModelFakeDriver {
+      override postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
+        if (++posts > LATE_POSTS) return Promise.reject(new RefusedCall("POST", `/api/v1/fixtures/${id}/events`, 409, "TEST_POST_REFUSED", "test: refuses a result once the walk explored"));
+        return super.postStream(id, events, prefix);
+      }
+    }
+    const io = capture();
+    const dir = reportDir();
+    const reg = openReg("MB-003", UNEXPECTED_REFUSAL, "refuses a result once the walk explored");
+    expect(await runModel(deps({ driverFor: () => new LateRefusal(), regs: [reg] }), ["--run-id", "late", "--report-dir", dir, ...ONE])).toBe(0);
+    expect(failureLine(io.out())).toMatch(/\(known MB-003\)/);
+    const rep = JSON.parse(readFileSync(join(dir, "late", "model-report.json"), "utf8")) as { cells: { verdict: string; numRuns: number; runs: number; vacuous: string[] }[] };
+    const [c] = rep.cells;
+    expect(c?.verdict).toBe("known-failure");
+    expect(c?.vacuous).toEqual([]);
+    expect(c?.numRuns ?? 40, "the premise: the failure ended the walk before its last run").toBeLessThan(c?.runs ?? 0);
+    expect(io.out()).toMatch(new RegExp(`\\n {2}known — ${c?.numRuns}/40 runs \\(\\d+ executions\\)`));
+    expect(io.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 1 known, 0 NEW, 0 vacuous,/);
   });
 
   it("empty case: a vacuous cell exits 1 (R25), and says why", async () => {
@@ -337,13 +374,15 @@ describe("model.ts", () => {
     const io = capture();
     expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "mu", "--report-dir", reportDir(), ...ONE])).toBe(1);
     expect(failureLine(io.out())).toMatch(new RegExp(`^FAILURE ${UNEXPECTED_REFUSAL} \\(NEW\\): `));
+    // Final batch F-1(c): the failing cell says how far its walk got too.
+    expect(io.out()).toMatch(/\n {2}NEW — \d+\/40 runs \(\d+ executions\)/);
     // Shrunk, at the defaults, fences on: the time box was not hit and no caveat applies (M-4, M-6).
     expect(io.out()).not.toContain("TIME BOX HIT (unshrunk)");
     expect(io.out()).toMatch(/model: 1 cell\(s\) — [^\n]*, 0 TIME BOX HIT/);
     expect(io.out()).not.toContain("replay caveat");
   });
 
-  it("T15 fix round 2: an open case on the same cell and check whose match is NOT in the evidence leaves a refusal NEW (exit 1, a stub); the matching case makes it known (exit 0)", async () => {
+  it("T15 fix round 2: an open case on the same cell and check whose match is NOT in the evidence leaves a refusal NEW (exit 1, a stub); the matching case makes it known (no stub — and, a product that takes no result, VACUOUS: exit 1, final batch F-1(a))", async () => {
     const io = capture();
     const tbd = openReg("MB-002", UNEXPECTED_REFUSAL, "fixture has an unassigned entrant");
     expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(1);
@@ -352,8 +391,10 @@ describe("model.ts", () => {
     // The product's own text reaches the printed evidence.
     expect(io.out()).toMatch(/\n {4}evidence: [^\n]*HTTP 409 TEST_POST_REFUSED: test: refuses every result/);
     const io2 = capture();
-    expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd, openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [tbd, openReg("MB-003", UNEXPECTED_REFUSAL, "refuses every result")] }), ["--run-id", "mn", "--report-dir", reportDir(), ...ONE])).toBe(1);
     expect(failureLine(io2.out())).toMatch(/\(known MB-003\)/);
+    expect(io2.out()).not.toContain("regression stub");
+    expect(io2.out()).toMatch(/\n {2}VACUOUS: [^\n]*no Score was accepted[^\n]* — \d+\/40 runs \(/);
   });
 
   it("T15 fix round 3, I-1/I-2: an unnamed refusal (model-refusal-named — MB-004/005's only path) is known only by a case matching the product's answer; its stub prints the match EMPTY, owed, never null", async () => {
@@ -368,8 +409,11 @@ describe("model.ts", () => {
     expect(() => completedStub(io.out(), { issue: null, fence: null })).toThrow(/match/);
     const reg = completedStub(io.out(), { id: "MB-004", issue: null, fence: null, match: "would strand home_slot_label" });
     const io2 = capture();
-    expect(await runModel(deps({ driverFor: () => new CrashingGenerate(), regs: [reg] }), ["--run-id", "mg", "--report-dir", reportDir(), ...ONE])).toBe(0);
+    // Known — and, a product that never generates, a VACUOUS cell: exit 1 (final batch F-1(a)).
+    expect(await runModel(deps({ driverFor: () => new CrashingGenerate(), regs: [reg] }), ["--run-id", "mg", "--report-dir", reportDir(), ...ONE])).toBe(1);
     expect(failureLine(io2.out())).toMatch(/\(known MB-004\)/);
+    expect(io2.out()).not.toContain("regression stub");
+    expect(io2.out()).toMatch(/model: 1 cell\(s\) — 0 ok, 0 known, 0 NEW, 1 vacuous,/);
     // A case whose match is only in the model's own line stays NEW.
     let checked = 0;
     for (const harness of ["→ 500 (no code)", "Generate("]) {

@@ -215,9 +215,10 @@ function verdictOf(rep: CellReport, replay: RegressionCase | null): Verdict {
   // An OPEN case whose replay no longer fails AS ITSELF (its check and its
   // match, T15 fix round 2) did not reproduce: fixed, or the replay drifted.
   if (replay !== null && replay.status === "open" && rep.failure?.known !== replay.id) return "not-reproduced";
-  if (rep.failure !== null) return "known-failure";
-  // A replay walks one path; coverage is the exploring runs' business.
+  // A replay walks one path; coverage is the exploring runs' business. A
+  // known failure never excuses a vacuous cell (final batch F-1(a)).
   if (replay === null && rep.vacuous.length > 0) return "vacuous";
+  if (rep.failure !== null) return "known-failure";
   return "ok";
 }
 
@@ -240,9 +241,11 @@ function printCell(c: ModelCell): void {
   if (c.verdict === "not-reproduced" && c.replayOf !== null) {
     say(`  NOT REPRODUCED ${c.replayOf}: the replay ${f === null ? "ran clean" : `failed on ${f.check}${f.known === null ? "" : ` (known ${f.known})`} instead`} — fixed, or the replay no longer walks the committed path`);
   }
-  if (f === null && c.verdict !== "not-reproduced" && c.verdict !== "aborted") {
-    const head = c.verdict === "vacuous" ? `VACUOUS: ${c.vacuous.join("; ")}` : "ok";
-    say(`  ${head} — ${c.numRuns} runs (${c.executions} executions), ${c.informativeSteps} informative steps, parity ${c.foldParity}, fenced ${JSON.stringify(c.fenced)}, unknowns ${JSON.stringify(c.unknowns)}${c.interrupted ? ", TIME BOX HIT" : ""}`);
+  // Final batch F-1(c): every judged cell says how far its walk got — a
+  // failure, known or NEW, ends fast-check's walk at the run that found it.
+  if (c.verdict !== "not-reproduced" && c.verdict !== "aborted") {
+    const head = c.verdict === "vacuous" ? `VACUOUS: ${c.vacuous.join("; ")}` : c.verdict === "known-failure" ? "known" : c.verdict === "new-failure" ? "NEW" : "ok";
+    say(`  ${head} — ${c.numRuns}/${c.runs} runs (${c.executions} executions), ${c.informativeSteps} informative steps, parity ${c.foldParity}, fenced ${JSON.stringify(c.fenced)}, unknowns ${JSON.stringify(c.unknowns)}${c.interrupted ? ", TIME BOX HIT" : ""}`);
   }
   for (const [id, x] of Object.entries(c.findings)) say(`  finding ${id} ×${x.count}${x.evidence[0] === undefined ? "" : ` — ${x.evidence[0]}`}`);
   if (Object.keys(c.masked).length > 0) say(`  masked while shrinking ${JSON.stringify(c.masked)}`);

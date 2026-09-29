@@ -402,7 +402,10 @@ describe("regression cases (R29)", () => {
     const open = loadRegressions().filter((r) => r.status === "open");
     let checked = 0;
     for (const f of FENCES) {
-      expect(open.filter((r) => r.fence === f.id).map((r) => r.id), `fence ${f.id} names no open committed case`).not.toEqual([]);
+      const witnesses = open.filter((r) => r.fence === f.id);
+      expect(witnesses.map((r) => r.id), `fence ${f.id} names no open committed case`).not.toEqual([]);
+      // …and the case and the fence agree on the issue (null when none is filed).
+      for (const r of witnesses) expect(r.issue, `${r.id} vs fence ${f.id}`).toBe(f.issue);
       checked++;
     }
     expect(checked).toBe(FENCES.length);

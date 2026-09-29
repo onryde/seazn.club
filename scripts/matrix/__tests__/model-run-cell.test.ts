@@ -397,6 +397,19 @@ describe("runCell", () => {
     expect(r.vacuous).toEqual([]);
   });
 
+  it("final batch F-1(a): a KNOWN failure never excuses a vacuous cell — vacuity is judged on it as on a clean cell; a NEW failure, already failing, is not judged", async () => {
+    const known = await runCell(input({ driver: () => new RefusingPosts(), regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] }));
+    expect(known.failure?.known).toBe("MB-003");
+    // The premise: the known failure ended the exploration early, before a Score was ever taken.
+    expect(known.numRuns).toBeLessThan(known.runs);
+    expect(known.counts.Score.accepted).toBe(0);
+    expect(known.vacuous).toContain("no Score was accepted");
+    // The same product, the failure NEW: judged by its failure alone.
+    const fresh = await runCell(input({ driver: () => new RefusingPosts() }));
+    expect(fresh.failure?.known).toBeNull();
+    expect(fresh.vacuous).toEqual([]);
+  });
+
   it("replay: the reported seed + path + replayPath reproduce the same failure and the same shrunk commands (R29, R-PF9)", async () => {
     const first = (await runCell(input({ fault879: true, fences: false }))).failure;
     if (first === null) throw new Error("the fences-off cell found nothing to replay");
