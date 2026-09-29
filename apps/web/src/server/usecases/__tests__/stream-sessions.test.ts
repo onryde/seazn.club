@@ -2416,6 +2416,51 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(await relayCredits(other.auth, other.auth.orgId)).toMatchObject({ monthly: rate, monthlyAllowance: rate });
   });
 
+  it("m4: a grant that FAILS never blocks a start the org can pay for — createSession logs and reports it, then admits a PACK-funded org on the ungranted balance and it goes live; an org with nothing else is refused no_credits, never a 500", async () => {
+    // The same corrupt ledger as I1 (a NEGATIVE monthly bucket the rollover's ledger_negative guard refuses by name), so
+    // the ensure throws for real, from its own guard. Two pack credits beside it: the balance the gate reads is 1.
+    const corrupt = async (credits: number) => {
+      const r = await rig({ credits, monthly: true });
+      await sql`insert into org_stream_credits (org_id, delta, reason, bucket, balance_after) values (${r.auth.orgId}, -1, 'consume', 'monthly', ${credits - 1})`;
+      return r;
+    };
+    const r = await corrupt(2);
+    expect(await creditBalance(sql, r.auth.orgId), "premise: pack 2, monthly -1").toBe(1);
+    sentry.captureError.mockClear();
+    const errors: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((_o: unknown, msg?: string) => { errors.push(String(msg)); }) as never);
+    let sessionId: string;
+    try {
+      ({ sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps));
+    } finally {
+      spy.mockRestore();
+    }
+    const reported = sentry.captureError.mock.calls.filter(([e, ctx]) => (e as { code?: string }).code === "ledger_negative" && (ctx as { orgId?: string }).orgId === r.auth.orgId);
+    expect(reported, "the failed grant is REPORTED, not swallowed").toHaveLength(1);
+    expect(reported[0]![1]).toMatchObject({ route: "relay.session.monthly_grant" });
+    expect(errors.filter((m) => m.includes("monthly grant failed")), "and logged").toHaveLength(1);
+    expect(await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'grant' and bucket = 'monthly'`, "nothing granted on top of the corrupt bucket")
+      .toEqual([{ n: 0 }]);
+    // It goes live, and the go-live consume draws the PACK — the bucket that funded it.
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.id).toBe(sessionId);
+    expect(live.state).toBe("live");
+    const consumes = await sql<{ bucket: string }[]>`select bucket from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`;
+    expect(consumes.map((c) => c.bucket)).toEqual(["pack"]);
+    // The negative pair: the same failed grant with nothing left to pay (pack 1 against the -1: a balance of 0 — the
+    // ledger's own check refuses a negative balance_after, so 0 is the floor) is the balance gate's own 402, no row.
+    const broke = await corrupt(1);
+    expect(await creditBalance(sql, broke.auth.orgId), "premise: pack 1, monthly -1").toBe(0);
+    const spy2 = vi.spyOn(log, "error").mockImplementation((() => {}) as never);
+    try {
+      await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+    } finally {
+      spy2.mockRestore();
+    }
+    expect(await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${broke.auth.orgId}`).toEqual([{ n: 0 }]);
+  });
+
   it("I3: after a mid-month upgrade the card agrees with itself — relayCredits' monthly bucket is topped up to the allowance it prints", async () => {
     const r = await rig({ credits: 2, monthly: true });
     const community = await monthlyRate("community");

@@ -1042,7 +1042,15 @@ export async function createSession(
   // exists. On the WALL clock, not deps.now(): the grant's period is the real UTC month (ledger rows carry the DB's
   // now()), and a test clock ticked across a month end must not mint a second grant mid-test. Outside the admission
   // transaction: it takes the org's money lock in a transaction of its own, which must not be held across `admit`.
-  await ensureMonthlyStreamGrant(orgId);
+  // m4 (lane-close fix): guarded the way relayCredits guards it — a grant that fails (a corrupt ledger's
+  // `ledger_negative`, the lock, the plan read) is logged and reported, and admission reads the UNGRANTED balance. An
+  // org with pack credits still goes live on them; one with nothing else gets the balance gate's own 402 no_credits.
+  try {
+    await ensureMonthlyStreamGrant(orgId);
+  } catch (err) {
+    log.error({ err, orgId, fixtureId }, "createSession: monthly grant failed; admitting on the ungranted balance");
+    captureError(err, { orgId, route: "relay.session.monthly_grant" });
+  }
 
   const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
@@ -1206,7 +1214,7 @@ export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayC
     // corrupt ledger's `ledger_negative`) or fail on the lock or the plan read, and a failed grant writes no key, so it
     // fails again on every render. Thrown from here it took down the org's whole fixtures tab (no error boundary under
     // d/[divSlug]/). Log it, report it, and answer the UNGRANTED balance. The next start (createSession) runs the
-    // same ensure and refuses loudly there, on the action that needs the credit, not on the page that shows it.
+    // same ensure under the same guard (m4): it logs and reports there too, and admits on the ungranted balance.
     log.error({ err, orgId }, "relayCredits: monthly grant failed; answering the ungranted balance");
     captureError(err, { orgId, route: "relay.credits.monthly_grant" });
     monthlyAllowance = await streamMonthlyRate(orgId).catch(() => 0);
