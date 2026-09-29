@@ -301,7 +301,18 @@ export async function apply(
   // unlocked — `org_id` never changes, and `state` is only the gate for this read; the decision reads the LOCKED row.
   const [peek] = await sql<{ org_id: string; state: Session["state"] }[]>`select org_id, state from fixture_stream_sessions where id = ${sessionId}`;
   if (!peek) return null;
-  const monthly = CAN_STILL_CONSUME.includes(peek.state) ? { rate: await streamMonthlyRate(peek.org_id), now: new Date() } : undefined;
+  // N4 (Task 14b re-review): a FAILED read must not block the apply. Most decisions from these states (Stop, every expiry)
+  // never consume, so a pooled-read outage is reported and `monthly` stays unresolved: the consume guard below refuses the
+  // one decision that needs the rate, by name, and the next apply retries the read.
+  let monthly: { rate: number; now: Date } | undefined;
+  if (CAN_STILL_CONSUME.includes(peek.state)) {
+    try {
+      monthly = { rate: await streamMonthlyRate(peek.org_id), now: new Date() };
+    } catch (err) {
+      log.error({ err: String(err), sessionId, orgId: peek.org_id, state: peek.state }, "stream session: the monthly credit rate read failed — reported; this apply decides without it and refuses a go-live consume");
+      captureError(err, { orgId: peek.org_id, route: "relay.credits.apply_rate_read", extra: { sessionId, state: peek.state } });
+    }
+  }
   const outcome = (await sql.begin(async (tx) => {
     // A7 — LOCK ORDER. stream-credits.ts's rule is that every writer takes the org's money lock FIRST (`lockOrg`, before
     // any read), and its staff paths then take this session row (`staffRow`: lockOrg, then FOR KEY SHARE on the linked
@@ -324,11 +335,12 @@ export async function apply(
     let dec = decide(before, cmd, now);
     let applied: Command = cmd;
     if (dec.effects.some((e) => e.type === "consume_credit")) {
-      // "Cannot happen" as a guard: the peek saw a state that can no longer consume, yet the LOCKED row decided a consume
-      // — only a state moved BACKWARDS between the two can do that. Refused by name: consuming without the rollover
-      // would silently draw a bought credit over this month's free one. Nothing is written; the next apply peeks again.
+      // Two ways to arrive here with no rate: the read above FAILED (N4, already reported), or — "cannot happen" as a
+      // guard — the peek saw a state that can no longer consume yet the LOCKED row decided a consume, which only a state
+      // moved BACKWARDS between the two can do. Either way refused by name: consuming without the rollover would silently
+      // draw a bought credit over this month's free one. Nothing is written; the next apply peeks and reads again.
       if (!monthly) {
-        throw new HttpError(500, `Session ${sessionId} was ${peek.state} when its credit rate was read and ${before.state} when it went live; refusing to consume without the monthly rollover`, "monthly_rate_unresolved");
+        throw new HttpError(500, `Session ${sessionId} went live (${peek.state} at the rate read, ${before.state} under the lock) with no monthly credit rate resolved; refusing to consume without the monthly rollover`, "monthly_rate_unresolved");
       }
       try {
         const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId, monthly }, now);

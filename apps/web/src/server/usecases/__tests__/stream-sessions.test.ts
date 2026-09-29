@@ -61,6 +61,21 @@ import {
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
+// N4 (Task 14b re-review): apply's POOLED rate read, switchable so one test can make it throw. A pass-through otherwise —
+// every other test reads the real V426 row.
+const rateRead = vi.hoisted(() => ({ fail: null as Error | null, calls: 0 }));
+vi.mock("../stream-credits", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../stream-credits")>();
+  return {
+    ...real,
+    streamMonthlyRate: async (orgId: string) => {
+      rateRead.calls++;
+      if (rateRead.fail) throw rateRead.fail;
+      return real.streamMonthlyRate(orgId);
+    },
+  };
+});
+
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // A KEK of this file's own (secret-columns.test.ts precedent): CI supplies no RELAY_KEK, and every sealed destination
@@ -1350,6 +1365,58 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     // The positive pair: the next apply peeks `warming`, reads the rate, and goes live with its consume.
     expect((await apply(sessionId, { type: "ingest_connected" }, r.deps))!.state).toBe("live");
     expect(await consumed()).toBe(1);
+  });
+
+  it("N4: a THROWING rate read (apply's pooled plan lookup) lets the organiser's Stop and the warming expiry complete — only a go-live consume is refused, by name, and every failed read is reported (mutant: drop the catch → Stop and expire throw the read's error)", async () => {
+    const down = new Error("plan read down");
+    const reportsFor = (orgId: string) => sentry.captureError.mock.calls.filter(([err, ctx]) =>
+      err === down && (ctx as { orgId?: string; route?: string }).orgId === orgId && (ctx as { route?: string }).route === "relay.credits.apply_rate_read").length;
+    const consumes = async (sid: string) => (await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where session_id = ${sid} and reason = 'consume'`)[0]!.n;
+    let checked = 0;
+    try {
+      // Stop, on a session that can still consume (the only states whose apply reads the rate).
+      const stop = await rig({ credits: 1 });
+      const s1 = await createSession(stop.auth, stop.fixtureId, body(stop.target.id), stop.deps);
+      expect(["requested", "provisioning", "warming"], "premise: the apply below reads the rate").toContain((await stop.row(s1.sessionId)).state);
+      rateRead.fail = down;
+      rateRead.calls = 0;
+      expect((await stopSession(stop.auth, stop.fixtureId, s1.sessionId, stop.deps)).state).toBe("completed");
+      expect(rateRead.calls, "premise: the throwing read was reached").toBeGreaterThan(0);
+      expect(await consumes(s1.sessionId)).toBe(0);
+      expect(reportsFor(stop.auth.orgId)).toBeGreaterThan(0);
+      checked++;
+
+      // The warming timeout: a phone that never connects is failed on time, read or no read.
+      rateRead.fail = null;
+      const idle = await rig({ credits: 1, connectAfterMs: 24 * 3_600_000 });
+      const s2 = await createSession(idle.auth, idle.fixtureId, body(idle.target.id), idle.deps);
+      rateRead.fail = down;
+      idle.tick((WARMING_TIMEOUT_MINUTES * 60 + 60) * 1000);
+      await applyExpiry(s2.sessionId, idle.deps);
+      expect(await idle.row(s2.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+      expect(reportsFor(idle.auth.orgId)).toBeGreaterThan(0);
+      checked++;
+
+      // The one decision that needs the rate — the go-live consume — is refused by the existing guard, nothing charged or
+      // written; the positive pair: once the read answers, the next apply goes live with its consume.
+      rateRead.fail = null;
+      const live = await rig({ credits: 1 });
+      const s3 = await createSession(live.auth, live.fixtureId, body(live.target.id), live.deps);
+      live.tick(3000);
+      rateRead.fail = down;
+      await expect(apply(s3.sessionId, { type: "ingest_connected" }, live.deps)).rejects.toMatchObject({ status: 500, code: "monthly_rate_unresolved" });
+      expect(await consumes(s3.sessionId)).toBe(0);
+      expect((await live.row(s3.sessionId)).state).toBe("warming");
+      expect(reportsFor(live.auth.orgId)).toBeGreaterThan(0);
+      rateRead.fail = null;
+      expect((await apply(s3.sessionId, { type: "ingest_connected" }, live.deps))!.state).toBe("live");
+      expect(await consumes(s3.sessionId)).toBe(1);
+      checked++;
+    } finally {
+      rateRead.fail = null;
+    }
+    expect(checked).toBe(3);
   });
 
   it("m1 RACE (the poll): a Stop that lands between the poll's ingest read and its apply — the poll saw `warming` and a connected ingest — answers the ENDED projection, never a 500; nothing goes live and nothing is charged (mutant: plain ingest_connected apply → InvalidTransition)", async () => {
