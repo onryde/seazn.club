@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-qr.v1.json",
+  "title": "Seazn capture QR payload, v1",
+  "description": "What the organiser's Phone tab encodes and the seazn-capture app scans (design 2026-09-07 §7.6, owner ruling R-A 2026-09-10). BOTH credential shapes are required; `preferred` is a discriminator the phone obeys and asserts nothing about which leg is primary. Every credential field is opaque to the phone. `exp` is Unix seconds = provision + max_duration + 30 min. Vendored into the capture repo; the checksum of this file is pinned by apps/web/src/lib/__tests__/capture-qr.v1.test.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "sid", "slot", "cred", "preferred", "exp"],
+  "properties": {
+    "v": { "const": 1 },
+    "sid": { "type": "string", "format": "uuid", "description": "fixture_stream_sessions.id" },
+    "slot": { "type": "integer", "minimum": 0, "description": "fixture_stream_inputs.slot — 0 for R1/R2; multi-camera hands each phone its own slot" },
+    "cred": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["srt", "rtmps"],
+      "properties": {
+        "srt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "streamId", "passphrase", "latencyMs"],
+          "properties": {
+            "url": { "type": "string", "minLength": 1 },
+            "streamId": { "type": "string", "minLength": 1 },
+            "passphrase": { "type": "string", "minLength": 1 },
+            "latencyMs": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "rtmps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "streamKey"],
+          "properties": {
+            "url": { "type": "string", "minLength": 1 },
+            "streamKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "preferred": { "enum": ["srt", "rtmps"] },
+    "exp": { "type": "integer", "minimum": 1 }
+  }
+}
