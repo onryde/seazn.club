@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { HttpError } from "@/lib/errors";
+import { canonicalJson } from "@/lib/canonical-json";
 import { CHECKOUT_BRANDING, CUSTOMER_UPDATE_FOR_TAX } from "@/lib/billing";
 import { type StreamCreditPack, type StreamPackSize, streamPack } from "@/lib/stream-credit-packs";
 
@@ -77,15 +78,6 @@ export async function resolveStreamPackPriceId(pack: StreamCreditPack): Promise<
   const price = found.data[0];
   if (!price) throw new HttpError(503, "Billing is not yet configured. Please contact support.");
   return price.id;
-}
-
-/** Key-sorted JSON (arrays keep their order), so two equal requests hash equal whatever order their fields were built in. */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, val: unknown) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
-      : val,
-  );
 }
 
 /**

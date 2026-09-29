@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type Stripe from "stripe";
 import { getStripe } from "@/lib/stripe";
 import { HttpError } from "@/lib/errors";
+import { canonicalJson } from "@/lib/canonical-json";
 import { CHECKOUT_BRANDING, CUSTOMER_UPDATE_FOR_TAX } from "@/lib/billing";
 import stripePlans from "@/config/stripe-plans.json";
 
@@ -140,16 +141,6 @@ export async function resolveCreditPackPriceId(packKey: string): Promise<string>
     throw new HttpError(503, "Billing is not yet configured. Please contact support.");
   }
   return price.id;
-}
-
-/** Key-sorted JSON (arrays keep their order), so two equal requests hash equal whatever order their fields were built
- *  in. Mirrors `relay-checkout.ts`'s helper of the same name (kept private there, with its own key prefix). */
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, val: unknown) =>
-    val && typeof val === "object" && !Array.isArray(val)
-      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
-      : val,
-  );
 }
 
 /**
