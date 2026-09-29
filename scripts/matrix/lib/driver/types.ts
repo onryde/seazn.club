@@ -86,6 +86,13 @@ export interface OrganiserDriver {
   patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome>;
   /** A probe: PUT /divisions/:id/stages; returns the refusal, never throws on 4xx. */
   replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe>;
+  /** Finalizes a decided fixture and answers its state (W1c Task 6). Optional:
+   *  a driver without it cannot claim a finalize proof (Task 7's PADPROOF
+   *  refuses such a driver). HttpDriver posts the finalize route, BrowserDriver
+   *  taps the console's Finalize (the events route): both append ONE
+   *  core.finalize ledger row, and parity compares that row, never the route
+   *  (controller ruling D). */
+  finalize?(fixtureId: string): Promise<FixtureStateOut>;
   readonly callCount: number;
 }
 

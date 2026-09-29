@@ -482,3 +482,74 @@ describe("HttpDriver — a request that never answers (T14 fix round 1, M-5)", (
     expect(calls).toEqual(["POST /api/v1/stages/s1/complete"]);
   });
 });
+
+// W1c Task 6. finalize: the product's own finalize route (fixtures/[id]/
+// finalize/route.ts:11, Body {expected_seq}), which appends core.finalize
+// through the scoring path (usecases/scoring.ts finalizeFixture). ledger: a
+// thin wrapper over the bench's hardened reader (bench/lib/ledger.ts
+// fetchFixtureLedger, ruling 38) through THIS driver's transport, so it is
+// counted and bounded like every other call.
+describe("HttpDriver — finalize and the fixture ledger (W1c Task 6)", () => {
+  it("finalize reads the tip first, posts {expected_seq} to /finalize, and answers the fixture's state from the product's answer", async () => {
+    const { t, calls } = fake([
+      (c) => (c.path === "/api/v1/fixtures/f1/state" ? ok({ status: "decided", last_seq: 5, outcome: { kind: "win", winner: "e1" } }) : undefined),
+      (c) => (c.path === "/api/v1/fixtures/f1/finalize" ? ok({ seq: 6, status: "finalized", outcome: { kind: "win", winner: "e1" }, event_id: "ev6" }) : undefined),
+    ]);
+    const d = drv(t);
+    expect(await d.finalize("f1")).toEqual({ status: "finalized", last_seq: 6, outcome: { kind: "win", winner: "e1" } });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/v1/fixtures/f1/state", "POST /api/v1/fixtures/f1/finalize"]);
+    expect(calls[1]!.body).toEqual({ expected_seq: 5 });
+    expect(d.callCount).toBe(2);
+  });
+
+  it("a refused finalize is the product's RefusedCall, code and all", async () => {
+    const { t } = fake([
+      (c) => (c.path.endsWith("/state") ? ok({ status: "in_play", last_seq: 2, outcome: null }) : undefined),
+      () => err(422, "NOT_DECIDED"),
+    ]);
+    const e = await drv(t).finalize("f1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).code).toBe("NOT_DECIDED");
+    expect((e as RefusedCall).path).toBe("/api/v1/fixtures/f1/finalize");
+  });
+
+  it("ledger(since) is EXCLUSIVE — since 3 never returns seq 3 — seq-sorted, and counted as one call", async () => {
+    const { t, calls } = fake([
+      (c) => (c.path === "/api/v1/fixtures/f1/events?since_seq=3"
+        ? ok([{ id: "e5", seq: 5, type: "core.finalize", payload: {} }, { id: "e3", seq: 3, type: "core.start", payload: {} }, { id: "e4", seq: 4, type: "generic.result", payload: { p1Score: 1, p2Score: 0 } }])
+        : undefined),
+    ]);
+    const d = drv(t);
+    const rows = await d.ledger("f1", 3);
+    expect(rows.map((r) => r.seq)).toEqual([4, 5]);
+    expect(rows.map((r) => r.type)).toEqual(["generic.result", "core.finalize"]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/v1/fixtures/f1/events?since_seq=3"]);
+    expect(d.callCount).toBe(1);
+  });
+
+  it("ledger with no bound reads from 0 (every row); an empty ledger is [] — and a bound that is no seq is refused before any call", async () => {
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/fixtures/f1/events?since_seq=0" ? ok([]) : undefined)]);
+    const d = drv(t);
+    expect(await d.ledger("f1")).toEqual([]);
+    expect(calls.length).toBe(1);
+    for (const bad of [-1, 1.5, Number.NaN]) await expect(d.ledger("f1", bad), String(bad)).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls.length).toBe(1);
+  });
+
+  it("a refused ledger read is loud, never an empty ledger (the bench reader's contract)", async () => {
+    const { t } = fake([() => err(403, "FORBIDDEN")]);
+    await expect(drv(t).ledger("f1", 0)).rejects.toThrow(/HTTP 403 FORBIDDEN/);
+  });
+
+  it("the ledger read is bounded like every other call", async () => {
+    vi.useFakeTimers();
+    try {
+      const t: Transport = { raw: () => new Promise(() => undefined) };
+      const p = drv(t).ledger("f1", 0).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+      expect(await p).toBeInstanceOf(RequestTimedOut);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

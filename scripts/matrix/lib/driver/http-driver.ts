@@ -8,6 +8,7 @@
 // progressCompletedStage), which computes a NEW draft seed proposal and marks
 // the previous draft stale (stages.ts:4942-4944).
 import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
+import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
@@ -182,6 +183,31 @@ export class HttpDriver implements OrganiserDriver {
     // (streams/index.ts), so the declared points the scenario folds locally are
     // for exactly the events posted here.
     return this.postStream(fixtureId, state.status === "scheduled" ? [START, forfeitEv] : [forfeitEv], idempotencyPrefix);
+  }
+
+  /** Finalizes a decided fixture through the product's own route
+   *  (fixtures/[id]/finalize/route.ts:11, Body `{expected_seq}`), which
+   *  appends core.finalize through the scoring path (usecases/scoring.ts
+   *  finalizeFixture). The organiser's console posts the same event to the
+   *  events route instead (T5 fixture-console.ts); parity compares the LEDGER
+   *  rows the two leave, never the routes (controller ruling D). The state is
+   *  the product's own answer to the append. */
+  async finalize(fixtureId: string): Promise<FixtureStateOut> {
+    // RF5: never assume the tip — read it, as postStream does.
+    const tip = (await this.fixtureState(fixtureId)).last_seq;
+    const posted = await this.#call<PostedEvent>(`/api/v1/fixtures/${fixtureId}/finalize`, "POST", { expected_seq: tip });
+    return { status: posted.status, last_seq: posted.seq, outcome: posted.outcome };
+  }
+
+  /** The fixture's ledger rows AFTER `sinceSeq` (EXCLUSIVE — `since 3` never
+   *  returns seq 3), seq-sorted and envelope-checked: the bench's hardened
+   *  reader (bench/lib/ledger.ts fetchFixtureLedger, ruling 38), sent through
+   *  this driver's transport so the read is counted and bounded like any other.
+   *  A refusal throws, never reads as an empty ledger. */
+  async ledger(fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+    // The route 400s anything but a non-negative integer; refuse it here, by name, before a call.
+    if (!(Number.isInteger(sinceSeq) && sinceSeq >= 0)) throw new DriverMisuse(`driver: ledger since_seq must be a non-negative integer seq, got ${sinceSeq}`);
+    return fetchFixtureLedger(this.#base, this.#session, fixtureId, sinceSeq, { raw: (_base, _s, path, method) => this.#send(path, method ?? "GET") });
   }
 
   async withdraw(entrantId: string): Promise<WithdrawOut> {
