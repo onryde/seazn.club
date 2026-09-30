@@ -7,23 +7,33 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { football } from "@seazn/engine/sports/football";
+import { hockey } from "@seazn/engine/sports/hockey";
+import { icehockey } from "@seazn/engine/sports/icehockey";
 import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
 import { tennis } from "@seazn/engine/sports/tennis";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
-import { START_MATCH_TESTID, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, selectorForTapStep, type PadPage, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
+import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { PAD_OWNER, PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
+import { foldStream } from "../lib/fold.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
+import { FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, footballGoalTile, footballPad } from "../lib/pads/football.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
+import { hockeyPad } from "../lib/pads/hockey.ts";
+import { icehockeyPad } from "../lib/pads/icehockey.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import { TABLETENNIS_SET_SCORE_TILE, TABLETENNIS_SUMMARY, tabletennisPad } from "../lib/pads/tabletennis.ts";
 import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, tennisPad } from "../lib/pads/tennis.ts";
+import { PERIOD_ADVANCE_TILE, periodGoalTile } from "../lib/pads/period.ts";
+import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
-import { compareRow } from "../lib/pads/replay.ts";
+import { compareRow, replayEvents, type ReplayResult } from "../lib/pads/replay.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
-import { generateStream } from "../lib/streams/index.ts";
-import { GeneratorUnsupported, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
+import { generateStream, matchesRequest } from "../lib/streams/index.ts";
+import { GeneratorUnsupported, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -414,5 +424,310 @@ describe("tennis", () => {
     expect(TENNIS_SUMMARY).toBe("tennis.set_summary");
     expect(sportModule("tennis")).toBe(tennis);
     expect(Object.keys(tennis.eventSchemas ?? {})).toContain(TENNIS_SUMMARY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 10: football, hockey, icehockey.
+
+type RowIn = { type: string; payload: unknown };
+const TILE = (tileId: string) => selectorForTapStep({ kind: "tile", tileId });
+const START_SEL = selectorForTapStep({ kind: "testid", testid: START_MATCH_TESTID });
+const CHOICE_ID = /^\[data-choice-option-id="([^"]+)"\]$/;
+
+/** Replays `events` through the real replay on a fake pad modelled on what
+ *  Step 0 saw each route write. Every tap is recorded; the replay's hold
+ *  release (its `pad-send-now` presence check, the one boundary it crosses
+ *  after every event's taps) commits the rows `write` answers for the taps
+ *  since the last release. */
+async function replayOnModel(
+  adapter: MatrixPadAdapter,
+  events: readonly StreamEvent[],
+  ctx: TapAdapterContext,
+  write: (taps: readonly string[], ledger: readonly LedgerRow[]) => RowIn[],
+): Promise<{ res: ReplayResult; ledger: LedgerRow[] }> {
+  const ledger: LedgerRow[] = [];
+  let taps: string[] = [];
+  const sendNow = selectorForTapStep({ kind: "releaseHold" });
+  const page: PadPage = {
+    locator: (sel: string) => ({
+      click: async () => { taps.push(sel); },
+      fill: async (v: string) => { taps.push(`${sel}=${v}`); },
+      waitFor: async () => undefined,
+      count: async () => {
+        if (sel === sendNow) {
+          for (const r of write(taps, ledger)) ledger.push({ id: `r${ledger.length + 1}`, seq: ledger.length + 1, type: r.type, payload: r.payload });
+          taps = [];
+        }
+        return 0;
+      },
+    }),
+    goto: async () => undefined,
+    setViewportSize: async () => undefined,
+  };
+  const res = await replayEvents(page, adapter, events, ctx, {
+    holdMs: 3000,
+    tip: async () => 0,
+    ledger: async (since: number) => ledger.filter((r) => r.seq > since),
+    sleep: async () => undefined,
+  });
+  return { res, ledger };
+}
+
+/** football as Step 0 saw it (2026-09-30, 320, 11-a-side): Start writes
+ *  core.start; a goal tile writes `{by}` alone; the period tile then a marker
+ *  choice writes `{phase: <the choice's id>}`. Anything else writes nothing. */
+function footballModel(ctx: TapAdapterContext) {
+  return (taps: readonly string[]): RowIn[] => {
+    if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
+    for (const side of ["home", "away"] as const) {
+      if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: "football.goal", payload: { by: ctx.entrants[side] } }];
+    }
+    const m = taps.length === 2 && taps[0] === TILE("period") ? CHOICE_ID.exec(taps[1]!) : null;
+    return m === null ? [] : [{ type: "football.period", payload: { phase: m[1] } }];
+  };
+}
+
+/** hockey / icehockey as Step 0 saw them: a goal tile writes `{by}`; the
+ *  advance tile writes `{to, at}`, where `to` is what the ENGINE says comes
+ *  next (the summary's detail.nextAdvance, which the skin reads) and `at` the
+ *  current play phase at elapsed 0 (whistleAt with no clock). */
+function periodModel(sport: "hockey" | "icehockey", ctx: TapAdapterContext) {
+  const m = sport === "hockey" ? hockey : icehockey;
+  return (taps: readonly string[], ledger: readonly LedgerRow[]): RowIn[] => {
+    if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
+    for (const side of ["home", "away"] as const) {
+      if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: `${sport}.goal`, payload: { by: ctx.entrants[side] } }];
+    }
+    if (taps.length !== 1 || taps[0] !== TILE("advance")) return [];
+    const { state } = foldStream(m, ctx.cfg, ctx.entrants.home, ctx.entrants.away, ledger.map((r) => ({ type: r.type, payload: r.payload })));
+    const d = (m.summary(state as never).detail ?? {}) as { nextAdvance?: string | null; phase?: string };
+    return d.nextAdvance == null ? [] : [{ type: `${sport}.period.advance`, payload: { to: d.nextAdvance, at: { period: d.phase, elapsed: 0 } } }];
+  };
+}
+
+/** The engine's own advance order for `cfg` after a home goal: fold, read
+ *  nextAdvance, advance to it, until the engine names none. */
+function engineAdvances(sport: "hockey" | "icehockey", cfg: unknown): string[] {
+  const m = sport === "hockey" ? hockey : icehockey;
+  const evs: StreamEvent[] = [START, { type: `${sport}.goal`, payload: { by: HOME } }];
+  const out: string[] = [];
+  for (;;) {
+    const { state } = foldStream(m, cfg, HOME, AWAY, evs);
+    const next = ((m.summary(state as never).detail ?? {}) as { nextAdvance?: string | null }).nextAdvance ?? null;
+    if (next === null) return out;
+    out.push(next);
+    evs.push({ type: `${sport}.period.advance`, payload: { to: next } });
+    if (out.length > 12) throw new Error(`${sport}: the engine never stopped naming advances: ${out.join(",")}`);
+  }
+}
+const adv = (sport: string, to: string): StreamEvent => ({ type: `${sport}.period.advance`, payload: { to } });
+
+describe("football", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "football.tsx"), "utf8"); });
+
+  it("football: a declared fallback's rowsFor equals the rows its steps write in the fake ledger (1 for the goal), and the stored rows fold to the requested outcome", async () => {
+    const goal = footballPad.fallbacks.find((f) => f.eventType === FOOTBALL_GOAL);
+    expect(goal, "football.goal is declared a fallback").toBeDefined();
+    let fallbackRows = 0;
+    let cases = 0;
+    const cfg = resolveSportCfg("football", offlineBuilderDefault("football"));
+    for (const outcome of outcomesFor("football", cfg).filter((o) => o.kind !== "forfeit")) {
+      const r = req("football", cfg, outcome);
+      const evs = generateStream(r);
+      const { res, ledger } = await replayOnModel(footballPad, evs, ctxOf(r), footballModel(ctxOf(r)));
+      expect(res.findings, JSON.stringify(outcome)).toEqual([]);
+      expect(res.rows.map((x) => x.expected.type)).toEqual(evs.map((e) => e.type));
+      for (const row of res.rows) {
+        if (row.expected.type === FOOTBALL_GOAL) {
+          expect(row.verdict).toBe("fallback");
+          expect(row.stored.length).toBe(goal!.rowsFor(row.expected, ctxOf(r)));
+          expect(row.stored.length).toBe(1); // Step 0: one goal tap wrote one row
+          fallbackRows++;
+        } else {
+          expect(row.verdict, row.expected.type).toBe("equal");
+        }
+      }
+      const folded = foldStream(football, cfg, HOME, AWAY, ledger.map((x) => ({ type: x.type, payload: x.payload })));
+      expect(matchesRequest(r, folded.outcome), JSON.stringify(outcome)).toBe("match");
+      cases++;
+    }
+    expect(cases).toBe(3); // home win, away win, draw (11-a-side has no ET and no shootout)
+    expect(fallbackRows).toBe(2);
+  });
+
+  it("routes: a goal is its side's tile; a marker is the period tile then the marker's choice, in every variant's marker list", () => {
+    const { r } = summariesOf("football", FOOTBALL_GOAL, "away");
+    expect(footballPad.stepsFor({ type: FOOTBALL_GOAL, payload: { by: AWAY, minute: 10 } }, ctxOf(r))).toEqual([{ kind: "tile", tileId: footballGoalTile("away") }]);
+    expect(footballPad.stepsFor({ type: FOOTBALL_GOAL, payload: { by: HOME, minute: 10 } }, ctxOf(r))).toEqual([{ kind: "tile", tileId: footballGoalTile("home") }]);
+    let checked = 0;
+    for (const v of variantKeys("football")) {
+      const cfg = resolveSportCfg("football", v);
+      for (const e of streamOf(req("football", cfg, { kind: "win", winner: "home" })).filter((x) => x.type === FOOTBALL_PERIOD)) {
+        const phase = (e.payload as { phase: string }).phase;
+        expect(footballPad.stepsFor(e, ctxOf(r)), `${v} ${phase}`).toEqual([{ kind: "tile", tileId: FOOTBALL_PERIOD_TILE }, { kind: "choice", optionId: phase }]);
+        checked++;
+      }
+    }
+    console.info(`pad-adapters: football: ${checked} generated marker(s) routed`);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a goal by no entrant of the fixture, or a payload off either shape, is refused by name", () => {
+    const { r } = summariesOf("football", FOOTBALL_GOAL, "home");
+    for (const payload of [null, { by: "stranger", minute: 10 }, { minute: 10 }, { by: HOME, minute: 10, scorer: "p1" }] as unknown[]) {
+      expect(() => footballPad.stepsFor({ type: FOOTBALL_GOAL, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/football\.goal payload .* is not \{by: one of the fixture's entrants/);
+    }
+    for (const payload of [null, {}, { phase: "" }, { phase: "HT", at: 45 }] as unknown[]) {
+      expect(() => footballPad.stepsFor({ type: FOOTBALL_PERIOD, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/football\.period payload .* is not the sheet's \{phase\}/);
+    }
+    expect(() => footballPad.stepsFor({ type: "football.card", payload: {} }, ctxOf(r))).toThrow(/football\.card/);
+  });
+
+  it("Step 0: the goal row (keys [by]) mismatches the generated {by, minute}, which is why it is a fallback; the marker rows are equal", () => {
+    const { r } = summariesOf("football", FOOTBALL_GOAL, "home");
+    const evs = generateStream(r);
+    const g = evs.find((e) => e.type === FOOTBALL_GOAL)!;
+    expect(compareRow(g, { id: "r2", seq: 2, type: FOOTBALL_GOAL, payload: { by: HOME } }, footballPad).verdict).toBe("mismatch");
+    let checked = 0;
+    for (const e of evs.filter((x) => x.type === FOOTBALL_PERIOD)) {
+      expect(compareRow(e, { id: "r3", seq: 3, type: FOOTBALL_PERIOD, payload: e.payload }, footballPad)).toEqual({ verdict: "equal", note: null });
+      checked++;
+    }
+    expect(checked).toBe(2); // HT, FT
+    expect(footballPad.fallbacks.map((f) => f.eventType)).toEqual([FOOTBALL_GOAL]);
+    expect(footballPad.tolerableExtraKeys?.(FOOTBALL_GOAL) ?? []).toEqual([]);
+  });
+
+  it("pins: the goal tile's payload is {by} alone at the line the fallback cites; the period tile opens the marker sheet whose option ids are the markers", () => {
+    const goal = footballPad.fallbacks.find((f) => f.eventType === FOOTBALL_GOAL)!;
+    const cite = /football\.tsx:(\d+)/.exec(goal.why);
+    expect(cite, goal.why).not.toBeNull();
+    expect(skin.split("\n")[Number(cite![1]) - 1]).toContain(`action: { event: { type: "football.goal", payload: { by: entrantOf(state, side) } } },`);
+    expect(skin).toMatch(/if \(offerable\("football\.goal"\)\) \{\s*for \(const side of SIDES\) \{\s*tiles\.push\(\{\s*id: `goal-\$\{side\}`,/);
+    expect(footballGoalTile("home")).toBe("goal-home");
+    const tile = /if \(offerable\("football\.period"\)\) \{\s*tiles\.push\(\{\s*id: "([^"]+)",/.exec(skin);
+    expect(tile, "football.tsx no longer builds the period tile as a literal id under the football.period offer").not.toBeNull();
+    expect(FOOTBALL_PERIOD_TILE).toBe(tile![1]);
+    expect(skin).toContain(`action: { sheet: "${FOOTBALL_PERIOD_TILE}" },`);
+    expect(skin).toContain(`${FOOTBALL_PERIOD_TILE}: periodSheet(view, t),`);
+    expect(skin).toMatch(/options: periodMarkersOf\(view\.cfg\)\.map\(\(marker\) => \(\{\s*id: marker,/);
+    expect(skin).toContain("buildPayload: (answers) => ({ phase: answers.marker }),");
+    expect(sportModule("football")).toBe(football);
+    expect(Object.keys(football.eventSchemas ?? {})).toEqual(expect.arrayContaining([FOOTBALL_GOAL, FOOTBALL_PERIOD]));
+  });
+});
+
+describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s (period kernel)", (sport, pad) => {
+  it("replayed on the fake ledger: goal equal, every advance a 1-row fallback, no finding, and the stored rows fold to the requested outcome", async () => {
+    const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
+    const advance = pad.fallbacks.find((f) => f.eventType === `${sport}.period.advance`);
+    expect(advance, "advance is declared a fallback").toBeDefined();
+    let cases = 0;
+    let advances = 0;
+    for (const outcome of outcomesFor(sport, cfg).filter((o) => o.kind !== "forfeit")) {
+      const r = req(sport, cfg, outcome);
+      const evs = generateStream(r);
+      const { res, ledger } = await replayOnModel(pad, evs, ctxOf(r), periodModel(sport, ctxOf(r)));
+      expect(res.findings, JSON.stringify(outcome)).toEqual([]);
+      expect(res.rows.map((x) => x.expected.type)).toEqual(evs.map((e) => e.type));
+      for (const row of res.rows) {
+        if (row.expected.type === `${sport}.period.advance`) {
+          expect(row.verdict).toBe("fallback");
+          expect(row.stored.length).toBe(advance!.rowsFor(row.expected, ctxOf(r)));
+          expect((row.stored[0]!.payload as { to: string }).to).toBe((row.expected.payload as { to: string }).to);
+          advances++;
+        } else {
+          expect(row.verdict, row.expected.type).toBe("equal");
+        }
+      }
+      const folded = foldStream(sport === "hockey" ? hockey : icehockey, cfg, HOME, AWAY, ledger.map((x) => ({ type: x.type, payload: x.payload })));
+      expect(matchesRequest(r, folded.outcome), JSON.stringify(outcome)).toBe("match");
+      cases++;
+    }
+    // fih-outdoor: 2 wins + a draw, 4 advances each; iihf: 2 wins (no draws), 3 advances each.
+    expect({ cases, advances }).toEqual(sport === "hockey" ? { cases: 3, advances: 12 } : { cases: 2, advances: 6 });
+  });
+
+  it("the cursor walks the ENGINE's advance order in every variant, per fixture, and refuses a wrong-order, early or extra advance naming both labels", () => {
+    let checked = 0;
+    for (const v of variantKeys(sport)) {
+      const cfg = resolveSportCfg(sport, v);
+      const order = engineAdvances(sport, cfg);
+      expect(order.at(-1), v).toBe("FT");
+      const ctx: TapAdapterContext = { cfg, entrants: { home: `${v}-h`, away: `${v}-a` } };
+      const other: TapAdapterContext = { cfg, entrants: { home: `${v}-h2`, away: `${v}-a2` } };
+      expect(() => pad.stepsFor(adv(sport, order[0]!), ctx), v).toThrow(/before core\.start/);
+      pad.stepsFor(START, ctx);
+      pad.stepsFor(START, other);
+      if (order.length > 1) expect(() => pad.stepsFor(adv(sport, order[1]!), ctx), v).toThrow(`advance would write ${order[0]}, event names ${order[1]}`);
+      for (const to of order) {
+        expect(pad.stepsFor(adv(sport, to), ctx), `${v} ${to}`).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+        checked++;
+      }
+      expect(() => pad.stepsFor(adv(sport, "FT"), ctx), v).toThrow(/advance would write nothing \(FT is behind it\), event names FT/);
+      // The other fixture's cursor never moved.
+      expect(pad.stepsFor(adv(sport, order[0]!), other), v).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+      // A second match on the same pair starts over.
+      pad.stepsFor(START, ctx);
+      expect(pad.stepsFor(adv(sport, order[0]!), ctx), v).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+    }
+    console.info(`pad-adapters: ${sport}: ${checked} advance(s) walked over ${variantKeys(sport).length} variant(s)`);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("goal routes to its side's tile; a goal by no entrant, or an advance off {to}, is refused by name", () => {
+    const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
+    const ctx: TapAdapterContext = { cfg, entrants: { home: HOME, away: AWAY } };
+    expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: HOME } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("home") }]);
+    expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: AWAY } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("away") }]);
+    for (const payload of [null, {}, { by: "stranger" }, { by: HOME, person: "p1" }] as unknown[]) {
+      expect(() => pad.stepsFor({ type: `${sport}.goal`, payload }, ctx), JSON.stringify(payload)).toThrow(/goal payload .* is not \{by: one of the fixture's entrants\}/);
+    }
+    pad.stepsFor(START, ctx);
+    for (const payload of [null, {}, { to: "" }, { to: "FT", at: { period: "P1", elapsed: 0 } }] as unknown[]) {
+      expect(() => pad.stepsFor({ type: `${sport}.period.advance`, payload }, ctx), JSON.stringify(payload)).toThrow(/advance payload .* is not \{to\}/);
+    }
+    expect(() => pad.stepsFor({ type: `${sport}.shot`, payload: {} }, ctx)).toThrow(new RegExp(`${sport}\\.shot`));
+  });
+
+  it("Step 0: the advance row ({to, at}) mismatches the generated {to}, which is why it is a fallback; the goal row is equal", () => {
+    const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
+    const evs = generateStream(req(sport, cfg, { kind: "win", winner: "home" }));
+    const g = evs.find((e) => e.type === `${sport}.goal`)!;
+    expect(compareRow(g, { id: "r2", seq: 2, type: g.type, payload: { by: HOME } }, pad)).toEqual({ verdict: "equal", note: null });
+    const a = evs.find((e) => e.type === `${sport}.period.advance`)!;
+    const first = sport === "hockey" ? "Q1" : "P1";
+    expect(compareRow(a, { id: "r3", seq: 3, type: a.type, payload: { ...(a.payload as object), at: { period: first, elapsed: 0 } } }, pad).verdict).toBe("mismatch");
+    expect(pad.fallbacks.map((f) => f.eventType)).toEqual([`${sport}.period.advance`]);
+    expect(pad.tolerableExtraKeys?.(a.type) ?? []).toEqual([]);
+  });
+});
+
+describe("the period kernel pins (hockey + icehockey share period-shared.ts)", () => {
+  let shared = "";
+  beforeAll(() => { shared = readFileSync(resolve(REPO, SKINS, "period-shared.ts"), "utf8"); });
+
+  it("the goal and advance tile ids and payloads, the event names, and the line the advance fallback cites", () => {
+    expect(shared).toMatch(/goal: `\$\{k\}\.goal`,\s*advance: `\$\{k\}\.period\.advance`,/);
+    expect(shared).toMatch(/if \(offerable\(e\.goal\)\) \{\s*for \(const side of SIDES\) \{\s*tiles\.push\(\{\s*id: `goal-\$\{side\}`,[\s\S]{0,200}?action: \{ event: \{ type: e\.goal, payload: \{ by: entrantOf\(state, side\) \} \} \},/);
+    expect(periodGoalTile("away")).toBe("goal-away");
+    const tile = /if \(next !== null && offerable\(e\.advance\)\) \{[\s\S]{0,120}?tiles\.push\(\{\s*id: "([^"]+)",/.exec(shared);
+    expect(tile, "period-shared.ts no longer builds the advance tile as a literal id under the e.advance offer").not.toBeNull();
+    expect(PERIOD_ADVANCE_TILE).toBe(tile![1]);
+    let checked = 0;
+    for (const pad of [hockeyPad, icehockeyPad]) {
+      const f = pad.fallbacks[0]!;
+      const cite = /period-shared\.ts:(\d+)/.exec(f.why);
+      expect(cite, f.why).not.toBeNull();
+      expect(shared.split("\n")[Number(cite![1]) - 1]).toContain("payload: at === undefined ? { to: next } : { to: next, at },");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    for (const [key, m] of [["hockey", hockey], ["icehockey", icehockey]] as const) {
+      expect(sportModule(key)).toBe(m);
+      expect(Object.keys(m.eventSchemas ?? {})).toEqual(expect.arrayContaining([`${key}.goal`, `${key}.period.advance`]));
+    }
   });
 });

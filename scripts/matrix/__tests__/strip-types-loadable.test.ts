@@ -108,10 +108,13 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
   });
 
   // W1c Tasks 9–11: the other nine sports' pad adapters, each loaded on its own.
-  const W1C_T9_11 = ["lib/pads/volleyball.ts", "lib/pads/tabletennis.ts", "lib/pads/tennis.ts"];
+  const W1C_T9_11 = [
+    "lib/pads/volleyball.ts", "lib/pads/tabletennis.ts", "lib/pads/tennis.ts",
+    "lib/pads/football.ts", "lib/pads/period.ts", "lib/pads/icehockey.ts", "lib/pads/hockey.ts",
+  ];
   it("W1c Tasks 9–11's modules are all in the walk", () => {
     const missing = W1C_T9_11.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
-    expect(W1C_T9_11.length).toBe(3);
+    expect(W1C_T9_11.length).toBe(7);
     expect(missing).toEqual([]);
   });
 

@@ -156,7 +156,7 @@ describe("PADPROOF", () => {
 
   it("a sport with no pad adapter is refused by name (NoPadAdapter), naming the task that owes it, before any driver call", async () => {
     const d = new FakePadDriver();
-    const sport = "football";
+    const sport = "cricket"; // owed by W1c Task 11 until its adapter lands
     expect(PAD_SPORTS).not.toContain(sport);
     const err = await padProof.run(ctxOf(d, sport)).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NoPadAdapter);

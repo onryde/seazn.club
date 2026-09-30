@@ -1023,13 +1023,13 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
 
   it("a sport with no adapter is not tapped: it goes over http, and pad-route abstains ONCE naming the task that owes it; coverage still reds score", async () => {
     const r = fakeReplay(OK);
-    const { driver, http } = make({ http: padHttp(), spec: spec("league", "football"), pads: PAD_ADAPTERS, replay: r.fn });
-    await built(driver, spec("league", "football"));
+    const { driver, http } = make({ http: padHttp(), spec: spec("league", "cricket"), pads: PAD_ADAPTERS, replay: r.fn });
+    await built(driver, spec("league", "cricket"));
     await driver.postStream("f1", EVENTS, "p");
     await driver.postStream("f1", EVENTS, "q");
     expect(r.calls).toEqual([]);
     expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
-    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: `no pad adapter for football yet → ${PAD_OWNER.football}` });
+    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: `no pad adapter for cricket yet → ${PAD_OWNER.cricket}` });
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "fail", evidence: ["score: invoked 2×, never in the browser"] });
   });
 
