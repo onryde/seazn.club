@@ -56,13 +56,17 @@ export default async function DirectoryPage({
         </div>
 
         <ScrollActiveTabIntoView>
-          <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
+          <nav
+            aria-label={t(ui, "directory.sections")}
+            className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200"
+          >
             {TABS.map((tabKey) => (
               <Link
                 key={tabKey}
                 href={`/directory?tab=${tabKey}`}
                 aria-current={tab === tabKey ? "page" : undefined}
-                className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
+                // m5 (B4 review): each tab is a 44-px tap target (the mockup's `min-h-11`), the new Streaming tab included.
+                className={`flex min-h-11 items-center border-b-2 px-4 py-2 text-sm font-medium transition ${
                   tab === tabKey
                     ? "border-purple-600 text-purple-700"
                     : "border-transparent text-slate-500 hover:text-slate-800"

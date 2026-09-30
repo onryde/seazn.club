@@ -21,7 +21,7 @@ import { ZodError } from "zod";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { ApiV1Error } from "@/lib/client-v1";
-import { HttpError } from "@/lib/errors";
+import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { Dict } from "@/lib/i18n-constants";
 import {
@@ -260,6 +260,24 @@ describe("the Directory Streaming tab (spec §4)", () => {
     expect(named).toBe(StreamTargetKind.options.length);
   });
 
+  it("m6: a legacy `custom_rtmp` row is NAMED 'Other' — a platform name in the subline and the picker, never the retired create option's list of services — in every locale", async () => {
+    const { LOCALES } = await import("@/lib/i18n-constants");
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    let checked = 0;
+    for (const l of LOCALES) {
+      const dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>;
+      const name = dict["stream.target.kind.other"]!;
+      expect(name, l).toBeTruthy();
+      expect(name, `${l}: a name, not a sentence listing services`).not.toMatch(/[:,]|vimeo|restream|cloudflare/i);
+      expect(name.length, `${l}: short enough for a subline`).toBeLessThanOrEqual(12);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    const html = panelHtml({ targets: [target({ kind: "custom_rtmp", keyHint: null })] });
+    expect(html).toMatch(/data-testid="stream-dest-subline"[^>]*>Other · added /);
+  });
+
   it("the add form: a segmented platform choice opening at the first platform, name ≤ 80, a password key with Show, an optional watch link — and NO server field (spec §4, D6)", () => {
     const html = panelHtml({ canEdit: true, targets: [], addOpen: true });
     expect(html).toMatch(/data-testid="stream-dest-form"/);
@@ -295,7 +313,11 @@ describe("rowLock", () => {
 
 // ─── the error map, off the real wire ─────────────────────────────────────────────────────────────────────────────────
 describe("destinationErrorText — every refusal the routes answer reads as the page's own copy, never the server's English", () => {
-  type Row = [name: string, err: () => Promise<unknown> | unknown, kind: StreamTargetKind, expected: string];
+  /** The retry sentence for anything unmapped — per operation (m4: a failed Remove is not told "That didn't save"). */
+  const RETRY = Symbol("retry");
+  const OPS = ["add", "rename", "replace", "remove"] as const;
+  const retryFor = (op: (typeof OPS)[number]) => m(op === "remove" ? "streamDest.error.removeFailed" : "streamDest.error.generic");
+  type Row = [name: string, err: () => Promise<unknown> | unknown, kind: StreamTargetKind, expected: string | typeof RETRY];
   const ROWS: Row[] = [
     ["TARGET_IN_USE 409, live on a numbered match", () => targetHeld(holder()), "youtube", m("streamDest.stopFirst", { match: matchOf(5) })],
     ["TARGET_IN_USE 409, waiting on a numbered match", () => targetHeld(holder({ state: "waiting", matchNo: 7 })), "twitch", m("streamDest.stopFirst", { match: matchOf(7) })],
@@ -310,24 +332,41 @@ describe("destinationErrorText — every refusal the routes answer reads as the 
     ["STREAM_KEY_EMPTY 422", () => new HttpError(422, "The stream key is empty", STREAM_KEY_EMPTY), "youtube", m("streamDest.error.keyEmpty")],
     ["DESTINATION_LABEL_EMPTY 422", () => new HttpError(422, "The destination name is empty", DESTINATION_LABEL_EMPTY), "youtube", m("streamDest.error.nameEmpty")],
     ["VALIDATION 400 on the watch link (the schema's own refusal)", () => schemaRefusal({ kind: "youtube", label: "A", streamKey: "k", watchUrl: "https://example.com/x" }), "youtube", m("streamDest.error.watch")],
-    ["VALIDATION 400 on anything else (a kind the create allowlist refuses)", () => schemaRefusal({ kind: "facebook", label: "A", streamKey: "k" }), "youtube", m("streamDest.error.generic")],
+    ["VALIDATION 400 on anything else (a kind the create allowlist refuses)", () => schemaRefusal({ kind: "facebook", label: "A", streamKey: "k" }), "youtube", RETRY],
     ["FORBIDDEN 403 (a viewer's stale tab)", () => new HttpError(403, "Insufficient permissions"), "youtube", m("streamDest.error.forbidden")],
-    ["CONFLICT 409, the row changed while saving", () => new HttpError(409, "the destination changed while it was being saved; try again"), "youtube", m("streamDest.error.generic")],
-    ["INTERNAL 500", () => new Error("boom"), "youtube", m("streamDest.error.generic")],
+    // m4: refusals retrying cannot fix say what will — the SERVER's own classes through the real envelope.
+    ["UNAUTHENTICATED 401 (signed out in another tab)", () => new AuthError("Not signed in"), "youtube", m("streamDest.error.signedOut")],
+    ["PAYMENT_REQUIRED 402, a frozen admin seat (members.max)", () => new PaymentRequiredError("members.max"), "youtube", m("streamDest.error.seatFrozen")],
+    ["PAYMENT_REQUIRED 402 for any other feature", () => new PaymentRequiredError("formats.double_elim"), "youtube", RETRY],
+    ["CONFLICT 409, the row changed while saving", () => new HttpError(409, "the destination changed while it was being saved; try again"), "youtube", RETRY],
+    ["INTERNAL 500", () => new Error("boom"), "youtube", RETRY],
   ];
 
-  it("each row's copy is the dictionary's, and the server's own message never reaches the screen", async () => {
+  it("each row's copy is the dictionary's for EVERY operation (the retry sentence is the op's own), and the server's own message never reaches the screen", async () => {
     let checked = 0;
     for (const [name, make, kind, expected] of ROWS) {
       const raw = await make();
       const e = await wire(raw);
-      const text = destinationErrorText(m, e, kind);
-      expect(text, name).toBe(expected);
-      expect(text, `${name}: not the server's sentence`).not.toBe(e.message);
-      if (e.message.length > 12) expect(text, `${name}: no server English inside`).not.toContain(e.message);
-      checked++;
+      for (const op of OPS) {
+        const text = destinationErrorText(m, e, kind, op);
+        expect(text, `${name} (${op})`).toBe(expected === RETRY ? retryFor(op) : expected);
+        expect(text, `${name}: not the server's sentence`).not.toBe(e.message);
+        if (e.message.length > 12) expect(text, `${name}: no server English inside`).not.toContain(e.message);
+        checked++;
+      }
     }
-    expect(checked).toBe(ROWS.length);
+    expect(checked).toBe(ROWS.length * OPS.length);
+    // The positive pair of the retry split: the two retry sentences are different sentences.
+    expect(retryFor("remove")).not.toBe(retryFor("add"));
+    expect(m("streamDest.error.seatFrozen")).not.toMatch(/try again/i);
+    expect(m("streamDest.error.signedOut")).toMatch(/sign in/i);
+  });
+
+  it("m4 premise: the frozen-seat refusal really is a 402 carrying feature_key members.max on the wire", async () => {
+    const e = await wire(new PaymentRequiredError("members.max"));
+    expect(e.status).toBe(402);
+    expect(e.code).toBe("PAYMENT_REQUIRED");
+    expect(e.extra.feature_key).toBe("members.max");
   });
 
   it("TARGET_UNREADABLE's remedy follows the row's kind exactly as the server's forKind decides it — every stored kind", async () => {
@@ -335,20 +374,22 @@ describe("destinationErrorText — every refusal the routes answer reads as the 
     for (const kind of StreamTargetKind.options) {
       const e = await wire(TargetUnreadableError.forKind(kind));
       const serverRemedy = TargetUnreadableError.forKind(kind).remedy;
-      expect(destinationErrorText(m, e, kind), kind).toBe(m(serverRemedy === "replace_key" ? "streamDest.error.unreadable" : "streamDest.error.unreadableLegacy"));
+      expect(destinationErrorText(m, e, kind, "replace"), kind).toBe(m(serverRemedy === "replace_key" ? "streamDest.error.unreadable" : "streamDest.error.unreadableLegacy"));
       checked++;
     }
     expect(checked).toBe(StreamTargetKind.options.length);
     expect(m("streamDest.error.unreadableLegacy"), "a legacy kind cannot be added again (D6)").not.toMatch(/again/i);
   });
 
-  it("errors that never reached the server (a network TypeError, an abort, null) are the generic retry copy", () => {
+  it("errors that never reached the server (a network TypeError, an abort, null) are the op's retry copy", () => {
     let checked = 0;
     for (const err of [new TypeError("Failed to fetch"), new DOMException("aborted", "AbortError"), null, "x"]) {
-      expect(destinationErrorText(m, err, "youtube"), String(err)).toBe(m("streamDest.error.generic"));
-      checked++;
+      for (const op of OPS) {
+        expect(destinationErrorText(m, err, "youtube", op), `${String(err)} (${op})`).toBe(retryFor(op));
+        checked++;
+      }
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(4 * OPS.length);
   });
 
   it("every streamDest.* key this file reads exists in all four locales (no English fallback leaking into es/fr/nl)", async () => {
@@ -392,6 +433,7 @@ describe("DestinationRow — driven", () => {
     expect(apiCalls).toEqual([{ url: "/api/v1/orgs/o/stream-targets/t1", method: "DELETE", json: undefined }]);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(byTestId(panel.tree(), "stream-dest-error")).toBeUndefined();
+    expect(byTestId(row.tree(), "stream-dest-error")).toBeUndefined();
   });
 
   it("the Remove dialog's body: a platform row says re-adding the key restores it (D2); a LEGACY row never says 'again' — it cannot be added (D6)", async () => {
@@ -447,6 +489,7 @@ describe("DestinationRow — driven", () => {
     expect(apiCalls.map((c) => c.method)).toEqual(["DELETE"]);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(byTestId(panel.tree(), "stream-dest-error")).toBeUndefined();
+    expect(byTestId(row.tree(), "stream-dest-error")).toBeUndefined();
   });
 
   it("a double tap on Remove sends ONE request: the second tap lands while the first is in flight", async () => {
@@ -475,8 +518,49 @@ describe("DestinationRow — driven", () => {
     };
     const { panel, row } = panelWith(target());
     await click(byTestId(row.tree(), "stream-dest-remove"));
-    expect(textAt(panel.tree(), "stream-dest-error")).toBe(m("streamDest.stopFirst", { match: matchOf(3) }));
+    // m7: the refusal is IN the row whose action it answers — never above the list, off-screen at 320.
+    expect(textAt(row.tree(), "stream-dest-error")).toBe(m("streamDest.stopFirst", { match: matchOf(3) }));
+    expect(byTestId(panel.tree(), "stream-dest-error"), "not at the top of the panel").toBeUndefined();
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("m4: a Remove that fails is told it was not REMOVED (never 'didn't save'), in its row; opening an editor clears it", async () => {
+    transport.impl = async (url, opts) => {
+      apiCalls.push({ url, method: opts?.method ?? "GET", json: opts?.json });
+      throw new ApiV1Error("boom", 500, "INTERNAL");
+    };
+    const { row } = panelWith(target());
+    await click(byTestId(row.tree(), "stream-dest-remove"));
+    expect(textAt(row.tree(), "stream-dest-error")).toBe(m("streamDest.error.removeFailed"));
+    expect(textAt(row.tree(), "stream-dest-error")).not.toBe(m("streamDest.error.generic"));
+    await click(byTestId(row.tree(), "stream-dest-rename"));
+    expect(byTestId(row.tree(), "stream-dest-error"), "a new attempt starts clean").toBeUndefined();
+  });
+
+  it("m3: Rename and Replace key submitted TWICE on one render send ONE request each — the second lands while the first is in flight", async () => {
+    let checked = 0;
+    for (const op of ["rename", "replace"] as const) {
+      apiCalls.length = 0;
+      let release: () => void = () => {};
+      transport.impl = (url, opts) => {
+        apiCalls.push({ url, method: opts?.method ?? "GET", json: opts?.json });
+        return new Promise((r) => { release = () => r(target()); });
+      };
+      const { row } = panelWith(target());
+      await click(byTestId(row.tree(), `stream-dest-${op}`));
+      if (op === "rename") type(row.tree(), "stream-dest-rename-input", "New name");
+      else type(row.tree(), "stream-dest-replace-input", "abcd-1234-efgh-5678-ijkl");
+      const form = byTestId(row.tree(), `stream-dest-${op}-form`)!;
+      const submit = propsOf(form).onSubmit as (e: { preventDefault: () => void }) => void;
+      submit({ preventDefault: () => {} });
+      submit({ preventDefault: () => {} });
+      await settle();
+      release();
+      await settle();
+      expect(apiCalls.map((c) => c.method), op).toEqual(["PATCH"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("Rename: an inline editor seeded with the current name, PATCH {label} trimmed, then a refresh; a blank name cannot be saved", async () => {
@@ -598,6 +682,27 @@ describe("AddForm — driven", () => {
     expect(attr(byTestId(island.tree(), "stream-dest-save")!, "disabled"), "a blank key").toBe(true);
     type(island.tree(), "stream-dest-key", "k");
     expect(attr(byTestId(island.tree(), "stream-dest-save")!, "disabled")).toBe(false);
+  });
+
+  it("m3: Save submitted TWICE on one render (a double tap, Enter twice) sends ONE add — the second lands while the first is in flight", async () => {
+    let release: () => void = () => {};
+    const onSave = vi.fn<(b: unknown) => Promise<void>>(() => new Promise((r) => { release = r; }));
+    const { island } = form(onSave);
+    type(island.tree(), "stream-dest-name", "Main court");
+    type(island.tree(), "stream-dest-key", "abcd-1234-efgh-5678-ijkl");
+    const submitOnce = propsOf(byTestId(island.tree(), "stream-dest-form")!).onSubmit as (e: { preventDefault: () => void }) => Promise<void>;
+    const first = submitOnce({ preventDefault: () => {} });
+    await submitOnce({ preventDefault: () => {} });
+    release();
+    await first;
+    await settle();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // The positive pair: once the first save has settled, the next submit IS sent.
+    const again = (propsOf(byTestId(island.tree(), "stream-dest-form")!).onSubmit as (e: { preventDefault: () => void }) => Promise<void>)({ preventDefault: () => {} });
+    await settle();
+    expect(onSave).toHaveBeenCalledTimes(2);
+    release();
+    await again;
   });
 
   it("m8: the key field keeps password managers out, and Show flips it to text", async () => {

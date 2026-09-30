@@ -24,6 +24,7 @@ import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizo
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
+import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
@@ -146,7 +147,15 @@ const en = (key: string, vars: Record<string, string | number> = {}): string => 
   });
 };
 const matchName = (no: number): string => en("breadcrumb.match", { no });
-const BRAND: Record<StreamPlatform, string> = { youtube: "YouTube", twitch: "Twitch" };
+/** The platforms' names from the product's own table (m11), never typed here. */
+const BRAND: Record<StreamPlatform, string> = STREAM_KIND_BRAND;
+/** The subline's key-hint words ("key ends …" in en), cut from the dictionary's own template around `{hint}` (m11) — so a
+ *  copy change moves the negative assertions with it instead of leaving them vacuous. */
+const KEY_HINT_WORDS = ((): string => {
+  const words = (EN_UI["streamDest.subline"] ?? "").split("{hint}")[0]!.split("}").pop()!.replace(/^\s*·\s*/, "").trim();
+  if (words.length < 3) throw new Error(`streamDest.subline no longer frames {hint} with words: ${JSON.stringify(EN_UI["streamDest.subline"])}`);
+  return words;
+})();
 
 // Keys. The shapes are the platforms' own (spec §4 "Key-shape warning"); the nonce keeps every key distinct, because a
 // key already saved in the org is that destination (A19), not a new one.
@@ -460,12 +469,14 @@ for (const width of [320, 1280] as const) {
     await expect(row.getByTestId("stream-dest-subline")).toContainText(`…${hintOf(key2)}`);
     expect((await listApi(page, rig.orgId)).find((t) => t.id === id)?.keyHint, "the API's hint is the new key's").toBe(hintOf(key2));
 
-    // 9. ADD TWITCH.
+    // 9. ADD TWITCH — one POST for one save (m11: the per-platform count, Twitch's side).
     const tLabel = `Twitch ${rig.tag}`;
     const tKey = twitchKey();
+    const twitchPostsBefore = log.filter((r) => r.method === "POST").length;
     await addViaForm(page, { platform: "twitch", label: tLabel, key: tKey });
     await expect(form.getByTestId("stream-dest-key-warning")).toHaveCount(0);
     await expect(form).toHaveCount(0, { timeout: SAVE_MS });
+    expect(log.filter((r) => r.method === "POST").length - twitchPostsBefore, "one POST for the Twitch save").toBe(1);
     list = await listApi(page, rig.orgId);
     expect(list.map((t) => [t.kind, t.label]), "YouTube (restored) then Twitch, oldest first").toEqual([["youtube", label2], ["twitch", tLabel]]);
     await expect(rows(page)).toHaveCount(2);
@@ -512,8 +523,8 @@ test("1: add with the shape warning (it warns, never blocks) and both sides of t
   await form.getByTestId("stream-dest-save").click();
   await expect(form).toHaveCount(0, { timeout: SAVE_MS });
   const [short] = await listApi(page, rig.orgId);
-  await expect(rowOf(page, short!.id).getByTestId("stream-dest-subline")).not.toContainText("key ends");
-  await expect(rowOf(page, short!.id).getByTestId("stream-dest-subline")).toContainText(en("streamDest.sublineNoHint", { platform: "YouTube", date: "" }).trim());
+  await expect(rowOf(page, short!.id).getByTestId("stream-dest-subline")).not.toContainText(KEY_HINT_WORDS);
+  await expect(rowOf(page, short!.id).getByTestId("stream-dest-subline")).toContainText(en("streamDest.sublineNoHint", { platform: BRAND.youtube, date: "" }).trim());
 
   // A well-formed key: no warning, and its last three show.
   const longKey = "abcd-1234-efgh-5678-ijkl";
@@ -523,6 +534,7 @@ test("1: add with the shape warning (it warns, never blocks) and both sides of t
   const list = await listApi(page, rig.orgId);
   expect(list.map((t) => t.keyHint), "the API's hints: none for the short key, the last three for the long").toEqual([null, "jkl"]);
   await expect(rowOf(page, list[1]!.id).getByTestId("stream-dest-subline")).toContainText("…jkl");
+  await expect(rowOf(page, list[1]!.id).getByTestId("stream-dest-subline"), "the positive twin: a hint shows its words").toContainText(KEY_HINT_WORDS);
   expect(log.filter((r) => r.method === "POST").length, "one POST per save").toBe(2);
 });
 
@@ -686,7 +698,8 @@ test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) 
     const panel = await openStreaming(page);
     await expect(rows(page)).toHaveCount(3);
     await expect(rowOf(page, legacy!.id).locator('[data-platform-mark="facebook"]')).toBeAttached();
-    await expect(rowOf(page, legacy!.id).getByTestId("stream-dest-subline")).not.toContainText("key ends");
+    await expect(rowOf(page, legacy!.id).getByTestId("stream-dest-subline")).not.toContainText(KEY_HINT_WORDS);
+    await expect(rowOf(page, held.id).getByTestId("stream-dest-subline"), "the positive twin: a readable key shows its hint").toContainText(KEY_HINT_WORDS);
     await expect(rowOf(page, legacy!.id), "a legacy row never says 'again' (D6)").not.toContainText(/again/i);
     await expectNoHorizontalScroll(page);
     await shot(panel, `9-${width}-list-held.png`);
@@ -711,6 +724,11 @@ test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) 
   });
   expect(hit, "a tap at ⋯'s centre lands on ⋯").toBe(true);
   expect(await tapTargets(panel), "the panel's controls were hit-tested").toBeGreaterThan(3);
+  // m5: the Directory's tab strip — Streaming included — meets the same floor at 320 (it scrolls; each is brought in).
+  const strip = page.getByRole("navigation", { name: en("directory.sections") });
+  const tabCount = await strip.locator("a[href]").count();
+  expect(tabCount, "the strip holds every Directory tab").toBeGreaterThanOrEqual(5);
+  expect(await tapTargets(strip), "every Directory tab was hit-tested").toBe(tabCount);
   await menu.click();
   await expect(row.getByRole("menuitem")).toHaveCount(3);
   await expect(row.getByTestId("stream-dest-locked")).toHaveText([

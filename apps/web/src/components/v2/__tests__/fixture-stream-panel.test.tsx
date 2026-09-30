@@ -895,7 +895,7 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
 // ─── PhoneTabBody: every §8a / §8b state from the projection alone ──────────────────────────────────────────────────
 const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
-  view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
+  fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
   onSelectTarget: () => {}, onRetryTargets: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
@@ -1566,6 +1566,19 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
     expect(byTestId(tree, "stream-dest-empty")).toBeUndefined();
     expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBeFalsy();
+  });
+
+  it("m12: the select's id is the FIXTURE's own (two mounted panels never share one), and its label names it", () => {
+    let checked = 0;
+    for (const fixtureId of ["f-1", "f-2"]) {
+      const tree = body({ fixtureId, view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t1" });
+      const select = byTestId(tree, "stream-target")!;
+      expect(attr(select, "id"), fixtureId).toBe(`stream-target-${fixtureId}`);
+      const label = tree.find((el) => el.type === "label" && attr(el, "htmlFor") === attr(select, "id"));
+      expect(label, `${fixtureId}: a <label> names the select`).toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a failed destination load is an ERROR with Retry — never shown as 'none' (the silent catch this replaces)", () => {

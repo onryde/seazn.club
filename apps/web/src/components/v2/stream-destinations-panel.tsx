@@ -50,16 +50,22 @@ function wireOf(err: unknown): { status: number; code: string; extra: Record<str
   return { status, code, extra: typeof extra === "object" && extra !== null ? (extra as Record<string, unknown>) : {} };
 }
 
+/** The admin seat an over-quota org has frozen (auth.ts `requireOrgAuth` → entitlement-freeze.ts
+ *  `assertMemberNotFrozen`): a 402 PAYMENT_REQUIRED whose `feature_key` is the member limit. */
+const FROZEN_SEAT_FEATURE = "members.max";
+
 /**
  * A refusal as this page's own sentence, by the route's machine code (openapi.ts documents each one). `kind` is the
  * destination the action was about: the wire carries no remedy for an unreadable key, so the ROW decides it — a
  * YouTube or Twitch row is repaired by Replace key; a legacy kind cannot be, and cannot be added again either (D6), so
- * it is told to remove it (the server's own `TargetUnreadableError.forKind` rule). Anything unmapped is the generic
- * retry sentence — never the server's English.
+ * it is told to remove it (the server's own `TargetUnreadableError.forKind` rule). `op` picks the retry sentence for
+ * anything unmapped ("didn't save" / "wasn't removed") — never the server's English. m4 (B4 review): a refusal that
+ * retrying cannot fix — signed out, a frozen admin seat — says what WILL fix it instead of "Try again".
  */
-export function destinationErrorText(msg: Msg, err: unknown, kind: StreamTargetKind): string {
+export function destinationErrorText(msg: Msg, err: unknown, kind: StreamTargetKind, op: Op): string {
+  const retry = msg(op === "remove" ? "streamDest.error.removeFailed" : "streamDest.error.generic");
   const w = wireOf(err);
-  if (!w) return msg("streamDest.error.generic");
+  if (!w) return retry;
   switch (w.code) {
     case "TARGET_IN_USE": {
       const h = w.extra.holder as { matchNo?: unknown } | null | undefined;
@@ -86,17 +92,22 @@ export function destinationErrorText(msg: Msg, err: unknown, kind: StreamTargetK
       // form does not already hold back (a blank name or key never enables Save).
       const issues = w.extra.issues;
       const watch = Array.isArray(issues) && issues.some((i) => Array.isArray((i as { path?: unknown })?.path) && (i as { path: unknown[] }).path[0] === "watchUrl");
-      return msg(watch ? "streamDest.error.watch" : "streamDest.error.generic");
+      return watch ? msg("streamDest.error.watch") : retry;
     }
     case "FORBIDDEN":
       return msg("streamDest.error.forbidden");
+    case "UNAUTHENTICATED":
+      return msg("streamDest.error.signedOut");
+    case "PAYMENT_REQUIRED":
+      return w.extra.feature_key === FROZEN_SEAT_FEATURE ? msg("streamDest.error.seatFrozen") : retry;
     default:
-      return msg("streamDest.error.generic");
+      return retry;
   }
 }
 
-/** A mutation's result: `ok` with what the call answered (null when a row op's 404 meant "already done"), or not. */
-type RunResult<T> = { ok: true; value: T | null } | { ok: false };
+/** A mutation's result: `ok` with what the call answered (null when a row op's 404 meant "already done"), or the
+ *  refusal as this page's sentence — shown by the caller WHERE the action was taken (m7: a row's refusal in its row). */
+type RunResult<T> = { ok: true; value: T | null } | { ok: false; error: string };
 type Run = <T>(op: Op, kind: StreamTargetKind, call: () => Promise<T>) => Promise<RunResult<T>>;
 type AddBody = { kind: StreamPlatform; label: string; streamKey: string; watchUrl?: string };
 
@@ -115,10 +126,9 @@ export function StreamDestinationsPanel({
   const msg = useMsg();
   const router = useRouter();
   const [addOpen, setAddOpen] = useState(initialAddOpen);
-  const [error, setError] = useState<string | null>(null);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const run: Run = async (op, kind, call) => {
-    setError(null);
     try {
       const value = await call();
       router.refresh();
@@ -129,15 +139,17 @@ export function StreamDestinationsPanel({
         router.refresh();
         return { ok: true, value: null };
       }
-      setError(destinationErrorText(msg, err, kind));
       // A refusal naming a holder means this page was stale: the destination is held NOW, so the list is re-read and the
       // row locks with its badge (the error line stays until the next action).
       if (w?.code === "TARGET_IN_USE") router.refresh();
-      return { ok: false };
+      return { ok: false, error: destinationErrorText(msg, err, kind, op) };
     }
   };
 
-  const openAdd = () => setAddOpen(true);
+  const openAdd = () => {
+    setAddError(null);
+    setAddOpen(true);
+  };
 
   return (
     <div data-testid="stream-destinations" className="space-y-4">
@@ -147,7 +159,10 @@ export function StreamDestinationsPanel({
             type="button"
             data-testid="stream-dest-add"
             aria-expanded={addOpen}
-            onClick={() => setAddOpen((v) => !v)}
+            onClick={() => {
+              setAddError(null);
+              setAddOpen((v) => !v);
+            }}
             className="btn btn-primary min-h-11"
           >
             <Plus aria-hidden className="h-4 w-4" strokeWidth={2} />
@@ -157,28 +172,31 @@ export function StreamDestinationsPanel({
       )}
       {canEdit && addOpen && (
         <AddForm
-          onCancel={() => setAddOpen(false)}
+          onCancel={() => {
+            setAddError(null);
+            setAddOpen(false);
+          }}
           onSave={async (body) => {
+            setAddError(null);
             const saved = await run("add", body.kind, () =>
               apiV1<StreamTargetSaved>(`/api/v1/orgs/${orgId}/stream-targets`, { method: "POST", json: body }),
             );
-            if (!saved.ok) return;
+            if (!saved.ok) {
+              setAddError(saved.error);
+              return;
+            }
             // A19, owner decision (a): a key already saved is that destination, UNCHANGED — nothing was added and the
             // typed name was not applied, so the form stays open and names the destination that holds the key (the
             // refresh above has put it on the list).
             if (saved.value?.outcome === "existing") {
-              setError(msg("streamDest.error.duplicate", { label: saved.value.label }));
+              setAddError(msg("streamDest.error.duplicate", { label: saved.value.label }));
               return;
             }
             setAddOpen(false);
           }}
         />
       )}
-      {error && (
-        <p data-testid="stream-dest-error" role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-          {error}
-        </p>
-      )}
+      {addError && errorLine(addError)}
       {targets.length === 0 ? (
         <div data-testid="stream-dest-empty" className="card flex flex-col items-center gap-3 p-8 text-center max-md:p-5">
           <span aria-hidden className="grid h-11 w-11 place-items-center rounded-full bg-purple-50 text-purple-700">
@@ -202,6 +220,15 @@ export function StreamDestinationsPanel({
         </div>
       )}
     </div>
+  );
+}
+
+/** A refusal, where the action was taken: under the add form, or inside the row whose action it answers (m7). */
+function errorLine(text: string): ReactNode {
+  return (
+    <p data-testid="stream-dest-error" role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+      {text}
+    </p>
   );
 }
 
@@ -262,16 +289,21 @@ export function AddForm({ onSave, onCancel }: { onSave: (b: AddBody) => Promise<
   const [show, setShow] = useState(false);
   const [watch, setWatch] = useState("");
   const [busy, setBusy] = useState(false);
+  // m3: a second submit that lands on the SAME render (a double tap on Save, Enter twice) is refused here — `busy` state
+  // has not disabled Save yet on that render, a ref already says so.
+  const saving = useRef(false);
   const warning = keyShapeWarning(kind, key);
   const ready = label.trim() !== "" && key.trim() !== "";
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!ready || busy) return;
+    if (!ready || saving.current) return;
+    saving.current = true;
     setBusy(true);
     try {
       await onSave({ kind, label: label.trim(), streamKey: key.trim(), ...(watch.trim() ? { watchUrl: watch.trim() } : {}) });
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   };
@@ -390,6 +422,8 @@ export function DestinationRow({
   const [key, setKey] = useState("");
   const [show, setShow] = useState(false);
   const [saving, setSaving] = useState(false);
+  // m7: this row's refusal, shown IN the row (at 320 a lower row's error is otherwise off-screen above the list).
+  const [error, setError] = useState<string | null>(null);
   // A second tap (or a tap during the confirm) while an action is in flight is refused here, before any request.
   const busy = useRef(false);
 
@@ -406,15 +440,21 @@ export function DestinationRow({
 
   const openRename = () => {
     setMenuOpen(false);
+    setError(null);
     setName(t.label);
     setMode("rename");
   };
   const openReplace = () => {
     setMenuOpen(false);
     if (locked) return;
+    setError(null);
     setKey("");
     setShow(false);
     setMode("replace");
+  };
+  const closeEditor = () => {
+    setError(null);
+    setMode(null);
   };
   const onRemove = async () => {
     setMenuOpen(false);
@@ -430,7 +470,10 @@ export function DestinationRow({
         tone: "danger",
         size: "touch",
       });
-      if (ok) await run("remove", t.kind, () => apiV1(path, { method: "DELETE" }));
+      if (!ok) return;
+      setError(null);
+      const done = await run("remove", t.kind, () => apiV1(path, { method: "DELETE" }));
+      if (!done.ok) setError(done.error);
     } finally {
       busy.current = false;
     }
@@ -440,9 +483,11 @@ export function DestinationRow({
     if (busy.current) return;
     busy.current = true;
     setSaving(true);
+    setError(null);
     try {
       const done = await run(op, t.kind, () => apiV1(path, { method: "PATCH", json: body }));
       if (done.ok) setMode(null);
+      else setError(done.error);
     } finally {
       busy.current = false;
       setSaving(false);
@@ -476,11 +521,12 @@ export function DestinationRow({
             <button type="submit" data-testid="stream-dest-rename-save" disabled={name.trim() === "" || saving} className="btn btn-primary min-h-11">
               {msg("streamDest.renameSave")}
             </button>
-            <button type="button" data-testid="stream-dest-rename-cancel" onClick={() => setMode(null)} className="btn btn-ghost min-h-11">
+            <button type="button" data-testid="stream-dest-rename-cancel" onClick={closeEditor} className="btn btn-ghost min-h-11">
               {msg("streamDest.cancel")}
             </button>
           </div>
         </form>
+        {error && <div className="mt-3">{errorLine(error)}</div>}
       </li>
     );
   }
@@ -603,12 +649,13 @@ export function DestinationRow({
             <button type="submit" data-testid="stream-dest-replace-save" disabled={key.trim() === "" || saving} className="btn btn-primary min-h-11">
               {msg("streamDest.replaceSave")}
             </button>
-            <button type="button" data-testid="stream-dest-replace-cancel" onClick={() => setMode(null)} className="btn btn-ghost min-h-11">
+            <button type="button" data-testid="stream-dest-replace-cancel" onClick={closeEditor} className="btn btn-ghost min-h-11">
               {msg("streamDest.cancel")}
             </button>
           </div>
         </form>
       )}
+      {error && <div className="mt-3 md:pl-11">{errorLine(error)}</div>}
     </li>
   );
 }

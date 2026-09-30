@@ -18486,15 +18486,17 @@ async function seedOverlayOrg(label: string, cards: boolean): Promise<{
 /**
  * Streaming destinations over real HTTP (fixture-page stream T2b; spec §5.2, D2, D6): add a Twitch destination →
  * rename → replace its key → remove (an ARCHIVE) → remove again (404) → add the same key again (RESTORED: the same id)
- * → remove. Runs on the shared Pro org and archives everything it creates, so no later suite sees a destination. The
- * stream key is never printed. SMOKE_ONLY=streamTargets runs it alone (SELECTABLE_SUITES).
+ * → the same key once more while it is ACTIVE (A19, owner decision (a): `outcome: existing`, NOT renamed) → remove. First
+ * the Directory's Streaming tab itself renders its panel (B4 fix round 1, m10 — the page's only PR-time signal, since
+ * e2e runs on a push to main). Runs on the shared Pro org and archives everything it creates, so no later suite sees a
+ * destination. The stream key is never printed. SMOKE_ONLY=streamTargets runs it alone (SELECTABLE_SUITES).
  */
 async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> {
   const base = `/api/v1/orgs/${orgId}/stream-targets`;
   const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const twitchKey = () => "live_1_" + Array.from(randomBytes(24), (b) => ALNUM[b % ALNUM.length]).join("");
-  type Target = { id: string; label: string; keyHint: string | null; inUse: unknown };
-  const EXPECTED_STEPS = 7;
+  type Target = { id: string; label: string; keyHint: string | null; inUse: unknown; outcome?: unknown };
+  const EXPECTED_STEPS = 9;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`stream targets smoke: ${label}`, cond);
@@ -18505,12 +18507,19 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
     check(`stream targets smoke: all ${EXPECTED_STEPS} steps ran (ran ${steps})`, steps === EXPECTED_STEPS);
   };
 
+  // Anchored on `="` (AGENTS.md): a bare testid probe also matches a serialised prop.
+  const page = await html(admin, "/directory?tab=streaming");
+  step(
+    `GET /directory?tab=streaming renders the Streaming panel (got ${page.status})`,
+    page.status === 200 && page.body.includes('data-testid="stream-destinations"'),
+  );
+
   const key1 = twitchKey();
   const created = await raw(admin, base, "POST", { kind: "twitch", label: "smoke-tw", streamKey: key1 });
   const t = created.json.data as Target | undefined;
   step(
-    `POST a Twitch destination → 201 with keyHint = the key's last 3 and inUse null (got ${created.status})`,
-    created.status === 201 && t?.keyHint === key1.slice(-3) && t?.inUse === null,
+    `POST a Twitch destination → 201 with keyHint = the key's last 3, inUse null, outcome inserted (got ${created.status})`,
+    created.status === 201 && t?.keyHint === key1.slice(-3) && t?.inUse === null && t?.outcome === "inserted",
   );
   if (!t?.id) return done();
   const one = `${base}/${t.id}`;
@@ -18540,9 +18549,17 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
   step(`DELETE a removed destination → 404 (got ${again.status})`, again.status === 404);
 
   const restored = await raw(admin, base, "POST", { kind: "twitch", label: "smoke-tw-back", streamKey: key2 });
+  const back = restored.json.data as Target | undefined;
   step(
-    `POST the same key again → 201 with the SAME id (restored, never a second row) (got ${restored.status})`,
-    restored.status === 201 && (restored.json.data as Target | undefined)?.id === t.id,
+    `POST the same key again → 201 with the SAME id, the NEW label, outcome restored (never a second row) (got ${restored.status})`,
+    restored.status === 201 && back?.id === t.id && back?.label === "smoke-tw-back" && back?.outcome === "restored",
+  );
+
+  const existing = await raw(admin, base, "POST", { kind: "twitch", label: "smoke-tw-renamed?", streamKey: key2 });
+  const kept = existing.json.data as Target | undefined;
+  step(
+    `POST the key of an ACTIVE destination → 201, the SAME id, outcome existing, label NOT changed (A19) (got ${existing.status})`,
+    existing.status === 201 && kept?.id === t.id && kept?.label === "smoke-tw-back" && kept?.outcome === "existing",
   );
 
   const cleanup = await raw(admin, one, "DELETE");

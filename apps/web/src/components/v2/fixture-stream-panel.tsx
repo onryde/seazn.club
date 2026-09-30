@@ -1143,6 +1143,7 @@ export function PhoneTab({
   return (
     <>
       <PhoneTabBody
+        fixtureId={fixtureId}
         view={shown}
         balance={balance}
         targets={targets}
@@ -1216,6 +1217,8 @@ export function PhoneTab({
 }
 
 export interface PhoneTabBodyProps {
+  /** m12: scopes the picker's DOM id, so two mounted panels never share one. */
+  fixtureId: string;
   view: StreamSessionView | null;
   balance: number;
   /** Task 14b (R4): the page's split of the balance by bucket. Shown as "{m} free this month · {p} bought" under the
@@ -1579,7 +1582,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           <div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               {p.targets.status === "ok" && targetList.length > 0 ? (
-                <label htmlFor="stream-target" className="text-xs text-slate-500">
+                <label htmlFor={`stream-target-${p.fixtureId}`} className="text-xs text-slate-500">
                   {msg("stream.dest.label")}
                 </label>
               ) : (
@@ -1609,7 +1612,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               </p>
             ) : p.targets.status === "ok" ? (
               <select
-                id="stream-target"
+                id={`stream-target-${p.fixtureId}`}
                 data-testid="stream-target"
                 // B7: a phone's native select clips a long label — the title still names the selection.
                 title={selected ? optionText(selected) : undefined}
