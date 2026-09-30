@@ -265,22 +265,37 @@ describe("planL1 — ruling 39: L1 runs at 1280 only", () => {
   });
 });
 
+/** Owner ruling 43(a) (2026-09-30): the width sweep is the one W1c committed —
+ *  `w1c-sweep-ko`, one plain run per L2 width. Its cell and scenario are read
+ *  from that evidence (never typed here), so `--set width-sweep` reproduces it. */
+const SWEEP_EVIDENCE = L2_WIDTHS.map((w) => {
+  const r = JSON.parse(readFileSync(join(REPO, `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1c-sweep-ko/w1c-sweep-ko-${w}/results.json`), "utf8")) as { cases: { caseId: string; row: string; sport: string; scenario: string; width: number }[] };
+  expect(r.cases.length, `w1c-sweep-ko-${w}`).toBe(1);
+  return r.cases[0]!;
+});
+
 describe("the layered sets", () => {
-  it("width sweep: exactly L2_WIDTHS, in order, 320 included", () => {
+  it("width sweep: exactly L2_WIDTHS, in order, 320 included, on the committed sweep's cell (owner ruling 43a)", () => {
     const p = widthSweepPlanner({ set: WIDTH_SWEEP_SET });
     const cases = p.layered(v);
     console.info(`layers: width sweep ${cases.length} cases`);
     expect(cases.map((c) => c.width)).toEqual([...L2_WIDTHS]);
     expect(cases.map((c) => c.width)).toContain(320);
+    // The evidence is one cell × one scenario at every width, in L2_WIDTHS order.
+    expect(SWEEP_EVIDENCE.map((e) => e.width)).toEqual([...L2_WIDTHS]);
+    const cells = new Set(SWEEP_EVIDENCE.map((e) => `${e.row}|${e.sport}|${e.scenario}`));
+    expect(cells.size).toBe(1);
+    const { row, sport, scenario } = SWEEP_EVIDENCE[0]!;
+    expect(row, "43(a) moved the sweep off ruling 39's league cell").not.toBe("league");
     let checked = 0;
     for (const c of cases) {
-      expect(c.spec).toEqual({ caseId: `league|badminton|${v("badminton")}|LIFECYCLE`, row: "league", sport: "badminton", variant: v("badminton"), scenario: "LIFECYCLE", canary: false });
+      expect(c.spec).toEqual({ caseId: `${row}|${sport}|${v(sport)}|${scenario}`, row, sport, variant: v(sport), scenario, canary: false });
       expect({ layer: c.layer, noPath: c.noPath, notRun: c.notRun }).toEqual({ layer: "L2", noPath: null, notRun: null });
       checked++;
     }
     expect(checked).toBe(L2_WIDTHS.length);
     expect(new Set(cases.map(layerCaseId)).size).toBe(cases.length);
-    expect({ sports: p.sports, layer: p.layer, acceptsWidth: p.acceptsWidth }).toEqual({ sports: ["badminton"], layer: "L2", acceptsWidth: null });
+    expect({ sports: p.sports, layer: p.layer, acceptsWidth: p.acceptsWidth }).toEqual({ sports: [sport], layer: "L2", acceptsWidth: null });
     for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => widthSweepPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });
 

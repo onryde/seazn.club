@@ -10,8 +10,10 @@
 //    (HARNESS_SCENARIO) is driven; one whose atom has a known path gap
 //    (knownNoPath, else l2NoPath) is 🚫 naming that wave; every other run is
 //    ░ "no scenario script yet" (D5 — W1c writes no new scenario script).
-//  - `--set width-sweep`: league|badminton LIFECYCLE at every L2 width, in
-//    order (ruling 39: the stage-rail fold at 320 and at the md breakpoint).
+//  - `--set width-sweep`: knockout|badminton LIFECYCLE at every L2 width, in
+//    order (ruling 39: the stage-rail fold at 320 and at the md breakpoint;
+//    owner ruling 43(a) moved it off ruling 39's league cell, because
+//    knockout was otherwise never driven below 1280).
 //  - `--set api-only-browser`: one case per API-only row on generic, PLANNED
 //    🚫 naming the wave that owns its organiser control (D7 as ruled; the
 //    controller's Task 12 ruling). No builder control reaches these rows, so
@@ -195,12 +197,13 @@ const refuseFilters = (set: string, cli: PlannerCli): void => {
   if (cli.only !== undefined || cli.scenario !== undefined || cli.canary !== undefined) throw new SetTakesNoFilter(set, cli);
 };
 
-/** Ruling 39's one-off sweep: the organiser lifecycle on league|badminton at
- *  every L2 width, in order. Labelled L2: it runs at L2's widths, and L1 is
- *  1280 only. */
+/** Ruling 39's one-off sweep, on the cell owner ruling 43(a) chose: the
+ *  organiser lifecycle on knockout|badminton at every L2 width, in order —
+ *  the committed `w1c-sweep-ko` evidence. Labelled L2: it runs at L2's widths,
+ *  and L1 is 1280 only. */
 export const widthSweepPlanner: PlanLayers = (cli: PlannerCli) => {
   refuseFilters(WIDTH_SWEEP_SET, cli);
-  const row = "league", sport = "badminton";
+  const row = "knockout", sport = "badminton";
   return {
     sports: [sport], deniesFeatures: false, layer: "L2", label: `--set ${WIDTH_SWEEP_SET}`, acceptsWidth: null,
     layered: (variantFor) => {

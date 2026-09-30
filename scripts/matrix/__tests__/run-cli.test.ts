@@ -1817,7 +1817,7 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(resultsIn(dir, "l2g").cases.map((c) => c.state)).toEqual(cell.map((r) => (owningWave(r) === null ? "not_run" : "no_path")));
   });
 
-  it("--set width-sweep --driver browser: league|badminton LIFECYCLE once per L2 width, in order, 320 included — a case driver at each case's own width; results L2", async () => {
+  it("--set width-sweep --driver browser: knockout|badminton LIFECYCLE (owner ruling 43a) once per L2 width, in order, 320 included — a case driver at each case's own width; results L2", async () => {
     capture();
     const dir = dirFor();
     const fb = fakeBrowserRun();
@@ -1827,7 +1827,7 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(raw.layer).toBe("L2");
     expect(raw.cases.map((c) => c.width)).toEqual([...L2_WIDTHS]);
     expect(raw.cases.map((c) => c.width)).toContain(320);
-    expect(raw.cases.map((c) => c.caseId)).toEqual(L2_WIDTHS.map((w) => `league|badminton|bwf|LIFECYCLE@${w}`));
+    expect(raw.cases.map((c) => c.caseId)).toEqual(L2_WIDTHS.map((w) => `knockout|badminton|bwf|LIFECYCLE@${w}`));
     expect(fb.opts.map((o) => o.width)).toEqual([...L2_WIDTHS]);
     expect(fb.log).toEqual([...L2_WIDTHS.flatMap((_w, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
   });
