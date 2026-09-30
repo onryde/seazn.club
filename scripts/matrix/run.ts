@@ -29,7 +29,9 @@
 //      flag, a positional, --canary with --only/--scenario, --set with any
 //      filter, a run id that is empty or too long once slugged; an unknown
 //      --driver, --driver browser without --width, a --width outside
-//      BROWSER_WIDTHS, or a --width on an http run); an unknown
+//      BROWSER_WIDTHS, or a --width on an http run); a run id whose
+//      <report-dir>/<run-id>/results.json already exists (RunIdReused, W1c
+//      Task 8 E-2 — its evidence is kept, never overwritten); an unknown
 //      filter value (UnknownFilter — checked before anything else, PF13); an
 //      unknown --set (UnknownSet) or a planner that refuses to be built (a
 //      bound variant case the engine cannot score, BoundVariantUnscorable; a
@@ -68,7 +70,7 @@
 // Every line printed passes through redact(), and so does every string that
 // reaches results.json (R14a). Never print DATABASE_URL, cookies or links.
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { newSession, raw, signIn, type Session } from "../bench/lib/http.ts";
@@ -212,6 +214,23 @@ export class UnknownSet extends Error {
   constructor(v: string) {
     super(`matrix: unknown --set '${v}' (allowed: ${Object.keys(SETS).join(", ")})`);
     this.name = "UnknownSet";
+  }
+}
+
+/** W1c Task 8 review E-2: a run id names its evidence directory
+ *  (<report-dir>/<run-id>/, which writeResults and MATRIX.md overwrite
+ *  unconditionally) AND every case org's slug (seed-org.ts caseOrgSlug). A
+ *  run under a finished run's id would destroy that run's results and red
+ *  every case on a duplicate slug — so a results.json already there refuses
+ *  the run before anything else touches the DB or the server. */
+export class RunIdReused extends Error {
+  readonly runId: string;
+  readonly path: string;
+  constructor(runId: string, path: string) {
+    super(`run id ${runId} already has results at ${path} — a run under it would overwrite that evidence (results.json, MATRIX.md) and red every case on the case-org slugs its id derives; pass a fresh --run-id`);
+    this.name = "RunIdReused";
+    this.runId = runId;
+    this.path = path;
   }
 }
 
@@ -623,6 +642,10 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   }
   // W1c Task 7: a set that proves the pad has nothing to prove over HTTP.
   if (planner.needsBrowser === true && cli.driver !== "browser") { warn(`matrix: --set ${cli.set ?? "(injected)"} scores every fixture on the pad; it runs with --driver browser only`); return EXIT.REFUSED; }
+  // E-2: a finished run's evidence is never overwritten. Only results.json
+  // marks a finished run — an aborted one leaves at most its shots.
+  const prior = join(cli.reportDir, cli.runId, "results.json");
+  if (existsSync(prior)) { warn(`matrix: ${errText(new RunIdReused(cli.runId, prior))}`); return EXIT.REFUSED; }
   if (planner.deniesFeatures && (deps.env.REDIS_URL ?? "").trim() !== "") { warn(errText(new RedisHidesDeny())); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("matrix: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }

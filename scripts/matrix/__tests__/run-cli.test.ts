@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -292,6 +292,43 @@ describe("runSlice — a run", () => {
     expect(io.out()).toMatch(/^\[1\/1\] league\|generic\|score\|LIFECYCLE → works \d+ checks, \d+ items$/m);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
+  });
+  // W1c Task 8 review E-2 (fix round 1): writeResults and MATRIX.md overwrite
+  // <report-dir>/<run-id>/ unconditionally, and every case org's slug derives
+  // from the run id — so a rerun under a finished run's id destroyed that
+  // run's evidence AND redded every case on an unnamed duplicate-key error.
+  // The sequence: no results → runs; results → refused, evidence untouched;
+  // a fresh id beside it → runs.
+  it("E-2: a run id whose results.json exists is refused by name (exit 2) before the preflight or the DB, and the earlier evidence is left as it was", async () => {
+    const dir = dirFor();
+    const args = (id: string) => ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", id, "--report-dir", dir];
+    capture();
+    expect(await runSlice(deps(), args("t1"))).toBe(0);
+    const results = readFileSync(join(dir, "t1", "results.json"));
+    const matrix = readFileSync(join(dir, "t1", "MATRIX.md"));
+    vi.restoreAllMocks();
+    const io = capture();
+    const again = deps();
+    expect(await runSlice(again, args("t1"))).toBe(2);
+    expect(again.order).toEqual([]);
+    expect(io.err()).toMatch(/RunIdReused: run id t1 already has results at \S*t1\/results\.json/);
+    expect(io.out()).toBe("");
+    expect(readFileSync(join(dir, "t1", "results.json")).equals(results)).toBe(true);
+    expect(readFileSync(join(dir, "t1", "MATRIX.md")).equals(matrix)).toBe(true);
+    vi.restoreAllMocks();
+    capture();
+    const fresh = deps();
+    expect(await runSlice(fresh, args("t1-r2"))).toBe(0);
+    expect(fresh.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+    expect(existsSync(join(dir, "t1-r2", "results.json"))).toBe(true);
+  });
+  it("E-2, the empty case: a run directory with no results.json (an aborted run's shots) is no finished run, and is not refused", async () => {
+    capture();
+    const dir = dirFor();
+    mkdirSync(join(dir, "t1", "shots"), { recursive: true });
+    const d = deps();
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t1", "--report-dir", dir])).toBe(0);
+    expect(d.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
   });
   // Fix round 1 (I-2): through the REAL runCase — scenarios.test's runOn is a
   // copy of its composition and cannot see runCase drop the invariants. A
