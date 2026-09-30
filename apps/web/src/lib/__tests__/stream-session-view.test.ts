@@ -39,6 +39,10 @@ const LOCALES = ["en", "es", "fr", "nl"] as const;
 const dict = (l: string): Record<string, string> => JSON.parse(readFileSync(join(DICT_DIR, l, "ui.json"), "utf8"));
 const msg = (k: string, vars: Record<string, string | number> = {}) =>
   Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), (messages as Record<string, string>)[k] ?? `MISSING:${k}`);
+/** `msg`'s twin over the es dictionary — T3's copy is the page's locale, never English. */
+const ES = JSON.parse(readFileSync(join(DICT_DIR, "es", "ui.json"), "utf8")) as Record<string, string>;
+const msgEs = (k: string, vars: Record<string, string | number> = {}) =>
+  Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), ES[k] ?? `MISSING:${k}`);
 
 /** Every key in all four locales; returns how many lookups it made (anti-vacuity: the caller asserts > 0). */
 function inEveryLocale(keys: readonly string[]): number {
@@ -95,7 +99,9 @@ describe("stream-session-view — the copy maps", () => {
 
   it("the create-error map is total over CREATE_ERROR_CODES, one key each, plus the holder-less target_in_use variant, in all four locales", () => {
     expect(Object.keys(CREATE_ERROR_KEYS).sort()).toEqual([...CREATE_ERROR_CODES].sort());
-    for (const c of CREATE_ERROR_CODES) expect(CREATE_ERROR_KEYS[c], c).toBe(`stream.error.${c}`);
+    // T3: `target_in_use` is named by `inUseText` (stream.inUse.*); its map entry is the ONE holder-less "elsewhere"
+    // sentence, and the retired `stream.error.target_in_use` (a court, never a match) is named by nothing.
+    for (const c of CREATE_ERROR_CODES) expect(CREATE_ERROR_KEYS[c], c).toBe(c === "target_in_use" ? "stream.error.target_in_use.unknown" : `stream.error.${c}`);
     expect(inEveryLocale([...Object.values(CREATE_ERROR_KEYS), "stream.error.target_in_use.unknown"])).toBe(
       LOCALES.length * (CREATE_ERROR_CODES.length + 1),
     );
@@ -225,24 +231,26 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     expect(targetRefusalRule({ code: DESTINATION_NOT_ALLOWED })).toBeNull();
   });
 
-  it("createErrorHolder reads extra.holder: the court and label when present; courtName null kept; null for the index race, another code, or a malformed holder", async () => {
+  it("createErrorHolder reads extra.holder: the court and label when present; courtName null kept; a pre-T3 holder (no matchNo/href/state) reads live with no match; null for the index race, another code, or a malformed holder", async () => {
+    // A holder with no `state` reads "live": the pre-T3 server refused only for a destination already on air, and its copy
+    // said "already live" — that is what such a holder has always meant.
     expect(createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: "f-2", courtName: "Court 3", label: "Club channel" } }))))
-      .toEqual({ courtName: "Court 3", label: "Club channel" });
+      .toEqual({ courtName: "Court 3", label: "Club channel", matchNo: null, href: null, state: "live" });
     expect(createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder: { fixtureId: null, courtName: null, label: "Club channel" } }))))
-      .toEqual({ courtName: null, label: "Club channel" });
+      .toEqual({ courtName: null, label: "Club channel", matchNo: null, href: null, state: "live" });
     expect(createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder: null })))).toBeNull();
     expect(createErrorHolder(await wire(new HttpError(409, "busy", "active_session", { holder: { courtName: "Court 3", label: "Club channel" } })))).toBeNull();
     expect(createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder: { courtName: "Court 3" } })))).toBeNull();
     expect(createErrorHolder(new Error("boom"))).toBeNull();
   });
 
-  it("createErrorText: target_in_use names the destination and the court; without a court (or a holder) it says 'another match'; any other code is its map entry", () => {
-    const named = createErrorText({ code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel" } }, msg);
-    expect(named).toBe(msg("stream.error.target_in_use", { destination: "Club channel", court: "Court 3" }));
+  it("createErrorText: target_in_use names the destination, the match and the court; without a match (or a holder) it says 'another match'; any other code is its map entry", () => {
+    const named = createErrorText({ code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel", matchNo: 4, href: "/x", state: "live" } }, msg);
+    expect(named).toBe("Club channel is live on Match 4 · Court 3. Stop it there or pick another destination.");
     expect(named).toContain("Club channel");
     expect(named).toContain("Court 3");
     expect(named).not.toMatch(/[{}]/);
-    expect(createErrorText({ code: "target_in_use", holder: { courtName: null, label: "Club channel" } }, msg)).toBe(msg("stream.error.target_in_use.unknown"));
+    expect(createErrorText({ code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel", matchNo: null, href: null, state: "live" } }, msg)).toBe(msg("stream.error.target_in_use.unknown"));
     expect(createErrorText({ code: "target_in_use", holder: null }, msg)).toBe(msg("stream.error.target_in_use.unknown"));
     let checked = 0;
     for (const code of CREATE_ERROR_CODES) {
@@ -264,6 +272,45 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     expect(targetRefusalRule(await wire(new HttpError(422, "refused", DESTINATION_NOT_ALLOWED, { rule: "toString" })))).toBeNull();
     expect(targetRefusalRule(await wire(new HttpError(422, "bad key", "ERROR", { rule: "host" })))).toBeNull();
     expect(targetRefusalRule(new Error("boom"))).toBeNull();
+  });
+});
+
+describe("target_in_use names the match (spec §3.3, §5.5)", () => {
+  // Every case runs BOTH real functions in production order — createErrorHolder on the raw wire error, then
+  // createErrorText on what it returned (fixture-stream-panel.tsx `setCreateError` and the create-error render).
+  const holderOf = async (holder: unknown) => createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder })));
+  const textOf = async (holder: unknown, m = msg) => createErrorText({ code: "target_in_use", holder: await holderOf(holder) }, m);
+
+  it("live + court: '{label} is live on Match {n} · {court}. …' in the page's locale", async () => {
+    const h = { label: "Club YouTube", matchNo: 7, courtName: "Court 2", href: "/o/a/c/b/d/c/f/7", state: "live", fixtureId: "f" };
+    expect(await textOf(h)).toBe("Club YouTube is live on Match 7 · Court 2. Stop it there or pick another destination.");
+    // The match is the locale's own breadcrumb.match, never a server string (plan premise 10).
+    const es = await textOf(h, msgEs);
+    expect(es).toContain(msgEs("breadcrumb.match", { no: 7 }));
+    expect(es).not.toContain("Match 7");
+    expect(es).not.toMatch(/MISSING|[{}]/);
+  });
+  it("waiting, no court: the match alone, from breadcrumb.match", async () => {
+    const h = { label: "Tw", matchNo: 3, courtName: null, href: "/x", state: "waiting", fixtureId: "f" };
+    expect(await textOf(h)).toBe("Tw is waiting for a phone on Match 3. Stop it there or pick another destination.");
+  });
+  it("a holder whose fixture was deleted (matchNo null) reads the ONE 'elsewhere' key, never 'Match null'", async () => {
+    const text = await textOf({ label: "Tw", matchNo: null, courtName: null, href: null, state: "live", fixtureId: null });
+    expect(text).toBe(msg("stream.error.target_in_use.unknown"));
+    expect(text).not.toMatch(/null|undefined|[{}]/);
+  });
+  it("the index-race holder:null reads the same 'elsewhere' key", async () => {
+    expect(await textOf(null)).toBe(msg("stream.error.target_in_use.unknown"));
+  });
+  it("every new key exists in all four locales, and the retired key exists in none", () => {
+    const keys = ["stream.inUse.live", "stream.inUse.waiting", "stream.inUse.matchCourt", "stream.inUse.open"];
+    let checked = 0;
+    for (const loc of ["en", "es", "fr", "nl"]) {
+      const d = JSON.parse(readFileSync(join(DICT_DIR, loc, "ui.json"), "utf8")) as Record<string, string>;
+      for (const k of keys) { expect(d[k], `${loc} ${k}`).toBeTruthy(); checked++; }
+      expect(d["stream.error.target_in_use"], `${loc} retired key`).toBeUndefined();
+    }
+    expect(checked).toBe(4 * keys.length);
   });
 });
 

@@ -732,7 +732,7 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
 // ===========================================================================
 // A5 — a second tab tries to start what is already running
 // ===========================================================================
-test("A5: a SECOND TAB taps Go live — on the same match it is refused active_session and shows the running stream; on another match with the same destination it is refused target_in_use naming the court; ONE session row either way", async ({
+test("A5: a SECOND TAB taps Go live — on the same match it is refused active_session and shows the running stream; on another match with the same destination it is refused target_in_use naming the match and its court; ONE session row either way", async ({
   page,
 }) => {
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000);
@@ -781,9 +781,13 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
   const body3 = row3.locator("[data-phone-body]");
   await expect(body3.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
   await body3.getByTestId("stream-go-live").click();
-  await expect(body3.getByTestId("stream-create-error")).toHaveText(
-    en("stream.error.target_in_use", { destination: target.label, court: courtName }),
-  );
+  // T3 (spec §3.3, §5.5): the refusal names the MATCH and its court — f1's own number through the locale's
+  // breadcrumb.match — and says whether f1's phone is live or still awaited. f1 may be in either state at this instant
+  // (the create above does not wait for live), so either full sentence is right; nothing else is.
+  const f1Match = en("stream.inUse.matchCourt", { match: en("breadcrumb.match", { no: f1.no }), court: courtName });
+  const inUse = [en("stream.inUse.live", { label: target.label, match: f1Match }), en("stream.inUse.waiting", { label: target.label, match: f1Match })];
+  const escaped = inUse.map((t) => t.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&"));
+  await expect(body3.getByTestId("stream-create-error")).toHaveText(new RegExp(`^(${escaped.join("|")})$`));
   await expect(body3.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
   const all = await sessionsOf({ orgId: rig.orgId });
   expect(all.map((s) => s.fixture_id), "ONE session in the org — f1's; the refused start wrote nothing").toEqual([f1.id]);

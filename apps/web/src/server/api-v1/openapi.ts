@@ -163,7 +163,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}", method: "patch", summary: "Schedule move, venue, officials, pin/lock — blocking conflicts → 409, warn-level ones come back in `conflicts`", tag: "fixtures", request: S.PatchFixture, response: S.PatchedFixture, errors: [402, 409, 422] },
   { path: "/fixtures/{id}/stream", method: "put", summary: "Set or clear the fixture's public broadcast link (https, exact-host allowlist: YouTube, Facebook, Twitch, Kick) — surfaces as \"Watch live\" on the public match page", tag: "fixtures", request: S.PutFixtureStream, response: S.FixtureStream, errors: [403, 404, 422] },
   // Streaming R1 — phone relay sessions (design §6.3). Never key-reachable (key-scopes.ts).
-  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is streaming for another fixture), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
+  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
   { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the QR payload while warming) — null when none exists", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), query: { reveal: { schema: { type: "string", enum: ["1"] }, description: "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; absent, the read is a poll and counts nothing; any other value is 400" } }, errors: [403, 404] },
   { path: "/fixtures/{id}/stream-sessions/{sid}/stop", method: "post", summary: "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and decides nothing (no transition, no provider call) — a tap on a session still ending is recorded as the organiser's action, one on an ended session writes nothing; 409 not_active when the fixture has since started a newer session", tag: "fixtures", response: S.StreamSessionCurrent, errors: [403, 404, 409] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
@@ -642,14 +642,11 @@ const STREAM_SESSION_CREATE_ERRORS = {
   }),
   409: scopedErrorEnvelope({
     sessionId: { type: ["string", "null"], format: "uuid", description: "On active_session (409): the fixture's running session — resume it rather than start another" },
+    // T3 (spec §5.5): the Directory's holder shape (stream-target-holders.ts wireHolder), nullable here alone.
     holder: {
+      ...STREAM_TARGET_HOLDER_PROPERTIES,
       type: ["object", "null"],
-      description: "On target_in_use (409): the fixture (always this organisation's) whose stream holds the destination; null when a concurrent start won the race and there is no holder to name",
-      properties: {
-        fixtureId: { type: ["string", "null"], format: "uuid", description: "The holding fixture; null if it was deleted" },
-        courtName: { type: ["string", "null"], description: "The holding fixture's court, when it has one" },
-        label: { type: "string", description: "The destination's own label" },
-      },
+      description: "On target_in_use (409): the match (always this organisation's) whose stream holds the destination — its number, organiser page, court and whether a phone is live or awaited; null when a concurrent start won the race and there is no holder to name",
     },
   }),
   422: DESTINATION_NOT_ALLOWED_ENVELOPE,

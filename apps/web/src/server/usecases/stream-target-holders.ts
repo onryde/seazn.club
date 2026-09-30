@@ -1,7 +1,8 @@
 import "server-only";
 // server/usecases/stream-target-holders.ts — ONE answer to "which session holds this destination", read by the
-// Directory list (`inUse`), Go live's refusal (`target_in_use`), and Replace key / Remove (`TARGET_IN_USE`). Spec
-// §5.3 + §5.5. Held = an ACTIVE session references the target; this org's only (the target join is the tenancy floor).
+// Directory list (`inUse`), Go live's refusal (`target_in_use`, stream-sessions.ts `targetHolderFor`), and Replace key /
+// Remove (`TARGET_IN_USE`). Spec §5.3 + §5.5. Held = an ACTIVE session references the target; this org's only (the
+// target join is the tenancy floor).
 import { sql, type Tx } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import type { StreamTargetHolder } from "@/server/api-v1/schemas";
@@ -19,14 +20,19 @@ export interface TargetHolder {
   courtName: string | null; label: string; state: HoldState;
 }
 
+/** The holding fixture's organiser page; null once the fixture (or any slug on its path) is gone. One authority for the
+ *  active holder here and Go live's terminal holder (stream-sessions.ts `terminalHolder`). */
+export function holderHref(r: Pick<HolderRow, "org_slug" | "comp_slug" | "div_slug" | "fixture_no">): string | null {
+  return r.org_slug && r.comp_slug && r.div_slug && r.fixture_no !== null
+    ? routes.fixture(r.org_slug, r.comp_slug, r.div_slug, r.fixture_no)
+    : null;
+}
+
 export function toTargetHolder(r: HolderRow): TargetHolder {
   const state = holdStateOf(r.state);
   if (state === null) throw new Error(`holderRows returned a terminal session ${r.session_id}`);
-  const href = r.org_slug && r.comp_slug && r.div_slug && r.fixture_no !== null
-    ? routes.fixture(r.org_slug, r.comp_slug, r.div_slug, r.fixture_no)
-    : null;
   return {
-    sessionId: r.session_id, targetId: r.target_id, fixtureId: r.fixture_id, href, matchNo: r.fixture_no,
+    sessionId: r.session_id, targetId: r.target_id, fixtureId: r.fixture_id, href: holderHref(r), matchNo: r.fixture_no,
     courtName: r.court_name, label: r.label, state,
   };
 }
@@ -57,8 +63,9 @@ export async function holderRows(
   return rows.map(toTargetHolder);
 }
 
-/** The 409 extra (Go live's `target_in_use`, PATCH/DELETE's `TARGET_IN_USE`). No session id: nothing a client does with it. */
-export const wireHolder = (h: TargetHolder) => ({
+/** The 409 extra (Go live's `target_in_use`, PATCH/DELETE's `TARGET_IN_USE`). No session id: nothing a client does with it.
+ *  Reads no `targetId`, so Go live's terminal holder (an ended session, never a `holderRows` row) goes through it too. */
+export const wireHolder = (h: Pick<TargetHolder, "fixtureId" | "href" | "matchNo" | "courtName" | "label" | "state">) => ({
   fixtureId: h.fixtureId, href: h.href, matchNo: h.matchNo, courtName: h.courtName, label: h.label, state: h.state,
 });
 

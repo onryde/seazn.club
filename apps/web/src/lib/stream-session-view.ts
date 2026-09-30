@@ -116,13 +116,14 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   active_session: "stream.error.active_session",
   storage_exhausted: "stream.error.storage_exhausted",
   ingest_unavailable: "stream.error.ingest_unavailable",
-  target_in_use: "stream.error.target_in_use",
+  // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
+  target_in_use: "stream.error.target_in_use.unknown",
   destination_not_allowed: "stream.error.destination_not_allowed",
   plan_lacks_relay: "stream.error.plan_lacks_relay",
   unknown: "stream.error.unknown",
 };
 
-/** `target_in_use` without a court to name (the index race's `{ holder: null }`, or a holder fixture with no court). */
+/** `target_in_use` without a match to name (the index race's `{ holder: null }`, or a holder whose fixture was deleted). */
 const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unknown";
 
 /** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
@@ -155,27 +156,43 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   return "unknown";
 }
 
-export type CreateErrorHolder = { courtName: string | null; label: string };
+export type CreateErrorHolder = {
+  courtName: string | null; label: string; matchNo: number | null; href: string | null; state: "live" | "waiting";
+};
 
 /** Who holds the destination on a `target_in_use` (`extra.holder`, stream-sessions.ts `targetInUse`); `null` on the
- *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. */
+ *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. A holder with no
+ *  `state` (a pre-T3 server) reads "live": that server refused only for a destination already on air. */
 export function createErrorHolder(err: unknown): CreateErrorHolder | null {
   const w = wireError(err);
   if (!w || w.code !== "target_in_use") return null;
-  const h = w.extra.holder as { courtName?: unknown; label?: unknown } | null | undefined;
+  const h = w.extra.holder as { courtName?: unknown; label?: unknown; matchNo?: unknown; href?: unknown; state?: unknown } | null | undefined;
   if (typeof h !== "object" || h === null || typeof h.label !== "string") return null;
-  return { courtName: typeof h.courtName === "string" ? h.courtName : null, label: h.label };
+  return {
+    courtName: typeof h.courtName === "string" ? h.courtName : null,
+    label: h.label,
+    matchNo: typeof h.matchNo === "number" ? h.matchNo : null,
+    href: typeof h.href === "string" ? h.href : null,
+    state: h.state === "waiting" ? "waiting" : "live",
+  };
 }
 
 type Msg = (k: MessageKey, vars?: Record<string, string | number>) => string;
 
-/** The refusal's sentence. `target_in_use` names the destination and the court holding it; without a court it says
- *  "another match" rather than render a hole. */
+/** Spec §3.3 — "{label} is {live|waiting for a phone} on Match {n} · {court}. Stop it there or pick another
+ *  destination." The match is the locale's own `breadcrumb.match`, never a server string (plan premise 10). No match
+ *  number (the holder's fixture was deleted) reads the one "elsewhere" sentence, never "Match null". */
+export function inUseText(msg: Msg, h: CreateErrorHolder): string {
+  if (h.matchNo === null) return msg(TARGET_IN_USE_ELSEWHERE_KEY);
+  const matchOnly = msg("breadcrumb.match", { no: h.matchNo });
+  const match = h.courtName ? msg("stream.inUse.matchCourt", { match: matchOnly, court: h.courtName }) : matchOnly;
+  return msg(h.state === "live" ? "stream.inUse.live" : "stream.inUse.waiting", { label: h.label, match });
+}
+
+/** The refusal's sentence. `target_in_use` names the destination, the match and its court (`inUseText`); without a
+ *  holder it says "another match" rather than render a hole. */
 export function createErrorText(error: { code: CreateErrorCode; holder: CreateErrorHolder | null }, msg: Msg): string {
-  if (error.code === "target_in_use") {
-    const h = error.holder;
-    return h?.courtName ? msg(CREATE_ERROR_KEYS.target_in_use, { destination: h.label, court: h.courtName }) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
-  }
+  if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
   return msg(CREATE_ERROR_KEYS[error.code]);
 }
 

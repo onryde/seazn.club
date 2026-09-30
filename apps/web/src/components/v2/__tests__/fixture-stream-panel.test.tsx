@@ -1112,11 +1112,13 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(body({ view: null, balance: 0, checkoutError: "owner" }), "stream-create-error")).toBeUndefined();
   });
 
-  it("a refused create shows the E5 create-error copy, keyed by code; target_in_use NAMES the court (D12)", () => {
+  it("a refused create shows the E5 create-error copy, keyed by code; target_in_use NAMES the match and court (D12, spec §5.5)", () => {
     const tree = body({ view: null, balance: 1, createError: { code: "storage_exhausted", holder: null } });
     expect(textAt(tree, "stream-create-error")).toBe(m("stream.error.storage_exhausted"));
-    const named = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel" } } });
-    expect(textAt(named, "stream-create-error")).toBe(m("stream.error.target_in_use", { destination: "Club channel", court: "Court 3" }));
+    const named = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel", matchNo: 4, href: "/x", state: "live" } } });
+    expect(textAt(named, "stream-create-error")).toBe(
+      m("stream.inUse.live", { label: "Club channel", match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 4 }), court: "Court 3" }) }),
+    );
     const elsewhere = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: null } });
     expect(textAt(elsewhere, "stream-create-error")).toBe(m("stream.error.target_in_use.unknown"));
     expect(byTestId(body({ view: null, balance: 1 }), "stream-create-error"), "the empty case").toBeUndefined();
@@ -1864,11 +1866,18 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
   it("refusals: target_in_use carries the holder (D12); a plan refusal from CREATE is the switched-off state (I4), never a retry", async () => {
     const s = serve({ current: null, targets: TARGETS });
-    s.create = () => { throw new ApiV1Error("in use", 409, "target_in_use", { holder: { fixtureId: "f-9", courtName: "Court 3", label: "Club" } }); };
+    // T3: the wire holder names the match (stream-target-holders.ts wireHolder); `waiting` so the state is read, not defaulted.
+    s.create = () => {
+      throw new ApiV1Error("in use", 409, "target_in_use", {
+        holder: { fixtureId: "f-9", href: "/o/a/c/b/d/c/f/4", matchNo: 4, courtName: "Court 3", label: "Club", state: "waiting" },
+      });
+    };
     const inUse = track(await mount(s));
     bodyOf(inUse).onGoLive();
     await settle();
-    expect(bodyOf(inUse).createError).toEqual({ code: "target_in_use", holder: { courtName: "Court 3", label: "Club" } });
+    expect(bodyOf(inUse).createError).toEqual({
+      code: "target_in_use", holder: { courtName: "Court 3", label: "Club", matchNo: 4, href: "/o/a/c/b/d/c/f/4", state: "waiting" },
+    });
 
     const plan = serve({ current: null, targets: TARGETS });
     plan.create = () => { throw new ApiV1Error("upgrade", 402, "PAYMENT_REQUIRED", { feature: "x", feature_key: "streaming.relay", reason: "This feature needs a plan upgrade." }); };

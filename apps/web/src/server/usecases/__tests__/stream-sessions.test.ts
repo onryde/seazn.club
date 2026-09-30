@@ -32,6 +32,8 @@ import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
+import { routes } from "@/lib/routes";
+import { holdStateOf, type SessionState } from "@/server/relay/domain/session";
 import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
@@ -2767,6 +2769,22 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
 // DIFFERENT stages (_rig.ts's own loud invariant), which is exactly what the
 // fixture index cannot separate.
 // ---------------------------------------------------------------------------
+/** A fixture's number and its organiser page, read from its own rows (stream-target-holders.test.ts's read). */
+async function fixturePage(fixtureId: string): Promise<{ matchNo: number; href: string }> {
+  const [fx] = await sql<{ fixture_no: number; org: string; comp: string; div: string }[]>`
+    select f.fixture_no, o.slug as org, c.slug as comp, d.slug as div from fixtures f
+      join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+      join organizations o on o.id = c.org_id where f.id = ${fixtureId}`;
+  return { matchNo: fx!.fixture_no, href: routes.fixture(fx!.org, fx!.comp, fx!.div, fx!.fixture_no) };
+}
+
+/** Puts `fixtureId` on a court named `name` at a venue of `orgId` (the G-T1 idiom). */
+async function onCourt(orgId: string, fixtureId: string, name: string): Promise<void> {
+  const [v] = await sql<{ id: string }[]>`insert into venues (org_id, name, address) values (${orgId}, 'Main Arena', '12 Court Road') returning id`;
+  const [c] = await sql<{ id: string }[]>`insert into courts (venue_id, org_id, name) values (${v!.id}, ${orgId}, ${name}) returning id`;
+  await sql`update fixtures set court_id = ${c!.id} where id = ${fixtureId}`;
+}
+
 describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live session per target)", () => {
   async function twoFixturesOneTarget() {
     const r = await rig({ credits: 2, fixtures: 2 });
@@ -2804,6 +2822,32 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     }
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b}`;
     expect(n).toBe(0);                                               // refused BEFORE the insert
+  });
+
+  // T3 (spec §3.3, §5.5): the refusal NAMES the match holding the destination — its number, its court, its organiser
+  // page and whether a phone is live or still awaited. Every expected field is read from the holder fixture's OWN rows
+  // (routes.fixture over its slugs, stream-target-holders.test.ts's read) and the hold state from the domain's
+  // holdStateOf, never from the usecase's output. `toEqual` on the holder: the wire carries exactly these six keys.
+  it("T3 target_in_use NAMES the match: a LIVE holder and a WARMING holder each answer {fixtureId, matchNo, href, courtName, label, state} — live, then waiting", async () => {
+    const seen = new Set<string>();
+    for (const connect of [true, false]) {
+      const r = await rig({ credits: 2, fixtures: 2, connectAfterMs: connect ? 3000 : 24 * 3_600_000 });
+      const [a, b] = r.fixtureIds as [string, string];
+      const court = `Court ${randomUUID().slice(0, 4)}`;
+      await onCourt(r.auth.orgId, a, court);
+      await createSession(r.auth, a, body(r.target.id), r.deps);
+      if (connect) r.tick(3000);
+      const held = (await currentSession(r.auth, a, r.deps))!;
+      expect(held.state, "the holder reached the state this leg is about").toBe(connect ? "live" : "warming");
+      const page = await fixturePage(a);
+      const err = await createSession(r.auth, b, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+      expect((err as HttpError).extra).toEqual({
+        holder: { fixtureId: a, matchNo: page.matchNo, href: page.href, courtName: court, label: r.target.label, state: holdStateOf(held.state as SessionState) },
+      });
+      seen.add(((err as HttpError).extra!.holder as { state: string }).state);
+    }
+    expect([...seen].sort(), "both hold states were witnessed").toEqual(["live", "waiting"]);
   });
 
   it("G-T2 ADMITS after `completed`: a holder in the index's `completed` terminal state no longer holds the destination, so fixture B starts on the SAME target (failure class 13's other direction — a guard nothing releases bricks a paid destination)", async () => {
@@ -2872,13 +2916,19 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     .map((e) => ({ result: e.result, reason: e.payload.reason ?? null, fixtureId: e.payload.fixtureId ?? null, machineId: e.payload.machineId ?? null }));
 
   it.each(["composed", "passthrough"] as const)("I1 (%s B), the destroy keeps FAILING: another fixture's ended session whose Machine is still listed holds the destination — B's admission TRIES the destroy (recorded on A's ledger: reason admission, B's fixture), it fails, and B is refused 409 target_in_use naming that court with nothing created (mutant: the prior-Machine query scoped to this fixture only → 201)", async (mode) => {
-    const { r, b, old, machine, flaky, destroyCalls } = await zombieOnTarget();
+    const { r, a, b, old, machine, flaky, destroyCalls } = await zombieOnTarget();
     const callsBefore = destroyCalls.length;
     const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    const page = await fixturePage(a);
     try {
       const err = await createSession(r.auth, b, body(r.target.id, mode), flaky).catch((e: unknown) => e);
       expect(err).toMatchObject({ status: 409, code: "target_in_use" });
       expect((err as Error).message).toContain("Court 7");
+      // T3: an ENDED session whose Machine may still push reads `live` — to a person the destination is still receiving
+      // from that match — and names it like an active holder does (its number and page from A's own rows).
+      expect((err as HttpError).extra).toEqual({
+        holder: { fixtureId: a, matchNo: page.matchNo, href: page.href, courtName: "Court 7", label: r.target.label, state: "live" },
+      });
       expect(ingestSpy).not.toHaveBeenCalled();
     } finally {
       ingestSpy.mockRestore();
@@ -3393,7 +3443,13 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     await stopSession(r.auth, f1, old, cf.deps);
     expect((await facts(old)).output_released_at).toBeNull();
 
-    await expect(createSession(r.auth, f2, body(r.target.id), cf.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+    // T3: the ended session whose output may still simulcast is named like an active holder, and reads `live`.
+    const page = await fixturePage(f1);
+    const refused = await createSession(r.auth, f2, body(r.target.id), cf.deps).catch((e: unknown) => e);
+    expect(refused).toMatchObject({ status: 409, code: "target_in_use" });
+    expect((refused as HttpError).extra).toEqual({
+      holder: { fixtureId: f1, matchNo: page.matchNo, href: page.href, courtName: null, label: r.target.label, state: "live" },
+    });
     await expect(createSession(r.auth, f1, body(r.target.id), cf.deps)).rejects.toMatchObject({ status: 409, code: "active_session", extra: { sessionId: old } });
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id}`;
     expect(n).toBe(1);                                                            // no second session, no second input

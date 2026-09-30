@@ -304,7 +304,7 @@ describe("the relay's routes are never key-reachable", () => {
   // Task 11 follow-up (controller ruling): a start refused `target_in_use` names the fixture holding the destination —
   // `holder: { fixtureId, courtName, label }`, or null when the index race gives no holder to name. It is a wire field,
   // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
-  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder`, and PATCH alone DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
+  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, href, matchNo, courtName, label, state }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder`, and PATCH alone DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
     type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
     type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
     const doc = buildOpenApiDocument() as Doc;
@@ -312,7 +312,9 @@ describe("the relay's routes are never key-reachable", () => {
     expect(Object.keys(err409.properties ?? {}).sort()).toEqual(["code", "current_seq", "holder", "message", "sessionId"]);
     const holder = err409.properties!.holder!;
     expect(holder.type, "holder is nullable (the race-loser refusal has no holder to name)").toEqual(["object", "null"]);
-    expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "label"]);
+    // T3 (spec §5.5): Go live's holder is the SAME shape as the Directory's (stream-target-holders.ts wireHolder) — the
+    // match's number, page and hold state beside the court and label.
+    expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "href", "label", "matchNo", "state"]);
     // T2b (spec §5.2): Replace key and Remove refuse TARGET_IN_USE naming the holder (the list's holder shape plus the
     // destination's label — stream-target-holders.ts wireHolder), and Replace key ALONE refuses DESTINATION_DUPLICATE
     // naming the other destination. M1 (B1 review): Remove never sends `other` (removeStreamTarget throws only

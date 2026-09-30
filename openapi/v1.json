@@ -37886,7 +37886,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
-        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is streaming for another fixture), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)",
+        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)",
         "tags": [
           "fixtures"
         ],
@@ -38266,7 +38266,7 @@
                             "object",
                             "null"
                           ],
-                          "description": "On target_in_use (409): the fixture (always this organisation's) whose stream holds the destination; null when a concurrent start won the race and there is no holder to name",
+                          "description": "On target_in_use (409): the match (always this organisation's) whose stream holds the destination — its number, organiser page, court and whether a phone is live or awaited; null when a concurrent start won the race and there is no holder to name",
                           "properties": {
                             "fixtureId": {
                               "type": [
@@ -38275,6 +38275,20 @@
                               ],
                               "format": "uuid",
                               "description": "The holding fixture; null if it was deleted"
+                            },
+                            "href": {
+                              "type": [
+                                "string",
+                                "null"
+                              ],
+                              "description": "The holding fixture's organiser page; null if it was deleted"
+                            },
+                            "matchNo": {
+                              "type": [
+                                "integer",
+                                "null"
+                              ],
+                              "description": "The holding fixture's number in its division; null if it was deleted"
                             },
                             "courtName": {
                               "type": [
@@ -38286,6 +38300,13 @@
                             "label": {
                               "type": "string",
                               "description": "The destination's own label"
+                            },
+                            "state": {
+                              "enum": [
+                                "live",
+                                "waiting"
+                              ],
+                              "description": "live = a phone is sending (live or ending); waiting = requested, provisioning or warming"
                             }
                           }
                         }

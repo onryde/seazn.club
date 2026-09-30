@@ -45,7 +45,7 @@ import {
   lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
-import { holderRows } from "./stream-target-holders";
+import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
@@ -836,23 +836,14 @@ async function activeSessionIdFor(fixtureId: string, exec: Tx | typeof sql = sql
  *
  *  The `org_stream_targets` join is also the tenancy floor: a target belonging to another org yields no holder, and the
  *  later `admit` answers 404 `target_not_found` from `targetBelongsToOrg`. This function never leaks another org's state. */
-async function targetHolderFor(
-  targetId: string, orgId: string, fixtureId: string, deps: SessionDeps,
-): Promise<{ sessionId: string; courtName: string | null; holderFixtureId: string | null; label: string } | null> {
-  const holders = () => sql<{ id: string; court_name: string | null; fixture_id: string | null; label: string }[]>`
-    select s.id, c.name as court_name, s.fixture_id, t.label
-      from fixture_stream_sessions s
-      join org_stream_targets t on t.id = s.target_id
-      left join fixtures f on f.id = s.fixture_id
-      left join courts c on c.id = f.court_id
-     where s.target_id = ${targetId} and t.org_id = ${orgId}
-       and s.fixture_id is distinct from ${fixtureId}
-       and s.state in ${sql([...ACTIVE_STATES])}`;
-  const first = await holders();
+async function targetHolderFor(targetId: string, orgId: string, fixtureId: string, deps: SessionDeps): Promise<TargetHolder | null> {
+  // T3 (M2, B1 review): the ONE holder query (stream-target-holders.ts `holderRows`) — Go live, the Directory list and
+  // Replace key / Remove share one source for "held by a live or waiting match", so they cannot diverge.
+  const first = await holderRows(sql, { orgId, targetId, notFixtureId: fixtureId });
   if (first.length === 0) return null;
-  for (const h of first) await applyExpiry(h.id, deps);      // B: this start attempt IS the tick for the holder too
-  const [still] = await holders();
-  return still ? { sessionId: still.id, courtName: still.court_name, holderFixtureId: still.fixture_id, label: still.label } : null;
+  for (const h of first) await applyExpiry(h.sessionId, deps);      // B: this start attempt IS the tick for the holder too
+  const [still] = await holderRows(sql, { orgId, targetId, notFixtureId: fixtureId });
+  return still ?? null;
 }
 
 /** 2C-post m5 (Task 2C-post review m5; post-2C-post plan sync). The fixture's one-active index releases the moment a session
@@ -892,20 +883,18 @@ async function tearDownPriorMachines(
 ): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
   // ONE read carries each row's destination label and court (the target FK is `not null` and restricts deletes, so the
   // inner join drops nothing): a refusal never needs a second read that could find the row gone.
-  const prior = await sql<(Row & { holder_label: string; holder_court: string | null })[]>`
-    select p.*, t.label as holder_label, c.name as holder_court
+  const prior = await sql<(Row & TerminalHolderRow)[]>`
+    select p.*, t.label as holder_label, c.name as holder_court, ${terminalHolderCols()}
       from (select ${cols()} from fixture_stream_sessions
              where org_id = ${orgId} and (fixture_id = ${fixtureId} or target_id = ${targetId})
                and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}
                and not (runner_state = 'destroyed' and runner_gone_confirmed_at is not null)) p
       join org_stream_targets t on t.id = p.target_id
       left join fixtures f on f.id = p.fixture_id
-      left join courts c on c.id = f.court_id`;
+      left join courts c on c.id = f.court_id
+      ${terminalHolderJoins()}`;
   if (prior.length === 0) return { sameFixture: null, otherFixture: null };
-  const bySession = new Map(prior.map((r) => {
-    const holder: Holder = { sessionId: r.id, label: r.holder_label, courtName: r.holder_court, holderFixtureId: r.fixture_id };
-    return [r.id, { s: toSession(r), holder }] as const;
-  }));
+  const bySession = new Map(prior.map((r) => [r.id, { s: toSession(r), holder: terminalHolder(r) }] as const));
   const listed = (await deps.drivers.runner.list()).flatMap((m) => {
     const hit = m.sessionId ? bySession.get(m.sessionId) : undefined;
     return hit ? [{ m, ...hit }] : [];
@@ -939,12 +928,13 @@ async function tearDownPriorMachines(
 async function releasePriorOutputs(
   fixtureId: string, targetId: string, orgId: string, deps: SessionDeps,
 ): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
-  const prior = await sql<{ id: string; fixture_id: string | null; holder_label: string; holder_court: string | null }[]>`
-    select s.id, s.fixture_id, t.label as holder_label, c.name as holder_court
+  const prior = await sql<({ id: string; fixture_id: string | null } & TerminalHolderRow)[]>`
+    select s.id, s.fixture_id, t.label as holder_label, c.name as holder_court, ${terminalHolderCols()}
       from fixture_stream_sessions s
       join org_stream_targets t on t.id = s.target_id
       left join fixtures f on f.id = s.fixture_id
       left join courts c on c.id = f.court_id
+      ${terminalHolderJoins()}
      where s.org_id = ${orgId} and (s.fixture_id = ${fixtureId} or s.target_id = ${targetId})
        and s.mode = 'passthrough' and s.state in ${sql([...TERMINAL_STATES])}
        and s.output_uid is not null and s.output_released_at is null
@@ -953,7 +943,7 @@ async function releasePriorOutputs(
     if (await releaseOutput(p.id, "admission", deps)) continue;
     if (p.fixture_id !== fixtureId) {
       log.warn({ sid: p.id, fixtureId, holderFixtureId: p.fixture_id, targetId }, "stream session: another fixture's ended passthrough session may still be broadcasting on this destination and its output release failed — start refused");
-      return { sameFixture: null, otherFixture: { sessionId: p.id, label: p.holder_label, courtName: p.holder_court, holderFixtureId: p.fixture_id } };
+      return { sameFixture: null, otherFixture: terminalHolder(p) };
     }
     log.warn({ sid: p.id, fixtureId }, "stream session: this fixture's previous passthrough session may still be broadcasting and its output release failed — start refused");
     return { sameFixture: p.id, otherFixture: null };
@@ -961,25 +951,51 @@ async function releasePriorOutputs(
   return { sameFixture: null, otherFixture: null };
 }
 
-/** The `target_in_use` refusal, ONE shape for both holders — an active session (`targetHolderFor`) and another fixture's
- *  ended session whose still-listed Machine admission could not destroy (I1). `code` is what the client acts on (Task
- *  13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
- *  "in use" alone sends an organiser hunting; it is the operator's line in the log and in Sentry. The client renders the
- *  DICTIONARY string keyed by `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal).
- *  Task 11 (controller ruling): the holder also rides as the machine-readable `extra` `{ holder: { fixtureId, courtName,
- *  label } }`, so that dictionary string can name the court. SAME-ORG BY CONSTRUCTION: both producers read only the
- *  caller's org (`targetHolderFor`: `t.org_id = $org`; `tearDownPriorMachines`: `org_id = $org`), and a session can only
+/** The `target_in_use` refusal, ONE shape for every holder — an active session (`targetHolderFor`) and another fixture's
+ *  ENDED session whose still-listed Machine (I1) or unreleased output (C1) admission could not take down. `code` is what
+ *  the client acts on (Task 13's `CreateErrorCode`). The MESSAGE names the holder because "in use" alone sends an
+ *  organiser hunting; it is the operator's line in the log and in Sentry. The client never renders `err.message`: it
+ *  renders the dictionary copy from the machine-readable `extra` `{ holder }` (Task 11's controller ruling, widened by
+ *  T3 to the match). SAME-ORG BY CONSTRUCTION: every producer reads only the caller's org (`holderRows`:
+ *  `t.org_id = $org`; `tearDownPriorMachines` / `releasePriorOutputs`: `org_id = $org`), and a session can only
  *  reference a target `admit` proved is the org's — so the extra never names another organisation's fixture. The
- *  holder's SESSION id is deliberately not in it: nothing a client does with it. */
-interface Holder { sessionId: string; label: string; courtName: string | null; holderFixtureId: string | null }
+ *  holder's SESSION id is deliberately not in it (`wireHolder`): nothing a client does with it.
+ *  An ACTIVE holder comes from `holderRows`; a TERMINAL one is built by `terminalHolder` below. */
+type Holder = Pick<TargetHolder, "sessionId" | "label" | "courtName" | "fixtureId" | "href" | "matchNo" | "state">;
 
+/** T3 (spec §5.5): the extra is `wireHolder`'s — the SAME shape the Directory's `TARGET_IN_USE` sends — so the client
+ *  names the match (`matchNo`, rendered through the locale's own breadcrumb.match), links its page (`href`) and says
+ *  whether a phone is live or awaited (`state`). The message is the operator's line: the match when it has a number,
+ *  else the court, else the fixture id. */
 function targetInUse(h: Holder): HttpError {
+  const where = h.matchNo !== null ? `match ${h.matchNo}` : h.courtName ? `court ${h.courtName}` : `fixture ${h.fixtureId ?? "(deleted)"}`;
   return new HttpError(
     409,
-    `the destination "${h.label}" is already streaming for ${h.courtName ? `court ${h.courtName}` : `fixture ${h.holderFixtureId ?? "(deleted)"}`}`,
+    `the destination "${h.label}" is already streaming for ${where}${h.matchNo !== null && h.courtName ? ` (court ${h.courtName})` : ""}`,
     "target_in_use",
-    { holder: { fixtureId: h.holderFixtureId, courtName: h.courtName, label: h.label } },
+    { holder: wireHolder(h) },
   );
+}
+
+/** The terminal holder's extra columns — the holder fixture's number and the slugs of its organiser page — read through
+ *  the same left joins `holderRows` uses (a deleted fixture leaves them all null). */
+interface TerminalHolderRow {
+  holder_label: string; holder_court: string | null;
+  fixture_no: number | null; org_slug: string | null; comp_slug: string | null; div_slug: string | null;
+}
+const terminalHolderCols = () => sql`f.fixture_no, o.slug as org_slug, comp.slug as comp_slug, d.slug as div_slug`;
+const terminalHolderJoins = () => sql`
+      left join divisions d on d.id = f.division_id
+      left join competitions comp on comp.id = d.competition_id
+      left join organizations o on o.id = comp.org_id`;
+
+/** An ENDED session whose Machine (`tearDownPriorMachines`) or output (`releasePriorOutputs`) may still be on air. It
+ *  reads `live`: to a person, the destination is still receiving from that match, whatever the row's state says. */
+function terminalHolder(r: TerminalHolderRow & { id: string; fixture_id: string | null }): Holder {
+  return {
+    sessionId: r.id, label: r.holder_label, courtName: r.holder_court, fixtureId: r.fixture_id, matchNo: r.fixture_no,
+    href: holderHref(r), state: "live",
+  };
 }
 
 function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
