@@ -8,6 +8,7 @@
 //    (the render drops per-check verdicts and evidence).
 //  - 24 distinct cases, no canary, a clean harness commit, no secret-shaped
 //    string anywhere (the repo is public; writeResults guarded only the write).
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -107,6 +108,11 @@ describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
     const probe = [`${TRUTH_RUNS}/run-a/shots/case-1/08-pad.png`, `${TRUTH_RUNS}/run-a/evidence/N-1.png`, `${TRUTH_RUNS}/run-a/screenshots.md`];
     expect(shotsIn(probe), "the oracle has teeth").toEqual([probe[0]]);
     expect(shotsIn(tracked), "a committed shots/ file: commit finding crops only").toEqual([]);
+    // Final review m-13: ~3800 run shots sit untracked in a worktree, so git ignores every run's shots/ — a stray
+    // `git add` cannot stage them — and never a finding crop under evidence/.
+    const ignored = (f: string): boolean => spawnSync("git", ["check-ignore", "-q", "--no-index", "--", f], { cwd: REPO }).status === 0;
+    expect(probe.map(ignored), "shots/ ignored at any depth; evidence/ and Markdown tracked").toEqual([true, false, false]);
+    expect(ignored(`${TRUTH_RUNS}/w1c-padproof/w1c-pp-320-r1/shots/case-3/08-pad-scored.png`)).toBe(true);
     expect(tracked.filter((f) => !existsSync(resolve(REPO, f))), "tracked but missing from the tree").toEqual([]);
     expect(tracked.length).toBeGreaterThanOrEqual(EVIDENCE_FLOOR + PICTURE_FLOOR);
   });
