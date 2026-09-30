@@ -20,6 +20,7 @@
     "matrix:catalogue": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/gen-catalogue.ts",
     "matrix:single-sport": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/single-sport.ts",
     "matrix:model": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/model.ts",
+    "matrix:parity": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/parity.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",

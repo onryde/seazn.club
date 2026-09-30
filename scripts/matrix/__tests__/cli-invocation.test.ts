@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const REPO = new URL("../../..", import.meta.url).pathname;
-/** Every matrix CLI. `parity` is Task 13's: listing it now means Task 13 cannot ship a bare invocation. */
+/** Every matrix CLI (W1c Task 13 added `parity`). */
 const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity"];
 // `(?:\.\/)?`: `./scripts/matrix/run.ts` is the same bare run.
 const BARE = new RegExp(`node\\s+(?:--[a-z-]+\\s+)*(?:\\./)?scripts/matrix/(?:${CLIS.join("|")})\\.ts`);
@@ -56,11 +56,11 @@ describe("CLI invocation (carry e)", () => {
     // A pathspec that silently matched nothing would read as "no bare line".
     for (const f of ["package.json", ".github/workflows/ci.yml", "AGENTS.md", "scripts/matrix/lib/crash-exit.ts"]) expect(files, f).toContain(f);
     let clis = 0;
-    for (const cli of CLIS.filter((c) => c !== "parity")) {
+    for (const cli of CLIS) {
       expect(files, cli).toContain(`scripts/matrix/${cli}.ts`);
       clis++;
     }
-    expect(clis).toBe(CLIS.length - 1);
+    expect(clis).toBe(CLIS.length);
     // Truth-run evidence is the one exclusion, and only it.
     expect(scanned("docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final/README.md")).toBe(false);
     expect(scanned("docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md")).toBe(true);

@@ -138,6 +138,15 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1c Task 13: the parity CLI and its library (its package script's run is
+  // the only other load before Task 14's live parity).
+  const W1C_T13 = ["parity.ts", "lib/parity.ts"];
+  it("W1c Task 13's modules are all in the walk", () => {
+    const missing = W1C_T13.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T13.length).toBe(2);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
