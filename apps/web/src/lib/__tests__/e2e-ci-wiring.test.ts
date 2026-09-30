@@ -960,3 +960,51 @@ describe("the walkthrough's fake phone-connect delay", () => {
     }
   });
 });
+
+// PR #904 CI: every server that runs the FAKE relay drivers can be asked to save
+// a stream destination, and saving SEALS it with RELAY_KEK (server/relay/crypto.ts)
+// — unset, POST stream-targets answers 500 "RELAY_KEK is not set" and every case
+// that saves one reds (walkthrough 3/3 did). The key is GENERATED per run into
+// $GITHUB_ENV before the server starts, never a literal: this repository is public.
+describe("RELAY_KEK reaches every fake-relay server, generated per run", () => {
+  const WORKFLOW_FILES = ["e2e.yml", "ci.yml"];
+  const read = (wf: string) => readFileSync(join(REPO_ROOT, ".github/workflows", wf), "utf8");
+  const stripComments = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+
+  it("each job whose Start server sets RELAY_DRIVERS=fake generates RELAY_KEK into $GITHUB_ENV before that step", () => {
+    let checked = 0;
+    const missing: string[] = [];
+    for (const wf of WORKFLOW_FILES) {
+      const yml = stripComments(read(wf));
+      const jobStarts = [...yml.matchAll(/^ {2}([a-z0-9_-]+):\n/gm)].map((m) => ({ name: m[1]!, at: m.index! }));
+      for (const fake of yml.matchAll(/^\s+RELAY_DRIVERS:\s*fake\s*$/gm)) {
+        const server = yml.lastIndexOf("- name: Start server", fake.index);
+        const job = [...jobStarts].reverse().find((j) => j.at < fake.index!);
+        expect(server, `${wf}: a RELAY_DRIVERS=fake line outside any Start server step`).toBeGreaterThan(job?.at ?? -1);
+        const before = yml.slice(job!.at, server);
+        const generated = /echo "RELAY_KEK=\$kek" >> "\$GITHUB_ENV"/.test(before) && /\bkek=\$\(openssl rand -hex 32\)/.test(before);
+        if (!generated) missing.push(`${wf}:${job!.name}`);
+        checked++;
+      }
+    }
+    // Anti-vacuity: the fake-relay servers are e2e.yml's three jobs and ci.yml's smoke build — none found is a failure.
+    expect(checked, "fake-relay Start server steps found").toBeGreaterThanOrEqual(4);
+    expect(missing, "jobs whose fake-relay server starts with no generated RELAY_KEK").toEqual([]);
+  });
+
+  it("no workflow assigns RELAY_KEK a value (a literal key in a public repo, or an env that shadows the generated one)", () => {
+    let scanned = 0;
+    for (const wf of WORKFLOW_FILES) {
+      const yml = stripComments(read(wf));
+      expect(yml.length, `${wf} read`).toBeGreaterThan(0);
+      scanned++;
+      expect(yml.match(/^\s+RELAY_KEK:/gm) ?? [], `${wf}: an env map sets RELAY_KEK`).toEqual([]);
+      expect(yml.match(/RELAY_KEK=[0-9a-fA-F]{16,}/g) ?? [], `${wf}: a literal RELAY_KEK value`).toEqual([]);
+    }
+    expect(scanned).toBe(WORKFLOW_FILES.length);
+  });
+});

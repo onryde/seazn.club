@@ -742,6 +742,17 @@ jobs:
             --forward-to http://localhost:3000/api/webhooks/stripe > forward.log 2>&1 &
           echo "forwarder started (pid $!)"
 
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         # On the SERVER, not the Playwright step: `build.ts` runs server-side,
         # so the server is what dials the solver. Set only on the test step,
@@ -1186,6 +1197,17 @@ jobs:
             exit 1
           fi
 
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         env:
           PLACEMENT_SERVICE_HOST: localhost:50051
@@ -1520,6 +1542,17 @@ jobs:
             docker logs placement-e2e || true
             exit 1
           fi
+
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
 
       - name: Start server
         env:
