@@ -3153,3 +3153,19 @@ Parallelism is limited, because most tasks share `common.ts`, `driver/types.ts` 
 
 Anything else runs in sequence.
 
+
+## Executor carries from plan review 4 (Approved, 0 Critical / 0 Important / 5 Minor)
+
+Each carry goes into the named task's dispatch brief. The executor re-pins it at Step 0 and does not treat it as settled.
+
+- **m-a (Task 2 / Task 7, scoped canary).** `runCanary` does not exist and `verdict` is undefined. Use the existing `runOn({canary: true})` and read `state.state`.
+- **m-b (Task 4 / Task 7, `PENDING_STATUSES`).** A second pending list that holds equal values passes the value pin. Either add a source scan that refuses a second literal list, or relabel that mutant as structural and say so.
+- **m-c (Task 3, `RULEBOOK_SIDE_SIZE`).**
+  - Write down the table's R9 reconciliation. It is rulebook-derived, not read from product output.
+  - Every row carries a non-empty source.
+  - The table spans 15 team presets. Expect `hockey/youth` to join `volleyball/beach` in the found list: the committed rulebook says 7 a side, the lineup says 11.
+- **m-d (Task 8 / Task 9, I10).** "I10 passes on the M1 stall and the self-pair path" holds only if I10 skips its rank items when `complete` is null. Pin that with a test. Americano `finalRanks` are pair-entrant ids; judge them per person through the members, never by entrant id.
+- **m-e (Task 7, `seatedLater`).** `seatedLater === true` holds only because of the fake's id order. Make the fake's id order adversarial, or assert on seat membership rather than position.
+- **FIVB rule numbers (Task 3 dispatch brief, both conditions binding).**
+  - The executor reads each rule number from the document in the same session and never recalls one. Otherwise the row says "unverified" and gives the URL (V2 is marked "summary" in the committed rulebook).
+  - A house variant cites its committed W2 rulebook row or is excluded by name.
