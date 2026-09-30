@@ -101,7 +101,7 @@ Where the spec and the tree disagree, see **False premises found in planning** b
 | Withdrawal: `mine.length === 0 → continue`; open formats void pending and report `walkover` only when something was pending; `page_playoff` is not in `BRACKET_WALKOVER_KINDS` | `apps/web/src/server/usecases/withdrawal.ts:166,213-217`; `usecases/stages.ts:880-884` |
 | M1 finds seed 1 by entrant id; R4 fires on `round === 1` and asserts `policy !== "none"` | `scripts/matrix/lib/scenarios/m1-walkover.ts:25,47`; `r4-withdrawal.ts:75,109` |
 | L2 numbering is global with a lap shift per 7-pick scenario; F1 `page_playoff_only` is run 801 of 1,732 | `scripts/matrix/lib/pairs.ts:132-165`; `catalogue/l2-pairs.json` |
-| The probe's API rows are single-stage only (comment names W1-driving) | `scripts/matrix/lib/probe-set.ts:36-39,56` |
+| The probe's API rows are single-stage only (comment names W1-driving) | `scripts/matrix/lib/probe-set.ts:36-39,58` |
 | Start gates: `PlanLacksGate` covers feature gates only; `planLimit` exists on the DB seam | `scripts/matrix/run.ts:333-369,713-717`; `:132` |
 | Americano grid: `GET /stages/{id}/americano` → `{rounds[{round_no, matches[{fixture_id, team1{entrant_id}, team2}]}], leaderboard[{person_id, …}]}` | `apps/web/src/server/usecases/americano.ts` |
 | Inline member: `{new_person: {full_name}, squad_number, is_captain}`; ≤40 members | `apps/web/src/server/api-v1/schemas.ts:563-589` |
@@ -245,8 +245,10 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" (Task
     - R4 withdraws seed 3 after round 1 (`r4-withdrawal.ts:75`). On a ladder, round 1 is the first challenge (seeds 8 v 7, D8), so seed 3 has no fixture yet and `withdrawal.ts:166` (`mine.length === 0 → continue`) leaves the policy `"none"`, which `r4-policy-reported` (`r4-withdrawal.ts:109`) reds on 11 cases.
     - R4 on americano and mexicano withdraws an individual entrant that no fixture seats, so the policy is `"none"`, nothing is voided, and the person keeps playing their pair games (`withdrawal.ts:213-217`, open-format branch).
     - Ruling 51 defines each meaning (D14).
-13. **"Ruling 51's ladder timing gives R4 a policy to report."** Withdrawing seed 3 AFTER its first challenge is decided leaves it no pending fixture, because D8 decides each challenge before the next is issued. The open-format branch posts a walkover only when a pending fixture exists (`withdrawal.ts:213-217`, `if (out.policy === "none" && plan.length > 0)`). So the product's correct answer on a ladder is `policy "none"`, voided 0, walkovers 0. Asserting `policy !== "none"` there would be a harness-premise red. D14 makes `r4-policy-reported` per-family on the ladder: the expected policy is DERIVED from the fixtures seed 3 has pending at withdrawal time, not assumed. This is flagged for the owner in the handback, because it fills in what ruling 51 left implicit.
-14. **"Mexicano waits only on a finalized round."** The wait test is `existing.some((f) => f.status !== "decided")` (`usecases/stages.ts:769`). An M1 walkover is stored `forfeited` (`engine-db/append-event.ts:147`), and an R4 cascade or open-format void is `void`/`abandoned`. Any of them makes every later mexicano generate return `[]`, which reads as exit `stalled_rounds` (I-3). D9 predicts all of them.
+13. **"Ruling 51's ladder timing gives R4 a policy to report."** Withdrawing seed 3 AFTER its first challenge is decided leaves it no pending fixture, because D8 decides each challenge before the next is issued. The open-format branch posts a walkover only when a pending fixture exists (`withdrawal.ts:213-217`, `if (out.policy === "none" && plan.length > 0)`). So the product's correct answer on a ladder is `policy "none"`, voided 0, walkovers 0. Asserting `policy !== "none"` there would be a harness-premise red. D14 makes `r4-policy-reported` per-family on the ladder: the expected policy is DERIVED from the fixtures seed 3 has pending at withdrawal time, not assumed. Plan review 2 confirmed this premise against the tree (the ladder is in neither `TABLE_KINDS`, `withdrawal.ts:37`, nor `BRACKET_WALKOVER_KINDS`, `stages.ts:880-884`; `PENDING` is `{scheduled, in_play}`, `apps/web/src/lib/table-withdrawal.ts:18`). D14's full ladder expectation is **ruled (53)**.
+14. **"Mexicano waits only on a finalized round."** The wait test is `existing.some((f) => f.status !== "decided")` (`usecases/stages.ts:769`). An M1 walkover is stored `forfeited` (`engine-db/append-event.ts:147`), and any open-format void is `abandoned`. Either one makes every later mexicano generate return `[]`, which reads as exit `stalled_rounds` (I-3). D9 predicts this for **M1** on mexicano. It does **not** arise for R4 (plan review 2, I-3): R4 withdraws an individual that no fixture seats, after round 1 is fully decided, so nothing is voided and nothing blocks.
+16. **"The open-format withdrawal cascade forfeits to the opponent."** (Plan review 2, I-1.) `cascadeItems` (`lib/scenarios/r4-withdrawal.ts:23-51`) models the table and bracket walkover: each pending fixture with a seated opponent becomes `forfeited` to that opponent. For kinds in neither `TABLE_KINDS` nor `BRACKET_WALKOVER_KINDS` (ladder, `page_playoff`, americano), the product instead **abandons** every pending fixture, counts each in `voided`, and still reports policy `walkover` (`withdrawal.ts:213-217`, `applyUpdate` → `voidAndAbandon`). The unchanged check would red "abandoned after walkover, expected forfeited" and "reported 1 voided, observed 0" for a harness reason. D14 makes `cascadeItems` kind-aware (Task 7).
+17. **"Mexicano's players are the division's individuals."** (Plan review 2, I-3.) The active-entrant query has no kind filter (`usecases/stages.ts:2290-2293`, `status in ('registered', 'confirmed')`). Pair entrants are inserted with `kind: "pair"` and the default status `'registered'` (`stages.ts:715-721`; `V212__entrants.sql:12`). So from round 2 on, every earlier pair entrant counts as a "player" as well, and `americanoGen` maps each one to an arbitrary member (false premise 10), whose person is already one of the individuals. `pairMexicanoRound` sorts by points, then id (`packages/engine/src/scheduling/americano.ts:93-95`). The duplicates sit next to each other and fall into the same quartet: the same person on both sides, possibly a self-pair that hits the `entrant_members` primary key (`V213:9`), which may surface as an unnamed 500 on generate. A **round-2 duplicate person is near-certain** on every mexicano case that reaches round 2. It is predicted with the signature `mexicano-pair-entrants-counted-as-players` → W7. Americano is untouched, because it plans every round at the Start generate, before any pair entrant exists.
 15. **"Dropping one L2 run removes only that run."** (Plan review 1, I-4.) `planL2` numbers runs globally, and the width comes from the run number plus a lap shift applied only when a scenario's pick count is a multiple of 7 (`scripts/matrix/lib/pairs.ts:132-165`). F1 has 21 picks today, and `page_playoff_only` F1 is run 801. Dropping it renumbers **931** of 1,731 runs and re-widths **949** (the reviewer simulated the committed generator; the control reproduced all 1,732 runs with 0 mismatches). Ruling 50 accepts the reshuffle once (Task 2 Step 4).
 
 ---
@@ -292,7 +294,16 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" (Task
 
 → D14, Tasks 7, 8, 15.
 
-**Ruled: 52.** D1–D13 below are **accepted as written** (each is marked "ruled (52)"). D6 amends ruling 49: model refusals route by design §8, which adds **W3** for `swiss_playoff` and `swiss_knockout` beside W4, W5 and W7. D14 is new at fix round 1. It records ruling 51 plus the planner's derived per-family expectations (false premise 13), which are **recommendations** until the owner confirms them (class 17).
+**Ruled: 52.** D1–D13 below are **accepted as written** (each is marked "ruled (52)"). D6 amends ruling 49: model refusals route by design §8, which adds **W3** for `swiss_playoff` and `swiss_knockout` beside W4, W5 and W7. D14 is new at fix round 1. It records ruling 51 and, since fix round 2, ruling 53.
+
+**Ruled: 53 (plan review 2, 2026-09-30).** R4 on the ladder is judged by what a withdrawal actually leaves (false premise 13). The case asserts that:
+- the policy is derived from the product's pending set;
+- seed 3's decided challenge is unchanged;
+- seed 3 is gone from the live ladder order but stays in the raw `ladder_order`;
+- no later challenge seats seed 3;
+- zero challenges are refused.
+
+Noted for W7, not asserted: `finalRanks` is the raw `ladder_order` (`engine-db/competition.ts:606`), so a withdrawn player keeps their rung. → D14, Task 7, Task 9 (I9).
 
 **D1 — ruled (52). Seed advance through two driver methods, not bench `advance.ts`.**
 - `confirmSeedProposal(stageId, {proposalId, tiePicks?})` confirms exactly the proposal id `/complete` returned for the next stage.
@@ -367,8 +378,11 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" (Task
 - Americano: no generate after Start. The harness lists fixtures and plays round by round, lowest `round_no` first. The cap is `config.rounds`.
 - Mexicano: generate after each fully decided round. The cap is `config.rounds + 1` generates. `created 0` before `config.rounds` rounds is exit `"stalled_rounds"` (new `LoopExit`) plus a note.
 - Per-round person uniqueness is read from the pair entrants' members.
-- Suspected product reds are recorded as findings → W7 and never fixed: a round-2 duplicate player, an early complete, and **any non-`decided` fixture blocking every later round** (false premise 14, plan review 1 I-3). The product waits on `existing.some((f) => f.status !== "decided")` (`usecases/stages.ts:769`), so a `forfeited` walkover (M1, `engine-db/append-event.ts:147`), a `void`/`abandoned` fixture (R4 cascade) or a `finalized` one each make every later generate create 0. The harness never "unblocks" it (no re-decide, no retry): the loop exits `stalled_rounds` with the note, and the case carries the predicted signature `mexicano-stalled-on-non-decided` so triage routes it to W7 without a harness hunt (Task 15 Step 3).
-- The `FakeAmericanoDriver` waits on exactly `status !== "decided"`, and a text pin in `americano-loop.test.ts` reads `stages.ts` for that predicate, so a product change to the wait rule reds the pin and moves the fake with it.
+- Product reds are recorded as findings → W7 and never fixed. Two are **predicted**, each with its own signature:
+  - **`mexicano-pair-entrants-counted-as-players`** (false premise 17, plan review 2 I-3). From round 2 on, the product counts every earlier pair entrant as a player, so a person appears twice in a round. This is near-certain on every mexicano case that reaches round 2 (LIFECYCLE, F1, R4, about 33 cases). It surfaces as an I10 "seated N×" red, or as a refused or 500 generate if a self-pair hits the `entrant_members` primary key.
+  - **`mexicano-stalled-on-non-decided`** (false premise 14, plan review 1 I-3). The product waits on `existing.some((f) => f.status !== "decided")` (`usecases/stages.ts:769`), so an M1 `forfeited` walkover (`engine-db/append-event.ts:147`) makes every later generate create 0. R4 does NOT cause it (plan review 2 I-3). The harness never "unblocks" it (no re-decide, no retry): the loop exits `stalled_rounds` with the note.
+  - Suspected, but with no signature: an early complete.
+- The `FakeAmericanoDriver` mirrors the product by DEFAULT. It waits on exactly `status !== "decided"`, and from round 2 on it counts its own earlier pair entrants as players, reading each through its last member row. The clean shape (individuals only) is the option `individualsOnly: true`, used only by the tests that isolate a harness mechanic. Text pins in `americano-loop.test.ts` read `stages.ts` for the wait predicate and for the kind-less active-entrant query (`:2290-2293`), so a product change reds the pin and moves the fake with it.
 - Owner value: the loops are bounded by the stage's own declared rounds, and a product that stops early reads as a named stall, not ✅.
 - Rejected: re-generating americano to "top up". False premise 3.
 
@@ -390,7 +404,7 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" (Task
 - Owner value: one L1 cell per capability that has a pad route today, and the gap is on a wave's list, not silent.
 - Rejected: writing those pad routes here, which is pad work outside the ruling-47 scope.
 
-**D14 — M1 and R4 on the ladder family (ruling 51; the derived expectations are recommendations, false premise 13).** Pinned at Task 7 Step 0 (ladder) and Task 8 Step 0 (americano/mexicano). Each meaning has a fake-driver test that reds on TODAY's hooks (`m1-walkover.ts:23-31`, `r4-withdrawal.ts:74-84`, `:109`) and passes after.
+**D14 — M1 and R4 on the ladder family (rulings 51 and 53; false premise 13).** Pinned at Task 7 Step 0 (ladder) and Task 8 Step 0 (americano/mexicano). Each meaning has a fake-driver test that reds on TODAY's hooks (`m1-walkover.ts:23-31`, `r4-withdrawal.ts:74-84`, `:109`) and passes after.
 - **M1 on americano and mexicano (ruling 51).**
   - "Seed 1's person" = `setup.persons.get(seed1)` (Task 5): one person for an individual, the roster for a team entrant (the product picked one member per team, false premise 10).
   - The target is the FIRST fixture in the batch whose home or away pair entrant has one of those persons as a member, read through `ctx.driver.entrantMembers(pairId)` (never inferred from display names).
@@ -398,15 +412,36 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" (Task
   - `m1-walkover-recorded` expects status `forfeited` and winner = seed 1's PAIR entrant id (canary: the absent pair). `m1-winner-progresses` abstains ("not a bracket stage").
   - On mexicano the walkover is `forfeited`, which stalls every later round (false premise 14): predicted signature `mexicano-stalled-on-non-decided` → W7.
   - The M1 hook takes a `targetOf(batch)` strategy chosen by stage kind: entrant-id match (today's, every other kind) or pair-member match (americano). A lookup table keyed by kind, not an if-chain in the hook.
-- **R4 on the ladder (ruling 51).**
+- **`r4-cascade-consistent` becomes kind-aware (false premise 16, plan review 2 I-1).** `cascadeItems(policy, w, before, after, walkovers, voided, kind)` chooses its walkover model by kind, through a lookup keyed on the product's two sets. Both sets are text-pinned: `TABLE_KINDS` from `withdrawal.ts:37` and `BRACKET_WALKOVER_KINDS` from `stages.ts:880-884`.
+  - For a kind in either set, the model is today's: a pending fixture with a seated opponent is `forfeited` to that opponent, and one with a TBD opponent is `abandoned`.
+  - For any other kind (the open-format branch: ladder, `page_playoff`, americano), `walkover` means every pending fixture is `abandoned` and counted in `voided`, and no fixture is forfeited (reported walkovers 0).
+  - "Pending" is the product's `WITHDRAWAL_PENDING_STATUSES`, text-pinned from `apps/web/src/lib/table-withdrawal.ts:18` (`{scheduled, in_play}`), never a typed list (plan review 2 m-3).
+  - The `league|generic` R4 canary stays byte-identical, because `league` is in `TABLE_KINDS` and canary runs are league-only (`run.ts:630-643` `canaryVerdict`; `slice.ts:74-77` `planCanaryCase`). A test pins the canary's verdict before and after.
+- **R4 on the ladder (ruling 51; the expectation is ruled (53) — false premise 13, plan review 2 Q3).**
   - The hook withdraws seed 3 in `afterRound` of the FIRST ladder step whose batch seats seed 3 (today's hook fires on `round === 1`). The R4 trigger is a per-kind strategy beside M1's: `round === 1` for every other kind, "first batch seating seed 3" for `ladder`.
-  - Expected policy is DERIVED, never assumed (false premise 13): `expectedPolicy = before.some((f) => !isTerminal(f.status)) ? "walkover" : "none"`, from the fixtures seed 3 held at withdrawal time and the product's open-format rule (`withdrawal.ts:213-217`). Under D8 it is `"none"` (seed 3's one challenge is decided before the hook fires), so `r4-policy-reported` on a ladder asserts `policy === expectedPolicy` and the canary judges the opposite. Every other kind keeps `policy !== "none"`.
-  - `r4-cascade-consistent` runs unchanged (with `none`, every `before` fixture must be unchanged).
-  - New ladder-only check `r4-not-challenged-later`: no challenge fixture after the withdrawal step seats seed 3 (the ladder's twin of `r4-not-paired-later`); abstains on other kinds.
-- **R4 on americano and mexicano (ruling 51): a PREDICTED product red → W7.**
-  - Seed 3 (an individual entrant) is withdrawn after round 1 as today. No fixture seats it (pair entrants do), so `before` is `[]` and the product reports `policy "none"`; the person keeps playing the pair games already planned (americano plans every round at Start, false premise 3).
-  - `r4-policy-reported` stays `policy !== "none"` there and so reds. The case gets the predicted signature `r4-withdrawn-player-kept-playing` when BOTH hold: `before.length === 0`, and seed 3's person is a member of a pair entrant seated on a fixture with `round_no > afterRound` (americano) — or, on mexicano, the policy is `"none"` with `before.length === 0` (whether mexicano's next generate still seats the withdrawn person is pinned at Task 8 Step 0 and recorded either way).
-  - **Triage rule (Task 15 Step 3):** an R4 red on the `americano` or `mexicano` row whose ONLY failing checks are `r4-policy-reported` (with the signature above) and, where applicable, `life-loop-bounded` with `mexicano-stalled-on-non-decided`, is a predicted product red → W7 and counts as NOT harness-caused for ruling 48. Any other failing check on that case (a crash, `life-built-as-posted`, `fold-parity`, I10, a refused call) is triaged normally, harness first.
+  - The case asserts five product facts, and nothing else:
+    1. **The policy is derived from the product's pending set.** `expectedPolicy = before.some((f) => PENDING.has(f.status)) ? "walkover" : "none"`, where `PENDING` is the text-pinned `WITHDRAWAL_PENDING_STATUSES` and the rule is the open-format branch (`withdrawal.ts:213-217`). Under D8 it is `"none"`, because seed 3's one challenge is decided before the hook fires. `r4-policy-reported` on a ladder asserts `policy === expectedPolicy`, and the canary judges the opposite. Every other kind keeps `policy !== "none"`.
+    2. **Seed 3's decided challenge is unchanged.** With `none`, `r4-cascade-consistent` (kind-aware, above) requires every `before` fixture unchanged, and walkovers, voided and skipped are all 0. Both the outcome and the swap it caused stand ("earned standings stand", `withdrawal.ts:213`).
+    3. **Seed 3 is gone from the live order but stays in the raw `ladder_order`.** New item in `r4-not-challenged-later`: seed 3 is absent from the live projection (raw order minus departed), and present in the stage's raw `config.ladder_order` at the index it held when it withdrew. The product never prunes it (`stages.ts:5562-5572`), and reach counts live rungs (`:5601-5640`).
+    4. **No later challenge seats seed 3.** `r4-not-challenged-later` checks each challenge fixture `playLadder` issued after the withdrawal step (the ladder's twin of `r4-not-paired-later`). A challenge naming seed 3 would get `LADDER_ENTRANT_WITHDRAWN` (`stages.ts:5575-5583`). The check abstains on other kinds.
+    5. **Zero refused challenges.** Stage completion stays with the existing `life-stage-completed`; it is not a new R4 item.
+  - **W7 note, recorded but NOT asserted:** `finalRanks` is the RAW `ladder_order` (`engine-db/competition.ts:606`), so seed 3 keeps a finishing rank at the rung it held. The case writes the note "ladder finalRanks keep withdrawn <seed 3> at rung <i> (raw ladder_order) — W7 rulebook question", and no check passes or fails on it either way.
+- **R4 on americano (ruling 51): a PREDICTED product red → W7.**
+  - Seed 3 (an individual entrant) is withdrawn after round 1, as today. No fixture seats it (pair entrants do), so `before` is `[]` and the product reports `policy "none"`. The person keeps playing the pair games already planned, because americano plans every round at Start (false premise 3).
+  - `r4-policy-reported` stays `policy !== "none"` there, and so reds. The case gets the predicted signature `r4-withdrawn-player-kept-playing` only when BOTH legs hold:
+    - `before.length === 0`;
+    - seed 3's person is a member of a pair entrant seated on a fixture with `round_no > afterRound`.
+- **R4 on mexicano (plan review 2 I-3): the same signature, with a real second leg.**
+  - Nothing is voided, so the rounds do not stall.
+  - The signature needs `before.length === 0` AND seed 3's person seated in any fixture of round ≥ 2 **through any entrant**. Seed 3 can come back through its round-1 pair entrant, which the product still counts as a player (false premise 17).
+  - Without that leg, the case goes to normal triage.
+  - The round-2 duplicate (`mexicano-pair-entrants-counted-as-players`) is expected on these cases too.
+- **Triage rule (Task 15 Step 3).** A ❌ is a predicted product red → W7, counted as NOT harness-caused for ruling 48, only when EVERY failing check on the case is covered by a signature the case carries:
+  - `r4-policy-reported` on an americano or mexicano R4 case → `r4-withdrawn-player-kept-playing`;
+  - `life-loop-bounded` with `exited stalled_rounds` on a mexicano M1 case → `mexicano-stalled-on-non-decided`;
+  - I10 "seated N×" items, or a refused or 500 generate after round 1, on any mexicano case → `mexicano-pair-entrants-counted-as-players`. Every duplicated person named must be a member of an earlier-round pair entrant.
+
+  Any other failing check (a crash before round 2, `life-built-as-posted`, `fold-parity`, `results-as-posted`, `m1-walkover-recorded`, `r4-cascade-consistent`, an I10 item that the pair-entrant evidence does not explain) sends the case to normal triage, harness first.
 - Owner value: every one of the 55 cells × scenario pairs these rules touch (22 M1 + 11 ladder R4 + 22 americano R4) ends as ✅ or a named, routed product finding, never an unexplained harness red, which is what ruling 48's "no ❌ with a harness cause" needs.
 - Rejected: dropping the pairs as unfit (ruling 42 forbids it, ruling 51 says so); keeping `policy !== "none"` on the ladder (it asserts a policy the product is right not to report).
 
@@ -715,7 +750,16 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   ```
   In `scenarios.test.ts`, add "page_playoff_only LIFECYCLE adds exactly 4 entrants": run on a fake driver whose `postStages` accepts `page_playoff`, then read `driver.calls` for the `addEntrants` count. Add "F1 on page_playoff_only is never planned": the F1 applicability decision for `page_playoff_only|generic` is a drop with the new reason. In `applicability.test.ts`, the F1 witness keeps `league|generic` and drops `page_playoff_only|generic`.
 
-  **R4 on `page_playoff_only` once it seeds 4 — the prediction** (plan review 1, m-5). Seed 3 plays `pp-elim` (round 0 → `round_no` 1) against seed 4 (`packages/engine/src/scheduling/bracket.ts:390-393`). The harness's default winner is the better seed (`scripts/matrix/lib/scenarios/common.ts:161`), so seed 3 WINS `pp-elim` and is seated in `pp-q2`. R4 then withdraws it after round 1. `page_playoff` is not in `BRACKET_WALKOVER_KINDS` (`usecases/stages.ts:880-884`), so the open-format branch applies (`withdrawal.ts:213-217`): `pp-q2` is voided, policy `"walkover"`, and `pp-final`'s away seat (`winnerOf("pp-q2")`) is never filled. Predicted: `r4-policy-reported` and `r4-cascade-consistent` pass, the stage never completes (`life-loop-bounded` / `life-stage-completed` red) → a **product red → W4** ("a page-playoff withdrawal voids the path to the final"). A fake test pins the harness side: on `FakeKnockoutDriver` (`__tests__/fake-driver.ts:400`) given a new option `pagePlayoff: true` (4 seats, the `pp-*` shape from `generatePagePlayoff`, and the open-format void on withdrawal mirrored from `withdrawal.ts:213-217`), R4 records policy `walkover`, one void, and exits without a `/complete` retry. Task 15 Step 3 lists it among the predicted reds.
+  **R4 on `page_playoff_only` once it seeds 4 — the prediction** (plan review 1, m-5). Seed 3 plays `pp-elim` (round 0 → `round_no` 1) against seed 4 (`packages/engine/src/scheduling/bracket.ts:390-393`). The harness's default winner is the better seed (`scripts/matrix/lib/scenarios/common.ts:161`), so seed 3 WINS `pp-elim` and is seated in `pp-q2`. R4 then withdraws it after round 1. `page_playoff` is not in `BRACKET_WALKOVER_KINDS` (`usecases/stages.ts:880-884`), so the open-format branch applies (`withdrawal.ts:213-217`). `pp-q2` is **abandoned**, even though its other seat (the loser of `pp-q1`) is filled. Nothing is forfeited. The product reports policy `"walkover"` with walkovers 0 and voided 1, and `pp-final`'s away seat (`winnerOf("pp-q2")`) is never filled (corrected at plan review 2, I-1: the first version of this prediction assumed a forfeit to the opponent).
+
+  Predicted outcome, once Task 7 makes `r4-cascade-consistent` kind-aware (D14, false premise 16): `r4-policy-reported` and `r4-cascade-consistent` pass, and the stage never completes (`life-loop-bounded` / `life-stage-completed` red). That is a **product red → W4** ("a page-playoff withdrawal voids the path to the final"). Between Task 2 and Task 7, `r4-cascade-consistent` still uses the table/bracket model and would red on this shape for a harness reason. No live R4 `page_playoff_only` evidence is taken before Task 7.
+
+  A fake test pins the harness side, on `FakeKnockoutDriver` (`__tests__/fake-driver.ts:400`) with a new option `pagePlayoff: true`: 4 seats, the `pp-*` shape from `generatePagePlayoff`, and the open-format abandon on withdrawal mirrored from `withdrawal.ts:213-217`. In Task 2 it asserts:
+  - policy `walkover`, walkovers 0, voided 1;
+  - `pp-q2` `abandoned`, `pp-final` never seated;
+  - no `/complete` retry.
+
+  Task 7 adds `expect(verdict("r4-cascade-consistent")).toBe("pass")` to the same test, which is its killer for the kind-aware mutant. Task 15 Step 3 lists the case among the predicted reds.
 
 - [ ] **Step 2: Run: expect FAIL** (no module; F1 is `ALWAYS`).
 
@@ -881,7 +925,9 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   ```
   The last test injects a catalog through `rosterSize`'s optional third argument (`catalogOf`, which defaults to the engine's `resolvePositions`).
 
-  **Fallback catalogs (plan review 1, m-2).** Only football declares `positionsFor(cfg)` today (`packages/engine/src/sports/football/football.ts:1740,2445`); every other team module answers its one static `positions` through `resolvePositions` (`packages/engine/src/sport/catalog.ts:53-55`). So volleyball's builder-default **beach** variant (2-a-side) gets the indoor catalog (6 starters + 8 bench = 14 members). The roster follows the engine's catalog, as D2 says, so this is not a harness bug; it is a **W2 finding** ("a variant whose squad size differs from the module's static catalog has no `positionsFor`"). The counted sweep must also report which cfgs fell back: it collects `{sport, preset, fellBack: sportModule(key).positionsFor === undefined}` and the test pins the exact fall-back list the executor observed on first run (expected to include `volleyball/beach` by the reviewer's reading; if it does not, that is a note, and the list is pinned as found), so the finding cannot silently vanish or silently grow. Task 16 records it in `_INDEX.md` → W2.
+  **Fallback catalogs (plan review 1, m-2).** Football (`packages/engine/src/sports/football/football.ts:1740,2445`), cricket (`sports/cricket/cricket.ts:2600,3532`) and the period kernel (`sports/period/kernel.ts:2451`, used by hockey and ice hockey) declare `positionsFor(cfg)`. The setbased kernel (volleyball, badminton, table tennis) does not: it answers one static `positions` per preset (`sports/setbased/kernel.ts:2281`) through `resolvePositions` (`packages/engine/src/sport/catalog.ts:53-55`). (Corrected at plan review 2, m-2: the first version said "only football".) So, by review 1's reading, volleyball's builder-default **beach** variant (2-a-side) gets a 6-starter catalog (14 members with the bench). The roster follows the engine's catalog, as D2 says, so this is not a harness bug. It is a **W2 finding**: "a variant whose side size differs from its catalog's `lineup.size`".
+
+  The counted sweep must also report the mismatches. It keys the flag on SIZE, not on the absence of `positionsFor`, which would also flag indoor volleyball, whose catalog is correct. It collects `{sport, preset, sideSize, lineupSize, mismatch: sideSize !== null && sideSize !== lineupSize}`. `sideSize` is the preset's own declared players-per-side, read from the cfg field that Task 3 Step 1 pins per sport (for example a `teamSize`/`playersPerSide` field), or `null` where the cfg declares none. The test pins the exact mismatch list the executor observed on first run. It is expected to be `volleyball/beach`; if not, that is a note, and the list is pinned as found. This way the finding cannot silently vanish or silently grow. Task 16 records it in `_INDEX.md` → W2.
 
   `http-driver.test.ts`, on the existing stub transport:
   - `addEntrants` with members posts `members: [{new_person: {full_name}, squad_number, is_captain}]`, one per member, in order;
@@ -999,7 +1045,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
 
 **Interfaces:**
 - Consumes: `rosterMembers`, `lineupFor`, `OrganiserDriver.entrantMembers/putLineup` (Task 3).
-- Produces: `DivisionSetup.rosters: ReadonlyMap<string, readonly EntrantMember[]>` (TEAM entrants only; empty for non-team or rosterless); `DivisionSetup.kind`, `DivisionSetup.entrantIds`; `Recorder.lineupsPut: number`.
+- Produces: `DivisionSetup.rosters: ReadonlyMap<string, readonly EntrantMember[]>` (TEAM entrants only; empty for non-team or rosterless); `DivisionSetup.kind`, `DivisionSetup.entrantIds`, `DivisionSetup.rosterless`; `Recorder.lineupsPut: number`.
 
 - [ ] **Step 0: Pin the product.** Read `apps/web/src/server/usecases/fixtures.ts`'s `putLineup` and record in the report:
   - the refusal code for a non-member `person_id`;
@@ -1059,7 +1105,8 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
    *  never thrown and never PUT. A DIVISION entrant with no recorded roster is
    *  still a harness bug, named. */
   export async function ensureLineups(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow): Promise<void> {
-    if (setup.kind !== "team" || rec.lineupFixtures.has(f.id)) return;
+    // D3: a PADPROOF rosterless setup scores team fixtures with no lineup (W1c D-T9-2), so it returns first.
+    if (setup.rosterless || setup.kind !== "team" || rec.lineupFixtures.has(f.id)) return;
     for (const side of [f.home_entrant_id, f.away_entrant_id]) {
       if (side === null) continue;
       if (!setup.entrantIds.has(side)) {
@@ -1075,7 +1122,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     rec.lineupFixtures.add(f.id);
   }
   ```
-  `DivisionSetup` gains `kind: EntrantKind` and `entrantIds: ReadonlySet<string>` (the ids `addEntrants` answered). `rosters` holds TEAM entrants only; americano individuals' persons go in a separate `setup.persons` (Task 5), never in `rosters`, so `ensureLineups` can never PUT a lineup for an individual sport. A rosterless PADPROOF setup has `kind "team"` and an empty `rosters`, so it keeps its early return by an explicit `o.rosterlessTeams === true` check at the top (D3), tested by `pad-proof.test.ts`.
+  `DivisionSetup` gains `kind: EntrantKind`, `entrantIds: ReadonlySet<string>` (the ids `addEntrants` answered) and `rosterless: boolean` (`= o.rosterlessTeams === true`, set by `setUpDivision`; plan review 2 m-1). `rosters` holds TEAM entrants only; americano individuals' persons go in a separate `setup.persons` (Task 5), never in `rosters`, so `ensureLineups` can never PUT a lineup for an individual sport. A rosterless PADPROOF setup has `kind "team"` and an empty `rosters`, so it takes the `setup.rosterless` early return on the first line of `ensureLineups` (D3). `pad-proof.test.ts` pins it (it calls `decideFixture` on rosterless team fixtures, `pad-proof.ts:56,73`); mutant "drop `setup.rosterless ||`" → killed by `pad-proof.test.ts` ("has no recorded roster").
 
   Two more Step 1 tests, stated empty-case first:
   ```ts
@@ -1227,14 +1274,20 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   it("declaredTake: bestNth adds its count ONCE, never per pool — the right answer differs from a naive per-pool count (plan review 1, m-7)", () => {
     // 3 uneven pools (sizes 4, 4, 3): top 2 per group = 6, plus the best 2 of the 3 thirds = 2 → 8.
     // A naive "count per pool" reading gives 6 + 2×3 = 12; a "pools × every take" reading gives 3×(2+2) = 12.
-    // The expected 8 is derived from the product's own vocabulary text (format-templates.ts:140 bestNth {nth, count}),
-    // pinned by the text test below, not from declaredTake.
-    const body = { kind: "knockout", name: "x", config: {}, seq: 2, progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }] }], placement: "rank_order", timing: "setup" } } as never;
-    expect(declaredTake(body, 3)).toBe(8);
+    // Plan review 2 m-6: the expected count is derived from the ENGINE's own slot expansion, never from declaredTake and
+    // never from the text test (which pins the kind SET only, not count semantics).
+    const take = [{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }] as const;
+    const engineSlots = expandTake(take as never, { poolKeys: ["A", "B", "C"] }).flat().length;   // @seazn/engine/competition, progression.ts:160
+    expect(engineSlots).toBe(8);                                      // the rule's answer, and it differs from the naive 12
+    const body = { kind: "knockout", name: "x", config: {}, seq: 2, progression: { sources: [{ stage: "previous", take }], placement: "rank_order", timing: "setup" } } as never;
+    expect(declaredTake(body, 3)).toBe(engineSlots);
   });
-  it("declaredTake's vocabulary matches the product's take kinds, read as text (the oracle for the two tests above)", () => {
+  it("declaredTake's vocabulary matches the product's take KINDS, read as text (the kind-set oracle; count semantics come from expandTake above)", () => {
     // Reads apps/web/src/components/v2/format-templates.ts as text; asserts the set of `kind: "<x>"` inside take arrays
-    // is exactly {rankRange, topNPerGroup, bestNth, roundLosers}, counted > 0 — a new product take kind reds here first.
+    // is exactly {rankRange, topNPerGroup, bestNth, roundLosers}, counted > 0 — a new template take kind reds here first.
+    // The engine's TakeRule also has `picks` (packages/engine/src/competition/progression.ts:37), which no template uses,
+    // so this text test cannot see it; declaredTake refuses it by name (UnknownTakeKind "picks"), asserted here:
+    expect(() => declaredTake({ kind: "knockout", name: "x", config: {}, seq: 2, progression: { sources: [{ stage: "previous", take: [{ kind: "picks", picks: [] }] }], placement: "rank_order", timing: "setup" } } as never, 1)).toThrow(/take kind 'picks'/);
   });
   it("league_ko on the fake: later stage generated after Start, stage 1 completed ONCE, the proposal /complete returned confirmed ONCE, stage 2 played", async () => {
     const driver = new FakeMultiStageDriver();
@@ -1292,29 +1345,49 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   **The rule-10 sequence test** (TEST-STRATEGY rule 10), in the same file:
   ```ts
   it("fast-check: any order of organiser actions around an advance keeps the harness's advance invariants after every step", async () => {
+    // Plan review 2 I-2: weighted so the generate → play → complete → confirm path is reached; `playStage1` plays
+    // stage 1 to its loop exit in one step (a league of 8 needs 7 rounds, which 16 single-round steps would rarely reach).
     const cmd = fc.oneof(
-      fc.constantFrom("generateLater", "playRound", "complete", "confirmLatest", "confirmStale", "recompute"),
-      fc.nat({ max: 7 }).map((seedIdx) => ({ withdrawOne: seedIdx })),   // plan review 1 I-5: the withdrawal transition, at any point
+      { arbitrary: fc.constantFrom("generateLater", "playStage1", "complete", "confirmLatest", "confirmStale", "recompute"), weight: 5 },
+      { arbitrary: fc.nat({ max: 7 }).map((seedIdx) => ({ withdrawOne: seedIdx })), weight: 1 },   // review 1 I-5: withdrawal at any point
     );
-    await fc.assert(fc.asyncProperty(fc.array(cmd, { minLength: 1, maxLength: 12 }), async (steps) => {
+    const tally = { confirmed: 0, withdrewBeforeConfirm: 0, withdrewAfterConfirm: 0 };
+    await fc.assert(fc.asyncProperty(fc.array(cmd, { minLength: 1, maxLength: 16 }), async (steps) => {
       const d = new FakeMultiStageDriver();
       const h = await AdvanceHarness.open(d, "league_ko");
       for (const s of steps) {
         await h.step(s);                          // each step: a named RefusedCall is recorded, never thrown out
         expect(h.completesOf(1)).toBeLessThanOrEqual(1);                 // /complete never repeated
         expect(h.confirmedIds().every((id) => h.issuedIds().includes(id))).toBe(true);
-        expect(h.seeded().every((e) => h.sourceField().includes(e) && !h.withdrawn().has(e))).toBe(true);
+        // Review 2 I-2: judged against entrants withdrawn BEFORE the confirm that seeded them. An entrant seeded and
+        // withdrawn LATER stays seated in stage 2 (the product walks it over, withdrawal.ts:191-209), so the old
+        // "seeded ⇒ never withdrawn" clause was false by construction.
+        expect(h.seeded().every((e) => h.sourceField().includes(e) && !h.withdrawnBeforeConfirm().has(e))).toBe(true);
         expect(h.stage2HasEntrants()).toBe(h.confirmedIds().length > 0); // no seat filled without a confirm
       }
+      if (h.confirmedIds().length > 0) tally.confirmed++;
+      if (h.withdrawnBeforeConfirm().size > 0 && h.confirmedIds().length > 0) tally.withdrewBeforeConfirm++;
+      if (h.withdrawnAfterConfirm().size > 0) tally.withdrewAfterConfirm++;
       return true;
     }), { numRuns: 200, seed: Number(process.env.MATRIX_FC_SEED ?? 20260930) });
+    // Anti-vacuity (TEST-STRATEGY rule 2), each counted over the 200 runs and pasted in the task report:
+    expect(tally.confirmed, "runs that reached a successful confirm").toBeGreaterThan(0);
+    expect(tally.withdrewBeforeConfirm, "runs where a withdrawal preceded a successful confirm").toBeGreaterThan(0);
+    expect(tally.withdrewAfterConfirm, "runs where a withdrawal followed a successful confirm").toBeGreaterThan(0);
   });
-  it("the withdrawal property is not vacuous: over the generated runs, some withdrawOne lands BEFORE a successful confirm (counted)", async () => {
-    // Same arbitrary and seed; counts runs where h.withdrawn().size > 0 at the moment a confirm answers 200. Expect > 0.
-    // Without this count, `!h.withdrawn().has(e)` could hold only because no run ever withdrew before a confirm (TEST-STRATEGY rule 2).
+  it("a withdrawal AFTER a confirm leaves the entrant seeded in stage 2, and stage 2 walks it over (review 2 I-2)", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    for (const s of ["generateLater", "playStage1", "complete", "confirmLatest"] as const) await h.step(s);
+    const seededFirst = h.seeded()[0]!;
+    await h.step({ withdrawOne: d.seedOf(seededFirst) - 1 });
+    expect(h.seeded()).toContain(seededFirst);                              // still seated: the product does not unseat
+    const itsFixture = d.fixturesOfStage(2).find((f) => f.home_entrant_id === seededFirst || f.away_entrant_id === seededFirst)!;
+    expect(itsFixture.status).toBe("forfeited");                            // knockout is in BRACKET_WALKOVER_KINDS: walked over
+    expect(itsFixture.outcome?.winner).not.toBe(seededFirst);
   });
   ```
-  `AdvanceHarness` is a test helper in the same file. It maps each step onto the harness's own functions (`recordGenerate`, `playStage`, `finishStage`, `confirmAdvance`) against the fake, keeping one `Recorder`. `withdrawOne(i)` calls `ctx.driver.withdraw(<entrant at seed i+1>)` and adds it to `rec.withdrawn`, exactly as R4's hook does; withdrawing an already-withdrawn entrant is a named `RefusedCall` recorded, never thrown out. The fake mirrors the product's rule that a withdrawn entrant is never seeded (it drops withdrawn entrants from its standings before taking the top `declaredTake`). A shrunk counterexample is committed as a named `it(...)` with its seed and path BEFORE any fix (rule 10).
+  `AdvanceHarness` is a test helper in the same file. It keeps `withdrawnBeforeConfirm()` / `withdrawnAfterConfirm()`, split at the step where the first confirm answered 200. `playStage1` calls the harness's `playStage` on stage 1 until it exits. It maps each step onto the harness's own functions (`recordGenerate`, `playStage`, `finishStage`, `confirmAdvance`) against the fake, keeping one `Recorder`. `withdrawOne(i)` calls `ctx.driver.withdraw(<entrant at seed i+1>)` and adds it to `rec.withdrawn`, exactly as R4's hook does; withdrawing an already-withdrawn entrant is a named `RefusedCall` recorded, never thrown out. The fake mirrors the product's rule that a withdrawn entrant is never seeded (it drops withdrawn entrants from its standings before taking the top `declaredTake`). A shrunk counterexample is committed as a named `it(...)` with its seed and path BEFORE any fix (rule 10).
 
 - [ ] **Step 2: Run: expect FAIL.**
 - [ ] **Step 3: Implement the driver methods** (`HttpDriver`):
@@ -1500,10 +1573,12 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - confirm with a fresh `recomputeSeedProposal` id instead of the one `/complete` returned → killed by the `confirms` equality;
   - call `finishStage` twice on stage 1 → killed by the fake's `DriverMisuse` and the fast-check "completes ≤ 1";
   - `fieldSource: "division"` on later stages → killed by the `fieldSource` pair assertion;
-  - `declaredTake` `topNPerGroup` ignores pools → killed by the vocabulary test (`8`);
+  - `declaredTake` `topNPerGroup` ignores pools → killed by the take-vocabulary test (`8`);
   - `advanceSeededAsDeclared` drops the withdrawn item → killed by the R4 test (the fake seeds the withdrawn entrant when the mutant is on; add the fake option `seedWithdrawn: true` for that test);
-  - remove `withdrawOne` from the fast-check `cmd` → killed by the non-vacuity count test (plan review 1 I-5);
-  - `declaredTake` `bestNth` multiplied by pools → killed by the uneven-pools test (`8`, not `12`; m-7).
+  - remove `withdrawOne` from the fast-check `cmd` → killed by the `withdrewBeforeConfirm` / `withdrewAfterConfirm` counts (plan review 1 I-5);
+  - drop the command weights (equal odds) → run once with the seed; if `tally.confirmed` stays > 0 the mutant is equivalent at this seed, note it; the count assertion is the guard (plan review 2 I-2);
+  - the fake unseats an entrant withdrawn after a confirm (cleaner than the product) → killed by the "withdrawal AFTER a confirm" example;
+  - `declaredTake` `bestNth` multiplied by pools → killed by the uneven-pools test (`8` from the engine's `expandTake`, not `12`; review 1 m-7, review 2 m-6).
 - [ ] **Step 8: tsc + eslint; commit** `feat(matrix): multi-stage driving — seed-proposal confirm, per-stage observation (W1-driving T6, D1, D12)`.
 
 - [ ] **Step 9: Live smoke, one cell per shape** (a fresh env per the skill). Run each with `EXIT=$?` written:
@@ -1523,8 +1598,8 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
 
 **Files:**
 - Create: `scripts/matrix/lib/scenarios/ladder-loop.ts`, `scripts/matrix/__tests__/ladder-loop.test.ts`
-- Modify: `driver/types.ts` (`challenge`), `http-driver.ts`, `browser-driver.ts` (filler), `common.ts` (`FORMAT_LATER` loses `ladder`; `playStage` dispatches `kind === "ladder"` to `playLadder`), `fake-formats-driver.ts` (`FakeLadderDriver`), `lib/scenarios/r4-withdrawal.ts` (D14: the per-kind trigger, the derived ladder policy, `r4-not-challenged-later`).
-- Test: `ladder-loop.test.ts`, `scenarios.test.ts` (the ladder part of `:1012` re-pinned), `r4-withdrawal.test.ts` if it exists, else the R4 block of `scenarios.test.ts`.
+- Modify: `driver/types.ts` (`challenge`), `http-driver.ts`, `browser-driver.ts` (filler), `common.ts` (`FORMAT_LATER` loses `ladder`; `playStage` dispatches `kind === "ladder"` to `playLadder`), `fake-formats-driver.ts` (`FakeLadderDriver`), `lib/scenarios/r4-withdrawal.ts` (D14, ruling 53: the per-kind trigger, the derived ladder policy, the kind-aware `cascadeItems` (false premise 16), `r4-not-challenged-later` with its raw/live items, the W7 finalRanks note).
+- Test: `ladder-loop.test.ts`, `scenarios.test.ts` (the ladder part of `:1012` re-pinned), the R4 block of `scenarios.test.ts` (there is no `r4-withdrawal.test.ts`; plan review 2 m-8).
 
 **Interfaces:**
 - Produces:
@@ -1542,7 +1617,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - whether `formats.advanced` is on the case org's plan (`seed-org.ts` `chooseTopPublicPlan`);
   - (D14, ruling 51) the M1 and R4 meanings on a ladder, each with file:line: the open-format withdrawal branch (`withdrawal.ts:213-217` at plan time: void pending, walkover policy only when something was pending), the raw-vs-live `ladder_order` rule (`usecases/stages.ts:5562-5572` never prunes; `:5601-5625` reach counted on live rungs), and `LADDER_ENTRANT_WITHDRAWN` for a challenge naming a departed entrant (`:5539-5590`).
 
-  Record each with file:line. **Before any implementation**, run the two D14 ladder tests below against TODAY's `r4-withdrawal.ts` and paste the red (`r4-policy-reported`: "policy none on a started division", or the hook firing at step 1 before seed 3 has played). A D14 test that is green today is not testing the new meaning.
+  Record each with file:line. Capture the `league|generic` R4 canary's checks JSON on `FakeLeagueDriver` with TODAY's code into `__tests__/fixtures/r4-canary-before.json` (the byte-identical test compares against it). **Before any implementation**, run the D14 ladder tests below against TODAY's `r4-withdrawal.ts` and paste the red (`r4-policy-reported`: "policy none on a started division", or the hook firing at step 1 before seed 3 has played). A D14 test that is green today is not testing the new meaning.
 
 - [ ] **Step 1: Failing tests.** Transitions: empty ladder; the first challenge; the last; a withdrawn entrant in the middle (R4, D14 timing); a walkover challenge (M1, which lands on the last challenge, D8); a withdrawal at any step (the rule-10 `withdrawOne`, plan review 1 I-5); a second sport.
   ```ts
@@ -1589,20 +1664,68 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(checks.find((c) => c.id === "r4-not-challenged-later")?.verdict).toBe("pass");
     expect(out.observed.withdrawal!.afterRound).toBe(ledger[first]!.step);
   });
-  it("R4 on a ladder: the expected policy is DERIVED from what seed 3 held pending (false premise 13) — none here, and the canary's opposite reds", async () => {
+  it("the product's pending set, read as text: WITHDRAWAL_PENDING_STATUSES is {scheduled, in_play} (plan review 2 m-3)", () => {
+    // Reads apps/web/src/lib/table-withdrawal.ts as text, extracts the Set literal of WITHDRAWAL_PENDING_STATUSES,
+    // and exports it to the tests as PENDING. Also reads TABLE_KINDS (withdrawal.ts:37) and BRACKET_WALKOVER_KINDS
+    // (stages.ts:880-884) the same way for the kind-aware cascade. Each set is asserted non-empty; a product change moves them.
+    expect([...PENDING].sort()).toEqual(["in_play", "scheduled"]);
+  });
+  it("R4 on a ladder (ruling 53): policy derived from the product's pending set — none here — and the canary's opposite reds", async () => {
     const driver = new FakeLadderDriver({ challengeRange: 3 });
     const { out, checks } = await runOn(driver, "R4", { row: "ladder" });
     const w = out.observed.withdrawal!;
-    // The oracle is the product's open-format rule (withdrawal.ts:213-217), read from the fixtures seed 3 held, not r4-withdrawal.ts.
-    const expected = w.before.some((f) => !["decided", "forfeited", "abandoned", "finalized", "cancelled", "void"].includes(f.status)) ? "walkover" : "none";
+    // The oracle is the product's open-format rule (withdrawal.ts:213-217) over the text-pinned PENDING set, not r4-withdrawal.ts.
+    const expected = w.before.some((f) => PENDING.has(f.status)) ? "walkover" : "none";
     expect(expected).toBe("none");                                   // D8 decides each challenge before the next is issued
-    expect(w.policy).toBe(expected);
+    expect([w.policy, w.walkovers, w.voided, w.skippedFinalized]).toEqual([expected, 0, 0, 0]);
     expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("pass");
+    expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");   // seed 3's decided challenge unchanged
     const canary = await runOn(new FakeLadderDriver({ challengeRange: 3 }), "R4", { row: "ladder", canary: true });
     expect(canary.checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("fail");
   });
-  it("R4 on a ladder with a PENDING challenge at withdrawal (fake option withdrawWhilePending): policy walkover, the pending challenge voided", async () => {
+  it("R4 on a ladder (ruling 53): seed 3 is gone from the LIVE order, still in the RAW ladder_order at its held index; the finalRanks rung is a W7 note, not a check", async () => {
+    const driver = new FakeLadderDriver({ challengeRange: 3 });
+    const { out, checks } = await runOn(driver, "R4", { row: "ladder" });
+    const seed3 = driver.entrantsBySeed()[2]!;
+    const heldAt = driver.rawOrderAtWithdrawal().indexOf(seed3);      // the fake's raw order the moment withdraw() answered
+    expect(heldAt).toBeGreaterThanOrEqual(0);
+    expect(driver.ladderOrder().indexOf(seed3)).toBe(heldAt);         // raw: never pruned (stages.ts:5562-5572)
+    expect(driver.ladderOrder().filter((e) => !driver.withdrawnIds().has(e))).not.toContain(seed3);
+    expect(checks.find((c) => c.id === "r4-not-challenged-later")?.verdict).toBe("pass");
+    // W7: the product snapshots the RAW order into finalRanks (engine-db/competition.ts:606), so seed 3 keeps its rung.
+    expect(out.notes.some((n) => n.includes(`ladder finalRanks keep withdrawn ${seed3} at rung ${heldAt}`) && /W7/.test(n))).toBe(true);
+    expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);  // recorded, never asserted either way
+  });
+  it("R4 on a ladder with a PENDING challenge at withdrawal (fake option withdrawWhilePending): walkover by abandon, never by forfeit", async () => {
+    // withdrawWhilePending: the fake issues seed 3's first challenge and the hook withdraws BEFORE it is decided.
     // The differing case: the right answer ("walkover") differs from the D8 default ("none"), so a hard-coded "none" is killed.
+    const driver = new FakeLadderDriver({ challengeRange: 3, withdrawWhilePending: true });
+    const { out, checks } = await runOn(driver, "R4", { row: "ladder" });
+    const w = out.observed.withdrawal!;
+    expect(w.before.filter((f) => PENDING.has(f.status)).length).toBe(1);
+    expect([w.policy, w.walkovers, w.voided]).toEqual(["walkover", 0, 1]);          // open-format branch: abandon + voided, no forfeit
+    const pending = out.observed.stages[0]!.fixtures.find((f) => f.id === w.before.find((b) => PENDING.has(b.status))!.id)!;
+    expect(pending.status).toBe("abandoned");
+    expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("pass");
+    expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");  // kind-aware (false premise 16)
+  });
+  it("cascadeItems is kind-aware (false premise 16): open-format walkover = every pending abandoned and counted voided; table/bracket unchanged", () => {
+    const before = [{ id: "f1", status: "scheduled", home: "w", away: "x" }, { id: "f2", status: "decided", home: "w", away: "y" }] as never;
+    const abandonedAfter = [{ id: "f1", status: "abandoned", home: "w", away: "x", outcome: null }, { id: "f2", status: "decided", home: "w", away: "y", outcome: { winner: "w" } }] as never;
+    const forfeitedAfter = [{ id: "f1", status: "forfeited", home: "w", away: "x", outcome: { winner: "x" } }, { id: "f2", status: "decided", home: "w", away: "y", outcome: { winner: "w" } }] as never;
+    const ok = (items: { ok: boolean }[]) => items.every((i) => i.ok);
+    for (const kind of ["ladder", "page_playoff", "americano"]) {
+      expect(ok(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)), kind).toBe(true);
+      expect(ok(cascadeItems("walkover", "w", before, forfeitedAfter, 1, 0, kind)), `${kind}: a forfeit is NOT the open-format shape`).toBe(false);
+    }
+    for (const kind of ["league", "group", "swiss", "knockout", "double_elim", "stepladder"]) {
+      expect(ok(cascadeItems("walkover", "w", before, forfeitedAfter, 1, 0, kind)), kind).toBe(true);
+      expect(ok(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)), `${kind}: an abandon with a seated opponent is not the table/bracket shape`).toBe(false);
+    }
+  });
+  it("the league|generic R4 canary verdict is byte-identical before and after the kind-aware cascade", async () => {
+    // Runs the R4 canary case (planCanaryCase(variantFor, "R4")) on FakeLeagueDriver and compares its checks JSON with the
+    // pre-change snapshot captured at Step 0 into __tests__/fixtures/r4-canary-before.json (committed in this task).
   });
   it("M1 on a ladder lands on the last challenge (D8, m-4): forfeited to seed 1, m1-winner-progresses abstains", async () => {
     const driver = new FakeLadderDriver({ challengeRange: 3 });
@@ -1615,6 +1738,11 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   it("fast-check (rule 10): playLadder under ANY withdrawal set and timing issues zero refused challenges, and the final LIVE order is the adjacent-swap rule replayed over the product's own ledger", async () => {
     // Drives the HARNESS (playLadder + ladderSchedule), never the fake's own challenge logic (plan review 1 I-5).
     // Withdrawals are injected through playLadder's afterRound hook at generated steps, exactly as R4's hook would.
+    // Normalisation (plan review 2 m-5), done by LadderHarness BEFORE play and counted, never an unplanned red:
+    //   - seedIdx is taken modulo n, so it always names an existing entrant;
+    //   - a repeat of an entrant already in the list is dropped (first occurrence wins) — the product would refuse a
+    //     second withdrawal, and that refusal is Task 6's sequence, not this property's;
+    //   - a withdrawal whose afterStep never runs (the sweep ended first) is not applied, and h.skippedWithdrawals() counts it.
     const arb = fc.record({
       n: fc.integer({ min: 2, max: 10 }),
       withdrawals: fc.array(fc.record({ afterStep: fc.nat({ max: 9 }), seedIdx: fc.nat({ max: 9 }) }), { maxLength: 4 }),
@@ -1642,9 +1770,14 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(withdrewMidSweep, "runs where a challenge followed a withdrawal (anti-vacuity)").toBeGreaterThan(0);
   });
   ```
-  `FakeLadderDriver` enforces the four ladder refusals with the product's codes from Step 0, swaps on a challenger win, writes `ladder_order` by seed on the first challenge and **never prunes it** (the product's raw order), counts reach on LIVE rungs (the product's F7 rule), refuses a departed entrant with `LADDER_ENTRANT_WITHDRAWN`, answers `withdraw` with the open-format rule (void pending; policy `walkover` only if something was pending, else `none`), and completes when ≥1 fixture exists and none is open. `finalRanks` = `ladder_order`. Its ledger (`decidedChallenges()`) records, for each challenge, whether it was live-adjacent and upward at issue time; those flags are computed from the fake's live order at issue, which is the product's rule, not `playLadder`'s. `LadderHarness` is a thin test helper that calls `setUpDivision` + `playLadder` with an `afterRound` hook that withdraws per the generated list; it has no challenge logic of its own.
+  `FakeLadderDriver` enforces the four ladder refusals with the product's codes from Step 0, swaps on a challenger win, writes `ladder_order` by seed on the first challenge and **never prunes it** (the product's raw order), counts reach on LIVE rungs (the product's F7 rule), refuses a departed entrant with `LADDER_ENTRANT_WITHDRAWN`, answers `withdraw` with the open-format rule (every pending fixture ABANDONED and counted in `voided`, walkovers 0; policy `walkover` only if something was pending, else `none`; false premise 16), keeps `rawOrderAtWithdrawal()`, and completes when ≥1 fixture exists and none is open. `finalRanks` = `ladder_order`. Its ledger (`decidedChallenges()`) records, for each challenge, whether it was live-adjacent and upward at issue time; those flags are computed from the fake's live order at issue, which is the product's rule, not `playLadder`'s. `LadderHarness` is a thin test helper that calls `setUpDivision` + `playLadder` with an `afterRound` hook that withdraws per the generated list; it has no challenge logic of its own.
 
-  `r4-withdrawal.ts` changes (D14): the trigger becomes a per-kind strategy (`R4_TRIGGER: Record<"default" | "ladder", (round, batch, seed3) => boolean>`), `r4-policy-reported` on `ladder` asserts `policy === expectedPolicy(before)` (with the canary judging the opposite), and the new `r4-not-challenged-later` check (ladder only; abstains elsewhere) reads the challenge fixtures `playLadder` issued AFTER the withdrawal step (`playLadder` records `rec.ladderSteps: {step, fixtureId}[]`; a challenge fixture's product `round_no` is not relied on). Zero challenges after the withdrawal is an abstain with its reason ("no challenge followed the withdrawal"), never a pass (TEST-STRATEGY rule 2); under D8 with 8 entrants one challenge follows (step 6).
+  `r4-withdrawal.ts` changes (D14, ruling 53):
+  - the trigger becomes a per-kind strategy (`R4_TRIGGER: Record<"default" | "ladder", (round, batch, seed3) => boolean>`);
+  - `r4-policy-reported` on `ladder` asserts `policy === expectedPolicy(before)` over the text-pinned `PENDING` (with the canary judging the opposite);
+  - `cascadeItems` gains a `kind` argument and picks its walkover model from `WALKOVER_MODEL: Record<"forfeit" | "abandon", …>` by membership in the text-pinned `TABLE_KINDS ∪ BRACKET_WALKOVER_KINDS` (false premise 16). Every existing caller passes the stage kind, so `league` keeps today's model byte-for-byte;
+  - on `ladder` the case pushes the W7 note "ladder finalRanks keep withdrawn <id> at rung <i> (raw ladder_order) — W7 rulebook question" and asserts nothing about it;
+  - the new `r4-not-challenged-later` check (items: seed 3 absent from the live order; seed 3 present in the raw `ladder_order` at its held index; one item per later challenge, none seating seed 3) (ladder only; abstains elsewhere) reads the challenge fixtures `playLadder` issued AFTER the withdrawal step (`playLadder` records `rec.ladderSteps: {step, fixtureId}[]`; a challenge fixture's product `round_no` is not relied on). Zero challenges after the withdrawal is an abstain with its reason ("no challenge followed the withdrawal"), never a pass (TEST-STRATEGY rule 2); under D8 with 8 entrants one challenge follows (step 6).
 - [ ] **Step 2: FAIL.**
 - [ ] **Step 3: Implement** `ladder-loop.ts`:
   ```ts
@@ -1688,16 +1821,20 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   }
   ```
   `LoopExit` gains `"refused_challenge"`. `life-loop-bounded` already reds every exit but `drained`.
-- [ ] **Step 4: PASS** (`ladder-loop.test.ts`, `scenarios.test.ts`, `http-driver.test.ts`, `browser-driver.test.ts`). `playLadder` also pushes `{step, fixtureId}` to `rec.ladderSteps` for every issued challenge (read by `r4-not-challenged-later`).
+- [ ] **Step 4: PASS** (`ladder-loop.test.ts`, `scenarios.test.ts`, `http-driver.test.ts`, `browser-driver.test.ts`). In the same step, Task 2's page-playoff R4 test in `scenarios.test.ts` gains `expect(verdict("r4-cascade-consistent")).toBe("pass")` (false premise 16). `playLadder` also pushes `{step, fixtureId}` to `rec.ladderSteps` for every issued challenge (read by `r4-not-challenged-later`).
 - [ ] **Step 5: Mutation:**
   - `challengerWins` always true → killed by the expected-order test (the right answer differs from the "always climbs" constant);
   - drop the withdrawn filter → killed by R4 (`LADDER_ENTRANT_WITHDRAWN` from the fake) AND, separately, by the fast-check property's "zero refused challenges" (run it with the R4 test file excluded once, so each killer is shown alone);
   - the R4 ladder trigger fires on `round === 1` (today's) → killed by the D14 timing test;
   - `expectedPolicy` hard-coded `"none"` → killed by the `withdrawWhilePending` test;
-  - the fake's `withdraw` answers `walkover` always → the "derived policy" test reds (proves the test reads the fake's product-shaped answer, not a constant).
+  - the fake's `withdraw` answers `walkover` always → the "derived policy" test reds (proves the test reads the fake's product-shaped answer, not a constant);
+  - `cascadeItems` ignores `kind` (always the forfeit model) → killed by the kind-aware unit test and by `withdrawWhilePending`'s `r4-cascade-consistent` pass (and by Task 2's page-playoff test once Task 7 adds that assertion);
+  - `cascadeItems` always uses the abandon model → killed by the kind-aware unit test's table/bracket half and by the byte-identical canary test;
+  - drop the raw-`ladder_order` item → killed by "gone from the LIVE order, still in the RAW";
+  - turn the W7 finalRanks note into a check → killed by `checks.some(/finalRanks/) === false`.
   - `plan.length === 0` returns `drained` → killed by the empty case;
   - read `ladder_order` from the challenge answer only, never re-listing → killed by the fake's `staleLadderOrderInAnswer` option test (the fake answers the pre-decision order, as the product does before the result lands).
-- [ ] **Step 6: tsc + eslint; commit** `feat(matrix): ladder driving through challenges; R4 on the ladder per ruling 51 (W1-driving T7, D8, D14)`.
+- [ ] **Step 6: tsc + eslint; commit** `feat(matrix): ladder driving through challenges; R4 on the ladder per rulings 51 and 53; kind-aware cascade (W1-driving T7, D8, D14)`.
 
 ---
 
@@ -1727,11 +1864,12 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - what `completeStage` puts in `finalRanks` for an americano stage (individual entrants, or pair entrants);
   - (plan review 1 I-3) the mexicano wait predicate, re-pinned: `existing.some((f) => f.status !== "decided")` at `stages.ts:769` at plan time, and the status a walkover gets (`forfeited`, `engine-db/append-event.ts:147`) and a withdrawal void gets;
   - (plan review 1 I-2) the member-row read in `americanoGen`: `personOf` over all `entrant_members` rows, no kind filter, no `order by` (`stages.ts:744-747` at plan time);
-  - (D14) whether mexicano's next generate still seats an individual withdrawn after round 1 (`americanoGen` receives `entrants: ActiveEntrant[]`, `stages.ts:734-740`; pin where the caller at `:2396` builds that list and whether it excludes withdrawn entrants).
+  - (D14) whether mexicano's next generate still seats an individual withdrawn after round 1 (`americanoGen` receives `entrants: ActiveEntrant[]`, `stages.ts:734-740`; pin where the caller at `:2396` builds that list and whether it excludes withdrawn entrants);
+  - (plan review 2 I-3, false premise 17) the active-entrant query the generate passes to `americanoGen`: no kind filter, `status in ('registered', 'confirmed')` (`stages.ts:2290-2293` at plan time); the pair-entrant insert, `kind: "pair"` with the default status `'registered'` (`stages.ts:715-721`, `db/migration/v2-engine/tables/V212__entrants.sql:12`); the `entrant_members` primary key (`V213__entrant_members.sql:9`); and `pairMexicanoRound`'s sort, points then id (`packages/engine/src/scheduling/americano.ts:93-95`). Record whether a self-pair would reach the PK (a 500) or is prevented earlier.
 
   Each is written down with file:line. I10 (Task 9) is built on the answer. **Before any implementation**, run the D14 M1 and R4 americano tests below against TODAY's `m1-walkover.ts` / `r4-withdrawal.ts` and paste the reds (M1: `m1-walkover-recorded` "no round fixture seated seed 1"; R4: `r4-policy-reported` "policy none" with no predicted signature on the case).
 
-- [ ] **Step 1: Failing tests.** Transitions: the first round; the last round; a round with a sit-out (F1: 7 players, courtCount 2); a withdrawn player (R4, a predicted product red, D14); a walkover (M1 on a pair entrant, D14; on mexicano it stalls the rounds, false premise 14); a void on mexicano; americano vs mexicano; a team sport (false premise 10 corrected: it GENERATES, with one arbitrary roster member per team; recorded as a W7 finding, never a crash).
+- [ ] **Step 1: Failing tests.** Transitions: the first round; the last round; a round with a sit-out (F1: 7 players, courtCount 2); a withdrawn player (R4, a predicted product red, D14; on mexicano it does NOT stall, plan review 2 I-3); a walkover (M1 on a pair entrant, D14; on mexicano it stalls the rounds, false premise 14); a void on mexicano; round 2 of mexicano, where the product counts round 1's pair entrants as players (false premise 17); americano vs mexicano; a team sport (false premise 10 corrected: it GENERATES, with one arbitrary roster member per team; recorded as a W7 finding, never a crash).
   ```ts
   it("americano: no generate after Start; rounds played lowest first; capped by config.rounds", async () => {
     const driver = new FakeAmericanoDriver({ mode: "americano", rounds: 7 });
@@ -1740,12 +1878,12 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(driver.calls.filter((c) => c === `generate ${stageId}`).length).toBe(0);
     expect(driver.roundsDecided()).toEqual([1, 2, 3, 4, 5, 6, 7]);
   });
-  it("mexicano: one generate per fully decided round; created 0 before config.rounds is stalled_rounds with a note", async () => {
-    const ok = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
+  it("mexicano loop mechanics (individualsOnly, to isolate the loop): one generate per fully decided round; created 0 before config.rounds is stalled_rounds with a note", async () => {
+    const ok = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7, individualsOnly: true });
     const good = await runOn(ok, "LIFECYCLE", { row: "mexicano" });
     expect(ok.calls.filter((c) => c.startsWith("generate ")).length).toBe(7);   // rounds 2..7 + the drained probe after round 7
     expect(good.checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("pass");
-    const stall = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7, stallAfter: 3 });
+    const stall = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7, stallAfter: 3, individualsOnly: true });
     const bad = await runOn(stall, "LIFECYCLE", { row: "mexicano" });
     expect(bad.out.notes.some((n) => /stalled after round 3 of 7/.test(n))).toBe(true);
     expect(bad.checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
@@ -1757,22 +1895,46 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(Object.keys(persons).length).toBeGreaterThan(0);
     for (const ids of Object.values(persons)) expect(ids.length).toBe(2);
   });
-  it("fast-check: mexicano under any interleaving of decide / forfeit / generate / withdraw never seats a person twice in a round, and a non-decided fixture blocks every later round", async () => {
+  it("fast-check (rule 10, product-shaped fake): under any interleaving of decide / forfeit / generate / withdraw, a non-decided fixture blocks every later round, round 1 never repeats a person, and every later duplicate is explained by an earlier pair entrant", async () => {
+    let dupRuns = 0;
     await fc.assert(fc.asyncProperty(fc.array(fc.constantFrom("decideOne", "forfeitOne", "generate", "withdrawOne"), { maxLength: 24 }), async (steps) => {
-      const h = await MexicanoHarness.open(new FakeAmericanoDriver({ mode: "mexicano", rounds: 5 }), 8);
+      const h = await MexicanoHarness.open(new FakeAmericanoDriver({ mode: "mexicano", rounds: 5 }), 8);   // DEFAULT = the product's shape
       for (const s of steps) {
         await h.step(s);
-        for (const r of h.rounds()) expect(new Set(r.persons).size, `round ${r.round_no}`).toBe(r.persons.length);
+        const r1 = h.rounds().find((r) => r.round_no === 1);
+        if (r1) expect(new Set(r1.persons).size, "round 1").toBe(r1.persons.length);   // only individuals exist before round 2
+        // Review 2 I-3: from round 2 a duplicate is the PRODUCT's (pair entrants counted as players, false premise 17).
+        // The harness invariant is that the signature's evidence holds: each duplicated person is a member of a pair entrant
+        // seated in an EARLIER round. A duplicate that evidence cannot explain is a harness or fake defect.
+        for (const r of h.rounds().filter((x) => x.round_no >= 2)) for (const p of h.duplicatesIn(r)) {
+          expect(h.pairEntrantsBefore(r.round_no).some((e) => h.membersOf(e).includes(p)), `round ${r.round_no}: ${p}`).toBe(true);
+        }
         // I-3: once any fixture is not "decided", no later generate creates a round (the product's rule, text-pinned below).
         if (h.anyNonDecided()) expect(h.lastGenerateCreated() ?? 0, "generate created a round past a non-decided fixture").toBe(0);
       }
+      if (h.rounds().some((r) => r.round_no >= 2 && h.duplicatesIn(r).length > 0)) dupRuns++;
       return true;
     }), { numRuns: 200, seed: Number(process.env.MATRIX_FC_SEED ?? 20260930) });
+    expect(dupRuns, "runs that reached a round-2 duplicate (anti-vacuity for the evidence invariant)").toBeGreaterThan(0);
   });
-  it("the fake's mexicano wait IS the product's: stages.ts reads `status !== \"decided\"` (text pin, I-3)", () => {
-    // Reads apps/web/src/server/usecases/stages.ts as text inside americanoGen's mexicano branch and asserts the wait
-    // predicate `existing.some((f) => f.status !== "decided")` is present exactly once; the fake imports the same
-    // predicate string's meaning (a constant WAIT_UNLESS = "decided"). A product change reds this pin first.
+  it("the fake's mexicano wait and player set ARE the product's (text pins, review 1 I-3, review 2 I-3)", () => {
+    const src = readFileSync(STAGES_TS, "utf8");                     // apps/web/src/server/usecases/stages.ts
+    const gen = sliceFunction(src, "americanoGen");                  // the function body, by brace matching
+    expect(gen.match(/existing\.some\(\(f\) => f\.status !== "decided"\)/g)?.length).toBe(1);
+    expect(WAIT_UNLESS).toBe("decided");                             // the fake's constant
+    const active = src.match(/const active = await tx<ActiveEntrant\[\]>`([\s\S]*?)`/)?.[1] ?? "";
+    expect(active).toMatch(/status in \('registered', 'confirmed'\)/);
+    expect(active).not.toMatch(/\bkind\b/);                          // no kind filter: pair entrants are "players" (false premise 17)
+    expect(FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT).toBe(true);
+  });
+  it("mexicano round 2 (false premise 17): the product-shaped fake repeats a person; the case records the signature with its evidence, routed W7", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "mexicano" });
+    const dup = driver.firstDuplicate();                             // {round_no, person, viaPairEntrant} from the fake's own rows
+    expect(dup.round_no).toBeGreaterThanOrEqual(2);
+    expect(out.notes.some((n) => n.includes("mexicano-pair-entrants-counted-as-players") && n.includes(dup.person) && n.includes(dup.viaPairEntrant) && /→ W7/.test(n))).toBe(true);
+    // The FULL failing-check set, which Task 15's "only covered checks" rule reads (review 2 m-8): I10 only.
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["I10"]);
   });
   it("mexicano M1 walkover (D14, false premise 14): the forfeit stalls every later round → stalled_rounds, a note, predicted W7", async () => {
     const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
@@ -1780,7 +1942,20 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(checks.find((c) => c.id === "m1-walkover-recorded")?.verdict).toBe("pass");
     expect(checks.find((c) => c.id === "life-loop-bounded")?.evidence.some((e) => /exited stalled_rounds/.test(e))).toBe(true);
     expect(out.notes.some((n) => /mexicano-stalled-on-non-decided/.test(n) && /→ W7/.test(n))).toBe(true);
-    expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
+    // The FULL failing-check set (review 2 m-8), derived from the rule, not from a run: M1 forfeits in round 1, so the
+    // stall comes before any round 2 (no duplicate, so I10 passes); the loop exits stalled_rounds (life-loop-bounded) and
+    // the stage never completes (life-stage-completed).
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["life-loop-bounded", "life-stage-completed"]);
+  });
+  it("mexicano R4 does NOT stall (review 2 I-3): round 2 is generated; the signature needs seed 3's person seated in round ≥ 2 through ANY entrant", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
+    const { out } = await runOn(driver, "R4", { row: "mexicano" });
+    expect(out.notes.some((n) => /mexicano-stalled-on-non-decided/.test(n))).toBe(false);
+    expect(driver.roundsGenerated()).toContain(2);
+    const p3 = driver.personOfSeed(3);
+    const seatedLater = driver.fixturesAfterRound(1).some((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => driver.membersOf(e!).includes(p3)));
+    // Signature present iff its second leg holds, read from the fake's rows (the oracle), never from r4-withdrawal.ts.
+    expect(out.notes.some((n) => /r4-withdrawn-player-kept-playing/.test(n))).toBe(seatedLater);
   });
   it("M1 on americano (D14, ruling 51): targets the first fixture whose pair entrant has seed 1's person as a member — reds on today's hook", async () => {
     const driver = new FakeAmericanoDriver({ mode: "americano", rounds: 7 });
@@ -1810,25 +1985,40 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   });
   it("R4 on americano WITHOUT the second leg (fake option `dropWithdrawnFromPlan`): no predicted signature — the red goes to normal triage", async () => {
     // The differing case: a product that DID drop the withdrawn player from later pairs must not be labelled with the W7 signature.
+    const driver = new FakeAmericanoDriver({ mode: "americano", rounds: 7, dropWithdrawnFromPlan: true });
+    const { out, checks } = await runOn(driver, "R4", { row: "americano" });
+    const p3 = driver.personOfSeed(3);
+    expect(driver.fixturesAfterRound(1).some((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => driver.membersOf(e!).includes(p3)))).toBe(false);
+    expect(out.notes.some((n) => /r4-withdrawn-player-kept-playing/.test(n))).toBe(false);
+    expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("fail");  // still red (policy none), now uncovered
   });
   it("americano|badminton LIFECYCLE puts zero lineups and completes; americano|football puts zero lineups, notes the pair-entrant skip, and completes (I-1)", async () => {
     // FakeAmericanoDriver mirrors americanoGen's member read: one person per entrant, the LAST member row for a team (false premise 10).
-    // badminton: putLineup calls 0, exit drained, life-stage-completed pass.
-    // football: putLineup calls 0, exactly one "not a division entrant" note per stage, exit drained, and one note
-    //           "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10)".
+    const bad = new FakeAmericanoDriver({ mode: "americano", rounds: 3 });
+    const b = await runOn(bad, "LIFECYCLE", { row: "americano", sport: "badminton" });
+    expect(bad.calls.filter((c) => c.startsWith("putLineup ")).length).toBe(0);
+    expect(b.out.observed.stages[0]!.exit).toBe("drained");
+    expect(b.checks.find((c) => c.id === "life-stage-completed")?.verdict).toBe("pass");
+    const foot = new FakeAmericanoDriver({ mode: "americano", rounds: 3 });
+    const f = await runOn(foot, "LIFECYCLE", { row: "americano", sport: "football", variant: Object.keys(sportModule("football").variants as object)[0]! });
+    expect(foot.calls.filter((c) => c.startsWith("putLineup ")).length).toBe(0);
+    expect(f.out.notes.filter((n) => /not a division entrant/.test(n)).length).toBe(1);   // one stage
+    expect(f.out.notes.filter((n) => n.startsWith("americano generated on team entrants with one arbitrary roster member each") && /W7/.test(n)).length).toBe(1);
+    expect(f.out.observed.stages[0]!.exit).toBe("drained");
+    expect(f.checks.find((c) => c.id === "life-stage-completed")?.verdict).toBe("pass");
   });
   it("team americano: the product's member read has no kind filter (text pin, I-2)", () => {
     // Reads stages.ts as text: inside americanoGen the entrant_members select carries no `kind` predicate and no `order by`.
     // If a product fix adds either, this pin reds and false premise 10's prediction must move (to a refusal or a roster-aware plan).
   });
   ```
-  The fake's option `duplicateInRound2: true` makes the product-shaped duplicate. The harness must NOT fix it. The test asserts the case records it as the I10 red (Task 9) with a note, and the loop still ends at its bound.
+  **The fake's default is the product's shape (plan review 2 I-3, false premise 17).** From mexicano round 2 on, `FakeAmericanoDriver` counts every active entrant as a player, pair entrants included (no kind filter, status `registered`/`confirmed`, as `stages.ts:2290-2293` does). It pairs them by points then id (`americano.ts:93-95`), so a person can sit in round 2 both alone and inside a round-1 pair entrant. The option `individualsOnly: true` models the corrected product; only the loop-mechanics test and a harness-isolating unit use it. The old `duplicateInRound2` option is gone: the duplicate is the default, never an opt-in. Whether a self-pair (a pair entrant paired with its own member) reaches the `entrant_members` PK as a 500 is pinned at Step 0. The fake mirrors that answer: a refused generate exits `refused_generate`, and the round-2 test's full failing set then gains `life-loop-bounded`, recorded as a Step 0 deviation. The harness must NOT fix the duplicate. The case records it as the I10 red (Task 9) with the signature note below, and the loop still ends at its bound.
 
-  `FakeAmericanoDriver` waits on exactly `status !== "decided"` (a forfeit and a void both block, false premise 14) and reads persons the way `americanoGen` does (every member row, last one wins). The notes the loop writes carry the predicted signatures `mexicano-stalled-on-non-decided` and `r4-withdrawn-player-kept-playing` verbatim, because Task 15 Step 3's triage rule matches on them. On a team sport (`setup.kind === "team"`), `playAmericano`/`playMexicano` also push, once, "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10)", naming for each team the one person the product seated (read from the pair entrants' members against `setup.persons`); that note is the finding, since every check may still pass.
+  `FakeAmericanoDriver` waits on exactly `status !== "decided"` (a forfeit and a void both block, false premise 14) and reads persons the way `americanoGen` does (every member row, last one wins). The notes the loop writes carry the predicted signatures `mexicano-stalled-on-non-decided`, `mexicano-pair-entrants-counted-as-players` and `r4-withdrawn-player-kept-playing` verbatim. `playMexicano` writes `mexicano-pair-entrants-counted-as-players: round <r> seats <person> twice, directly and via pair entrant <id> (a round-<q> pair, q < r) → W7` for the first such duplicate per stage. The evidence (the person is a member of an earlier pair entrant) is required: a duplicate it cannot explain gets no signature and goes to normal triage. because Task 15 Step 3's triage rule matches on them. On a team sport (`setup.kind === "team"`), `playAmericano`/`playMexicano` also push, once, "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10)", naming for each team the one person the product seated (read from the pair entrants' members against `setup.persons`); that note is the finding, since every check may still pass.
 
   **The M1 hook on americano** (`m1-walkover.ts`, D14): `targetOf` for kind `americano` resolves `setup.persons.get(seed1)`, then for each fixture in the batch reads `ctx.driver.entrantMembers(side)` for both sides (cached per pair entrant) and takes the first fixture where either side's members intersect seed 1's persons. `absent` is the other side; `m1-walkover-recorded`'s expected winner is seed 1's pair entrant (canary: the absent pair). For every other kind `targetOf` is today's entrant-id match, byte-for-byte.
 
-  **The R4 signature on americano** (`r4-withdrawal.ts`, D14): after `snapshot`, on kind `americano`, when `w.policy === "none"` and `w.before.length === 0`, the scenario reads seed 3's persons from `setup.persons` and the observed stage's `persons` map; if any of them belongs to a pair entrant seated on a fixture with `roundNo > w.afterRound`, it pushes `r4-withdrawn-player-kept-playing: <person> still seated in <k> later fixture(s) — predicted product red → W7`. On mexicano it pushes the same signature with `(mexicano: next-round seating per Task 8 Step 0)` when the policy is `none` and `before` is empty. `r4-policy-reported` is NOT relaxed: it still reds, and the note is what Task 15 Step 3's triage rule reads.
+  **The R4 signature on americano** (`r4-withdrawal.ts`, D14): after `snapshot`, on kind `americano`, when `w.policy === "none"` and `w.before.length === 0`, the scenario reads seed 3's persons from `setup.persons` and the observed stage's `persons` map; if any of them belongs to a pair entrant seated on a fixture with `roundNo > w.afterRound`, it pushes `r4-withdrawn-player-kept-playing: <person> still seated in <k> later fixture(s) — predicted product red → W7`. On mexicano the same rule applies with a real second leg (plan review 2 I-3: R4 does not stall mexicano, so round 2 is generated). The signature is pushed only when seed 3's person is seated in a round ≥ 2 through ANY entrant (alone, or as a member of a pair entrant, which false premise 17 makes likely). Policy `none` and an empty `before` are not enough on their own. `r4-policy-reported` is NOT relaxed: it still reds, and the note is what Task 15 Step 3's triage rule reads.
 - [ ] **Step 2: FAIL.**
 - [ ] **Step 3: Implement** `americano-loop.ts`:
   ```ts
@@ -1893,6 +2083,15 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     const out: Record<string, readonly string[]> = {};
     for (const e of sides) out[e] = (await ctx.driver.entrantMembers(e)).map((m) => m.person_id);
     rec.stagePersons.set(stage.id, out);
+    if (stage.kind === "mexicano") notePairEntrantDuplicates(rec, setup, stage, out);   // review 2 I-3, false premise 17
+  }
+
+  /** From round 2 on: the first person seated twice in one round, directly and via a pair entrant that an EARLIER
+   *  round created, gets the predicted signature. Evidence required; an unexplained duplicate gets no signature. */
+  function notePairEntrantDuplicates(rec: Recorder, setup: DivisionSetup, stage: StageRef, persons: Record<string, readonly string[]>): void {
+    // for each round r ≥ 2 (from rec's fixtures of this stage): expand each side to persons via `persons`
+    // (a division entrant maps through setup.persons); find a person p appearing twice; find a pair entrant e seated in a
+    // round q < r with p ∈ persons[e]; if found, push the signature note once per stage and return.
   }
   ```
   `decideRound` is the existing `decideBatch` body, lifted to take `stage`. `Recorder.stagePersons: Map<string, Record<string, readonly string[]>>`, and `snapshot` writes it to `ObservedStage.persons`. The division entrants' own persons come from `setup.persons` (Task 5; never `rosters`, plan review 1 I-1), and `snapshot` writes them to the same map, so I10 can map field entrant → person.
@@ -1907,8 +2106,12 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - the stall note loses the `mexicano-stalled-on-non-decided` signature → killed by the M1 mexicano test;
   - M1 `targetOf` for americano falls back to the entrant-id match → killed by the D14 M1 americano test (today's red returns);
   - the R4 signature ignores its second leg (labels every `policy none` americano case) → killed by the `dropWithdrawnFromPlan` test;
+  - the mexicano R4 signature fires on `policy none` alone (the first draft's shape) → killed by "mexicano R4 does NOT stall" (its `toBe(seatedLater)`), run once with the fake's `dropWithdrawnFromPlan` so `seatedLater` is false;
+  - `notePairEntrantDuplicates` drops its evidence requirement (labels any duplicate) → killed by a unit case with a duplicate that no earlier pair explains;
+  - drop the `notePairEntrantDuplicates` call → killed by the mexicano round-2 test;
+  - the fake's default flips to `individualsOnly` → killed by the text-pin test's `FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT` and by the fast-check `dupRuns > 0` count;
   - `ensureLineups` loses the `entrantIds.has` gate → killed by the americano|football zero-lineups test (the named throw fires).
-- [ ] **Step 6: tsc + eslint; commit** `feat(matrix): americano and mexicano round loops on linked persons; M1/R4 on the pair entrants per ruling 51 (W1-driving T8, D9, D14)`.
+- [ ] **Step 6: tsc + eslint; commit** `feat(matrix): americano and mexicano round loops on linked persons; M1/R4 on the pair entrants per ruling 51; pair-entrant duplicate signature (W1-driving T8, D9, D14)`.
 
 ---
 
@@ -2018,9 +2221,17 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
       expect(evaluateInvariant(I9, run([ladder(["a", "b", "d", "c", "x"], ["a", "b", "d", "c", "x"])])).evidence.join(" ")).toMatch(/x ranked but not in the field/);
       expect(evaluateInvariant(I9, run([ladder(["a", "b", "c", "d"], ["a", "b", "d", "c"])])).evidence.join(" ")).toMatch(/finalRanks differ from ladder_order/);
     });
-    it("a withdrawn entrant may be absent from finalRanks; an active one may not", () => {
-      const w = { entrantId: "c", afterRound: 1, policy: "walkover" as const, walkovers: 0, voided: 0, skippedFinalized: 0, before: [] };
+    it("the PRODUCT shape (review 2 m-4, ruling 53): a withdrawn entrant stays ranked at its held rung, since finalRanks = raw ladder_order — pass, and the rung is a W7 note", () => {
+      // competition.ts:606 snapshots the raw ladder_order, which stages.ts:5562-5572 never prunes; D8 leaves policy "none".
+      const w = { entrantId: "c", afterRound: 3, policy: "none" as const, walkovers: 0, voided: 0, skippedFinalized: 0, before: [] };
+      const r = evaluateInvariant(I9, run([ladder(["a", "c", "b", "d"], ["a", "c", "b", "d"])], { withdrawal: w }));
+      expect(r.verdict).toBe("pass");                                 // "ranked but withdrawn" is NOT an I9 failure (W7's question)
+      expect(r.checked).toBe(4);
+    });
+    it("a withdrawn entrant may ALSO be absent from finalRanks (a pruning product); an active one may not", () => {
+      const w = { entrantId: "c", afterRound: 3, policy: "none" as const, walkovers: 0, voided: 0, skippedFinalized: 0, before: [] };
       expect(evaluateInvariant(I9, run([ladder(["a", "b", "d"], ["a", "b", "d"])], { withdrawal: w })).verdict).toBe("pass");
+      expect(evaluateInvariant(I9, run([ladder(["a", "c", "d"], ["a", "c", "d"])], { withdrawal: w })).evidence.join(" ")).toMatch(/b not ranked/);
     });
   });
   describe("I10 americano", () => {
@@ -2087,7 +2298,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   Their failure texts are the ones the tests match:
   - I9:
     - `no decided challenge on the ladder`;
-    - `<e> not ranked` / `<e> ranked N×` (active entrants only; `run.withdrawal?.entrantId` is exempt from "not ranked");
+    - `<e> not ranked` / `<e> ranked N×` (active entrants only; `run.withdrawal?.entrantId` is exempt from "not ranked", and a withdrawn entrant still RANKED is not a failure either: the product keeps its rung, a W7 note from Task 7, ruling 53);
     - `<id> ranked but not in the field`;
     - `finalRanks differ from ladder_order: …`.
   - I10:
@@ -2428,7 +2639,7 @@ Ruling 44 gives both to W1-driving and strikes them from W2.
   - `sports` = `SPORT_KEYS` (every builder variant order is read once from the DB).
   - The default slice planner, given an `--only` that `checkSliceFilter` rejects but `checkCellFilter` accepts, plans through `planW1Driving` restricted to that cell. A slice cell plans exactly as today.
 
-  **The `probe-set.ts` orphan (plan review 1, m-8; facts-A item 18).** `scripts/matrix/lib/probe-set.ts:36-39` says the probe's API-only rows are "single-stage (a multi-stage row needs seed-proposal handling, deferred to W1-driving)", and `:56` enforces it (`isApi.has(row) && stages.length === 1`), which leaves out `group_group_ko`, the one multi-stage row in `API_ONLY_ROWS` (`catalogue.ts:27-29`). Decision: **the exclusion stays, the comment changes.** `w1b-probe` is W1b's committed probe set; re-planning it would change what a re-run of that set means, while the `w1-driving` set (this task) already plans `group_group_ko` × every sport × the four scenarios. So:
+  **The `probe-set.ts` orphan (plan review 1, m-8; facts-A item 18).** `scripts/matrix/lib/probe-set.ts:36-39` says the probe's API-only rows are "single-stage (a multi-stage row needs seed-proposal handling, deferred to W1-driving)", and `:58` enforces it (re-pinned at plan review 2, m-8) (`isApi.has(row) && stages.length === 1`), which leaves out `group_group_ko`, the one multi-stage row in `API_ONLY_ROWS` (`catalogue.ts:27-29`). Decision: **the exclusion stays, the comment changes.** `w1b-probe` is W1b's committed probe set; re-planning it would change what a re-run of that set means, while the `w1-driving` set (this task) already plans `group_group_ko` × every sport × the four scenarios. So:
   - reword the `probe-set.ts:36-39` comment to: "single-stage only: `w1b-probe` is W1b's frozen probe; the multi-stage API-only row (`group_group_ko`) is driven by the `w1-driving` set (`lib/w1-driving-set.ts`), which W1-driving added" — the comment no longer names W1-driving as a deferral, so the Task 1 guard has nothing to route;
   - add to `w1-driving-set.test.ts`: "every API-only row the probe set leaves out is planned by the w1-driving set, counted": for each row of `API_ONLY_ROWS` not in `probeRows().api`, assert `planW1Driving(variantFor, {})` holds at least one LIFECYCLE case on it; the count of such rows is asserted `> 0` (today 1, `group_group_ko`) so the test cannot pass on an empty difference;
   - `probe-set.test.ts` is unchanged (its pins on the api list still hold).
@@ -2668,16 +2879,19 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
      - `ko_plate|*|F1` → W4: `409 STAGE_COMPLETED_SEEDING_FAILED` after stage 1 committed complete, `CompleteObs.completed = false`, never retried (m-6, Task 6 Step 9);
      - `group_group_ko|*|F1`;
      - the 10 americano/mexicano × team-sport cells (false premise 10, corrected at plan review 1): the stage GENERATES on one arbitrary roster member per team; the cases carry the note "americano generated on team entrants with one arbitrary roster member each" → W7 finding. They may still be ✅ on every check, which is exactly why the note is the finding;
-     - every mexicano M1 case and any mexicano case with a forfeit or void: `mexicano-stalled-on-non-decided` → W7 (false premise 14, plan review 1 I-3);
-     - every americano and mexicano R4 case: `r4-withdrawn-player-kept-playing` → W7 (ruling 51, D14);
-     - `page_playoff_only|*|R4`: `pp-q2` voided by the open-format branch, the final never seated, the stage never completes → W4 (plan review 1 m-5, Task 2);
+     - every mexicano M1 case and any mexicano case with a forfeit or void: `mexicano-stalled-on-non-decided` → W7 (false premise 14, plan review 1 I-3). **R4 does not stall mexicano** (plan review 2 I-3): its withdrawal voids nothing that is pending, so round 2 is generated;
+     - every mexicano case that reaches round 2 (about 33 cases: LIFECYCLE, M1-free, R4 and F1 across the mexicano cells): `mexicano-pair-entrants-counted-as-players` → W7, with I10 failing on `round <n>: <person> seated 2×` (false premise 17, plan review 2 I-3). The note names the person and the earlier pair entrant that contains them;
+     - every americano R4 case, and every mexicano R4 case where seed 3's person is seated in a round ≥ 2 through any entrant: `r4-withdrawn-player-kept-playing` → W7 (ruling 51, D14; the mexicano second leg, plan review 2 I-3);
+     - `page_playoff_only|*|R4`: `pp-q2` abandoned by the open-format branch (policy `walkover`, walkovers 0, voided 1; false premise 16), so `r4-policy-reported` and the kind-aware `r4-cascade-consistent` pass; the final is never seated and the stage never completes (`life-loop-bounded` / `life-stage-completed`) → W4 (plan review 1 m-5, plan review 2 I-1, Task 2);
+     - the ladder R4 cases carry **no predicted red** (ruling 53): the policy is derived (`none`), seed 3 is live-absent and raw-present, and no later challenge seats it. Each carries the W7 note "ladder finalRanks keep withdrawn <id> at rung <i>", counted in TRIAGE.md as a W7 note, not a red;
      - `double_elim` with an unplayed `gf-reset` (Task 9 Step 0).
   4. **Triage rules for the predicted signatures** (ruling 51, D14; plan review 1 C-1, I-3). A ❌ is classified **product (predicted) → W7** without a harness hunt ONLY when every one of its failing checks is covered by a signature on the same case:
      - `r4-policy-reported` failing on an `americano`/`mexicano` R4 case that carries `r4-withdrawn-player-kept-playing`;
      - `life-loop-bounded` failing with `exited stalled_rounds` on a `mexicano` case that carries `mexicano-stalled-on-non-decided`;
-     - on a `mexicano` M1 or R4 case, both of the above together.
+     - `I10` failing ONLY with `round <n ≥ 2>: <person> seated 2×` items on a `mexicano` case that carries `mexicano-pair-entrants-counted-as-players`, where every such person is named in that case's signature evidence (a member of an earlier pair entrant; false premise 17). An I10 item for round 1, a `never played` item, or a person the evidence does not name is uncovered;
+     - on a `mexicano` case, any combination of the above, provided each failing check is covered by its own signature (for example `r4-policy-reported` + I10 on a mexicano R4 case). A mexicano R4 case never gets `life-loop-bounded` covered by the stall signature, since R4 does not stall (plan review 2 I-3).
 
-     A failing check NOT on that list (a crash, `life-built-as-posted`, `fold-parity`, `results-as-posted`, I10, `m1-walkover-recorded`, a refused call) sends the whole case to normal triage, **harness first**. A signature on a case whose failing checks do not match it is itself a harness finding (the signature fired on the wrong shape). The count of cases classified by each signature is pasted into TRIAGE.md, and a signature count of 0 where the prediction said "every case" is recorded as "prediction not confirmed", never silently dropped. On the ladder, R4 carries no predicted red: `r4-policy-reported` is derived (D14) and a red there is triaged normally.
+     A failing check NOT on that list (a crash, `life-built-as-posted`, `fold-parity`, `results-as-posted`, I10 outside the pair-entrant rule, `m1-walkover-recorded`, a refused call) sends the whole case to normal triage, **harness first**. A signature on a case whose failing checks do not match it is itself a harness finding (the signature fired on the wrong shape). The count of cases classified by each signature is pasted into TRIAGE.md, and a signature count of 0 where the prediction said "every case" is recorded as "prediction not confirmed", never silently dropped. On the ladder, R4 carries no predicted red (ruling 53): `r4-policy-reported` is derived (D14), and any red there is triaged normally, harness first.
 - [ ] **Step 4: The generated `MATRIX.md`.** `pnpm matrix:render truth-runs/w1drv-l3/results.json`. Confirm that `MATRIX.md` exists, is non-empty, and carries one row per planned case (the renderer's own count).
 - [ ] **Step 5: `plans.lock.json`.** Add one entry per new committed run: `w1drv-http-slice`, `w1drv-l3` (or each split id), `w1drv-l1-r1..r3`, and the Task 11 and Task 14 runs if committed. Copy the missing-entry failure's printed entry (`committed-plans.ts`). Editing an existing entry is a stop.
 - [ ] **Step 6: Parity.** `pnpm matrix:parity truth-runs/w1drv-http-slice/results.json truth-runs/w1drv-l1/w1drv-l1-r1/results.json --out truth-runs/w1drv-l1/parity.md; echo EXIT=$?`, over the cells the two runs share. Each difference is triaged as W1c Task 14 did.
@@ -2723,12 +2937,14 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
   - americano × team sport generates on one arbitrary roster member per team → W7 (false premise 10, corrected at plan review 1);
   - any seeding tie the harness had to pick (`seeding_tie_picked` cases) → W4/W5 by row;
   - every suspected americano/mexicano product red (D9) → W7, including the mexicano stall on any non-`decided` fixture (false premise 14);
-  - R4 on americano/mexicano: the withdrawn player keeps playing (ruling 51) → W7;
-  - R4 on `page_playoff_only`: the open-format void strands the final → W4 (m-5);
-  - volleyball beach (and any other fallback) rosters sized by the module's static catalog, no `positionsFor` → W2 (m-2, Task 3);
+  - R4 on americano/mexicano: the withdrawn player keeps playing (ruling 51; on mexicano only where the second leg holds) → W7;
+  - mexicano from round 2 counts round-1 pair entrants as players, so a person sits twice in one round (`stages.ts:2290-2293` has no kind filter; false premise 17, plan review 2 I-3) → W7;
+  - the ladder keeps a withdrawn player's rung in `finalRanks` (the raw `ladder_order`, `competition.ts:606`; ruling 53's note, never asserted) → W7;
+  - R4 on `page_playoff_only`: the open-format branch abandons `pp-q2` and strands the final → W4 (review 1 m-5, review 2 I-1);
+  - a variant whose side size differs from its catalog's `lineup.size` (volleyball beach, by review 1's reading; the setbased kernel has no `positionsFor`) → W2 (m-2, Task 3);
   - an unplayed `gf-reset` → W6.
-- [ ] **Step 7: False premises.** Add the planning list (1–15, including the four found at plan review 1: 12–15, and false premise 10's correction) plus every Step 0 premise that proved false, each with what was seen.
-- [ ] **Step 8: Recommendations.** D1–D13 are recorded as ruled (52), with D6's amendment of ruling 49 (W3 added). D14's ruling-51 meanings are ruled; its derived per-family expectations (false premise 13: the ladder's derived `r4-policy-reported`; the R4 predicted-signature legs) stay recommendations unless the owner has confirmed them. Anything not ruled stays a recommendation and is never labelled a ruling (class 17).
+- [ ] **Step 7: False premises.** Add the planning list (1–17, including the four found at plan review 1: 12–15, the two found at plan review 2: 16–17, and false premise 10's correction) plus every Step 0 premise that proved false, each with what was seen.
+- [ ] **Step 8: Recommendations.** D1–D13 are recorded as ruled (52), with D6's amendment of ruling 49 (W3 added). D14's ruling-51 meanings and its ladder R4 expectation are ruled (51, 53). The predicted-signature legs and triage rule (Task 15 Step 3) are the planner's method, not a ruling. Anything not ruled stays a recommendation and is never labelled a ruling (class 17).
 - [ ] **Step 9: Memory.** Update the programme memory entry (W1-driving done, counts, the PR, what W1d needs first) and its `MEMORY.md` index line.
 - [ ] **Step 10: Commit** `docs(matrix): W1-driving index — status, findings, R1, W1d/W2 prerequisites`. Then open the PR (body ending with the attribution line) and ask the owner whether to dispatch e2e for the branch (`workflow_dispatch`; feature-branch pushes trigger nothing). This wave touches no e2e spec, so the answer is likely "not needed". Put it to the owner anyway.
 
@@ -2757,6 +2973,20 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
    The stage cap: `group_group_ko` needs 3 stages, and a case org gets the top public plan (`seed-org.ts:103-108` `chooseTopPublicPlan`; review 1 read 6). Task 6 Step 0 pins it, and Task 6 Step 3a adds the `PlanStageCapTooLow` start gate, so a plan-catalogue change refuses the run before any case instead of reading as a product ❌ (plan review 1 m-1; the first draft's claim that Step 0 already re-pinned it was untrue).
 
    Plan review 1 (fix round 1) is folded in: C-1 → D14, Tasks 7, 8, 15 Step 3; I-1 → Task 4 `ensureLineups` gate, Task 5 `setup.persons`; I-2 → false premise 10 corrected, Tasks 5, 8, 12, 15, 16; I-3 → false premise 14, D9, Task 8; I-4 → ruling 50, Task 2 Step 4, Task 10 Step 4; I-5 → Task 6 and Task 7 rule-10 tests; m-1 → Task 6 Step 3a; m-2 → Task 3; m-3 → Task 4 Step 0, Review Focus 1; m-4 → D8; m-5 → Task 2, Task 15; m-6 → Task 6 Step 9, Task 12 Step 7, Task 15; m-7 → Task 6 Step 1; m-8 → Task 12.
+
+   Plan review 2 (fix round 2) is folded in:
+   - I-1 → false premise 16, D14 (kind-aware `cascadeItems`), the Task 2 page-playoff prediction, Task 7 (unit test, `withdrawWhilePending`, the byte-identical canary, mutants), Task 15 Step 3;
+   - I-2 → Task 6's fast-check: weighted commands; the seeding clause judged against `withdrawnBeforeConfirm`; confirm/before/after counts asserted > 0; a withdrawal-after-confirm example; mutants;
+   - I-3 → false premise 17, D9, D14, Task 8 (Step 0 pins, the product-shaped default fake with `individualsOnly`, the evidence-checked fast-check, the round-2 signature test, mexicano R4 not stalling, mutants), Task 15 Step 3 (predictions and the I10 triage rule), Task 16;
+   - m-1 → Task 4 `ensureLineups` (the `setup.rosterless` return);
+   - m-2 → Task 3's side-size flag;
+   - m-3 → Task 7's text-pinned `PENDING`;
+   - m-4 → Task 9 I9's product-shape case;
+   - m-5 → Task 7's `LadderHarness` normalisation;
+   - m-6 → Task 6: 8 from the engine's `expandTake`, and `picks` refused by name;
+   - m-7 → expected values written out in Tasks 6, 7 and 8;
+   - m-8 → Task 7 files, Task 8's full failing-check sets, probe-set `:58`;
+   - FP13 and W7 → ruling 53, D14, Task 7, Task 9, Task 15, Task 16.
 2. **Placeholder scan.** Some values are deliberate Step 0 pins, each confirmed in its task before use:
    - the product's refusal codes (`SEEDING_TIE_CODE`, the lineup refusal, the ladder codes);
    - the cricket payload literals (`MATCH_CLOSE_DRAW`, `FOLLOW_ON_PAYLOAD`);
@@ -2779,13 +3009,13 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
    - RF3 → `ladder-loop.test.ts` "no challenge played is red", `americano-loop.test.ts` "stalled_rounds", and I9/I10's empty cases (T7, T8, T9);
    - RF4 → `workers.test.ts` and `run-cli.test.ts` workers (T11);
    - RF5 → `scenario-catalogue.test.ts` "a stray wave literal is refused" and the zero-routes case (T1).
-5. **Sequence tests (rule 10).** Multi-stage advance (T6), ladder challenges (T7) and mexicano rounds (T8) each have a fast-check test with invariants after every step and a pinned seed. Each includes the withdrawal transition (`withdrawOne` in T6 and T8; generated withdrawals through `playLadder`'s hook in T7) with a counted non-vacuity check, and T7's property drives `playLadder` itself, not the fake's challenge logic (plan review 1 I-5). Shrunk failures are committed as named cases before any fix.
+5. **Sequence tests (rule 10).** Multi-stage advance (T6), ladder challenges (T7) and mexicano rounds (T8) each have a fast-check test with invariants after every step and a pinned seed. Each includes the withdrawal transition (`withdrawOne` in T6 and T8; generated withdrawals through `playLadder`'s hook in T7) with counted non-vacuity checks (T6 counts runs reaching a confirm, and withdrawals before and after it; T8 counts runs reaching a round-2 duplicate), and T7's property drives `playLadder` itself, not the fake's challenge logic (plan review 1 I-5). Shrunk failures are committed as named cases before any fix.
 
 ---
 
 ## Execution handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`, with the wave prompt at `docs/superpowers/specs/2026-09-27-format-matrix-prompts/W1-driving.md`. D1–D13 are ruled (52), and rulings 50 and 51 are folded in (fix round 1). One item still needs the owner's word before Task 7: D14's derived ladder expectation (false premise 13: R4 after seed 3's first challenge leaves the product nothing pending, so `r4-policy-reported` on the ladder expects the DERIVED policy, `none` under D8, rather than "not none"). Which execution approach would you prefer?
+Plan complete and saved to `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`, with the wave prompt at `docs/superpowers/specs/2026-09-27-format-matrix-prompts/W1-driving.md`. D1–D13 are ruled (52); rulings 50 and 51 are folded in (fix round 1), and ruling 53 (the ladder R4 expectation) and plan review 2 in fix round 2. Nothing in the plan awaits an owner ruling. Which execution approach would you prefer?
 
 - **Subagent-driven.** A fresh implementer per task and a fresh reviewer after each, then a whole-branch review at the end (Task 15 Step 10). This is the most thorough, and the programme's standing topology (`docs/superpowers/RULES.md`).
 - **Native.** One session implements every task, then one fresh reviewer checks the branch. Cheaper, but there is no independent review until the end.
