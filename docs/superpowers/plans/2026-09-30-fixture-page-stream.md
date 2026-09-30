@@ -30,6 +30,25 @@ every task. The spec binds; where this plan deviates, the deviation is named in 
 cut from `origin/main` 770bdca07. Every command below starts with `cd` into this path **in the same shell call**
 (AGENTS.md: shell cwd resets to the main checkout between calls). `WT` below means this absolute path.
 
+## Execution batches (owner ruling 2026-09-30)
+
+Seven batches. Each batch gets **one implementer and one review**; inside a batch the implementer still commits **once
+per task**, in task order, so each commit stays bisectable and each task's own gate and mutations still run.
+
+| Batch | Tasks | Boundary gate (the orchestrator re-runs it, scoped) |
+|---|---|---|
+| B1 | T1 + T2a + T2b | T1, T2a and T2b scope commands; T2a Step 8's walkthroughs, whole; `SMOKE_ONLY=streamTargets` |
+| B2 | T3 + T4 | T3 and T4 scope commands, then the **Wave S gate** (end of T4) |
+| B3 | T5 + T6 | T5 Step 19 and T6 Step 6 (walkthroughs and e2e whole) |
+| B4 | T7 + T8 | the Wave D gate (end of T8) |
+| B5 | T9a + T9b | T9a Step 5 and T9b Step 6, including `mobile.spec.ts` whole; T9b's screenshots |
+| B6 | T10 | T10 Step 4, then the owner's real-phone STOP (Step 6) |
+| B7 | T11 | T11 is the lane close; it STOPs before any push or PR |
+
+A batch's review runs over the batch's commits (`git diff <batch base>..HEAD`) with this plan's task text as the brief.
+Fixes from that review land in the owning task's files as a follow-up commit in the same batch, and the batch gate is
+re-run before the next batch starts.
+
 ## Global Constraints
 
 **Rulings and product rules (spec §0–§1):**
@@ -64,6 +83,14 @@ cut from `origin/main` 770bdca07. Every command below starts with `cd` into this
 - A real-phone scan is a gate. If the stream QR scans poorly, it alone stays logo-less and the exception is recorded
   in the helper's comment.
 - D9: the Phone node takes an optional `phoneStatus` prop. **This branch renders nothing there.**
+- D10 (owner, 2026-10-04): every QR rendered by the shared Seazn QR component (`SeaznQrImage`, T10) gets **tap to
+  enlarge**. A caption under the QR reads "Tap to enlarge". A **single** tap (never a double tap, which is the
+  browser's zoom) opens a full-screen overlay on white, the QR sized to min(viewport width, viewport height) minus a
+  16 px gutter, captioned "Turn up brightness if it won't scan". While open it requests a Screen Wake Lock and
+  releases it on close; `navigator.wakeLock` is feature-detected, and a missing API or a refused request never throws
+  or blocks. It closes on any tap, a 44 px ✕, or Esc; focus moves into it and returns to the QR on close; it is
+  `role="dialog"`, `aria-modal`, with an accessible name. It applies to the stream, Remote scoring and check-in QRs in
+  this branch. The owner's scan gate covers the normal and the enlarged size.
 
 **Server contract (spec §5):**
 - Create order: an active duplicate returns the existing row; otherwise the most recent archived row is un-archived
@@ -234,6 +261,8 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
 | `apps/web/src/components/v2/stream-signal-chain.tsx` | `SignalChain` component | T9a |
 | `apps/web/src/components/v2/stream-session-provider.tsx` | one `usePhoneSession` poller shared by button dot + panel | T9b |
 | `apps/web/src/lib/seazn-qr.ts` | `seaznQrLayout`, `seaznQrSvg`, `renderSeaznQr` | T10 |
+| `apps/web/src/lib/qr-enlarge.ts` | D10: `enlargedQrSize`, `holdScreenWakeLock` | T10 |
+| `apps/web/src/components/v2/seazn-qr-image.tsx` | D10: `SeaznQrImage` (tap to enlarge overlay) | T10 |
 
 **Modified:**
 
@@ -242,7 +271,7 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
 | `apps/web/src/server/relay/secret-columns.ts` | `insertStreamTarget` order, `archiveStreamTarget`, `replaceTargetKey`, `readKeyHints`, `keyHintOf`, and a `lockStreamTarget` read | T1, T2b |
 | `apps/web/src/lib/stream-destinations.ts` | `STREAM_PLATFORMS`, `STREAM_PLATFORM_PRESETS` | T2a |
 | `apps/web/src/server/api-v1/schemas.ts` | the create kind narrows; `PatchStreamTarget`, `StreamTargetHolder`, `StreamOutput`; `StreamTarget` and `StreamSessionCurrent` gain fields | T2a, T2b, T4 |
-| `apps/web/src/server/usecases/stream-targets.ts` | create by preset; list excludes archived plus `keyHint`/`inUse`; `renameStreamTarget`, `replaceStreamTargetKey`, `removeStreamTarget` | T2a, T2b |
+| `apps/web/src/server/usecases/stream-targets.ts` | create by preset; list excludes archived plus `keyHint`/`inUse`; `patchStreamTarget` (rename or replace key), `removeStreamTarget`, `targetHeld` | T2a, T2b |
 | `apps/web/src/server/relay/domain/session.ts` | `holdStateOf` | T2a |
 | `apps/web/src/server/usecases/stream-sessions.ts` | `targetHolderFor`/`targetInUse` use the holders module; target lock in admission; provider meta; `output` projection; `openStreamStates` | T2b, T3, T4, T6 |
 | `apps/web/src/server/relay/ports.ts`, `ingest-cf.ts`, `fakes.ts` | `OutputState` gains `connecting`; `ProviderCallMeta`; fake key prefixes | T2a, T4 |
@@ -255,11 +284,12 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
 | `apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx` | loader call in T5; stream context and probes removed in T6 | T5, T6 |
 | `apps/web/src/components/v2/desk/run-sheet-row.tsx`, `desk/run-sheet.tsx`, `stages-panel.tsx` | toggle and panel become the chip | T6 |
 | `apps/web/src/app/directory/page.tsx` | `streaming` tab | T7 |
-| `apps/web/src/components/v2/device-link-panel.tsx`, `checkin-qr.tsx` | `renderSeaznQr` | T10 |
+| `apps/web/src/components/v2/device-link-panel.tsx`, `checkin-qr.tsx` | `renderSeaznQr`, `SeaznQrImage` | T10 |
+| `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` | §8a `QR size` and `QR encoding` rows, dated amendment (D7) | T10 |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` + generated `lib/i18n-keys.ts` | keys per task | T3, T5–T9b |
 | `apps/web/e2e/walkthrough/stream-relay.spec.ts`, `stream-credits.spec.ts`, `e2e/stream-overlay.spec.ts`, `e2e/mobile.spec.ts` | fixture-page helpers, twin checks | T2a, T5, T6, T8, T9b |
 | `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | registers the new walkthrough | T7 |
-| `scripts/smoke.ts` | `streamTargetsSuite`, stream-twin presence | T2b, T5 |
+| `scripts/smoke.ts` | `streamTargetsSuite` and the `SMOKE_ONLY` suite filter; stream-twin presence (in `v1Suite`) | T2b, T5 |
 | `docs/superpowers/specs/2026-09-02-scorepad-v3-phone-composition-design.md`, `AGENTS.md` | dated "two duplicated controls" amendment | T5 |
 
 ---
@@ -645,10 +675,25 @@ export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, 
 }
 ```
 
-- [ ] **Step 8: Adapt the two m6 retry tests** (`secret-columns.test.ts` :155 and :166). They force the "conflict,
-  then vanished" path by deleting the conflicting row between statements. Read how they intercept (the statement
-  order is now: active read, archived read, insert). Move their interception to the **insert** of attempt 1, and keep
-  both assertions ("the retry's insert lands" and "refused by name, never a third attempt"). Do not weaken either.
+- [ ] **Step 8: Adapt the two m6 retry tests** (`secret-columns.test.ts` :155 and :166). They drive a scripted `tx`
+  that answers each statement from a list (`scripted(answers)`, :146). Each round now issues three statements (active
+  read, archived read, insert), so the expected shapes change. Keep what each test PROVES ("the retry's insert lands",
+  "refused by name, never a third attempt") and change only the shapes, exactly as follows:
+  - `INSERT_SQL` (:144) gains the new predicate:
+    `/^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null and archived_at is null do nothing/`.
+  - `SELECT_SQL` (:145) becomes the ACTIVE read:
+    `/^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \? and archived_at is null$/`.
+  - Add `ARCHIVED_SQL = /^select id from org_stream_targets where org_id = \? and dest_fingerprint = \? and archived_at is not null order by archived_at desc, created_at desc limit 1$/`.
+  - A classifier `const kindOf = (s: string) => INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "active" : ARCHIVED_SQL.test(s) ? "archived" : s;`.
+  - First test ("the retry's insert lands"): `scripted([[], [], [], [], [], [landed]])`; `toHaveLength(6)`;
+    `statements.map(kindOf)` equals `["active", "archived", "insert", "active", "archived", "insert"]`; the
+    `toMatchObject` on `out` is unchanged.
+  - Second test ("refused by name"): `scripted([])`; `toHaveLength(6)`; the same six-kind sequence; the
+    `StreamTargetVanishedError` assertion is unchanged. Six, not more, is the "never a third attempt" witness.
+  - Update the comment above them: the window is now "an active read and an archived read that both find nothing, then
+    an insert that conflicts".
+  Every regex must match its statement: an unmatched statement falls through `kindOf` as its raw text and fails the
+  `toEqual`, so a wrong regex cannot pass silently.
 
 - [ ] **Step 9: Run T1's scope and confirm green.**
 
@@ -767,8 +812,8 @@ export async function holdRig(): Promise<{ auth: AuthCtx; fixtureId: string; tar
 }
 
 /** A session on `targetId` in `state`, written raw: only the READ of held-ness is under test, never `decide`. */
-export async function sessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string): Promise<string> {
-  const [s] = await sql<{ id: string }[]>`
+export async function sessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string, exec: Tx = sql): Promise<string> {
+  const [s] = await exec<{ id: string }[]>`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
     select f.id, ${orgId}, 'passthrough', ${state}, ${targetId}, ${await rigUser()}, d.sport_key, d.competition_id, f.division_id, true
       from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
@@ -778,7 +823,9 @@ export async function sessionOnTarget(orgId: string, fixtureId: string, targetId
 ```
 
 Import `seedOrg` and `startedDivisionWithFixture` from `@/server/usecases/__tests__/_rig` (secret-columns.test.ts
-imports them the same way) and `AuthCtx` from `@/server/api-v1/auth`, if the file does not already.
+imports them the same way), `AuthCtx` from `@/server/api-v1/auth`, and the `Tx` type the way `secret-columns.ts`
+imports it, if the file does not already. `exec` lets T2b's row-lock test write the session INSIDE the transaction that
+holds the lock; `rigUser()` stays on the pool (its user row must be committed before the session references it).
 
 `apps/web/src/server/usecases/__tests__/stream-target-holders.test.ts` runs against the DB, like
 `stream-sessions.test.ts`:
@@ -967,8 +1014,11 @@ export function holdStateOf(state: SessionState): HoldState | null {
 }
 ```
 
-`schemas.ts`: add the import `import { STREAM_PLATFORMS } from "@/lib/stream-destinations";` (check whether the file
-already imports from it). Replace `CreateStreamTarget` and `StreamTarget` (:1361-1382):
+`schemas.ts`: add the import `import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";` (check whether the
+file already imports from it). **Relative with `.ts`, never `@/`:** `scripts/openapi-gen.ts` loads schemas.ts under bare
+`node --experimental-strip-types`, which has no `@/` alias (the file's own header, schemas.ts:11-20 and :33-48, says so;
+openapi.ts:27 imports this same file this way). An `@/` import passes vitest and tsc and then kills `pnpm openapi:gen`
+with ERR_MODULE_NOT_FOUND. Replace `CreateStreamTarget` and `StreamTarget` (:1361-1382):
 
 ```ts
 /** D6: the platforms a NEW destination may name — a subset of `StreamTargetKind`, which stays whole for stored rows. */
@@ -1194,8 +1244,14 @@ Walkthroughs:
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web && rm -f /tmp/fs-t2a.json && pnpm vitest run src/server/relay/domain/__tests__/hold-state.test.ts src/server/usecases/__tests__/stream-target-holders.test.ts src/server/usecases/__tests__/stream-targets.test.ts src/lib/__tests__/stream-destinations.test.ts src/server/relay/__tests__/fakes.test.ts src/server/relay/__tests__/secret-columns.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/usecases/__tests__/stream-sessions.test.ts "src/app/api/v1/fixtures/[id]/stream-sessions/__tests__/routes.test.ts" src/server/api-v1/__tests__/stream-contract.test.ts src/components/v2/__tests__/fixture-stream-panel.test.tsx --reporter=json --outputFile=/tmp/fs-t2a.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/fs-t2a.json
 ```
 
-Also run the two relay test files the grep listed (`relay-internal-routes.test.ts`, `relay-sweep.test.ts`) by their
-exact paths. Expected: `f: 0`, and every path appears in `files`.
+Also run the two relay test files the grep listed (`src/server/usecases/__tests__/relay-internal-routes.test.ts`,
+`src/server/usecases/__tests__/relay-sweep.test.ts`) by their exact paths. Expected: `f: 0`, and every path appears in
+`files`.
+
+Then regenerate the OpenAPI documents, because T2a changed `CreateStreamTarget`, `StreamTarget` and the POST summary,
+and CI's drift check would red on T2a's commit alone:
+`cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && pnpm openapi:gen && git diff --stat -- openapi/`.
+Expected: exit 0, and `openapi/v1.json` and `openapi/v1.public.json` both change.
 
 - [ ] **Step 7: Mutate once each.**
   - `holdStateOf`: `case "ending"` moved under `"waiting"`. Red: "live and ending read 'live'".
@@ -1220,7 +1276,7 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
 
 - [ ] **Step 10: Commit.** Commit every file above with
   `feat(stream): create by platform preset, list keyHint + inUse, one holders module (T2a)`, with the mutation list in
-  the body.
+  the body. The commit includes the regenerated `openapi/v1.json` and `openapi/v1.public.json` from Step 6.
 
 ### Task 2b: Rename, replace key, remove — the routes, the row locks and the contract
 
@@ -1235,8 +1291,11 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
 - Modify: `apps/web/src/server/api-v1/openapi.ts:223-224` (two ROUTES rows) and `ERROR_SCHEMA_OVERRIDES` :641
 - Modify: `apps/web/src/server/api-v1/key-scopes.ts:341-342` (two entries)
 - Modify: `scripts/smoke.ts` (new `streamTargetsSuite`, registered where the stream suites are registered)
-- Test: `apps/web/src/server/usecases/__tests__/stream-targets.test.ts` (PATCH and DELETE cases)
-- Test: `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` (archived refused; the lock test)
+- Test: `apps/web/src/server/usecases/__tests__/stream-targets.test.ts` (PATCH and DELETE cases; the row lock from
+  Remove's and Replace key's side)
+- Test: `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` (archived refused; the lock test from Go
+  live's side; the §9.1 "replace a key, then go live" sequence)
+- Test: `apps/web/src/server/relay/__tests__/_session-rig.ts` (`sessionOnTarget` gains an optional executor)
 - Test: `apps/web/src/app/api/v1/orgs/[id]/stream-targets/__tests__/target-route.test.ts` (new: the route wiring and envelopes)
 - Test: `apps/web/src/server/api-v1/__tests__/stream-contract.test.ts:212-219` (five becomes seven)
 
@@ -1343,6 +1402,39 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
     ]) await expect(call()).rejects.toMatchObject({ status: 404 });
   });
 
+  it("the ROW LOCK, Remove's side and Replace key's side: each WAITS on a Go live holding the target, then refuses 409 once that Go live's session commits", async () => {
+    let checked = 0;
+    for (const op of ["remove", "replace"] as const) {
+      const r = await realTarget();
+      let release!: () => void;
+      const held = new Promise<void>((res) => { release = res; });
+      let locked!: () => void;
+      const lockTaken = new Promise<void>((res) => { locked = res; });
+      // Transaction A plays createSession's admission: lock the target, write a `requested` session on it, hold.
+      const goLive = sql.begin(async (tx) => {
+        expect(await lockStreamTarget(tx, r.auth.orgId, r.targetId)).toBe(true);
+        await sessionOnTarget(r.auth.orgId, r.fixtureId, r.targetId, "requested", tx);
+        locked();
+        await held;
+      });
+      await lockTaken;
+      let settled = false;
+      const write = (op === "remove"
+        ? removeStreamTarget(r.auth, r.auth.orgId, r.targetId)
+        : patchStreamTarget(r.auth, r.auth.orgId, r.targetId, { streamKey: `k-${randomUUID()}` })
+      ).finally(() => { settled = true; });
+      write.catch(() => {});                                   // observed below; no unhandled rejection meanwhile
+      await new Promise((res) => setTimeout(res, 300));
+      expect(settled, `${op} did not wait on the target row lock`).toBe(false);
+      release();
+      await goLive;
+      // Under READ COMMITTED the waiter re-reads after A commits: the session A wrote is now the holder.
+      await expect(write, op).rejects.toMatchObject({ status: 409, code: "TARGET_IN_USE" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("PatchStreamTarget: exactly one of label / streamKey", () => {
     expect(PatchStreamTarget.safeParse({ label: "x" }).success).toBe(true);
     expect(PatchStreamTarget.safeParse({ streamKey: "k" }).success).toBe(true);
@@ -1355,13 +1447,20 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
 Append to `stream-sessions.test.ts`, beside the G-T6 race test (:2973), and reuse its `rig()` and `deps`:
 
 ```ts
-  it("an ARCHIVED target is refused at createSession with the existing not-found shape, before any provider call", async () => {
+  it("an ARCHIVED target is refused at createSession with the existing not-found shape: 404, no live input, no machine, no session row", async () => {
     const r = await rig();
-    await removeStreamTarget(r.auth, r.auth.orgId, r.targetId);
-    const before = providerCalls(r);             // the count G-T1's zero-provider-call assertions already read
-    await expect(createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.targetId }, r.deps))
-      .rejects.toMatchObject({ status: 404, message: "stream target not found" });
-    expect(providerCalls(r) - before).toBe(0);
+    await removeStreamTarget(r.auth, r.auth.orgId, r.target.id);
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    try {
+      await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps))
+        .rejects.toMatchObject({ status: 404, message: "stream target not found" });
+      expect(ingestSpy).not.toHaveBeenCalled();
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    expect(r.runner.created).toEqual([]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(n).toBe(0);
   });
 
   it("the ROW LOCK: createSession WAITS on a transaction that holds the target FOR UPDATE, and an archive committed there makes it 404", async () => {
@@ -1371,14 +1470,14 @@ Append to `stream-sessions.test.ts`, beside the G-T6 race test (:2973), and reus
     let locked!: () => void;
     const lockTaken = new Promise<void>((res) => { locked = res; });
     const holder = sql.begin(async (tx) => {
-      expect(await lockStreamTarget(tx, r.auth.orgId, r.targetId)).toBe(true);
+      expect(await lockStreamTarget(tx, r.auth.orgId, r.target.id)).toBe(true);
       locked();
       await held;
-      await archiveStreamTarget(tx, r.auth.orgId, r.targetId);
+      await archiveStreamTarget(tx, r.auth.orgId, r.target.id);
     });
     await lockTaken;
     let settled = false;
-    const start = createSession(r.auth, r.fixtureId, { mode: "passthrough", targetId: r.targetId }, r.deps)
+    const start = createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)
       .finally(() => { settled = true; });
     await new Promise((res) => setTimeout(res, 300));
     expect(settled, "createSession did not wait on the target row lock").toBe(false);
@@ -1388,10 +1487,39 @@ Append to `stream-sessions.test.ts`, beside the G-T6 race test (:2973), and reus
   });
 ```
 
-`rig()` (:199) is the file's own. Read its return for the real field names (`auth`, `fixtureId`, the target id, and
-`deps`). `providerCalls(r)` stands for however G-T1's zero-provider-call assertions count calls in this file
-(`rtk proxy grep -naE "G-T1" …/stream-sessions.test.ts`), so use that exact expression. T2a already replaced `rig()`'s
-`targetHost` option with `streamKey` (see T2a Step 5).
+`rig()` (:199) is the file's own; it returns `target` (use `r.target.id`), `ingest`, `runner`, `deps`, `auth` and
+`fixtureId`. The archived test does **not** assert "zero provider calls": the refusal is inside the admission
+transaction, after `storageUsage()` in `createSession`'s `Promise.all` (stream-sessions.ts:1054-1069), which G-T1's idiom
+counts as a provider call. Spec §5.2 asks only for "the existing not-found shape", and the test pins exactly that, plus
+no live input, no Machine and no row. T2a already replaced `rig()`'s `targetHost` option with `streamKey` (see T2a
+Step 5).
+
+Append to `stream-sessions.test.ts` the §9.1 sequence **replace a key, then go live**. It is the seam between the
+writer (`replaceTargetKey` reseals `rtmp_enc` and refingerprints) and the reader (createSession's `readTargetSecret`
+and `addOutput`), and nothing else drives both:
+
+```ts
+  it("§9.1 sequence — replace a key, THEN go live: the output dials the NEW key, and the old key is dialled nowhere", async () => {
+    const r = await rig({ credits: 1 });
+    const before = await sql.begin((tx) => readTargetSecret(tx, r.auth.orgId, r.target.id));
+    const newKey = `k-${randomUUID()}`;
+    expect(newKey).not.toBe(before.streamKey);                        // or the test cannot tell the two apart
+    await patchStreamTarget(r.auth, r.auth.orgId, r.target.id, { streamKey: newKey });
+    const added = vi.spyOn(r.ingest, "addOutput");
+    try {
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      expect(added).toHaveBeenCalledTimes(1);
+      expect(added.mock.calls[0]![1]).toMatchObject({ url: before.url, streamKey: newKey });
+    } finally {
+      added.mockRestore();
+    }
+    expect(r.ingest.liveOutputsTo({ url: before.url, streamKey: newKey })).toBe(1);
+    expect(r.ingest.liveOutputsTo(before)).toBe(0);
+  });
+```
+
+Import `patchStreamTarget` from `../stream-targets` and `readTargetSecret` from `@/server/relay/secret-columns` if the
+file does not already.
 
 - [ ] **Step 2: Write the failing contract and route tests.**
   - `stream-contract.test.ts:212-219` becomes "exactly the SEVEN relay operations", with the list plus
@@ -1621,9 +1749,18 @@ list. Model its fetch helpers on that suite. The suite:
 6. POST the same key gives 201 with **the same id** (restored).
 7. DELETE (cleanup).
 
-Each step asserts its status, and the suite counts its steps and fails on fewer than 7. Run it locally with
-`cd …/fixture-stream && pnpm test:smoke -- --only streamTargets`, if the runner supports a filter (read the top of
-`smoke.ts`). Otherwise run the full smoke once at T11, not here.
+Each step asserts its status, and the suite counts its steps and fails on fewer than 7. `scripts/smoke.ts` has no
+suite filter (its suites run as sequential awaits, :903), and a full local smoke run breaks the owner's 2026-09-28
+scoped-run rule. So:
+- add an env-gated filter to the runner in this task: when `SMOKE_ONLY` is set (a comma list of suite names, each a
+  suite function's name without its `Suite` suffix: `streamTargets`, `v1`), the runner runs only its setup plus the
+  named suites and prints `ran N suite(s)`, and an unknown name fails the run rather than running nothing; unset, it runs everything as today,
+  so CI is unchanged. Model the switch on how the runner already skips a suite (read the top of `smoke.ts`);
+- run just this suite: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && SMOKE_ONLY=streamTargets pnpm test:smoke`
+  against the local prod server. Expected: exit 0, `ran 1 suite(s)`, and the suite's own "7 steps" line;
+- mutate the filter once (ignore `SMOKE_ONLY`) and confirm the run then prints more than one suite. That is the
+  filter's own witness; zero suites run is a failure, never a pass.
+The full smoke is CI's, and runs on this branch's PR.
 
 - [ ] **Step 5: Run T2b's scope.** Use the Step 3 command, plus `src/server/api-v1/__tests__/key-scopes.test.ts`,
   `src/server/api-v1/__tests__/openapi-coverage.test.ts`, `src/server/api-v1/__tests__/openapi-published.test.ts`,
@@ -1633,7 +1770,12 @@ Each step asserts its status, and the suite counts its steps and fails on fewer 
 - [ ] **Step 6: Mutate once each.**
   - `removeStreamTarget`: the `holderRows` check deleted. Red: "REFUSED 409 TARGET_IN_USE in EVERY active state".
   - `createSession`: `lockStreamTarget` replaced by an unlocked `select … and archived_at is null` (no `for update`).
-    Red: "the ROW LOCK: createSession WAITS". It settles within 300 ms.
+    Red: "the ROW LOCK: createSession WAITS", at its **final 404 assertion**. It does not settle within 300 ms even
+    mutated, because the session INSERT's foreign-key check takes FOR KEY SHARE on the target, which conflicts with
+    the holder's FOR UPDATE; the unlocked read saw the row before the archive, so the mutant admits and fails late.
+  - `removeStreamTarget`: `lockStreamTarget` replaced by the same unlocked select. Red: "the ROW LOCK, Remove's side"
+    (it settles inside 300 ms, reading no holder yet, and archives).
+  - `patchStreamTarget` (replace branch): the same mutation. Red: "the ROW LOCK, … Replace key's side".
   - `lockStreamTarget` without `archived_at is null` (T1's mutation, re-run here). Red: "an ARCHIVED target is refused
     at createSession".
   - `patchStreamTarget`: `.trim()` deleted. Red: "Review Focus 2".
@@ -1659,15 +1801,22 @@ Each step asserts its status, and the suite counts its steps and fails on fewer 
 - Produces:
   - `target_in_use` 409 extra `holder: {fixtureId, href, matchNo, courtName, label, state} | null`. It stays null on
     the index-race path.
-  - `stream-session-view.ts`:
-    - `createErrorHolder(err): {label: string; matchNo: number | null; courtName: string | null; href: string | null; state: "live" | "waiting"} | null`;
-    - `inUseText(msg, holder): string`;
-    - `createErrorText` uses `inUseText` for a named holder.
+  - `stream-session-view.ts` (both existing signatures KEPT):
+    - `CreateErrorHolder` extended to `{label: string; courtName: string | null; matchNo: number | null; href: string | null; state: "live" | "waiting"}`;
+    - `createErrorHolder(err: unknown): CreateErrorHolder | null` — still takes the RAW wire error and keeps the
+      `wireError` + `code === "target_in_use"` guard (called once, at fixture-stream-panel.tsx:1086, whose result is
+      stored in `createError.holder`);
+    - `inUseText(msg, holder: CreateErrorHolder): string` (new);
+    - `createErrorText(error: {code, holder}, msg)` — unchanged signature (called at fixture-stream-panel.tsx:1867);
+      only its `target_in_use` branch changes, to `holder ? inUseText(msg, holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY)`.
   - Keys:
     - `stream.inUse.live`, `stream.inUse.waiting` (with `{label}` and `{match}`);
     - `stream.inUse.matchCourt` (`{match}` and `{court}`);
-    - `stream.inUse.elsewhere` (`{label}`);
-    - `stream.inUse.open` (`{match}`).
+    - `stream.inUse.open` (`{match}`);
+    - the ONE "elsewhere" key stays the existing `stream.error.target_in_use.unknown` ("That destination is already
+      live on another match.", `TARGET_IN_USE_ELSEWHERE_KEY`, :126). No second "elsewhere" key is added;
+    - `stream.error.target_in_use` (`{destination} … {court}`) has no reader after T3 and is **deleted** from all four
+      locales; `CREATE_ERROR_KEYS.target_in_use` (:119) points at `stream.error.target_in_use.unknown`.
 
 - [ ] **Step 1: Write the failing tests.** In `stream-sessions.test.ts`, find every assertion on
   `extra.holder` (`rtk proxy grep -naE "holder" apps/web/src/server/usecases/__tests__/stream-sessions.test.ts`). Extend
@@ -1686,48 +1835,61 @@ the holder is in `warming`, that expects `state: "waiting"`. Leave the G-T6 race
 the terminal-teardown holder cases (`prior.otherFixture` / `priorOutput.otherFixture`), assert `state: "live"` (a
 Machine or output still on air) and `matchNo` equal to that fixture's number.
 
-In `stream-session-view.test.ts` (the node harness; `useMsg` is not needed, because these functions take `msg`):
+In `stream-session-view.test.ts` (the node harness). The file already has `msg` (:40, English) and `wire(err)` (:65,
+an `HttpError` through the real v1 envelope into an `ApiV1Error`). Every case goes through BOTH real functions in
+production order: `createErrorHolder(raw)` then `createErrorText({code, holder}, msg)`, as fixture-stream-panel.tsx
+:1086 and :1867 do. Add `const msgEs` beside `msg`, built the same way from the `es` dictionary (read :37-45: `msg`
+loads a dictionary from `DICT_DIR`):
 
 ```ts
-import en from "@/dictionaries/en/ui.json";
-import es from "@/dictionaries/es/ui.json";
-import { t } from "@/lib/i18n";
-
-const msgOf = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) => t(dict, key, vars);
-
 describe("target_in_use names the match (spec §3.3, §5.5)", () => {
-  const err = (holder: unknown) => ({ status: 409, code: "target_in_use", extra: { holder } });
-  it("live + court: '{label} is live on Match {n} · {court}. …' in the page's locale", () => {
+  const holderOf = async (holder: unknown) => createErrorHolder(await wire(new HttpError(409, "in use", "target_in_use", { holder })));
+  const textOf = async (holder: unknown, m = msg) => createErrorText({ code: "target_in_use", holder: await holderOf(holder) }, m);
+
+  it("live + court: '{label} is live on Match {n} · {court}. …' in the page's locale", async () => {
     const h = { label: "Club YouTube", matchNo: 7, courtName: "Court 2", href: "/o/a/c/b/d/c/f/7", state: "live", fixtureId: "f" };
-    expect(createErrorText(msgOf(en), err(h))).toBe("Club YouTube is live on Match 7 · Court 2. Stop it there or pick another destination.");
-    expect(createErrorText(msgOf(es), err(h))).toContain("Partido 7");
+    expect(await textOf(h)).toBe("Club YouTube is live on Match 7 · Court 2. Stop it there or pick another destination.");
+    expect(await textOf(h, msgEs)).toContain(msgEs("breadcrumb.match", { no: 7 }));
   });
-  it("waiting, no court: the match alone, from breadcrumb.match", () => {
+  it("waiting, no court: the match alone, from breadcrumb.match", async () => {
     const h = { label: "Tw", matchNo: 3, courtName: null, href: "/x", state: "waiting", fixtureId: "f" };
-    expect(createErrorText(msgOf(en), err(h))).toBe("Tw is waiting for a phone on Match 3. Stop it there or pick another destination.");
+    expect(await textOf(h)).toBe("Tw is waiting for a phone on Match 3. Stop it there or pick another destination.");
   });
-  it("a holder whose fixture was deleted (matchNo null) reads the 'elsewhere' copy, never 'Match null'", () => {
-    const h = { label: "Tw", matchNo: null, courtName: null, href: null, state: "live", fixtureId: null };
-    const text = createErrorText(msgOf(en), err(h));
-    expect(text).toBe(t(en, "stream.inUse.elsewhere", { label: "Tw" }));
-    expect(text).not.toMatch(/null|undefined/);
+  it("a holder whose fixture was deleted (matchNo null) reads the ONE 'elsewhere' key, never 'Match null'", async () => {
+    const text = await textOf({ label: "Tw", matchNo: null, courtName: null, href: null, state: "live", fixtureId: null });
+    expect(text).toBe(msg("stream.error.target_in_use.unknown"));
+    expect(text).not.toMatch(/null|undefined|[{}]/);
   });
-  it("the index-race holder:null keeps the generic copy", () => {
-    expect(createErrorText(msgOf(en), err(null))).toBe(t(en, "stream.error.unknown"));
+  it("the index-race holder:null reads the same 'elsewhere' key", async () => {
+    expect(await textOf(null)).toBe(msg("stream.error.target_in_use.unknown"));
   });
-  it("every new key exists in all four locales", () => {
-    const keys = ["stream.inUse.live", "stream.inUse.waiting", "stream.inUse.matchCourt", "stream.inUse.elsewhere", "stream.inUse.open"];
+  it("every new key exists in all four locales, and the retired key exists in none", () => {
+    const keys = ["stream.inUse.live", "stream.inUse.waiting", "stream.inUse.matchCourt", "stream.inUse.open"];
     let checked = 0;
-    for (const d of [en, es, fr, nl]) for (const k of keys) { expect((d as Record<string, string>)[k], k).toBeTruthy(); checked++; }
+    for (const loc of ["en", "es", "fr", "nl"]) {
+      const d = JSON.parse(readFileSync(join(DICT_DIR, loc, "ui.json"), "utf8")) as Record<string, string>;
+      for (const k of keys) { expect(d[k], `${loc} ${k}`).toBeTruthy(); checked++; }
+      expect(d["stream.error.target_in_use"], `${loc} retired key`).toBeUndefined();
+    }
     expect(checked).toBe(4 * keys.length);
   });
 });
 ```
 
-Check the current null-holder behaviour at `stream-session-view.ts:150-200` before pinning the last-but-one case. If
-today's null path renders `stream.error.target_in_use` with an empty court, keep that exact behaviour and pin it
-instead: "keeps the generic copy" means whatever it renders today. Import `fr` and `nl` the same way as `en` and `es`.
-Check `lib/i18n` for the real `t` signature and the placeholder syntax (`{name}`).
+Then update the existing cases at :222-250 to the new shape, keeping every negative:
+- m6 (:225) `createErrorHolder({ code: "target_in_use" })` stays `toBeNull()`.
+- :228-231: the two `toEqual`s become
+  `{ courtName: "Court 3", label: "Club channel", matchNo: null, href: null, state: "live" }` and
+  `{ courtName: null, label: "Club channel", matchNo: null, href: null, state: "live" }`. A holder with no `state`
+  reads `"live"`: the pre-T3 server refused only for a destination already on air, and today's copy says "already
+  live", so that is what such a holder has always meant.
+- :232-235 stay `toBeNull()`: the index race (`holder: null`), `active_session` carrying a holder (the code guard), a
+  holder with no `label`, and a non-wire error.
+- :237-246 (`createErrorText`): the named case becomes
+  `createErrorText({ code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel", matchNo: 4, href: "/x", state: "live" } }, msg)`
+  `toBe("Club channel is live on Match 4 · Court 3. Stop it there or pick another destination.")`, still with the
+  `toContain` and `not.toMatch(/[{}]/)` lines. The court-without-match and null-holder rows both expect
+  `msg("stream.error.target_in_use.unknown")`. The loop over the other codes is unchanged.
 
 - [ ] **Step 2: Run and confirm red.**
 
@@ -1789,39 +1951,51 @@ Every read of `holder.holderFixtureId` in stream-sessions.ts becomes `holder.fix
 Hoist `STREAM_TARGET_HOLDER_PROPERTIES` above `STREAM_SESSION_CREATE_ERRORS` if T2b placed it below. Then run
 `pnpm openapi:gen` again.
 
-- [ ] **Step 4: Implement the client side.** In `stream-session-view.ts`, replace `createErrorHolder` and the
-  `target_in_use` branch of `createErrorText`:
+- [ ] **Step 4: Implement the client side.** In `stream-session-view.ts` (:150-200), keep `wireError`, both
+  signatures and the code guard; widen the holder and change only `createErrorText`'s `target_in_use` branch:
 
 ```ts
-export interface InUseHolder { label: string; matchNo: number | null; courtName: string | null; href: string | null; state: "live" | "waiting" }
+export type CreateErrorHolder = {
+  courtName: string | null; label: string; matchNo: number | null; href: string | null; state: "live" | "waiting";
+};
 
-/** The named holder on a `target_in_use` refusal, or null (the index-race path, or a shape this client does not know). */
-export function createErrorHolder(err: unknown): InUseHolder | null {
-  const h = (err as { extra?: { holder?: unknown } } | null)?.extra?.holder as Partial<InUseHolder> | null | undefined;
-  if (!h || typeof h.label !== "string" || (h.state !== "live" && h.state !== "waiting")) return null;
+/** Who holds the destination on a `target_in_use` (`extra.holder`, stream-sessions.ts `targetInUse`); `null` on the
+ *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. A holder with no
+ *  `state` (a pre-T3 server) reads "live": that server refused only for a destination already on air. */
+export function createErrorHolder(err: unknown): CreateErrorHolder | null {
+  const w = wireError(err);
+  if (!w || w.code !== "target_in_use") return null;
+  const h = w.extra.holder as { courtName?: unknown; label?: unknown; matchNo?: unknown; href?: unknown; state?: unknown } | null | undefined;
+  if (typeof h !== "object" || h === null || typeof h.label !== "string") return null;
   return {
-    label: h.label, state: h.state,
-    matchNo: typeof h.matchNo === "number" ? h.matchNo : null,
     courtName: typeof h.courtName === "string" ? h.courtName : null,
+    label: h.label,
+    matchNo: typeof h.matchNo === "number" ? h.matchNo : null,
     href: typeof h.href === "string" ? h.href : null,
+    state: h.state === "waiting" ? "waiting" : "live",
   };
 }
 
 /** Spec §3.3 — "{label} is {live|waiting for a phone} on Match {n} · {court}. Stop it there or pick another
- *  destination." The match is the locale's own `breadcrumb.match`, never a server string. */
-export function inUseText(msg: Msg, h: InUseHolder): string {
-  if (h.matchNo === null) return msg("stream.inUse.elsewhere", { label: h.label });
+ *  destination." The match is the locale's own `breadcrumb.match`, never a server string. No match number (the holder's
+ *  fixture was deleted) reads the one "elsewhere" sentence. */
+export function inUseText(msg: Msg, h: CreateErrorHolder): string {
+  if (h.matchNo === null) return msg(TARGET_IN_USE_ELSEWHERE_KEY);
   const matchOnly = msg("breadcrumb.match", { no: h.matchNo });
   const match = h.courtName ? msg("stream.inUse.matchCourt", { match: matchOnly, court: h.courtName }) : matchOnly;
   return msg(h.state === "live" ? "stream.inUse.live" : "stream.inUse.waiting", { label: h.label, match });
 }
+
+export function createErrorText(error: { code: CreateErrorCode; holder: CreateErrorHolder | null }, msg: Msg): string {
+  if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
+  return msg(CREATE_ERROR_KEYS[error.code]);
+}
 ```
 
-In `createErrorText`, the `target_in_use` branch becomes
-`const h = createErrorHolder(err); return h ? inUseText(msg, h) : <today's null-holder return, unchanged>;`.
-Use the file's existing `Msg` type name. Every caller of the old `createErrorHolder` return shape (`{courtName, label}`)
-is in `fixture-stream-panel.tsx`; update each read to the new fields (use
-`rtk proxy grep -naE "createErrorHolder"` to find them).
+`CREATE_ERROR_KEYS.target_in_use` (:119) becomes `"stream.error.target_in_use.unknown"`, so the map no longer names
+the retired key. The two panel call sites (:1086 `createErrorHolder(err)` on the raw error, :1867
+`createErrorText(p.createError, msg)`) are unchanged. Delete `stream.error.target_in_use` from all four
+`ui.json` files; `pnpm i18n:gen-keys` then drops it from `i18n-keys.ts`, and tsc proves nothing still reads it.
 
 Dictionary keys (flat, beside the existing `stream.error.*`):
 
@@ -1830,7 +2004,6 @@ Dictionary keys (flat, beside the existing `stream.error.*`):
 | `stream.inUse.live` | `{label} is live on {match}. Stop it there or pick another destination.` | `{label} está en directo en {match}. Detenlo allí o elige otro destino.` | `{label} est en direct sur {match}. Arrêtez-le là-bas ou choisissez une autre destination.` | `{label} is live op {match}. Stop het daar of kies een andere bestemming.` |
 | `stream.inUse.waiting` | `{label} is waiting for a phone on {match}. Stop it there or pick another destination.` | `{label} está esperando un teléfono en {match}. Detenlo allí o elige otro destino.` | `{label} attend un téléphone sur {match}. Arrêtez-le là-bas ou choisissez une autre destination.` | `{label} wacht op een telefoon op {match}. Stop het daar of kies een andere bestemming.` |
 | `stream.inUse.matchCourt` | `{match} · {court}` | `{match} · {court}` | `{match} · {court}` | `{match} · {court}` |
-| `stream.inUse.elsewhere` | `{label} is already in use on another match. Pick another destination.` | `{label} ya se está usando en otro partido. Elige otro destino.` | `{label} est déjà utilisée sur un autre match. Choisissez une autre destination.` | `{label} is al in gebruik bij een andere wedstrijd. Kies een andere bestemming.` |
 | `stream.inUse.open` | `Open {match}` | `Abrir {match}` | `Ouvrir {match}` | `{match} openen` |
 
 Then run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && pnpm i18n:gen-keys && pnpm i18n:check`.
@@ -1841,7 +2014,9 @@ Then run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream
   `src/server/api-v1/__tests__/openapi-published.test.ts`. Expected: `f: 0`.
 
 - [ ] **Step 6: Mutate once each.**
-  - `inUseText`: the `matchNo === null` branch deleted. Red: "a holder whose fixture was deleted".
+  - `inUseText`: the `matchNo === null` branch deleted. Red: "a holder whose fixture was deleted" (it renders
+    `Match null`).
+  - `createErrorHolder`: the `w.code !== "target_in_use"` guard deleted. Red: the kept `active_session` null row.
   - `terminalHolder`: `state: "live"` changed to `"waiting"`. Red: the terminal-teardown holder case.
   - `targetHolderFor`: `notFixtureId` dropped. Red: the existing "a second session on THIS fixture is
     active_session" case.
@@ -1939,7 +2114,8 @@ Then run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream
 use their real names. The recorder capture is how the file already asserts `stream_provider_calls` rows.
 
 Add a `fakes.test.ts` twin of the session-id case, and add: a key starting with `FAKE_CONNECTING_KEY_PREFIX` reads
-`connecting`.
+`unknown` before the input connects and `connecting` after it (tick past `connectAfterMs` between the two reads), and
+the provider-call recorder holds exactly the two `outputState` rows (no hidden `inputStatus`).
 
 `stream-sessions.test.ts`:
 
@@ -1954,6 +2130,42 @@ Add a `fakes.test.ts` twin of the session-id case, and add: a key starting with 
     const second = await currentSession(r.auth, r.fixtureId, r.deps);
     expect(second!.output!.since).toBe(first!.output!.since);          // unchanged state: since does not move
     expect(Date.parse(second!.output!.since)).toBeLessThanOrEqual(t0.getTime());
+  });
+
+  it("D3's clock starts at LIVE, never during warming: warm 45 s with the output non-ok, go live — no warning at live+0 s or live+29.999 s, a warning at live+30 s", async () => {
+    const WARM_MS = 45_000;
+    const POLL_MS = 5_000;
+    let checked = 0;
+    for (const nonOk of ["unknown", "connecting"] as const) {
+      // The output reads the SAME non-ok state before and after go-live — Cloudflare's shape when the destination has
+      // not been tried yet — so the trailing run of that state starts in warming. Only the live clamp stops the clock.
+      const r = await rig({ connectAfterMs: WARM_MS });
+      const outSpy = vi.spyOn(r.ingest, "outputState").mockResolvedValue(nonOk);
+      try {
+        await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+        let polls = 0;
+        for (let t = 0; t < WARM_MS; t += POLL_MS) {                // the organiser's poll through warming
+          expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, `${nonOk} t=${t}`).not.toBe("live");
+          polls++;
+          r.tick(POLL_MS);
+        }
+        expect(polls).toBe(WARM_MS / POLL_MS);
+        const live = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(live!.state, nonOk).toBe("live");
+        expect(live!.output, nonOk).toEqual({ state: nonOk, since: r.deps.now().toISOString() });   // clamped to live_at
+        expect(destinationWarning(live!, r.deps.now()), `${nonOk} live+0`).toBe(false);
+        r.tick(OUTPUT_WARNING_AFTER_MS - 1);
+        const early = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(destinationWarning(early!, r.deps.now()), `${nonOk} live+29.999`).toBe(false);
+        r.tick(1);
+        const due = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(destinationWarning(due!, r.deps.now()), `${nonOk} live+30`).toBe(true);
+      } finally {
+        outSpy.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("output is null for a composed session, and for a passthrough session once it has ended", async () => {
@@ -2060,9 +2272,16 @@ export const FAKE_CONNECTING_KEY_PREFIX = "connecting-";
 
 ```ts
     if (row.outputs.some((o) => new URL(o.url).hostname.includes("reject") || o.streamKey.startsWith(FAKE_REJECT_KEY_PREFIX))) return "rejected";
-    if (row.outputs.some((o) => o.streamKey.startsWith(FAKE_CONNECTING_KEY_PREFIX))) return "connecting";
+    // Cloudflare reports no output status before inbound video (ingest-cf.ts:283-287): `unknown` until the input
+    // connects, then `connecting` for a destination that never accepts. The walkthrough then crosses go-live in the
+    // real shape, not a friendlier one.
+    if (row.outputs.some((o) => o.streamKey.startsWith(FAKE_CONNECTING_KEY_PREFIX))) return this.isConnected(row) ? "connecting" : "unknown";
     return "ok";
 ```
+
+`isConnected(row)` is the predicate `inputStatus` already applies (fakes.ts:118-121: `row.scripted`, else
+`clock() - createdAt >= connectAfterMs`), extracted into a private method that both call. It must not call
+`inputStatus` itself, which would record an extra provider call and move every provider-call count.
 
 `drivers.ts:45`: the disabled driver's four methods gain the unused `_meta?: ProviderCallMeta` parameter.
 
@@ -2088,19 +2307,30 @@ In `currentSession`, keep the observed `output` in a variable scoped to the func
 
 ```ts
   // D3: `since` is the start of the trailing run of ingest_status events whose outputState equals the current one —
-  // the events the poll above already records on every change (Ruling 13). Null for composed sessions and whenever this
-  // poll did not read the output.
+  // the events the poll above already records on every change (Ruling 13) — CLAMPED to the session's `live_at`. The
+  // destination is not tried before the phone is live, and Cloudflare reads `unknown` (non-ok) all through warming,
+  // so an unclamped run would start the 30 s clock during warming and warn on the first live render (review #9). While
+  // live, `since` is therefore "non-ok while live". `greatest` ignores a null `live_at` (not live yet). Null for
+  // composed sessions and whenever this poll did not read the output.
   let output: StreamSessionCurrent["output"] = null;
   if (row.mode === "passthrough" && outputObserved !== null) {
-    const [first] = await sql<{ occurred_at: Date }[]>`
-      select occurred_at from fixture_stream_events
-       where session_id = ${row.id} and type = 'ingest_status'
-         and seq > coalesce((select max(seq) from fixture_stream_events
-                              where session_id = ${row.id} and type = 'ingest_status'
-                                and payload->>'outputState' is distinct from ${outputObserved}), 0)
-       order by seq asc limit 1`;
-    output = { state: outputObserved, since: new Date(first?.occurred_at ?? deps.now()).toISOString() };
+    const [first] = await sql<{ since: Date | null }[]>`
+      select greatest(
+        (select occurred_at from fixture_stream_events
+          where session_id = ${row.id} and type = 'ingest_status'
+            and seq > coalesce((select max(seq) from fixture_stream_events
+                                 where session_id = ${row.id} and type = 'ingest_status'
+                                   and payload->>'outputState' is distinct from ${outputObserved}), 0)
+          order by seq asc limit 1),
+        (select live_at from fixture_stream_sessions where id = ${row.id})
+      ) as since`;
+    output = { state: outputObserved, since: new Date(first?.since ?? deps.now()).toISOString() };
   }
+
+Both clocks must be the session's clock: `live_at` is written from `deps.now()` (stream-sessions.ts:222), so the
+`ingest_status` event this poll records must pass `occurredAt: deps.now()` to `recordEvent` (telemetry.ts:48 defaults
+it to the wall clock). Read the call; if it omits `occurredAt`, pass it. Otherwise the unit test's ticked clock and the
+rows disagree, and the sequence test above cannot pass for the right reason.
 ```
 
 and add `output,` to the returned object after `ingest: ingestState,`.
@@ -2137,6 +2367,8 @@ Add `output: null,` to every `StreamSessionCurrent` literal that the Step-list g
   - `destinationWarning`: `>=` changed to `>`. Red: "fires at exactly OUTPUT_WARNING_AFTER_MS".
   - `outputElapsedMs`: `Math.max(0, …)` removed. Red: "Review Focus 5".
   - `since` query: `is distinct from` changed to `=`. Red: "output.since is when the CURRENT output state began".
+  - `since` query: the `live_at` arm of `greatest` deleted. Red: "D3's clock starts at LIVE" at `live+0` (since is the
+    first warming poll, 45 s earlier, so the warning is already due).
   - `releaseOutput`: `{ sessionId }` removed. Red: the fakes/session-id case over `releaseOutput`. If no such case
     exists yet, add one to `stream-sessions.test.ts`: after Stop, the fake recorder's `removeOutput` row has
     `sessionId === r.sessionId`.
@@ -2147,10 +2379,10 @@ Add `output: null,` to every `StreamSessionCurrent` literal that the Step-list g
 **Wave S gate** (the orchestrator re-runs it; scoped, not full):
 
 ```bash
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web && rm -f /tmp/fs-waveS.json && pnpm vitest run src/server/relay/__tests__/secret-columns.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/relay/__tests__/rls-static.test.ts src/server/relay/__tests__/port-boundary.test.ts src/server/relay/__tests__/fakes.test.ts src/server/relay/__tests__/ingest-cf.test.ts src/server/relay/__tests__/drivers.test.ts src/server/relay/domain/__tests__/hold-state.test.ts src/server/usecases/__tests__/stream-target-holders.test.ts src/server/usecases/__tests__/stream-targets.test.ts src/server/usecases/__tests__/stream-sessions.test.ts src/server/api-v1/__tests__/stream-contract.test.ts src/server/api-v1/__tests__/key-scopes.test.ts src/server/api-v1/__tests__/openapi-published.test.ts src/lib/__tests__/stream-destinations.test.ts src/lib/__tests__/stream-session-view.test.ts src/components/v2/__tests__/fixture-stream-panel.test.tsx "src/app/api/v1/orgs/[id]/stream-targets/__tests__/target-route.test.ts" "src/app/api/v1/fixtures/[id]/stream-sessions/__tests__/routes.test.ts" --reporter=json --outputFile=/tmp/fs-waveS.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,n:(.testResults|length)}' /tmp/fs-waveS.json
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web && rm -f /tmp/fs-waveS.json && pnpm vitest run src/server/relay/__tests__/secret-columns.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/enc-boundary.test.ts src/server/relay/__tests__/rls-static.test.ts src/server/relay/__tests__/port-boundary.test.ts src/server/relay/__tests__/fakes.test.ts src/server/relay/__tests__/ingest-cf.test.ts src/server/relay/__tests__/drivers.test.ts src/server/relay/domain/__tests__/hold-state.test.ts src/server/usecases/__tests__/stream-target-holders.test.ts src/server/usecases/__tests__/stream-targets.test.ts src/server/usecases/__tests__/stream-sessions.test.ts src/server/api-v1/__tests__/stream-contract.test.ts src/server/api-v1/__tests__/key-scopes.test.ts src/server/api-v1/__tests__/openapi-published.test.ts src/lib/__tests__/stream-destinations.test.ts src/lib/__tests__/stream-session-view.test.ts src/components/v2/__tests__/fixture-stream-panel.test.tsx "src/app/api/v1/orgs/[id]/stream-targets/__tests__/target-route.test.ts" "src/app/api/v1/fixtures/[id]/stream-sessions/__tests__/routes.test.ts" src/server/usecases/__tests__/relay-internal-routes.test.ts src/server/usecases/__tests__/relay-sweep.test.ts src/server/api-v1/__tests__/openapi-coverage.test.ts src/server/usecases/__tests__/api-key-scopes.test.ts src/server/relay/__tests__/telemetry.test.ts --reporter=json --outputFile=/tmp/fs-waveS.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,n:(.testResults|length),files:[.testResults[].name]}' /tmp/fs-waveS.json
 ```
 
-Expected: `f: 0` and `n: 20`. Also run the two walkthroughs from T2a Step 8, whole.
+Expected: `f: 0` and `n: 25`, with every path present in `files`. Also run the two walkthroughs from T2a Step 8, whole.
 
 ## Wave P — placement (no visual change to the panel itself)
 
@@ -2203,6 +2435,16 @@ Expected: `f: 0` and `n: 20`. Also run the two walkthroughs from T2a Step 8, who
   - `routes.fixture(org, comp, div, no)`.
 - Produces:
   - `server/stream-panel-context.ts`: `loadStreamPanelContext(args: {auth: AuthCtx; competitionId: string; sportKey: string; fixtureIds: readonly string[]; locale: Locale; offered: boolean; checkout?: {status?: string; sessionId?: string}}): Promise<StreamPanelContext | undefined>`, which is undefined when `!offered`.
+  - **Cost, accepted and measured (review #11).** The loader now runs on every render of the fixture page for an
+    organiser with Stream offered, including each `router.refresh()` after a scoring `send`
+    (fixture-console.tsx:540). It costs: 2× `hasFeature`, `relayCredits` (with the idempotent
+    `ensureMonthlyStreamGrant`), `preferredCurrency`, `getDictionary("public")` (no DB) and `openStreamStates`. The
+    plan keeps it on the server rather than splitting it into a client fetch on first open, because the panel must
+    render its Ready state without a spinner and the checkout return needs the post-reconcile balance on first paint.
+    The bound is pinned by a test (Step 2, "the loader's reads"): each dependency is called **at most once** per
+    render, so the count cannot grow unnoticed. T11 Step 2 records the measured number of SQL round trips per
+    organiser refresh against the prod budget (60 connections, 3 × 12) in the task report. Spectators, scorers
+    without `canEdit` and orgs without Stream pay nothing: `offered` is false and the loader returns before any read.
   - `lib/fixture-stream-mount.ts`:
     - `type FixtureStreamMode = "panel" | "stop-only" | null`;
     - `fixtureStreamMode(i: {canEdit: boolean; entitled: boolean; frozen: boolean; activeSession: boolean}): FixtureStreamMode`;
@@ -2339,6 +2581,10 @@ which fetches on mount, so it is inert under `renderToStaticMarkup` and is safe 
 ```ts
   it("offered:false reads NOTHING — no entitlement query, no reconcile, no credits (a read-only viewer or a frozen page)", async () => {
     const got = await loadStreamPanelContext({ ...args, offered: false, checkout: { status: "success", sessionId: "cs_1" } });
+    // (review #11) `offered: false` reads NOTHING — the scorer's and spectator's refresh stays free. Assert every
+    // dependency mock (hasFeature, relayCredits, preferredCurrency, openStreamStates) has 0 calls here; then, in a
+    // sibling case "the loader's reads", render once with `offered: true` and assert each is called AT MOST once
+    // (hasFeature exactly twice), counting the mocks checked and failing on zero.
     expect(got).toBeUndefined();
     expect(entitlements.hasFeature).not.toHaveBeenCalled();
     expect(checkoutSpies.reconcileStreamCreditsCheckout).not.toHaveBeenCalled();
@@ -2706,9 +2952,14 @@ async function openPhoneTab(page: Page, rig: RelayRig, f: RelayFixture): Promise
     the division page) now assert the same property on the fixture page. The stop-only card replaces the division
     probe: a frozen org with a live session shows `stream-stop-probe` inside `fixture-stream-body` after one tap on
     the Stream control.
-  - Re-cost `test.setTimeout` in each case whose budget was flat, from the file's constants (AGENTS.md #20):
-    `Math.max(<current flat value>, SEED_MS + CYCLE_MS + NAV_MS)`, with
-    `const NAV_MS = 30_000; // one fixture-page load, the budget openFixture waits for`.
+  - Re-cost `test.setTimeout` in EVERY case from the file's constants (AGENTS.md #20). The move adds cost **per
+    navigation** (each `openFixture` / `openPhoneTab` is a full page load, where a run-sheet row click was not), so
+    the budget is the case's current expression plus its navigations:
+    `test.setTimeout(<the case's current expression> + NAVS * NAV_MS)`, with
+    `const NAV_MS = 30_000; // one fixture-page load, the budget openFixture waits for` at the top of the file and
+    `const NAVS = <n>; // openFixture/openPhoneTab calls in this case` declared inside each case, counted by reading
+    the case. A `Math.max(current, …)` is not enough: every current budget already exceeds `SEED_MS + CYCLE_MS + NAV_MS`
+    (:445, :546, :604, :675, :740, :808), so the max would return the old value and cost nothing.
   - `stream-credits.spec.ts` gets the same helpers. Its checkout-return case (~:860-900) now asserts:
     - the Stripe return lands on `${rig.divPath}/f/${f.no}` (not `?tab=fixtures`);
     - the Stream panel is open on the Phone tab;
@@ -2885,13 +3136,47 @@ describe("the run sheet's stream chip (spec 2026-09-30 §2) — the path to Stop
     const [a, b] = r.fixtureIds;
     await r.session(a!, "live");
     await r.session(b!, "provisioning");
+    let terminal = 0;
+    for (const s of TERMINAL_STATES) { await r.session(b!, s); terminal++; }   // completed AND failed, on a listed fixture
+    expect(terminal).toBe(TERMINAL_STATES.length);
     const other = await streamRig();
     await other.session(other.fixtureIds[0]!, "live");
     const auth = await authFor(r.orgId);              // the file's own AuthCtx builder for a streamRig org
     expect(await openStreamStates(auth, [a!, b!, other.fixtureIds[0]!])).toEqual({ [a!]: "live", [b!]: "waiting" });
     expect(await openStreamStates(auth, [])).toEqual({});
   });
+
+  it("openStreamStates ONLY terminal sessions on a fixture: absent (each terminal state alone)", async () => {
+    let checked = 0;
+    for (const s of TERMINAL_STATES) {
+      const r = await streamRig();
+      const f = r.fixtureIds[0]!;
+      await r.session(f, s);
+      expect(await openStreamStates(await authFor(r.orgId), [f]), s).toEqual({});
+      checked++;
+    }
+    expect(checked).toBe(TERMINAL_STATES.length);
+  });
+
+  it("§9.1 sequence — the run-sheet chip's state after Stop: live, then the organiser's Stop through the real use case, then the fixture is absent", async () => {
+    const r = await rig();
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    expect(await openStreamStates(r.auth, [r.fixtureId])).toEqual({ [r.fixtureId]: "live" });
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    // Drive to terminal the way the file's "organiser's Stop" PATH does (its grace tick), then read again.
+    expect(await openStreamStates(r.auth, [r.fixtureId])).toEqual({});
+  });
 ```
+
+The two filters that used to cover for each other (the SQL `state in ACTIVE_STATES` and an `if (s)` in the loop) are
+collapsed into ONE guard, the SQL filter; the loop now throws on a terminal row, so the assumption is loud instead of a
+silent second filter. Both cases witness the SQL guard: with it dropped, the terminal rows reach the loop and it
+throws. The first case seeds its terminal rows on fixture `b`, which also has an active one, so `distinct on
+(fixture_id) … order by created_at desc` picks a terminal row there. For
+the Stop sequence, read the existing `PATHS` entry "the organiser's Stop" (stream-sessions.test.ts ~:3238) for how it
+reaches `completed` after `stopSession`, and replace the comment line with that exact tick-and-read.
 
 Read the existing :2496 case for how it builds the AuthCtx for a `streamRig` org, and use the same builder in place of
 `authFor`.
@@ -2933,8 +3218,11 @@ export async function openStreamStates(auth: AuthCtx, fixtureIds: readonly strin
      order by fixture_id, created_at desc`;
   const out: Record<string, HoldState> = {};
   for (const r of rows) {
+    // ONE guard decides "active": the SQL filter above. This line is the assumption made loud (TEST-STRATEGY:
+    // assumptions are guards), not a second filter that would cover for the first and leave both untested.
     const s = holdStateOf(r.state);
-    if (s) out[r.fixture_id] = s;
+    if (s === null) throw new Error(`openStreamStates: a terminal session (${r.state}) passed the ACTIVE_STATES filter`);
+    out[r.fixture_id] = s;
   }
   return out;
 }
@@ -3018,7 +3306,10 @@ skipped. Then run the Step 19 walkthrough and e2e commands from T5, whole files.
 
 - [ ] **Step 7: Mutate once each.**
   - The chip's `canEdit &&` deleted. Red: "a viewer who cannot edit sees no chip".
-  - `openStreamStates`: `state in ACTIVE_STATES` changed to `state is not null`. Red: "terminal … absent".
+  - `openStreamStates` SQL: `state in ACTIVE_STATES` changed to `state is not null`. Red: "terminal … absent" and
+    "ONLY terminal sessions … absent" (a terminal row reaches the loop, which throws).
+  - `openStreamStates` loop: the `throw` replaced by `continue`, SQL filter restored. Stays green by design: it is the
+    assumption guard, reachable only through the SQL mutant above. Record that in the report.
   - The chip's href without `?stream=open`. Red: the href regex, and the e2e case.
 
 - [ ] **Step 8: Typecheck, lint, commit.** Commit with
@@ -3148,7 +3439,9 @@ describe("the Directory Streaming tab (spec §4)", () => {
     for (const id of ["stream-dest-add", "stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu"]) expect(html, id).not.toMatch(new RegExp(`data-testid="${id}"`));
   });
   it("empty: the empty state with Add for an editor; the positive twin renders no empty state", () => {
-    expect(panelHtml({ canEdit: true, targets: [] })).toMatch(/data-testid="stream-dest-empty"/);
+    expect(panelHtml({ canEdit: true, targets: [] })).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="stream-dest-empty-add"/);
+    expect(panelHtml({ canEdit: false, targets: [] })).toMatch(/data-testid="stream-dest-empty"/);
+    expect(panelHtml({ canEdit: false, targets: [] })).not.toMatch(/data-testid="stream-dest-empty-add"/);
     expect(panelHtml({ canEdit: true, targets: [target()] })).not.toMatch(/data-testid="stream-dest-empty"/);
   });
   it("the phone ⋯ menu is a 44px md:hidden button; the desktop actions are max-md:hidden", () => {
@@ -3363,6 +3656,11 @@ export function StreamDestinationsPanel({
       {targets.length === 0 ? (
         <div data-testid="stream-dest-empty" className="card p-5 text-sm text-slate-600">
           <p>{msg("streamDest.empty")}</p>
+          {canEdit && !addOpen && (
+            <button type="button" data-testid="stream-dest-empty-add" onClick={() => setAddOpen(true)} className="btn btn-primary mt-3 min-h-11">
+              {msg("streamDest.add")}
+            </button>
+          )}
         </div>
       ) : (
         <div className="card overflow-visible">
@@ -3582,7 +3880,8 @@ control above it is `canEdit`-only).
      - Remove it: gone. This is the spec's sequence "Remove while waiting (refused), then Stop, then Remove (allowed)".
   6. **Re-add restores.** Remove, then add with the same key and a new name. The API list returns the **same id**
      (captured before the remove) with the new name.
-  7. **The empty state.** On a fresh org, `stream-dest-empty` is visible with the `streamDest.empty` text.
+  7. **The empty state.** On a fresh org, `stream-dest-empty` is visible with the `streamDest.empty` text, and its
+     own `stream-dest-empty-add` (spec §4.1 "+ Add destination") opens `stream-dest-form`.
   8. **The phone ⋯ menu** at 320×568 (`page.setViewportSize`): `stream-dest-menu` is visible and ≥ 44×44 by
      `boundingBox`, and `elementFromPoint` at its centre is the button (a real hit-test). Open it: three menu items. For
      a held row, `stream-dest-locked` shows the Stop-first text. `stream-dest-actions` is hidden.
@@ -3642,7 +3941,8 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web 
 - Test: `apps/web/src/components/v2/__tests__/fixture-stream-panel.test.tsx`
 
 **Interfaces:**
-- Consumes: `StreamTarget` (T2a); `inUseText`, `createErrorHolder` (T3); `PlatformMark`, `platformName` (T7).
+- Consumes: `StreamTarget` (T2a); `CreateErrorHolder` (the parsed holder, T3) and `createErrorText` (T3);
+  `PlatformMark`, `platformName` (T7).
 - Produces:
   - `type TargetsState = {status: "loading"} | {status: "error"} | {status: "ok"; list: StreamTarget[]}`;
   - `PhoneTabBodyProps.targets: TargetsState`, replacing `StreamTarget[]`;
@@ -3684,15 +3984,16 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream/apps/web 
     expect(html).not.toMatch(/stream-dest-empty|stream-dest-load-error/);
   });
   it("a target_in_use refusal names the match and links 'Open Match {n}' to its page; a deleted holder shows no link", () => {
-    const held = bodyHtml({ createError: { status: 409, code: "target_in_use", extra: { holder: { label: "Club YouTube", matchNo: 5, courtName: "Court 1", href: "/o/a/c/b/d/c/f/5", state: "waiting", fixtureId: "f" } } } });
+    const held = bodyHtml({ createError: { code: "target_in_use", holder: { label: "Club YouTube", matchNo: 5, courtName: "Court 1", href: "/o/a/c/b/d/c/f/5", state: "waiting" } } });
     expect(held).toContain("Club YouTube is waiting for a phone on Match 5 · Court 1.");
     expect(held).toMatch(/data-testid="stream-in-use-open"[^>]*href="\/o\/a\/c\/b\/d\/c\/f\/5"[^>]*>Open Match 5</);
-    const gone = bodyHtml({ createError: { status: 409, code: "target_in_use", extra: { holder: { label: "X", matchNo: null, courtName: null, href: null, state: "live", fixtureId: null } } } });
+    const gone = bodyHtml({ createError: { code: "target_in_use", holder: { label: "X", matchNo: null, courtName: null, href: null, state: "live" } } });
     expect(gone).not.toMatch(/data-testid="stream-in-use-open"/);
   });
 ```
 
-Use the file's own `CreateError` shape for `createError` (read how `createErrorText` is fed), and its own `target()`
+`createError` is the PARSED `{code, holder}` the panel stores (fixture-stream-panel.tsx:1086 runs
+`createErrorHolder(err)` on the raw error once), never the raw `{status, code, extra}`. Use the file's own `target()`
 builder if it has one. Otherwise add the one from T7's test.
 
 - [ ] **Step 2: Run and confirm red** (the same JSON command, with `src/components/v2/__tests__/fixture-stream-panel.test.tsx`).
@@ -3782,7 +4083,7 @@ Where `createErrorText` renders the refusal (`stream-create-error`), add after t
 
 ```tsx
               {(() => {
-                const h = createErrorHolder(p.createError);
+                const h = p.createError?.code === "target_in_use" ? p.createError.holder : null;   // already parsed at :1086
                 return h?.href && h.matchNo !== null ? (
                   <a data-testid="stream-in-use-open" href={h.href} className="tlink ml-1">
                     {msg("stream.inUse.open", { match: msg("breadcrumb.match", { no: h.matchNo }) })}
@@ -3949,20 +4250,30 @@ describe("chainFor — spec §3.2, row by row", () => {
     for (const s of TERMINAL_STATES) { expect(chainFor(v(s, null, null), T0), s).toBeNull(); checked++; }
     expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
   });
-  it("lime is never a text colour: no row asks for lime text (tones map to rings and lines only)", () => {
-    // The component test pins the class mapping; here: every lime tone is on a node, never on a word.
-    expect(chainFor(v("live", "connected", "ok"), T0)!.phone.tone).toBe("lime");
-  });
 });
 ```
 
 `apps/web/src/components/v2/__tests__/stream-signal-chain.test.tsx` (node, `renderToStaticMarkup`):
 
 ```tsx
-  it("lime appears only as a ring or line class — never on text", () => {
-    const html = chainHtml(chainFor(liveOk, T0)!);
-    expect(html).toMatch(/ring-\[var\(--mk-lime\)\]/);
-    expect(html).not.toMatch(/text-\[var\(--mk-lime\)\]|text-lime-/);
+  it("lime appears only as a ring or line class — never on text, across EVERY §3.2 row's nodes", () => {
+    // Every row of the table, rendered: each node carries data-tone; no element anywhere carries a lime TEXT class.
+    const rows = [null, warming, liveOk, liveConnecting, liveWarned, liveStale, ending].map((view) => chainFor(view, T0)!);
+    let nodes = 0;
+    let limeNodes = 0;
+    for (const chain of rows) {
+      const html = chainHtml(chain);
+      expect(html).not.toMatch(/text-\[var\(--mk-lime\)\]|text-lime-/);
+      for (const m of html.matchAll(/data-tone="(\w+)"[^>]*class="([^"]*)"/g)) {
+        nodes++;
+        if (m[1] === "lime") {
+          limeNodes++;
+          expect(m[2]).toMatch(/ring-\[var\(--mk-lime\)\]/);
+        }
+      }
+    }
+    expect(nodes).toBe(rows.length * 3);        // three nodes per row, or the scan matched nothing
+    expect(limeNodes).toBeGreaterThan(0);        // the lime rows really were scanned
   });
   it("links render their style class; the connecting and problem animations are opted out under reduced motion (globals.css)", () => {
     const css = readFileSync(resolve(import.meta.dirname, "../../../app/globals.css"), "utf8");
@@ -3987,8 +4298,10 @@ describe("chainFor — spec §3.2, row by row", () => {
 ```
 
 `chainHtml(chain, destination = {kind: "youtube", label: "Club YouTube"}, phoneStatus?)` renders
-`<SignalChain …/>` inside the `en` dictionary provider. `liveOk` and `warming` are view literals like those in the
-pure test.
+`<SignalChain …/>` inside the `en` dictionary provider. `warming`, `liveOk`, `liveConnecting` (output `connecting`,
+`since` = T0), `liveWarned` (the same, rendered at T0 + `OUTPUT_WARNING_AFTER_MS`: build it by passing that `now` to
+`chainFor`), `liveStale` (ingest `disconnected`) and `ending` are view literals like those in the pure test. Each
+node's ring `span` carries `data-tone={node.tone}` before its `class`, which is what the scan reads.
 
 - [ ] **Step 2: Run and confirm red.**
 
@@ -4156,9 +4469,15 @@ Then run `pnpm i18n:gen-keys && pnpm i18n:check`.
 - [ ] **Step 4: The D3 walkthrough case** (the round-1 regression, spec §9.4), in `stream-relay.spec.ts`:
   - Seed a destination with `streamKey: "connecting-" + randomBytes(6).toString("hex")`. The literal names
     `fakes.ts FAKE_CONNECTING_KEY_PREFIX`.
-  - Go live through the UI (`openPhoneTab`, pick, Go live) and wait for LIVE.
-  - Assert the chain: `stream-chain` has `data-dest="connecting"` and `data-link2="connecting"`.
+  - Go live through the UI (`openPhoneTab`, pick, Go live) and wait for LIVE. Record `const liveAt = Date.now()` the
+    moment the pill reads LIVE. The fake now reads `unknown` through warming and `connecting` after the input
+    connects (T4), and T4 clamps `since` to `live_at`, so the 30 s are measured from live, not from the first warming
+    poll: however long warming took under CI load, the first live render is `connecting`.
+  - Assert the chain: `stream-chain` has `data-dest="connecting"` and `data-link2="connecting"`, and
+    `stream-output-warning` has count 0.
   - `expect.poll` until `stream-output-warning` is visible, with timeout `OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS`.
+    Then assert `Date.now() - liveAt >= OUTPUT_WARNING_AFTER_MS - POLL_WAIT_MS`: the warning did not fire early (the
+    lower bound allows one poll of rendering lag, and no more).
     Declare `const OUTPUT_WARNING_AFTER_MS = 30_000; // lib/stream-session-view.ts` in the spec, with a unit
     assertion in `stream-session-view.test.ts` that the lib's value equals 30 000 (the spec's number), so the two
     cannot drift silently.
@@ -4182,7 +4501,7 @@ Then run `pnpm i18n:gen-keys && pnpm i18n:check`.
   - `destinationHalf`: the `destinationWarning` branch deleted. Red: the D3 row, plus e2e.
   - `chainFor` live: the `ingest.state !== "connected"` check changed to `true`. Red: "live, output ok" (the phone
     becomes amber).
-  - `TONE_RING.lime` changed to `text-lime-600`. Red: "lime appears only as a ring".
+  - `TONE_RING.lime` changed to `text-lime-600`. Red: "lime appears only as a ring … EVERY §3.2 row".
   - `phoneStatus` rendered. Red: the D9 case.
 
 - [ ] **Step 7: Typecheck, lint, commit.** Commit with
@@ -4200,10 +4519,9 @@ Then run `pnpm i18n:gen-keys && pnpm i18n:check`.
   - `MODE_OPTIONS` / `stepRadio` / `stream-mode-scorebug` are removed;
   - the credits collapse to one line;
   - the Ready / Waiting / Live action blocks follow spec §3.3;
-  - the ended and failed boxes are restyled;
-  - `QR_COLUMN_W`.
+  - the ended and failed boxes are restyled (the QR's size is T10's).
 - Modify: `apps/web/src/components/v2/fixture-console.tsx` (wrap in `StreamSessionProvider` when `stream` is set; the button's dot and label)
-- Modify: dictionaries (`stream.buttonLive`, `stream.credits.oneLine`, `stream.onAir`) + gen-keys; remove `stream.mode.*` / `stream.steps.*` keys that become unread
+- Modify: dictionaries (`stream.buttonLive`, `stream.credits.uses`, `stream.onAir`) + gen-keys; remove `stream.mode.*` / `stream.steps.*` keys that become unread
 - Test: `fixture-stream-panel.test.tsx`, `fixture-console-authority-band.test.tsx`, `fixture-stream-mount.test.ts`
 - Test (e2e): both stream walkthroughs (updated `stream-mode-scorebug`, `stream-credits-split`, tab-default and `stream-balance` assertions), `stream-overlay.spec.ts` (OBS is now the second tab)
 
@@ -4211,8 +4529,11 @@ Then run `pnpm i18n:gen-keys && pnpm i18n:check`.
 - Consumes: `chainFor`, `SignalChain`, `DestinationWarning` (T9a); `destinationWarning` (T4); `FixtureStreamMount`, `OpenPanel` (T5).
 - Produces:
   - `streamButtonState(view: Pick<StreamSessionView, "state" | "output"> | null, now: Date): {dot: null | "amber" | "red"; labelKey: "stream.button" | "stream.buttonLive"}`.
-  - `StreamSessionProvider({fixtureId, children})`, `useSharedPhoneSession(fixtureId)`.
-  - `usePhoneSession(fixtureId, opts?: {enabled?: boolean})`.
+  - `StreamSessionProvider({fixtureId, initialView?, children})`, `useSharedPhoneSession(fixtureId)`.
+  - `usePhoneSession(fixtureId, opts?: {enabled?: boolean; initialView?: StreamSessionView | null})`. `initialView`
+    seeds the hook's `useState`; it is a **test seam the server never passes**, and the comment says so.
+  - Known limit, recorded not fixed: the poll runs only while a session is non-terminal (fixture-stream-panel.tsx
+    :820-827), so a session started from ANOTHER device stays invisible here (no dot) until the page reloads.
   - DOM: `data-role="fixture-stream"` / `-phone` gain `data-dot="amber|red"` when a dot shows.
 
 - [ ] **Step 1: Write the failing tests.** In `fixture-stream-mount.test.ts`:
@@ -4247,12 +4568,15 @@ In `fixture-stream-panel.test.tsx`:
 - Phone is the first tab and the default: its tab button comes first in the markup, and it is selected with no
   `openedByReturn`.
 - There is no `stream-mode-scorebug` and no "Coming soon".
-- The credits one-liner reads `Uses 1 credit · {n} left · Buy more` from the `en` dictionary, with `title` = the
-  split sentence when the split adds up. Assert through `t(en, "stream.credits.oneLine", { n })` and the existing
-  split key.
+- The credits one-liner is three parts joined by ` · `: `stream.credits.uses` ("Uses 1 credit"), then
+  `stream-balance` holding the EXISTING plural text (`stream.phone.credits.one` at n = 1, `.other` otherwise), then
+  Buy more. `stream-balance` carries `title` = the split sentence when the split adds up. The existing
+  `stream-balance` assertions (unit :1024, :1034, :1071) keep their meaning unchanged. Add a case at n = 1 and n = 9 in
+  `es` and `fr`: the balance reads the plural key's `one` / `other` form, never a `{n}` interpolated into a fixed
+  word.
 - The Live state renders "On air" and the elapsed time in `font-mono`, plus a full-width `stream-stop` with the red
   classes; `stream-details` is closed (no `open` attribute).
-- The Waiting state's QR container has `w-full md:w-80` (≥320 px on desktop, full width on phone).
+- (The Waiting QR's size moves to T10, which owns every QR change and the `_THEMES.md` rows that bind it.)
 - Ready: the picker, then `stream-manage-destinations`, then a full-width `stream-go-live`, then the credits line,
   in that DOM order (§3.3). Assert the `indexOf` order.
 - The no-credit state still renders the pack tiles unchanged. Pin the existing tile test ids.
@@ -4262,6 +4586,8 @@ In `fixture-console-authority-band.test.tsx`:
   `initialView` test seam, documented as "server never passes it") renders `data-role="fixture-stream"` with
   `data-dot="red"` and the label "Live", and the phone twin with `data-dot="red"`.
 - Idle renders no `data-dot=`. Anchor the regex on `data-dot="`.
+- The phone twin's accessible name follows the state (WCAG 1.4.1: the dot is colour only): live renders
+  `aria-label="Live"` (`stream.buttonLive`), idle renders `aria-label="Stream"`. Anchor on `aria-label="`.
 
 - [ ] **Step 2: Run and confirm red** (the JSON command over the three test files).
 
@@ -4304,8 +4630,9 @@ import { usePhoneSession, type PhoneSession } from "./fixture-stream-panel";
 
 const SessionCtx = createContext<PhoneSession | null>(null);
 
-export function StreamSessionProvider({ fixtureId, children }: { fixtureId: string; children: ReactNode }) {
-  const session = usePhoneSession(fixtureId);
+export function StreamSessionProvider({ fixtureId, initialView, children }: { fixtureId: string; initialView?: StreamSessionView | null; children: ReactNode }) {
+  // `initialView` is a unit-test seam only: the server never passes it (the console mounts the provider without it).
+  const session = usePhoneSession(fixtureId, { initialView });
   return <SessionCtx.Provider value={session}>{children}</SessionCtx.Provider>;
 }
 
@@ -4320,8 +4647,9 @@ export function useSharedPhoneSession(fixtureId: string): PhoneSession {
 
 `usePhoneSession`:
 - Export its return type as `PhoneSession`.
-- Accept `opts: { enabled?: boolean } = {}`. When `enabled === false`, it neither fetches nor polls: its effects
-  return early on `!enabled`, with `enabled` in their dependency arrays.
+- Accept `opts: { enabled?: boolean; initialView?: StreamSessionView | null } = {}`. When `enabled === false`, it
+  neither fetches nor polls: its effects return early on `!enabled`, with `enabled` in their dependency arrays.
+  `initialView` seeds the view `useState` (test seam; the server never passes it).
 - `PhoneTab` and `PhoneStopProbe` call `useSharedPhoneSession(fixtureId)` in place of `usePhoneSession(fixtureId)`.
 - There is a circular import (the provider imports the panel, and the panel imports the provider). Break it by moving
   `usePhoneSession` and `PhoneSession` into `stream-session-provider.tsx`, with the panel importing from there. That
@@ -4332,7 +4660,8 @@ export function useSharedPhoneSession(fixtureId: string): PhoneSession {
 - Read `const s = useSharedPhoneSession(fixture.id)` in a tiny child `StreamControl` component, because the provider
   must be above the reader.
 - `StreamControl({variant: "desktop" | "phone", open, onToggle})` renders the T5 buttons, with the label
-  `msg(state.labelKey)` (desktop) and a dot `span` when `state.dot` is set
+  `msg(state.labelKey)` (desktop text, and the phone twin's `aria-label`, so the icon-only twin reads "Live" while
+  live) and a dot `span` when `state.dot` is set
   (`h-2 w-2 rounded-full ${dot === "red" ? "bg-red-600" : "bg-amber-500"}`). The button carries `data-dot={dot}`, set
   only when non-null.
 - `now` is the session hook's own ticking `now`, which already exists for the elapsed timer.
@@ -4343,15 +4672,18 @@ Frame (`PhoneTabBody` and `FixtureStreamPanel`):
   default (Phone is the default either way); keep the strip and scroll behaviour.
 - Delete `MODE_OPTIONS`, `stepRadio`, the mode radiogroup and `mode`/`onMode` from the props. The feed mode is always
   `"passthrough"`, the only enabled one. The composed mode stays in the API.
-- Credits: replace the chip and split block with
-  `<p className="mt-2 text-center text-xs text-slate-500">{msg("stream.credits.oneLine", {…})} · <button data-testid="stream-buy-more" …>{msg("stream.phone.buyMore")}</button></p>`,
-  where `stream-balance` is the `span` around `{n} left`, carrying `title={splitSentence}` (the existing
-  `stream-credits-split` sentence, when it adds up). Keep `data-testid="stream-credits-split"` as a
-  visually-hidden `span` holding the same sentence, so screen readers keep it and the walkthroughs keep their witness.
+- Credits: replace the chip and split block with one line composed of three parts, never one interpolated message
+  (word order and plural agreement differ by locale):
+  `<p className="mt-2 text-center text-xs text-slate-500">{msg("stream.credits.uses")} · <span data-testid="stream-balance" title={splitSentence}>{balanceText}</span> · <button data-testid="stream-buy-more" …>{msg("stream.phone.buyMore")}</button></p>`,
+  where `balanceText` is exactly today's `stream-balance` text (`stream.phone.credits.one` / `.other` with `{n}`,
+  read from the current code at :1457) and `splitSentence` is the existing `stream-credits-split` sentence when it
+  adds up. Keep `data-testid="stream-credits-split"` as a visually-hidden `span` holding the same sentence, so screen
+  readers keep it and the walkthroughs keep their witness. The mockup's "9 left" reads "9 credits" here: a plan
+  decision, because the plural key is what keeps every locale grammatical.
 - Live: `<p data-testid="stream-on-air" className="text-sm font-semibold text-slate-800">{msg("stream.onAir")}</p>` plus
   the elapsed time in `font-mono text-3xl tabular-nums`, then `stream-stop` as `btn min-h-12 w-full bg-red-600 text-white hover:bg-red-700`,
   keeping today's confirm dialog.
-- `QR_COLUMN_W` becomes `"w-full md:w-80"`.
+- The QR's size (`QR_COLUMN_W`, the img's width) is NOT changed here; T10 owns it.
 - Ended and failed: keep their content and test ids, and change only the container classes to the new frame's card
   (`rounded-lg ring-1 ring-purple-100 bg-white p-4`).
 
@@ -4360,7 +4692,7 @@ Dictionaries:
 | key | en | es | fr | nl |
 |---|---|---|---|---|
 | `stream.buttonLive` | `Live` | `En directo` | `En direct` | `Live` |
-| `stream.credits.oneLine` | `Uses 1 credit · {n} left` | `Usa 1 crédito · quedan {n}` | `Utilise 1 crédit · {n} restants` | `Kost 1 credit · nog {n}` |
+| `stream.credits.uses` | `Uses 1 credit` | `Usa 1 crédito` | `Utilise 1 crédit` | `Kost 1 credit` |
 | `stream.onAir` | `On air` | `En antena` | `À l’antenne` | `In de lucht` |
 
 Then remove each `stream.mode.*`, `stream.steps.*` and `stream.tab.obs` value that is now unread. Keep
@@ -4374,6 +4706,16 @@ en `OBS overlay`, es `Superposición OBS`, fr `Incrustation OBS`, nl `OBS-overla
   - `stream-overlay.spec.ts` clicks `stream-tab-obs` before its OBS assertions.
   - `stream-credits` split assertions read `stream-credits-split` (still in the DOM, visually hidden: use
     `toHaveText`, not `toBeVisible`) and `stream-balance`'s `title`.
+  - Every `creditsChip` text assertion stays exactly as it is, because `stream-balance` keeps the plural key's
+    text: `rtk proxy grep -naE "creditsChip" apps/web/e2e` lists them (today stream-relay.spec.ts :459, :510, :557,
+    :565, :577, :620, :722, :818, :838, and stream-overlay.spec.ts :889, :900). Run them; none is edited.
+  - **The one-poller witness (spec §2), in the browser** (review #21: the node harness cannot see it, because
+    `renderIsland` never provides context and `renderToStaticMarkup` runs no effects). In `stream-relay.spec.ts`,
+    with a Waiting session and the panel open, count requests with
+    `page.on("request", (r) => { if (r.method() === "GET" && new URL(r.url()).pathname.endsWith("/stream-sessions/current")) n++; })`
+    over `const K = 4` poll periods (`await page.waitForTimeout(K * STREAM_POLL_MS)`), then assert
+    `n >= K - 1` (the poll really ran: zero is a failure) and `n <= K + 1` (a second poller doubles it). Budget:
+    add `K * STREAM_POLL_MS` to that case's timeout.
 
 - [ ] **Step 5: Screenshots and per-screen verdicts.**
   - Capture the fixture page at 1280, 768 and 320 in each panel state: Ready, no destinations, load error, Waiting
@@ -4393,24 +4735,35 @@ en `OBS overlay`, es `Superposición OBS`, fr `Incrustation OBS`, nl `OBS-overla
 
 - [ ] **Step 7: Mutate once each.**
   - `streamButtonState` live: `destinationWarning` ignored. Red: "D3 turns the live dot AMBER".
-  - `useSharedPhoneSession`: `enabled: true` always. Red: add a provider test asserting that the own-poll fetch mock
-    has **0 calls** under a provider (the one-poller claim). This test is owed by this step.
+  - `useSharedPhoneSession`: `enabled: true` always. Red: the one-poller walkthrough assertion (`n <= K + 1`). Run
+    that case alone for the mutant, then whole-file for the gate.
   - The Phone-first default changed back to `"obs"`. Red: "Phone is the first tab and the default".
 
 - [ ] **Step 8: Typecheck, lint, commit.** Commit with
   `feat(stream): Signal-path frame — Phone first, credits one line, Details, one shared poller, Stream button dot (T9b)`.
 
-### Task 10: `renderSeaznQr` — the logo QR on the three fixture-page QRs
+### Task 10: `renderSeaznQr` — the logo QR, its size and tap to enlarge, on the three fixture-page QRs
 
 **Files:**
 - Create: `apps/web/src/lib/seazn-qr.ts`
+- Create: `apps/web/src/lib/qr-enlarge.ts` (D10: `enlargedQrSize`, `holdScreenWakeLock`)
+- Create: `apps/web/src/components/v2/seazn-qr-image.tsx` (D10: the shared QR image with tap to enlarge)
 - Modify: `apps/web/src/components/v2/fixture-stream-panel.tsx`:
   - :720: delete `QR_RENDER_OPTIONS`;
-  - ~:1044: `QRCode.toDataURL` becomes `renderSeaznQr`.
-- Modify: `apps/web/src/components/v2/device-link-panel.tsx:95`
-- Modify: `apps/web/src/components/v2/checkin-qr.tsx:27`
-- Test (new): `apps/web/src/lib/__tests__/seazn-qr.test.ts`
-- Test: `fixture-stream-panel.test.tsx`, `device-link-panel.test.tsx` (their `qrcode` mocks now mock `@/lib/seazn-qr`)
+  - :724: `QR_COLUMN_W` becomes `"w-full max-w-[346px]"` (the QR box's own width: 320 + 2 × 12 `p-3` + 2 × 1 border);
+  - ~:1044: `QRCode.toDataURL` becomes `renderSeaznQr`;
+  - :1702-1711: the `stream-qr` img and its skeleton go from `w-[min(264px,100%)]` to `w-[min(320px,100%)]`, and the
+    img renders through `SeaznQrImage`.
+- Modify: `apps/web/src/components/v2/device-link-panel.tsx:95` and :243 (the img through `SeaznQrImage`)
+- Modify: `apps/web/src/components/v2/checkin-qr.tsx:27` and :67 (the img through `SeaznQrImage`)
+- Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` §8a, the `QR size` (:961) and
+  `QR encoding` (:962) rows (dated amendment citing spec 2026-09-30 D7)
+- Modify: dictionaries (`qr.tapToEnlarge`, `qr.enlarged.name`, `qr.enlarged.brightness`, `qr.enlarged.close`) + gen-keys
+- Test (new): `apps/web/src/lib/__tests__/seazn-qr.test.ts`, `apps/web/src/lib/__tests__/qr-enlarge.test.ts`,
+  `apps/web/src/components/v2/__tests__/seazn-qr-image.test.tsx`
+- Test: `fixture-stream-panel.test.tsx` (its `qrcode` mock now mocks `@/lib/seazn-qr`; :66 import, :1130 size pin and
+  :1871-1878 encoding pin rewritten against the amended sheet), `device-link-panel.test.tsx` (same mock change)
+- Test (e2e): `apps/web/e2e/walkthrough/stream-relay.spec.ts` (painted QR width; tap to enlarge at 320 and 1280)
 
 **Interfaces:**
 - Produces:
@@ -4420,6 +4773,15 @@ en `OBS overlay`, es `Superposición OBS`, fr `Incrustation OBS`, nl `OBS-overla
   - `seaznQrSvg(text, {size, logoHref}): string` (pure).
   - `renderSeaznQr(text, {size}): Promise<string>`, which returns an SVG data URL and fetches the logo once per page
     as a data URL.
+  - D10 (`lib/qr-enlarge.ts`): `QR_ENLARGE_GUTTER_PX = 16`; `enlargedQrSize(vw, vh): number`
+    (= `max(0, min(vw, vh) − 2 × QR_ENLARGE_GUTTER_PX)`); `holdScreenWakeLock(nav): () => void` (requests a screen
+    wake lock if the API exists; the returned disposer releases it, including one that resolves after the dispose;
+    never throws, never rejects).
+  - D10 (`components/v2/seazn-qr-image.tsx`): `SeaznQrImage({src, alt, testId, className?, width?, height?})`. It
+    renders `<button data-testid="{testId}-enlarge" aria-haspopup="dialog">` around the `<img data-testid={testId}>`,
+    the caption "Tap to enlarge", and, when open, a portal overlay `data-testid="qr-enlarged"` (`role="dialog"`,
+    `aria-modal="true"`, `aria-label` = `qr.enlarged.name`) holding `qr-enlarged-img`, the brightness caption and a
+    44 px ✕ `qr-enlarged-close`.
 
 - [ ] **Step 1: Write the failing test** — `apps/web/src/lib/__tests__/seazn-qr.test.ts`. It uses `jsqr` and `sharp`,
   as `src/server/__tests__/_sheet-raster.ts` does:
@@ -4432,6 +4794,7 @@ import QRCode from "qrcode";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_ICON_FRACTION, SEAZN_QR_ICON_PAD_MODULES, SEAZN_QR_QUIET_MODULES, seaznQrLayout, seaznQrSvg } from "../seazn-qr";
+import { enlargedQrSize } from "../qr-enlarge";
 
 const LOGO = `data:image/png;base64,${readFileSync(resolve(import.meta.dirname, "../../../public/logo-square.png")).toString("base64")}`;
 
@@ -4468,30 +4831,58 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
     }
     expect(checked).toBe(5);
   });
-  it("carries the logo, centred, at the icon fraction", () => {
-    const svg = seaznQrSvg(DLINK, { size: 280, logoHref: LOGO });
-    expect(svg).toContain(`href="${LOGO}"`);
+  it("carries the logo, centred, at the icon fraction: x/y/width/height are the layout's own numbers", () => {
+    let checked = 0;
+    for (const text of [DLINK, STREAM_PAYLOAD]) {
+      const n = QRCode.create(text, { errorCorrectionLevel: SEAZN_QR_ERROR_CORRECTION }).modules.size;
+      const L = seaznQrLayout(n);
+      const at = SEAZN_QR_QUIET_MODULES + (n - L.icon) / 2;
+      const svg = seaznQrSvg(text, { size: 280, logoHref: LOGO });
+      expect(svg).toContain(`<image href="${LOGO}" x="${at}" y="${at}" width="${L.icon}" height="${L.icon}"/>`);
+      expect(L.icon).toBeCloseTo(n * SEAZN_QR_ICON_FRACTION, 10);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
-  it("DECODES with the logo on, at every size each call site renders — stream 320 and a 288 phone, Remote scoring 280, check-in 240", async () => {
+  it("DECODES with the logo on, at every size the page DISPLAYS — read from the sheet and the components, never typed here", async () => {
+    // The stream QR's three measured sizes are the amended _THEMES.md §8a `QR size` row's (1280, 320, 320 @ 125 %).
+    const row = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"))!;
+    const streamPx = [...row.matchAll(/\*\*(\d+) CSS px at/g)].map((m) => Number(m[1]));
+    expect(streamPx).toHaveLength(3);
+    // Remote scoring and check-in: the display size their own components declare.
+    const dlinkPx = 4 * Number(/dlink\.alt[^>]*\bw-(\d+)\b/.exec(readFileSync(DLINK_PANEL_PATH, "utf8"))![1]);
+    const checkinPx = Number(/checkinQr\.alt[\s\S]{0,200}?width=\{(\d+)\}/.exec(readFileSync(CHECKIN_PATH, "utf8"))![1]);
+    // D10: the enlarged overlay's size at the two e2e viewports.
+    const enlarged = [enlargedQrSize(320, 568), enlargedQrSize(1280, 800)];
     const cases: [string, string, number][] = [
-      ["stream", STREAM_PAYLOAD, 320], ["stream phone", STREAM_PAYLOAD, 288],
-      ["remote scoring", DLINK, 280], ["check-in", CHECKIN, 240],
+      ...streamPx.map((px) => ["stream", STREAM_PAYLOAD, px] as [string, string, number]),
+      ["remote scoring", DLINK, dlinkPx], ["check-in", CHECKIN, checkinPx],
+      ...enlarged.map((px) => ["stream enlarged", STREAM_PAYLOAD, px] as [string, string, number]),
     ];
     let checked = 0;
     for (const [name, text, px] of cases) {
-      expect(await decode(seaznQrSvg(text, { size: px, logoHref: LOGO }), px), name).toBe(text);
+      expect(px, `${name} size`).toBeGreaterThan(0);
+      expect(await decode(seaznQrSvg(text, { size: px, logoHref: LOGO }), px), `${name} @ ${px}px`).toBe(text);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(7);
   });
 });
 ```
+
+`THEMES_PATH`, `DLINK_PANEL_PATH` and `CHECKIN_PATH` are `resolve(import.meta.dirname, …)` paths to
+`docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md`,
+`src/components/v2/device-link-panel.tsx` and `src/components/v2/checkin-qr.tsx`. The regexes read the class and
+`width` the components pass to `SeaznQrImage` after Step 3b; if a component's markup moves, fix the regex, never type
+the number in. This test runs after Step 3a has amended the sheet, so Step 2's red run expects the sheet read to fail
+too.
 
 For `streamPayloadFixture()`, import the `CaptureQrV1` fixture the panel test already builds, if it is exported;
 otherwise build one here in the `lib/capture-qr` shape (`v: 1`, `sid` a uuid, `slot: 0`, both creds with 65-character
 secrets, `preferred`, `exp`), and serialise it with the same `qrText` the panel uses.
 
-**If the 288 px stream case fails to decode, that is the spec's named risk.** Do not loosen the test. Record the
+**If the 172 px stream case (320 @ 125 % zoom) fails to decode, that is the spec's named risk and the §7 fallback
+trigger, recorded as such.** Do not loosen the test. Record the
 failure, and take the spec's fallback: the stream QR alone renders logo-less through a
 `seaznQrSvg(text, {size, logoHref: null})` path at EC H. The exception is written in the helper's header comment, and
 the test's stream rows switch to `logoHref: null` with a comment pointing at that exception. The real-phone gate
@@ -4594,9 +4985,300 @@ returning a fixed data URL. Each test's assertion keeps its meaning ("the QR ren
 string"): assert that `renderSeaznQr` was called with the payload and `{ size: 640 }` (panel) and
 `{ size: 280 }` (device link).
 
-- [ ] **Step 4: Run the scope.** The JSON command over `seazn-qr.test.ts`, `fixture-stream-panel.test.tsx`,
-  `device-link-panel.test.tsx` and `device-link-panel-i18n.test.tsx`, then the stream walkthroughs (A-case "the QR at
-  125% zoom" still decodes in the browser) and `scorer-sheets-handover-panel` / `scorer-sheets-print-scan`, whole.
+- [ ] **Step 3a: The stream QR's size, and the binding sheet amended** (spec §3.3 / §7: "≥320 px on desktop and
+  full width on a phone"; review #18/#19).
+  - `fixture-stream-panel.tsx`: the `stream-qr` img and its skeleton become `w-[min(320px,100%)]`. `QR_COLUMN_W`
+    becomes `"w-full max-w-[346px]"`, so the QR box, the paste field (which §8a binds to "the QR box's own width") and
+    the Cancel button (which keeps its own `md:w-auto`, now with no conflicting `md:` width) all follow the new box.
+  - `_THEMES.md` §8a, `QR size` row (:961): replace `min(264px, available)` with `min(320px, available)` and the first
+    measurement with **320 CSS px at 1280**. Keep the 236 and 172 measurements (the below-768 subtraction is
+    unchanged) and every other sentence. Append: "Amended 2026-09-30 (spec 2026-09-30 D7 and §7: ≥320 px on desktop,
+    full width on a phone); was `min(264px, available)`." If the T9b/T10 screenshots measure `available` below 320 at
+    768, write the measured 768 number into the row as a fourth `**N CSS px at 768**`.
+  - `_THEMES.md` §8a, `QR encoding` row (:962): replace its first sentence with "**EC-H with a 4-module quiet zone and
+    the Seazn logo centred** (`lib/seazn-qr.ts`: the icon covers 0.22 of the symbol over a knocked-out odd square
+    with a 1-module pad, the geometry of `scorer-sheet-pdf.ts` `drawBrandQr`); the ≈ 435-byte capture payload puts
+    the symbol at v22 / 105 modules." Keep the row's last sentence. Append "Amended 2026-09-30 (spec 2026-09-30 D7);
+    was EC-M with no logo."
+  - `fixture-stream-panel.test.tsx`: drop the `QR_RENDER_OPTIONS` import (:66). Rewrite :1130 and :1871-1878 to pin
+    the component against the AMENDED sheet (neither is deleted):
+
+```ts
+    // :1130 — the img's width is the sheet's rule, read from the row, not typed here
+    const sizeRow = readFileSync(SHEET_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"))!;
+    const cap = /min\((\d+)px, available\)/.exec(sizeRow)![1];
+    expect(Number(cap)).toBeGreaterThanOrEqual(320);                       // spec §7's floor on desktop
+    expect(String(attr(img, "className"))).toContain(`w-[min(${cap}px,100%)]`);
+```
+
+```ts
+  it("§8a's encoding settings are the helper's: EC-H, a 4-module quiet zone, and the Seazn logo (amended 2026-09-30, D7)", () => {
+    const sheet = readFileSync(SHEET_PATH, "utf8");
+    const row = sheet.split("\n").find((l) => l.startsWith("| QR encoding |"));
+    expect(row, "§8a lost its QR encoding row").toBeDefined();
+    expect(row!).toContain(`EC-${SEAZN_QR_ERROR_CORRECTION} with a ${SEAZN_QR_QUIET_MODULES}-module quiet zone`);
+    expect(row!).toMatch(/Seazn logo/);
+    expect(SEAZN_QR_ERROR_CORRECTION).toBe("H");                           // spec §7, the rulebook
+  });
+```
+
+  - e2e (`stream-relay.spec.ts`, the case that reaches Waiting): at 1280 the painted `stream-qr` box is
+    `≥ 320 − 0.5` CSS px wide (`boundingBox()`), and at 320 it equals the sheet's 236 ± 1. Read both numbers from the
+    `QR size` row in the spec file too (the walkthrough already reads repo files by path), never typed.
+
+- [ ] **Step 3b: Tap to enlarge (owner ruling D10, 2026-10-04).** Every QR rendered through `SeaznQrImage` opens full
+  screen on a single tap.
+
+`apps/web/src/lib/qr-enlarge.ts`:
+
+```ts
+// lib/qr-enlarge.ts — owner ruling D10 (2026-10-04): a Seazn QR opens full screen on one tap, as large as the
+// viewport allows, with the screen kept awake while it is open.
+
+/** The gutter on each side of the enlarged QR (D10: "min(viewport width, viewport height) minus a 16 px gutter"). */
+export const QR_ENLARGE_GUTTER_PX = 16;
+
+/** The enlarged QR's edge in CSS px — derived from the viewport every time, never a constant. */
+export function enlargedQrSize(vw: number, vh: number): number {
+  return Math.max(0, Math.min(vw, vh) - 2 * QR_ENLARGE_GUTTER_PX);
+}
+
+type WakeSentinel = { release(): Promise<void> };
+type WakeNavigator = { wakeLock?: { request(type: "screen"): Promise<WakeSentinel> } } | undefined;
+
+/** Hold a screen wake lock while the overlay is open. Feature-detected: no API, a refused request or a failed release
+ *  never throws and never rejects (D10). The disposer also releases a lock that is granted AFTER it ran. */
+export function holdScreenWakeLock(nav: WakeNavigator): () => void {
+  let disposed = false;
+  let sentinel: WakeSentinel | null = null;
+  const lock = nav?.wakeLock;
+  if (lock && typeof lock.request === "function") {
+    Promise.resolve()
+      .then(() => lock.request("screen"))
+      .then((s) => {
+        if (disposed) void s.release().catch(() => {});
+        else sentinel = s;
+      })
+      .catch(() => {});
+  }
+  return () => {
+    disposed = true;
+    if (sentinel) void sentinel.release().catch(() => {});
+    sentinel = null;
+  };
+}
+```
+
+`apps/web/src/components/v2/seazn-qr-image.tsx`:
+
+```tsx
+"use client";
+// Owner ruling D10 (2026-10-04): every Seazn QR opens full screen on a SINGLE tap (a double tap is the browser's zoom),
+// on white, as large as the viewport allows, with the screen kept awake. Esc, the ✕ or any tap closes it, and focus
+// returns to the QR.
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useMsg } from "@/components/i18n/dict-provider";
+import { enlargedQrSize, holdScreenWakeLock } from "@/lib/qr-enlarge";
+
+export function SeaznQrImage(p: { src: string; alt: string; testId: string; className?: string; width?: number; height?: number }) {
+  const msg = useMsg();
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        data-testid={`${p.testId}-enlarge`}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+        className="mx-auto block touch-manipulation rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+      >
+        {/* A data: URL encoded in the browser — nothing for next/image to optimise. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img data-testid={p.testId} src={p.src} alt={p.alt} className={p.className} width={p.width} height={p.height} />
+      </button>
+      <p className="mt-1 text-center text-xs text-slate-500">{msg("qr.tapToEnlarge")}</p>
+      {open && (
+        <QrEnlarged
+          src={p.src}
+          alt={p.alt}
+          onClose={() => {
+            setOpen(false);
+            trigger.current?.focus();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function QrEnlarged({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  const msg = useMsg();
+  const closeBtn = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const [size, setSize] = useState(() => enlargedQrSize(window.innerWidth, window.innerHeight));
+  useEffect(() => {
+    closeBtn.current?.focus();
+    const onResize = () => setSize(enlargedQrSize(window.innerWidth, window.innerHeight));
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCloseRef.current();
+      if (e.key === "Tab") {                       // the ✕ is the dialog's only control: keep focus inside
+        e.preventDefault();
+        closeBtn.current?.focus();
+      }
+    };
+    window.addEventListener("resize", onResize);
+    document.addEventListener("keydown", onKey);
+    const release = holdScreenWakeLock(navigator as Parameters<typeof holdScreenWakeLock>[0]);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("keydown", onKey);
+      release();
+    };
+  }, []);
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={msg("qr.enlarged.name")}
+      data-testid="qr-enlarged"
+      onClick={() => onCloseRef.current()}
+      className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-white"
+    >
+      <button
+        ref={closeBtn}
+        type="button"
+        data-testid="qr-enlarged-close"
+        aria-label={msg("qr.enlarged.close")}
+        onClick={(e) => {
+          e.stopPropagation();
+          onCloseRef.current();
+        }}
+        className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-lg text-2xl text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+      >
+        ✕
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img data-testid="qr-enlarged-img" src={src} alt={alt} style={{ width: size, height: size }} />
+      <p className="px-4 text-center text-sm text-slate-600">{msg("qr.enlarged.brightness")}</p>
+    </div>,
+    document.body,
+  );
+}
+```
+
+The three call sites render their QR through it, keeping their test ids and classes:
+`<SeaznQrImage testId="stream-qr" src={p.qrDataUrl} alt={msg("stream.phone.qr.alt")} className="mx-auto block aspect-square h-auto w-[min(320px,100%)]" />`,
+`<SeaznQrImage testId="dlink-qr" src={minted.qr} alt={msg("dlink.alt")} className="ph-no-capture mx-auto h-56 w-56" />`
+(use the device-link img's existing test id if it has one; read :243), and
+`<SeaznQrImage testId="checkin-qr" src={qr} alt={msg("checkinQr.alt")} className="mx-auto rounded-lg border border-slate-200 p-1" width={176} height={176} />`.
+Keep the panel's own eslint comment where the old `<img>` was removed.
+
+Dictionaries (the owner named three strings; the ✕ needs its own accessible name, so there is a fourth, reported to
+the owner as such rather than borrowing another namespace's "Close"):
+
+| key | en | es | fr | nl |
+|---|---|---|---|---|
+| `qr.tapToEnlarge` | `Tap to enlarge` | `Toca para ampliar` | `Touchez pour agrandir` | `Tik om te vergroten` |
+| `qr.enlarged.name` | `Enlarged QR code` | `Código QR ampliado` | `Code QR agrandi` | `Vergrote QR-code` |
+| `qr.enlarged.brightness` | `Turn up brightness if it won't scan` | `Sube el brillo si no se escanea` | `Augmentez la luminosité si le code ne se scanne pas` | `Zet de helderheid hoger als hij niet scant` |
+| `qr.enlarged.close` | `Close` | `Cerrar` | `Fermer` | `Sluiten` |
+
+Then `pnpm i18n:gen-keys && pnpm i18n:check`.
+
+Tests. `apps/web/src/lib/__tests__/qr-enlarge.test.ts` (node):
+
+```ts
+import { describe, expect, it, vi } from "vitest";
+import { QR_ENLARGE_GUTTER_PX, enlargedQrSize, holdScreenWakeLock } from "../qr-enlarge";
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+const fakeNav = () => {
+  const release = vi.fn(() => Promise.resolve());
+  const request = vi.fn(() => Promise.resolve({ release }));
+  return { nav: { wakeLock: { request } }, request, release };
+};
+
+describe("D10 — tap to enlarge", () => {
+  it("the ruling's gutter is 16 px (owner 2026-10-04)", () => {
+    expect(QR_ENLARGE_GUTTER_PX).toBe(16);
+  });
+  it("the enlarged size is DERIVED from the viewport: min(vw, vh) − 2 × gutter, portrait and landscape, phone and desktop", () => {
+    const viewports: [number, number][] = [[320, 568], [568, 320], [390, 844], [768, 1024], [1280, 800], [1920, 1080]];
+    let checked = 0;
+    const seen = new Set<number>();
+    for (const [vw, vh] of viewports) {
+      const got = enlargedQrSize(vw, vh);
+      expect(got, `${vw}×${vh}`).toBe(Math.min(vw, vh) - 2 * QR_ENLARGE_GUTTER_PX);
+      seen.add(got);
+      checked++;
+    }
+    expect(checked).toBe(viewports.length);
+    expect(seen.size).toBeGreaterThan(3);            // a constant would collapse this to one value
+    expect(enlargedQrSize(20, 20)).toBe(0);          // never negative
+  });
+  it("the wake lock is requested on open and RELEASED on close", async () => {
+    const { nav, request, release } = fakeNav();
+    const dispose = holdScreenWakeLock(nav);
+    await flush();
+    expect(request).toHaveBeenCalledWith("screen");
+    expect(release).not.toHaveBeenCalled();
+    dispose();
+    await flush();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+  it("a lock granted AFTER close is released the moment it arrives", async () => {
+    const { nav, release } = fakeNav();
+    const dispose = holdScreenWakeLock(nav);
+    dispose();                                       // closed before the request resolved
+    await flush();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+  it("no crash when navigator.wakeLock is undefined, when navigator is undefined, and when the request or the release rejects", async () => {
+    let checked = 0;
+    for (const nav of [undefined, {}, { wakeLock: { request: () => Promise.reject(new Error("NotAllowedError")) } },
+      { wakeLock: { request: () => Promise.resolve({ release: () => Promise.reject(new Error("gone")) }) } }]) {
+      const dispose = holdScreenWakeLock(nav as never);
+      await flush();
+      expect(() => dispose()).not.toThrow();
+      await flush();                                 // an unhandled rejection here fails the run
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});
+```
+
+`apps/web/src/components/v2/__tests__/seazn-qr-image.test.tsx` (node, `renderToStaticMarkup` inside the `en`
+provider, as the panel tests do): closed, it renders `data-testid="stream-qr-enlarge"` with `aria-haspopup="dialog"`
+wrapping `data-testid="stream-qr"`, and the caption text `Tap to enlarge`; there is no `qr-enlarged` in the markup. In
+each of the three call-site tests (panel Waiting state, device-link minted state, check-in), assert the `-enlarge`
+button and the caption are present, so no call site bypasses the component. Opening is a browser behaviour (portal,
+effects, focus): the e2e below witnesses it.
+
+e2e, in `stream-relay.spec.ts`, in the case that reaches Waiting, once at `page.setViewportSize({width: 320, height: 568})`
+and once at `{width: 1280, height: 800}`:
+- `stream-qr-enlarge` is visible, with the caption; a single `click()` on it (not `dblclick`).
+- `qr-enlarged` is visible, has `role="dialog"`, `aria-modal="true"` and the `qr.enlarged.name` label.
+- `qr-enlarged-img`'s `boundingBox().width >= Math.min(vw, vh) - 32 - 0.5`, with `vw`/`vh` read from
+  `page.viewportSize()` (never typed).
+- `qr-enlarged-close` is focused, and its `boundingBox()` is ≥ 44 × 44.
+- `page.keyboard.press("Escape")`: `qr-enlarged` has count 0, and `stream-qr-enlarge` is focused (`toBeFocused`).
+- Open again and click the ✕: closed. Open again and click the enlarged image: closed ("any tap").
+- The wake lock in a real browser: before the first open, `page.addInitScript` wraps `navigator.wakeLock.request` (when
+  it exists) to count requests and releases on `window.__wake`; after open, `requests === 1`; after Escape,
+  `releases === 1`. When the browser has no `wakeLock`, the script defines none and the case asserts only that the
+  overlay opened and closed (the no-crash path). Record which path ran in the report.
+- Budget: add `2 * NAV_MS` to that case's timeout (two viewport passes).
+
+- [ ] **Step 4: Run the scope.** The JSON command over `seazn-qr.test.ts`, `qr-enlarge.test.ts`,
+  `seazn-qr-image.test.tsx`, `fixture-stream-panel.test.tsx`, `device-link-panel.test.tsx` and
+  `device-link-panel-i18n.test.tsx`, then the stream walkthroughs (A-case "the QR at 125% zoom" still decodes in the
+  browser) and `scorer-sheets-handover-panel` / `scorer-sheets-print-scan`, whole. Also check-in's own spec if one
+  exists (`rtk proxy grep -rlaE "checkin-qr" apps/web/e2e`), whole.
 
 - [ ] **Step 5: Mutate once each.**
   - `SEAZN_QR_ERROR_CORRECTION` changed to `"M"`. Red: "encodes at the declared EC level" (and decoding may still
@@ -4605,21 +5287,30 @@ string"): assert that `renderSeaznQr` was called with the payload and `{ size: 6
   - The `knocked` guard changed to always `false` (no knock-out, logo drawn over live modules). This must **not** make
     the decode test pass for a wrong reason: record whether it stays green. It is a finding about the decode margin,
     not a test to weaken.
+  - `holdScreenWakeLock`'s disposer: `if (sentinel) void sentinel.release()…` deleted (D10's named mutant). Red: "the
+    wake lock is … RELEASED on close". Restore it, then delete the `if (disposed) void s.release()…` arm. Red: "a lock
+    granted AFTER close".
+  - `enlargedQrSize` returns a constant `288`. Red: "the enlarged size is DERIVED from the viewport".
 
 - [ ] **Step 6: REAL-PHONE SCAN — STOP for the owner. This cannot be automated.**
   1. Start the prod build (`seazn-local-env`), open a fixture page at 1280, and take a session to Waiting, so the
      stream QR shows.
   2. Ask the owner to scan it with the Seazn capture app on a real phone. Also ask them to scan the Remote scoring QR
      and the check-in QR on the same page with the phone's camera.
-  3. Record in the task report, for each of the three QRs: device, OS version, app or camera, distance, lighting,
+  3. Repeat on a **320-wide display**: the same page opened on the organiser's own phone (or a second phone), where the
+     stream QR paints at the sheet's 236 CSS px, scanned by the capture phone. This is the smallest real display, and
+     the one an organiser holding the fixture page on a phone uses.
+  4. Repeat every scan above **enlarged** (D10): tap the QR, scan the full-screen overlay. So each QR is scanned at its
+     normal and its enlarged size, at 1280 and at 320.
+  5. Record in the task report, for each QR × width × size: device, OS version, app or camera, distance, lighting,
      result (scanned / slow / failed), and the time to lock.
-  4. **Do not continue past this step until the owner reports the result.**
+  6. **Do not continue past this step until the owner reports the result.**
      - If the stream QR scans poorly, apply the §7 fallback: `logoHref: null` for that call site only, recorded in the
        helper's header comment ("Exceptions: the stream capture QR — <date>, <device>, <result>"). Then re-run Step 4
        and ask for a re-scan.
 
-- [ ] **Step 7: Commit** (after the owner's result): `feat(qr): Seazn-logo QR at EC H on the stream, Remote scoring and check-in QRs (T10)`,
-  with the scan record in the body.
+- [ ] **Step 7: Commit** (after the owner's result): `feat(qr): Seazn-logo QR at EC H, ≥320 px, tap to enlarge on the stream, Remote scoring and check-in QRs (T10)`,
+  with the scan record in the body, and the `_THEMES.md` amendment in the same commit.
 
 ### Task 11: Lane close — the scoped gate, the visual verdicts, then STOP
 
@@ -4644,8 +5335,25 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && FILES=
 ```
 
 Expected: `f: 0`, and `n` equals the word count printed plus 4, minus any boundary file already listed. Compare the
-two lists by eye: a missing path is a silently skipped file (AGENTS.md: positionals are literal filters). Then run
-`rtk proxy pnpm typecheck`, `rtk proxy pnpm lint` and `pnpm i18n:check`.
+two lists by eye: a missing path is a silently skipped file (AGENTS.md: positionals are literal filters).
+
+The list above holds only test files the branch EDITED. The rule is "the tests covering the files you changed", so
+also run the tests that cover a changed SOURCE file without having been edited themselves:
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && SRC=$(git diff --name-only origin/main...HEAD -- 'apps/web/src/**/*.ts' 'apps/web/src/**/*.tsx' | grep -v '__tests__' | sed 's|^apps/web/||' | tr '\n' ' ') && echo "$SRC" | wc -w && cd apps/web && rm -f /tmp/fs-t11-related.json && pnpm vitest related --run $SRC --reporter=json --outputFile=/tmp/fs-t11-related.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,n:(.testResults|length),files:[.testResults[].name]}' /tmp/fs-t11-related.json
+```
+
+Expected: `f: 0`, and `files` includes at least `openapi-coverage.test.ts`, `api-key-scopes.test.ts`,
+`relay-sweep.test.ts` and `telemetry.test.ts` (review #26); a missing one means `related` did not see the import
+graph, so run it by path. If `related` would pull in a very large set (it follows imports transitively), that is still
+the covering set for this branch, not the full suite; report its `n`. Then run `rtk proxy pnpm typecheck`,
+`rtk proxy pnpm lint` and `pnpm i18n:check`.
+
+Record the organiser-refresh cost T5 accepted (review #11): with the prod server up, render one organiser fixture page
+with Stream offered and count the SQL round trips `loadStreamPanelContext` makes (the dev query log, or a temporary
+counter in a scratch run, never committed), and write the number beside the prod budget (60 connections, 3 × 12) in
+the task report.
 
 - [ ] **Step 3: The scoped e2e gate**, whole files, against a fresh prod build of the rebased worktree:
 
@@ -4658,19 +5366,26 @@ Paste the passed and total counts for each. `mobile.spec.ts` is serial, so treat
 until a full pass completes. A red that looks environmental goes through the `seazn-local-env` skill §5 list before it
 is called a defect.
 
-- [ ] **Step 4: Smoke.** Run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && pnpm test:smoke`
-  against the local prod server, with `RELAY_KEK` set as CI sets it. Report the `streamTargetsSuite` step count (7)
-  and the new fixture-console Stream check. Smoke is PR-only in CI (AGENTS.md), so this local run is the only smoke
-  before the PR.
+- [ ] **Step 4: Smoke, scoped to the changed routes only.** The full smoke is CI's job: it runs on this branch's PR
+  before merge (smoke is PR-triggered). Locally, run only the suites that cover the routes this branch changed, through
+  T2b's `SMOKE_ONLY` filter, against the local prod server with `RELAY_KEK` set as CI sets it:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && SMOKE_ONLY=streamTargets,v1 pnpm test:smoke`.
+  `streamTargets` covers the new PATCH/DELETE and the changed POST; `v1` holds the fixture-console Stream twin check
+  (T5 Step 16 sits in `v1Suite`, smoke.ts:16864). Expected: `ran 2 suite(s)`, the `streamTargetsSuite` "7 steps" line,
+  and the Stream check passing. Report both; at PR time, also report CI smoke's own `streamTargetsSuite` count.
 
-- [ ] **Step 5: The control-set diff, 320 against 1280, from the live DOM** (AGENTS.md phone composition). On one
-  entitled organiser fixture page with the scoring pad mounted:
+- [ ] **Step 5: The control-set diff, 320 against 1280, from the live DOM** (AGENTS.md phone composition). On TWO
+  entitled organiser fixture pages whose header strips differ, with the scoring pad mounted: a **badminton** v3 pad
+  (its strip carries the reserved server slot, mobile.spec.ts:153) and a **cricket** v3 pad (its strip carries none).
+  The Stream icon adds a 44 px control to a strip whose crowding differs by sport, so one sample is not a sweep.
+  For each sport:
   - List the visible interactive controls in DOM order at 1280 and at 320 (the `controlSet` helper from
     `stream-relay.spec.ts`).
   - Diff membership, order and repeats.
   - Expected: the only controls present at both widths **as twins** are Remote scoring and Stream, each appearing once
     per width. Nothing else is repeated, and the 320 set is not the 1280 set shrunk.
-  - Paste both lists and the diff.
+  - Paste both lists and the diff, per sport (four lists, two diffs). Zero controls listed at either width is a
+    failure of the helper, not a clean diff.
 
 - [ ] **Step 6: Per-screen visual verdicts.** Gather T7 Step 11's and T9b Step 5's screenshots, plus the fixture page
   at 768 and 1280 with **no** panel open (to prove "nothing changes at ≥768 except the two header buttons").
@@ -4683,7 +5398,7 @@ is called a defect.
   the owning task's files, and re-run that task's scoped gate.
 
 - [ ] **Step 8: STOP for the owner.** Do **not** push, open a PR or dispatch e2e. Report to the owner:
-  - the gate counts from Steps 2–4;
+  - the gate counts from Steps 2–4, and the organiser-refresh query count from Step 2;
   - the control-set diff;
   - the visual verdict table;
   - the T10 real-phone record;
@@ -4694,6 +5409,8 @@ is called a defect.
     - the Twitch preset host;
     - the Directory mockup's "Change server" was not built;
     - the problem link is static, not animated;
+    - the credits line reads "9 credits" (the plural key), not the mockup's "9 left";
+    - the D10 ✕ needed a fourth string (`qr.enlarged.close`) beyond the three the ruling named;
   - the premises list at the top of this plan.
 
   Wait for the owner's go-ahead before `git push` and `gh pr create`.
@@ -4716,6 +5433,7 @@ is called a defect.
 | §0 D7 | T10 |
 | §0 D8 | T7, T2a, T2b, T5 |
 | §0 D9 | T9a (the unrendered `phoneStatus`) |
+| §0 D10 (tap to enlarge, 2026-10-04) | T10 Step 3b (component, wake lock, 4 locales), Step 5 (the release mutant), Step 6 (scan both sizes) |
 | §1 success list | T5 (found from the match), T7 (wrong key visible), T4 + T9a (30 s), T3 + T8 (busy destination names the match), T5 (Stop in every gate state), T11 Step 6 (≥768 unchanged) |
 | §2 route + `searchParams`, who sees Stream, desktop/phone twins, `openPanel`, `consoleScoringEmptyOnPhone`, doc + AGENTS amendments, checkout return | T5 |
 | §2 shared loader | T5 |
@@ -4723,7 +5441,7 @@ is called a defect.
 | §3.1 frame | T9b |
 | §3.2 chain + table + lime-not-text + reduced motion + D3 box | T9a |
 | §3.3 Ready | T8, T9b |
-| §3.3 Waiting | T9b, T10 |
+| §3.3 Waiting | T9b, T10 (the ≥320 px QR and the `_THEMES.md` §8a amendment, Step 3a) |
 | §3.3 Live | T9b |
 | §3.3 No destinations, load error | T8 |
 | §3.3 in-use | T3, T8 |
@@ -4737,9 +5455,9 @@ is called a defect.
 | §5.6 | T4 + T9a |
 | §5.7 | T4 |
 | §6 keys | per task; unused labels removed in T6, T8, T9b |
-| §7 | T10 (the six other QRs are out of scope, per §7 / §8) |
+| §7 | T10 (the six other QRs are out of scope, per §7 / §8); decode sizes read from the amended §8a row and the components |
 | §8 | nothing built |
-| §9.1 | per task |
+| §9.1 | per task; the sequences: replace key then go live (T2b, stream-sessions), concurrent Remove / Replace against Go live (T2b, both sides of the row lock), the chip after Stop (T6, through the real Stop) |
 | §9.2 | T5, T7, T8, T9a |
 | §9.3 | T5, T9b, T11 |
 | §9.4 | T2b + T5 smoke, T9a (round-1 regression), T5 (D2 checkout regression), T10 (phone scan) |
@@ -4752,10 +5470,12 @@ is called a defect.
   fixture-console Stream check (premise 7).
 - §3.2's `ending` row gives no Stream-button dot rule, so T9b decides amber.
 - The Directory mockup's "Change server" field is overruled by §4 "No server field" (T7 Step 11).
+- §3.3's credits line "Uses 1 credit · 9 left" renders "Uses 1 credit · 9 credits": the balance keeps the plural key
+  so every locale agrees in number (T9b, review #22).
 
 **2. Placeholder scan.** No "TBD", "TODO", "implement later" or "similar to Task N" remains. Where a step names an
-existing helper by role rather than by name (`providerCalls(r)`, `goLive(r)`, `renderDivision`, `consoleHtml`'s
-`baseState`), the step says which existing code to read for its real name. Those files were not opened for this plan,
+existing helper by role rather than by name (`goLive(r)`, `startComposed`, `stopAndDrain`, `streamRig`/`authFor`,
+`renderDivision`, `consoleHtml`'s `baseState`), the step says which existing code to read for its real name. Those files were not opened for this plan,
 and naming them from memory would be a guess.
 
 **3. Type consistency.** These names are the same everywhere they appear:
@@ -4777,7 +5497,9 @@ and naming them from memory would be a guess.
 - `TargetsState`;
 - `chainFor`, `Chain`, `SignalChain`, `DestinationWarning`;
 - `StreamSessionProvider`, `useSharedPhoneSession`, `PhoneSession`;
-- `seaznQrLayout`, `seaznQrSvg`, `renderSeaznQr`.
+- `seaznQrLayout`, `seaznQrSvg`, `renderSeaznQr`;
+- `CreateErrorHolder` (widened, T3; the panel stores it parsed), `inUseText`, `TARGET_IN_USE_ELSEWHERE_KEY`;
+- `QR_ENLARGE_GUTTER_PX`, `enlargedQrSize`, `holdScreenWakeLock`, `SeaznQrImage`.
 
 `holdRig` / `sessionOnTarget` are defined in T2a, and T2b and T3 use them.
 

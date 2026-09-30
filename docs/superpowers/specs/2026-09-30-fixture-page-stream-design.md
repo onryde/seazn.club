@@ -32,6 +32,7 @@ This design fixes all four and gives the panel a look that explains the stream.
 | D7 | **Every QR carries the Seazn logo in the centre** (a standing rule). This branch covers the three fixture-page QRs; the other six follow in a separate PR. |
 | D8 | Design section 2 (Directory, server, wiring, tests) is approved. |
 | D9 | capture-qr **v2**, with a per-session token, is the web side's to build, in its own branch after this one. v1 minting stops the day v2 ships. This branch only reserves the heartbeat slot on the Phone node (§3.4). |
+| D10 | (2026-10-04) Every QR from the shared Seazn QR component gets **tap to enlarge**: a "Tap to enlarge" caption; a single tap opens a full-screen white overlay with the QR at min(viewport width, height) minus a 16 px gutter and "Turn up brightness if it won't scan"; a Screen Wake Lock held while open (feature-detected, never throws); closes on any tap, a 44 px ✕ or Esc, focus returning to the QR. See §7. |
 
 ## 1. Goal, users, success
 
@@ -355,6 +356,12 @@ This closes the NULL `session_id` seen on staging for `removeOutput`.
   ≥320 px on desktop and full width on a phone.
 - **A real-phone scan before shipping is a gate.** If that QR scans poorly, it alone stays logo-less, recorded as an
   exception in the helper's comment.
+- **Tap to enlarge (D10, 2026-10-04).** The three QRs render through one shared component. A single tap opens a
+  full-screen overlay on white (`role="dialog"`, `aria-modal`, an accessible name) with the QR at
+  min(viewport width, viewport height) − 2 × 16 px and the caption "Turn up brightness if it won't scan"; it holds a
+  Screen Wake Lock while open (feature-detected; a missing API or refused request never throws or blocks) and releases
+  it on close; any tap, a 44 px ✕ or Esc closes it and focus returns to the QR. The real-phone gate covers the normal
+  and the enlarged size.
 - **A follow-up PR** moves the remaining six call sites: `(public)/r/[ref]/page.tsx`, `ticket.png`, the poster page
   and its PDF, `doc-theme.ts`, and `copy-link.tsx`.
 
