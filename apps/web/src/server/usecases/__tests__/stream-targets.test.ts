@@ -405,6 +405,64 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
     await expect(patchStreamTarget(auth, auth.orgId, t.id, { streamKey: "   " })).rejects.toMatchObject({ status: 422 });
   });
 
+  it("I2: replace key on a PLATFORM row whose envelope will not open (a KEK change) RECOVERS it in place — re-sealed on the platform's preset under the current KEK, a real keyHint, and the same destination a create of that key finds; every platform", async () => {
+    let checked = 0;
+    for (const kind of STREAM_PLATFORMS) {
+      const { auth } = await seedOrg();
+      // rigTarget writes an envelope that will not open (the boundary's own rig; this file may not name the column).
+      const targetId = await rigTarget(auth.orgId, `Unreadable ${kind}`, kind);
+      expect((await listStreamTargets(auth, auth.orgId)).find((t) => t.id === targetId), kind).toMatchObject({ keyHint: null });
+      const streamKey = `k-${randomUUID()}`;
+      const got = await patchStreamTarget(auth, auth.orgId, targetId, { streamKey });
+      expect(got, kind).toMatchObject({ id: targetId, kind, label: `Unreadable ${kind}`, keyHint: streamKey.slice(-3) });
+      const canonical = checkDestination(STREAM_PLATFORM_PRESETS[kind]);
+      expect(canonical.ok, kind).toBe(true);
+      expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, targetId)), kind).toEqual({ url: canonical.ok ? canonical.url : "", streamKey });
+      // The fingerprint is the CURRENT KEK's: a create of the same key is this row, not a second destination.
+      expect((await createStreamTarget(auth, auth.orgId, { kind, label: "again", streamKey })).id, kind).toBe(targetId);
+      expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id), kind).toEqual([targetId]);
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length);
+  });
+
+  it("I2: replace key on a LEGACY-kind row whose envelope will not open is a 422 telling the organiser to remove it and add it again — never a 500 — and nothing is re-sealed; every legacy kind", async () => {
+    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    expect(legacy.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const kind of legacy) {
+      const { auth } = await seedOrg();
+      const targetId = await rigTarget(auth.orgId, `Old ${kind}`, kind);
+      const err = await patchStreamTarget(auth, auth.orgId, targetId, { streamKey: `k-${randomUUID()}` }).then(() => null, (e: unknown) => e);
+      expect(err, kind).toMatchObject({ status: 422 });
+      expect((err as Error).message, kind).toMatch(/remove .*add it again/i);
+      await expect(sql.begin((tx) => readTargetSecret(tx, auth.orgId, targetId)), `${kind}: still the unopenable envelope`).rejects.toThrow();
+      expect((await listStreamTargets(auth, auth.orgId)).find((t) => t.id === targetId), kind).toMatchObject({ keyHint: null });
+      checked++;
+    }
+    expect(checked).toBe(legacy.length);
+  });
+
+  it("M5: rename TRIMS the label (as the key is trimmed); a whitespace-only label is 422 and changes nothing", async () => {
+    const { auth } = await seedOrg();
+    const t = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Court 1", streamKey: `k-${randomUUID()}` });
+    expect(await patchStreamTarget(auth, auth.orgId, t.id, { label: "  Court 9 (main)\n" })).toMatchObject({ id: t.id, label: "Court 9 (main)" });
+    await expect(patchStreamTarget(auth, auth.orgId, t.id, { label: " \t\n " })).rejects.toMatchObject({ status: 422 });
+    expect((await listStreamTargets(auth, auth.orgId)).map((x) => x.label)).toEqual(["Court 9 (main)"]);
+  });
+
+  it("M5: create TRIMS the label; a whitespace-only label is 422 and writes nothing — and a RESTORE takes the trimmed label too", async () => {
+    const { auth } = await seedOrg();
+    const streamKey = `k-${randomUUID()}`;
+    await expect(createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "   ", streamKey })).rejects.toMatchObject({ status: 422 });
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
+    const made = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "\t Main court ", streamKey });
+    expect(made.label).toBe("Main court");
+    await removeStreamTarget(auth, auth.orgId, made.id);
+    const back = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "  Back again  ", streamKey });
+    expect(back).toMatchObject({ id: made.id, label: "Back again" });
+  });
+
   it("remove archives: gone from the list, 404 the second time, and re-adding the same key RESTORES the same id (sequence)", async () => {
     const { auth } = await seedOrg();
     const t = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Tw", streamKey: "live_42_abcdefghijklmnopqrstu" });

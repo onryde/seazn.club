@@ -9,7 +9,8 @@ import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
-import { holdRig, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { holdRig, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { startedDivisionWithFixture } from "./_rig";
 import { holderRows, toTargetHolder } from "../stream-target-holders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -48,7 +49,7 @@ describe.skipIf(!HAS_DB)("holderRows — who holds a destination, named for a pe
     expect(h).toMatchObject({ fixtureId: null, href: null, matchNo: null, courtName: null, state: "live" });
   });
 
-  it("notFixtureId excludes THIS fixture's own session and nothing else; another org's session is never a holder", async () => {
+  it("notFixtureId excludes THIS fixture's own session and nothing else — ANOTHER fixture's session and a DELETED fixture's (fixture_id null) still hold; another org's session is never a holder", async () => {
     const r = await holdRig();
     const other = await holdRig();
     const targetId = r.targetId;
@@ -56,6 +57,22 @@ describe.skipIf(!HAS_DB)("holderRows — who holds a destination, named for a pe
     expect(await holderRows(sql, { orgId: r.auth.orgId, targetId, notFixtureId: r.fixtureId })).toEqual([]);
     expect(await holderRows(sql, { orgId: r.auth.orgId, targetId })).toHaveLength(1);
     expect(await holderRows(sql, { orgId: other.auth.orgId, targetId })).toEqual([]);
+    // M3 (B1 review): "nothing else". One active session per destination (V421), so each survivor gets its own target.
+    const { fixtureIds: [elsewhere, deleted] } = await startedDivisionWithFixture(r.auth, { fixtures: 2 });
+    const onAnother = await rigTarget(r.auth.orgId, "Another fixture");
+    const sAnother = await sessionOnTarget(r.auth.orgId, elsewhere!, onAnother, "live");
+    const onDeleted = await rigTarget(r.auth.orgId, "Deleted fixture");
+    const sDeleted = await sessionOnTarget(r.auth.orgId, deleted!, onDeleted, "warming");
+    await sql`update fixture_stream_sessions set fixture_id = null where id = ${sDeleted}`;
+    let survivors = 0;
+    for (const [target, sessionId] of [[onAnother, sAnother], [onDeleted, sDeleted]] as const) {
+      const got = await holderRows(sql, { orgId: r.auth.orgId, targetId: target, notFixtureId: r.fixtureId });
+      expect(got.map((h) => h.sessionId), target === onDeleted ? "a deleted fixture's session (null is distinct from any id)" : "another fixture's session").toEqual([sessionId]);
+      survivors++;
+    }
+    expect(survivors).toBe(2);
+    // …and across the org, notFixtureId drops exactly the one session it names.
+    expect((await holderRows(sql, { orgId: r.auth.orgId, notFixtureId: r.fixtureId })).map((h) => h.sessionId).sort()).toEqual([sAnother, sDeleted].sort());
   });
 
   it("toTargetHolder refuses a TERMINAL row — 'a holder is active' is a guard, not a comment", () => {

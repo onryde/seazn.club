@@ -221,7 +221,7 @@ export const ROUTES: RouteSpec[] = [
   // "fixtures" with the relay sessions they feed: there is no "organizations" tag (lane C A11).
   // Never key-reachable (key-scopes.ts).
   { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key)", tag: "fixtures", response: z.array(S.StreamTarget) },
-  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
+  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 409 when a concurrent save of the same destination won: try again", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 409, 422] },
   { path: "/orgs/{id}/stream-targets/{targetId}", method: "patch", summary: "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key)", tag: "fixtures", request: S.PatchStreamTarget, response: S.StreamTarget, errors: [404, 409, 422] },
   { path: "/orgs/{id}/stream-targets/{targetId}", method: "delete", summary: "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed", tag: "fixtures", response: S.StreamTargetRemoved, errors: [404, 409] },
   // Public (no auth, cacheable, consent-filtered)
@@ -622,7 +622,10 @@ const STREAM_TARGET_HOLDER_PROPERTIES = {
     state: { enum: ["live", "waiting"], description: "live = a phone is sending (live or ending); waiting = requested, provisioning or warming" },
   },
 } as const;
-const STREAM_TARGET_WRITE_409 = scopedErrorEnvelope({
+// PATCH (Replace key) refuses TARGET_IN_USE or DESTINATION_DUPLICATE; DELETE (Remove) only TARGET_IN_USE — so only
+// PATCH's 409 documents `other` (M1, B1 review: an extra a route never sends is not documented on it).
+const STREAM_TARGET_DELETE_409 = scopedErrorEnvelope({ holder: STREAM_TARGET_HOLDER_PROPERTIES });
+const STREAM_TARGET_PATCH_409 = scopedErrorEnvelope({
   holder: STREAM_TARGET_HOLDER_PROPERTIES,
   other: {
     type: "object",
@@ -667,8 +670,8 @@ const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> =
   },
   "POST /orgs/{id}/stream-targets": { 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
   "POST /fixtures/{id}/stream-sessions": STREAM_SESSION_CREATE_ERRORS,
-  "PATCH /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_WRITE_409, 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
-  "DELETE /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_WRITE_409 },
+  "PATCH /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_PATCH_409, 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
+  "DELETE /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_DELETE_409 },
 };
 
 function pathParams(path: string): object[] {

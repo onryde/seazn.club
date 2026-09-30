@@ -2,7 +2,8 @@
 // column (enc-boundary.test.ts). Everything crossing this file is sealed on the
 // way in and opened on the way out; nothing decrypted is ever written back.
 import type { Tx } from "@/lib/db";
-import { checkDestination, type DestinationRefusal } from "@/lib/stream-destinations";
+import { HttpError } from "@/lib/errors";
+import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination, type DestinationRefusal, type StreamPlatform } from "@/lib/stream-destinations";
 import { fingerprintDestination, open, seal } from "./crypto";
 
 export interface InputCredentials {
@@ -176,10 +177,11 @@ const storedTarget = (r: TargetRow, outcome: InsertOutcome): StoredStreamTarget 
 
 /** `insertStreamTarget` lost the race for a destination — its insert conflicted with a row it could not then read
  *  back — on its first attempt AND on its one retry (m6); or `replaceTargetKey`'s write conflicted with a holder that
- *  was gone by the re-read. Carries no org, url or key. */
-export class StreamTargetVanishedError extends Error {
+ *  was gone by the re-read. Carries no org, url or key. M4 (B1 review): an HttpError 409 — "try again" is a retry the
+ *  caller can make, so the v1 envelope answers 409, never an unmapped 500. */
+export class StreamTargetVanishedError extends HttpError {
   constructor() {
-    super("stream target changed while it was being saved; try again");
+    super(409, "stream target changed while it was being saved; try again");
     this.name = "StreamTargetVanishedError";
   }
 }
@@ -253,20 +255,37 @@ export type ReplaceKeyResult =
   | { ok: true; changed: boolean }
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "undialable"; rule: DestinationRefusal }
-  | { ok: false; reason: "duplicate"; other: { id: string; label: string } };
+  | { ok: false; reason: "duplicate"; other: { id: string; label: string } }
+  | { ok: false; reason: "unreadable" };
+
+const isPlatform = (kind: string): kind is StreamPlatform => (STREAM_PLATFORMS as readonly string[]).includes(kind);
 
 /** §5.2 Replace key — the SAME url (it was server-filled per platform), a new key: re-sealed and re-fingerprinted. An
- *  ACTIVE row of this org already holding the new fingerprint refuses with its name; an archived one never blocks. */
+ *  ACTIVE row of this org already holding the new fingerprint refuses with its name; an archived one never blocks.
+ *  I2 (B1 review): an envelope that will not open (sealed under another KEK — the row the list shows with keyHint null)
+ *  is exactly the row Replace key must RECOVER in place, since the old url is gone with it. A platform row's url is its
+ *  preset (D6: server-filled), so it is re-sealed there; a legacy kind has no preset to fall back on and is `unreadable`
+ *  (the caller's 422: remove it and add it again). The old envelope is never needed to write the new one. */
 export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, streamKey: string): Promise<ReplaceKeyResult> {
-  const [row] = await tx<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null }[]>`
-    select rtmp_enc, dest_fingerprint from org_stream_targets
+  const [row] = await tx<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null; kind: string }[]>`
+    select rtmp_enc, dest_fingerprint, kind from org_stream_targets
      where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
   if (!row) return { ok: false, reason: "not_found" };
-  const { url } = openFields(row.rtmp_enc, TARGET_SEALED);
+  let url: string;
+  let recovering = false;
+  try {
+    url = openFields(row.rtmp_enc, TARGET_SEALED).url;
+  } catch {
+    if (!isPlatform(row.kind)) return { ok: false, reason: "unreadable" };
+    url = STREAM_PLATFORM_PRESETS[row.kind];
+    recovering = true;
+  }
   const dialable = checkDestination(url);
   if (!dialable.ok) return { ok: false, reason: "undialable", rule: dialable.rule };
   const fingerprint = fingerprintDestination(dialable.url, streamKey);
-  if (fingerprint === row.dest_fingerprint) return { ok: true, changed: false };
+  // A matching fingerprint is a no-op only when the envelope OPENS: a damaged envelope under the current KEK keeps its
+  // fingerprint, and "the same key again" is then exactly the re-seal that repairs it.
+  if (fingerprint === row.dest_fingerprint && !recovering) return { ok: true, changed: false };
   const otherHolder = () => tx<{ id: string; label: string }[]>`
     select id, label from org_stream_targets
      where org_id = ${orgId} and dest_fingerprint = ${fingerprint} and archived_at is null and id <> ${targetId}`;

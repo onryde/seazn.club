@@ -304,7 +304,7 @@ describe("the relay's routes are never key-reachable", () => {
   // Task 11 follow-up (controller ruling): a start refused `target_in_use` names the fixture holding the destination —
   // `holder: { fixtureId, courtName, label }`, or null when the index race gives no holder to name. It is a wire field,
   // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
-  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder` and DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
+  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder`, and PATCH alone DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
     type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
     type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
     const doc = buildOpenApiDocument() as Doc;
@@ -314,18 +314,27 @@ describe("the relay's routes are never key-reachable", () => {
     expect(holder.type, "holder is nullable (the race-loser refusal has no holder to name)").toEqual(["object", "null"]);
     expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "label"]);
     // T2b (spec §5.2): Replace key and Remove refuse TARGET_IN_USE naming the holder (the list's holder shape plus the
-    // destination's label — stream-target-holders.ts wireHolder), and Replace key refuses DESTINATION_DUPLICATE naming
-    // the other destination. Named routes, each with its exact key set.
+    // destination's label — stream-target-holders.ts wireHolder), and Replace key ALONE refuses DESTINATION_DUPLICATE
+    // naming the other destination. M1 (B1 review): Remove never sends `other` (removeStreamTarget throws only
+    // TARGET_IN_USE or 404), so its 409 must not document it. Named routes, each with its exact key set.
     const targetPath = "/api/v1/orgs/{id}/stream-targets/{targetId}";
+    const directory409: Record<"patch" | "delete", string[]> = {
+      patch: ["code", "current_seq", "holder", "message", "other"],
+      delete: ["code", "current_seq", "holder", "message"],
+    };
     let directory = 0;
     for (const method of ["patch", "delete"] as const) {
       const e = doc.paths[targetPath]![method]!.responses["409"]!.content["application/json"].schema.properties.error;
-      expect(Object.keys(e.properties ?? {}).sort(), method).toEqual(["code", "current_seq", "holder", "message", "other"]);
+      expect(Object.keys(e.properties ?? {}).sort(), method).toEqual(directory409[method]);
       expect(Object.keys(e.properties!.holder!.properties ?? {}).sort(), method).toEqual(["courtName", "fixtureId", "href", "label", "matchNo", "state"]);
-      expect(Object.keys(e.properties!.other!.properties ?? {}).sort(), method).toEqual(["id", "label"]);
+      if (method === "patch") expect(Object.keys(e.properties!.other!.properties ?? {}).sort(), method).toEqual(["id", "label"]);
       directory++;
     }
     expect(directory).toBe(2);
+    // M4 (B1 review): a create that loses the destination race twice is StreamTargetVanishedError — a 409 "try again"
+    // on the wire, so POST documents a 409 (the plain envelope: no holder, no other).
+    const post409 = doc.paths["/api/v1/orgs/{id}/stream-targets"]!.post!.responses["409"]?.content["application/json"].schema.properties.error;
+    expect(Object.keys(post409?.properties ?? {}).sort(), "POST stream-targets documents 409").toEqual(["code", "current_seq", "message"]);
     const documentsHolder = new Set(["post /api/v1/fixtures/{id}/stream-sessions", `patch ${targetPath}`, `delete ${targetPath}`]);
     let others = 0;
     for (const [path, ops] of Object.entries(doc.paths)) {

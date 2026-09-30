@@ -26,10 +26,12 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
-import { StreamTarget, StreamTargetRemoved } from "@/server/api-v1/schemas";
+import { StreamTarget, StreamTargetKind, StreamTargetRemoved } from "@/server/api-v1/schemas";
+import { STREAM_PLATFORMS } from "@/lib/stream-destinations";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
-import { sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { REQUESTED_TIMEOUT_SECONDS } from "@/server/relay/config";
+import { rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { seedOrg as seedSignedInOrg } from "@/server/usecases/__tests__/_seed";
@@ -39,8 +41,9 @@ import { DELETE, PATCH } from "../[targetId]/route";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // A KEK of this file's own (stream-targets.test.ts precedent), put back afterwards; never printed. The relay drivers
-// are the fakes: the route ticks each holder's lazy expiry before it reads "held", and a fresh passthrough session's
-// expiry is `none`, so no provider is called — the fakes only stop a stray call from reaching a real one.
+// are the fakes: the route ticks each holder's lazy expiry before it reads "held". A fresh passthrough session's expiry
+// is `none`; I1's backdated `requested` row expires to failed(admission_timeout), which asks nothing of any provider —
+// the fakes only stop a stray call from reaching a real one.
 const savedKek = process.env.RELAY_KEK;
 beforeAll(() => {
   process.env.RELAY_KEK = randomBytes(32).toString("hex");
@@ -148,6 +151,65 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets/{targetId} — the ro
     expect((await listStreamTargets(o.auth, o.auth.orgId)).map((t) => t.id)).toEqual([o.target.id]);   // nothing archived
     const renamed = await patch(o.auth.orgId, o.target.id, { label: "Renamed while live" });
     expect(renamed.status).toBe(200);
+  });
+
+  // I1 (B1 review): the door ticks each holder's lazy expiry BEFORE it reads "held", so a session stuck past its deadline
+  // — here a `requested` row nobody admitted (F18) — does not refuse Remove or Replace key until the daily sweep. The
+  // deadline is the relay's own REQUESTED_TIMEOUT_SECONDS, never a number typed here.
+  it("I1: a holder STUCK past its deadline does not refuse DELETE or a key replace — the door expires it first (admission_timeout) and the write lands; inside its window the same holder still refuses 409 (positive pair)", async () => {
+    let doors = 0;
+    for (const method of ["delete", "patch"] as const) {
+      const o = await organiser();
+      const go = () => (method === "delete" ? del(o.auth.orgId, o.target.id) : patch(o.auth.orgId, o.target.id, { streamKey: key() }));
+      const sessionId = await sessionOnTarget(o.auth.orgId, o.fixtureId, o.target.id, "requested");
+      const fresh = await go();
+      expect(fresh.status, `${method}: a requested holder inside its window`).toBe(409);
+      expect(((await fresh.json()) as Envelope).error?.code, method).toBe("TARGET_IN_USE");
+      await sql`update fixture_stream_sessions set created_at = now() - make_interval(secs => ${REQUESTED_TIMEOUT_SECONDS + 1}) where id = ${sessionId}`;
+      const res = await go();
+      expect(res.status, `${method}: the same holder past its deadline`).toBe(200);
+      const [row] = await sql<{ state: string; fail_reason: string | null }[]>`
+        select state, fail_reason from fixture_stream_sessions where id = ${sessionId}`;
+      expect(row, method).toEqual({ state: "failed", fail_reason: "admission_timeout" });
+      expect((await listStreamTargets(o.auth, o.auth.orgId)).map((t) => t.id), method).toEqual(method === "delete" ? [] : [o.target.id]);
+      doors++;
+    }
+    expect(doors).toBe(2);
+  });
+
+  // I2 (B1 review): a destination whose sealed envelope will not open (a KEK change) lists with keyHint null, and Replace
+  // key is its in-place recovery — never a 500. A platform row is re-sealed on its preset; a legacy kind has no preset to
+  // fall back on and is a 422 telling the organiser to remove it and add it again.
+  it("I2: PATCH {streamKey} on a row whose envelope will not open — 200 with a real keyHint for every platform; 422 (never 500) for a legacy kind, with no undocumented extra", async () => {
+    let platforms = 0;
+    for (const kind of STREAM_PLATFORMS) {
+      const { auth } = await seedSignedInOrg("pro");
+      authState.userId = auth.userId!;
+      const targetId = await rigTarget(auth.orgId, `Unreadable ${kind}`, kind);
+      const streamKey = key();
+      const res = await patch(auth.orgId, targetId, { streamKey });
+      expect(res.status, kind).toBe(200);
+      const text = await res.text();
+      expect(text, "the reply never echoes the key").not.toContain(streamKey);
+      expect(StreamTarget.parse((JSON.parse(text) as Envelope).data), kind).toMatchObject({ id: targetId, kind, keyHint: streamKey.slice(-3) });
+      platforms++;
+    }
+    expect(platforms).toBe(STREAM_PLATFORMS.length);
+    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    expect(legacy.length).toBeGreaterThan(0);
+    let legacies = 0;
+    for (const kind of legacy) {
+      const { auth } = await seedSignedInOrg("pro");
+      authState.userId = auth.userId!;
+      const targetId = await rigTarget(auth.orgId, `Old ${kind}`, kind);
+      const res = await patch(auth.orgId, targetId, { streamKey: key() });
+      expect(res.status, kind).toBe(422);
+      const error = ((await res.json()) as Envelope).error!;
+      expect(error.message, kind).toMatch(/remove .*add it again/i);
+      expect(documented("patch", 422, error, `patch ${kind} unreadable`), kind).toBe(0);
+      legacies++;
+    }
+    expect(legacies).toBe(legacy.length);
   });
 
   it("PATCH a key ANOTHER destination holds is 409 DESTINATION_DUPLICATE naming it, and its `other` is documented", async () => {

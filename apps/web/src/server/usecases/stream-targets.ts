@@ -68,13 +68,14 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   if (!destination.ok) throw new DestinationNotAllowedError(destination.rule);
   // A whitespace-only key passes the schema's min(1) and is nothing once trimmed.
   if (streamKey === "") throw new HttpError(422, "The stream key is empty");
+  const label = labelOf(body.label);
   const watch = body.watchUrl === undefined ? null : streamUrlSchema.safeParse(body.watchUrl);
   if (watch && !watch.success) throw new HttpError(422, "invalid watch link");
   const watchUrl = watch ? watch.data : null;
   // A19 + D2: the same destination again is the EXISTING target, or its most recently archived row restored
   // (insertStreamTarget), so the reply is the STORED row — never this body echoed onto an id it did not write.
   const stored = (await sql.begin((tx) =>
-    insertStreamTarget(tx, { orgId, kind: body.kind, label: body.label, watchUrl, rtmp: { url: destination.url, streamKey } }),
+    insertStreamTarget(tx, { orgId, kind: body.kind, label, watchUrl, rtmp: { url: destination.url, streamKey } }),
   )) as StoredStreamTarget;
   // Read back through the list, so `keyHint` and `inUse` come from the one projection. A row archived between the
   // insert and this read is a 409 retry, never a 500.
@@ -96,11 +97,20 @@ export function targetHeld(h: TargetHolder): HttpError {
 
 const targetNotFound = () => new HttpError(404, "stream target not found");
 
+/** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Directory
+ *  would render as a blank name — and nothing left is a 422. */
+function labelOf(raw: string): string {
+  const label = raw.trim();
+  if (label === "") throw new HttpError(422, "The destination name is empty");
+  return label;
+}
+
 export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: string, body: PatchStreamTarget): Promise<StreamTarget> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   if (body.label !== undefined) {
+    const label = labelOf(body.label);
     const renamed = await sql<{ id: string }[]>`
-      update org_stream_targets set label = ${body.label}
+      update org_stream_targets set label = ${label}
        where id = ${targetId} and org_id = ${orgId} and archived_at is null returning id`;
     if (renamed.length === 0) throw targetNotFound();
   } else {
@@ -115,6 +125,10 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
       if (r.ok) return;
       if (r.reason === "not_found") throw targetNotFound();
       if (r.reason === "undialable") throw new DestinationNotAllowedError(r.rule);
+      // I2: a legacy-kind row whose sealed key will not open has no platform preset to re-seal on.
+      if (r.reason === "unreadable") {
+        throw new HttpError(422, "This destination's saved key can no longer be read and it is not a YouTube or Twitch destination; remove it and add it again");
+      }
       throw new HttpError(409, `that stream key is already saved as "${r.other.label}"`, "DESTINATION_DUPLICATE", { other: r.other });
     });
   }
