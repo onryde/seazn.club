@@ -285,7 +285,7 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
     expect(driven).toBeGreaterThan(0);
     expect(planned).toBeGreaterThan(0);
   });
-  it("a driven case stored ⏳/🚫 in recordPlanned's shape reds; a real runtime ⏳/🚫 on a driven case does not (final review I-2)", () => {
+  it("a driven case stored ⏳/🚫 in recordPlanned's shape, or with fixtures/events counted, reds; a real runtime ⏳/🚫 on a driven case does not (final review I-2)", () => {
     const dir = "w1c-l1/w1c-l1-r1";
     const cases = parseResults(JSON.parse(readFileSync(resolve(REPO, TRUTH_RUNS, dir, "results.json"), "utf8"))).cases;
     const plan = thawed(readLock().runs[dir]!);
@@ -294,7 +294,10 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
     expect(plan.driven.has(noVariant(target.caseId)), "the probe's case is one the plan drives").toBe(true);
     expect(target.durationMs, "the committed case really ran").toBeGreaterThan(0);
     const unrun = { checks: [], durationMs: 0, counts: { calls: 0, fixtures: 0, events: 0 }, notes: [] };
-    const ran = { checks: [], durationMs: target.durationMs, counts: { ...target.counts, calls: Math.max(1, target.counts.calls) } };
+    // A runtime ⏳/🚫 comes only from runCase's catch: counts start at 0/0/0, fixtures and events are set only
+    // after scenario.run returns, and the catch updates calls alone (run.ts runCase). So an honest one counts
+    // calls and time, never fixtures or events (re-review I-2: this witness used to keep the target's 28/56).
+    const ran = { checks: [], durationMs: target.durationMs, counts: { calls: Math.max(1, target.counts.calls), fixtures: 0, events: 0 } };
     const deferred = decideState({ checks: [], deferred: { wave: "W1d", reason: "no pad adapter" }, error: null });
     const noPath = decideState({ checks: [], deferred: null, error: null, noPath: { wave: "W1d", reason: "no organiser control" } });
     const notRun = decideState({ checks: [], deferred: null, error: null, notRun: "no scenario script yet (atom LIFECYCLE)" });
@@ -308,6 +311,16 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
     // A driven case that spent time and ended ⏳ or 🚫 at runtime (run.ts: ScenarioUnsupported, NoOrganiserPath) is honest.
     expect(judged({ ...ran, state: "later", reason: deferred.reason })).toEqual([]);
     expect(judged({ ...ran, state: "no_path", reason: noPath.reason })).toEqual([]);
+    // Re-review I-2, the final review's own probe: the driven case flipped to ⏳/🚫 with its checks dropped, its
+    // duration and its counts KEPT. The runner cannot write that shape, so it reds.
+    expect(target.counts.fixtures + target.counts.events, "the probe's case counted fixtures or events").toBeGreaterThan(0);
+    const kept = { checks: [], durationMs: target.durationMs, counts: target.counts };
+    const COUNTED = "a runtime ⏳/🚫 counts neither";
+    expect(judged({ ...kept, state: "later", reason: deferred.reason }).join("\n")).toContain(COUNTED);
+    expect(judged({ ...kept, state: "no_path", reason: noPath.reason }).join("\n")).toContain(COUNTED);
+    // Either count alone is the tell.
+    expect(judged({ ...ran, counts: { ...ran.counts, fixtures: 1 }, state: "later", reason: deferred.reason }).join("\n")).toContain(COUNTED);
+    expect(judged({ ...ran, counts: { ...ran.counts, events: 1 }, state: "no_path", reason: noPath.reason }).join("\n")).toContain(COUNTED);
     // A browser case can reach its 🚫 before the driver counts a call (NoOrganiserPath at the first control): the time it spent is the tell.
     expect(judged({ ...unrun, durationMs: target.durationMs, state: "no_path", reason: noPath.reason })).toEqual([]);
     expect([deferred.state, noPath.state, notRun.state]).toEqual(["later", "no_path", "not_run"]);

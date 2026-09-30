@@ -1,6 +1,6 @@
 // The committed-evidence judge (W1c Task 14 carry 3, fix round 1 review I-1,
 // final review I-1/I-2), shared by committed-matrix.test.ts and
-// committed-plans-tomorrow.test.ts. A committed run is judged case by case
+// committed-plans-frozen.test.ts. A committed run is judged case by case
 // against the plan it ran: a case the plan PLANS is stored as exactly the
 // plan's 🚫/░ with no check; a case the plan DRIVES is never stored as planned
 // (class 6); no case is missing, repeated or outside the plan.
@@ -134,9 +134,18 @@ export function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { 
       // time in prepareCaseOrg, so that shape on a driven case is a lost result
       // (class 6) — while a ⏳/🚫 the case reached at RUNTIME (ScenarioUnsupported,
       // NoOrganiserPath; run.ts) is honest.
+      const deferredState = c.state === "no_path" || c.state === "later";
       const unrun = c.durationMs === 0 && c.counts.calls === 0 && c.counts.fixtures === 0 && c.counts.events === 0;
-      if (c.state === "not_run" || ((c.state === "no_path" || c.state === "later") && unrun)) {
+      if (c.state === "not_run" || (deferredState && unrun)) {
         wrong.push(`${c.caseId}: the plan DRIVES this case, stored ${c.state} with ${c.checks.length} check(s) in ${c.durationMs} ms — a driven result recorded as planned (class 6)`);
+      } else if (deferredState && (c.counts.fixtures > 0 || c.counts.events > 0)) {
+        // Re-review I-2: a runtime ⏳/🚫 comes only from runCase's catch. Counts
+        // start at 0/0/0, fixtures and events are set only after scenario.run
+        // returns, and the catch updates calls alone (run.ts runCase). So a
+        // driven ⏳/🚫 that counts either was not deferred at runtime: its
+        // result was replaced (class 6). What stays indistinguishable is a flip
+        // that also zeroes both and keeps its time and calls (W1d task 3).
+        wrong.push(`${c.caseId}: the plan DRIVES this case, stored ${c.state} with ${c.counts.fixtures} fixture(s) and ${c.counts.events} event(s) — a runtime ⏳/🚫 counts neither (run.ts runCase), so a driven result was replaced (class 6)`);
       }
     } else {
       wrong.push(`${c.caseId}: not in its plan (${plan.plan})`);
