@@ -1901,4 +1901,20 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     expect(raw.cases.length, argv.join(" ")).toBeGreaterThan(0);
     expect(raw.plan).toBe(plan);
   });
+  // Review m-6: the plan behind 7 of W1c Task 14's committed runs. Its own row:
+  // the set plans every pad sport, so the DB must hand each one the order the
+  // catalogue assumes (the table's fake knows generic and badminton only).
+  it("the pad-proof set: results.json names it", async () => {
+    capture();
+    const dir = dirFor();
+    const base = deps();
+    const d = deps({
+      openBrowserRun: async () => fakeBrowserRun().run,
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+    });
+    expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "1280", "--run-id", "p1", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
+    expect(raw.cases.length).toBe(PAD_SPORTS.length);
+    expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
+  });
 });

@@ -15,9 +15,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { findSecrets } from "../lib/redact.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
-import { API_ONLY_ROWS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { decideState, parseResults, stringsIn, type CaseResultV2 } from "../lib/results.ts";
 import { L2_WIDTHS } from "../lib/widths.ts";
+import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
+import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
+import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
+import { planCanaryCase, planSliceCases } from "../lib/slice.ts";
 import { loopbackLiteralsIn } from "./loopback-literals.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -25,34 +28,36 @@ const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/trut
 /** Every committed slice: its wave and its directory under truth-runs. */
 const SLICES = [["W1a", "w1a-slice"], ["W1b", "w1b-slice"]] as const;
 
-/** The states decideState makes WITHOUT reading checks: a planned 🚫/░ (run.ts
- *  recordPlanned) and a ⏳ deferral. W1c Task 12's N-3 gives such a row no
- *  check of its own, so there is nothing to re-decide it from. */
-const UNDECIDED_FROM_CHECKS: ReadonlySet<string> = new Set(["no_path", "not_run", "later"]);
-/** W1c Task 14, carry 3: re-decide every case from its own checks. A 🚫/░/⏳
- *  row with no check, or an error red with no check, is SKIPPED and counted;
- *  a 🚫/░/⏳ row that DOES carry a check is reported, never skipped — N-3 says
- *  it may not, and skipping it would hide a verdict nothing re-decides. The
- *  caller pins how many were checked: zero checked is a failure, not a pass. */
-function reDecide(cases: readonly CaseResultV2[]): { checked: number; skipped: number; wrong: string[] } {
-  let checked = 0;
-  let skipped = 0;
-  const wrong: string[] = [];
-  for (const c of cases) {
-    if (UNDECIDED_FROM_CHECKS.has(c.state)) {
-      if (c.checks.length > 0) wrong.push(`${c.caseId}: ${c.state} carries ${c.checks.length} check(s) — a planned or deferred row carries none (N-3)`);
-      else skipped++;
-      continue;
-    }
-    if (c.state === "red" && c.reason.startsWith("error: ") && c.checks.length === 0) {
-      skipped++;
-      continue;
-    }
-    checked++;
-    const d = decideState({ checks: c.checks, deferred: null, error: null });
-    if (d.state !== c.state || d.reason !== c.reason) wrong.push(`${c.caseId}: stored ${c.state} "${c.reason}", checks decide ${d.state} "${d.reason}"`);
+/** How one committed case is judged. `checked`: re-decided from its checks
+ *  (a refused case with its mandate, rebuilt from its reason). `errored`: an
+ *  error red — decideState makes it from the error alone, whatever checks it
+ *  kept (run.ts M-2 keeps a browser case's checks), so it is re-decided with
+ *  that error, rebuilt from its `error: ` reason. `planned`: 🚫/░, and
+ *  `deferred`: ⏳ — decideState makes both WITHOUT reading checks, and N-3
+ *  gives such a row none, so a row that carries one is reported. Whether a
+ *  planned/deferred case SHOULD be one is its plan's question (judgeRun). */
+type CaseKind = "checked" | "errored" | "planned" | "deferred";
+function judgeCase(c: CaseResultV2): { kind: CaseKind; wrong: string | null } {
+  const differs = (d: { state: string; reason: string }): string | null =>
+    d.state === c.state && d.reason === c.reason ? null : `${c.caseId}: stored ${c.state} "${c.reason}", checks decide ${d.state} "${d.reason}"`;
+  if (c.state === "no_path" || c.state === "not_run" || c.state === "later") {
+    const kind: CaseKind = c.state === "later" ? "deferred" : "planned";
+    return { kind, wrong: c.checks.length > 0 ? `${c.caseId}: ${c.state} carries ${c.checks.length} check(s) — a planned or deferred row carries none (N-3)` : null };
   }
-  return { checked, skipped, wrong };
+  if (c.state === "red" && c.reason.startsWith("error: ")) {
+    return { kind: "errored", wrong: differs(decideState({ checks: c.checks, deferred: null, error: c.reason.slice("error: ".length) })) };
+  }
+  return { kind: "checked", wrong: differs(decideState({ checks: c.checks, deferred: null, error: null, mandated: c.state === "refused" ? c.reason : null })) };
+}
+/** W1c Task 14, carry 3: every case re-decided or skipped by kind, counted.
+ *  The caller pins the counts: zero checked is a failure, not a pass. */
+function reDecide(cases: readonly CaseResultV2[]): { checked: number; skipped: number; wrong: string[] } {
+  const judged = cases.map(judgeCase);
+  return {
+    checked: judged.filter((j) => j.kind === "checked").length,
+    skipped: judged.filter((j) => j.kind !== "checked").length,
+    wrong: judged.flatMap((j) => (j.wrong === null ? [] : [j.wrong])),
+  };
 }
 
 describe.each(SLICES)("committed %s slice evidence", (_wave, slice) => {
@@ -116,6 +121,8 @@ const CATALOGUE_FLOOR = 7;
  *  crops (N-1 at 1280 and 768, N-4 at 375): a picture sweep that sees fewer lost some. */
 const PICTURE_FLOOR = 10;
 
+/** Files inside a run's shots/ directory (a path segment, not a substring). */
+const shotsIn = (files: readonly string[]): string[] => files.filter((f) => f.split("/").includes("shots"));
 /** The evidence run directory a committed file belongs to: truth-runs/<dir>/…. */
 const runDirOf = (f: string): string => f.slice(TRUTH_RUNS.length + 1).split("/")[0]!;
 /** Pictures no Markdown file in their own run directory names. Task 8's ruling:
@@ -138,11 +145,29 @@ describe("committed evidence and catalogue, every file (FB-1, F-3)", () => {
     expect(catalogue.length).toBeGreaterThanOrEqual(CATALOGUE_FLOOR);
     expect(pictures.length).toBeGreaterThanOrEqual(PICTURE_FLOOR);
   });
-  it("the listing is git's: an untracked file under truth-runs is never committed evidence, a tracked one always is", () => {
-    const listed = new Set(tracked);
-    const untracked = execFileSync("git", ["ls-files", "-z", "--others", "--exclude-standard", "--", TRUTH_RUNS], { cwd: REPO, encoding: "utf8" }).split("\0").filter((f) => f !== "");
-    expect(untracked.filter((f) => listed.has(f))).toEqual([]);
+  it("the listing is git's: every tracked file is on the tree, and no run's shots/ directory is committed", () => {
+    // Review m-2: git's index and `--others` are disjoint by construction, so
+    // the old "untracked ∩ tracked = ∅" could not fail. What CAN go wrong is
+    // a run's whole shots/ directory committed (the Task 7/8 ruling commits
+    // finding crops only, under evidence/), or a tracked file gone from disk.
+    const probe = [`${TRUTH_RUNS}/run-a/shots/case-1/08-pad.png`, `${TRUTH_RUNS}/run-a/evidence/N-1.png`, `${TRUTH_RUNS}/run-a/screenshots.md`];
+    expect(shotsIn(probe), "the oracle has teeth").toEqual([probe[0]]);
+    expect(shotsIn(tracked), "a committed shots/ file: commit finding crops only").toEqual([]);
     expect(tracked.filter((f) => !existsSync(resolve(REPO, f))), "tracked but missing from the tree").toEqual([]);
+    expect(tracked.length).toBeGreaterThanOrEqual(EVIDENCE_FLOOR + PICTURE_FLOOR);
+  });
+  it("every committed MATRIX.md is the render of its results.json (review m-5), walkthrough-a exempt by name", () => {
+    // Walkthrough A (Task 8, c609f9cd4) was rendered before carry 5 gave the
+    // MATRIX header its layer / driver / plan line; it is history, not re-rendered.
+    const EXEMPT = "w1c-walkthrough-a";
+    const matrices = tracked.filter((f) => f.endsWith("/MATRIX.md") && runDirOf(f) !== EXEMPT);
+    const stale = matrices.filter((m) => readFileSync(resolve(REPO, m), "utf8") !== renderMatrix(parseResults(JSON.parse(readFileSync(resolve(REPO, m.replace(/MATRIX\.md$/, "results.json")), "utf8")))));
+    expect(stale, "re-render with pnpm matrix:render <results.json> --out <MATRIX.md>").toEqual([]);
+    // Every other committed results.json has its render beside it, and the sweep read them all.
+    const results = tracked.filter((f) => f.endsWith("/results.json") && runDirOf(f) !== EXEMPT);
+    expect(results.filter((f) => !matrices.includes(f.replace(/results\.json$/, "MATRIX.md")))).toEqual([]);
+    expect(matrices.length).toBe(results.length);
+    expect(results.length).toBeGreaterThanOrEqual(W1C_RUNS.length);
   });
   it("every committed picture is finding evidence: named by a Markdown file in its own run directory (Task 8 ruling)", () => {
     const markdownOf = (dir: string) => tracked.filter((f) => runDirOf(f) === dir && f.endsWith(".md")).map((f) => readFileSync(resolve(REPO, f), "utf8"));
@@ -197,26 +222,20 @@ describe("the committed slices", () => {
   });
 });
 
-/** W1c Task 14's committed runs, each with the case count its plan declares. */
-const W1C_RUNS: readonly (readonly [string, number])[] = [
-  // The slice over HTTP: 6 cells × LIFECYCLE, M1, R4, F1.
-  ["w1c-http-slice", 24],
-  // L1: the 6 slice cells at 1280 (ruling 39), three runs (class 8).
-  ...[1, 2, 3].map((n) => [`w1c-l1/w1c-l1-r${n}`, 6] as const),
-  // Plan D5: the committed L2 rotation on the slice cells — 3 executed, 7 🚫, 58 ░.
-  ["w1c-l2", 3 + 7 + 58],
-  // The API-only set: one case per API-only row.
-  ["w1c-api-only", API_ONLY_ROWS.length],
-  // The knockout width sweep: one case at each L2 width.
-  ...L2_WIDTHS.map((w) => [`w1c-sweep-ko/w1c-sweep-ko-${w}`, 1] as const),
-  // Pad proof (plan D1, D3): one case per sport, at 1280 and at 320, three runs each —
-  // plus 1280 r4, the fresh-id rerun after r3's cricket red under a machine-load spike.
-  ...([["1280", [1, 2, 3, 4]], ["320", [1, 2, 3]]] as const).flatMap(([w, ns]) => ns.map((n) => [`w1c-padproof/w1c-pp-${w}-r${n}`, SPORT_KEYS.length] as const)),
+/** The run directories W1c Task 14 committed (its brief's Steps 1–8): each
+ *  must still be committed. Their case counts and splits are their PLANS'
+ *  (judged below), never typed here. */
+const W1C_RUNS: readonly string[] = [
+  "w1c-http-slice",
+  ...[1, 2, 3].map((n) => `w1c-l1/w1c-l1-r${n}`),
+  "w1c-l2",
+  "w1c-api-only",
+  ...L2_WIDTHS.map((w) => `w1c-sweep-ko/w1c-sweep-ko-${w}`),
+  ...([["1280", [1, 2, 3, 4]], ["320", [1, 2, 3]]] as const).flatMap(([w, ns]) => ns.map((n) => `w1c-padproof/w1c-pp-${w}-r${n}`)),
 ];
 
 describe("every committed results.json is what decideState makes of its checks (W1c Task 14, carry 3)", () => {
-  const files = trackedUnder(TRUTH_RUNS).filter((f) => f.endsWith("/results.json"));
-  it("the re-decision has teeth: a planned row is skipped; a planned row with a check, a flipped verdict and a stale reason are caught", () => {
+  it("the re-decision has teeth: planned and error rows are skipped by kind; a planned row with a check, a flipped verdict and a stale reason are caught", () => {
     const pass = (id: string) => ({ id, kind: "invariant" as const, verdict: "pass" as const, checked: 2, reason: "ok", evidence: [] });
     const base = { row: "league", sport: "generic", variant: "score", scenario: "X", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [] };
     const probe: CaseResultV2[] = [
@@ -227,42 +246,178 @@ describe("every committed results.json is what decideState makes of its checks (
       // Same state, stale reason: a count the checks no longer add up to.
       { ...base, caseId: "stale-reason", state: "works", reason: "9 checks, 99 items", checks: [pass("a")] },
       { ...base, caseId: "honest", state: "works", reason: "1 checks, 2 items", checks: [pass("a")] },
+      // Review m-4: an error red that KEPT its checks (run.ts M-2), and a mandated ⛔ — neither is a false red.
+      { ...base, caseId: "error-with-checks", state: "red", reason: "error: TimeoutError: page closed", checks: [pass("a")] },
+      { ...base, caseId: "refused-clean", state: "refused", reason: "denied by the plan", checks: [pass("a")] },
     ];
     const r = reDecide(probe);
-    expect(r.skipped).toBe(2);
-    expect(r.checked).toBe(3);
     expect(r.wrong.map((w) => w.split(":")[0])).toEqual(["planned-with-check", "flipped", "stale-reason"]);
+    expect([r.checked, r.skipped]).toEqual([4, 4]);
   });
-  it("every W1c run the plan declares is committed, with the case count its plan declares", () => {
-    const missing: string[] = [];
-    for (const [dir, n] of W1C_RUNS) {
-      const f = `${TRUTH_RUNS}/${dir}/results.json`;
-      if (!files.includes(f)) { missing.push(f); continue; }
-      const cases = parseResults(JSON.parse(readFileSync(resolve(REPO, f), "utf8"))).cases;
-      expect(cases.length, dir).toBe(n);
-      expect(new Set(cases.map((c) => c.caseId)).size, `${dir}: distinct case ids`).toBe(n);
+  it("every run W1c Task 14 committed is still committed", () => {
+    const files = new Set(trackedUnder(TRUTH_RUNS));
+    expect(W1C_RUNS.filter((d) => !files.has(`${TRUTH_RUNS}/${d}/results.json`))).toEqual([]);
+    expect(new Set(W1C_RUNS).size).toBe(W1C_RUNS.length);
+  });
+});
+
+// W1c Task 14 fix round 1, review I-1: a run is judged against ITS OWN PLAN,
+// case by case. The plan comes from the planner the run's recorded `plan`
+// names (carry 6), never from the results under test — so a DRIVEN case
+// stored as ░/🚫 with its checks lost (class 6: absent = suppressed) is caught,
+// where a state-only skip and a `skipped >=` floor both waved it through.
+
+/** A plan's cases, keyed without the variant (the DB's builder default, which
+ *  the planner reads live) and, for a plain run, without the run's one width. */
+interface ExpectedPlan {
+  readonly plan: string;
+  readonly layered: boolean;
+  readonly driven: ReadonlySet<string>;
+  readonly planned: ReadonlyMap<string, { readonly state: "no_path" | "not_run"; readonly reason: string }>;
+}
+const noVariant = (caseId: string): string => caseId.split("|").filter((_, i) => i !== 2).join("|");
+const noWidth = (caseId: string): string => caseId.replace(/@\d+$/, "");
+/** Variant-free keys: every planner is handed the sport as its own variant, and the key drops it. */
+const anyVariant = (sport: string): string => sport;
+
+function fromLayered(plan: string, cases: readonly LayerCase[]): ExpectedPlan {
+  const driven = new Set<string>();
+  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
+  for (const c of cases) {
+    const key = noVariant(layerCaseId(c));
+    if (c.spec !== null) { driven.add(key); continue; }
+    // The stored reason is what decideState makes of the planner's own 🚫/░ (run.ts recordPlanned).
+    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
+    planned.set(key, { state: d.state as "no_path" | "not_run", reason: d.reason });
+  }
+  return { plan, layered: true, driven, planned };
+}
+const fromSpecs = (plan: string, ids: readonly string[]): ExpectedPlan =>
+  ({ plan, layered: false, driven: new Set(ids.map(noVariant)), planned: new Map() });
+
+/** The plan a recorded `plan` string names, built by the runner's own planners. */
+function expectedPlan(plan: string): ExpectedPlan {
+  const words = plan.split(" ");
+  const flag = (name: string): string | undefined => { const i = words.indexOf(name); return i < 0 ? undefined : words[i + 1]; };
+  const filters = { only: flag("--only"), scenario: flag("--scenario") };
+  if (words[0] === "--set") {
+    const set = words[1];
+    if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({}).plan(anyVariant).map((c) => c.caseId));
+    if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
+    if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
+    if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));
+  }
+  if (words[0] === "--canary" && words[1] !== undefined) return fromSpecs(plan, [planCanaryCase(anyVariant, words[1]).caseId]);
+  if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, l1Planner(filters).layered(anyVariant));
+  if (words[0] === "--layer" && words[1] === "L2") return fromLayered(plan, l2Planner(filters).layered(anyVariant));
+  if (words[0] === "slice") return fromSpecs(plan, planSliceCases(anyVariant, filters).map((c) => c.caseId));
+  throw new Error(`committed-matrix: no planner for the recorded plan "${plan}"`);
+}
+
+/** One run judged against its plan, case by case: a case the plan PLANS is
+ *  stored as exactly the plan's 🚫/░ (state and reason) with no check; a case
+ *  the plan DRIVES is never stored as planned (class 6); no case is missing,
+ *  repeated or outside the plan; a plain run is one width. The counts are the
+ *  plan's by construction: `driven` + `planned` = the run's cases. */
+function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { driven: number; planned: number; wrong: string[] } {
+  const keyOf = (id: string): string => (plan.layered ? noVariant(id) : noWidth(noVariant(id)));
+  const wrong: string[] = [];
+  const seen = new Set<string>();
+  let driven = 0;
+  let planned = 0;
+  for (const c of cases) {
+    const key = keyOf(c.caseId);
+    const j = judgeCase(c);
+    if (j.wrong !== null) wrong.push(j.wrong);
+    if (seen.has(key)) wrong.push(`${c.caseId}: repeated in the run`);
+    seen.add(key);
+    const p = plan.planned.get(key);
+    if (p !== undefined) {
+      planned++;
+      if (c.state !== p.state || c.reason !== p.reason) wrong.push(`${c.caseId}: the plan records ${p.state} "${p.reason}", stored ${c.state} "${c.reason}"`);
+    } else if (plan.driven.has(key)) {
+      driven++;
+      if (j.kind === "planned") wrong.push(`${c.caseId}: the plan DRIVES this case, stored ${c.state} with ${c.checks.length} check(s) — a driven result recorded as planned (class 6)`);
+    } else {
+      wrong.push(`${c.caseId}: not in its plan (${plan.plan})`);
     }
-    expect(missing).toEqual([]);
-    expect(W1C_RUNS.length).toBe(1 + 3 + 1 + 1 + L2_WIDTHS.length + 7);
+  }
+  for (const k of [...plan.driven, ...plan.planned.keys()]) if (!seen.has(k)) wrong.push(`${k}: planned by ${plan.plan}, missing from the run`);
+  if (!plan.layered && new Set(cases.map((c) => c.caseId.match(/@\d+$/)?.[0] ?? "")).size > 1) wrong.push(`${plan.plan}: a plain run holds more than one width`);
+  return { driven, planned, wrong };
+}
+
+/** The results.json files committed at W1c Task 14's close (fix round 1): a sweep that judges fewer lost some. */
+const RESULTS_FLOOR = 33;
+/** The committed runs written before results.json recorded its plan (carry 6,
+ *  3c36ea1b3), each named with the plan its command line ran. Any other run
+ *  with no recorded plan is refused, never skipped. */
+const PLAN_BEFORE_CARRY_6: Readonly<Record<string, string>> = Object.freeze({
+  "w1a-slice": "slice",
+  "w1b-slice": "slice",
+  "w1b-probe": `--set ${PROBE_SET}`,
+  // Task 8's walkthrough: one cell × LIFECYCLE per run, at 1280, 320 (×3) and over HTTP.
+  ...Object.fromEntries(["1280-f", "320a", "320b", "320c", "http-f"].flatMap((w) =>
+    ["generic", "badminton"].map((sport) => [`w1c-walkthrough-a/w1c-wa-${w}-${sport}`, `slice --only league|${sport} --scenario LIFECYCLE`]))),
+});
+
+/** The plan a committed run is judged against: the one it recorded, or the
+ *  one it is named with from before carry 6 — never both, never neither. */
+function planFor(dir: string, recorded: string | undefined): string | { refused: string } {
+  const named = PLAN_BEFORE_CARRY_6[dir];
+  if (recorded !== undefined && named !== undefined) return { refused: `${dir}: records "${recorded}" AND is named "${named}" before carry 6` };
+  return recorded ?? named ?? { refused: `${dir}: no recorded plan, and not named as a run from before carry 6` };
+}
+
+describe("each committed run, judged against its own plan (W1c Task 14 fix round 1, review I-1)", () => {
+  it("a run is judged against the plan it recorded or is named with — never both, never neither", () => {
+    expect(planFor("w1c-l2", "--layer L2")).toBe("--layer L2");
+    expect(planFor("w1a-slice", undefined)).toBe("slice");
+    expect(planFor("w1a-slice", "slice")).toEqual({ refused: expect.stringContaining("AND is named") });
+    expect(planFor("w1d-new-run", undefined)).toEqual({ refused: expect.stringContaining("no recorded plan") });
   });
-  it("every case of every committed run is re-decided from its checks, and the sweep judged something", () => {
-    let checked = 0;
-    let skipped = 0;
+  const l2 = `${TRUTH_RUNS}/w1c-l2/results.json`;
+  it("a driven case stored as planned, a planned row with another reason, a lost, a stray and a repeated case are each caught", () => {
+    const cases = parseResults(JSON.parse(readFileSync(resolve(REPO, l2), "utf8"))).cases;
+    const plan = expectedPlan("--layer L2");
+    // The honest committed run is clean, and it is the plan's split exactly.
+    const honest = judgeRun(cases, plan);
+    expect(honest.wrong).toEqual([]);
+    expect([honest.driven, honest.planned]).toEqual([plan.driven.size, plan.planned.size]);
+    // Class 6: R4a@375 was DRIVEN; stored as ░ with its checks lost it must red.
+    const driven = cases.find((c) => noVariant(c.caseId) === "swiss|badminton|R4a@375");
+    expect(driven, "the probe's driven case is in the committed run").toBeDefined();
+    const flipped = cases.map((c) => (c === driven ? { ...c, state: "not_run" as const, reason: "no scenario script yet (atom R4a)", checks: [] } : c));
+    expect(judgeRun(flipped, plan).wrong.join("\n")).toContain("swiss|badminton|bwf|R4a@375");
+    // A planned row stored with another row's reason, a lost case, and a case no plan holds.
+    const plannedCase = cases.find((c) => c.state === "no_path")!;
+    const reworded = cases.map((c) => (c === plannedCase ? { ...c, reason: "W9: another wave" } : c));
+    expect(judgeRun(reworded, plan).wrong.join("\n")).toContain(`${plannedCase.caseId}: the plan records no_path`);
+    expect(judgeRun(cases.filter((c) => c !== driven), plan).wrong.join("\n")).toContain("swiss|badminton|R4a@375: planned by --layer L2, missing");
+    expect(judgeRun([...cases, { ...driven!, caseId: "ladder|badminton|bwf|R4a@375" }], plan).wrong.join("\n")).toContain("ladder|badminton|bwf|R4a@375: not in its plan");
+    expect(judgeRun([...cases, driven!], plan).wrong.join("\n")).toContain("swiss|badminton|bwf|R4a@375: repeated in the run");
+  });
+  it("every committed results.json is exactly its plan: each driven case re-decided, each planned row the plan's own", () => {
+    const files = trackedUnder(TRUTH_RUNS).filter((f) => f.endsWith("/results.json"));
     const wrong: string[] = [];
+    let driven = 0;
+    let planned = 0;
     for (const f of files) {
-      const r = reDecide(parseResults(JSON.parse(readFileSync(resolve(REPO, f), "utf8"))).cases);
-      checked += r.checked;
-      skipped += r.skipped;
-      wrong.push(...r.wrong.map((w) => `${f}: ${w}`));
+      const dir = f.slice(TRUTH_RUNS.length + 1, -"/results.json".length);
+      const results = parseResults(JSON.parse(readFileSync(resolve(REPO, f), "utf8")));
+      const plan = planFor(dir, "plan" in results && typeof results.plan === "string" ? results.plan : undefined);
+      if (typeof plan !== "string") { wrong.push(plan.refused); continue; }
+      const r = judgeRun(results.cases, expectedPlan(plan));
+      wrong.push(...r.wrong.map((w) => `${dir}: ${w}`));
+      driven += r.driven;
+      planned += r.planned;
     }
-    console.info(`committed-matrix: ${files.length} results.json, ${checked} case(s) re-decided, ${skipped} planned/deferred/error case(s) skipped`);
+    console.info(`committed-matrix: ${files.length} results.json judged against their plans — ${driven} driven case(s), ${planned} planned 🚫/░ row(s)`);
     expect(wrong).toEqual([]);
-    // Anti-vacuity: the W1a/W1b files plus every W1c run above, and at least
-    // the planned rows W1c declares (D5's 7 + 58 on L2, the API-only set).
-    expect(files.length).toBeGreaterThanOrEqual(3 + W1C_RUNS.length);
-    expect(skipped).toBeGreaterThanOrEqual(7 + 58 + API_ONLY_ROWS.length);
-    // …and at least every case the plans say was EXECUTED: the two 24-case
-    // slices, the HTTP slice, L1 ×3, L2's 3, the sweep, pad proof ×7.
-    expect(checked).toBeGreaterThanOrEqual(2 * 24 + 24 + 3 * 6 + 3 + L2_WIDTHS.length + 7 * SPORT_KEYS.length);
+    // Anti-vacuity: no run lost, and both kinds were judged.
+    expect(files.length).toBeGreaterThanOrEqual(RESULTS_FLOOR);
+    expect(Object.keys(PLAN_BEFORE_CARRY_6).every((d) => files.includes(`${TRUTH_RUNS}/${d}/results.json`)), "a run named before carry 6 is no longer committed").toBe(true);
+    expect(driven).toBeGreaterThan(0);
+    expect(planned).toBeGreaterThan(0);
   });
 });
