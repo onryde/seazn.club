@@ -251,7 +251,11 @@ start_server() {
   # e2e suites stream on the fake drivers, as CI's server steps now say explicitly. Under production an explicit fake
   # also needs ENV_NAME "local" or "ci" (m2) — unset, or a caller's stg/prod, and every relay-touching request
   # (every request, where the compiled boot hook runs) answers 500 — so this mirror names itself ci, as those steps do.
-  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" ENV_NAME=ci node server.js ) > "$log" 2>&1 &
+  # Like CI, it seals stream targets under a per-run random RELAY_KEK (a caller's own wins), and the walkthrough's
+  # fake phone connects after FAKE_INGEST_CONNECT_AFTER_MS, the value e2e.yml pins for the walkthrough leg.
+  ( cd "$sd" && exec env PORT="$port" HOSTNAME=127.0.0.1 RELAY_DRIVERS="${RELAY_DRIVERS:-fake}" ENV_NAME=ci \
+      RELAY_KEK="${RELAY_KEK:-$(openssl rand -hex 32)}" \
+      FAKE_INGEST_CONNECT_AFTER_MS="${FAKE_INGEST_CONNECT_AFTER_MS:-10000}" node server.js ) > "$log" 2>&1 &
   SERVER_PID=$!
   echo "$SERVER_PID" > "$RUNDIR/server.pid"
 
