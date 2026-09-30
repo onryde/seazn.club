@@ -457,9 +457,12 @@ describe("D3 — the destination warning (spec §5.6)", () => {
       // The server measured `elapsed` at `since + elapsed`; the browser's clock reads that instant plus its own skew.
       for (const [elapsed, warns] of [[0, false], [OUTPUT_WARNING_AFTER_MS - 1, false], [OUTPUT_WARNING_AFTER_MS, true]] as const) {
         vi.useFakeTimers({ now: since.getTime() + elapsed + browserOffset });
-        expect(destinationWarning(view("live", out("connecting", elapsed))), `browser ${browserOffset > 0 ? "ahead" : "behind"}, server elapsed ${elapsed}`).toBe(warns);
-        expect(outputElapsedMs(view("live", out("connecting", elapsed)))).toBe(elapsed);
-        vi.useRealTimers();
+        try {
+          expect(destinationWarning(view("live", out("connecting", elapsed))), `browser ${browserOffset > 0 ? "ahead" : "behind"}, server elapsed ${elapsed}`).toBe(warns);
+          expect(outputElapsedMs(view("live", out("connecting", elapsed)))).toBe(elapsed);
+        } finally {
+          vi.useRealTimers();   // a failed expect must not leak fake timers into the rest of the file
+        }
         checked++;
       }
     }

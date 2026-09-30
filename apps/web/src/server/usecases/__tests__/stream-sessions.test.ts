@@ -3634,6 +3634,46 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     }
   });
 
+  // N4 (B2 re-review): `live_at` and the ingest_status events are written on one instance's clock and read under another's,
+  // so the boundary can sit a few seconds AHEAD of the server now answering. D3's elapsed is how long the destination
+  // has NOT received — a boundary in the future means it has not been not-receiving at all yet: 0, never negative (and
+  // the published contract is `nonnegative()`). Both sources of `since` are driven: the live clamp (`live_at` written
+  // ahead), and the event (written on a clock that then answers from behind it — events are append-only).
+  it("N4: a boundary AHEAD of this server's clock (another instance's skew) answers elapsedMs 0 — never negative — with since unchanged and no warning; the positive pair: once this clock passes it, elapsed counts up from it", async () => {
+    const SKEW_MS = 5_000;
+    let checked = 0;
+    for (const source of ["live_at", "event"] as const) {
+      const r = await rig({ credits: 1 });
+      let out: OutputState = "connecting";
+      const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+      try {
+        const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+        await goLive(r);
+        let boundary: number;
+        if (source === "live_at") {
+          boundary = r.deps.now().getTime() + SKEW_MS;
+          await sql`update fixture_stream_sessions set live_at = live_at + ${`${SKEW_MS} milliseconds`}::interval where id = ${sessionId}`;
+        } else {
+          r.tick(10_000);
+          out = "ok";
+          boundary = r.deps.now().getTime();
+          expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "the ok event is written here").toEqual({ state: "ok", since: iso(new Date(boundary)), elapsedMs: 0 });
+          r.tick(-SKEW_MS);
+        }
+        const word = source === "live_at" ? "connecting" : "ok";
+        const ahead = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(ahead.output, source).toEqual({ state: word, since: iso(new Date(boundary)), elapsedMs: 0 });
+        expect(destinationWarning(ahead), source).toBe(false);
+        r.tick(SKEW_MS + 1_000);
+        expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, `${source}: past it`).toEqual({ state: word, since: iso(new Date(boundary)), elapsedMs: 1_000 });
+      } finally {
+        spy.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("output is null for a composed session (warming and live), and for a passthrough session once it has ended", async () => {
     const composed = await rig({ credits: 1 });
     const c = await createSession(composed.auth, composed.fixtureId, body(composed.target.id, "composed"), composed.deps);
@@ -3757,6 +3797,28 @@ describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("N2 (B2 re-review): the probe steps aside for EVERY admit refusal it can weigh, not only active_session — a 0-credit org Go live on an unreadable key is 402 no_credits (F-A5: the credit before any destination question), measured like every refused admission (one storage read, ruling 13); a credit then makes the same Go live the 422", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 0, recorder: rec });
+    expect(await creditBalance(sql, r.auth.orgId), "the rig really is broke — or 402 could not be the answer").toBe(0);
+    const targetId = await rigTarget(r.auth.orgId, "Unreadable", "youtube");
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const err = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err, "the credit is answered first, never 'replace the key'").toMatchObject({ status: 402, code: "no_credits" });
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation), "the admission answered it: exactly its one read-only storage read, nothing started").toEqual(["storageUsage"]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n).toBe(0);
+    // The positive pair: with a credit, the SAME Go live reaches the probe and is the unreadable refusal, before any read.
+    await grantCredits({ orgId: r.auth.orgId, delta: 1, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
+    rec.calls.length = 0;
+    const paid = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
+    expect(paid).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation)).toEqual([]);
   });
 
   it("M3: a MISSING or MALFORMED RELAY_KEK is the deployment's fault, never the organiser's — Go live is a 500 (not an HttpError), never 422 TARGET_UNREADABLE, and writes nothing", async () => {
@@ -3883,7 +3945,8 @@ const DEST_PINNED: DestCmd[][] = [
 
 /** Named regression cases (rule 10): each is the SHRUNK counterexample a seeded run found, committed before its fix. */
 /** Seed 20260930, path "0:1:0:0:0": the other org's Go live on this org's destination is 404 — and took the admission's
- *  storage read. NOT a system defect: ruling 13 pins that measurement on every refused admission. The invariant was
+ *  storage read. NOT a system defect: `createSession` records a storage snapshot for each admission check (ruling 13,
+ *  streaming-r1 plan "Data captured"), a refusal included, pinned by the SAMPLES and SNAPSHOTS test. The invariant was
  *  worded too wide ("no provider call" → "none but the admission's own measurement"); this sequence keeps it honest. */
 const DEST_REGRESSION_ADMISSION_READ: DestCmd[] = [{ kind: "goLive", org: 1, fixture: 0, slot: 0 }, { kind: "remove", org: 1, slot: 0 }];
 /** Seed 20260930, path "73:1:0:2:6:5:5" (DEST_MODEL_RUNS = 100): a match already streaming, then Go live on an UNREADABLE
@@ -4109,9 +4172,9 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
           const inputs = expired.size === 0 ? [] : (await sql<{ ingest_input_id: string }[]>`
             select ingest_input_id from fixture_stream_inputs where session_id in ${sql([...expired])}`).map((x) => x.ingest_input_id);
           const stray = rec.calls.slice(callsBefore).filter((call) => !(call.sessionId != null && expired.has(call.sessionId)) && !(call.subjectId != null && inputs.includes(call.subjectId)));
-          // Ruling 13 (DEST_REGRESSION_ADMISSION_READ below): a refusal FROM `admit` still takes the admission's storage
-          // measurement — one read-only storageUsage, no session — and records it; stream-sessions.test.ts ("the refused
-          // one") and routes.test.ts A21 pin that snapshot. Every other refusal — the holder guard, an unreadable key, and
+          // DEST_REGRESSION_ADMISSION_READ below: a refusal FROM `admit` still takes the admission's storage measurement —
+          // one read-only storageUsage, no session — and records it (a snapshot per admission check: ruling 13, streaming-r1
+          // plan "Data captured"); the SAMPLES and SNAPSHOTS test above and routes.test.ts A21 pin that snapshot. Every other refusal — the holder guard, an unreadable key, and
           // every Directory refusal — asks the provider nothing.
           const fromAdmit = c.kind === "goLive" && (expected.code === "active_session" || expected.status === 404);
           expect(stray.map((call) => `${call.operation}:${call.sessionId ?? "-"}`), `${label}: a refusal called a provider`).toEqual(fromAdmit ? ["storageUsage:-"] : []);

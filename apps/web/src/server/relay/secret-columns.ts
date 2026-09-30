@@ -236,7 +236,8 @@ export class TargetSecretUnreadableError extends Error {
 }
 
 /** §5.3 — each ACTIVE destination's key hint, opened here so the full key never leaves this module. An envelope that
- *  will not open (a rotated KEK, a corrupt byte) is a row with no hint, never a failed list (Review Focus 1). */
+ *  will not open under a valid KEK (a rotated KEK, a corrupt byte) is a row with no hint, never a failed list (Review
+ *  Focus 1). A missing or malformed RELAY_KEK is the deployment's fault, not a row's: it rethrows (M3; N1, B2 re-review). */
 export async function readKeyHints(tx: Tx, orgId: string): Promise<Map<string, string | null>> {
   const rows = await tx<{ id: string; rtmp_enc: Uint8Array }[]>`
     select id, rtmp_enc from org_stream_targets where org_id = ${orgId} and archived_at is null`;
@@ -245,7 +246,8 @@ export async function readKeyHints(tx: Tx, orgId: string): Promise<Map<string, s
     let hint: string | null = null;
     try {
       hint = keyHintOf(openFields(r.rtmp_enc, TARGET_SEALED).streamKey);
-    } catch {
+    } catch (err) {
+      if (!hasValidKek("RELAY_KEK")) throw err;
       hint = null;
     }
     hints.set(r.id, hint);

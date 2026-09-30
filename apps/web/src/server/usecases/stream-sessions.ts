@@ -1024,7 +1024,8 @@ function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): u
  *  `admit` would pass on everything it can weigh WITHOUT the storage read (`admitsBarStorage`, asked with this fixture's
  *  active session read on the same transaction): F-A5 (owner, 2026-09-29) puts "already running" — and the plan, the
  *  credit and the target's existence — before any destination question, and an unreadable key is one. Every such
- *  refusal is left for the admission below, which answers it as before, measurement included (ruling 13). Found by the
+ *  refusal is left for the admission below, which answers it as before, measurement included (the admission snapshot:
+ *  ruling 13, streaming-r1 plan "Data captured"; pinned by the SAMPLES and SNAPSHOTS test). Found by the
  *  destination model's DEST_REGRESSION_FA5_UNREADABLE (stream-sessions.test.ts). */
 async function refuseUnreadableTarget(
   orgId: string, fixtureId: string, targetId: string, admitsBarStorage: (activeSessionId: string | null) => boolean,

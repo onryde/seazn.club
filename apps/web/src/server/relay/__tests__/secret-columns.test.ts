@@ -607,6 +607,29 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
         spy.mockRestore();
       }
     });
+
+    it("readKeyHints (N1, B2 re-review): an unset or malformed KEK rejects with the KEK's own error — never a list of null hints; under the valid KEK an unopenable ROW still reads null beside a readable one (Review Focus 1)", async () => {
+      const r = await rig();
+      const [bad] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      // The precondition: there ARE active rows to open, or a KEK fault could never be reached and "rejects" would be vacuous.
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and archived_at is null`;
+      expect(n).toBe(2);
+      let checked = 0;
+      for (const f of KEK_FAULTS) {
+        const err = await withKek(f.value, () => sql.begin((tx) => readKeyHints(tx, r.orgId)).then(() => null, (e: unknown) => e));
+        expect(err, f.name).toBeInstanceOf(Error);
+        expect((err as Error).message, f.name).toMatch(f.says);
+        checked++;
+      }
+      expect(checked).toBe(KEK_FAULTS.length);
+      // The other branch, with the KEK restored: the row's own fault is a null hint, the list still answers.
+      const hints = await sql.begin((tx) => readKeyHints(tx, r.orgId));
+      expect(hints.get(bad!.id)).toBeNull();
+      expect(hints.get(r.targetId)).toBe(keyHintOf(r.target.streamKey));
+      expect(hints.get(r.targetId), "the readable row really has a hint, so null above is the row's fault").not.toBeNull();
+      expect(hints.size).toBe(2);
+    });
   });
 
   it("I2: a DAMAGED envelope whose fingerprint still matches (same KEK, same key) is re-sealed by replacing the SAME key — not the no-op an openable row gets (mutant: short-circuit on the fingerprint alone)", async () => {
