@@ -8,8 +8,9 @@ MATRIX.md header reads `Layer L2 · driver browser · plan slice --only knockout
 Why plain runs and not `--set width-sweep`: when these ran, that set was hard-wired to league|badminton
 (`lib/layers.ts`). Running the sweep on a knockout slice cell, including 768/834, was the controller's
 recommendation for Task 14; owner ruling 43(a) (2026-09-30, in `_INDEX.md`) accepts it in place of ruling
-39's `league|badminton`. Since `e431cbbce` the set plans knockout|badminton, so `--set width-sweep` reproduces
-this evidence (final review m-1). The league sweep is not owed.
+39's `league|badminton`. Since `e431cbbce` the set plans knockout|badminton: its PLAN matches this evidence,
+the same seven case ids in one layered run (final review m-1). The set itself has never been run live. The league
+sweep is not owed.
 
 | width | state | checks / items | pad ledger | no-horizontal-scroll | EXIT | secs |
 |---|---|---|---|---|---|---|

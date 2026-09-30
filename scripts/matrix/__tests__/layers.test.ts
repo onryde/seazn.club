@@ -267,7 +267,8 @@ describe("planL1 — ruling 39: L1 runs at 1280 only", () => {
 
 /** Owner ruling 43(a) (2026-09-30): the width sweep is the one W1c committed —
  *  `w1c-sweep-ko`, one plain run per L2 width. Its cell and scenario are read
- *  from that evidence (never typed here), so `--set width-sweep` reproduces it. */
+ *  from that evidence (never typed here), so `--set width-sweep` PLANS the same cases. The set has never been
+ *  run live. */
 const SWEEP_EVIDENCE = L2_WIDTHS.map((w) => {
   const r = JSON.parse(readFileSync(join(REPO, `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1c-sweep-ko/w1c-sweep-ko-${w}/results.json`), "utf8")) as { cases: { caseId: string; row: string; sport: string; scenario: string; width: number }[] };
   expect(r.cases.length, `w1c-sweep-ko-${w}`).toBe(1);
