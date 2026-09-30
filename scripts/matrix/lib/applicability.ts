@@ -10,6 +10,7 @@ import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/l
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
 import { foldStream } from "./fold.ts";
+import { routeTo, type Route } from "./routing.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "./scenario-catalogue.ts";
 import { drawsAllowed, entrantKindsFor, resolveSportCfg, sportModule } from "./sport-cfg.ts";
 import { ALL_OUTCOMES, START, type StreamEvent } from "./streams/types.ts";
@@ -246,7 +247,10 @@ export interface Rule {
    *  rule's own (which would then be false). */
   readonly gap?: HarnessGap;
 }
-export interface HarnessGap { readonly when: Predicate; readonly reason: string }
+/** `route`: the wave that owes the harness path, and why (lib/routing.ts). */
+export interface HarnessGap { readonly when: Predicate; readonly route: Route }
+/** A gap's text as the committed drop list and L2 pairs carry it: the why, then the wave it is routed to. */
+export const gapReason = (g: HarnessGap): string => `${g.route.why} — routed ${g.route.wave}`;
 const ALWAYS: Rule = Object.freeze({ when: always, reason: "", variantDependent: false, witness: null });
 type W = string | WitnessCell;
 const cellOf = (w: W): WitnessCell => (typeof w === "string" ? { cell: w } : w);
@@ -299,7 +303,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
     ),
     gap: Object.freeze({
       when: and(not(drawRefusedHere), tieInBracket, () => !GENERATES_TIE),
-      reason: "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving",
+      route: routeTo("W1-driving", "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place"),
     }),
   }),
   M6: rule(decider, "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, W4), or none is switched on under this config", "knockout|icehockey", "knockout|badminton", true),
@@ -425,7 +429,7 @@ const dropReason = (r: Rule, d: Decision): string => {
   // Gapped: the rule APPLIES, so its own reason ("why not") would be false.
   if (r.gap !== undefined && isHarnessGap(r, d)) {
     const also = d.unscorable.length > 0 ? `; the other committed variants that enable it (${listed(d.unscorable)}) cannot be scored by the harness` : "";
-    return `${r.gap.reason}; it applies at ${listed(d.gapped)}${also}`;
+    return `${gapReason(r.gap)}; it applies at ${listed(d.gapped)}${also}`;
   }
   if (!r.variantDependent) return r.reason;
   if (d.unscorable.length === 0) return `${r.reason} — no committed variant enables it`;

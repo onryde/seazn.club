@@ -17,9 +17,10 @@ import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
+import { API_ONLY_UI_WAVE, TEMPLATE_DRIVING } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
+  BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
@@ -41,6 +42,13 @@ const ORG_SLUG = "m-run-1";
 /** What the fake product answers for slugs — deliberately NOT what the scenario asks for. */
 const PRODUCT_COMP_SLUG = "matrix-product-slug";
 const PRODUCT_DIV_SLUG = "d-product";
+/** Ruling 47 (_INDEX.md): the wave rule-override driving in the browser goes to, read from the index. */
+function ruling47OverrideWave(): string {
+  const index = src("docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md").replace(/\s+/g, " ");
+  const w = /Rule-override driving in the browser \(`OVERRIDE_WAVE`[^)]*\) goes to \*\*(W[\w-]+)\*\*/.exec(index)?.[1];
+  expect(w, "ruling 47 no longer names the wave rule-override driving goes to").toBeDefined();
+  return w!;
+}
 
 /** A `new Set(["a", "b"])` / `new Set([\n "a", ...])` literal's members, read from the product. */
 function setLiteral(file: string, name: string): string[] {
@@ -328,8 +336,12 @@ describe("BrowserDriver — the mixed path", () => {
     const err = await second.driver.createDivision(c2.id, { name: "x", slug: "d", sportKey: "generic", variantKey: "default", config: { pointsToWin: 15 } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NoOrganiserPath);
     expect(err).not.toBeInstanceOf(DriverMisuse);
-    expect(err).toMatchObject({ wave: "W1-driving" });
+    // Ruling 47 names the owning wave, and the wave thrown is the route's: the route and the
+    // NoOrganiserPath literal (the guard reads a literal only, PF-3) are pinned together.
+    expect(OVERRIDE_ROUTE.wave).toBe(ruling47OverrideWave());
+    expect(err).toMatchObject({ wave: OVERRIDE_ROUTE.wave });
     expect((err as NoOrganiserPath).reason).toMatch(/rule override \(pointsToWin\)/);
+    expect((err as NoOrganiserPath).reason).toContain(OVERRIDE_ROUTE.why);
     expect(second.pageCalls).toEqual(["createCompetitionUi"]);
     // Not recorded: createDivision was never invoked on either path.
     expect(only(second.driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 1 });
@@ -503,8 +515,10 @@ describe("BrowserDriver — API-only rows (D7)", () => {
           expect(ui, `${row}|${sport}`).toMatchObject({ verdict: "abstain", checked: 0, reason: `reachable only through catalog template ${tmpl}; driving it → W1-driving` });
           abstained++;
         }
-        const text = tmpl === undefined ? `no organiser control builds ${row} → ${wave}` : ui.reason;
-        expect(only(driver, "mixed-driver-coverage"), `${row}|${sport}`).toMatchObject({ verdict: "pass", checked: 2, evidence: [`createDivision: exempt — ${text}`] });
+        // The exemption is the row's route (api-only-ui.ts): design §8's wave for the row, or ruling 47's W1-driving on a template cell.
+        const route = tmpl === undefined ? API_ONLY_UI_WAVE[row] : TEMPLATE_DRIVING;
+        expect(route.wave, `${row}|${sport}`).toBe(tmpl === undefined ? wave : "W1-driving");
+        expect(only(driver, "mixed-driver-coverage"), `${row}|${sport}`).toMatchObject({ verdict: "pass", checked: 2, evidence: [`createDivision: exempt — → ${route.wave}: ${route.why}`] });
         // The http-built division is the one every later page object acts in.
         const bs = await driver.postStages("d9", stagesForRow(row)).catch((e: unknown) => e);
         expect(bs).toBeInstanceOf(Error);

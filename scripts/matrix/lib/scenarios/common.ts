@@ -6,6 +6,7 @@ import type { MatchOutcome, StageCtx, StageKind } from "@seazn/engine/core";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { RefusedCall, type CompetitionRef, type DivisionRef, type EntrantRow, type FixtureRow, type StageRef } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
+import { routeTo } from "../routing.ts";
 import {
   isTerminal, snap, toObservedOutcome,
   type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type ObservedDeclared, type ObservedFixture,
@@ -88,7 +89,10 @@ export class Recorder {
 /** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
  *  americano / mexicano, multi-stage seeding, team rosters — is its own wave.
  *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
-export const DRIVING_WAVE = "W1-driving";
+export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth W1a deferred (ruling 28)");
+/** The deferral sites' wave argument (the Q-A guard reads it by value); kept
+ *  until W1-driving deletes the last of them. */
+export const DRIVING_WAVE = DRIVING_ROUTE.wave;
 
 const FORMAT_LATER = new Set(["ladder", "americano", "mexicano"]);
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */

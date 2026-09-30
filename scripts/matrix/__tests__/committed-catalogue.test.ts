@@ -29,7 +29,7 @@ import type * as TS from "typescript";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { RULES, decide, planL3 } from "../lib/applicability.ts";
+import { RULES, decide, gapReason, planL3 } from "../lib/applicability.ts";
 import { UnscorableUnclassified, computeCounts } from "../lib/counts.ts";
 import { foldStream } from "../lib/fold.ts";
 import { expectedGate } from "../lib/format-gates-copy.ts";
@@ -392,11 +392,12 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
         expect(g.kind, `${g.scenario} ${row}|${s}`).toBe(expected.get(`${g.scenario}#${row}|${s}`));
         judged++;
       }
-      const gapReason = RULES[g.scenario]?.gap?.reason;
+      const gap = RULES[g.scenario]?.gap;
+      const reason = gap === undefined ? undefined : gapReason(gap);
       if (g.kind === "harness-gap") {
-        expect(gapReason, `${g.scenario}: a harness-gap group for a rule with no gap`).toBeDefined();
-        expect(g.reason.startsWith(gapReason ?? ""), g.scenario).toBe(true);
-      } else if (gapReason !== undefined) expect(g.reason.startsWith(gapReason), g.scenario).toBe(false);
+        expect(reason, `${g.scenario}: a harness-gap group for a rule with no gap`).toBeDefined();
+        expect(g.reason.startsWith(reason ?? ""), g.scenario).toBe(true);
+      } else if (reason !== undefined) expect(g.reason.startsWith(reason), g.scenario).toBe(false);
       if (g.kind === "unscorable-only") expect(g.reason, g.scenario).toMatch(/cannot be scored by the harness/);
     }
     expect(judged).toBe(d.total);

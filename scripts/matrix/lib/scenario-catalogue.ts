@@ -13,6 +13,7 @@ import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, cellId } from "./catalogue.ts";
 import { NO_CODE, NO_MESSAGE } from "./driver/types.ts";
 import { FENCES } from "./model/fences.ts";
+import { routeTo, type Route } from "./routing.ts";
 import type { ScenarioKey } from "./scenarios/types.ts";
 
 export type Family = "R" | "M" | "F" | "D" | "P" | "Q" | "X" | "C" | "E";
@@ -139,14 +140,24 @@ const L3_EXCLUDED: Readonly<Record<string, string>> = Object.freeze({
 /** L3-only: the API path has no browser counterpart. */
 const L2_EXCLUDED = new Set(["E2"]);
 
-/** Design §4 "Known 🚫 at design time", keyed by PARENT, with the wave that
- *  owes each a build-or-refuse ruling. */
-const KNOWN_NO_PATH: Readonly<Record<string, string>> = Object.freeze({ D1: "W9", D2: "W9", R13: "W9", D4: "W4", Q4: "W4", C5: "W5" });
+/** Design §4 "Known 🚫 at design time" (no route or screen today), keyed by
+ *  PARENT, with the route to the wave that owes each a build-or-refuse ruling
+ *  ("division-level D1, D2, R13 in W9; D4 in W4; Q4 in W4; C5 in W5"). */
+const KNOWN_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
+  D1: routeTo("W9", "division merge: build-or-refuse ruling (design §4)"),
+  D2: routeTo("W9", "division split: build-or-refuse ruling (design §4)"),
+  R13: routeTo("W9", "entrant moved to another division after the draw: build-or-refuse ruling (design §4)"),
+  D4: routeTo("W4", "separation: build-or-refuse ruling (design §4)"),
+  Q4: routeTo("W4", "final not played: build-or-refuse ruling (design §4)"),
+  C5: routeTo("W5", "points deduction: carry_deltas exists only through stage PUT, FORMAT_LOCKED once fixtures exist; build-or-refuse ruling (design §4)"),
+});
 /** Design §4 "Known UI-only 🚫" (ruling 30), keyed by ATOM: an HTTP route
  *  exists (L3 runs), but no screen sends it (the L2 run records 🚫). M12b's
  *  `core.lineup.retirement` has no pad or console control, and no
  *  minimum-players rule exists; both are owed to W2. */
-const KNOWN_UI_NO_PATH: Readonly<Record<string, string>> = Object.freeze({ M12b: "W2" });
+const KNOWN_UI_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
+  M12b: routeTo("W2", "core.lineup.retirement has no pad or console control (ruling 30)"),
+});
 
 export interface AtomicScenario {
   readonly id: string;
@@ -173,8 +184,8 @@ export const ATOMIC: readonly AtomicScenario[] = Object.freeze(PARENTS.flatMap((
       title: a.title,
       layers: Object.freeze(layers),
       l3Excluded,
-      knownNoPath: KNOWN_NO_PATH[p.id] ?? null,
-      l2NoPath: KNOWN_UI_NO_PATH[a.id] ?? null,
+      knownNoPath: KNOWN_NO_PATH[p.id]?.wave ?? null,
+      l2NoPath: KNOWN_UI_NO_PATH[a.id]?.wave ?? null,
     });
   });
 }));

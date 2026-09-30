@@ -9,6 +9,10 @@
 // exemption. Each is tested, in that order, below.
 import { describe, expect, it } from "vitest";
 import { ACTION_TYPES, CREATE_PATHS, MixedLedger, type ActionType } from "../lib/driver/mixed.ts";
+import { routeTo, type Route } from "../lib/routing.ts";
+
+/** A route as a caller hands it to exempt (lib/routing.ts). */
+const G5 = routeTo("W5", "no organiser UI for group_only");
 
 /** O-1 (W1c Task 8 review): the types whose browser turn ends only once a
  *  browser call CREATED something. Typed here from the review, never read
@@ -104,10 +108,10 @@ describe("MixedLedger", () => {
     // Beside a red and an exemption, the note comes last.
     ran.record("withdraw", "http");
     ran.record("createDivision", "http");
-    ran.exempt("createDivision", "no organiser UI for group_only → W5");
+    ran.exempt("createDivision", G5);
     expect(ran.coverage()).toMatchObject({ verdict: "fail", checked: 3, evidence: [
       "withdraw: invoked 1×, never in the browser",
-      "createDivision: exempt — no organiser UI for group_only → W5",
+      "createDivision: exempt — → W5: no organiser UI for group_only",
       `generate: ${CREATE_PATHS.generate} ran in the browser — 1 of 2 browser call(s) created`,
     ] });
     // generate only ever over http: the red says so, and there is no browser call to note.
@@ -151,51 +155,58 @@ describe("MixedLedger", () => {
     expect(l.coverage()).toMatchObject({ verdict: "fail", checked: 2, evidence: ["withdraw: invoked 2×, never in the browser"] });
   });
 
-  it("an exemption passes its type only with a reason naming a wave, and the reason is kept as evidence", () => {
+  it("an exemption passes its type only with a route to the owning wave, and the route is kept as evidence (→ wave: why)", () => {
     const l = new MixedLedger();
     l.record("createDivision", "http");
-    expect(() => l.exempt("createDivision", "no organiser UI")).toThrow(/wave/);
-    l.exempt("createDivision", "no organiser UI for page_playoff_only → W4");
-    expect(l.coverage()).toMatchObject({ verdict: "pass", checked: 1, evidence: ["createDivision: exempt — no organiser UI for page_playoff_only → W4"] });
+    // strip-types runs untyped callers: the old reason string is refused by name, never stored as "→ undefined".
+    expect(() => l.exempt("createDivision", "no organiser UI → W4" as unknown as Route)).toThrow(/must carry a route/);
+    l.exempt("createDivision", routeTo("W4", "no organiser UI for page_playoff_only"));
+    expect(l.coverage()).toMatchObject({ verdict: "pass", checked: 1, evidence: ["createDivision: exempt — → W4: no organiser UI for page_playoff_only"] });
   });
 
-  it("the W1-driving wave is a wave; a bare arrow or a W with no number is not", () => {
+  it("the W1-driving wave is a wave; a hand-built route to a non-wave, or with no why, is not", () => {
     const l = new MixedLedger();
-    for (const bad of ["→ W", "→ wave 4", "W4", "→W4"]) expect(() => l.exempt("createDivision", bad), bad).toThrow(/wave/);
-    l.exempt("createDivision", "reachable only through catalog template box-league; driving it → W1-driving");
+    const bad = [{ wave: "W", why: "x" }, { wave: "wave 4", why: "x" }, { wave: "W11", why: "x" }, { wave: "", why: "x" }, { wave: "W4", why: " " }, { wave: "W4" }, null];
+    let refused = 0;
+    for (const b of bad) { expect(() => l.exempt("createDivision", b as unknown as Route), JSON.stringify(b)).toThrow(/must carry a route/); refused++; }
+    expect(refused).toBe(bad.length);
+    l.exempt("createDivision", routeTo("W1-driving", "reachable only through catalog template box-league; driving it"));
     l.record("createDivision", "http");
-    expect(l.coverage()).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(l.coverage()).toMatchObject({ verdict: "pass", checked: 1, evidence: ["createDivision: exempt — → W1-driving: reachable only through catalog template box-league; driving it"] });
   });
 
   it("an exempt type still counts its failures beside another type's red, exemption evidence after the reds", () => {
     const l = new MixedLedger();
     l.record("createDivision", "http");
-    l.exempt("createDivision", "no organiser UI for group_only → W5");
+    l.exempt("createDivision", G5);
     l.record("score", "http");
     expect(l.coverage()).toMatchObject({
       verdict: "fail", checked: 2,
-      evidence: ["score: invoked 1×, never in the browser", "createDivision: exempt — no organiser UI for group_only → W5"],
+      evidence: ["score: invoked 1×, never in the browser", "createDivision: exempt — → W5: no organiser UI for group_only"],
     });
   });
 
   it("an exemption for a type the case never invoked checks nothing (still vacuous alone)", () => {
     const l = new MixedLedger();
-    l.exempt("createDivision", "no organiser UI for group_only → W5");
+    l.exempt("createDivision", G5);
     expect(l.coverage()).toMatchObject({ verdict: "fail", checked: 0 });
   });
 
   it("a second exemption for a type must say the same thing: one owner per missing path", () => {
     const l = new MixedLedger();
-    l.exempt("createDivision", "no organiser UI for group_only → W5");
-    l.exempt("createDivision", "no organiser UI for group_only → W5");
-    expect(() => l.exempt("createDivision", "no organiser UI for group_only → W4")).toThrow(/already exempt/);
+    l.exempt("createDivision", G5);
+    l.exempt("createDivision", G5);
+    // The same text again (a second route object) is the same owner.
+    l.exempt("createDivision", routeTo("W5", "no organiser UI for group_only"));
+    expect(() => l.exempt("createDivision", routeTo("W4", "no organiser UI for group_only"))).toThrow(/already exempt/);
+    expect(() => l.exempt("createDivision", routeTo("W5", "another reason"))).toThrow(/already exempt/);
   });
 
   it("an action type the ledger does not declare is refused by name (strip-types runs untyped callers)", () => {
     const l = new MixedLedger();
     expect(() => l.record("finalise" as ActionType, "browser")).toThrow(/not an action type/);
     expect(() => l.wantsBrowser("finalise" as ActionType, "first")).toThrow(/not an action type/);
-    expect(() => l.exempt("finalise" as ActionType, "x → W4")).toThrow(/not an action type/);
+    expect(() => l.exempt("finalise" as ActionType, routeTo("W4", "x"))).toThrow(/not an action type/);
     expect(() => l.record("generate", "carrier-pigeon" as "http")).toThrow(/browser or http/);
   });
 

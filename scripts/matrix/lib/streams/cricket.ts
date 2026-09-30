@@ -6,12 +6,17 @@
 // :1682); a winning chase keeps a wicket in hand. Two-innings streams (the
 // `test` preset, and its draw) are W1-driving's generator work, not built yet.
 import type { PadSpec } from "@seazn/engine/sport";
+import { routeTo } from "../routing.ts";
 import { sportModule } from "../sport-cfg.ts";
 import { GeneratorUnsupported, START, outcomeLabel, type SportStreamGenerator } from "./types.ts";
 
 interface CricketCfg { inningsPerSide: number; ballsPerInnings: number }
 
 const SUMMARY = "cricket.innings.summary";
+/** Ruling 44: the two-innings generator is W1-driving's. The refusal names the
+ *  wave through this route, so the message committed in variants.json is
+ *  unchanged (W1-driving Task 10 builds the path and drops the refusal). */
+const TWO_INNINGS = routeTo("W1-driving", "cricket two-innings generator (ruling 44)");
 
 /** The engine's own declaration refused: its padSpec carries no usable wicket
  *  ceiling for an innings total, so there is no all-out to clamp to. */
@@ -40,7 +45,7 @@ export const cricketGenerator: SportStreamGenerator = {
   decided(req) {
     const cfg = req.cfg as CricketCfg;
     if (cfg.inningsPerSide !== 1) {
-      throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), "two-innings streams are W1-driving's generator work");
+      throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), `two-innings streams are ${TWO_INNINGS.wave}'s generator work`);
     }
     if (req.outcome.kind === "draw") throw new GeneratorUnsupported(req.sportKey, "draw", "limited-overs cricket has no draw");
     const B = cfg.ballsPerInnings;

@@ -11,7 +11,7 @@ import { NoOrganiserPath, RefusedCall } from "../lib/driver/types.ts";
 import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
 import type { PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { CaseBrowser } from "../lib/browser/session.ts";
-import { EMPTY_PADS, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
+import { EMPTY_PADS, OVERRIDE_ROUTE, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
 import type { Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
@@ -1059,7 +1059,7 @@ describe("summariseRun (PF4) — empty first", () => {
       // Controller ruling (fix round 1): ⏳ is an honest owner-assigned state, never vacuity.
       kase("deferred", "later", "W1b: team rosters", []),
       // …and so is 🚫 (W1c Task 6, M-4 ruling): a path this layer does not drive, owned by a wave.
-      kase("no-path", "no_path", "W1-driving: the division builder takes no rule override", []),
+      kase("no-path", "no_path", `${OVERRIDE_ROUTE.wave}: the division builder takes no rule override`, []),
       kase("works", "works", "1 checks, 3 items", [chk("pass", 3), chk("abstain", 0)]),
       kase("real-red", "red", "k: wrong", [chk("fail", 2)]),
       kase("refused", "red", "error: RefusedCall: POST /x → HTTP 400 VALIDATION: bad", []),
@@ -1412,7 +1412,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     const run: BrowserRun = {
       caseDriver: async (co) => {
         const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
-          createDivision: async () => { throw new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"); },
+          createDivision: async () => { throw new NoOrganiserPath(OVERRIDE_ROUTE.wave, "the division builder takes no rule override (pointsToWin)"); },
           checks: (): CheckResult[] => [],
         });
         return { driver, close: async () => undefined };
@@ -1421,7 +1421,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     };
     expect(await runSlice(deps({ openBrowserRun: async () => run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "np", "--report-dir", dir])).toBe(0);
     const [c] = resultsIn(dir, "np").cases;
-    expect(c).toMatchObject({ state: "no_path", reason: "W1-driving: the division builder takes no rule override (pointsToWin)", checks: [] });
+    expect(c).toMatchObject({ state: "no_path", reason: `${OVERRIDE_ROUTE.wave}: the division builder takes no rule override (pointsToWin)`, checks: [] });
     expect(io.out()).toMatch(/vacuous: none/);
     expect(io.out()).toMatch(/error reds: none/);
   });
@@ -1630,7 +1630,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     capture();
     const throws: [string, () => Error, string][] = [
       ["later", () => new ScenarioUnsupported("W1-driving", "team rosters"), "later"],
-      ["no_path", () => new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"), "no_path"],
+      ["no_path", () => new NoOrganiserPath(OVERRIDE_ROUTE.wave, "the division builder takes no rule override (pointsToWin)"), "no_path"],
       ["error", () => new Error("scenario boom"), "red"],
     ];
     let checked = 0;

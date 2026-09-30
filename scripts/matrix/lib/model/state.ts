@@ -17,6 +17,7 @@ import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
+import { routeTo } from "../routing.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
@@ -248,6 +249,9 @@ export function orientationBound(legs: number): number {
 type Knobs = Parameters<typeof stagesForRow>[1];
 
 const slugOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 60);
+/** Ruling 49: the model gets team rosters in W1-driving. The team refusal names
+ *  the wave through this route (W1-driving Task 14 replaces the refusal). */
+const MODEL_ROSTERS = routeTo("W1-driving", "the model fields no team rosters yet (ruling 49)");
 
 /** A fresh division (not started) with `entrants` entrants on the row's single
  *  stage, built from the builder's own bodies (stagesForRow). */
@@ -256,7 +260,7 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
   if (bodies.length !== 1) throw new Error(`model: ${input.row} is multi-stage — the model drives single-stage rows (W1a's slice)`);
   const cfg = resolveSportCfg(input.sport, input.variant);
   const kind = entrantKindFor(input.sport, cfg);
-  if (kind === "team") throw new Error(`model: ${input.sport} fields teams — rosters are W1-driving`);
+  if (kind === "team") throw new Error(`model: ${input.sport} fields teams — rosters are ${MODEL_ROSTERS.wave}`);
   const d = input.driver;
   const competitionId = input.competitionId ?? (await d.createCompetition({ name: `Matrix model ${input.tag}`, slug: slugOf(`m-${input.tag}`) })).id;
   const division = await d.createDivision(competitionId, { name: `Matrix model ${input.tag}`, slug: slugOf(`d-${input.tag}`), sportKey: input.sport, variantKey: input.variant });

@@ -14,6 +14,7 @@ import type * as TS from "typescript";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
+import { WAVE_ID } from "../lib/routing.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
@@ -545,19 +546,28 @@ describe("regression cases (R29)", () => {
   });
 });
 
-// --- Q-A guard (ruling 28) ------------------------------------------------------
-/** The deferral classes, each with the index of its wave argument. */
-const DEFERRALS: Readonly<Record<string, number>> = { ScenarioUnsupported: 0, RowBuildDeferred: 1 };
-interface DeferralScan { sites: number; waves: string[]; unread: string[] }
-/** Every use of a deferral class in `src`, read from the TypeScript AST (so a
- *  comment or a string is never a site). A `new` with a literal or
- *  DRIVING_WAVE wave is read; the declaration, a plain import/re-export,
- *  `instanceof` and a type position construct nothing. ANY other use — a
- *  subclass (its wave hides in `super(`), an `as` alias, a value alias,
- *  `Reflect.construct` — is unread, and an unread use fails the guard. */
-function scanDeferrals(src: string, file = "synthetic.ts"): DeferralScan {
+// --- Q-A guard (ruling 28; W1-driving D7) -----------------------------------------
+/** The deferral classes, each with the index of its wave argument. `ModelUnsupported`
+ *  is constructed from W1-driving Task 14 on; reading a class nothing builds yet costs nothing. */
+const DEFERRALS: Readonly<Record<string, number>> = { ScenarioUnsupported: 0, RowBuildDeferred: 1, NoOrganiserPath: 0, ModelUnsupported: 0 };
+/** The one routing call (lib/routing.ts): its argument 0 is the wave. */
+const ROUTE_CALL = "routeTo";
+interface RouteScan { sites: number; waves: string[]; unread: string[] }
+/** Every route in `src`, read from the TypeScript AST (so a comment is never a
+ *  site). Two constructs name a wave: `routeTo(<wave>, …)` and a `new` of a
+ *  deferral class. Either is read when its wave argument is a literal or
+ *  DRIVING_WAVE; any other argument is unread. A deferral class's declaration,
+ *  a plain import/re-export, `instanceof` and a type position construct
+ *  nothing, and neither does routeTo's own declaration or a plain import. ANY
+ *  other use — a subclass (its wave hides in `super(`), an `as` alias, a value
+ *  alias, `Reflect.construct`, routeTo passed as a value — is unread.
+ *  And a string, template or template span whose text IS a programme wave id,
+ *  or contains "W1-driving", anywhere else is a stray wave literal (a map
+ *  value, a const, a `routedTo:` field), unread by name: a new routing shape
+ *  cannot hide from the guard. An unread use fails the guard. */
+function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const out: DeferralScan = { sites: 0, waves: [], unread: [] };
+  const out: RouteScan = { sites: 0, waves: [], unread: [] };
   const at = (n: TS.Node) => `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
   // Fail closed on a parse error: an unclosed comment or template swallows
   // the code after it, and a deferral inside would read as "no sites".
@@ -570,42 +580,95 @@ function scanDeferrals(src: string, file = "synthetic.ts"): DeferralScan {
     if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) return arg.text;
     return ts.isIdentifier(arg) && arg.text === "DRIVING_WAVE" ? DRIVING_WAVE : null;
   };
+  /** The literals that ARE a route's wave argument: never strays. */
+  const declared = new Set<TS.Node>();
+  const readSite = (arg: TS.Expression | undefined, where: string): void => {
+    out.sites++;
+    const w = waveOf(arg);
+    if (w === null) { out.unread.push(where); return; }
+    out.waves.push(w);
+    if (arg !== undefined) declared.add(arg);
+  };
   const classify = (id: TS.Identifier, waveIndex: number): void => {
     const p = id.parent;
     const callee: TS.Node = ts.isPropertyAccessExpression(p) && p.name === id ? p : id;
     const host = callee.parent;
-    if (ts.isNewExpression(host) && host.expression === callee) {
-      out.sites++;
-      const w = waveOf(host.arguments?.[waveIndex]);
-      if (w === null) out.unread.push(`${at(id)} ${host.getText(sf)}`); else out.waves.push(w);
-      return;
-    }
+    if (ts.isNewExpression(host) && host.expression === callee) { readSite(host.arguments?.[waveIndex], `${at(id)} ${host.getText(sf)}`); return; }
     if (ts.isClassDeclaration(p) && p.name === id) return;
     if ((ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) && p.propertyName === undefined) return;
     if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && p.right === id) return;
     if (ts.isTypeReferenceNode(p)) return;
     out.unread.push(`${at(id)} ${id.text} used as ${ts.SyntaxKind[p.kind]}`);
   };
+  const classifyRoute = (id: TS.Identifier): void => {
+    const p = id.parent;
+    if (ts.isCallExpression(p) && p.expression === id) { readSite(p.arguments[0], `${at(id)} ${p.getText(sf)}: routeTo's wave is not a literal`); return; }
+    if (ts.isFunctionDeclaration(p) && p.name === id) return;
+    if ((ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) && p.propertyName === undefined) return;
+    out.unread.push(`${at(id)} ${ROUTE_CALL} used as ${ts.SyntaxKind[p.kind]}`);
+  };
+  const literals: TS.Node[] = [];
   const visit = (n: TS.Node): void => {
-    if (ts.isIdentifier(n) && Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
+    if (ts.isIdentifier(n)) {
+      if (Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
+      else if (n.text === ROUTE_CALL) classifyRoute(n);
+    } else if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
+      if (WAVE_ID.test(n.text) || n.text.includes("W1-driving")) literals.push(n);
+    }
     ts.forEachChild(n, visit);
   };
   visit(sf);
+  for (const n of literals) {
+    if (!declared.has(n)) out.unread.push(`${at(n)} stray wave literal ${n.getText(sf)}: name a wave only through routeTo or a deferral class`);
+  }
   return out;
 }
 /** A Status-table state that is still owed work. Markdown emphasis is not part of the state. */
 const isOpen = (state: string): boolean => /^(not started|in progress|awaiting)/i.test(state.replace(/[*_]/g, "").trim());
+/** _INDEX.md's Status table: wave → state. */
+function statusRows(): Map<string, string> {
+  const start = INDEX.indexOf("## Status");
+  const status = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1));
+  return new Map([...status.matchAll(/^\| (W[\w-]+) \| [^|]* \| (.*) \|$/gm)].map((m) => [m[1]!, m[2]!]));
+}
+/** The guard's judgement, apart from the tree it reads: nothing unread, at
+ *  least one route read (R25: zero read is a failure, never "no deferral
+ *  sites" — false premise 8), and every wave a route names has an open Status
+ *  row. `alsoNamed`: waves the catalogue's data names (knownNoPath /
+ *  l2NoPath), judged too but not counted as routes read. */
+function judgeRoutes(scans: readonly RouteScan[], jsonRoutes: readonly string[], rows: ReadonlyMap<string, string>, alsoNamed: readonly string[] = []): { read: number; waves: string[] } {
+  expect(scans.flatMap((s) => s.unread), "a route names its wave in a shape this guard cannot read, or a bare wave literal sits outside routeTo").toEqual([]);
+  const read = scans.reduce((n, s) => n + s.sites, 0) + jsonRoutes.length;
+  expect(read, "routes read across every construct").toBeGreaterThan(0);
+  const waves = [...new Set([...scans.flatMap((s) => s.waves), ...jsonRoutes, ...alsoNamed])];
+  for (const w of waves) {
+    expect(rows.has(w), `${w} has no status row in _INDEX.md`).toBe(true);
+    expect(isOpen(rows.get(w)!), `${w}: "${rows.get(w)}" is not open`).toBe(true);
+  }
+  return { read, waves };
+}
 /** Every module the harness ships (test files and fixtures excluded). */
 const shipped = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? (e.name === "__tests__" ? [] : shipped(join(d, e.name)))
     : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [join(d, e.name)] : []);
 
-describe("Q-A guard — the deferral reader", () => {
+describe("Q-A guard — the route reader", () => {
+  it("empty case first: an empty source reads no route and nothing unread", () => {
+    expect(scanRoutes("")).toEqual({ sites: 0, waves: [], unread: [] });
+  });
   it("reads a literal wave, DRIVING_WAVE by value, RowBuildDeferred's second argument, and a namespaced class", () => {
-    expect(scanDeferrals(`throw new ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
-    expect(scanDeferrals(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`)).toEqual({ sites: 1, waves: [DRIVING_WAVE], unread: [] });
-    expect(scanDeferrals(`throw new RowBuildDeferred("ladder", "W7");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
-    expect(scanDeferrals(`import * as T from "./types.ts";\nthrow new T.ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+    expect(scanRoutes(`throw new ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+    expect(scanRoutes(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`)).toEqual({ sites: 1, waves: [DRIVING_WAVE], unread: [] });
+    expect(scanRoutes(`throw new RowBuildDeferred("ladder", "W7");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
+    expect(scanRoutes(`import * as T from "./types.ts";\nthrow new T.ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+  });
+  it("reads routeTo(<literal>, …) and the four deferral classes, NoOrganiserPath and ModelUnsupported included", () => {
+    expect(scanRoutes(`export const r = routeTo("W4", "why");`)).toEqual({ sites: 1, waves: ["W4"], unread: [] });
+    expect(scanRoutes(`throw new NoOrganiserPath("W2", "x");`)).toEqual({ sites: 1, waves: ["W2"], unread: [] });
+    expect(scanRoutes(`throw new ModelUnsupported("W7", "x");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
+    // A route by identifier: the one construct's declaration and imports are not sites.
+    expect(scanRoutes(`import { routeTo } from "./routing.ts";\nexport function routeTo(wave: string, why: string) { return { wave, why }; }\nconst r = routeTo("W1-driving", "why");`))
+      .toEqual({ sites: 1, waves: ["W1-driving"], unread: [] });
   });
   it("ignores what constructs nothing: the declaration, a plain import, instanceof, a type, a comment, a string", () => {
     const src = [
@@ -615,7 +678,7 @@ describe("Q-A guard — the deferral reader", () => {
       `const name = "new RowBuildDeferred(row, \\"W1a\\")";`,
       `function f(e: ScenarioUnsupported | RowBuildDeferred) { return e instanceof ScenarioUnsupported; }`,
     ].join("\n");
-    expect(scanDeferrals(src)).toEqual({ sites: 0, waves: [], unread: [] });
+    expect(scanRoutes(src)).toEqual({ sites: 0, waves: [], unread: [] });
   });
   it("refuses what hides the wave: an unreadable argument, a missing one, a subclass, an import alias, a value alias, Reflect.construct", () => {
     const hidden = {
@@ -630,10 +693,39 @@ describe("Q-A guard — the deferral reader", () => {
       unterminatedTemplate: `const s = \`never closed\nthrow new ScenarioUnsupported("W1a", "x");`,
     };
     for (const [shape, src] of Object.entries(hidden)) {
-      const scan = scanDeferrals(src);
+      const scan = scanRoutes(src);
       expect(scan.unread.length, `${shape}: ${JSON.stringify(scan)}`).toBeGreaterThan(0);
       expect(scan.waves, shape).not.toContain("W1a");
     }
+  });
+  it("a stray wave literal is refused by name: a map value, a const, a template, a W1-driving substring", () => {
+    const stray = {
+      mapValue: `const M = { D1: "W9" };`,
+      constant: `export const OVERRIDE = "W1-driving";`,
+      template: "const t = `W4`;",
+      substring: `const s = "owed to W1-driving later";`,
+      routedTo: `const c = { routedTo: "W2" };`,
+      // A template span, not a whole literal: "rosters are W1-driving" in a message.
+      span: "const m = `model: ${sport} fields teams — rosters are W1-driving`;",
+      // A routeTo's WHY that names the wave is a stray too: the wave is argument 0's alone.
+      why: `const r = routeTo("W2", "owed to W1-driving");`,
+    };
+    let refused = 0;
+    for (const [shape, src] of Object.entries(stray)) {
+      const scan = scanRoutes(src);
+      expect(scan.unread.some((u) => u.includes("stray wave literal")), `${shape}: ${JSON.stringify(scan)}`).toBe(true);
+      refused++;
+    }
+    expect(refused).toBe(Object.keys(stray).length);
+  });
+  it("a routeTo whose wave is not a literal is unread (a variable hides the wave), and so is routeTo passed as a value", () => {
+    expect(scanRoutes(`const w = pick(); routeTo(w, "x");`).unread.length).toBeGreaterThan(0);
+    expect(scanRoutes(`const w = pick(); routeTo(w, "x");`).sites).toBe(1);
+    expect(scanRoutes(`routeTo();`).unread.length).toBeGreaterThan(0);
+    expect(scanRoutes(`const r = routeTo; r(pick(), "x");`).unread.length).toBeGreaterThan(0);
+  });
+  it("text that only looks like a wave is not a site: W11, a lowercase set name, a comment", () => {
+    expect(scanRoutes(`const a = "W11"; const b = "w1-driving"; // routeTo("W4", "x")`)).toEqual({ sites: 0, waves: [], unread: [] });
   });
   it("a Status state is open when it says not started / in progress / awaiting, with or without emphasis", () => {
     // W1b's and W1a's cells as written on 2026-09-28, then the plain forms.
@@ -645,25 +737,45 @@ describe("Q-A guard — the deferral reader", () => {
   });
 });
 
-describe("Q-A guard — a deferral or an owning wave never names a finished wave (ruling 28)", () => {
-  it("every wave a deferral or the catalogue's knownNoPath / l2NoPath names has an _INDEX status row that is open", () => {
-    const start = INDEX.indexOf("## Status");
-    const status = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1));
-    const rows = new Map([...status.matchAll(/^\| (W[\w-]+) \| [^|]* \| (.*) \|$/gm)].map((m) => [m[1]!, m[2]!]));
+describe("Q-A guard — the judgement, apart from the tree", () => {
+  it("empty case first: zero routes read is a failure, never a pass (R25)", () => {
+    const rows = statusRows();
+    expect(rows.size).toBeGreaterThan(0);
+    expect(() => judgeRoutes([], [], rows)).toThrow(/routes read across every construct/);
+    // A scan that read nothing is still zero, whatever the catalogue's data names.
+    expect(() => judgeRoutes([{ sites: 0, waves: [], unread: [] }], [], rows, ["W2"])).toThrow(/routes read across every construct/);
+  });
+  it("a route to a wave whose Status row is closed fails naming the row; the same route to an open row passes", () => {
+    // Synthetic rows: never the real W1-driving row, which Task 16 closes.
+    const one: RouteScan[] = [{ sites: 1, waves: ["W1-driving"], unread: [] }];
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "done"]]))).toThrow(/W1-driving: "done" is not open/);
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "**Tasks 1–16 done** — merged"]]))).toThrow(/W1-driving: .* is not open/);
+    expect(judgeRoutes(one, [], new Map([["W1-driving", "**in progress** — plan"]]))).toEqual({ read: 1, waves: ["W1-driving"] });
+    // A counts.json route and a catalogue-named wave are judged the same way.
+    expect(() => judgeRoutes([], ["W1-driving"], new Map([["W1-driving", "done"]]))).toThrow(/W1-driving: "done" is not open/);
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "in progress"], ["W9", "done"]]), ["W9"])).toThrow(/W9: "done" is not open/);
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "in progress"]]), ["W9"])).toThrow(/W9 has no status row/);
+  });
+  it("an unread route fails the judgement, whatever else was read", () => {
+    const rows = new Map([["W2", "not started"]]);
+    expect(() => judgeRoutes([{ sites: 2, waves: ["W2"], unread: ["x.ts:1 stray wave literal \"W2\""] }], [], rows)).toThrow(/cannot read, or a bare wave literal/);
+  });
+});
+
+describe("Q-A guard — a route never names a finished wave (ruling 28)", () => {
+  it("every wave a route names — routeTo, a deferral class, the catalogue's knownNoPath / l2NoPath, counts.json's routedTo — has an _INDEX status row that is open", () => {
+    const rows = statusRows();
     expect(rows.size).toBeGreaterThan(0);
     const modules = shipped(resolve(REPO, "scripts/matrix"));
     expect(modules.length).toBeGreaterThan(0);
-    const scans = modules.map((f) => scanDeferrals(readFileSync(f, "utf8"), f));
-    // A site whose wave the reader cannot see would be skipped silently.
-    expect(scans.flatMap((s) => s.unread), "a deferral names its wave in a shape this guard cannot read").toEqual([]);
-    expect(scans.reduce((n, s) => n + s.sites, 0)).toBeGreaterThan(0);
-    const deferred = new Set(scans.flatMap((s) => s.waves));
-    const owing = new Set(ATOMIC.flatMap((a) => [a.knownNoPath, a.l2NoPath]).filter((w): w is string => w !== null));
-    expect(deferred.size).toBeGreaterThan(0);
-    expect(owing.size).toBeGreaterThan(0);
-    for (const w of new Set([...deferred, ...owing])) {
-      expect(rows.has(w), `${w} has no status row in _INDEX.md`).toBe(true);
-      expect(isOpen(rows.get(w)!), `${w}: "${rows.get(w)}" is not open`).toBe(true);
-    }
+    const scans = modules.map((f) => scanRoutes(readFileSync(f, "utf8"), f));
+    const counts = JSON.parse(readFileSync(resolve(REPO, "scripts/matrix/catalogue/counts.json"), "utf8")) as { variants: Record<string, unknown> };
+    const jsonRoutes = Object.values(counts.variants).flatMap((v) => (v !== null && typeof v === "object" && typeof (v as { routedTo?: unknown }).routedTo === "string" ? [(v as { routedTo: string }).routedTo] : []));
+    // The reader is not blind to the JSON: counts.json routes its unscorable variant lists (committed-catalogue.test.ts).
+    expect(jsonRoutes.length, "counts.json routes read").toBeGreaterThan(0);
+    const owing = ATOMIC.flatMap((a) => [a.knownNoPath, a.l2NoPath]).filter((w): w is string => w !== null);
+    expect(owing.length).toBeGreaterThan(0);
+    const { read, waves } = judgeRoutes(scans, jsonRoutes, rows, owing);
+    console.info(`Q-A guard: ${read} routes read (${read - jsonRoutes.length} in ${modules.length} modules, ${jsonRoutes.length} in counts.json); waves ${waves.join(", ")}`);
   });
 });

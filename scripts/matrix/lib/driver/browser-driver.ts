@@ -28,7 +28,7 @@
 // Every wait is derived from the product's constants (AGENTS class 20;
 // browser-budget.test.ts scans this file for a flat timeout).
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
-import { apiOnlyUiPath } from "../api-only-ui.ts";
+import { API_ONLY_UI_WAVE, TEMPLATE_DRIVING, apiOnlyUiPath } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
 import { createCompetitionUi } from "../browser/pages/competition.ts";
@@ -45,6 +45,7 @@ import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
 import type { MatrixPadAdapter } from "../pads/types.ts";
 import type { CheckResult } from "../results.ts";
+import { routeTo, type Route } from "../routing.ts";
 import { assertion, type Item } from "../scenarios/assertions.ts";
 import type { CaseSpec } from "../scenarios/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
@@ -116,9 +117,11 @@ export const PUBLIC_REVALIDATE_S = 30;
  *  regeneration of the page may read a data entry this old. */
 export const PUBLIC_DATA_REVALIDATE_S = 30;
 /** The rules editor, not the builder, carries a division's match-rules
- *  override; no wave in design §8 or the programme index owns driving it, so
- *  it is W1-driving's (M-4 ruling, fix round 1). */
-const OVERRIDE_WAVE = "W1-driving";
+ *  override (M-4 ruling, fix round 1). Ruling 47: driving it in the browser
+ *  goes to W2, which owns the editor fixes under ruling 33. The
+ *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a
+ *  literal only, PF-3); browser-driver.test.ts pins the two together. */
+export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; W2 owns the editor fixes (rulings 33, 47)");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -372,15 +375,16 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   /** D7: an API-only row has no organiser control; the text names who owns it
-   *  (api-only-ui.ts, the one authority the layer planner reads too). */
-  #judgeApiOnlyPath(row: ApiOnlyRowKey): string {
+   *  (api-only-ui.ts, the one authority the layer planner reads too). Answers
+   *  the row's route, which the mixed ledger's exemption carries. */
+  #judgeApiOnlyPath(row: ApiOnlyRowKey): Route {
     const path = apiOnlyUiPath(row, this.#spec.sport);
     const text = `${path.reason} → ${path.wave}`;
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
       this.#checks.push(path.template === null ? assertion("organiser-ui-path", [{ ok: false, note: text }]) : assertion("organiser-ui-path", [], text));
     }
-    return text;
+    return path.template === null ? API_ONLY_UI_WAVE[row] : TEMPLATE_DRIVING;
   }
 
   async createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
@@ -398,7 +402,7 @@ export class BrowserDriver implements OrganiserDriver {
     const override = Object.keys(input.config ?? {});
     // M-4 ruling: a cell with no path in this layer (🚫, owned by a wave), never an error red.
     if (override.length > 0) {
-      throw new NoOrganiserPath(OVERRIDE_WAVE, `the division builder takes no rule override (${override.join(", ")}); the rules editor that does is not driven in this layer`);
+      throw new NoOrganiserPath("W2", `the division builder takes no rule override (${override.join(", ")}); ${OVERRIDE_ROUTE.why}`);
     }
     this.#ledger.record("createDivision", "browser");
     const { division, stages } = await this.#write(() => this.#ui((p) => p.createDivisionUi(this.#ctx, compSlug, competitionId,

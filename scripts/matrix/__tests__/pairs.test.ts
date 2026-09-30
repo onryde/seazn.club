@@ -14,8 +14,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "../lib/catalogue.ts";
-import { MissingRule, RULES, decide, type Rule } from "../lib/applicability.ts";
+import { MissingRule, RULES, decide, gapReason, type Rule } from "../lib/applicability.ts";
 import { GapUnbound, L2_WIDTHS, UnknownL2Scenario, VariantsIncomplete, planL2, type L2Run } from "../lib/pairs.ts";
+import { routeTo } from "../lib/routing.ts";
 import { l2Atomic, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { buildSportVariants, offlineBuilderDefault } from "../lib/variants.ts";
 
@@ -36,10 +37,10 @@ function owed(r: Rule, row: RowKey, sport: string): Owed | null {
   if (r.gap === undefined || d.gapped.length === 0) return null;
   const first = d.gapped[0]!;
   const def = offlineBuilderDefault(sport);
-  if (first === `${def} (builder default)`) return { gap: r.gap.reason, preset: def, bound: null };
+  if (first === `${def} (builder default)`) return { gap: gapReason(r.gap), preset: def, bound: null };
   const vc = variants.find((v) => v.sport === sport)!.cases.find((c) => c.id === first);
   expect(vc, `${row}|${sport}: gapped id ${first} is neither the default nor a committed variant`).toBeDefined();
-  return { gap: r.gap.reason, preset: vc!.preset, bound: first };
+  return { gap: gapReason(r.gap), preset: vc!.preset, bound: first };
 }
 const TRUTH = new Map<string, Map<string, Owed>>(L2_IDS.map((id) => {
   const m = new Map<string, Owed>();
@@ -133,18 +134,19 @@ describe("L2 pair file", () => {
     // single-sport: the rule applies to ONE sport so the other ten witness the drop; it sweeps every row and cell.
     const id = "M1";
     const one = SPORT_KEYS[SPORT_KEYS.length - 1]!;
-    const gapped: Rule = { when: (f) => f.sport === one, reason: "only one sport", variantDependent: false, witness: null, gap: { when: () => true, reason: "synthetic L3 gap" } };
+    const gapped: Rule = { when: (f) => f.sport === one, reason: "only one sport", variantDependent: false, witness: null, gap: { when: () => true, route: routeTo("W1-driving", "synthetic L3 gap") } };
     const p = planL2({ variants, rules: { ...RULES, [id]: gapped }, only: [id] });
     expect(p.runs.length).toBe(ROW_KEYS.length); // one per row, all on the one sport
     expect(p.targets).toEqual({ rowScenario: ROW_KEYS.length, sportScenario: 1 });
     for (const x of p.runs) {
       expect(x.sport).toBe(one);
-      expect(x.l3Gap).toBe("synthetic L3 gap");
+      // The committed text: the why, then the wave it is routed to (l2-pairs.json's shape).
+      expect(x.l3Gap).toBe("synthetic L3 gap — routed W1-driving");
       expect({ preset: x.preset, bound: x.bound }).toEqual({ preset: offlineBuilderDefault(one), bound: null });
     }
     // The same rule with no gap planned there: identical runs, none marked.
-    const open = planL2({ variants, rules: { ...RULES, [id]: { ...gapped, gap: { when: () => false, reason: "never" } } }, only: [id] });
-    expect(open.runs.map((x) => ({ ...x, l3Gap: "synthetic L3 gap" }))).toEqual(p.runs);
+    const open = planL2({ variants, rules: { ...RULES, [id]: { ...gapped, gap: { when: () => false, route: routeTo("W1-driving", "never") } } }, only: [id] });
+    expect(open.runs.map((x) => ({ ...x, l3Gap: "synthetic L3 gap — routed W1-driving" }))).toEqual(p.runs);
     expect(open.runs.every((x) => x.l3Gap === null)).toBe(true);
   });
 
@@ -156,10 +158,10 @@ describe("L2 pair file", () => {
     for (const v of variants) {
       const vc = v.cases.find((c) => c.preset !== offlineBuilderDefault(v.sport) && c.scorable === null);
       if (vc === undefined) continue;
-      const r: Rule = { when: (f) => f.sport === v.sport && f.preset !== offlineBuilderDefault(v.sport), reason: "off-default preset", variantDependent: true, witness: null, gap: { when: () => true, reason: "variant gap" } };
+      const r: Rule = { when: (f) => f.sport === v.sport && f.preset !== offlineBuilderDefault(v.sport), reason: "off-default preset", variantDependent: true, witness: null, gap: { when: () => true, route: routeTo("W2", "variant gap") } };
       const p = planL2({ variants, rules: { ...RULES, [id]: r }, only: [id] });
       expect(p.runs.length, v.sport).toBe(ROW_KEYS.length);
-      for (const x of p.runs) expect({ sport: x.sport, preset: x.preset, bound: x.bound, l3Gap: x.l3Gap }, `${v.sport} ${x.row}`).toEqual({ sport: v.sport, preset: vc.preset, bound: vc.id, l3Gap: "variant gap" });
+      for (const x of p.runs) expect({ sport: x.sport, preset: x.preset, bound: x.bound, l3Gap: x.l3Gap }, `${v.sport} ${x.row}`).toEqual({ sport: v.sport, preset: vc.preset, bound: vc.id, l3Gap: "variant gap — routed W2" });
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
@@ -199,7 +201,7 @@ describe("L2 pair file", () => {
     let calls = 0;
     // Answers yes only on its first call: decide sees it apply under the gap,
     // then the gap-lifted decision sees it not apply.
-    const flip: Rule = { when: () => calls++ === 0, reason: "flip", variantDependent: false, witness: null, gap: { when: () => true, reason: "g" } };
+    const flip: Rule = { when: () => calls++ === 0, reason: "flip", variantDependent: false, witness: null, gap: { when: () => true, route: routeTo("W2", "g") } };
     expect(() => planL2({ variants, rules: { ...RULES, [id]: flip }, only: [id] })).toThrow(GapUnbound);
     expect(calls).toBe(2);
   });

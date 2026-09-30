@@ -9,14 +9,20 @@
 // loads statically and which must never reach lib/browser — boundary.test.ts)
 // plans it as 🚫. Neither keeps a copy.
 import { API_ONLY_ROWS, type ApiOnlyRowKey } from "./catalogue.ts";
+import { routeTo, type Route } from "./routing.ts";
 
-/** The wave that owns the organiser control each API-only row lacks. */
-export const API_ONLY_UI_WAVE: Readonly<Record<ApiOnlyRowKey, string>> = Object.freeze({
-  knockout_third_place: "W4", page_playoff_only: "W4", stepladder_only: "W4", group_only: "W5", group_group_ko: "W5",
+/** The route to the wave that owns the organiser control each API-only row lacks. */
+export const API_ONLY_UI_WAVE: Readonly<Record<ApiOnlyRowKey, Route>> = Object.freeze({
+  knockout_third_place: routeTo("W4", "no builder control for a third-place match (design §8)"),
+  page_playoff_only: routeTo("W4", "no builder control for a first-stage page playoff (design §8)"),
+  stepladder_only: routeTo("W4", "no builder control for a first-stage stepladder (design §8)"),
+  group_only: routeTo("W5", "no builder control for a group stage with no knockout (design §8)"),
+  group_group_ko: routeTo("W5", "no builder control for two group stages (design §8)"),
 });
 /** The two API-only cells a catalog template does reach (template-card-<key>). */
 export const TEMPLATE_ONLY_CELLS: Readonly<Record<string, string>> = Object.freeze({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
-export const TEMPLATE_DRIVING_WAVE = "W1-driving";
+/** Ruling 47: the template-only cells are driven by W1-driving. */
+export const TEMPLATE_DRIVING = routeTo("W1-driving", "catalog template driving (ruling 47)");
 
 export interface ApiOnlyUiPath {
   /** Who owes the organiser path. */
@@ -41,6 +47,6 @@ export function apiOnlyUiPath(row: ApiOnlyRowKey, sport: string): ApiOnlyUiPath 
   const cell = `${row}|${sport}`;
   const template = Object.prototype.hasOwnProperty.call(TEMPLATE_ONLY_CELLS, cell) ? TEMPLATE_ONLY_CELLS[cell] : null;
   return template === null
-    ? { wave: API_ONLY_UI_WAVE[row], template: null, reason: `no organiser control builds ${row}` }
-    : { wave: TEMPLATE_DRIVING_WAVE, template, reason: `reachable only through catalog template ${template}; driving it` };
+    ? { wave: API_ONLY_UI_WAVE[row].wave, template: null, reason: `no organiser control builds ${row}` }
+    : { wave: TEMPLATE_DRIVING.wave, template, reason: `reachable only through catalog template ${template}; driving it` };
 }
