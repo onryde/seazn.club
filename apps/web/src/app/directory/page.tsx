@@ -25,8 +25,10 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { ScrollActiveTabIntoView } from "@/components/ui/scroll-active-tab-into-view";
 import { listVenues } from "@/server/usecases/venues";
 import { VenuesPanel } from "@/components/v2/venues-panel";
+import { listStreamTargets } from "@/server/usecases/stream-targets";
+import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
 
-const TABS = ["players", "clubs", "officials", "venues"] as const;
+const TABS = ["players", "clubs", "officials", "venues", "streaming"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function DirectoryPage({
@@ -76,6 +78,7 @@ export default async function DirectoryPage({
         {tab === "clubs" && <ClubsTab ui={ui} />}
         {tab === "officials" && <OfficialsTab ui={ui} />}
         {tab === "venues" && <VenuesTab ui={ui} />}
+        {tab === "streaming" && <StreamingTab ui={ui} locale={locale} />}
       </main>
     </DictProvider>
   );
@@ -245,6 +248,21 @@ async function VenuesTab({ ui }: { ui: Dict }) {
         orgId={auth.orgId}
         canEdit={canEdit}
       />
+    </div>
+  );
+}
+
+// Spec 2026-09-30 §4 (D1) — the ONE place streaming destinations are managed. Every member sees the list; Add / Rename /
+// Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
+// through the same use-case the API serves (VenuesTab's shape), so the list, its key hints and its "in use" badges are
+// the API's projection, never a second query.
+async function StreamingTab({ ui, locale }: { ui: Dict; locale: string }) {
+  const { auth, canEdit } = await requirePageAuth();
+  const targets = await listStreamTargets(auth, auth.orgId);
+  return (
+    <div className="space-y-4">
+      <p className="max-w-xl text-sm text-slate-500">{t(ui, "directory.streaming.desc")}</p>
+      <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} />
     </div>
   );
 }
