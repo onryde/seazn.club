@@ -743,7 +743,9 @@ describe.skipIf(!HAS_DB)("the hidden L rung: out of the table, intact in the mat
   // rendered cells to compare. That is the point: hiding the rung must not
   // stop anyone checking that its matrix is still coherent, or the day it goes
   // back on sale it sells whatever the last unrelated migration left behind.
-  it("keeps L's matrix differing from M on exactly the two keys V341 overrides", async () => {
+  // V426 (owner ruling 2026-09-29, Streaming R1 Task 14b) adds a THIRD deliberate divergence:
+  // `streaming.credits.monthly` — the passes' one-off match credits, event_pass 1 · event_pass_l 5.
+  it("keeps L's matrix differing from M on exactly the keys V341 and V426 override", async () => {
     const rows = await sql<
       { plan_key: string; feature_key: string; bool_value: boolean | null; int_value: number | null }[]
     >`
@@ -767,7 +769,9 @@ describe.skipIf(!HAS_DB)("the hidden L rung: out of the table, intact in the mat
       })
       .sort()
       .join(", ");
-    expect(differing).toBe("divisions.per_competition.max, entrants.per_division.max");
+    expect(differing).toBe(
+      "divisions.per_competition.max, entrants.per_division.max, streaming.credits.monthly",
+    );
   });
 });
 

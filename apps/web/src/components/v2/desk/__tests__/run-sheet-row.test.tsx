@@ -10,8 +10,11 @@ import { messages } from "@/lib/messages";
 
 // `RunSheetRow`'s inline Set-time editor refreshes on save. Nothing here clicks
 // it, but the hook throws outside a router context.
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 
 // Competition Desk W2, max-effort review findings 6 and 8 — both about what a

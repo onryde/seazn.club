@@ -14,6 +14,7 @@ import "server-only";
 // transaction has closed. E5: storage_exhausted is a REFUSAL (503, no row).
 import { sql, type Tx } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
@@ -39,11 +40,18 @@ import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { NoCreditsError, consumeForSession, creditBalance, lockOrg, reuseWindowOpen } from "./stream-credits";
+import {
+  NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
+  lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
+} from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
 import { setFixtureStreamUrl } from "./fixtures";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
+
+/** M6: the states a session can still CONSUME from, i.e. not yet live — `apply` reads the org's monthly rate (a pooled
+ *  read) for these alone. The domain decides a consume only from `warming`, and states only move forward. */
+const CAN_STILL_CONSUME: readonly Session["state"][] = ["requested", "provisioning", "warming"];
 
 export interface SessionDeps { drivers: RelayDrivers; now: () => Date; appUrl: string }
 export function defaultDeps(appUrl: string): SessionDeps {
@@ -285,6 +293,26 @@ export async function apply(
   actor?: Actor,
 ): Promise<Session | null> {
   const now = deps.now();
+  // M6 (Task 14b review): the go-live consume rolls the org's free month over under the money lock it already holds, so
+  // it needs the org's rate — a POOLED read (orgPlanKey) that must never run inside the transaction below (lib/db.ts's
+  // nesting guard: a second connection per open transaction is a self-deadlock under load). So it is read HERE, and only
+  // for a session that can still consume: states only move forward (domain/session.ts), and a consume is decided only
+  // from `warming`, so a session seen live, ending or terminal now can never consume in this apply. The row is peeked
+  // unlocked — `org_id` never changes, and `state` is only the gate for this read; the decision reads the LOCKED row.
+  const [peek] = await sql<{ org_id: string; state: Session["state"] }[]>`select org_id, state from fixture_stream_sessions where id = ${sessionId}`;
+  if (!peek) return null;
+  // N4 (Task 14b re-review): a FAILED read must not block the apply. Most decisions from these states (Stop, every expiry)
+  // never consume, so a pooled-read outage is reported and `monthly` stays unresolved: the consume guard below refuses the
+  // one decision that needs the rate, by name, and the next apply retries the read.
+  let monthly: { rate: number; now: Date } | undefined;
+  if (CAN_STILL_CONSUME.includes(peek.state)) {
+    try {
+      monthly = { rate: await streamMonthlyRate(peek.org_id), now: new Date() };
+    } catch (err) {
+      log.error({ err: String(err), sessionId, orgId: peek.org_id, state: peek.state }, "stream session: the monthly credit rate read failed — reported; this apply decides without it and refuses a go-live consume");
+      captureError(err, { orgId: peek.org_id, route: "relay.credits.apply_rate_read", extra: { sessionId, state: peek.state } });
+    }
+  }
   const outcome = (await sql.begin(async (tx) => {
     // A7 — LOCK ORDER. stream-credits.ts's rule is that every writer takes the org's money lock FIRST (`lockOrg`, before
     // any read), and its staff paths then take this session row (`staffRow`: lockOrg, then FOR KEY SHARE on the linked
@@ -294,10 +322,9 @@ export async function apply(
     // `decide`, and that needs the locked row. `org_id` is read without a lock because nothing ever changes it; it is
     // only the lock's key. consumeForSession's own lockOrg is then re-entrant. `recordEffect` and the projection's
     // writes take the row alone and never the org lock, so no cycle can form through them.
-    // Witness: "A7 lock order: … the row stays free for a FOR UPDATE NOWAIT".
-    const [owner] = await tx<{ org_id: string }[]>`select org_id from fixture_stream_sessions where id = ${sessionId}`;
-    if (!owner) return null;
-    await lockOrg(tx, owner.org_id);
+    // Witness: "A7 lock order: … the row stays free for a FOR UPDATE NOWAIT". (M6: the unlocked `org_id` read is the peek
+    // above, before the transaction.)
+    await lockOrg(tx, peek.org_id);
     const row = await lockRow(tx, sessionId);
     if (!row) return null;
     const before = toSession(row);
@@ -308,8 +335,15 @@ export async function apply(
     let dec = decide(before, cmd, now);
     let applied: Command = cmd;
     if (dec.effects.some((e) => e.type === "consume_credit")) {
+      // Two ways to arrive here with no rate: the read above FAILED (N4, already reported), or — "cannot happen" as a
+      // guard — the peek saw a state that can no longer consume yet the LOCKED row decided a consume, which only a state
+      // moved BACKWARDS between the two can do. Either way refused by name: consuming without the rollover would silently
+      // draw a bought credit over this month's free one. Nothing is written; the next apply peeks and reads again.
+      if (!monthly) {
+        throw new HttpError(500, `Session ${sessionId} went live (${peek.state} at the rate read, ${before.state} under the lock) with no monthly credit rate resolved; refusing to consume without the monthly rollover`, "monthly_rate_unresolved");
+      }
       try {
-        const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId }, now);
+        const c = await consumeForSession(tx, { orgId: before.orgId, fixtureId: before.fixtureId, sessionId, monthly }, now);
         if (c.ledgerId) await tx`update fixture_stream_sessions set credit_ledger_id = ${c.ledgerId} where id = ${sessionId}`;
       } catch (e) {
         if (!(e instanceof NoCreditsError)) throw e;
@@ -541,6 +575,12 @@ export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise
  *  (plan §"Fly machine lifecycle" — the `observed` trigger). Every read,
  *  heartbeat, poll and admission calls this; the daily backstop too. */
 export async function reconcileSession(sessionId: string, deps: SessionDeps): Promise<Session | null> {
+  // M10 (Task 14b review): a deployment with NO relay (R5) cannot observe, expire on evidence, or stop anything through
+  // a provider — every port of the disabled pair refuses. A session still up from before (the old fake default, or a
+  // live deployment switched off) is ENDED, failed(relay_disabled), on the locked row; a terminal one is left alone.
+  // Before this, a composed session's observation threw on every poll and the relay sweep skips a disabled deployment,
+  // so nothing ever ended it. Money follows the domain's rules (session.ts `relay_disabled`).
+  if (deps.drivers.disabled) return apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "relay_disabled" }), deps);
   const s = await applyExpiry(sessionId, deps);
   if (!s || s.mode !== "composed") return s;
   const r = s.runner;
@@ -943,10 +983,10 @@ function targetInUse(h: Holder): HttpError {
 
 function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
   switch (refusal.refusal) {
-    case "plan_lacks_overlay": throw new PaymentRequiredError("streaming.overlay");
+    case "plan_lacks_overlay": throw new PaymentRequiredError(RELAY_PLAN_GATES.overlay);
     case "overlay_required": throw new HttpError(409, "phone streaming needs the overlay tier", "overlay_required");
-    case "plan_lacks_relay": throw new PaymentRequiredError("streaming.relay");
-    case "no_credits": throw new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: "streaming.relay" });
+    case "plan_lacks_relay": throw new PaymentRequiredError(RELAY_PLAN_GATES.relay);
+    case "no_credits": throw new HttpError(402, "This organisation has no match credits", "no_credits", { featureKey: RELAY_PLAN_GATES.relay });
     case "target_not_found": throw new HttpError(404, "stream target not found");
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });
@@ -965,6 +1005,13 @@ export async function createSession(
   // (device-links.ts, checkin-token.ts) answers 403. A device link carries its issuing organiser, so it passes.
   const actorUserId = auth.userId;
   if (actorUserId === null) throw new HttpError(403, "A stream can only be started by a signed-in organiser");
+  // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
+  // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
+  // so nothing is faked and no credit moves. The Phone tab already reads this code.
+  if (deps.drivers.disabled) {
+    log.warn({ fixtureId, orgId }, "stream session: the relay is disabled on this deployment — start refused");
+    throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+  }
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);
@@ -990,6 +1037,21 @@ export async function createSession(
   if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
   const priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
 
+  // V426 (Task 14b, R3a): this month's free match credits are granted BEFORE the balance is read, so an org that has
+  // never bought a pack is admitted on its plan's allowance. Idempotent and one indexed read once the period's row
+  // exists. On the WALL clock, not deps.now(): the grant's period is the real UTC month (ledger rows carry the DB's
+  // now()), and a test clock ticked across a month end must not mint a second grant mid-test. Outside the admission
+  // transaction: it takes the org's money lock in a transaction of its own, which must not be held across `admit`.
+  // m4 (lane-close fix): guarded the way relayCredits guards it — a grant that fails (a corrupt ledger's
+  // `ledger_negative`, the lock, the plan read) is logged and reported, and admission reads the UNGRANTED balance. An
+  // org with pack credits still goes live on them; one with nothing else gets the balance gate's own 402 no_credits.
+  try {
+    await ensureMonthlyStreamGrant(orgId);
+  } catch (err) {
+    log.error({ err, orgId, fixtureId }, "createSession: monthly grant failed; admitting on the ungranted balance");
+    captureError(err, { orgId, route: "relay.session.monthly_grant" });
+  }
+
   const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
@@ -1000,9 +1062,9 @@ export async function createSession(
     sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`,
     deps.drivers.ingest.storageUsage().then(storageUsageForColumns),   // outside the transaction; G7: fitted to the integer columns
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
-    // existing single authority (it already filters expired overrides); no resolver edit. Under V402
-    // every R1 admission is an override, so the FALSE branch is exercised as a unit-level assertion on
-    // this mapping rather than through a plan-granted org that does not exist yet.
+    // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
+    // plan grants the relay, so the FALSE branch (plan-granted) is the common one; stream-sessions.test.ts
+    // drives it through createSession on an org with no override row.
     overrideRow(orgId, "streaming.relay"),
   ]);
   const viaOverride = relayOverride?.bool_value === true;
@@ -1125,14 +1187,52 @@ async function latestRow(fixtureId: string): Promise<Row | null> {
   return row ?? null;
 }
 
-/** C1: the org's balance, with NO session row required. `currentSession` returns
- *  `null` until a session exists and `balance` rides inside that projection, so the
- *  idle Phone tab had no source for it at all and read 0 for every credited org.
- *  One authority — `creditBalance` (Task 7). Tenancy is checked the same way the
- *  projection checks it: a mismatch is 404, never 403 (404 ≡ missing). */
-export async function relayBalance(auth: AuthCtx, orgId: string): Promise<number> {
+/** What the Phone tab's credits card shows (Task 14b, R2/R4): the balance split by bucket, plus the plan's monthly
+ *  allowance for the "Your plan includes {n} free match credits" note. The division page's reader — it GRANTS this
+ *  month's free credits first (R3b, `ensureMonthlyStreamGrant`, idempotent), so the idle tab of an org that has never
+ *  started a stream already shows them. `total` is creditBalance's number (creditBreakdown sums the same rows), so the
+ *  chip and the split cannot disagree.
+ *
+ *  C1 lives here now (Task 14b review M9 retired `relayBalance`, which nothing but its own test called): the balance is
+ *  readable with NO session row. `currentSession` returns `null` until a session exists and `balance` rides inside that
+ *  projection, so the idle Phone tab had no other source and read 0 for every credited org. Tenancy is checked the way
+ *  the projection checks it: a mismatch is 404, never 403 (404 ≡ missing). */
+export interface RelayCredits extends StreamCreditBreakdown {
+  /** The plan's `streaming.credits.monthly` (V426), on the org's RESOLVED plan. */
+  monthlyAllowance: number;
+}
+
+export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayCredits> {
   if (orgId !== auth.orgId) throw new HttpError(404, "organisation not found");
-  return creditBalance(sql, orgId);
+  // I3: the ensure resolves the plan's rate to decide a mid-month top-up, and hands it back — the allowance printed on
+  // the card is the same number the grant was topped up to, read once.
+  let monthlyAllowance: number;
+  try {
+    ({ rate: monthlyAllowance } = await ensureMonthlyStreamGrantWithRate(orgId));
+  } catch (err) {
+    // I1: this is a WRITE made during the division page's GET, for every editable org. It can refuse by design (a
+    // corrupt ledger's `ledger_negative`) or fail on the lock or the plan read, and a failed grant writes no key, so it
+    // fails again on every render. Thrown from here it took down the org's whole fixtures tab (no error boundary under
+    // d/[divSlug]/). Log it, report it, and answer the UNGRANTED balance. The next start (createSession) runs the
+    // same ensure under the same guard (m4): it logs and reports there too, and admits on the ungranted balance.
+    log.error({ err, orgId }, "relayCredits: monthly grant failed; answering the ungranted balance");
+    captureError(err, { orgId, route: "relay.credits.monthly_grant" });
+    monthlyAllowance = await streamMonthlyRate(orgId).catch(() => 0);
+  }
+  return { ...(await creditBreakdown(sql, orgId)), monthlyAllowance };
+}
+
+/** F1: which of `fixtureIds` have a session still UP (an ACTIVE state) — THIS org's only. A billing-frozen competition
+ *  renders no stream panel (the division page gates it on `editable`), yet the stop route still serves a frozen org's
+ *  organiser, so the page mounts a stop probe for exactly these fixtures: a freeze never strands a stream on air. */
+export async function openStreamFixtureIds(auth: AuthCtx, fixtureIds: readonly string[]): Promise<string[]> {
+  if (fixtureIds.length === 0) return [];
+  const rows = await sql<{ fixture_id: string }[]>`
+    select distinct fixture_id from fixture_stream_sessions
+     where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}`;
+  // In the caller's order (the division's fixture order), so the probes stack the way the run sheet lists them.
+  const open = new Set(rows.map((r) => r.fixture_id));
+  return fixtureIds.filter((id) => open.has(id));
 }
 
 export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
@@ -1228,6 +1328,13 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     select id, kind, label from org_stream_targets where id = ${row.target_id}`;
   const [fx] = await sql<{ stream_url: string | null; status: string }[]>`select stream_url, status from fixtures where id = ${fixtureId}`;
   const hb = row.last_heartbeat as { fps?: number | null; bitrateKbps?: number | null } | null;
+  // D3: the session's OWN net spend — its consume row, less any refund linked to it. Neither a restart inside the reuse
+  // window (no consume row) nor a refunded consume is "a credit used". Unlinked refunds name no session and never count.
+  // Org-scoped as reuseWindowOpen's arithmetic is; the lookup itself rides V425's partial (session_id) index on every
+  // poll rather than walking the org's whole ledger through (org_id, created_at).
+  const [spend] = await sql<{ net: number }[]>`
+    select coalesce(sum(delta), 0)::int as net from org_stream_credits
+     where org_id = ${row.org_id} and session_id = ${row.id} and reason in ('consume', 'refund')`;
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
@@ -1239,6 +1346,10 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     endReason: row.end_reason,
+    creditUsed: spend!.net < 0,
+    // I-1: admission's own question, on admission's own clock (createSession asks `reuseWindowOpen` with deps.now()), so
+    // the tab's "free restart" and the gate that waives the balance cannot disagree.
+    restartFree: await reuseWindowOpen(sql, { orgId: row.org_id, fixtureId }, deps.now()),
   };
 }
 
@@ -1261,6 +1372,15 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
           occurredAt: deps.now(), payload: { state: locked?.state ?? row.state } });
       });
     }
+    return (await currentSession(auth, fixtureId, deps))!;
+  }
+  // M10: with no relay there is no provider to stop through — the session is ended failed(relay_disabled), the
+  // reconcile's own decision, and the projection answers. Never the `stop` below, whose composed arm asks the runner and
+  // would throw. N5 (Task 14b re-review): it goes through `apply` WITH the actor, so the tap is still the organiser's
+  // recorded action (Task 10 n5) — the row names her and the decision her Stop made. A session another writer finished
+  // first decides nothing and records nothing, as below.
+  if (deps.drivers.disabled) {
+    await apply(sessionId, (s) => (isTerminal(s.state) ? null : { type: "relay_disabled" }), deps, { userId: auth.userId ?? null, source: "client" });
     return (await currentSession(auth, fixtureId, deps))!;
   }
   // m1: re-decided on the LOCKED row (T5-a). A session another writer FINISHED after the read above (an expiry, a failure)

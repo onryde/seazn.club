@@ -1084,6 +1084,8 @@ describe("relay sweep — pure parts", () => {
     // Neither is an outcome the backstop's reconcile produces (the poll and the go-live consume do): a visit that sees one
     // raced another request, and it is counted apart rather than folded into a timeout or a crash.
     target_rejected: "otherFailures", no_credits: "otherFailures",
+    // M10: produced by the organiser's poll on a deployment with no relay — where the sweep does not run at all.
+    relay_disabled: "otherFailures",
   };
 
   it("every fail reason the API declares lands in its declared bucket — the table and the enum are the same set", () => {

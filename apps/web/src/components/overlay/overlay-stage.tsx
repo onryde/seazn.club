@@ -16,7 +16,7 @@ import { OverlayMomentSlab } from "./overlay-moment";
 import { OverlayEndOfOverCard } from "./overlay-end-of-over";
 import { OverlayTossCard } from "./overlay-toss-card";
 import { OVERLAY_MOMENT_FOLD_MS } from "./moment-timing";
-import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
+import { fetchOverlayFixture, type OverlayLiveData, type RealtimePurpose } from "@/components/public-site/live-score-data";
 import {
   hasDetailBand,
   overlayModel,
@@ -65,6 +65,12 @@ export interface OverlayStageProps {
   /** True on the overlay route: fill the viewport. False in the console
    *  preview, which sets its own scale on the wrapper. */
   fit?: boolean;
+  /** RT (lane-close fix, ruled 2026-09-29): the realtime purpose and signed key the OBS page read off the URL the
+   *  organiser copied. Both or neither: the OBS page passes both when its URL carries a key, and the Phone tab's preview
+   *  passes NEITHER — so the preview never mints a token and its `realtime={false}` means what it says. Passed straight
+   *  to `useLiveFixture`; the stage declares nothing of its own. */
+  realtimePurpose?: RealtimePurpose;
+  overlayKey?: string;
 }
 
 /** Stable identity: a fresh `[]` every render would re-run the enqueue effect
@@ -103,10 +109,15 @@ export function OverlayStage(props: OverlayStageProps) {
   // stage's fetcher; `MatchCentre` keeps the public JSON. `presentationNowOffsetMs`
   // is `props.delayMs` (Task 5d's `?delay=`, resolved server-side in
   // page.tsx) — 0 when absent, exactly as before Task 5d; the clock
-  // subtracts it either way.
+  // subtracts it either way. RT (lane-close fix): the purpose and key are the
+  // CALLER's — the OBS page's, off the URL the organiser copied — so a
+  // community org's overlay asks for realtime on a signed key and a refusal
+  // leaves it on the poll; the console preview passes neither and never asks.
   const { data, transport, presentationNowOffsetMs, awaitingDelay } = useLiveFixture(props.fixtureId, props.initial, props.realtime, {
     fetcher: fetchOverlayFixture,
     delayMs: props.delayMs,
+    realtimePurpose: props.realtimePurpose,
+    overlayKey: props.overlayKey,
   });
   // The ONE timer in the overlay (Step 8a; _THEMES.md §6; owner 2026-09-06:
   // the clock TICKS). Formatted here, handed to the pure model as a string.

@@ -1,18 +1,57 @@
 // server/relay/drivers.ts — RELAY_DRIVERS=fake|live picks the adapters once
-// per process (a two-entry registry, §9a). Unset is fake: a process that was
-// not told it may spend money does not. Tests inject their own pair.
+// per process (a registry, §9a). Unset is fake outside production: a process
+// that was not told it may spend money does not. Unset IN production is
+// "disabled" (R5, Task 14b): a pair that refuses every call — nothing faked,
+// nothing sent. Tests inject their own pair.
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { relayDriverMode } from "./config";
 import { FakeIngest, FakeRunner } from "./fakes";
 import { CloudflareIngest } from "./ingest-cf";
-import { createRefusedBeforeCall, type IngestProvider, type ProviderCallRecorder, type RunnerProvider } from "./ports";
+import {
+  createRefusedBeforeCall, type IngestCapabilities, type IngestProvider, type ProviderCallRecorder, type RunnerProvider,
+} from "./ports";
 import { FLY_LIST_SETTLE_MS, FlyRunner } from "./runner-fly";
 import { recordProviderCall } from "./telemetry";
 
 export interface RelayDrivers {
   ingest: IngestProvider;
   runner: RunnerProvider;
+  /** R5: set only on the pair `disabledRelayDrivers()` builds — the process has no relay at all. createSession refuses
+   *  on it with `ingest_unavailable` before any row or provider call, and the relay-sweep cron skips. */
+  disabled?: true;
+}
+
+/** R5 (Task 14b): what every port of the disabled pair answers. Named, so a caller that reaches a provider anyway (a
+ *  session left from before the switch) fails loudly and says why, rather than reading a fake answer. */
+export class RelayDriversDisabled extends Error {
+  constructor() {
+    super("streaming is disabled on this deployment: NODE_ENV=production with RELAY_DRIVERS unset — set RELAY_DRIVERS=live (with its secrets) to enable it");
+    this.name = "RelayDriversDisabled";
+  }
+}
+
+/** R5: the pair a production process with no RELAY_DRIVERS runs. Typed as the two ports, so tsc proves it complete;
+ *  every method rejects and both data members throw on read — a capability or settle window read off a provider
+ *  that does not exist would be a made-up number. */
+export function disabledRelayDrivers(): RelayDrivers {
+  const refuse = async (): Promise<never> => {
+    throw new RelayDriversDisabled();
+  };
+  const ingest: IngestProvider = {
+    get capabilities(): IngestCapabilities {
+      throw new RelayDriversDisabled();
+    },
+    createLiveInput: refuse, inputStatus: refuse, addOutput: refuse, outputState: refuse, removeOutput: refuse,
+    deleteInput: refuse, storageUsage: refuse, listVideos: refuse, deleteVideo: refuse,
+  };
+  const runner: RunnerProvider = {
+    get listSettleMs(): number {
+      throw new RelayDriversDisabled();
+    },
+    create: refuse, stop: refuse, observe: refuse, destroy: refuse, list: refuse,
+  };
+  return { ingest, runner, disabled: true };
 }
 
 let instance: RelayDrivers | null = null;
@@ -75,11 +114,27 @@ function lazyRunner(): RunnerProvider {
 export function relayDrivers(): RelayDrivers {
   if (override) return override;
   if (instance) return instance;
+  const mode = relayDriverMode();
   instance =
-    relayDriverMode() === "live"
+    mode === "live"
       ? { ingest: new CloudflareIngest({ recorder: dbRecorder }), runner: lazyRunner() }
-      : { ingest: new FakeIngest({ recorder: dbRecorder }), runner: new FakeRunner({ recorder: dbRecorder }) };
+      : mode === "disabled"
+        ? disabledRelayDrivers()
+        : { ingest: new FakeIngest({ recorder: dbRecorder }), runner: new FakeRunner({ recorder: dbRecorder }) };
   return instance;
+}
+
+/** Can this process stream at all? UNAVAILABLE when the relay is DISABLED (R5 — production with RELAY_DRIVERS unset), and
+ *  (m1, lane-close review) when it is LIVE but missing CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_STREAM_TOKEN — the pair the
+ *  live drivers cannot be built without, so every start there fails. Answered from the mode, the two env reads
+ *  (`CloudflareIngest.configured`) or the test override, WITHOUT constructing anything (N1, Task 14b fix round 2): the
+ *  division page asks on every fixtures render and the relay-checkout route on every request, and a constructing
+ *  answer took the fixtures tab down for every org on a live deploy short one secret. The page shows "unavailable"
+ *  and the checkout refuses 503 on it. Ask this for the question; take `relayDrivers()` only to call a provider. */
+export function relayUnavailable(): boolean {
+  if (override) return override.disabled === true;
+  const mode = relayDriverMode();
+  return mode === "disabled" || (mode === "live" && !CloudflareIngest.configured());
 }
 
 /** Tests only. `null` clears the override AND the cached instance. */

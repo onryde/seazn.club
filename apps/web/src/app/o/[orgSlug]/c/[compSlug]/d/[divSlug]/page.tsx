@@ -31,6 +31,13 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
+import { openStreamFixtureIds, relayCredits } from "@/server/usecases/stream-sessions";
+import { relayUnavailable } from "@/server/relay/drivers";
+import { overlayKeyFor } from "@/server/overlay/overlay-key";
+import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
+import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
+import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
+import { preferredCurrency } from "@/lib/currency-server";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
@@ -82,14 +89,28 @@ const EDIT_TABS = [...TABS, "discipline", "settings"] as const;
 type Tab = (typeof EDIT_TABS)[number];
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
+/** A search param as `URLSearchParams.get` reads it: the first value of a repeated key (D2 — see `checkoutReturn`). */
+function firstParam(v: string | string[] | undefined): string | undefined {
+  return typeof v === "string" ? v : v?.[0];
+}
+
 export default async function DivisionPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    checkout?: string;
+    session_id?: string;
+    stream?: string | string[];
+    fixture?: string | string[];
+  }>;
 }) {
-  const [{ orgSlug, compSlug, divSlug }, { tab: rawTab }] = await Promise.all([
+  const [
+    { orgSlug, compSlug, divSlug },
+    { tab: rawTab, checkout, session_id: checkoutSessionId, stream: streamParam, fixture: fixtureParam },
+  ] = await Promise.all([
     params,
     searchParams,
   ]);
@@ -509,22 +530,71 @@ export default async function DivisionPage({
   // Sliced to that prefix, so the flight carries ~20 strings and not the whole
   // public catalogue.
   //
-  // Everything after the FIRST read is behind `streamEntitled`. Streaming is
-  // a dark rollout — `streaming.overlay` is granted by no plan today
-  // (`lib/feature-copy.ts`) — so on every division page that currently exists
-  // this costs exactly one entitlement query and neither the second read, the
-  // `public` dictionary import, nor a byte of it on the RSC flight. Skipped
-  // entirely off the fixtures tab and for a viewer who cannot edit: neither
-  // can reach a panel at all.
+  // Everything after the FIRST read is behind `streamEntitled`. Since V426
+  // (Task 14b) every plan grants both keys, so on an editable fixtures tab the
+  // reads below run; an org a staff override switched off still costs exactly
+  // one entitlement query and neither the second read, the `public`
+  // dictionary import, nor a byte of it on the RSC flight. Skipped entirely
+  // off the fixtures tab and for a viewer who cannot edit: neither can reach a
+  // panel at all.
   const streamOffered = tab === "fixtures" && editable;
   const streamEntitled =
     streamOffered && (await hasFeature(auth.orgId, "streaming.overlay", competition.id));
+  const streamRelayEntitled =
+    streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id));
+  // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production) refuses every start and
+  // every pack checkout, so the Phone tab shows that instead of buy tiles and Go live. It also skips the credits read
+  // below: that read GRANTS the month's free credits, and a relay-less deployment has no business writing them.
+  // N1 (fix round 2): asked WITHOUT constructing the drivers — a live deploy missing a Cloudflare secret must not take this
+  // tab down. m1 (lane-close review): nor may it offer Go live and buy tiles — such a deploy cannot start anything, so
+  // it reads as unavailable too (drivers.ts `relayUnavailable`).
+  const streamRelayDisabled = streamRelayEntitled && relayUnavailable();
+  // G1 (Task 14 fix round 1): the match-credit checkout returns HERE (`?checkout=success&session_id=…`), and this render
+  // can beat Stripe's webhook — so reconcile the session before reading the balance, exactly as the billing, upgrade and
+  // registration pages do on their own returns. Best-effort and idempotent (it and the webhook converge on one ledger
+  // row), it never throws, and it grants only a COMPLETE match-credit session that names this org.
+  if (checkout === "success" && checkoutSessionId) {
+    await reconcileStreamCreditsCheckout(auth.orgId, checkoutSessionId);
+  }
+  // M4 (Task 14 fix round 4): the credits and the currency are independent reads — ledger queries and one
+  // cookies/headers read — so they run together, not one after the other. Both only with the relay (D9's query budget).
+  // Task 14b (R3b): `relayCredits` grants this month's free match credits BEFORE it reads (idempotent), and answers the
+  // balance split by bucket beside the plan's monthly allowance — the chip stays the total.
+  const [streamCredits, streamCurrency] = streamRelayEntitled && !streamRelayDisabled
+    ? await Promise.all([relayCredits(auth, auth.orgId), preferredCurrency(auth.orgId)])
+    : [null, "gbp" as const];
   const streamPanel = streamOffered
     ? {
         entitled: streamEntitled,
-        relayEntitled:
-          streamEntitled && (await hasFeature(auth.orgId, "streaming.relay", competition.id)),
+        relayEntitled: streamRelayEntitled,
+        relayDisabled: streamRelayDisabled,
+        // Streaming R1 lane D: the Phone tab's routes address the org, and its idle state needs the balance before
+        // any session exists (C1). Read only when the relay is entitled and running — otherwise the tab shows its
+        // switched-off or unavailable state (fixture-stream-panel.tsx), which reads no balance.
+        orgId: auth.orgId,
+        streamBalance: streamCredits?.total ?? 0,
+        // Task 14b (R4): the split behind the chip ("{m} free this month · {p} bought") and the plan's monthly allowance
+        // for the credits card's note. Null / 0 without the relay, where no tab reads them.
+        streamSplit: streamCredits
+          ? { monthly: streamCredits.monthly, pack: streamCredits.pack, total: streamCredits.total }
+          : null,
+        monthlyAllowance: streamCredits?.monthlyAllowance ?? 0,
+        // P1: the currency `/api/billing/relay-checkout` will CHARGE — the same `preferredCurrency` for the same org and
+        // browser (subscription → cookie → Accept-Language) — so the tiles quote the checkout's own amount. Without the
+        // relay there are no tiles, and nothing reads it.
+        currency: streamCurrency,
         sportKey: division.sport_key,
+        // RT (lane-close fix, ruled 2026-09-29): each row's signed overlay key, for the OBS URL its panel copies — the
+        // grant a community org's overlay presents to the realtime-token route. Only with the panel (`streamEntitled`);
+        // a fixture the server cannot sign for (no AUTH_SECRET) is left out and its URL goes keyless.
+        overlayKeys: streamEntitled
+          ? Object.fromEntries(
+              fixtures.flatMap((f) => {
+                const key = overlayKeyFor(f.id);
+                return key ? [[f.id, key] as const] : [];
+              }),
+            )
+          : {},
         overlayDict: streamEntitled
           ? (Object.fromEntries(
               Object.entries(await getDictionary(locale, "public")).filter(([k]) =>
@@ -532,9 +602,24 @@ export default async function DivisionPage({
               ),
             ) as Record<string, string>)
           : {},
-        viewerPlan,
       }
     : undefined;
+  // F1 (Task 14 fix round 2): a BILLING freeze takes the stream panel away with everything else editable, but it must not
+  // strand a stream already on air — the stop route still serves a frozen org's organiser. So a frozen competition's
+  // fixtures tab mounts the stop-only probe for each fixture with a session still up, named by its entrants. Never
+  // alongside the live panel (the row's own Phone tab owns Stop there), and never for a viewer who cannot edit.
+  // I-2 (lane-close review): the same holds when staff switch `streaming.overlay` OFF mid-stream. Since V426 an override
+  // is the only way it goes false, and the panel and the row's toggle are both gated on it — so without the probe the
+  // relay kept sending with no Stop anywhere. `streamEntitled` is false whenever the panel is not offered, so this also
+  // covers a frozen page (`editable` false) — `billingFrozen` stays named for the reader.
+  const frozenOnAir =
+    tab === "fixtures" && canEdit && (billingFrozen || !streamEntitled)
+      ? await openStreamFixtureIds(auth, fixtures.map((f) => f.id))
+      : [];
+  // An unfilled side reads as its slot ("Winner of R1·2") or TBD — the one resolver every fixture renderer uses.
+  const sideName = (entrantId: string | null, slotLabel: SlotLabel | null) =>
+    (entrantId ? entrantNames[entrantId] : undefined) ??
+    resolveSlotLabel(slotLabel, (key, vars) => t(dict, key, vars), "schedule.tbd");
 
   return (
     <>
@@ -717,6 +802,19 @@ export default async function DivisionPage({
 
         {tab === "fixtures" && (
           <>
+            {frozenOnAir.length > 0 && (
+              <div data-testid="frozen-stream-probes" className="mb-6">
+                {fixtures
+                  .filter((f) => frozenOnAir.includes(f.id))
+                  .map((f) => (
+                    <PhoneStopProbe
+                      key={f.id}
+                      fixtureId={f.id}
+                      label={`${sideName(f.home_entrant_id, f.home_slot_label)} ${t(dict, "schedule.vs")} ${sideName(f.away_entrant_id, f.away_slot_label)}`}
+                    />
+                  ))}
+              </div>
+            )}
             {/* PROMPT-62: two-sided tree for each knockout stage, above the
                 flat list (which keeps scheduling + Documents). Renders nothing
                 until the bracket is generated or for non-single-elim shapes. */}
@@ -805,6 +903,11 @@ export default async function DivisionPage({
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
               stream={streamPanel}
+              // D2 — a stream-credit checkout returns with `?stream=open&fixture=<id>`; the panel decides (through
+              // `checkoutReturnFor`) which row that names and mounts the run sheet on a filter that renders it.
+              // A repeated key reaches a server component as string[]; the panel's auto-open reads
+              // `useSearchParams().get`, which answers the FIRST value — so the filter is derived from the same one.
+              checkoutReturn={{ stream: firstParam(streamParam), fixture: firstParam(fixtureParam) }}
             />
           </>
         )}

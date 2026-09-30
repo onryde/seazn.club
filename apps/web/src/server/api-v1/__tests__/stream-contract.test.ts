@@ -55,15 +55,16 @@ describe("relay wire enums equal their declarations", () => {
     expect(sorted(S.StreamSessionState.options)).toEqual(sorted(domain));
   });
 
-  it("StreamFailReason is exactly the domain's FailReason — ten, and never storage_exhausted (E5: a refusal with no row)", () => {
+  it("StreamFailReason is exactly the domain's FailReason — eleven, and never storage_exhausted (E5: a refusal with no row)", () => {
     // Keyed by the DOMAIN type: tsc refuses this literal if FailReason gains or loses a member, so the runtime
     // comparison below always compares the wire enum against the domain's current declaration.
     const domain: Record<FailReason, true> = {
       no_inbound_timeout: true, provision_timeout: true, admission_timeout: true, target_rejected: true, no_credits: true,
       machine_create_failed: true, machine_boot_timeout: true, machine_exit_nonzero: true, machine_oom: true, machine_crash: true,
+      relay_disabled: true,
     };
     expect(sorted(S.StreamFailReason.options)).toEqual(sorted(Object.keys(domain)));
-    expect(S.StreamFailReason.options).toHaveLength(10);
+    expect(S.StreamFailReason.options).toHaveLength(11);
     expect(S.StreamFailReason.options as readonly string[]).not.toContain("storage_exhausted");
     // A failed session carries no end reason: the two vocabularies never overlap.
     expect(S.StreamFailReason.options.filter((r) => (S.StreamEndReason.options as readonly string[]).includes(r))).toEqual([]);
@@ -176,9 +177,21 @@ describe("relay request schemas refuse what they must", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
-      target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null,
+      target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
+      restartFree: false,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // D3: creditUsed is REQUIRED and a boolean — an absent field must not read as "no credit used" on the client.
+    const withoutCreditUsed: Record<string, unknown> = { ...current };
+    delete withoutCreditUsed.creditUsed;
+    expect(S.StreamSessionCurrent.safeParse(withoutCreditUsed).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, creditUsed: 1 }).success).toBe(false);
+    // I-1: restartFree likewise — an absent field would read as "not free" and force the chooser on a free restart.
+    const withoutRestartFree: Record<string, unknown> = { ...current };
+    delete withoutRestartFree.restartFree;
+    expect(S.StreamSessionCurrent.safeParse(withoutRestartFree).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: "yes" }).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: true }).success, "the positive pair").toBe(true);
     expect(S.StreamSessionCurrent.safeParse({ ...current, streamKey: "k" }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, qr: {} }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "storage_exhausted" }).success).toBe(false);

@@ -19,10 +19,21 @@
 //       createRelayCheckout call → "the checkout is opened for the RESOLVED org"
 //   RT5 return_url shape    drop the `"fixtures"` tab argument / the stream=open pair
 //                           → "the return_url reopens the Phone tab on that fixture"
+//   RT7 disabled drivers    the `relayDrivers().disabled` gate deleted (Task 14b review I2)
+//                           → "I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED"
+//   RT8 the gate constructs  `relayUnavailable()` → `relayDrivers().disabled` (Task 14b re-review N1)
+//                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…" (the 500 it throws)
+//   RT9 m1 secret check      `relayUnavailable()` reverted to the mode alone (lane-close review m1)
+//                           → "m1: a LIVE deployment missing a Cloudflare secret refuses with 503…"
+//   RT10 m5 overlay key      the `streaming.overlay` gate deleted (lane-close review m5)
+//                           → "m5: refuses an org whose streaming.overlay is switched OFF…"
+//   RT11 drift refusal       the `instanceof StreamPackPriceDriftError` branch deleted (parked c)
+//                           → "the drift guard's refusal is a 502 checkout_unavailable, answered WITHOUT a second report…"
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { streamRig } from "@/server/relay/__tests__/_session-rig";
+import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 
 const { requireUserMock, requireBillingOwnerMock, createRelayCheckoutMock, preferredCurrencyMock } =
   vi.hoisted(() => ({
@@ -45,8 +56,10 @@ vi.mock("@/server/usecases/billing-manage", async (importOriginal) => ({
 // The ONLY Stripe seam. Bare factory on purpose — if the route ever imports a
 // second symbol from here, this test fails loudly rather than silently letting
 // a real Stripe call through.
-vi.mock("@/lib/relay-checkout", () => ({
+vi.mock("@/lib/relay-checkout", async (importOriginal) => ({
   createRelayCheckout: (args: unknown) => createRelayCheckoutMock(args),
+  // Parked (c): the drift guard's typed refusal, which the route answers — the real class, so `instanceof` is honest.
+  StreamPackPriceDriftError: (await importOriginal<typeof import("@/lib/relay-checkout")>()).StreamPackPriceDriftError,
 }));
 // `preferredCurrency` reads `cookies()`, which throws outside a Next request
 // scope — an environment limit of unit-testing a route, not a route defect.
@@ -56,7 +69,12 @@ vi.mock("@/lib/currency-server", () => ({
   preferredCurrency: (...args: unknown[]) => preferredCurrencyMock(...args),
 }));
 
+// B5 (Task 14 fix round 1): a Stripe request error is REPORTED here, once, with context — and answered as a typed 502.
+const { captureErrorMock } = vi.hoisted(() => ({ captureErrorMock: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: (...args: unknown[]) => captureErrorMock(...args) }));
+
 import { POST } from "../route";
+import { HttpError } from "@/lib/errors";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -81,19 +99,29 @@ async function callerFor(orgId: string): Promise<void> {
   preferredCurrencyMock.mockReset().mockResolvedValue("eur");
 }
 
-/** The live `streaming.relay` override the REAL resolver reads. No plan grants
- *  this key while streaming is dark (V402), so an override is the only way an
- *  org is entitled — which is exactly how a community pilot is admitted. */
+/** A live `streaming.relay` override set to TRUE — a staff lift. Since V426 (Task 14b) every plan grants the key, so
+ *  this is belt-and-braces for the cases that are not about the gate; the first case below proves the PLAN alone
+ *  admits a community org. */
 async function entitle(orgId: string): Promise<void> {
   await sql`
     insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
     values (${orgId}, 'streaming.relay', true, 'task-8 route test')`;
 }
 
+/** A live `streaming.relay` override set to FALSE — since V426 the ONLY way an org lacks the relay (every plan grants
+ *  it), and so the only way this route's 402 is reachable. */
+async function deny(orgId: string): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+    values (${orgId}, 'streaming.relay', false, 'task-14b route test: staff switch-off')`;
+}
+
 describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
-  it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture", async () => {
+  it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture — for a community org entitled by its PLAN alone (V426: no override row)", async () => {
     const rig = await streamRig();
-    await entitle(rig.orgId);
+    // No `entitle`: V426 grants streaming.relay on every plan, and the rig's org has no subscription (community).
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_entitlement_overrides where org_id = ${rig.orgId}`;
+    expect(n, "premise: no override row — the plan is what admits this org").toBe(0);
     await callerFor(rig.orgId);
     const fixtureId = rig.fixtureIds[0]!;
 
@@ -136,15 +164,113 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     );
   });
 
-  it("refuses a plan without streaming.relay with 402 plan_lacks_relay, and never calls Stripe", async () => {
+  it("refuses an org whose streaming.relay is switched OFF by an override with 402 plan_lacks_relay, and never calls Stripe (V426: the only way the gate is reachable)", async () => {
     const rig = await streamRig();
-    await callerFor(rig.orgId); // deliberately NOT entitled
+    await deny(rig.orgId); // every plan grants it now, so the refusal needs a staff switch-off
+    await callerFor(rig.orgId);
     const res = await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 });
     expect(res.status).toBe(402);
     expect(await res.json()).toMatchObject({ ok: false, code: "plan_lacks_relay" });
     // The whole point of the gate order: nobody pays for a tier they cannot use,
     // and the refusal costs no Stripe round-trip.
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+  });
+
+  // m5 (lane-close review): createSession admits only with BOTH keys (admit: no overlay → 402 on streaming.overlay,
+  // whatever the relay says), so a pack sold to an org whose overlay is off is a credit nothing can spend. The checkout
+  // asks the same two keys, overlay first, as admit does.
+  it("m5: refuses an org whose streaming.overlay is switched OFF with 402 plan_lacks_overlay — with the relay on or off — and never calls Stripe; the relay's own refusal is unchanged", async () => {
+    const cases: { name: string; overlay: boolean; relay: boolean; status: number; code?: string }[] = [
+      { name: "overlay off, relay on", overlay: false, relay: true, status: 402, code: "plan_lacks_overlay" },
+      { name: "both off (overlay first, as admit orders them)", overlay: false, relay: false, status: 402, code: "plan_lacks_overlay" },
+      { name: "overlay on, relay off", overlay: true, relay: false, status: 402, code: "plan_lacks_relay" },
+      { name: "both on", overlay: true, relay: true, status: 200 },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const rig = await streamRig();
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+        values (${rig.orgId}, 'streaming.overlay', ${c.overlay}, 'm5 route test'), (${rig.orgId}, 'streaming.relay', ${c.relay}, 'm5 route test')`;
+      await callerFor(rig.orgId);
+      const res = await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 });
+      expect(res.status, c.name).toBe(c.status);
+      if (c.code) {
+        expect(await res.json(), c.name).toMatchObject({ ok: false, code: c.code });
+        expect(createRelayCheckoutMock, c.name).not.toHaveBeenCalled();
+      } else {
+        expect(createRelayCheckoutMock, c.name).toHaveBeenCalledTimes(1);
+      }
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED — before the entitlement read and any Stripe call; the same org buys once they are back", async () => {
+    // R5: a production process with RELAY_DRIVERS unset runs the disabled pair and refuses every start (createSession's
+    // 503). Selling a pack meanwhile takes real money for a credit nothing can spend.
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    const body = { orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 };
+    setRelayDriversForTest(disabledRelayDrivers());
+    try {
+      const res = await post(body);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toMatchObject({ ok: false, code: "ingest_unavailable" });
+      expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+    } finally {
+      setRelayDriversForTest(null);
+    }
+    // The positive pair: the same caller, the same body, on the default (fake) drivers.
+    expect((await post(body)).status).toBe(200);
+    expect(createRelayCheckoutMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("m1: a LIVE deployment missing a Cloudflare secret refuses with 503 ingest_unavailable and never calls Stripe — each secret alone; with both it sells", async () => {
+    // N1: answered by constructing the drivers, this was a 500 from `new CloudflareIngest()` on every checkout. m1: nor may
+    // it SELL — every start on such a deployment fails (the drivers cannot be built), so a pack bought there is money for
+    // a credit nothing can spend. The same 503 a disabled deployment answers, before any Stripe call.
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    const body = { orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 1 };
+    const cases = [
+      { CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "tok", sells: false },
+      { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "", sells: false },
+      { CLOUDFLARE_ACCOUNT_ID: "", CLOUDFLARE_STREAM_TOKEN: "", sells: false },
+      { CLOUDFLARE_ACCOUNT_ID: "acct", CLOUDFLARE_STREAM_TOKEN: "tok", sells: true },
+    ];
+    let checked = 0;
+    try {
+      for (const c of cases) {
+        vi.unstubAllEnvs();
+        vi.stubEnv("RELAY_DRIVERS", "live");
+        vi.stubEnv("ENV_NAME", "prod");
+        vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", c.CLOUDFLARE_ACCOUNT_ID);
+        vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", c.CLOUDFLARE_STREAM_TOKEN);
+        setRelayDriversForTest(null);
+        createRelayCheckoutMock.mockClear();
+        const label = JSON.stringify(c);
+        // The premise, from the real constructor: it refuses exactly where the route must.
+        let builds = true;
+        try { relayDrivers(); } catch { builds = false; }
+        setRelayDriversForTest(null);
+        expect(builds, `${label}: premise`).toBe(c.sells);
+        const res = await post(body);
+        if (c.sells) {
+          expect(res.status, label).toBe(200);
+          expect(createRelayCheckoutMock, label).toHaveBeenCalledTimes(1);
+        } else {
+          expect(res.status, label).toBe(503);
+          expect(await res.json(), label).toMatchObject({ ok: false, code: "ingest_unavailable" });
+          expect(createRelayCheckoutMock, label).not.toHaveBeenCalled();
+        }
+        checked++;
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      setRelayDriversForTest(null);
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("refuses a body naming another organisation (400), before the fixture is even looked up", async () => {
@@ -160,7 +286,8 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
   it("a fixture that is not this org's is 404, even when the org is unentitled — the ownership check precedes the paywall", async () => {
     const rig = await streamRig();
     const other = await streamRig();
-    await callerFor(rig.orgId); // NOT entitled: a 402 here would mean the gates ran in the wrong order
+    await deny(rig.orgId); // switched OFF: a 402 here would mean the gates ran in the wrong order
+    await callerFor(rig.orgId);
     const res = await post({ orgId: rig.orgId, fixtureId: other.fixtureIds[0]!, pack: 5 });
     expect(res.status).toBe(404);
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
@@ -189,5 +316,79 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
       expect([res.status, JSON.stringify(body)]).toEqual([400, JSON.stringify(body)]);
     }
     expect(createRelayCheckoutMock).not.toHaveBeenCalled();
+  });
+
+  // B5 — the browser pass met this for real: a sandbox account with no head-office address refuses automatic tax, and
+  // Stripe's 400 surfaced as an UNHANDLED 500 in the log. A Stripe request error is an outcome of THIS route, not a
+  // crash: reported once with the org and Stripe's own ids, answered 502 with a code, which the Phone tab already reads
+  // as "Checkout didn't open. Try again." Scoped both ways — the route's own typed refusals and a genuine bug keep
+  // their paths.
+  it("a Stripe request error is a handled 502 checkout_unavailable, reported once with context — never an unhandled 500", async () => {
+    const rig = await streamRig();
+    await entitle(rig.orgId);
+    await callerFor(rig.orgId);
+    const fixtureId = rig.fixtureIds[0]!;
+    captureErrorMock.mockReset();
+    let checked = 0;
+    for (const type of ["StripeInvalidRequestError", "StripeAPIError", "StripeConnectionError", "StripeRateLimitError"]) {
+      const stripeErr = Object.assign(new Error("Your head office address is required for automatic tax."), {
+        type, code: "parameter_missing", requestId: `req_${type}`, statusCode: 400,
+      });
+      createRelayCheckoutMock.mockRejectedValueOnce(stripeErr);
+      const res = await post({ orgId: rig.orgId, fixtureId, pack: 5 });
+      expect([type, res.status]).toEqual([type, 502]);
+      expect(await res.json()).toMatchObject({ ok: false, code: "checkout_unavailable" });
+      expect(captureErrorMock).toHaveBeenLastCalledWith(
+        stripeErr,
+        expect.objectContaining({ orgId: rig.orgId, route: "billing/relay-checkout", extra: expect.objectContaining({ stripeType: type, stripeRequestId: `req_${type}` }) }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(captureErrorMock).toHaveBeenCalledTimes(4);
+
+    // The route's OWN typed refusal (an account the pack prices were never synced to) keeps its status and is not
+    // re-reported as a Stripe failure.
+    captureErrorMock.mockReset();
+    createRelayCheckoutMock.mockRejectedValueOnce(new HttpError(503, "Billing is not yet configured. Please contact support."));
+    expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(503);
+    // …and a genuine bug is still the unhandled 500 it is, not laundered into "try again".
+    createRelayCheckoutMock.mockRejectedValueOnce(new TypeError("cannot read properties of undefined"));
+    expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(500);
+    // A `type` field alone is not Stripe's: node-fetch's FetchError carries `type: "system"`, and it is not a
+    // Stripe answer to this request.
+    createRelayCheckoutMock.mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { type: "system" }));
+    expect((await post({ orgId: rig.orgId, fixtureId, pack: 5 })).status).toBe(500);
+    expect(captureErrorMock).not.toHaveBeenCalled();
+  });
+
+  // Parked (c): the PROD drift guard (lib/relay-checkout.ts resolveStreamPackPriceId) refuses a pack whose live price
+  // differs from the table, and reports it ONCE itself. The route answers the typed refusal with the Phone tab's
+  // "Checkout didn't open" code — and does not report it again on every tap, which `handler` would do for any thrown
+  // HttpError ≥ 500.
+  it("the drift guard's refusal is a 502 checkout_unavailable, answered WITHOUT a second report per tap", async () => {
+    const { StreamPackPriceDriftError } = await import("@/lib/relay-checkout");
+    const { log } = await import("@/server/logger");
+    const rig = await streamRig();
+    await callerFor(rig.orgId);
+    captureErrorMock.mockReset();
+    // `handler`'s own report of an HttpError ≥ 500 (Sentry.captureException beside this log line, lib/http.ts).
+    const logged: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((_o: unknown, msg?: string) => { logged.push(String(msg)); }) as never);
+    let checked = 0;
+    try {
+      for (let i = 0; i < 2; i++) {
+        createRelayCheckoutMock.mockRejectedValueOnce(new StreamPackPriceDriftError("seazn_stream_pack_5", "price_drifted", "eur: live 1, table 2925"));
+        const res = await post({ orgId: rig.orgId, fixtureId: rig.fixtureIds[0]!, pack: 5 });
+        expect(res.status).toBe(502);
+        expect(await res.json()).toMatchObject({ ok: false, code: "checkout_unavailable" });
+        checked++;
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    expect(checked).toBe(2);
+    expect(captureErrorMock, "reported by the guard once, never by the route per tap").not.toHaveBeenCalled();
+    expect(logged.filter((m) => m.includes("HttpError reached 500")), "handler re-reported the typed refusal").toEqual([]);
   });
 });

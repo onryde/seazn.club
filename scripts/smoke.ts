@@ -897,8 +897,9 @@ async function main() {
 
   // --- stream overlay W1 (Task 8): the overlay route over real HTTP, and the
   // manifest's own `stream-overlay` group's counterpart. Its own fresh orgs —
-  // `streaming.overlay` is an org-WIDE override and granting it on the shared
-  // Pro org would add the OBS panel to every fixtures tab this file asserts on.
+  // since V426 every plan grants `streaming.overlay`, so the gate's negative is
+  // an org-WIDE override-false row, and writing it on the shared Pro org would
+  // take the OBS panel off every fixtures tab this file asserts on.
   await streamOverlaySuite();
 
   // --- the above-Pro rung (Task 11): community's save-point window and its
@@ -18368,22 +18369,23 @@ async function visualSeedRoutesSuite(owner: Session, orgSlug: string): Promise<v
       page.body.includes('data-testid="mc-score-0"'),
   );
   // The manifest's THIRD group, `stream-overlay`, has its counterpart in
-  // `streamOverlaySuite` below rather than here: its route needs an org-wide
-  // `streaming.overlay` override, and this suite runs on the shared Pro org.
+  // `streamOverlaySuite` below rather than here: its negative needs an org-wide
+  // `streaming.overlay` override-false row, and this suite runs on the shared
+  // Pro org.
 }
 
-/** Lift a BOOLEAN entitlement for one org, directly. Same SQL-flip convention
+/** Override a BOOLEAN entitlement for one org, directly. Same SQL-flip convention
  *  as `setStaff`/`setConnect` above, and the same one `e2e/helpers.ts`'s
  *  `setBoolEntitlementOverrideSql` uses — `org_entitlement_overrides` carries
  *  both a `bool_value` and an `int_value`, and `hasFeature` reads the boolean.
  *
- *  There is no HTTP route for this that a non-staff owner can reach, and
- *  `streaming.overlay` is granted by NO plan (V402 writes a row for every plan
- *  with `bool_value = false` — a dark rollout), so an override is the only way
- *  the overlay route is reachable at all. */
+ *  There is no HTTP route for this that a non-staff owner can reach. Since
+ *  V426 (Task 14b) every plan grants `streaming.overlay` — V402 had written it
+ *  `false` on every plan, a dark rollout — so an override-false row is the only
+ *  way left to switch the overlay route off. */
 async function setBoolEntitlement(orgId: string, featureKey: string, value: boolean): Promise<void> {
   const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is required to grant streaming.overlay in smoke");
+  if (!url) throw new Error("DATABASE_URL is required to write an entitlement override in smoke");
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
     connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
@@ -18456,33 +18458,35 @@ async function seedOverlayOrg(label: string, cards: boolean): Promise<{
  * own, so its palette could only ever be proven where it is painted.
  *
  * TWO ORGS, identical in every way except the entitlement, so the gate is a
- * differential rather than a claim: A is granted and must answer 200 with the
- * scorebug's markup, B is not and must be indistinguishable from a missing
- * fixture. B is granted NOTHING at any point — the resolver caches for 300 s
- * (`ENT_TTL_SECONDS`, lib/entitlements.ts), so a "revoke and re-check" on one
- * org would assert against a stale answer.
+ * differential rather than a claim: A rides its PLAN (V426 grants
+ * `streaming.overlay` on every plan) and must answer 200 with the scorebug's
+ * markup; B carries an override-false row and must be indistinguishable from a
+ * missing fixture. B's row is written before ANY fetch and never changes — the
+ * resolver caches for 300 s (`ENT_TTL_SECONDS`, lib/entitlements.ts), so a
+ * "switch off and re-check" on one org would assert against a stale answer.
  */
 async function streamOverlaySuite(): Promise<void> {
   if (!process.env.DATABASE_URL) {
-    console.log("SKIP  stream overlay suite (DATABASE_URL not set — the entitlement needs SQL)");
+    console.log("SKIP  stream overlay suite (DATABASE_URL not set — the override-false negative needs SQL)");
     return;
   }
   const entitled = await seedOverlayOrg("entitled", true);
   const denied = await seedOverlayOrg("denied", true);
-  // Granted BEFORE the first fetch: `resolve()` is cache-aside with a 300 s
-  // TTL, and a 404 fetched first would still be cached when the grant landed.
-  await setBoolEntitlement(entitled.orgId, "streaming.overlay", true);
+  // Switched off BEFORE the first fetch: `resolve()` is cache-aside with a
+  // 300 s TTL, and a 200 fetched first would still be cached when the override
+  // landed. `entitled` gets NO row: its 200 below is its plan's V426 grant.
+  await setBoolEntitlement(denied.orgId, "streaming.overlay", false);
 
   const anon = newSession();
   const shut = await html(anon, `/overlay/fixtures/${denied.fixtureId}?style=bar`);
   check(
-    `overlay smoke: an org without streaming.overlay gets 404, not a broken overlay (got ${shut.status})`,
+    `overlay smoke: an override switches overlay off → 404, not a broken overlay (got ${shut.status})`,
     shut.status === 404,
   );
 
   const bar = await html(anon, `/overlay/fixtures/${entitled.fixtureId}?style=bar`);
   check(
-    `overlay smoke: the entitled overlay answers 200 (got ${bar.status})`,
+    `overlay smoke: with no override the plan's own grant (V426) answers 200 (got ${bar.status})`,
     bar.status === 200,
   );
   check(

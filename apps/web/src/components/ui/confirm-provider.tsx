@@ -26,6 +26,11 @@ export interface ConfirmOptions {
   tone?: "default" | "danger";
   /** Require typing this exact string before the confirm button arms. */
   typedName?: string;
+  /** The cancel button's text, from the CALLER's page-locale dictionary. Unset, it is the `common` bundle's
+   *  `dialog.cancel` for the `seazn_locale` cookie — which is the cookie's locale, not necessarily the page's. */
+  cancelLabel?: string;
+  /** "touch": both buttons get the 44-px phone floor below md (`max-md:min-h-11`). Unset, the classes are unchanged. */
+  size?: "touch";
 }
 
 type ConfirmFn = (opts: ConfirmOptions) => Promise<boolean>;
@@ -93,7 +98,8 @@ function ConfirmSurface({
   opts: ConfirmOptions;
   settle: (ok: boolean) => void;
 }) {
-  const { title, body, confirmLabel, tone = "default", typedName } = opts;
+  const { title, body, confirmLabel, tone = "default", typedName, cancelLabel, size } = opts;
+  const touch = size === "touch" ? " max-md:min-h-11" : "";
   const [typed, setTyped] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
@@ -178,12 +184,12 @@ function ConfirmSurface({
           </label>
         )}
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button type="button" className="btn btn-ghost" onClick={() => settle(false)}>
-            {clientCommon(readLocaleCookie(), "dialog.cancel")}
+          <button type="button" className={`btn btn-ghost${touch}`} onClick={() => settle(false)}>
+            {cancelLabel ?? clientCommon(readLocaleCookie(), "dialog.cancel")}
           </button>
           <button
             type={tone === "danger" ? "button" : "submit"}
-            className={`btn ${tone === "danger" ? "btn-danger" : "btn-primary"}`}
+            className={`btn ${tone === "danger" ? "btn-danger" : "btn-primary"}${touch}`}
             disabled={!armed}
             onClick={() => settle(true)}
             onKeyDown={(e) => {

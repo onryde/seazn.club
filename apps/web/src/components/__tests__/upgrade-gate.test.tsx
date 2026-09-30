@@ -897,3 +897,35 @@ describe("UpgradeGate — reason override", () => {
     expect(html).toContain(featureReason("formats.double_elim"));
   });
 });
+
+// Streaming R1 Task 14b (V426, owner 2026-09-29: "no enterprise, even community can do livestreaming"). Both streaming
+// keys are granted by EVERY plan, so a streaming gate is reachable only through a staff override set to false — and no
+// copy it renders may name Enterprise. Swept over both keys, every viewer plan, and both arms (compact pill, full card),
+// inside a competition and at org level: the pill is what the Phone tab renders, the card is what a future caller would.
+describe("UpgradeGate — the streaming gates never name Enterprise (V426)", () => {
+  it("renders no 'Enterprise' for streaming.overlay or streaming.relay, on any viewer plan, compact or card", () => {
+    const plans: ViewerPlan[] = ["community", "pro", "enterprise"];
+    let checked = 0;
+    for (const feature of ["streaming.overlay", "streaming.relay"]) {
+      for (const viewerPlan of plans) {
+        for (const compact of [true, false]) {
+          for (const [path, provider] of [["/o/riverside/c/summer-league/d/main", true], ["/o/riverside/settings", false]] as const) {
+            pathname = path;
+            const html = render(<Gate feature={feature} viewerPlan={viewerPlan} compact={compact} />, { provider, paidPlan: viewerPlan !== "community" && provider });
+            const where = `${feature} · ${viewerPlan} · ${compact ? "pill" : "card"} · ${path}`;
+            expect(html, where).not.toMatch(/Enterprise/);
+            // The positive pair: the gate DID render (its own marker), so "no Enterprise" is not an empty string.
+            expect(html, where).toContain(`data-feature="${feature}"`);
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBe(2 * 3 * 2 * 2);
+  });
+
+  it("the positive control: api.write — still above every self-serve plan — DOES wear the Enterprise badge", () => {
+    pathname = "/o/riverside/settings";
+    expect(render(<Gate feature="api.write" compact />)).toMatch(/Enterprise/);
+  });
+});

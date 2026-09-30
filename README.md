@@ -160,8 +160,12 @@ live input, pulls it back into a headless browser, and re-encodes to the club's
 destination. It is wired behind `RELAY_DRIVERS`
 ([`apps/web/src/server/relay/drivers.ts`](apps/web/src/server/relay/drivers.ts)): unset,
 empty or `fake` runs in-memory Cloudflare and Fly doubles with no network — every local
-run and every test — and `live` calls the real APIs. Live mode needs an account and a
-Stream-scoped token:
+run and every test — and `live` calls the real APIs. In a production build
+(`NODE_ENV=production`) an unset `RELAY_DRIVERS` is **disabled** instead: no drivers, and
+every stream start answers `503 ingest_unavailable`; production-build harnesses (CI's
+server steps, `scripts/ci-local.sh`) set `RELAY_DRIVERS=fake` explicitly. An explicit
+`fake` is allowed only with `ENV_NAME` unset, `local` or `ci` — on `stg`/`prod` the server
+refuses to boot. Live mode needs an account and a Stream-scoped token:
 
 - `CLOUDFLARE_ACCOUNT_ID` — the account live inputs are created under
 - `CLOUDFLARE_STREAM_TOKEN` — scoped to Stream; server-side only, never a `NEXT_PUBLIC_*` var, never reaches the browser

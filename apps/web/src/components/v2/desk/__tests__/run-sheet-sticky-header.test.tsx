@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { buildRunSheet, type RunSheetFixture } from "@/lib/run-sheet-groups";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
+}));
 
 // Competition desk W3, controller ruling C-1 — pre-existing from W2 (this
 // file's own git history has zero commits in `origin/main..HEAD` before

@@ -16,8 +16,11 @@ import {
 } from "@/components/v2/fixture-stream-panel";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 
 const TZ = "Europe/London";
@@ -60,9 +63,15 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
   return {
     entitled: true,
     relayEntitled: false,
+    relayDisabled: false,
     sportKey: "football",
     overlayDict: {},
-    viewerPlan: "community",
+    orgId: "o-1",
+    streamBalance: 0,
+    streamSplit: null,
+    monthlyAllowance: 0,
+    currency: "gbp",
+    overlayKeys: {},
     ...o,
   };
 }
@@ -134,6 +143,9 @@ describe("what the toggle opens", () => {
     expect(find(island.tree(), FixtureStreamPanel), "the panel must not mount closed").toBeUndefined();
     const toggle = find(island.tree(), FixtureStreamToggle)!;
     expect(propsOf(toggle).open).toBe(false);
+    // The row's one line for the checkout return (owner ruling 4): the toggle is told WHICH fixture it is, so a
+    // `?stream=open&fixture=<id>` URL opens this row and no other.
+    expect(propsOf(toggle).fixtureId).toBe("f1");
     (propsOf(toggle).onToggle as () => void)();
     const panel = find(island.tree(), FixtureStreamPanel);
     expect(panel, "opening the toggle did not mount the panel").toBeDefined();

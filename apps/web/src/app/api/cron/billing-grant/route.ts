@@ -27,7 +27,21 @@ import { log } from "@/server/logger";
  *
  *  Cron-shaped like /api/cron/billing-quantity: x-cron-secret header
  *  (CRON_SECRET env). Also runs the earn_grant daily-volume farm-watch
- *  (v17 gap #296) — same daily poll, no separate schedule. */
+ *  (v17 gap #296) — same daily poll, no separate schedule.
+ *
+ *  NOT the stream match credits (Task 14b review M4, controller ruling
+ *  2026-09-29, amending R3). A cron sweep would write two ledger rows per live
+ *  org per month forever, for orgs that never stream. The month is rolled over
+ *  lazily, under the money lock, by the readers that act on it — the division
+ *  page's credits card (`relayCredits`), createSession's balance check and the
+ *  go-live consume (stream-credits.ts `ensureMonthlyStreamGrant`). Two readers
+ *  do NOT run it: the session projection's `balance` (stream-sessions.ts
+ *  `currentSession`) and the /admin credits panel (admin-stream-credits.ts),
+ *  which read the ledger as it stands. Across a month turn, until one of the
+ *  rolling readers runs, a Phone tab already open and staff both see last
+ *  month's unexpired free credits. The one path that spends, the go-live
+ *  consume, rolls the month first (a roll that fails is reported and the
+ *  consume runs on the ledger as it stands). */
 export async function POST() {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;

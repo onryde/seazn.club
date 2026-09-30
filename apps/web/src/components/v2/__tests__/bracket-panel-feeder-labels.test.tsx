@@ -30,8 +30,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 // Only the two providers `StagesPanel` demands of its host (the draw-list half
 // of the agreement test at the bottom). The DICT provider is deliberately NOT
 // mocked — see the header note.
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 vi.mock("@/components/ui/confirm-provider", () => ({
   useConfirm: () => vi.fn(async () => false),

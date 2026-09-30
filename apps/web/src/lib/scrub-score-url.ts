@@ -7,8 +7,14 @@
 // breadcrumb, a replay's URL list) would send a working scoring credential to
 // a third party. Every helper here swaps the token for a fixed placeholder and
 // leaves the rest of the value as it was.
+//
+// The stream overlay's realtime KEY rides a URL the same way (lane-close re-review M-2): the OBS URL the organiser's
+// panel copies (`/overlay/fixtures/{id}?…&key=…`) and the overlay's token request (`/realtime-token?purpose=overlay&
+// key=…`). It grants a realtime subscription to one public fixture, retired only by rotating AUTH_SECRET, so it is
+// scrubbed with the same care: every `key=` QUERY PARAMETER value becomes `[key]`, plain or URL-encoded.
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
+import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
 
 // @sentry/nextjs re-exports `Event` but not `Integration` (that lives in
 // @sentry/core, which is not a dependency here), so take it from a signature.
@@ -32,16 +38,27 @@ const ENCODED_SCORE_PATH = /(%(?:25)*2[Ff]score%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
  * `handl_…`) from being eaten.
  */
 const BARE_TOKEN = /dl_[A-Za-z0-9_-]{32,}/g;
-/** Cheap pre-check: nothing any of the three patterns could match. */
-const MAYBE_TOKEN = /\/score\/|%(?:25)*2[Ff]score%|dl_/;
+/**
+ * The overlay key as a query parameter: `key=` at the start of a query string (Sentry's `request.query_string` carries
+ * no `?`) or after `?` / `&`, never inside another name (`monkey=`, `apikey=`). The value ends at the next `&`, `#`,
+ * quote, angle bracket or space. Any value, not only the key's own length: a tampered or foreign key is scrubbed too.
+ */
+const OVERLAY_KEY_QUERY = new RegExp(`((?:^|[?&])${OVERLAY_KEY_PARAM}=)[^&#\\s"'<>]+`, "g");
+/** The same parameter URL-ENCODED inside another URL: `%3Fkey%3D` / `%26key%3D`, at any encoding depth, either hex case. */
+const ENCODED_OVERLAY_KEY = new RegExp(`(%(?:25)*(?:3[Ff]|26)${OVERLAY_KEY_PARAM}%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
+/** Cheap pre-check: nothing any of the patterns could match. */
+const MAYBE_TOKEN = new RegExp(`\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%`);
 
-/** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, and a bare `dl_…` secret becomes `dl_[token]`. */
+/** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
+ *  and an overlay `key=` query value (plain or encoded) becomes `[key]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
     .replace(SCORE_PATH, "/score/[token]")
     .replace(ENCODED_SCORE_PATH, "$1[token]")
-    .replace(BARE_TOKEN, "dl_[token]");
+    .replace(BARE_TOKEN, "dl_[token]")
+    .replace(OVERLAY_KEY_QUERY, "$1[key]")
+    .replace(ENCODED_OVERLAY_KEY, "$1[key]");
 }
 
 /**

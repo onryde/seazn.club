@@ -742,6 +742,17 @@ jobs:
             --forward-to http://localhost:3000/api/webhooks/stripe > forward.log 2>&1 &
           echo "forwarder started (pid $!)"
 
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         # On the SERVER, not the Playwright step: `build.ts` runs server-side,
         # so the server is what dials the solver. Set only on the test step,
@@ -756,6 +767,19 @@ jobs:
           # floods the Actions log and buries the failure. warn keeps refusals
           # and faults; silent would hide the only signal when a red is real.
           LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          # The fake ingest reports the phone "connected" this long after a stream's input is
+          # made (server/relay/fakes.ts; default 3000). stream-relay.spec.ts asserts the QR the
+          # Phone tab draws while the camera warms, which stays on screen only until the server's
+          # next read after the connect; 3 s is inside a loaded runner's create + first read.
+          # The Playwright step below is told the same value: the spec budgets its waits from it.
+          FAKE_INGEST_CONNECT_AFTER_MS: "10000"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -806,6 +830,8 @@ jobs:
           PLAYWRIGHT_BASE: http://localhost:3000
           E2E_PARALLEL_SLICE: ${{ matrix.slice }}
           SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # The same value the server was started with (see "Start server"): the spec's waits derive from it.
+          FAKE_INGEST_CONNECT_AFTER_MS: "10000"
 
       # Distinct from "Connect walkthrough not configured" above: that one
       # keys on STRIPE_CONNECT_TEST_ACCOUNT and covers the REGISTRATION money
@@ -1171,6 +1197,17 @@ jobs:
             exit 1
           fi
 
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         env:
           PLACEMENT_SERVICE_HOST: localhost:50051
@@ -1180,6 +1217,13 @@ jobs:
           # floods the Actions log and buries the failure. warn keeps refusals
           # and faults; silent would hide the only signal when a red is real.
           LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
@@ -1499,6 +1543,17 @@ jobs:
             exit 1
           fi
 
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         env:
           PLACEMENT_SERVICE_HOST: localhost:50051
@@ -1508,6 +1563,13 @@ jobs:
           # floods the Actions log and buries the failure. warn keeps refusals
           # and faults; silent would hide the only signal when a red is real.
           LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

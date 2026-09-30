@@ -343,7 +343,7 @@ stateDiagram-v2
 | `apps/web/src/app/api/billing/relay-checkout/route.ts` | Create (Task 8) | 402 `plan_lacks_relay` BEFORE Stripe; `{ client_secret }` |
 | `apps/web/src/lib/billing-checkout-client.ts` | Modify (Task 8) | `fetchRelayCheckoutClientSecret(orgId, fixtureId, pack)` beside `fetchCreditPackCheckoutClientSecret` |
 | `apps/web/src/lib/__tests__/billing-checkout-client.test.ts` | Modify (Task 8) | the relay helper's unit, appended to the EXISTING client test (present at `453d95cd6`): the result type `{ ok: true, clientSecret } \| { ok: false, status, code }` over a double `fetchFn` |
-| `scripts/stripe-stream-packs.ts` | Create (Task 8) | one-off, idempotent: the sandbox product + three prices by lookup key |
+| `scripts/stripe-stream-packs.ts` | Create (Task 8) | one-off, idempotent: the sandbox product + three prices by lookup key. **Retired 2026-09-29 (lane-close Addendum S):** folded into `scripts/stripe-sync.ts` (`pnpm stripe:sync`), which re-mints a changed pack price on its own policy and skips the packs on a live key while `STREAM_PACK_PRICES_FINAL` is false |
 | `apps/web/src/server/usecases/billing-events.ts` | Modify (Task 8) | `session.metadata.kind === "stream_credits"` branch → `recordPurchase` |
 | `apps/web/src/server/usecases/__tests__/stream-credits-webhook.test.ts` | Create (Task 8) | the branch writes one row; a replayed event writes none |
 | `apps/web/src/server/api-v1/schemas.ts` | Modify (Task 9) | `CreateStreamSession`, `StreamSessionCreated`, `StreamSessionCurrent`, `CreateStreamTarget`, `StreamTarget`, `RelayHeartbeat`, `RelayHeartbeatReply` |
@@ -9377,7 +9377,7 @@ export function fetchRelayCheckoutClientSecret(
 ```
   Its unit is APPENDED to `apps/web/src/lib/__tests__/billing-checkout-client.test.ts`, which already exists (verified on the tree at `453d95cd6`) — do not create a second client test file, and do not renumber or edit the `it`s already in it. Two new `it`s: a double `fetchFn` returning `{ ok: true, data: { client_secret: "cs_x" } }` → `{ ok: true, clientSecret: "cs_x" }`; one returning 402 with `{ ok: false, error: "…" }` → an `ok: false` result whose `status` is `402` (assert `status`, since that is the only thing distinguishing the paywall refusal — `CheckoutSecretResult` has no `code` field; assert `error` is a non-empty string rather than pinning its text). Both `it`s assert the POSTed path and body.
 
-- [ ] **Step 7: Write the one-off sandbox script.** Create `scripts/stripe-stream-packs.ts`:
+- [ ] **Step 7: Write the one-off sandbox script.** Create `scripts/stripe-stream-packs.ts` (retired 2026-09-29 by lane-close Addendum S — the packs are synced by `pnpm stripe:sync` now; this step is kept as the record of Task 8):
 
 ```ts
 // scripts/stripe-stream-packs.ts — create the SANDBOX product and its three
@@ -15202,7 +15202,7 @@ async function relayPhoneState(page: Page, state: PhoneState): Promise<Record<st
   - **§12.4 Vault**: `<as read at Task 0>`; the envelope built.
   - **RP9**: the `ui` namespace holds every Phone-tab key (P15); `stream.credits.soon` deleted.
   - **Driver env**: `RELAY_DRIVERS=fake|live` (unset = fake); live needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_STREAM_TOKEN`, `FLY_API_TOKEN`, `RELAY_IMAGE`, `RELAY_KEK`; `FAKE_INGEST_CONNECT_AFTER_MS` for the fake.
-  - **Stripe lookup-key NAMES**: `seazn_stream_pack_1`, `seazn_stream_pack_5`, `seazn_stream_pack_20` (never values); the sandbox product name; `scripts/stripe-stream-packs.ts` is the one-off.
+  - **Stripe lookup-key NAMES**: `seazn_stream_pack_1`, `seazn_stream_pack_5`, `seazn_stream_pack_20` (never values); the sandbox product name; `scripts/stripe-stream-packs.ts` was the one-off (retired by Addendum S, 2026-09-29: `pnpm stripe:sync` syncs the packs).
   - **Cross-repo item for the owner (P1)**: `relay-sweep.yml` in `onryde/seazn.club.workflow` — DAILY (owner 2026-09-14), both legs, `PROD_SWEEP_ENABLED`, POST `/api/cron/relay-sweep` with `x-cron-secret`; until it lands the sweep is smoke-driven only. Nothing time-critical depends on it (recommendation B — lazy expiry, inline retry, Machine-side hard stop).
   - **Owner rulings 2026-09-14, verbatim-short**: 1 FS10 keep (*"all good"*); 2 Vault no — envelope final; 3 sweep daily (*"just run every day is fine"*); 4 the one `run-sheet-row.tsx` line allowed — **re-ruled on C19 ("apply rec"): that one line is the `fixtureId` prop on the row's existing `<FixtureStreamToggle>`, NOT a `streamOpen` initialiser.** The `?stream=open` reading lives in the panel module (Task 14 Step 4 b1/b2), which owns the behaviour; the row keeps `useState(false)` and imports no `useSearchParams`. Global Constraints §"Do NOT touch", ruling 4's own paragraph and both File Structure rows were corrected to match on 2026-09-16, so no site now describes the superseded initialiser; 5 `watch_url` + `runner_retries` accepted; 6 `INGEST_TIMEOUT_SECONDS = 180` (*"3 mins after phone goes away"*), hold 183 RTMPS / SRT null; 7 Sentry enabled, DSN owed; 8 checkout embedded (*"checkout should be inbuilt as other"*).
   - **Recommendation B — RULED (ruling 11)**: money/safety rules never wait for the daily tick — `domain/expiry.ts` evaluated lazily on every read/heartbeat/poll/admission; inline retry; `RELAY_DEADLINE_AT` hard stop; the cron keeps retention + backstop + orphans.

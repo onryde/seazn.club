@@ -43191,7 +43191,7 @@
     },
     "/api/v1/public/fixtures/{id}/realtime-token": {
       "get": {
-        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement)",
+        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)",
         "tags": [
           "public"
         ],
@@ -43203,6 +43203,25 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "overlay"
+              ]
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],

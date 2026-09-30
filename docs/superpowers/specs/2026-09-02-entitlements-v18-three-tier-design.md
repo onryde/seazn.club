@@ -232,12 +232,18 @@ Rationale is one line per changed row; unchanged rows say "keep".
 | `ai.credits.trial` | – | **15** | – | – | 20 | Pro re-cut 20 → 15 (W2 T12). Enterprise deliberately KEEPS 20 — its numbers are set per deal, so the asymmetry is intended and is not a drift to "fix" |
 | pass credit grant (constant, not a key) | | | **+25** | **+35** | | R9; per-rung map replaces `PASS_CREDIT_GRANT`. L re-cut 50 → 35 with the monthly grants (W2 T12) |
 
-### Streaming (W1 — dark rollout, added 2026-09-09)
+### Streaming (W1 — dark rollout, added 2026-09-09; amended by V426, owner 2026-09-29)
+
+**Amended by V426, owner 2026-09-29** (Streaming R1 Task 14b, V426's header quoting the owner: "even community can do livestreaming by
+default credit per month or buy adds' on"): `streaming.overlay` and `streaming.relay` are TRUE on every plan, and
+`streaming.credits.monthly` is new. The dark-rollout values (all F, V402) are superseded; an
+`org_entitlement_overrides` row is now the only way a streaming gate appears.
 
 | key | Free | Pro | Pass M | Pass L | Ent | why |
 |---|---|---|---|---|---|---|
-| `streaming.overlay` | F | F | F | F | F | Stream Overlay W1 (V402): false on EVERY plan, including Enterprise — nobody has this yet. Not a "keep", a genuine dark launch: the row exists only so `/admin/entitlements` shows the key under "other" before a tier is picked. The GA flip (pro/event_pass_l/enterprise per design §5.1) is a LATER migration shipped with its own pricing copy; not added to `ENTITLEMENT_DOMAINS`, so it does not render on `/pricing` while dark |
-| `streaming.relay` | F | F | F | F | F | Stream Overlay W1 (V402), same row shape and same reason as `streaming.overlay` directly above — the Phone tab's realtime relay grant, seeded in the same migration so a later reader never finds one key catalogued without the other |
+| `streaming.overlay` | **T** | **T** | **T** | **T** | **T** | V426 (owner 2026-09-29): every plan streams. Was — Stream Overlay W1 (V402): false on EVERY plan, including Enterprise — nobody has this yet. Not a "keep", a genuine dark launch: the row exists only so `/admin/entitlements` shows the key under "other" before a tier is picked. The GA flip (pro/event_pass_l/enterprise per design §5.1) is a LATER migration shipped with its own pricing copy; not added to `ENTITLEMENT_DOMAINS`, so it does not render on `/pricing` while dark |
+| `streaming.relay` | **T** | **T** | **T** | **T** | **T** | V426 (owner 2026-09-29): every plan streams, as `streaming.overlay`. Was — Stream Overlay W1 (V402), same row shape and same reason as `streaming.overlay` directly above — the Phone tab's realtime relay grant, seeded in the same migration so a later reader never finds one key catalogued without the other |
+| `streaming.credits.monthly` | **1** | **5** | **1** | **5** | **20** | V426 (owner 2026-09-29): free match credits (1 credit = 1 match, ≤ 5 h). Free / Pro / Ent are MONTHLY (UTC month, expire at month end). The two PASS values are NOT monthly: each is a ONE-OFF grant made when the pass is bought, never expiring (`grantPassStreamCredits`); the monthly grant reads only the org's subscription plan. Not in `ENTITLEMENT_DOMAINS`, so `/pricing` does not list it |
 
 Rule going forward: **the matrix carries only enforced keys.** Anything that
 is copy-only lives in dictionaries, never in `plan_entitlements`.

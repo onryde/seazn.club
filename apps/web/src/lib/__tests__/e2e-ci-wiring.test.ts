@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sitemapWindowOverride } from "../sitemap-window";
+import { FakeIngest } from "../../server/relay/fakes";
 
 /** apps/web — this file lives at apps/web/src/lib/__tests__/. */
 const WEB = resolve(import.meta.dirname, "../../..");
@@ -449,8 +450,18 @@ const WALKTHROUGH_SPECS: string[] = [
   // and revoke through the real panel and route, a lost-then-retried grant replaying its key
   // (one row), a lost-then-EDITED refund refused as a reused key and reset, a revoke below zero
   // refused, the widths, and a non-staff caller refused.
-  // (Task 15 adds stream-relay.spec.ts to this block.)
   "stream-credits-admin.spec.ts",
+  // Streaming R1 lane D — the fixture Phone tab's session lifecycle on the fake relay drivers:
+  // add a destination, Go live, the QR, LIVE, Stop, ENDED at 320/768/1280; which credit bucket
+  // pays; the free restart; the forced chooser; a second tab's double start; a refused
+  // destination; Stop reachable after each switch-off; the allowlist; one control set per
+  // width; Spanish; the QR at 125% zoom.
+  "stream-relay.spec.ts",
+  // Streaming R1 lane D, File B: the credits ledger through the page — each plan's monthly
+  // grant, the month rollover, the upgrade top-up, a pack bought from the chooser (and its
+  // checkout return to an untimed fixture), the Event Pass grant, a checkout sheet that
+  // cannot load.
+  "stream-credits.spec.ts",
 ];
 
 afterEach(() => {
@@ -897,5 +908,103 @@ describe("sitemap.spec.ts's cache window", () => {
     expect(body, "no e2e_env() in ci-local.sh").not.toBe("");
     const local = /^\s*export SITEMAP_REVALIDATE_SECONDS=(\S+)\s*$/m.exec(strip(body))?.[1];
     expect(local, "ci-local.sh's e2e_env does not export SITEMAP_REVALIDATE_SECONDS").toBe(parallelJobWindow());
+  });
+});
+
+// stream-relay.spec.ts (Streaming R1 lane D) asserts the QR the Phone tab draws
+// while the phone "connects", which the FAKE ingest reports
+// FAKE_INGEST_CONNECT_AFTER_MS after a stream's input is made — and it derives
+// every stream wait from the same variable. Both processes need the SAME value:
+// the server so the QR state lasts long enough to be seen, the Playwright
+// runner so its budgets match the server's pace. The walkthrough project runs
+// only in e2e-parallel, whose Start-server and Playwright steps each carry it
+// (fix round 1, I4). A lost line reds only on a push to main, after the merge.
+describe("the walkthrough's fake phone-connect delay", () => {
+  const strip = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+  const connectMs = (body: string) =>
+    /^\s+FAKE_INGEST_CONNECT_AFTER_MS: *"?([^"\s]*)"?\s*$/m.exec(body)?.[1];
+
+  it("is set to the SAME value on e2e-parallel's Start server step and its Playwright step, and the fake accepts it", async () => {
+    const yml = strip(readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8"));
+    const start = yml.indexOf("\n  e2e-parallel:\n");
+    const end = yml.indexOf("\n  e2e-serial:\n");
+    expect(start, "no e2e-parallel job").toBeGreaterThan(-1);
+    expect(end, "no e2e-serial job after it").toBeGreaterThan(start);
+    const job = yml.slice(start, end);
+    // Premise: the walkthrough project, which selects the spec, runs in THIS job and no other.
+    const walkthrough = projectNamed(await configFor(undefined), "walkthrough");
+    expect(selects(walkthrough, "walkthrough/stream-relay.spec.ts"), "premise: the walkthrough project selects stream-relay.spec.ts").toBe(true);
+    expect(job, "premise: e2e-parallel runs the walkthrough project").toMatch(/^\s+project: walkthrough\s*$/m);
+    expect(yml.slice(end), "premise: no later job runs the walkthrough project").not.toMatch(/^\s+project: walkthrough\s*$/m);
+
+    const servers = [...job.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)].map((m) => m[1]!);
+    const runs = [...job.matchAll(/- name: Run Playwright e2e[^\n]*\n([\s\S]*?)(?=\n      - name: )/g)].map((m) => m[1]!);
+    expect(servers.length, "e2e-parallel starts one server").toBe(1);
+    expect(runs.length, "e2e-parallel has one Playwright step").toBe(1);
+    const server = connectMs(servers[0]!);
+    const runner = connectMs(runs[0]!);
+    expect(server, "Start server does not set FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    expect(runner, "the Playwright step does not set FAKE_INGEST_CONNECT_AFTER_MS").toBeDefined();
+    expect(runner, "the Playwright runner budgets from a different delay than the server runs").toBe(server);
+
+    // The server's own parse (server/relay/fakes.ts) refuses a junk value at construction — so would every stream start.
+    vi.stubEnv("FAKE_INGEST_CONNECT_AFTER_MS", server!);
+    try {
+      expect(() => new FakeIngest(), `FAKE_INGEST_CONNECT_AFTER_MS=${server} is refused by the fake ingest`).not.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+// PR #904 CI: every server that runs the FAKE relay drivers can be asked to save
+// a stream destination, and saving SEALS it with RELAY_KEK (server/relay/crypto.ts)
+// — unset, POST stream-targets answers 500 "RELAY_KEK is not set" and every case
+// that saves one reds (walkthrough 3/3 did). The key is GENERATED per run into
+// $GITHUB_ENV before the server starts, never a literal: this repository is public.
+describe("RELAY_KEK reaches every fake-relay server, generated per run", () => {
+  const WORKFLOW_FILES = ["e2e.yml", "ci.yml"];
+  const read = (wf: string) => readFileSync(join(REPO_ROOT, ".github/workflows", wf), "utf8");
+  const stripComments = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+
+  it("each job whose Start server sets RELAY_DRIVERS=fake generates RELAY_KEK into $GITHUB_ENV before that step", () => {
+    let checked = 0;
+    const missing: string[] = [];
+    for (const wf of WORKFLOW_FILES) {
+      const yml = stripComments(read(wf));
+      const jobStarts = [...yml.matchAll(/^ {2}([a-z0-9_-]+):\n/gm)].map((m) => ({ name: m[1]!, at: m.index! }));
+      for (const fake of yml.matchAll(/^\s+RELAY_DRIVERS:\s*fake\s*$/gm)) {
+        const server = yml.lastIndexOf("- name: Start server", fake.index);
+        const job = [...jobStarts].reverse().find((j) => j.at < fake.index!);
+        expect(server, `${wf}: a RELAY_DRIVERS=fake line outside any Start server step`).toBeGreaterThan(job?.at ?? -1);
+        const before = yml.slice(job!.at, server);
+        const generated = /echo "RELAY_KEK=\$kek" >> "\$GITHUB_ENV"/.test(before) && /\bkek=\$\(openssl rand -hex 32\)/.test(before);
+        if (!generated) missing.push(`${wf}:${job!.name}`);
+        checked++;
+      }
+    }
+    // Anti-vacuity: the fake-relay servers are e2e.yml's three jobs and ci.yml's smoke build — none found is a failure.
+    expect(checked, "fake-relay Start server steps found").toBeGreaterThanOrEqual(4);
+    expect(missing, "jobs whose fake-relay server starts with no generated RELAY_KEK").toEqual([]);
+  });
+
+  it("no workflow assigns RELAY_KEK a value (a literal key in a public repo, or an env that shadows the generated one)", () => {
+    let scanned = 0;
+    for (const wf of WORKFLOW_FILES) {
+      const yml = stripComments(read(wf));
+      expect(yml.length, `${wf} read`).toBeGreaterThan(0);
+      scanned++;
+      expect(yml.match(/^\s+RELAY_KEK:/gm) ?? [], `${wf}: an env map sets RELAY_KEK`).toEqual([]);
+      expect(yml.match(/RELAY_KEK=[0-9a-fA-F]{16,}/g) ?? [], `${wf}: a literal RELAY_KEK value`).toEqual([]);
+    }
+    expect(scanned).toBe(WORKFLOW_FILES.length);
   });
 });

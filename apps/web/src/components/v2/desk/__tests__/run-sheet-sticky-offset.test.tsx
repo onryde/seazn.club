@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { RunSheet } from "@/components/v2/desk/run-sheet";
 import { buildRunSheet, type RunSheetFixture } from "@/lib/run-sheet-groups";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
+}));
 
 // Controller ruling C-3 (real-data reproduction, on top of ruling C-1): the
 // day header and a bracket round header both stuck at the SAME `top: 56px`

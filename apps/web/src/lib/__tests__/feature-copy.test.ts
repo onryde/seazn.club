@@ -86,6 +86,10 @@ describe("feature-copy V290", () => {
     // V302 (owner 2026-07-19): AI scheduling exists on every tier; Pro is the
     // next step up for the bool feature-flag itself.
     expect(featurePlan("scheduling.ai")).toBe("pro");
+    // V426 (Streaming R1 Task 14b): every plan streams, so neither streaming key is above self-serve any more. They
+    // were in ENTERPRISE_FEATURES from V402 until then; a paywall for either must never say Contact-us / Enterprise.
+    expect(featurePlan("streaming.overlay")).toBe("pro");
+    expect(featurePlan("streaming.relay")).toBe("pro");
   });
   /**
    * `import.bulk`'s refusal must not restate its cap or name a plan.

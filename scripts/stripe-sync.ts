@@ -13,6 +13,13 @@
 // half — so this script sends billing_scheme/tiers_mode/tiers when the seed has
 // them. Flat prices (the one-time Event Pass) keep the plain unit_amount shape.
 //
+// Match-credit packs (streaming R1, Addendum S): synced here too, on the same
+// re-mint policy, but their amounts are NOT in stripe-plans.json — they come
+// ONLY from apps/web/src/lib/stream-credit-packs.ts (`streamPackPriceAmounts`),
+// the table the Phone tab's tiles quote. The owner re-prices a pack by editing
+// that table and running this script. While `STREAM_PACK_PRICES_FINAL` is false
+// the packs are sandbox placeholders, and a LIVE key skips them (loudly).
+//
 // Run after db:apply / any wipe, once per environment (test/prod) by pointing at it:
 //   node --env-file=apps/web/.env.local --experimental-strip-types scripts/stripe-sync.ts
 import { readFileSync } from "node:fs";
@@ -20,6 +27,13 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import postgres from "postgres";
 import Stripe from "stripe";
+import {
+  STREAM_CREDIT_PACKS,
+  STREAM_PACK_PRICES_FINAL,
+  streamPackPriceAmounts,
+  streamPackPriceDrift,
+  type StreamCreditPack,
+} from "../apps/web/src/lib/stream-credit-packs.ts";
 
 /** One graduated tier. `up_to: "inf"` is the fallback tier (Stripe's own token);
  *  `currency_options` are SET per-currency amounts for THIS tier, never FX. */
@@ -326,6 +340,25 @@ async function createPrice(
   return price.id;
 }
 
+/** THE re-mint policy, shared by every price this script owns. Stripe prices are
+ *  immutable — amounts, currency options and billing_scheme alike — so a change
+ *  is a NEW price: `mint` creates it carrying the lookup_key (transfer_lookup_key
+ *  moves the key off the old price, so a checkout resolving by key never finds
+ *  nothing), and only THEN is the old price archived so nothing new resolves to
+ *  it. Existing subscriptions keep their original price id (Task 8 sync guards). */
+async function replaceAndArchive(
+  stripe: Stripe,
+  oldPriceId: string,
+  lookupKey: string,
+  mint: () => Promise<string>,
+  why?: string,
+): Promise<string> {
+  const replacementId = await mint();
+  await stripe.prices.update(oldPriceId, { active: false });
+  console.log(`  ↳ ${lookupKey}: drift → new price ${replacementId} (archived ${oldPriceId})${why ? ` — ${why}` : ""}`);
+  return replacementId;
+}
+
 /** The currencies whose TIER ladders have to be expanded to see drift — none on
  *  a flat price, whose per-currency amounts come back with `currency_options`. */
 function tierCurrencies(spec: PriceSpec): string[] {
@@ -411,9 +444,9 @@ export async function ensurePrice(
     // subscriptions keep their original price id (Task 8 sync guards) — no one is
     // repriced mid-term, but note that also means groups on the old flat price
     // stay flat until they are explicitly migrated.
-    const replacementId = await createPrice(stripe, spec, prod, currency, planKey);
-    await stripe.prices.update(p.id, { active: false });
-    console.log(`  ↳ ${spec.lookup_key}: drift → new price ${replacementId} (archived ${p.id})`);
+    const replacementId = await replaceAndArchive(stripe, p.id, spec.lookup_key, () =>
+      createPrice(stripe, spec, prod, currency, planKey),
+    );
     return { priceId: replacementId, productId: prod };
   }
   const prod =
@@ -427,6 +460,122 @@ export async function ensurePrice(
     ).id;
   const priceId = await createPrice(stripe, spec, prod, currency, planKey);
   return { priceId, productId: prod };
+}
+
+// ---------------------------------------------------------------------------
+// Match-credit packs (Addendum S). Folded in from the retired one-off
+// scripts/stripe-stream-packs.ts: the product lookup is that script's, the
+// price policy is this script's (re-mint on any difference, reuse on none).
+// ---------------------------------------------------------------------------
+
+/** The Stripe product the three pack prices hang off. Its copy is what a buyer
+ *  reads on the payment page; only a product this script CREATES gets it. */
+export const STREAM_PACK_PRODUCT = {
+  name: "Seazn Club Match Credits",
+  description: "One match credit = one phone-streamed match, up to 5 hours.",
+} as const;
+
+/** MEASURED, 2026-09-28 (in the retired script): `stripe.products.search` is
+ *  index-backed and lags creation by seconds, so a second run moments after the
+ *  first found nothing and minted a DUPLICATE product. `products.list` is
+ *  immediately consistent, so the tag is matched client-side. The tag, not the
+ *  name: a renamed product must still be found. The OLDEST match wins —
+ *  `products.list` is newest-first, so "first" would flip between runs if a
+ *  duplicate ever existed, and the existing prices hang off the oldest. */
+export async function ensureStreamPackProduct(stripe: Stripe): Promise<string> {
+  const matches: Array<{ id: string; created: number }> = [];
+  for await (const p of stripe.products.list({ active: true, limit: 100 })) {
+    if (p.metadata?.kind === "stream_credits") matches.push(p);
+  }
+  matches.sort((a, b) => a.created - b.created);
+  if (matches[0]) return matches[0].id;
+  return (await stripe.products.create({ ...STREAM_PACK_PRODUCT, metadata: { kind: "stream_credits" } })).id;
+}
+
+/** The exact create payload for a pack's price. Pure + exported so tests assert
+ *  it. The amounts are `streamPackPriceAmounts` spread whole — the same function
+ *  the tiles read back — so nothing here computes an amount of its own. */
+export function streamPackPriceCreateParams(pack: StreamCreditPack, productId: string): Stripe.PriceCreateParams {
+  return {
+    product: productId,
+    lookup_key: pack.lookupKey,
+    transfer_lookup_key: true,
+    nickname: `${pack.credits} match credit${pack.credits === 1 ? "" : "s"}`,
+    ...streamPackPriceAmounts(pack),
+    metadata: { kind: "stream_credits", credits: String(pack.credits) },
+  };
+}
+
+/** A pack's price, on this script's policy: reuse when `streamPackPriceDrift`
+ *  finds nothing (no write at all), re-mint on ANY difference — a changed base
+ *  or option amount, a missing or extra option, another base currency — and
+ *  create when there is none. `streamPackPriceDrift` is the pack table's own
+ *  comparator (the checkout's drift guard asks the same one), so "equal" means
+ *  one thing everywhere. */
+export async function ensureStreamPackPrice(
+  stripe: Stripe,
+  productId: string,
+  pack: StreamCreditPack,
+): Promise<{ priceId: string; action: "existing" | "created" | "re-minted" }> {
+  // `currency_options` is omitted from the default response; without the expand every option would read as missing.
+  const found = await stripe.prices.list({ lookup_keys: [pack.lookupKey], limit: 1, expand: ["data.currency_options"] });
+  const live = found.data[0];
+  if (!live) {
+    const created = await stripe.prices.create(streamPackPriceCreateParams(pack, productId));
+    return { priceId: created.id, action: "created" };
+  }
+  const drift = streamPackPriceDrift(pack, live);
+  if (drift.length === 0) return { priceId: live.id, action: "existing" };
+  // On the product the live price hangs off, as ensurePrice does — never a second product.
+  const prod = typeof live.product === "string" ? live.product : live.product.id;
+  const why = drift.map((d) => `${d.at}: live ${d.live ?? "none"}, table ${d.want ?? "none"}`).join("; ");
+  const priceId = await replaceAndArchive(
+    stripe,
+    live.id,
+    pack.lookupKey,
+    async () => (await stripe.prices.create(streamPackPriceCreateParams(pack, prod))).id,
+    why,
+  );
+  return { priceId, action: "re-minted" };
+}
+
+/** A key is LIVE unless it is a test key — so an unrecognised key is treated as
+ *  live and the placeholder guard below fails safe. main()'s mode line agrees. */
+export function isLiveStripeKey(key: string): boolean {
+  return !key.includes("_test_");
+}
+
+/** Sync every pack — unless the key is LIVE and the table is not final
+ *  (`STREAM_PACK_PRICES_FINAL`), in which case NOTHING is asked of Stripe and
+ *  the run says so loudly: a sandbox placeholder must never become a live price
+ *  because someone synced plans. `final` is a parameter only so tests can take
+ *  both sides; main() passes nothing and gets the constant. */
+export async function syncStreamPacks(
+  stripe: Stripe,
+  key: string,
+  final: boolean = STREAM_PACK_PRICES_FINAL,
+): Promise<{ skipped: boolean; prices: Array<{ lookupKey: string; priceId: string; action: string }> }> {
+  if (isLiveStripeKey(key) && !final) {
+    console.warn(
+      [
+        "",
+        "  !!! MATCH-CREDIT PACKS SKIPPED on this LIVE key !!!",
+        "  apps/web/src/lib/stream-credit-packs.ts STREAM_PACK_PRICES_FINAL is false: its prices are",
+        "  sandbox placeholders. Set the real prices in that table, flip STREAM_PACK_PRICES_FINAL to true,",
+        "  and run stripe:sync again. Nothing was read or written for the packs.",
+        "",
+      ].join("\n"),
+    );
+    return { skipped: true, prices: [] };
+  }
+  const productId = await ensureStreamPackProduct(stripe);
+  const prices: Array<{ lookupKey: string; priceId: string; action: string }> = [];
+  for (const pack of STREAM_CREDIT_PACKS) {
+    const { priceId, action } = await ensureStreamPackPrice(stripe, productId, pack);
+    prices.push({ lookupKey: pack.lookupKey, priceId, action });
+    console.log(`✓ ${pack.lookupKey}: onetime=${priceId} (${pack.credits} match credits, ${action})`);
+  }
+  return { skipped: false, prices };
 }
 
 /** Write resolved price ids onto the plans row (the checkout route reads these). */
@@ -453,7 +602,7 @@ async function main(): Promise<void> {
     console.error("STRIPE_SECRET_KEY is not set.");
     process.exit(1);
   }
-  console.log(`Stripe mode: ${key.includes("_test_") ? "TEST" : "LIVE"}`);
+  console.log(`Stripe mode: ${isLiveStripeKey(key) ? "LIVE" : "TEST"}`);
 
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -561,6 +710,9 @@ async function main(): Promise<void> {
           `(${orgAddon.plan_key}, ${orgAddon.feature_key} +${orgAddon.delta_each}/org)`,
       );
     }
+    // Match-credit packs (Addendum S): amounts from lib/stream-credit-packs.ts,
+    // no plans row (lib/relay-checkout.ts resolves the live price by lookup_key).
+    await syncStreamPacks(stripe, key);
     console.log("Stripe sync complete.");
   } finally {
     await sql.end();

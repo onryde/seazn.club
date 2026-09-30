@@ -1,0 +1,3 @@
+# The capture-app contracts are CHECKSUMMED byte for byte (docs/contracts, capture-qr.v1): no end-of-line
+# conversion on checkout or commit, or a Windows clone reads a different digest than the one pinned.
+docs/contracts/** -text

@@ -5,8 +5,11 @@ import { buildRunSheet, type RunSheetFixture } from "@/lib/run-sheet-groups";
 
 // `RunSheetRow` reaches for `useRouter` (its inline Set-time editor
 // refreshes on save) — same mock `run-sheet-filters.test.tsx` needs.
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 
 // Owner-approved "Option 2" (competition desk W3, on top of Option B) — a

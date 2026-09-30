@@ -13,7 +13,7 @@
 // provide fails in seconds, not in Playwright.
 import type { APIRequestContext, Page } from "@playwright/test";
 import { activeOrg, apiJson, seedRosteredFixture, TAG } from "../helpers";
-import { grantOverlay, seedOverlayFixture } from "../overlay-kit";
+import { seedOverlayFixture } from "../overlay-kit";
 import type { SeedKind } from "./manifest";
 
 // SEED_KINDS / SEED_PARAMS are declared in ./manifest (pure); this file holds
@@ -118,18 +118,19 @@ async function postEvent(
  *  period-kernel sport, all three chip tones, and the entitlement), and a
  *  second copy here would drift the day the engine's card vocabulary moves.
  *
- *  TWO THINGS THIS SEED MUST DO OR THE ROWS PHOTOGRAPH THE WRONG PAGE.
- *  The route is entitlement-gated and `streaming.overlay` is granted by NO
- *  plan (V402, a dark rollout), so an ungranted org gets `notFound()` — and a
- *  404 the manifest's `awaitSelector` would then fail on, which is the
- *  awaitSelector doing its job. And the sport must be hockey: football is not
+ *  TWO THINGS THIS SEED MUST HOLD OR THE ROWS PHOTOGRAPH THE WRONG PAGE.
+ *  The route is entitlement-gated: an org without `streaming.overlay` gets
+ *  `notFound()` — a 404 the manifest's `awaitSelector` would then fail on,
+ *  which is the awaitSelector doing its job. Since V426 every plan grants the
+ *  key, so the rig's own plan holds it and no override is written; an
+ *  override-false row on this org is the one thing that would 404 it. And the
+ *  sport must be hockey: football is not
  *  a period-kernel sport, so its `summary().detail` never carries
  *  `discipline` and NO chip renders for it however many cards the ledger
  *  holds (`overlay-model.ts`'s own note). Hockey alone reaches advisory,
  *  caution and dismissal in one fixture. */
 async function overlayFixture(page: Page): Promise<Record<string, string>> {
   const rig = await seedOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   return {
     orgSlug: rig.orgSlug,
     compSlug: rig.compSlug,

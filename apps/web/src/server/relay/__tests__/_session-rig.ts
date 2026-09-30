@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { seal } from "../crypto";
+import { creditBreakdown, ensureMonthlyStreamGrant } from "@/server/usecases/stream-credits";
 
 /** A real users row. staff_audit_log.actor_id is `not null references users(id)` (V103) and
  *  seedOrg's AuthCtx carries userId: null (_rig.ts) — so every staff credit write needs one. */
@@ -52,6 +53,33 @@ export async function resealTargetDestination(targetId: string, rtmp: { url: str
   if (rows.length !== 1) throw new Error(`no org_stream_targets row ${targetId}`);
 }
 
+/** V426 (Task 14b): createSession now grants the org's free monthly credits before it reads the balance, so a rig that
+ *  seeds "N credits" would admit N + the plan's rate. This makes THIS period's grant (so createSession's ensure is a
+ *  no-op) and then expires it on the spot, leaving the ledger at the pack credits the test chose — the arithmetic every
+ *  pre-V426 test was written against. A test ABOUT the monthly grant opts out and lets createSession make it. Returns
+ *  the rate it granted and spent (read from V426's row, never typed). */
+export async function spendMonthlyStreamGrant(orgId: string): Promise<number> {
+  const rate = await ensureMonthlyStreamGrant(orgId);
+  const split = await creditBreakdown(sql, orgId);
+  if (split.monthly > 0) {
+    await sql`
+      insert into org_stream_credits (org_id, delta, reason, bucket, balance_after, note)
+      values (${orgId}, ${-split.monthly}, 'expire', 'monthly', ${split.total - split.monthly}, 'rig: monthly grant spent')`;
+  }
+  return rate;
+}
+
+/** A destination row for `orgId` with a FAKE envelope — for DB tests outside server/relay/** that need a session's
+ *  target but must not name the sealed column (enc-boundary.test.ts r3; the realtime-token route test, PR #904 CI).
+ *  A raw insert with no dest_fingerprint (a legacy-shaped row — V421's partial index ignores it), because nothing here
+ *  opens the envelope. Returns the target id. */
+export async function rigTarget(orgId: string, label = "Rig"): Promise<string> {
+  const [target] = await sql<{ id: string }[]>`
+    insert into org_stream_targets (org_id, kind, label, rtmp_enc)
+    values (${orgId}, 'youtube', ${label}, ${Buffer.from("not-a-real-envelope")}) returning id`;
+  return target!.id;
+}
+
 export interface StreamRig {
   orgId: string;
   /** The users row that authors staff writes and sessions. */
@@ -67,16 +95,13 @@ export async function streamRig(opts: { fixtures?: 1 | 2; createdBy?: string } =
   const createdBy = opts.createdBy ?? (await rigUser());
   // One target PER SESSION: V421's fixture_stream_sessions_one_active_target refuses two non-terminal sessions on one
   // destination, and a caller that seats two live sessions on two fixtures (stream-credits.test.ts m2) means two
-  // courts, which means two destinations. A raw insert with no dest_fingerprint (a legacy-shaped row — V421's partial
-  // index ignores it), because the envelope is fake and nothing here opens it.
+  // courts, which means two destinations (`rigTarget`: a fake envelope nothing here opens).
   const session = async (fixtureId: string, state = "warming") => {
-    const [target] = await sql<{ id: string }[]>`
-      insert into org_stream_targets (org_id, kind, label, rtmp_enc)
-      values (${auth.orgId}, 'youtube', 'Rig', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    const targetId = await rigTarget(auth.orgId);
     const [s] = await sql<{ id: string }[]>`
       insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by,
                                            sport_key, competition_id, division_id, entitlement_via_override)
-      select f.id, ${auth.orgId}, 'passthrough', ${state}, ${target!.id}, ${createdBy},
+      select f.id, ${auth.orgId}, 'passthrough', ${state}, ${targetId}, ${createdBy},
              d.sport_key, d.competition_id, f.division_id, true
         from fixtures f join divisions d on d.id = f.division_id
        where f.id = ${fixtureId}

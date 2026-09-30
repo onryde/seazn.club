@@ -10,28 +10,42 @@
 // (`1px` / `solid` / the RESOLVED custom property, never a hex literal — a hex
 // passes for one sport and rots silently for the other ten).
 //
-// SERIAL, on purpose. The rig grants an org-wide entitlement halfway through
-// its own life (the 404 gate is proved on the SAME fixture, before the grant),
-// so the tests are ordered rather than independent. AGENTS.md class 21 applies
+// SERIAL, on purpose. The rig switches the overlay OFF by an org-wide override
+// and back on halfway through its own life (the 404 is proved on the SAME
+// fixture before the override comes off — since V426 every plan grants
+// `streaming.overlay`, so an override is the only negative left), so the tests
+// are ordered rather than independent. AGENTS.md class 21 applies
 // to reading a red run from this file: the first failure aborts the rest, so a
 // red COUNT here is a floor, never a total — re-run after each fix until a
 // full pass completes.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type Browser, type Page } from "@playwright/test";
-import { apiJson, invalidateOrgEntitlements } from "./helpers";
+import {
+  apiJson,
+  invalidateOrgEntitlements,
+  setBoolEntitlementOverrideSql,
+} from "./helpers";
 import {
   OVERLAY_MOMENT_FOLD_MS,
   OVERLAY_MOMENT_HOLD_MS,
 } from "../src/components/overlay/moment-timing";
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
 import { POLL_MS } from "../src/components/public-site/match-centre/use-live-fixture";
+import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "../src/components/public-site/live-score-data";
+import { OVERLAY_KEY_PARAM } from "../src/lib/realtime-purpose";
+import { watchFixtureRealtime } from "./realtime-propagation-kit";
 import {
   HOCKEY_CARD_TONES,
   STREAM_URL,
-  grantOverlay,
+  clearStreamingOverride,
+  denyOverlay,
+  grantRigPackCredits,
   seedCricketOverlayFixture,
   seedCricketOverlayFreshOver,
   seedOverlayFixture,
   sendEvent,
+  setRigPlan,
   signInAs,
   type OverlayRig,
 } from "./overlay-kit";
@@ -110,11 +124,11 @@ async function resolveToken(page: Page, token: string): Promise<string> {
 }
 
 let rig: OverlayRig;
-/** The route's status for this exact fixture BEFORE the entitlement existed.
- *  Captured in `beforeAll` rather than asserted there, so the gate has a named
- *  test of its own and its expectation is a real differential: one fixture,
- *  one URL, one variable. */
-let statusBeforeGrant = 0;
+/** The route's status for this exact fixture while an override switched
+ *  `streaming.overlay` OFF. Captured in `beforeAll` rather than asserted there,
+ *  so the gate has a named test of its own and its expectation is a real
+ *  differential: one fixture, one URL, one variable (the override row). */
+let statusWhileDenied = 0;
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(180_000);
@@ -127,18 +141,25 @@ test.beforeAll(async ({ browser }) => {
   try {
     rig = await seedOverlayFixture(ownerPage);
 
+    // V426: the rig's plan grants the overlay, so the only 404 left is an
+    // override. The seed's own API calls may already have resolved this org's
+    // entitlements, so the override drops that cache before the fetch reads it.
+    await denyOverlay(rig.orgId);
+    await invalidateOrgEntitlements(ownerPage.request, rig.orgId);
     const anon = await anonPage(browser);
     try {
       const res = await anon.goto(`/overlay/fixtures/${rig.fixtureId}`);
-      statusBeforeGrant = res?.status() ?? 0;
+      statusWhileDenied = res?.status() ?? 0;
     } finally {
       await anon.context().close();
     }
 
-    await grantOverlay(rig.orgId);
-    // The 404 above RESOLVED `streaming.overlay` for this org, so the grant has
-    // to drop whatever that resolution cached. A no-op where there is no Redis;
-    // required against a cached target, and the reason the two are not one step.
+    // The override comes OFF (not flipped to true): what serves the route from
+    // here on is the plan's own V426 row, which is the thing every later test
+    // in this file now rides. The 404 above RESOLVED `streaming.overlay` for
+    // this org, so the removal has to drop whatever that resolution cached — a
+    // no-op where there is no Redis, required against a cached target.
+    await clearStreamingOverride(rig.orgId, "streaming.overlay");
     await invalidateOrgEntitlements(ownerPage.request, rig.orgId);
   } finally {
     await owner.close();
@@ -268,15 +289,15 @@ for (const style of ["bar", "bug"] as const) {
 // ===========================================================================
 
 test.describe("the overlay route", () => {
-  test("the entitlement gate 404s until streaming.overlay is granted", async ({ browser }) => {
+  test("an override switches overlay off → 404", async ({ browser }) => {
     expect(
-      statusBeforeGrant,
-      "the same fixture, the same URL, no entitlement — the overlay must be indistinguishable from a missing fixture",
+      statusWhileDenied,
+      "the same fixture, the same URL, an override-false row — the overlay must be indistinguishable from a missing fixture",
     ).toBe(404);
     const page = await anonPage(browser);
     try {
       const res = await page.goto(`/overlay/fixtures/${rig.fixtureId}`);
-      expect(res?.status(), "and 200 once the org holds the key").toBe(200);
+      expect(res?.status(), "and 200 once the override is gone: the rig's plan grants it on its own (V426)").toBe(200);
       await expect(page.locator('[data-testid="ovl-root"]')).toHaveCount(1);
     } finally {
       await page.context().close();
@@ -787,6 +808,264 @@ test.describe("§8's live preview", () => {
 });
 
 // ===========================================================================
+// V426 (Task 14b): the Phone tab on the plan with the LEAST — community.
+// ===========================================================================
+
+/** The English copy the card must read, from the dictionary itself — never
+ *  typed here, so a copy edit moves the expectation with it. */
+const EN_UI = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+const en = (key: string, vars: Record<string, number> = {}): string => {
+  const raw = EN_UI[key];
+  if (raw === undefined) throw new Error(`en/ui.json has no ${key}`);
+  return raw.replace(/\{(\w+)\}/g, (_, v: string) => String(vars[v]));
+};
+
+test.describe("the Phone tab on a community org (V426)", () => {
+  // Single-sport (hockey) by design: the plan gate, the monthly grant and the credit lines are org-level and read no
+  // sport; the overlay kit's seed is a rostered hockey fixture, and nothing on this path branches on it.
+  // A rig of its own: this block moves its org's PLAN and writes an org-wide
+  // `streaming.relay` override, neither of which may reach `rig` above.
+  let community: OverlayRig;
+  let rate = 0;
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(180_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    try {
+      community = await seedOverlayFixture(ownerPage);
+      // Seeded on pro (the kit's recipe needs a paid plan's limits to build a
+      // rostered hockey fixture), then moved to community BEFORE any page read
+      // grants this period's credits — so the grant the page makes is the
+      // community rate, read from V426's row.
+      ({ monthlyMatchCredits: rate } = await setRigPlan(community.orgId, "community"));
+      await invalidateOrgEntitlements(ownerPage.request, community.orgId);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  /** The row's stream panel, open on its default OBS tab. */
+  async function openPanel(page: Page): Promise<void> {
+    await page.goto(`/o/${community.orgSlug}/c/${community.compSlug}/d/${community.divSlug}?tab=fixtures`);
+    await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1);
+    // The sheet opens on "Today" and the seed does not schedule for today (the
+    // live-preview test's own premise above).
+    await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
+    const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
+    await expect(toggle, "community holds streaming.overlay (V426), so the row offers the panel").toHaveCount(1);
+    await toggle.click();
+  }
+
+  async function openPhoneTab(page: Page): Promise<void> {
+    await openPanel(page);
+    await page.locator('[data-testid="stream-tab-phone"]').click();
+  }
+
+  test("opens with no upgrade gate, grants the plan's free match credits on the read, and says so on the card", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    expect(rate, "V426 declares a community rate of at least one match").toBeGreaterThanOrEqual(1);
+    // The project's storageState, as the live-preview test above: it carries the pre-dismissed cookie banner, which
+    // an empty context paints over the run sheet's first row — over the stream toggle itself.
+    const owner = await browser.newContext();
+    const page = await owner.newPage();
+    try {
+      await signInAs(page, community.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openPhoneTab(page);
+
+      const gate = page.locator('[data-testid="stream-phone-gate"]');
+      await expect(gate.locator("[data-phone-body]"), "the Phone tab body, not the relay's UpgradeGate").toHaveCount(1, {
+        timeout: 30_000,
+      });
+      await expect(gate.locator(":scope > a"), "no UpgradeGate pill in the tab").toHaveCount(0);
+
+      // The org owned NO credits before this render: the balance is the grant
+      // the page's own read made (R3b), at the community rate.
+      await expect(page.locator('[data-testid="stream-balance"]')).toHaveText(
+        rate === 1 ? en("stream.phone.credits.one") : en("stream.phone.credits.other", { n: rate }),
+      );
+      // No bought credits yet, so there is nothing to SPLIT: the line is hidden (review M2 — "1 free this month · 0
+      // bought" read as a nudge, not information), and the chip alone says it.
+      await expect(page.locator('[data-testid="stream-credits-split"]')).toHaveCount(0);
+
+      // The positive half: with credits in BOTH buckets the same line appears, summing to the chip.
+      const bought = 2;
+      expect(await grantRigPackCredits(community.orgId, bought), "the org total after the bought credits").toBe(rate + bought);
+      await openPhoneTab(page);
+      await expect(page.locator('[data-testid="stream-balance"]')).toHaveText(
+        en("stream.phone.credits.other", { n: rate + bought }),
+        { timeout: 30_000 },
+      );
+      await expect(page.locator('[data-testid="stream-credits-split"]')).toHaveText(
+        en("stream.credits.split", { m: rate, p: bought }),
+      );
+
+      await page.locator('[data-testid="stream-buy-more"]').click();
+      await expect(page.locator('[data-testid="stream-credits-monthly"]')).toHaveText(
+        rate === 1 ? en("stream.credits.monthlyNote.one") : en("stream.credits.monthlyNote.other", { n: rate }),
+      );
+
+      // The card is open with both new lines on it: nothing in the PANEL may reach past the viewport at any width.
+      // Scoped to the panel, not the page: at 320 the division page already overflows by ~56 px from the "Now
+      // playing" chip (stages-panel.tsx — two 9rem names side by side), with this panel closed, on main as well.
+      // That is not this card's to fix, and a page-level check here would stay red for a reason it cannot move.
+      let widths = 0;
+      for (const width of [1280, 768, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect(page.locator('[data-testid="stream-credits-monthly"]')).toBeVisible();
+        const seen = await page.evaluate(() => {
+          const vw = document.documentElement.clientWidth;
+          const panel = document.querySelector<HTMLElement>('[data-testid="stream-panel"]');
+          if (!panel) return { checked: 0, past: ["stream-panel is not in the DOM"] };
+          const boxes = [panel, ...Array.from(panel.querySelectorAll<HTMLElement>("*"))];
+          const past = boxes
+            .filter((el) => el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().right > vw + 1)
+            .map((el) => `${el.tagName.toLowerCase()}[${el.dataset.testid ?? ""}] right=${Math.round(el.getBoundingClientRect().right)}`);
+          return { checked: boxes.length, past };
+        });
+        expect(seen.checked, `${width}: no panel box was measured`).toBeGreaterThan(10);
+        expect(seen.past, `${width}: a panel box reaches past the ${width}px viewport`).toEqual([]);
+        widths++;
+      }
+      expect(widths).toBe(3);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  // RT (lane-close fix, ruled 2026-09-29; supersedes addendum RT's session-based bypass): community orgs get REAL-TIME
+  // overlays through the SIGNED KEY the organiser's panel puts in the OBS URL it copies. The plan-wide `realtime` stays
+  // off — a spectator keeps the poll. Driven on the PRODUCT path, end to end: the organiser copies the OBS URL from the
+  // panel, OBS (an anonymous browser) opens exactly that URL, and what is asserted is the overlay's own token request and
+  // the subscription it leads to. Nothing is seeded — no session is needed any more, and none exists here. The route's
+  // unit table (realtime-token/__tests__/route.test.ts) owns every other combination.
+  test("RT: the OBS URL copied from the panel earns the overlay a realtime subscription — the same URL with its key tampered does not", async ({
+    browser,
+  }) => {
+    test.setTimeout(150_000);
+    // The project's storageState (the pre-dismissed cookie banner), as the Phone-tab test above.
+    const owner = await browser.newContext();
+    const page = await owner.newPage();
+    const obs = await anonPage(browser);
+    const tamperedObs = await anonPage(browser);
+    try {
+      await signInAs(page, community.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openPanel(page);
+
+      // Copy, as the organiser does — the button, not just the value it would copy.
+      const origin = new URL(page.url()).origin;
+      await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+      const field = page.locator('[data-testid="stream-link"]');
+      // Anchored on the ORIGIN too: the panel fills it in after hydration, and a copy taken before that is a path OBS
+      // cannot open.
+      const escaped = origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      await expect(field).toHaveValue(new RegExp(`^${escaped}/overlay/fixtures/${community.fixtureId}\\?`), { timeout: 30_000 });
+      await page.locator('[data-testid="stream-copy"]').click();
+      await expect(page.locator('[data-testid="stream-copy"]')).toContainText(en("stream.copied"));
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copied, "Copy writes the field's own URL").toBe(await field.inputValue());
+      const url = new URL(copied);
+      expect(url.origin, "a URL OBS can open: this deployment's own origin").toBe(origin);
+      expect(url.pathname).toBe(`/overlay/fixtures/${community.fixtureId}`);
+      const key = url.searchParams.get(OVERLAY_KEY_PARAM);
+      expect(key, "the copied OBS URL carries the fixture's signed key").toMatch(/^[A-Za-z0-9_-]{22}$/);
+
+      // Premise, and the spectator path unchanged: community has no `realtime`, and the declared purpose alone is refused.
+      expect((await obs.request.get(realtimeTokenPath(community.fixtureId))).status(), "a spectator is refused").toBe(403);
+      expect(
+        (await obs.request.get(realtimeTokenPath(community.fixtureId, OVERLAY_REALTIME_PURPOSE))).status(),
+        "the declared purpose without its key never mints",
+      ).toBe(403);
+
+      // OBS opens the copied URL. The watch is armed BEFORE the navigation: the token request fires from a mount effect.
+      const watch = await watchFixtureRealtime(obs, community.fixtureId);
+      await obs.setViewportSize({ width: 1920, height: 1080 });
+      await obs.goto(copied);
+      const ovl = obs.locator('[data-testid="ovl-root"]');
+      await expect(ovl).toHaveCount(1, { timeout: 30_000 });
+      await expect
+        .poll(() => watch.tokenStatuses.length, { message: "the overlay never asked the realtime-token door", timeout: 30_000 })
+        .toBeGreaterThan(0);
+      expect(watch.tokenStatuses[0], "the overlay's own keyed request is minted a token").toBe(200);
+
+      // The subscription. A stub Supabase host (CI) mints but never dials — the hook's own stub guard — so there the
+      // join cannot happen and the overlay stays on the poll; E2E_REQUIRE_REALTIME=1 says this environment HAS realtime,
+      // and turns that degradation into the failure.
+      const subscribed = await obs
+        .waitForFunction(
+          () => document.querySelector('[data-testid="ovl-root"]')?.getAttribute("data-transport") === "realtime",
+          undefined,
+          { timeout: 15_000 },
+        )
+        .then(() => true)
+        .catch(() => false);
+      if (subscribed) {
+        expect(watch.joined(), "the DOM says realtime, and a Phoenix join for THIS fixture's channel confirmed it").toBe(true);
+      } else {
+        expect(
+          process.env.E2E_REQUIRE_REALTIME === "1",
+          "E2E_REQUIRE_REALTIME=1: this environment is supposed to have realtime, and the keyed overlay never subscribed",
+        ).toBe(false);
+        await expect(ovl, "no subscription: the stub-host fallback is the poll, anything else is a crash").toHaveAttribute("data-transport", "poll");
+        test.info().annotations.push({ type: "realtime-unavailable", description: "RT: minted 200, but no websocket joined (stub host)" });
+      }
+
+      // The pair: the SAME URL with one character of its key changed. Asked, refused, and on the poll.
+      const bad = new URL(copied);
+      bad.searchParams.set(OVERLAY_KEY_PARAM, (key![0] === "A" ? "B" : "A") + key!.slice(1));
+      const badWatch = await watchFixtureRealtime(tamperedObs, community.fixtureId);
+      await tamperedObs.goto(bad.toString());
+      await expect(tamperedObs.locator('[data-testid="ovl-root"]')).toHaveCount(1, { timeout: 30_000 });
+      await expect
+        .poll(() => badWatch.tokenStatuses.length, { message: "the tampered overlay never asked", timeout: 30_000 })
+        .toBeGreaterThan(0);
+      expect(badWatch.tokenStatuses[0], "a tampered key takes the normal path: refused").toBe(403);
+      await expect(tamperedObs.locator('[data-testid="ovl-root"]')).toHaveAttribute("data-transport", "poll");
+      expect(badWatch.joined(), "no channel join on a refused token").toBe(false);
+    } finally {
+      await owner.close();
+      await obs.context().close();
+      await tamperedObs.context().close();
+    }
+  });
+
+  test("the sibling negative: an override switches streaming.relay off, and the same tab says streaming is SWITCHED OFF — never a price", async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    await setBoolEntitlementOverrideSql(community.orgId, "streaming.relay", false);
+    // The project's storageState, as the live-preview test above: it carries the pre-dismissed cookie banner, which
+    // an empty context paints over the run sheet's first row — over the stream toggle itself.
+    const owner = await browser.newContext();
+    const page = await owner.newPage();
+    try {
+      await invalidateOrgEntitlements(page.request, community.orgId);
+      await signInAs(page, community.ownerEmail);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await openPhoneTab(page);
+      const gate = page.locator('[data-testid="stream-phone-gate"]');
+      // Review I4: every plan streams (V426), so the only way here is a staff override — an org that no plan can
+      // buy its way out of. The tab says so and names who to contact; it never shows a plan, a price or an upgrade.
+      await expect(gate.locator('[data-testid="stream-switched-off"]'), "the switched-off state").toHaveCount(1, {
+        timeout: 30_000,
+      });
+      await expect(gate.locator('[data-testid="stream-switched-off"]')).toContainText(en("stream.phone.switchedOff"));
+      await expect(gate.locator("[data-phone-body]"), "no Phone tab body behind the override").toHaveCount(0);
+      await expect(gate.locator(":scope > a"), "no UpgradeGate pill").toHaveCount(0);
+      await expect(gate.locator('a[href*="/billing"], a[href*="upgrade"]'), "no billing or upgrade link").toHaveCount(0);
+    } finally {
+      await owner.close();
+    }
+  });
+});
+
+// ===========================================================================
 // Private Realtime → overlay scorebug (JWT mint + Realtime Authorization)
 // Must stay BEFORE the stream-link describe: that one decides the fixture.
 // ===========================================================================
@@ -1012,7 +1291,6 @@ test.describe("moments (W2)", () => {
     const ownerPage = await owner.newPage();
     try {
       moments = await seedOverlayFixture(ownerPage);
-      await grantOverlay(moments.orgId);
     } finally {
       await owner.close();
     }
@@ -1170,7 +1448,6 @@ test.describe("overlay clock holds when paused (*.clock)", () => {
     const ownerPage = await owner.newPage();
     try {
       clockRig = await seedOverlayFixture(ownerPage);
-      await grantOverlay(clockRig.orgId);
     } finally {
       await owner.close();
     }
@@ -1275,7 +1552,6 @@ test.describe("cricket crease band (W2 Task 3)", () => {
     const ownerPage = await owner.newPage();
     try {
       cricket = await seedCricketOverlayFixture(ownerPage);
-      await grantOverlay(cricket.orgId);
     } finally {
       await owner.close();
     }
@@ -1345,7 +1621,6 @@ test.describe("cricket end-of-over card (EOO)", () => {
     const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const ownerPage = await owner.newPage();
     const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
-    await grantOverlay(rig.orgId);
 
     const anon = await anonPage(browser);
     const anonBug = await anonPage(browser);
@@ -1446,7 +1721,6 @@ test.describe("§1's name ladder on the bar (W2-F45)", () => {
     const ownerPage = await owner.newPage();
     try {
       const rig = await seedOverlayFixture(ownerPage);
-      await grantOverlay(rig.orgId);
       for (const [id, name] of [
         [rig.homeEntrantId, home],
         [rig.awayEntrantId, away],

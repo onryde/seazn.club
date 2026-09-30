@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
+// The fixture stream panel (imported through the run sheet) reads the checkout-return URL and strips it (G5).
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/",
+  useSearchParams: () => new URLSearchParams(""),
+}));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
 vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 

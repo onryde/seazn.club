@@ -18,6 +18,7 @@ import { loadOverlayLiveData } from "@/server/overlay/load";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { resolveTheme } from "@/components/overlay/theme-registry";
 import { resolveDelayMs } from "@/lib/overlay-delay";
+import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE } from "@/lib/realtime-purpose";
 
 export const metadata: Metadata = { robots: { index: false, follow: false } };
 
@@ -48,7 +49,9 @@ export async function generateStaticParams() {
 }
 
 type Params = { fixtureId: string };
-type Query = { style?: string; lang?: string; delay?: string };
+/** RT: the signed key rides under the token route's own parameter name, so the panel that writes it, this page that
+ *  reads it and the route that verifies it spell it once (lib/realtime-purpose.ts). */
+type Query = { style?: string; lang?: string; delay?: string } & { [K in typeof OVERLAY_KEY_PARAM]?: string | string[] };
 
 export default async function OverlayPage({
   params,
@@ -58,7 +61,9 @@ export default async function OverlayPage({
   searchParams: Promise<Query>;
 }) {
   const { fixtureId } = await params;
-  const { style, lang, delay } = await searchParams;
+  const query = await searchParams;
+  const { style, lang, delay } = query;
+  const key = query[OVERLAY_KEY_PARAM];
 
   // Task 5d — closes the delay-compensation seam: an unparseable or
   // out-of-range `?delay=` falls back to 0 (undelayed) rather than
@@ -132,6 +137,12 @@ export default async function OverlayPage({
   // the start label because that read already happened for the gate.
   const initial = await loadOverlayLiveData(fixture.id);
 
+  // RT (lane-close fix, ruled 2026-09-29): the signed key the organiser's panel put in this URL (`?key=`). Passed to the
+  // stage WITH the overlay purpose, so its transport asks the token route for realtime even on a plan without it; the
+  // route verifies the key (constant-time, fixture-bound) and a bad one simply leaves the stage on the poll. Not checked
+  // here: one authority for the grant. A repeated `?key=` is not a key.
+  const overlayKey = typeof key === "string" && key.length > 0 ? key : undefined;
+
   return (
     <OverlayStage
       fixtureId={fixture.id}
@@ -154,6 +165,7 @@ export default async function OverlayPage({
       dict={dict}
       decidedTemplates={decidedOutcomeTemplates((k, v) => msgFor(locale, k, v))}
       delayMs={delayMs}
+      {...(overlayKey ? { realtimePurpose: OVERLAY_REALTIME_PURPOSE, overlayKey } : {})}
       fit
     />
   );

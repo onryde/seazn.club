@@ -1293,9 +1293,11 @@ export const StreamFailReason = z.enum([
   // The two TIMED exits the domain's expiry owns (Task 2B `evaluate`): a create
   // that never finished (F16) and a row admitted but never provisioned (F18).
   // They belong HERE and not in StreamEndReason: a failed session carries no
-  // end reason at all (P1-F-b). Ten members — the copy map (Task 13) is total
+  // end reason at all (P1-F-b). Eleven members — the copy map (Task 13) is total
   // over this enum, so adding one here owes four dictionary keys there.
   "provision_timeout", "admission_timeout",
+  // M10 (Task 14b review): a deployment with no relay ended a session left up from before.
+  "relay_disabled",
 ]);
 /** How a COMPLETED session ended — the deadline is not a failure. */
 export const StreamEndReason = z.enum(["stopped", "max_duration"]);
@@ -1343,6 +1345,15 @@ export const StreamSessionCurrent = z
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     endReason: StreamEndReason.nullable(),
+    /** True iff THIS session's own consume still stands: the sum of its `consume` + `refund` credit rows is below zero.
+     *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —
+     *  both read false, so the "1 credit used" chip is never a false money claim (lane D D3). */
+    creditUsed: z.boolean(),
+    /** I-1 (lane-close review): true iff a new start on THIS fixture would cost nothing right now — a consume of this
+     *  fixture still stands inside the reuse window (§5.2 "a restart after a failure is the same match"). Computed through
+     *  the one authority admission asks (`reuseWindowOpen`), so the Phone tab never sells a pack for a restart the server
+     *  would admit at balance 0. A fixture fact, not this session's: a restart that consumed nothing still reads true. */
+    restartFree: z.boolean(),
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;

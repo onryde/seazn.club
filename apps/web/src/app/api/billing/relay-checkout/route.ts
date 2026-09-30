@@ -5,10 +5,28 @@ import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { baseUrl } from "@/lib/oauth";
 import { hasFeature } from "@/lib/entitlements";
-import { createRelayCheckout } from "@/lib/relay-checkout";
+import { createRelayCheckout, StreamPackPriceDriftError } from "@/lib/relay-checkout";
 import { preferredCurrency } from "@/lib/currency-server";
 import { requireBillingOwner } from "@/server/usecases/billing-manage";
 import { routes } from "@/lib/routes";
+import { NextResponse } from "next/server";
+import { captureError } from "@/lib/sentry";
+import { relayUnavailable } from "@/server/relay/drivers";
+import { log } from "@/server/logger";
+
+/** Every error the Stripe SDK raises for a request carries a `type` of `Stripe…Error` (invalid request, API, connection,
+ *  rate limit, authentication, permission, idempotency). Read by shape, as billing-manage.ts reads it — a genuine bug
+ *  (a TypeError) or this route's own HttpError is NOT one. */
+function stripeRequestError(err: unknown): { type: string; code?: string; requestId?: string; statusCode?: number } | null {
+  const e = err as { type?: unknown; code?: unknown; requestId?: unknown; statusCode?: unknown } | null;
+  if (!e || typeof e.type !== "string" || !e.type.startsWith("Stripe")) return null;
+  return {
+    type: e.type,
+    code: typeof e.code === "string" ? e.code : undefined,
+    requestId: typeof e.requestId === "string" ? e.requestId : undefined,
+    statusCode: typeof e.statusCode === "number" ? e.statusCode : undefined,
+  };
+}
 
 const schema = z
   .object({
@@ -31,7 +49,10 @@ const schema = z
  * `orgId` must EQUAL the resolved org (400): the resolver reads a cookie, and
  * a stale one must not buy credits for a different organisation. Then the
  * fixture must be that org's (404, never "forbidden"). Then — BEFORE any
- * Stripe call — the org's resolved `streaming.relay` must be true, or 402
+ * Stripe call — the deployment must have a relay at all (503
+ * `ingest_unavailable`, Task 14b review I2), and the org's resolved
+ * `streaming.overlay` and `streaming.relay` must both be true — the two keys
+ * createSession admits on, in its order (m5) — or 402 `plan_lacks_overlay` /
  * `plan_lacks_relay`: nobody pays for a tier they cannot use. Never a redirect
  * (R8): JSON with the secret.
  *
@@ -58,25 +79,74 @@ export async function POST(req: Request) {
        where f.id = ${body.fixtureId} and o.id = ${orgId}`;
     if (!fx) throw new HttpError(404, "fixture not found");
 
-    if (!(await hasFeature(orgId, "streaming.relay", fx.competition_id))) {
+    // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production, drivers.ts
+    // `disabledRelayDrivers`) refuses every start with this same 503, so a pack sold meanwhile is real money for a
+    // credit nothing can spend — and so (m1) does a LIVE one missing a Cloudflare secret, whose drivers cannot be built.
+    // Refused BEFORE the entitlement read and any Stripe call, with the code the Phone tab already reads ("The
+    // streaming service is unavailable"). After the ownership checks: a fixture that is not this org's stays 404
+    // whatever the deployment.
+    if (relayUnavailable()) {
+      throw new HttpError(503, "the streaming ingest is unavailable", "ingest_unavailable");
+    }
+
+    // m5 (lane-close review): the same TWO keys createSession admits on, in admit's order — without the overlay no start
+    // is admitted whatever the relay says, so a pack sold then is a credit nothing can spend.
+    const [overlay, relay] = await Promise.all([
+      hasFeature(orgId, "streaming.overlay", fx.competition_id),
+      hasFeature(orgId, "streaming.relay", fx.competition_id),
+    ]);
+    if (!overlay) {
+      throw new HttpError(402, "This plan does not include the stream overlay", "plan_lacks_overlay");
+    }
+    if (!relay) {
       throw new HttpError(402, "This plan does not include phone streaming", "plan_lacks_relay");
     }
 
     const [sub] = await sql<{ stripe_customer_id: string | null }[]>`
       select stripe_customer_id from subscriptions where id = ${subscriptionId}`;
     const tab = `${baseUrl(req)}${routes.division(fx.org_slug, fx.comp_slug, fx.div_slug, "fixtures")}&fixture=${body.fixtureId}`;
-    const session = await createRelayCheckout({
-      // The RESOLVED org, never `body.orgId` — they are equal by the check
-      // above, and keeping the resolver's value means a future relaxation of
-      // that check cannot quietly turn the body into the authority.
-      orgId,
-      fixtureId: body.fixtureId,
-      size: body.pack,
-      returnUrl: `${tab}&stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-      currency: await preferredCurrency(orgId, req),
-      customerId: sub?.stripe_customer_id,
-      customerEmail: user.email,
-    });
+    const currency = await preferredCurrency(orgId, req);
+    let session: Awaited<ReturnType<typeof createRelayCheckout>>;
+    try {
+      session = await createRelayCheckout({
+        // The RESOLVED org, never `body.orgId` — they are equal by the check
+        // above, and keeping the resolver's value means a future relaxation of
+        // that check cannot quietly turn the body into the authority.
+        orgId,
+        fixtureId: body.fixtureId,
+        size: body.pack,
+        returnUrl: `${tab}&stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        currency,
+        customerId: sub?.stripe_customer_id,
+        customerEmail: user.email,
+      });
+    } catch (err) {
+      // B5 (Task 14 fix round 1): Stripe refusing to open the session — an account missing its tax head-office
+      // address answers 400, an outage 5xx, a timeout a connection error — is an OUTCOME here, not a crash. Reported
+      // ONCE, with the org and Stripe's own ids, and answered 502 with a code the Phone tab already reads as "Checkout
+      // didn't open. Try again." Returned rather than thrown: `handler` captures every HttpError ≥ 500 itself, which
+      // would report the same failure twice. This route's own typed refusals (the 503 for unsynced pack prices) and a
+      // genuine bug keep their paths.
+      // Parked (c): the PROD drift guard refused a pack whose live price differs from the table. It has already logged
+      // and reported that once (lib/relay-checkout.ts); answered here with the same 502 code, and not re-thrown, which
+      // would have `handler` report it again on every tap.
+      if (err instanceof StreamPackPriceDriftError) {
+        return NextResponse.json({ ok: false, error: err.message, code: err.code }, { status: err.status });
+      }
+      const stripe = stripeRequestError(err);
+      if (!stripe) throw err;
+      captureError(err, {
+        userId: user.id,
+        orgId,
+        route: "billing/relay-checkout",
+        extra: { stripeType: stripe.type, stripeCode: stripe.code, stripeRequestId: stripe.requestId, stripeStatus: stripe.statusCode, pack: body.pack },
+      });
+      log.error({ orgId, stripeType: stripe.type, stripeCode: stripe.code, stripeRequestId: stripe.requestId }, "relay-checkout: Stripe refused to open the session");
+      return NextResponse.json(
+        { ok: false, error: "Checkout could not be opened. Please try again.", code: "checkout_unavailable" },
+        { status: 502 },
+      );
+    }
     return { client_secret: session.client_secret };
   });
 }

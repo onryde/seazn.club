@@ -1824,6 +1824,26 @@ export async function fixtureRealtimeEligible(fixtureId: string): Promise<boolea
   return row?.realtime === true;
 }
 
+/**
+ * RT (lane-close fix, ruled 2026-09-29): does THIS fixture's org hold `streaming.overlay` for the fixture's competition —
+ * read as the overlay page reads it (`hasFeature`, competition-scoped) — on a fixture that is PUBLIC (the same views as
+ * `fixtureRealtimeEligible`, so a private competition never qualifies)? One of the overlay realtime bypass's three
+ * conditions; the declared purpose and the signed key are the route's to check, and this never sees either. Whether a
+ * stream session is up is deliberately NOT asked any more: the key is the grant.
+ */
+export async function fixtureOverlayEntitled(fixtureId: string): Promise<boolean> {
+  if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return false;
+  const [row] = await sql<{ org_id: string; competition_id: string }[]>`
+    select c.org_id, c.id as competition_id
+    from public_fixtures_v f
+    join public_divisions_v d on d.id = f.division_id
+    join public_competitions_v c on c.id = d.competition_id
+    where f.id = ${fixtureId}
+    limit 1`;
+  if (!row) return false;
+  return hasFeature(row.org_id, "streaming.overlay", row.competition_id);
+}
+
 /** Sitemap source: every `public` competition past draft, with its division
  *  slugs — a draft is unlisted until published (`lib/competition-listing.ts`). */
 export async function listPublicSitemapEntries(): Promise<

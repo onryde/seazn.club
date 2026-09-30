@@ -11,7 +11,7 @@ import {
 } from "./runner";
 
 export type SessionState = "requested" | "provisioning" | "warming" | "live" | "ending" | "completed" | "failed";
-export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "no_credits" | RunnerFailReason;
+export type FailReason = "no_inbound_timeout" | "provision_timeout" | "admission_timeout" | "target_rejected" | "no_credits" | "relay_disabled" | RunnerFailReason;
 export type Mode = "passthrough" | "composed";
 
 export const ACTIVE_STATES: readonly SessionState[] = ["requested", "provisioning", "warming", "live", "ending"];
@@ -39,7 +39,8 @@ export interface Session {
   outputUid: string | null;
 }
 
-// ---- admission (§6.3 order; E5: storage_exhausted is a refusal, never a state)
+// ---- admission (§6.3 order, amended by owner ruling 2026-09-29 (F-A5): active_session moves up to directly after the
+// plan gates; E5: storage_exhausted is a refusal, never a state)
 export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lacks_relay" | "no_credits" | "target_not_found" | "storage_exhausted" | "active_session";
 export interface AdmitInput {
   overlay: boolean; relay: boolean; balance: number; targetBelongsToOrg: boolean;
@@ -54,10 +55,13 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   if (i.relay && !i.overlay) return { ok: false, refusal: "overlay_required" };  // r5: the implication check
   if (!i.overlay) return { ok: false, refusal: "plan_lacks_overlay" };
   if (!i.relay) return { ok: false, refusal: "plan_lacks_relay" };
+  // F-A5 (owner ruling 2026-09-29): a match already streaming answers a second start before credits, destination or
+  // storage are weighed — "already running" is the truth; "no credits" or "storage full" would send the organiser the
+  // wrong way while their stream is up.
+  if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
   if (i.headroomMinutes < i.maxDurationMinutes) return { ok: false, refusal: "storage_exhausted" };
-  if (i.activeSessionId) return { ok: false, refusal: "active_session", activeSessionId: i.activeSessionId };
   return { ok: true };
 }
 
@@ -66,6 +70,7 @@ export type Command =
   | { type: "provision" } | { type: "provisioned" }
   | { type: "ingest_connected" } | { type: "credit_refused" }
   | { type: "target_rejected" } | { type: "stop" } | { type: "complete" }
+  | { type: "relay_disabled" }
   | { type: "expire"; expiry: Expiry }
   | { type: "runner"; trigger: RunnerTrigger };
 
@@ -319,6 +324,16 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
     case "complete":
       if (s.state !== "ending" && s.state !== "live") throw illegal();
       return complete(s, now);
+    case "relay_disabled":
+      // M10 (Task 14b review): this deployment has NO relay (R5 — config.ts relayDriverMode "disabled"), so a session
+      // still up from before cannot be observed, expired on evidence, or stopped through a provider: every port refuses,
+      // and a poll that asked threw on every tick. It ends here, failed, from any state that is still up (a terminal one
+      // was refused above). No runner effect — there is no provider to call; the runner is left as it stands, so the
+      // C27 cleanup can tear a real Machine down once a provider is back. The passthrough output release is `decide`'s
+      // one predicate (C1), and releaseOutput records and reports the port's refusal instead of throwing. Money follows
+      // the existing rules: a credit is consumed only at go-live, so a session that never went live was never charged,
+      // and one that did keeps its consume like every other failure after go-live.
+      return fail(s, "relay_disabled", now);
     case "expire":
       return expire(s, c.expiry, now, illegal);
     case "runner":

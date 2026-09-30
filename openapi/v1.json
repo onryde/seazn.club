@@ -38513,7 +38513,8 @@
                                     "machine_oom",
                                     "machine_crash",
                                     "provision_timeout",
-                                    "admission_timeout"
+                                    "admission_timeout",
+                                    "relay_disabled"
                                   ]
                                 },
                                 {
@@ -38790,6 +38791,12 @@
                                   "type": "null"
                                 }
                               ]
+                            },
+                            "creditUsed": {
+                              "type": "boolean"
+                            },
+                            "restartFree": {
+                              "type": "boolean"
                             }
                           },
                           "required": [
@@ -38808,7 +38815,9 @@
                             "replayUrl",
                             "target",
                             "fixtureDecided",
-                            "endReason"
+                            "endReason",
+                            "creditUsed",
+                            "restartFree"
                           ],
                           "additionalProperties": false
                         },
@@ -38870,7 +38879,9 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
-                    "endReason": "stopped"
+                    "endReason": "stopped",
+                    "creditUsed": true,
+                    "restartFree": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -39156,7 +39167,8 @@
                                 "machine_oom",
                                 "machine_crash",
                                 "provision_timeout",
-                                "admission_timeout"
+                                "admission_timeout",
+                                "relay_disabled"
                               ]
                             },
                             {
@@ -39433,6 +39445,12 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "creditUsed": {
+                          "type": "boolean"
+                        },
+                        "restartFree": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -39451,7 +39469,9 @@
                         "replayUrl",
                         "target",
                         "fixtureDecided",
-                        "endReason"
+                        "endReason",
+                        "creditUsed",
+                        "restartFree"
                       ],
                       "additionalProperties": false
                     },
@@ -39508,7 +39528,9 @@
                       "label": "example"
                     },
                     "fixtureDecided": true,
-                    "endReason": "stopped"
+                    "endReason": "stopped",
+                    "creditUsed": true,
+                    "restartFree": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -58907,7 +58929,7 @@
     },
     "/api/v1/public/fixtures/{id}/realtime-token": {
       "get": {
-        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement)",
+        "summary": "Realtime subscriber token (403 unless the org has the realtime entitlement; ?purpose=overlay is also granted when ?key= is the fixture's signed overlay key from the organiser's OBS URL and the org has streaming.overlay)",
         "tags": [
           "public"
         ],
@@ -58919,6 +58941,25 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "overlay"
+              ]
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],

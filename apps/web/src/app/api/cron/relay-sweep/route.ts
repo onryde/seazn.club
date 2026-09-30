@@ -18,6 +18,10 @@ export async function POST(req: Request) {
     if (!secret) throw new HttpError(503, "CRON_SECRET is not configured");
     const given = (await headers()).get("x-cron-secret");
     if (given !== secret) throw new HttpError(401, "Bad cron secret");
-    return sweepStreamSessions(defaultDeps(baseUrl(req)));
+    const deps = defaultDeps(baseUrl(req));
+    // R5 (Task 14b): no relay on this deployment (production, RELAY_DRIVERS unset) — every provider port refuses, and
+    // there is nothing to reconcile against. Say so rather than fail at the first provider read every night.
+    if (deps.drivers.disabled) return { disabled: true as const };
+    return sweepStreamSessions(deps);
   });
 }

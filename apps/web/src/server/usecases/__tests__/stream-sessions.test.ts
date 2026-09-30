@@ -21,12 +21,17 @@ import { randomBytes, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseCaptureQr } from "@/lib/capture-qr";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { ApiV1Error, apiV1 } from "@/lib/client-v1";
+import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
+import { createErrorCode } from "@/lib/stream-session-view";
+import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
-import { inputEnvelopesHex, resealTargetDestination, rigUser } from "@/server/relay/__tests__/_session-rig";
+import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -36,22 +41,40 @@ import {
   TOKEN_GRACE_MINUTES, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
-import { relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
+import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
-import { creditBalance, grantCredits, orgMoneyLockKey, revokeCredits } from "../stream-credits";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import {
+  creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
+} from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  reconcileSession, relayBalance, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  openStreamFixtureIds, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
 // each of its four sites (r2-m3).
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
+
+// N4 (Task 14b re-review): apply's POOLED rate read, switchable so one test can make it throw. A pass-through otherwise —
+// every other test reads the real V426 row.
+const rateRead = vi.hoisted(() => ({ fail: null as Error | null, calls: 0 }));
+vi.mock("../stream-credits", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../stream-credits")>();
+  return {
+    ...real,
+    streamMonthlyRate: async (orgId: string) => {
+      rateRead.calls++;
+      if (rateRead.fail) throw rateRead.fail;
+      return real.streamMonthlyRate(orgId);
+    },
+  };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -171,7 +194,9 @@ async function override(orgId: string, key: string, value: boolean) {
   await invalidateOrgEntitlements(orgId);
 }
 
-async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; fixtures?: 1 | 2; targetHost?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
+/** `monthly: true` leaves this period's free match credits for createSession to grant (V426); by default the rig grants
+ *  and spends them (`spendMonthlyStreamGrant`), so `credits` is the whole balance, as every pre-V426 test assumes. */
+async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; targetHost?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null (_rig.ts:37), and fixture_stream_sessions.created_by is `uuid not null` — the
   // organiser who starts a stream is a REAL users row, so every `created_by` / `actor_user_id` below is a real id and
@@ -183,6 +208,7 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
   // The grant's in-transaction audit row needs a real users row (staff_audit_log.actor_id NOT NULL, V103:16) and every
   // staff write needs a key (Task 7).
   if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
+  if (!opts.monthly) await spendMonthlyStreamGrant(auth.orgId);
   const target = await createStreamTarget(auth, auth.orgId, {
     kind: opts.kind ?? "youtube", label: "Club",
     rtmpUrl: `rtmps://${opts.targetHost ?? "a.rtmps.youtube.com"}/live2`, streamKey: "yt-key",
@@ -227,7 +253,8 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const overlayOnly = await rig({ overlay: true, relay: false });
     await expect(createSession(overlayOnly.auth, overlayOnly.fixtureId, body(overlayOnly.target.id), overlayOnly.deps)).rejects.toMatchObject({ status: 402, featureKey: "streaming.relay" });
     const broke = await rig({ credits: 0 });
-    await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+    // The feature key the Phone tab's view model reads (C-c): the RELAY's, so "no credits" is never mistaken for a plan.
+    await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits", extra: { featureKey: "streaming.relay" } });
     let checked = 0;
     for (const x of [none, relayOnly, overlayOnly, broke]) {
       const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${x.auth.orgId}`;
@@ -412,6 +439,35 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(gone.state).toBe("warming");
   });
 
+  // Lane D amendment D5 (class 1 — a fixture on both ends proves the fixture). capture-qr.v1.test.ts pins the contract
+  // against fixtures authored from §7.6; THIS is the seam: the payload the REAL builder (currentSession's qr) hands the
+  // Phone tab, through the phone's parser and the checksummed JSON contract's required-key sets. It crosses the wire as
+  // JSON, so the parse is of the serialised text, exactly what the QR encodes.
+  it("D5: the REAL builder's qr satisfies the checksummed v1 contract — parseCaptureQr accepts its JSON verbatim, and its keys equal the contract's required set at every level", async () => {
+    const contract = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../../docs/contracts/capture-qr.v1.json"), "utf8")) as {
+      required: string[]; properties: { cred: { required: string[]; properties: { srt: { required: string[] }; rtmps: { required: string[] } } } };
+    };
+    const r = await rig({ credits: 1 });
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const qr = (await currentSession(r.auth, r.fixtureId, r.deps))!.qr;
+    expect(qr, "the warming projection carries a qr").not.toBeNull();
+    const wire = JSON.parse(JSON.stringify(qr)) as unknown;
+    expect(parseCaptureQr(wire, r.deps.now())).toEqual({ ok: true, payload: qr });
+    const levels: [string, string[], string[]][] = [
+      ["top", Object.keys(qr!), contract.required],
+      ["cred", Object.keys(qr!.cred), contract.properties.cred.required],
+      ["cred.srt", Object.keys(qr!.cred.srt), contract.properties.cred.properties.srt.required],
+      ["cred.rtmps", Object.keys(qr!.cred.rtmps), contract.properties.cred.properties.rtmps.required],
+    ];
+    let checked = 0;
+    for (const [name, built, required] of levels) {
+      expect(required.length, `${name}: the contract declares no keys`).toBeGreaterThan(0);
+      expect([...built].sort(), `${name}: the builder's keys vs the contract's`).toEqual([...required].sort());
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("double start → 409 active_session carrying the existing id (r1: admit, and the partial index as the race backstop)", async () => {
     const r = await rig({ credits: 2 });
     const first = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
@@ -426,6 +482,26 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
              d.sport_key, d.competition_id, f.division_id, true
         from fixtures f join divisions d on d.id = f.division_id where f.id = ${r.fixtureId}`)
       .rejects.toMatchObject({ code: "23505", constraint_name: "fixture_stream_sessions_one_active" });
+  });
+
+  it("F-A5 (owner 2026-09-29), through the real createSession: with the storage pool FULL, a second start on the SAME fixture answers 409 active_session carrying the running id — not 503 storage_exhausted; a SIBLING fixture on its own destination is refused 503 storage_exhausted, so the pool really is full (mutant: the old admit order → the same-fixture start reads storage_exhausted)", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const [f1, f2] = r.fixtureIds as [string, string];
+    const first = await createSession(r.auth, f1, body(r.target.id), r.deps);
+    // Full: one minute of headroom before any reservation — below one more booking whatever else the DB holds.
+    r.ingest.storage = { ...r.ingest.storage, totalStorageMinutesLimit: r.ingest.storage.totalStorageMinutes + 1 };
+    await expect(createSession(r.auth, f1, body(r.target.id), r.deps)).rejects.toMatchObject({
+      status: 409, code: "active_session", extra: { sessionId: first.sessionId },
+    });
+    // The positive pair: the same full pool refuses a start that has no running stream to name. Its own destination, so
+    // the destination guard (decided before admission) is not what answers.
+    const own = await createStreamTarget(r.auth, r.auth.orgId, {
+      kind: "youtube", label: "Court 2", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key-court-2",
+    });
+    await expect(createSession(r.auth, f2, body(own.id), r.deps)).rejects.toMatchObject({ status: 503, code: "storage_exhausted" });
+    const rows = await sql<{ id: string; fixture_id: string }[]>`
+      select id, fixture_id from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(rows, "ONE session — the running one; neither refusal wrote a row").toEqual([{ id: first.sessionId, fixture_id: f1 }]);
   });
 
   // Note 4 (the brief's hazard, raised at Step 4): the FIXTURE index's 23505 used to be mapped INSIDE `sql.begin`, where
@@ -471,6 +547,51 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const failed = (await currentSession(broke.auth, broke.fixtureId, broke.deps))!;
     expect(failed.state).toBe("failed");
     expect(failed.failReason).toBe("no_credits");
+    expect(failed.creditUsed, "D3: a session refused its credit at live used none").toBe(false);
+    expect(live.creditUsed, "D3: the positive pair — the session that went live paid").toBe(true);
+  });
+
+  // Lane D amendment D3 (R3.15): the ended state's "1 credit used" chip reads `creditUsed`, so it must be TRUE only for
+  // a session whose OWN consume still stands — net of refunds linked to it. The rule is the amendment's: the sum of this
+  // session's consume + refund rows is below zero. Walked as a SEQUENCE: before the consume, after it, after a goodwill
+  // refund that names no session, after a refund linked to this session, and the NEXT session on the same fixture.
+  it("D3: creditUsed — false before the consume, true once it stands, unmoved by an unlinked refund, false after a refund linked to THIS session; the next session pays again and says so", async () => {
+    const r = await rig({ credits: 2 });
+    const a = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(warming.state).toBe("warming");
+    expect(warming.creditUsed, "no consume row yet — the empty case").toBe(false);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state).toBe("live");
+    expect(live.creditUsed).toBe(true);
+    const staff = await rigUser();
+    await refundCredits({ orgId: r.auth.orgId, delta: 1, createdBy: staff, note: "goodwill", idempotencyKey: randomUUID(), sessionId: null });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "a refund naming no session returns nothing of this one").toBe(true);
+    await refundCredits({ orgId: r.auth.orgId, delta: 1, createdBy: staff, note: "stream failed", idempotencyKey: randomUUID(), sessionId: a.sessionId });
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.creditUsed, "the linked refund nets the consume out").toBe(false);
+    const stopped = await stopSession(r.auth, r.fixtureId, a.sessionId, r.deps);
+    expect(stopped.creditUsed, "the stop route's projection is the same fact").toBe(false);
+    // The refunded consume no longer stands, so it opens no reuse window (lane C D2): the next session pays, and says so.
+    const b = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const again = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(again).toMatchObject({ id: b.sessionId, state: "live", creditUsed: true });
+  });
+
+  it("D3: a restart inside the reuse window consumed nothing, so its creditUsed is false — while the session that paid read true", async () => {
+    const r = await rig({ credits: 1 });
+    const a = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!).toMatchObject({ id: a.sessionId, state: "live", creditUsed: true });
+    expect((await stopSession(r.auth, r.fixtureId, a.sessionId, r.deps)).creditUsed).toBe(true);
+    const b = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const restarted = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(restarted).toMatchObject({ id: b.sessionId, state: "live" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${b.sessionId}`;
+    expect(n, "the restart wrote no ledger row").toBe(0);
+    expect(restarted.creditUsed).toBe(false);
   });
 
   // The brief's ONE-credit seed, restored (fix round 1, I2). A club that bought exactly one credit, went live (1 → 0) and
@@ -535,6 +656,52 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(await consumes()).toBe(1);
   });
 
+  // I-1 (lane-close review): the Phone tab read only the balance, so at 0 it sold a pack for a restart the server admits
+  // free (§5.2, `admit`'s waived balance gate). The projection now carries `restartFree` — the SAME authority admission
+  // asks (`reuseWindowOpen`, on the same clock) — and each of its answers below is checked against what `createSession`
+  // then actually does, so the fact the panel shows and the gate the server applies cannot disagree. The window is the
+  // DECLARED one (config.ts CREDIT_REUSE_HOURS), a minute inside and a minute past. The scenario is the review's: the paid
+  // session went live, then the free restart's phone never connected and it failed `no_inbound_timeout` — at balance 0.
+  it("I-1: restartFree — false before any consume, true once this fixture's consume stands; after a failed (no_inbound_timeout) restart at balance 0 it is true a minute inside the window and false a minute past it — and createSession agrees both ways", async () => {
+    const r = await rig({ credits: 1 });
+    const first = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(warming).toMatchObject({ id: first.sessionId, state: "warming" });
+    expect(warming.restartFree, "the empty case: nothing consumed on this fixture yet").toBe(false);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live).toMatchObject({ state: "live", creditUsed: true, restartFree: true });
+    await stopSession(r.auth, r.fixtureId, first.sessionId, r.deps);
+    expect(await creditBalance(sql, r.auth.orgId), "premise: the restart below runs AT zero").toBe(0);
+
+    // The free restart's phone never connects: warming past its timeout, read by the organiser's poll.
+    // Both rows are re-dated, the paid one further back: the projection reads the fixture's LATEST session by created_at.
+    const second = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 2}) where id = ${first.sessionId}`;
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${second.sessionId}`;
+    const redate = (minutesAgo: number) => sql`
+      update org_stream_credits set created_at = ${r.deps.now()}::timestamptz - make_interval(mins => ${minutesAgo})
+       where org_id = ${r.auth.orgId} and reason = 'consume'`;
+    await redate(CREDIT_REUSE_HOURS * 60 - 1);
+    const failed = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(failed).toMatchObject({ id: second.sessionId, state: "failed", failReason: "no_inbound_timeout", balance: 0 });
+    // The differential against D3's fact: THIS session used no credit, yet its restart is free — the paid one's window.
+    expect(failed.creditUsed).toBe(false);
+    expect(failed.restartFree, "a minute inside the window").toBe(true);
+
+    await redate(CREDIT_REUSE_HOURS * 60 + 1);
+    const past = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(past.restartFree, "a minute past the window").toBe(false);
+    await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps), "…and admission agrees: at 0 it is refused").rejects.toMatchObject({ status: 402, code: "no_credits" });
+
+    await redate(CREDIT_REUSE_HOURS * 60 - 1);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.restartFree).toBe(true);
+    const third = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect(third.sessionId, "…and admission agrees: inside the window at 0 it is admitted").toBeTruthy();
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`;
+    expect(n, "one consume across all three sessions").toBe(1);
+  });
+
   it("stop → ending → completed for passthrough; replay fill copies the YouTube watch URL only when stream_url is null", async () => {
     const r = await rig({ credits: 1, watchUrl: "https://www.youtube.com/watch?v=relay1" });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
@@ -595,6 +762,54 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
     // The positive pair on the SAME target row: the url put back on the list, the start admitted.
     await resealTargetDestination(r.target.id, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key" });
+    const made = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(made.sessionId)).state).toBe("warming");
+  });
+
+  // Task 13 review m5: the two plan gates `refuse` throws are read back by the Phone tab's view model off
+  // `extra.feature_key`, and both sides take the keys from ONE authority (lib/stream-plan-gates.ts). This drives each gate
+  // through the REAL producer (createSession → refuse) and the REAL consumer (the v1 envelope → apiV1 → createErrorCode):
+  // a server key that drifts from the authority reads as "unknown" here — a retry sentence where an upgrade was owed.
+  it("m5: both plan gates createSession refuses carry an authority key on the wire, and the Phone tab reads each as plan_lacks_relay", async () => {
+    const GATES = [
+      { opts: { overlay: false, relay: false }, key: RELAY_PLAN_GATES.overlay },
+      { opts: { overlay: true, relay: false }, key: RELAY_PLAN_GATES.relay },
+    ] as const;
+    let checked = 0;
+    for (const { opts, key } of GATES) {
+      const r = await rig({ credits: 1, ...opts });
+      const err = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err, key).toBeInstanceOf(HttpError);
+      const res = await v1(async () => { throw err; });
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(res);
+      const wired = await apiV1(`/api/v1/fixtures/${r.fixtureId}/stream-sessions`, { method: "POST", json: body(r.target.id) })
+        .catch((e: unknown) => e)
+        .finally(() => fetchSpy.mockRestore());
+      expect(wired, key).toBeInstanceOf(ApiV1Error);
+      expect((wired as ApiV1Error).extra.feature_key, key).toBe(key);
+      expect(createErrorCode(wired), key).toBe("plan_lacks_relay");
+      checked++;
+    }
+    expect(checked).toBe(GATES.length);
+  });
+
+  // Task 13 review m4: `ingest_unavailable` is one of CREATE_ERROR_KEYS' refusals, and until now nothing drove the path
+  // that produces it. A provider that refuses the live-input create is a 503 with that code — and the E5 shape: the row
+  // it inserted is deleted (no dead row), and a passthrough create consumes nothing, so the balance stands.
+  it("m4: an ingest whose create_live_input REJECTS refuses 503 ingest_unavailable — no session row, balance unchanged — and the next create starts", async () => {
+    const r = await rig({ credits: 1 });
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput").mockRejectedValueOnce(new Error("provider 500"));
+    try {
+      const err = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 503, code: "ingest_unavailable" });
+      expect(ingestSpy, "the refusal came from the ingest call, not before it").toHaveBeenCalledTimes(1);
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n, "a refused start leaves no row").toBe(0);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    // The positive pair: the same org, fixture and target, with the ingest answering again.
     const made = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await r.row(made.sessionId)).state).toBe("warming");
   });
@@ -1175,6 +1390,100 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     await holder;
     return pending;
   };
+
+  it("M6 (through apply): a session created in one UTC month that goes live in the next draws the NEW month's free credit — the go-live consume rolls the month over under its own lock", async () => {
+    const r = await rig({ credits: 2 });   // this month's grant made and spent: the ledger is 2 bought credits
+    // V426's own row, never typed here.
+    const [{ rate }] = await sql<{ rate: number }[]>`select int_value as rate from plan_entitlements where plan_key = 'community' and feature_key = 'streaming.credits.monthly'`;
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    // The month's period is the WALL clock (createSession's ensure and apply's rollover both read it, never deps.now()),
+    // so the month is turned by faking Date alone — the rig's own clock and every timer stay real.
+    const wall = new Date();
+    const next = new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() + 1, 1, 0, 0, 30));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(next);
+    try {
+      r.tick(3000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    } finally {
+      vi.useRealTimers();
+    }
+    const consumes = await sql<{ bucket: string }[]>`select bucket from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`;
+    expect(consumes.map((c) => c.bucket), "the new month's free credit, not a bought one").toEqual(["monthly"]);
+    const grants = await sql<{ delta: number }[]>`
+      select delta from org_stream_credits where idempotency_key = ${streamMonthlyGrantKey(r.auth.orgId, streamMonthlyPeriod(next))}`;
+    expect(grants.map((g) => g.delta)).toEqual([rate]);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(2 + rate - 1);
+  });
+
+  it("M6 guard: a session the rate peek saw LIVE but the lock finds WARMING (a backwards move no writer makes) is refused by name — never consumed without the rollover — and the next apply goes live", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    await sql`update fixture_stream_sessions set state = 'live' where id = ${sessionId}`;   // what the peek reads
+    const out = await endUnderHeldLock(r, sessionId, () => apply(sessionId, { type: "ingest_connected" }, r.deps),
+      "update fixture_stream_sessions set state = 'warming' where id = $1");              // what the lock finds
+    expect(out.ok).toBe(false);
+    expect((out as { e: unknown }).e).toMatchObject({ status: 500, code: "monthly_rate_unresolved" });
+    const consumed = async () => (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`)[0]!.n;
+    expect(await consumed(), "nothing charged").toBe(0);
+    expect((await r.row(sessionId)).state, "nothing written").toBe("warming");
+    // The positive pair: the next apply peeks `warming`, reads the rate, and goes live with its consume.
+    expect((await apply(sessionId, { type: "ingest_connected" }, r.deps))!.state).toBe("live");
+    expect(await consumed()).toBe(1);
+  });
+
+  it("N4: a THROWING rate read (apply's pooled plan lookup) lets the organiser's Stop and the warming expiry complete — only a go-live consume is refused, by name, and every failed read is reported (mutant: drop the catch → Stop and expire throw the read's error)", async () => {
+    const down = new Error("plan read down");
+    const reportsFor = (orgId: string) => sentry.captureError.mock.calls.filter(([err, ctx]) =>
+      err === down && (ctx as { orgId?: string; route?: string }).orgId === orgId && (ctx as { route?: string }).route === "relay.credits.apply_rate_read").length;
+    const consumes = async (sid: string) => (await sql<{ n: number }[]>`
+      select count(*)::int as n from org_stream_credits where session_id = ${sid} and reason = 'consume'`)[0]!.n;
+    let checked = 0;
+    try {
+      // Stop, on a session that can still consume (the only states whose apply reads the rate).
+      const stop = await rig({ credits: 1 });
+      const s1 = await createSession(stop.auth, stop.fixtureId, body(stop.target.id), stop.deps);
+      expect(["requested", "provisioning", "warming"], "premise: the apply below reads the rate").toContain((await stop.row(s1.sessionId)).state);
+      rateRead.fail = down;
+      rateRead.calls = 0;
+      expect((await stopSession(stop.auth, stop.fixtureId, s1.sessionId, stop.deps)).state).toBe("completed");
+      expect(rateRead.calls, "premise: the throwing read was reached").toBeGreaterThan(0);
+      expect(await consumes(s1.sessionId)).toBe(0);
+      expect(reportsFor(stop.auth.orgId)).toBeGreaterThan(0);
+      checked++;
+
+      // The warming timeout: a phone that never connects is failed on time, read or no read.
+      rateRead.fail = null;
+      const idle = await rig({ credits: 1, connectAfterMs: 24 * 3_600_000 });
+      const s2 = await createSession(idle.auth, idle.fixtureId, body(idle.target.id), idle.deps);
+      rateRead.fail = down;
+      idle.tick((WARMING_TIMEOUT_MINUTES * 60 + 60) * 1000);
+      await applyExpiry(s2.sessionId, idle.deps);
+      expect(await idle.row(s2.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+      expect(reportsFor(idle.auth.orgId)).toBeGreaterThan(0);
+      checked++;
+
+      // The one decision that needs the rate — the go-live consume — is refused by the existing guard, nothing charged or
+      // written; the positive pair: once the read answers, the next apply goes live with its consume.
+      rateRead.fail = null;
+      const live = await rig({ credits: 1 });
+      const s3 = await createSession(live.auth, live.fixtureId, body(live.target.id), live.deps);
+      live.tick(3000);
+      rateRead.fail = down;
+      await expect(apply(s3.sessionId, { type: "ingest_connected" }, live.deps)).rejects.toMatchObject({ status: 500, code: "monthly_rate_unresolved" });
+      expect(await consumes(s3.sessionId)).toBe(0);
+      expect((await live.row(s3.sessionId)).state).toBe("warming");
+      expect(reportsFor(live.auth.orgId)).toBeGreaterThan(0);
+      rateRead.fail = null;
+      expect((await apply(s3.sessionId, { type: "ingest_connected" }, live.deps))!.state).toBe("live");
+      expect(await consumes(s3.sessionId)).toBe(1);
+      checked++;
+    } finally {
+      rateRead.fail = null;
+    }
+    expect(checked).toBe(3);
+  });
 
   it("m1 RACE (the poll): a Stop that lands between the poll's ingest read and its apply — the poll saw `warming` and a connected ingest — answers the ENDED projection, never a 500; nothing goes live and nothing is charged (mutant: plain ingest_connected apply → InvalidTransition)", async () => {
     const r = await rig({ credits: 1 });
@@ -1773,15 +2082,20 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(snap!.competition_id).not.toBeNull();
   });
 
-  it("Dc: entitlement_via_override is true for a live staff override and false for a plan-granted org", async () => {
+  it("Dc: entitlement_via_override is true for a live staff override and false for a plan-granted org (driven through createSession since V426)", async () => {
     const r = await rig({ credits: 1 });                                   // the rig grants relay BY OVERRIDE
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await sql<{ v: boolean }[]>`select entitlement_via_override as v from fixture_stream_sessions where id = ${sessionId}`)[0]!.v).toBe(true);
-    // The false arm at the level it is producible: the column is `overrideRow(...)?.bool_value === true`,
-    // and an org with no live override row maps to false. Under V402 every R1 admission is an override,
-    // so this is asserted on the MAPPING rather than through a plan-granted org that does not exist yet.
-    await sql`delete from org_entitlement_overrides where org_id = ${r.auth.orgId} and feature_key = 'streaming.relay'`;
-    expect((await overrideRow(r.auth.orgId, "streaming.relay"))?.bool_value === true).toBe(false);
+    // The false arm through the REAL producer (Task 14b): V426 grants both keys on every plan, so an org with NO
+    // override row is admitted by its plan — the plan-granted org that did not exist under V402 — and its session must
+    // record false. A second rig, because the first one's session holds its fixture.
+    const p = await rig({ credits: 1 });
+    await sql`delete from org_entitlement_overrides where org_id = ${p.auth.orgId} and feature_key in ('streaming.overlay', 'streaming.relay')`;
+    await invalidateOrgEntitlements(p.auth.orgId);
+    expect(await overrideRow(p.auth.orgId, "streaming.relay"), "premise: no override row").toBeNull();
+    const { sessionId: planSession } = await createSession(p.auth, p.fixtureId, body(p.target.id), p.deps);
+    expect((await sql<{ v: boolean }[]>`select entitlement_via_override as v from fixture_stream_sessions where id = ${planSession}`)[0]!.v,
+      "admitted by the plan, not by an override").toBe(false);
   });
 
   it("Df: the estimate is DERIVED from the rate constants; passthrough (storage only) and composed (storage + compute) differ, and viewers change neither", async () => {
@@ -1940,10 +2254,275 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     // no balance chip, "Go live" unreachable. Task 14's body tests cannot see it — they
     // pass `balance: 2` into the pure component by hand, so the prop test is green in
     // exactly the state that is broken. This usecase IS the witness.
+    // M9: relayBalance is retired; relayCredits (the page's ONE reader) carries C1 now.
     expect(await currentSession(r.auth, r.fixtureId, r.deps)).toBeNull();
-    expect(await relayBalance(r.auth, r.auth.orgId)).toBe(2);
+    expect(await relayCredits(r.auth, r.auth.orgId)).toMatchObject({ total: 2, pack: 2 });
     const other = await rig({ credits: 1 });
-    await expect(relayBalance(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });   // 404 ≡ missing, never 403
+    await expect(relayCredits(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });   // 404 ≡ missing, never 403
+  });
+
+  // V426 (Task 14b, R3): the plan's free match credits, read from V426's own rows — never typed here.
+  const monthlyRate = async (plan: string) =>
+    (await sql<{ n: number }[]>`select int_value as n from plan_entitlements where plan_key = ${plan} and feature_key = 'streaming.credits.monthly'`)[0]!.n;
+
+  it("V426 (R3a): an org that never bought a credit is ADMITTED on its plan's free monthly credits — createSession grants them before the balance gate, and the go-live consume draws the MONTHLY bucket", async () => {
+    const r = await rig({ monthly: true });   // credits 0, and this period's grant left for createSession to make
+    const rate = await monthlyRate("community");
+    expect(rate, "premise: community's V426 row grants at least one").toBeGreaterThanOrEqual(1);
+    expect(await creditBalance(sql, r.auth.orgId), "premise: nothing bought, nothing granted yet").toBe(0);
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const grants = await sql<{ bucket: string; delta: number }[]>`
+      select bucket, delta from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'grant'`;
+    expect(grants.map((g) => ({ ...g }))).toEqual([{ bucket: "monthly", delta: rate }]);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state).toBe("live");
+    expect(live.balance).toBe(rate - 1);
+    const consumes = await sql<{ bucket: string }[]>`
+      select bucket from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`;
+    expect(consumes.map((c) => c.bucket)).toEqual(["monthly"]);
+    // The negative pair, on the rig's default (the grant made AND spent): no free credit left, so the same start is 402.
+    const spent = await rig();
+    await expect(createSession(spent.auth, spent.fixtureId, body(spent.target.id), spent.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+  });
+
+  it("R5: a deployment with its relay DISABLED refuses every start with the ingest's 503 — before any row, provider call or monthly grant; the same org starts on real drivers", async () => {
+    const r = await rig({ credits: 1, monthly: true });
+    const count = async (table: "fixture_stream_sessions" | "org_stream_credits") =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)} where org_id = ${r.auth.orgId}`)[0]!.n;
+    const before = { sessions: await count("fixture_stream_sessions"), credits: await count("org_stream_credits") };
+    const disabled: SessionDeps = { ...r.deps, drivers: disabledRelayDrivers() };
+    await expect(createSession(r.auth, r.fixtureId, body(r.target.id), disabled)).rejects.toMatchObject({ status: 503, code: "ingest_unavailable" });
+    expect(await count("fixture_stream_sessions"), "no session row").toBe(before.sessions);
+    expect(await count("org_stream_credits"), "no ledger row — not even this month's free grant").toBe(before.credits);
+    // Every port of the disabled pair rejects with RelayDriversDisabled, so a 503 carrying the ingest's own code (not
+    // that error) is itself the proof that no provider was asked.
+    // The positive pair: the same org, the same fixture, on the rig's drivers.
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect(sessionId).toBeTruthy();
+  });
+
+  // M10 (Task 14b review): a session left up from before a deployment lost its relay (the old fake default in production,
+  // or a live one switched off) can no longer be observed: every port of the disabled pair refuses, a composed session's
+  // poll threw on every tick, and the relay sweep skips a disabled deployment — so nothing ever ended it.
+  const offDeps = (r: { deps: SessionDeps }): SessionDeps => ({ ...r.deps, drivers: disabledRelayDrivers() });
+  const failedTransitions = async (sessionId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'transition' and to_state = 'failed'`)[0]!.n;
+  const ledgerFor = async (sessionId: string) =>
+    (await sql<{ reason: string }[]>`select reason from org_stream_credits where session_id = ${sessionId} order by created_at`).map((x) => x.reason);
+
+  it("M10: a leftover WARMING session under disabled drivers is ended failed(relay_disabled) by the organiser's poll — once, and every later poll answers without a throw; it was never charged", async () => {
+    const r = await rig({ credits: 2 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);   // up, on the fake drivers
+    expect((await r.row(sessionId)).state, "premise: the leftover is still up").toBe("warming");
+    let checked = 0;
+    for (let i = 0; i < 3; i++) {   // polls two and three are the no-throw-loop witness
+      expect(await currentSession(r.auth, r.fixtureId, offDeps(r)), `poll ${i + 1}`).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The Machine's own reads (jobSession, the sweep) reconcile a row whatever its state: an ENDED one is left alone.
+    expect(await reconcileSession(sessionId, offDeps(r))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await failedTransitions(sessionId), "ended once, not once per poll").toBe(1);
+    expect(await ledgerFor(sessionId), "a before-live session consumed nothing, so nothing is owed back").toEqual([]);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(2);
+  });
+
+  it("M10: a leftover LIVE session keeps its consume, like every failure after go-live; its output release is refused by the port, reported once — and the poll still answers", async () => {
+    const r = await rig({ credits: 2 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "premise: live, charged").toBe("live");
+    expect((await r.row(sessionId)).state).toBe("live");
+    sentry.captureError.mockClear();
+    expect(await currentSession(r.auth, r.fixtureId, offDeps(r))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await ledgerFor(sessionId)).toEqual(["consume"]);
+    expect(await creditBalance(sql, r.auth.orgId)).toBe(1);
+    const releases = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.release_output");
+    expect(releases, "the output the fake drivers added cannot be removed without a relay: recorded and reported").toHaveLength(1);
+  });
+
+  it("M10: a leftover COMPOSED session with a Machine up is ended WITHOUT asking the runner — its runner is left as it stands for a provider to clean up later", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    const before = await r.row(sessionId);
+    expect(before.machine_id, "premise: a Machine is up").toMatch(/^fake-machine-/);
+    expect(await currentSession(r.auth, r.fixtureId, offDeps(r))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    const after = await r.row(sessionId);
+    expect(after.runner_state, "no observation was made up").toBe(before.runner_state);
+    expect(after.machine_id).toBe(before.machine_id);
+  });
+
+  it("M10: Stop under disabled drivers answers the ended projection — never a 500 — and a second Stop is the same answer", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+    let checked = 0;
+    for (let i = 0; i < 2; i++) {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, offDeps(r)), `stop ${i + 1}`).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await failedTransitions(sessionId)).toBe(1);
+  });
+
+  it("N5: a Stop under disabled drivers records the organiser's TAP — one action row naming her, on the decision it made (relay_disabled) — while a poll that ends the same kind of session records none, and a second Stop on the ended session adds none (mutant: drop the actor → no row)", async () => {
+    const actions = async (sid: string) => sql<{ type: string; actor_user_id: string | null; source: string; payload: { state?: string } }[]>`
+      select type, actor_user_id, source, payload from fixture_stream_events where session_id = ${sid} and kind = 'action' and type <> 'create' order by seq`;
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(sessionId)).state, "premise: still up").toBe("warming");
+    expect(await actions(sessionId), "premise: no tap yet").toEqual([]);
+    for (let i = 0; i < 2; i++) {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, offDeps(r)), `stop ${i + 1}`).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    }
+    expect(await actions(sessionId)).toEqual([{ type: "relay_disabled", actor_user_id: r.auth.userId, source: "client", payload: { state: "warming" } }]);
+    // The differential: the same leftover ended by the organiser's POLL has no actor — nobody pressed anything.
+    const polled = await rig({ credits: 1 });
+    const p = await createSession(polled.auth, polled.fixtureId, body(polled.target.id), polled.deps);
+    expect(await currentSession(polled.auth, polled.fixtureId, offDeps(polled))).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await actions(p.sessionId)).toEqual([]);
+  });
+
+  it("V426 (R3b): relayCredits grants this month's free credits on the page's read, splits the balance by bucket beside the plan's allowance, a second read writes nothing, and another org's is 404", async () => {
+    const r = await rig({ credits: 2, monthly: true });
+    const rate = await monthlyRate("community");
+    const count = async () => (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId}`)[0]!.n;
+    const first = await relayCredits(r.auth, r.auth.orgId);
+    expect(first).toEqual({ monthly: rate, pack: 2, total: rate + 2, monthlyAllowance: rate });
+    expect(first.total, "the chip's number is creditBalance's").toBe(await creditBalance(sql, r.auth.orgId));
+    const n = await count();
+    expect(await relayCredits(r.auth, r.auth.orgId)).toEqual(first);
+    expect(await count(), "idempotent within the month").toBe(n);
+    const other = await rig({ monthly: true });
+    await expect(relayCredits(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });
+    expect(await count(), "a refused read grants nothing").toBe(n);
+    // The allowance follows the RESOLVED plan: a pro org's is pro's row, and differs from community's.
+    const pro = await rig({ monthly: true });
+    await setOrgPlan(pro.auth.orgId, "pro");
+    const proRate = await monthlyRate("pro");
+    expect(proRate, "premise: the two rows differ").not.toBe(rate);
+    expect(await relayCredits(pro.auth, pro.auth.orgId)).toEqual({ monthly: proRate, pack: 0, total: proRate, monthlyAllowance: proRate });
+  });
+
+  it("I1: a grant that FAILS never fails the page's read — relayCredits logs and reports it, then answers the ungranted balance; the healthy org beside it still grants", async () => {
+    // A corrupt ledger: a NEGATIVE monthly bucket (no writer makes one — the rollover's ledger_negative guard refuses
+    // it by name). This period's grant is left unmade, so the page's read takes the full path and the guard throws on
+    // every render. Before I1 that throw was the division page's: one bad row took down the whole fixtures tab.
+    const r = await rig({ credits: 2, monthly: true });
+    await sql`insert into org_stream_credits (org_id, delta, reason, bucket, balance_after) values (${r.auth.orgId}, -1, 'consume', 'monthly', 1)`;
+    const rate = await monthlyRate("community");
+    const before = (await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId}`)[0]!.n;
+    sentry.captureError.mockClear();
+    const errors: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((_o: unknown, msg?: string) => { errors.push(String(msg)); }) as never);
+    try {
+      let checked = 0;
+      for (let i = 0; i < 2; i++) {   // every render, not just the first: a failed grant writes no key
+        expect(await relayCredits(r.auth, r.auth.orgId)).toEqual({ monthly: -1, pack: 2, total: 1, monthlyAllowance: rate });
+        checked++;
+      }
+      expect(checked).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId}`)[0]!.n, "nothing granted on top of the corrupt bucket").toBe(before);
+    const reported = sentry.captureError.mock.calls.filter(([e, ctx]) => (e as { code?: string }).code === "ledger_negative" && (ctx as { orgId?: string }).orgId === r.auth.orgId);
+    expect(reported, "each failed grant is REPORTED, not swallowed").toHaveLength(2);
+    expect(errors.filter((m) => m.includes("monthly grant failed")), "and logged").toHaveLength(2);
+    // Tenancy is not a grant failure: another org's read is still 404, never a soft fallback.
+    const other = await rig({ monthly: true });
+    await expect(relayCredits(other.auth, r.auth.orgId)).rejects.toMatchObject({ status: 404 });
+    // The positive pair: a healthy org's read still grants.
+    expect(await relayCredits(other.auth, other.auth.orgId)).toMatchObject({ monthly: rate, monthlyAllowance: rate });
+  });
+
+  it("m4: a grant that FAILS never blocks a start the org can pay for — createSession logs and reports it, then admits a PACK-funded org on the ungranted balance and it goes live; an org with nothing else is refused no_credits, never a 500", async () => {
+    // The same corrupt ledger as I1 (a NEGATIVE monthly bucket the rollover's ledger_negative guard refuses by name), so
+    // the ensure throws for real, from its own guard. Two pack credits beside it: the balance the gate reads is 1.
+    const corrupt = async (credits: number) => {
+      const r = await rig({ credits, monthly: true });
+      await sql`insert into org_stream_credits (org_id, delta, reason, bucket, balance_after) values (${r.auth.orgId}, -1, 'consume', 'monthly', ${credits - 1})`;
+      return r;
+    };
+    const r = await corrupt(2);
+    expect(await creditBalance(sql, r.auth.orgId), "premise: pack 2, monthly -1").toBe(1);
+    sentry.captureError.mockClear();
+    const errors: string[] = [];
+    const spy = vi.spyOn(log, "error").mockImplementation(((_o: unknown, msg?: string) => { errors.push(String(msg)); }) as never);
+    let sessionId: string;
+    try {
+      ({ sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps));
+    } finally {
+      spy.mockRestore();
+    }
+    const reported = sentry.captureError.mock.calls.filter(([e, ctx]) => (e as { code?: string }).code === "ledger_negative" && (ctx as { orgId?: string }).orgId === r.auth.orgId);
+    expect(reported, "the failed grant is REPORTED, not swallowed").toHaveLength(1);
+    expect(reported[0]![1]).toMatchObject({ route: "relay.session.monthly_grant" });
+    expect(errors.filter((m) => m.includes("monthly grant failed")), "and logged").toHaveLength(1);
+    expect(await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'grant' and bucket = 'monthly'`, "nothing granted on top of the corrupt bucket")
+      .toEqual([{ n: 0 }]);
+    // It goes live, and the go-live consume draws the PACK — the bucket that funded it.
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.id).toBe(sessionId);
+    expect(live.state).toBe("live");
+    const consumes = await sql<{ bucket: string }[]>`select bucket from org_stream_credits where session_id = ${sessionId} and reason = 'consume'`;
+    expect(consumes.map((c) => c.bucket)).toEqual(["pack"]);
+    // The negative pair: the same failed grant with nothing left to pay (pack 1 against the -1: a balance of 0 — the
+    // ledger's own check refuses a negative balance_after, so 0 is the floor) is the balance gate's own 402, no row.
+    const broke = await corrupt(1);
+    expect(await creditBalance(sql, broke.auth.orgId), "premise: pack 1, monthly -1").toBe(0);
+    const spy2 = vi.spyOn(log, "error").mockImplementation((() => {}) as never);
+    try {
+      await expect(createSession(broke.auth, broke.fixtureId, body(broke.target.id), broke.deps)).rejects.toMatchObject({ status: 402, code: "no_credits" });
+    } finally {
+      spy2.mockRestore();
+    }
+    expect(await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${broke.auth.orgId}`).toEqual([{ n: 0 }]);
+  });
+
+  it("I3: after a mid-month upgrade the card agrees with itself — relayCredits' monthly bucket is topped up to the allowance it prints", async () => {
+    const r = await rig({ credits: 2, monthly: true });
+    const community = await monthlyRate("community");
+    const pro = await monthlyRate("pro");
+    expect(pro, "premise: the upgrade raises the allowance").toBeGreaterThan(community);
+    expect(await relayCredits(r.auth, r.auth.orgId)).toEqual({ monthly: community, pack: 2, total: community + 2, monthlyAllowance: community });
+    await setOrgPlan(r.auth.orgId, "pro");
+    const after = await relayCredits(r.auth, r.auth.orgId);
+    expect(after.monthly, "\"Your plan includes N free\" above \"N free this month\" — the same N").toBe(after.monthlyAllowance);
+    expect(after).toEqual({ monthly: pro, pack: 2, total: pro + 2, monthlyAllowance: pro });
+  });
+
+  it("F1: openStreamFixtureIds names exactly the fixtures with a session still UP — every active state in, every terminal state out, another org's never", async () => {
+    // The billing-frozen division page mounts a stop probe for each id this returns, so an org whose competition froze
+    // mid-stream can still stop it. The states come from the engine's own ACTIVE_STATES / TERMINAL_STATES.
+    const r = await rig({ fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    expect(await openStreamFixtureIds(r.auth, []), "the empty case asks nothing").toEqual([]);
+    expect(await openStreamFixtureIds(r.auth, [a, b]), "no session at all").toEqual([]);
+    const [row] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      select ${a}, ${r.auth.orgId}, 'passthrough', 'completed', ${r.target.id}, ${r.auth.userId}, now(),
+             d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${a}
+      returning id`;
+    let checked = 0;
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
+      await sql`update fixture_stream_sessions set state = ${state} where id = ${row!.id}`;
+      const open = ACTIVE_STATES.includes(state);
+      expect(await openStreamFixtureIds(r.auth, [a, b]), state).toEqual(open ? [a] : []);
+      // Tenancy: another org naming the same fixture ids reads nothing.
+      const other = await seedOrg();
+      expect(await openStreamFixtureIds(other.auth, [a, b]), `${state}, another org`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
+    expect(checked).toBeGreaterThan(0);
+    // An id outside the list is never reported, even while it is up.
+    await sql`update fixture_stream_sessions set state = 'live' where id = ${row!.id}`;
+    expect(await openStreamFixtureIds(r.auth, [b])).toEqual([]);
+    await sql`update fixture_stream_sessions set state = 'completed' where id = ${row!.id}`;
   });
 
   it("F18: a `requested` row nobody admitted is failed with admission_timeout on the next read (the net for a crash between the insert and provisioning)", async () => {

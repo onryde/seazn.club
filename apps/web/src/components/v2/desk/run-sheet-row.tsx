@@ -495,7 +495,7 @@ export function RunSheetRow({
             </span>
           )}
           {showStream && (
-            <FixtureStreamToggle open={streamOpen} onToggle={() => setStreamOpen((v) => !v)} />
+            <FixtureStreamToggle open={streamOpen} onToggle={() => setStreamOpen((v) => !v)} fixtureId={fixture.id} />
           )}
           <div className="min-w-0 flex-1">
             {/* Task 9: desktop-only now — `phoneLineTwo` below carries this

@@ -64,6 +64,9 @@ vi.mock("@/lib/entitlements", () => ({
   hasFeature: vi.fn(async () => true),
   orgPlanKey: vi.fn(async () => "community"),
 }));
+// Task 14 P1: the fixtures tab resolves the checkout's currency (`preferredCurrency` reads cookies/headers), which has
+// no request scope in a direct page call. Not what this suite pins.
+vi.mock("@/lib/currency-server", () => ({ preferredCurrency: vi.fn(async () => "gbp") }));
 vi.mock("@/server/usecases/teams", () => ({ listEntrantLogoUrls: vi.fn(async () => ({})) }));
 vi.mock("@/server/engine-db", () => ({
   resolveModule: vi.fn(() => ({
@@ -84,6 +87,12 @@ vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
   withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
   statementCount: () => 0,
+}));
+// Task 14b: the fixtures tab reads the Phone tab's credits through `relayCredits`, which GRANTS this month's free match
+// credits in a real transaction first — this page test is not about streaming, so that read is a zero double.
+vi.mock("@/server/usecases/stream-sessions", () => ({
+  relayCredits: async () => ({ monthly: 0, pack: 0, total: 0, monthlyAllowance: 0 }),
+  openStreamFixtureIds: async () => [],
 }));
 
 import DivisionPage from "../page";

@@ -23,7 +23,6 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { apiJson } from "./helpers";
 import {
-  grantOverlay,
   seedCricketOverlayFixture,
   seedFootballOverlayFixture,
   seedHockeyGoalOverlayFixture,
@@ -70,7 +69,6 @@ async function shoot(page: Page, name: string): Promise<void> {
 test("cricket — six and out, on the bar", async ({ page, browser }) => {
   test.setTimeout(300_000);
   const rig = await seedCricketOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   const ctx = await browser.newContext({
     storageState: { cookies: [], origins: [] },
     viewport: { width: 1920, height: 1080 },
@@ -112,7 +110,6 @@ test("cricket — six and out, on the bar", async ({ page, browser }) => {
 test("hockey — goal and red card, on the bug", async ({ page, browser }) => {
   test.setTimeout(300_000);
   const rig = await seedOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   const ctx = await browser.newContext({
     storageState: { cookies: [], origins: [] },
     viewport: { width: 1920, height: 1080 },
@@ -147,7 +144,6 @@ test("football — a penalty goal names its taker AND says penalty, on the bar",
   // through `kind`, so the hockey scene below is this one's twin and the two
   // must be judged together.
   const rig = await seedFootballOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   const taker = rig.offenderIds[0];
   const ctx = await browser.newContext({
     storageState: { cookies: [], origins: [] },
@@ -188,7 +184,6 @@ test("hockey — a penalty stroke names its taker AND says stroke, on the bar", 
   // goal in field hockey that most deserves a name reached air as a bare name
   // and was indistinguishable from one scored in open play.
   const rig = await seedHockeyGoalOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   const taker = rig.offenderIds[0];
   const ctx = await browser.newContext({
     storageState: { cookies: [], origins: [] },
@@ -243,7 +238,6 @@ test("§1's ladder — a name the cell cannot hold falls to its three-letter cod
   // short one shrinks, and nothing spills (measured, `stream-overlay.spec.ts`).
   // This is therefore the frame to sign off — the one the defect lived in.
   const rig = await seedFootballOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   for (const [id, name] of [
     [rig.homeEntrantId, "Royal Kingsbridge & Wandsworth Wanderers Athletic Club Reserves"],
     [rig.awayEntrantId, "Northbridge Athletic & Riverside Wanderers Reserve XI"],
@@ -277,7 +271,6 @@ test("§1's ladder — a name the cell cannot hold falls to its three-letter cod
 test("reduced motion — the slab still appears, it just does not slide", async ({ page, browser }) => {
   test.setTimeout(300_000);
   const rig = await seedOverlayFixture(page);
-  await grantOverlay(rig.orgId);
   const ctx = await browser.newContext({
     storageState: { cookies: [], origins: [] },
     viewport: { width: 1920, height: 1080 },

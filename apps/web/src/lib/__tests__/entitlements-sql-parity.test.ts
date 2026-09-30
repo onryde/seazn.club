@@ -603,7 +603,9 @@ describe.skipIf(!HAS_DB)("org_has_feature parity with lib/entitlements", () => {
   // added to OVERRIDES here, which is the point: the divergence becomes a
   // deliberate, reviewed edit instead of an accident.
   it("keeps the L rung's matrix identical to M's apart from the documented overrides", async () => {
-    const OVERRIDES = ["divisions.per_competition.max", "entrants.per_division.max"];
+    // V341 (#294): the L rung's two headroom caps. V426 (owner ruling 2026-09-29, Streaming R1 Task 14b):
+    // `streaming.credits.monthly` — each pass's ONE-OFF match credits, event_pass 1 · event_pass_l 5.
+    const OVERRIDES = ["divisions.per_competition.max", "entrants.per_division.max", "streaming.credits.monthly"];
 
     // `present` markers rather than `m.feature_key is null`: an explicit
     // marker, robust to a null-valued row and to a later `ON`-join rewrite. A
@@ -668,6 +670,14 @@ describe.skipIf(!HAS_DB)("org_has_feature parity with lib/entitlements", () => {
       select int_value from plan_entitlements
       where plan_key = 'event_pass_l' and feature_key = 'divisions.per_competition.max'`).toEqual([
       { int_value: 20 },
+    ]);
+    // …and the values V426's owner ruling decided (1 · 5), both sides, so neither pass drifts to the other's.
+    expect(await sql`
+      select plan_key, int_value from plan_entitlements
+      where plan_key in ('event_pass', 'event_pass_l') and feature_key = 'streaming.credits.monthly'
+      order by plan_key`).toEqual([
+      { plan_key: "event_pass", int_value: 1 },
+      { plan_key: "event_pass_l", int_value: 5 },
     ]);
   });
 });

@@ -1457,6 +1457,17 @@ jobs:
       # build rather than in front of it; the build is now a `background:` step
       # joined at the `wait:` above.
 
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
       # Start the server PRODUCTION runs (#356). `next start` does not serve an
       # `output: standalone` build at all — it warns and serves the
       # non-standalone tree, so this job was exercising a serving path fly.toml
@@ -1506,6 +1517,13 @@ jobs:
           # The e2e jobs do NOT set this; they mint tokens in the DB
           # (E2E_PROD_TARGET) and skip the specs that assert link exposure.
           AUTH_DEV_LINKS: "1"
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). Smoke drives the
+          # stream-overlay suite on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
