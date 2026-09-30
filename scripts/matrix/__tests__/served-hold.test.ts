@@ -127,6 +127,30 @@ describe("readServedHold: the probe page's chunks, fetched from the server under
     await expect(readServedHold(BASE, wire({ [HOLD_PROBE_PATH]: { status: 200, text: html() } }).fetchText)).rejects.toThrow(ServedHoldUnreadable);
   });
 
+  // Task 8 review m2 (fix round 1): a deployment-id build (Next's skew
+  // protection) names every chunk with a deployment query. Its shape is Next's
+  // own — shared/lib/deployment-id.js getAssetTokenQuery, read here as text —
+  // never a string typed into this test.
+  it("a chunk named with Next's deployment-id query is read, and fetched exactly as the page names it", async () => {
+    const dl = src("apps/web/node_modules/next/dist/shared/lib/deployment-id.js");
+    const body = /function getAssetTokenQuery\([^)]*\) \{([\s\S]*?)\n\}/.exec(dl)?.[1] ?? "";
+    const key = /return `\$\{ampersand \? '&' : '\?'\}(\w+)=\$\{id\}`;/.exec(body)?.[1];
+    expect(key, "next's getAssetTokenQuery no longer answers `?<key>=<id>`").toBeDefined();
+    // The first (and only) query on a chunk URL: no ampersand.
+    const query = `?${key!}=dpl_W1cT8m2x`;
+    const a = `/_next/static/chunks/a.js${query}`;
+    const pad = `/_next/static/chunks/pad.js${query}`;
+    const w = wire({
+      [HOLD_PROBE_PATH]: { status: 200, text: html(a, pad, a) },
+      "/_next/static/chunks/a.js": { status: 200, text: "let a=1;" },
+      "/_next/static/chunks/pad.js": { status: 200, text: OBSERVED },
+    });
+    expect(await readServedHold(BASE, w.fetchText)).toEqual({ holdMs: 3000, found: 1, scanned: 2 });
+    expect(w.asked).toEqual([`${BASE}${HOLD_PROBE_PATH}`, `${BASE}${a}`, `${BASE}${pad}`]);
+    // Only that query: any other still names no chunk the reader trusts (fail closed).
+    await expect(readServedHold(BASE, wire({ [HOLD_PROBE_PATH]: { status: 200, text: html("/_next/static/chunks/pad.js?v=1") } }).fetchText)).rejects.toThrow(/loads no \/_next\/static\/chunks script/);
+  });
+
   it("a chunk the page names but the server cannot serve is refused by name (a build whose static files were never staged)", async () => {
     const w = wire({ [HOLD_PROBE_PATH]: { status: 200, text: html("/_next/static/chunks/pad.js") } });
     await expect(readServedHold(BASE, w.fetchText)).rejects.toThrow(/\/_next\/static\/chunks\/pad\.js.*HTTP 404/);

@@ -91,7 +91,11 @@ export const fetchText: FetchText = async (url) => {
   return { status: r.status, text: await r.text() };
 };
 
-const CHUNK_SRC = /<script\b[^>]*\bsrc="(\/_next\/static\/chunks\/[^"]+\.js)"/g;
+/** A chunk script the page loads, kept as the page names it. A deployment-id
+ *  build (Next's skew protection) adds `?dpl=<id>` — next/dist/shared/lib/
+ *  deployment-id.js getAssetTokenQuery — so that one query is accepted and
+ *  fetched with the chunk; any other query still names no chunk (fail closed). */
+const CHUNK_SRC = /<script\b[^>]*\bsrc="(\/_next\/static\/chunks\/[^"?]+\.js(?:\?dpl=[^"&]+)?)"/g;
 
 /** Reads the hold window from the server at `base`: the probe page, then every
  *  distinct chunk it loads, in page order. */
