@@ -52,7 +52,8 @@ export const padProof: Scenario = {
     // Fires before the first driver call, like every deferral (common.ts setUpDivision).
     if (!PAD_SPORTS.includes(ctx.spec.sport)) throw new NoPadAdapter(ctx.spec.sport);
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, PAD_PROOF_ENTRANTS);
+    // A team sport's pad is proven on rosterless team entrants (common.ts SetUpOptions).
+    const setup = await setUpDivision(ctx, rec, PAD_PROOF_ENTRANTS, { rosterlessTeams: true });
     const plan = padProofPlan(drawsAllowed(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind));
     // Every open fixture is tried on the pad ONCE. A pad that leaves one open
     // has already failed its check, and a second attempt would build on a

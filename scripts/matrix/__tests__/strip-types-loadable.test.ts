@@ -107,6 +107,14 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1c Tasks 9–11: the other nine sports' pad adapters, each loaded on its own.
+  const W1C_T9_11 = ["lib/pads/volleyball.ts", "lib/pads/tabletennis.ts", "lib/pads/tennis.ts"];
+  it("W1c Tasks 9–11's modules are all in the walk", () => {
+    const missing = W1C_T9_11.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T9_11.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
   // W1c Task 8 (carry M-6): the served-hold preflight browser-run.ts calls
   // before any case — its own row below is its only load before a live run.
   const W1C_T8 = ["lib/browser/served-hold.ts"];

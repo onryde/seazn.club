@@ -4,9 +4,15 @@
 // pad-adapters.test.ts pins the two equal.
 import { badmintonPad } from "./badminton.ts";
 import { genericPad } from "./generic.ts";
+import { tabletennisPad } from "./tabletennis.ts";
+import { tennisPad } from "./tennis.ts";
 import type { MatrixPadAdapter } from "./types.ts";
+import { volleyballPad } from "./volleyball.ts";
 
 export const PAD_ADAPTERS: Readonly<Partial<Record<string, MatrixPadAdapter>>> = Object.freeze({
   generic: genericPad,
+  volleyball: volleyballPad,
   badminton: badmintonPad,
+  tabletennis: tabletennisPad,
+  tennis: tennisPad,
 });

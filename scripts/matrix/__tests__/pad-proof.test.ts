@@ -14,7 +14,7 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { NoPadAdapter } from "../lib/scenarios/pad-proof.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext } from "../lib/scenarios/types.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
-import { drawsAllowed, resolveSportCfg } from "../lib/sport-cfg.ts";
+import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
@@ -131,6 +131,27 @@ describe("PADPROOF", () => {
     expect(d.calls.filter((c) => c === "postStream")).toHaveLength(3);
     expect(r.byId("pad-finalized")).toMatchObject({ verdict: "fail", checked: 3, evidence: [`${fx[1]!.id}: in_play, not decided — the console offers no Finalize`] });
     expect(r.byId("life-loop-bounded").verdict).toBe("fail");
+  });
+
+  it("a team-kind pad sport plays on rosterless team entrants (Tasks 9–11 Step 0: the pad scored volleyball beach with no roster), while every other scenario still defers team rosters to W1-driving", async () => {
+    const team = PAD_SPORTS.filter((s) => entrantKindFor(s, resolveSportCfg(s, offlineBuilderDefault(s))) === "team");
+    expect(team.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const sport of team) {
+      const d = new FakePadDriver();
+      const kinds: string[] = [];
+      const add = d.addEntrants.bind(d);
+      d.addEntrants = (id, es) => { kinds.push(...es.map((e) => e.kind)); return add(id, es); };
+      const r = await run(d, sport);
+      expect(kinds, sport).toEqual(["team", "team", "team"]);
+      expect(r.state, sport).toBe("works");
+      // The other direction: LIFECYCLE on the same sport is still the W1-driving deferral, before any driver call.
+      const l = new FakePadDriver();
+      await expect(SCENARIOS.LIFECYCLE.run({ ...ctxOf(l, sport), spec: { ...ctxOf(l, sport).spec, scenario: "LIFECYCLE" } }), sport).rejects.toMatchObject({ name: "ScenarioUnsupported", message: "team rosters" });
+      expect(l.calls, sport).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(team.length);
   });
 
   it("a sport with no pad adapter is refused by name (NoPadAdapter), naming the task that owes it, before any driver call", async () => {

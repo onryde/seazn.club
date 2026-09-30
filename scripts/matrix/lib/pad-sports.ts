@@ -8,7 +8,7 @@
 
 /** The sports with a pad adapter, in SPORT_KEYS order (the registry's wave
  *  order, never re-sorted; AGENTS class 18). Grows T7→T11 alongside PAD_ADAPTERS. */
-export const PAD_SPORTS: readonly string[] = Object.freeze(["generic", "badminton"]);
+export const PAD_SPORTS: readonly string[] = Object.freeze(["generic", "volleyball", "badminton", "tabletennis", "tennis"]);
 
 /** Every other sport → the W1c task that owes its adapter (plan, Tasks 9–11).
  *  A sport moves from here to PAD_SPORTS when its adapter lands. */
@@ -17,9 +17,6 @@ export const PAD_OWNER: Readonly<Record<string, string>> = Object.freeze({
   cricket: "W1c Task 11",
   boardgame: "W1c Task 11",
   carrom: "W1c Task 11",
-  volleyball: "W1c Task 9",
-  tabletennis: "W1c Task 9",
-  tennis: "W1c Task 9",
   icehockey: "W1c Task 10",
   hockey: "W1c Task 10",
 });

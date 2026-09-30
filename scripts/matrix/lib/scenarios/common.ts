@@ -96,13 +96,20 @@ export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
 const BYE_PHANTOM = "__bye__";
 
-export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number): Promise<DivisionSetup> {
+/** `rosterlessTeams`: a team-kind sport plays on team entrants with no members
+ *  instead of deferring. Only PADPROOF asks for it (W1c Tasks 9–11): Step 0
+ *  saw the pad score a rosterless team fixture (volleyball beach), and the
+ *  plan's D3 proves the team sports' pads there. Rosters (members, lineups)
+ *  stay W1-driving's for every other scenario. */
+export interface SetUpOptions { readonly rosterlessTeams?: boolean }
+
+export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
   // Every deferral fires before the first driver call.
   if (FORMAT_LATER.has(ctx.spec.row)) throw new ScenarioUnsupported(DRIVING_WAVE, `${ctx.spec.row}: challenge/rotation driving lands in ${DRIVING_WAVE}`);
   const bodies = stagesForRow(ctx.spec.row);
   if (bodies.length > 1) throw new ScenarioUnsupported(DRIVING_WAVE, "multi-stage rows need seed-proposal handling");
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
-  if (kind === "team") throw new ScenarioUnsupported(DRIVING_WAVE, "team rosters");
+  if (kind === "team" && o.rosterlessTeams !== true) throw new ScenarioUnsupported(DRIVING_WAVE, "team rosters");
   const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
   const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
   // The override crosses the wire as the division's config, as the editor sends it.

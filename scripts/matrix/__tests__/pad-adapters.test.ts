@@ -7,7 +7,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { badminton } from "@seazn/engine/sports/setbased";
+import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
+import { tennis } from "@seazn/engine/sports/tennis";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
 import { START_MATCH_TESTID, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
@@ -16,6 +17,9 @@ import { PAD_OWNER, PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
+import { TABLETENNIS_SET_SCORE_TILE, TABLETENNIS_SUMMARY, tabletennisPad } from "../lib/pads/tabletennis.ts";
+import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, tennisPad } from "../lib/pads/tennis.ts";
+import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
 import { compareRow } from "../lib/pads/replay.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
@@ -235,5 +239,180 @@ describe("badminton", () => {
     // The skin's own SUMMARY_TYPE is built the same way, and the setScore sheet posts it.
     expect(skin).toMatch(/export const SUMMARY_TYPE = `\$\{SPORT\}\.\$\{badmintonModule\.coarseEventType\}`;/);
     expect(skin).toMatch(/\[SET_SCORE_TILE_ID\]: setScoreSheet\(/);
+  });
+});
+
+// ── W1c Task 9: the set-summary family ───────────────────────────────────────
+// Each: the builder default's generated summaries → the setScore sheet, home
+// first (Step 0 saw "Points — Home" / "Games — Home" first at 320), with the
+// numbers taken from generateStream; the ids pinned to the skin's source and
+// the engine module's own event types; the row Step 0 saw compared equal.
+
+/** The generator's summaries of `sport` at its builder default, for a win by `winner`. */
+function summariesOf(sport: string, type: string, winner: "home" | "away") {
+  const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
+  const r = req(sport, cfg, { kind: "win", winner });
+  return { cfg, r, sums: generateStream(r).filter((e) => e.type === type) };
+}
+const sheetSteps = (tile: string, p: { home: number; away: number }) => [
+  { kind: "tile", tileId: tile },
+  { kind: "number", value: p.home }, { kind: "confirm" },
+  { kind: "number", value: p.away }, { kind: "confirm" },
+];
+
+describe("tabletennis", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "tabletennis.tsx"), "utf8"); });
+
+  it("a game summary is the setScore sheet with the generated numbers, home first, one per straight game of the engine's preset (bo5 → 3)", () => {
+    let checked = 0;
+    for (const winner of ["home", "away"] as const) {
+      const { cfg, r, sums } = summariesOf("tabletennis", TABLETENNIS_SUMMARY, winner);
+      expect(sums.length).toBe(Math.ceil((cfg as { bestOf: number }).bestOf / 2));
+      for (const s of sums) {
+        const p = s.payload as { home: number; away: number };
+        expect(p.home).not.toBe(p.away); // the case can see a home/away swap
+        expect(tabletennisPad.stepsFor(s, ctxOf(r))).toEqual(sheetSteps(TABLETENNIS_SET_SCORE_TILE, p));
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("Step 0: setScore writes without the serve anchor — no anchor step, no fallback, the row equal to the generated summary", () => {
+    expect(tabletennisPad.fallbacks).toEqual([]);
+    const { r, sums } = summariesOf("tabletennis", TABLETENNIS_SUMMARY, "home");
+    expect(tabletennisPad.stepsFor(sums[0]!, ctxOf(r)).some((s) => s.kind === "tile" && s.tileId === "serveAnchor")).toBe(false);
+    const seen = { id: "r2", seq: 2, type: TABLETENNIS_SUMMARY, payload: { away: 6, home: 11 } };
+    expect(compareRow(sums[0]!, seen, tabletennisPad)).toEqual({ verdict: "equal", note: null });
+    expect(tabletennisPad.tolerableExtraKeys?.(TABLETENNIS_SUMMARY) ?? []).toEqual([]);
+  });
+
+  it("a summary that is not the sheet's {home, away} of whole numbers is refused by name", () => {
+    const { r } = summariesOf("tabletennis", TABLETENNIS_SUMMARY, "home");
+    const bad: unknown[] = [null, { home: 11 }, { home: 11, away: 6, extra: 1 }, { home: 11.5, away: 6 }, { home: "11", away: 6 }];
+    for (const payload of bad) expect(() => tabletennisPad.stepsFor({ type: TABLETENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
+    expect(() => tabletennisPad.stepsFor({ type: "tabletennis.rally", payload: { side: "home" } }, ctxOf(r))).toThrow(/tabletennis\.rally/);
+  });
+
+  it("pins: the tile id is tabletennis.tsx's SET_SCORE_TILE_ID and the event type is the engine module's coarse type", () => {
+    const m = /export const SET_SCORE_TILE_ID = "([^"]+)";/.exec(skin);
+    expect(m, "tabletennis.tsx no longer exports SET_SCORE_TILE_ID as a string literal").not.toBeNull();
+    expect(TABLETENNIS_SET_SCORE_TILE).toBe(m![1]);
+    expect(sportModule("tabletennis")).toBe(tabletennis);
+    expect(TABLETENNIS_SUMMARY).toBe(`tabletennis.${tabletennis.coarseEventType}`);
+    expect(skin).toMatch(/export const SUMMARY_TYPE = `\$\{SPORT\}\.\$\{tabletennisModule\.coarseEventType\}`;/);
+    expect(skin).toMatch(/\[SET_SCORE_TILE_ID\]: setScoreSheet\(/);
+  });
+});
+
+describe("volleyball", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "volleyball.tsx"), "utf8"); });
+
+  it("volleyball beach: two set summaries, the second to 21 not 15 (the final-set target applies only at set index bestOf−1)", () => {
+    let checked = 0;
+    for (const winner of ["home", "away"] as const) {
+      const { cfg, r, sums } = summariesOf("volleyball", VOLLEYBALL_SUMMARY, winner);
+      const c = cfg as { bestOf: number; setTo: number; finalSetTo: number };
+      expect(offlineBuilderDefault("volleyball")).toBe("beach");
+      expect(c.setTo).not.toBe(c.finalSetTo); // the case can see the wrong target
+      expect(sums.length).toBe(Math.ceil(c.bestOf / 2));
+      expect(sums.length).toBeLessThan(c.bestOf); // straight sets never reach set index bestOf−1
+      for (const s of sums) {
+        const p = s.payload as { home: number; away: number };
+        expect(Math.max(p.home, p.away)).toBe(c.setTo);
+        expect(volleyballPad.stepsFor(s, ctxOf(r))).toEqual(sheetSteps(VOLLEYBALL_SET_SCORE_TILE, p));
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("Step 0: the beach row Step 0 saw is equal to the generated summary; no roster, no fallback, no tolerated key", () => {
+    expect(volleyballPad.fallbacks).toEqual([]);
+    const { sums } = summariesOf("volleyball", VOLLEYBALL_SUMMARY, "home");
+    const seen = { id: "r2", seq: 2, type: VOLLEYBALL_SUMMARY, payload: { away: 16, home: 21 } };
+    expect(compareRow(sums[0]!, seen, volleyballPad)).toEqual({ verdict: "equal", note: null });
+    expect(volleyballPad.tolerableExtraKeys?.(VOLLEYBALL_SUMMARY) ?? []).toEqual([]);
+  });
+
+  it("a summary that is not the sheet's {home, away} of whole numbers is refused by name", () => {
+    const { r } = summariesOf("volleyball", VOLLEYBALL_SUMMARY, "home");
+    for (const payload of [null, { away: 16 }, { home: 21, away: 16, side: "home" }, { home: 21, away: Number.NaN }] as unknown[]) {
+      expect(() => volleyballPad.stepsFor({ type: VOLLEYBALL_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
+    }
+    expect(() => volleyballPad.stepsFor({ type: "volleyball.rally", payload: { side: "home" } }, ctxOf(r))).toThrow(/volleyball\.rally/);
+  });
+
+  it("pins: the tile id is volleyball.tsx's SET_SCORE_TILE_ID and the event type is the engine module's coarse type", () => {
+    const m = /export const SET_SCORE_TILE_ID = "([^"]+)";/.exec(skin);
+    expect(m, "volleyball.tsx no longer exports SET_SCORE_TILE_ID as a string literal").not.toBeNull();
+    expect(VOLLEYBALL_SET_SCORE_TILE).toBe(m![1]);
+    expect(sportModule("volleyball")).toBe(volleyball);
+    expect(VOLLEYBALL_SUMMARY).toBe(`volleyball.${volleyball.coarseEventType}`);
+    expect(skin).toMatch(/export const SUMMARY_TYPE = `\$\{SPORT\}\.\$\{volleyballModule\.coarseEventType\}`;/);
+    expect(skin).toMatch(/\[SET_SCORE_TILE_ID\]: setScoreSheet\(/);
+  });
+});
+
+describe("tennis", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "tennis.tsx"), "utf8"); });
+
+  it("tennis: a 6-3 set's steps carry no tie-break numbers — exactly 5 steps, home first, for every generated set", () => {
+    let checked = 0;
+    for (const winner of ["home", "away"] as const) {
+      const { cfg, r, sums } = summariesOf("tennis", TENNIS_SUMMARY, winner);
+      const at = (cfg as { set: { tiebreakAt: number } }).set.tiebreakAt;
+      expect(sums.length).toBe(Math.ceil((cfg as { bestOf: number }).bestOf / 2));
+      for (const s of sums) {
+        const p = s.payload as { home: number; away: number };
+        // Not the tie-break shape (at+1 : at), which is the only one whose sheet asks more (tennis.tsx:851-855).
+        expect(Math.min(p.home, p.away)).toBeLessThan(at);
+        const steps = tennisPad.stepsFor(s, ctxOf(r));
+        expect(steps).toHaveLength(5);
+        expect(steps).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, p));
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a tie-break-shaped set (tiebreakAt+1 : tiebreakAt, from the cfg) is refused by name, never typed as two numbers; its positive pair is typed", () => {
+    const { cfg, r } = summariesOf("tennis", TENNIS_SUMMARY, "home");
+    const at = (cfg as { set: { tiebreakAt: number } }).set.tiebreakAt;
+    let checked = 0;
+    for (const payload of [{ home: at + 1, away: at }, { home: at, away: at + 1 }]) {
+      expect(() => tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is a tie-break set/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // One game fewer on the loser is a plain set: typed.
+    expect(tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload: { home: at + 1, away: at - 1 } }, ctxOf(r))).toHaveLength(5);
+    for (const payload of [null, { home: 6 }, { home: 6, away: 3, tb: { home: 7, away: 5 } }] as unknown[]) {
+      expect(() => tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
+    }
+  });
+
+  it("Step 0: the 6-3 row Step 0 saw (no tb key) is equal to the generated summary; no fallback, no tolerated key", () => {
+    expect(tennisPad.fallbacks).toEqual([]);
+    const { sums } = summariesOf("tennis", TENNIS_SUMMARY, "home");
+    const seen = { id: "r2", seq: 2, type: TENNIS_SUMMARY, payload: { away: 3, home: 6 } };
+    expect(compareRow(sums[0]!, seen, tennisPad)).toEqual({ verdict: "equal", note: null });
+    expect(tennisPad.tolerableExtraKeys?.(TENNIS_SUMMARY) ?? []).toEqual([]);
+  });
+
+  it("pins: the setScore tile id and sheet key are tennis.tsx's, and the event type is SET_SUMMARY_TYPE, which the engine module declares", () => {
+    // tennis.tsx exports neither; the tile is built with the literal id and the sheet registered under it.
+    const tile = /if \(offerable\(SET_SUMMARY_TYPE\) && !setInProgressOf\(state\)\) \{\s*tiles\.push\(\{\s*id: "([^"]+)",/.exec(skin);
+    expect(tile, "tennis.tsx no longer builds the set-score tile as a literal id under the SET_SUMMARY_TYPE offer").not.toBeNull();
+    expect(TENNIS_SET_SCORE_TILE).toBe(tile![1]);
+    expect(skin).toContain(`${TENNIS_SET_SCORE_TILE}: setScoreSheet(view),`);
+    expect(skin).toMatch(/const SPORT = "tennis";/);
+    expect(skin).toMatch(/const SET_SUMMARY_TYPE = `\$\{SPORT\}\.set_summary`;/);
+    expect(TENNIS_SUMMARY).toBe("tennis.set_summary");
+    expect(sportModule("tennis")).toBe(tennis);
+    expect(Object.keys(tennis.eventSchemas ?? {})).toContain(TENNIS_SUMMARY);
   });
 });
