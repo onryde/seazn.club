@@ -193,6 +193,7 @@ const eitherPill = (...keys: string[]): RegExp => new RegExp(`^(${keys.map((k) =
 interface RelayFixture { id: string; no: number }
 interface RelayRig {
   orgId: string;
+  divisionId: string;
   divPath: string;
   fixtures: RelayFixture[];
   /** V426's `streaming.credits.monthly` for the rig's plan — read from plan_entitlements by setRigPlan, never typed:
@@ -254,7 +255,7 @@ async function seedRelayRig(page: Page, opts: { plan?: string; entrants?: number
   expect(fixtures.map((f) => f.id).sort(), "relay rig: every generated fixture has a run-sheet number").toEqual([...fixtureIds].sort());
 
   const { monthlyMatchCredits } = await setRigPlan(orgId, opts.plan ?? "pro");
-  return { orgId, divPath: `/o/${orgSlug}/c/${comp.data.slug}/d/${div.data.slug}`, fixtures, monthlyRate: monthlyMatchCredits, tag };
+  return { orgId, divisionId: div.data.id, divPath: `/o/${orgSlug}/c/${comp.data.slug}/d/${div.data.slug}`, fixtures, monthlyRate: monthlyMatchCredits, tag };
 }
 
 // The ledger, read the way the product reads it (creditBreakdown's sums).
@@ -962,7 +963,10 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
   const f = rig.fixtures[0]!;
   await openFixture(page, rig, f); // the fixture page's read grants the month
   const live = await goLiveApi(page, f.id, target.id);
-  // SETUP: the result, then the finalize — through the API, the requests the console itself sends.
+  // SETUP: start the division (scoring is closed until then), the result, then the finalize — through the API, the
+  // requests the desk and the console themselves send.
+  const started = await apiJson(page.request, `/api/v1/divisions/${rig.divisionId}/start`, "POST");
+  expect(started.status, `setup start -> ${JSON.stringify(started.error)}`).toBe(200);
   await scoreFixture(page.request, f.id, 2, 1);
   const state = await apiJson<{ last_seq: number; status: string }>(page.request, `/api/v1/fixtures/${f.id}/state`);
   const fin = await apiJson(page.request, `/api/v1/fixtures/${f.id}/finalize`, "POST", { expected_seq: state.data!.last_seq });
