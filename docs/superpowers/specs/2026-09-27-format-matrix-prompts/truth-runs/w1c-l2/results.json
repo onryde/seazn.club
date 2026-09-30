@@ -1,0 +1,2117 @@
+{
+  "schemaVersion": 3,
+  "runId": "w1c-l2",
+  "harnessCommit": "b7668c0ff",
+  "startedAt": "2026-09-30T12:54:14.917Z",
+  "finishedAt": "2026-09-30T12:55:03.628Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L2",
+  "driver": "browser",
+  "plan": "--layer L2",
+  "cases": [
+    {
+      "caseId": "swiss|badminton|bwf|R1@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R2@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R2",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R2)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R3@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R4a@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R4",
+      "canary": false,
+      "state": "works",
+      "reason": "19 checks, 192 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 27,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 16,
+          "reason": "no two entrants meet twice in a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 16,
+          "reason": "16 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 12,
+          "reason": "12 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 table(s) drawn as the API ranks them",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 3,
+          "reason": "3 ok",
+          "evidence": []
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 invoked action type(s): 9 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) ran in the browser — 1 of 1 browser call(s) created"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 shot(s) written and non-empty; 10 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 107079 bytes, sha256 eca6cbddaae2",
+            "01-competition-created: 51932 bytes, sha256 b60a773ee69b",
+            "02-builder-basics: 97711 bytes, sha256 24d00efff080",
+            "02-builder-format: 229648 bytes, sha256 53c522de755b",
+            "02-division-built-before: 95141 bytes, sha256 89266df7a79c",
+            "02-division-built: 82291 bytes, sha256 7239db7aaeb6",
+            "03-entrants-before: 82291 bytes, sha256 7239db7aaeb6",
+            "03-entrants: 132272 bytes, sha256 f13d1c002a52",
+            "04-started-before: 132272 bytes, sha256 f13d1c002a52",
+            "04-started: 263086 bytes, sha256 eb5019a87a0a",
+            "run-sheet-all: 263086 bytes, sha256 eb5019a87a0a",
+            "05-generated-before: 199878 bytes, sha256 bf04366e3c36",
+            "05-generated: 181567 bytes, sha256 1c2eff2f8086",
+            "08-pad-before: 70006 bytes, sha256 fd85c6567034",
+            "08-pad-sheet: 102301 bytes, sha256 e0e7b9403843",
+            "08-pad-scored: 65169 bytes, sha256 59f2585bcd04",
+            "06-withdrawn-before: 111467 bytes, sha256 cbad3db54c19",
+            "06-withdrawn: 107438 bytes, sha256 70b8b969dd90",
+            "08-completed-before: 237666 bytes, sha256 987e250095ba",
+            "08-completed: 256301 bytes, sha256 b4ec982e601b",
+            "10-standings: 88934 bytes, sha256 614f78827b89"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 111,
+        "fixtures": 20,
+        "events": 48
+      },
+      "durationMs": 15172,
+      "notes": [
+        "stage swiss status after start: active"
+      ],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R4c@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R4c",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R4c)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R5@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R5",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R5)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R7@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R7",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R7)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R8@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R8",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R8)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R10@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R10",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R10)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R11a@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R11a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R11a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R13@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R13",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W9: no organiser path, known at design time (design §4): entrant moved to another division after the draw",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R14@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R14",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R14)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|R15@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "R15",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom R15)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M1@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M1",
+      "canary": false,
+      "state": "works",
+      "reason": "17 checks, 189 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 31,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "no two entrants meet twice in a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 23,
+          "reason": "23 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-walkover-recorded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "m1-winner-progresses",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a bracket stage",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 table(s) drawn as the API ranks them",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 3,
+          "reason": "3 ok",
+          "evidence": []
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 9,
+          "reason": "9 invoked action type(s): 9 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) ran in the browser — 1 of 1 browser call(s) created"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 shot(s) written and non-empty; 10 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 107962 bytes, sha256 c97d0f5d184b",
+            "01-competition-created: 56772 bytes, sha256 42beedbc5d47",
+            "02-builder-basics: 98356 bytes, sha256 6fd7346642db",
+            "02-builder-format: 229270 bytes, sha256 86d87ce254f8",
+            "02-division-built-before: 94109 bytes, sha256 da15843c5dbb",
+            "02-division-built: 83498 bytes, sha256 6fb43dcc6ab7",
+            "03-entrants-before: 83498 bytes, sha256 6fb43dcc6ab7",
+            "03-entrants: 135107 bytes, sha256 1a15ebf36bf2",
+            "04-started-before: 135107 bytes, sha256 1a15ebf36bf2",
+            "04-started: 266141 bytes, sha256 16df026bb6b5",
+            "run-sheet-all: 266141 bytes, sha256 16df026bb6b5",
+            "05-generated-before: 220484 bytes, sha256 71ea86d9c479",
+            "05-generated: 212587 bytes, sha256 cc59c03241c5",
+            "07-forfeit-before: 76481 bytes, sha256 8f6bc92b3fec",
+            "07-forfeit: 62600 bytes, sha256 e38b93a7ad2b",
+            "08-pad-before: 72059 bytes, sha256 27853d5b36ce",
+            "08-pad-sheet: 105495 bytes, sha256 76b63d3f1bde",
+            "08-pad-scored: 65520 bytes, sha256 e5597d664a2b",
+            "08-completed-before: 245333 bytes, sha256 5d45f40738d8",
+            "08-completed: 259817 bytes, sha256 f17012b901bb",
+            "10-standings: 93638 bytes, sha256 d1b2879d5126"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 128,
+        "fixtures": 20,
+        "events": 59
+      },
+      "durationMs": 17002,
+      "notes": [
+        "stage swiss status after start: active"
+      ],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M2@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M2",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M2)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M3@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M4a@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M4a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M4a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M7a@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M7a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M7a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M7b@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M7b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M7b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M8a@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M8a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M8a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M8b@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M8b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M8b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M9a@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M9a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M9a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M9b@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M9b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M9b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M10@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M10",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M10)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|M11@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "M11",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom M11)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|F1@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F1",
+      "canary": false,
+      "state": "works",
+      "reason": "18 checks, 176 items",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "each table row's points equal Σ the sport's declared points over its results",
+          "evidence": []
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 26,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 15,
+          "reason": "no two entrants meet twice in a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "every Generate answer is fixtures (2xx) or a named refusal",
+          "evidence": []
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 21,
+          "reason": "21 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 15,
+          "reason": "15 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 20,
+          "reason": "20 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-everyone-drawn",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 7,
+          "reason": "7 ok",
+          "evidence": []
+        },
+        {
+          "id": "f1-round-size",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 5,
+          "reason": "5 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "organiser-ui-path",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "builder-posted-as-harness",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 stage(s) built exactly as the harness's bodies",
+          "evidence": []
+        },
+        {
+          "id": "ui-standings-match",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 table(s) drawn as the API ranks them",
+          "evidence": []
+        },
+        {
+          "id": "pad-ledger-as-generated",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 3,
+          "reason": "3 ok",
+          "evidence": []
+        },
+        {
+          "id": "mixed-driver-coverage",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 8,
+          "reason": "8 invoked action type(s): 8 ran in the browser, 0 exempt",
+          "evidence": [
+            "generate: the create-fixtures path (stage-rail.ts generateUi) ran in the browser — 1 of 1 browser call(s) created"
+          ]
+        },
+        {
+          "id": "visual-evidence",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 19,
+          "reason": "19 shot(s) written and non-empty; 9 must-differ pair(s) differ",
+          "evidence": [
+            "01-competition-created-before: 107065 bytes, sha256 0149693b2c7a",
+            "01-competition-created: 51857 bytes, sha256 3330eae8c0e8",
+            "02-builder-basics: 97234 bytes, sha256 60d0b4b2fd69",
+            "02-builder-format: 229170 bytes, sha256 3fbafb9d634d",
+            "02-division-built-before: 94668 bytes, sha256 8f53da6f2a3f",
+            "02-division-built: 82099 bytes, sha256 f3315be73906",
+            "03-entrants-before: 82099 bytes, sha256 f3315be73906",
+            "03-entrants: 125373 bytes, sha256 05956a4215f6",
+            "04-started-before: 125373 bytes, sha256 05956a4215f6",
+            "04-started: 263180 bytes, sha256 fc07a7c6735c",
+            "run-sheet-all: 263180 bytes, sha256 fc07a7c6735c",
+            "05-generated-before: 198973 bytes, sha256 dba78f3874ce",
+            "05-generated: 184963 bytes, sha256 87b6c0ea3a55",
+            "08-pad-before: 69952 bytes, sha256 2cbf3f909a3a",
+            "08-pad-sheet: 102175 bytes, sha256 8cf1d1fd1daa",
+            "08-pad-scored: 65120 bytes, sha256 0bfe791003f7",
+            "08-completed-before: 236200 bytes, sha256 228064dd3306",
+            "08-completed: 254715 bytes, sha256 a0193677253b",
+            "10-standings: 86799 bytes, sha256 eda4c1411cce"
+          ]
+        },
+        {
+          "id": "no-horizontal-scroll",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 19,
+          "reason": "19 state(s) probed, none scrolls sideways",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 103,
+        "fixtures": 20,
+        "events": 45
+      },
+      "durationMs": 15931,
+      "notes": [
+        "stage swiss status after start: active"
+      ],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|F2@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F2",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F2)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|F5a@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F5a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F5a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|F5b@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F5b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F5b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|F6@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F6",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F6)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|F7@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "F7",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F7)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|generic|score|F8@768",
+      "row": "swiss",
+      "sport": "generic",
+      "variant": "score",
+      "scenario": "F8",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom F8)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D1@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D1",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W9: no organiser path, known at design time (design §4): two divisions merged",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D2@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D2",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W9: no organiser path, known at design time (design §4): one division split",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D3@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom D3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D4a@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D4a",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W4: no organiser path, known at design time (design §4): separation: same-club separation",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D4b@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D4b",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W4: no organiser path, known at design time (design §4): separation: same-country separation",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D5a@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D5a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom D5a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D5b@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D5b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom D5b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D6@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D6",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom D6)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|D7@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "D7",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom D7)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|P1@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "P1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|P3@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "P3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|P4@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "P4",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P4)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|P5a@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "P5a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P5a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|generic|score|P5b@430",
+      "row": "swiss",
+      "sport": "generic",
+      "variant": "score",
+      "scenario": "P5b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P5b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|P5b@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "P5b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P5b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|P7@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "P7",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom P7)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "knockout|badminton|bwf|Q4a@320",
+      "row": "knockout",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "Q4a",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W4: no organiser path, known at design time (design §4): final not played: → joint winners",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X1a@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X1a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X1a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X1b@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X1b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X1b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X2@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X2",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X2)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X3@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X3",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X3)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X4a@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X4a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X4a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X4b@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X4b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X4b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|X4c@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "X4c",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom X4c)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C1@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C2@320",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C2",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C2)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 320
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C3a@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C3a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C3a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C3b@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C3b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C3b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C4@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C4",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C4)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C5@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C5",
+      "canary": false,
+      "state": "no_path",
+      "reason": "W5: no organiser path, known at design time (design §4): points deduction (conduct) applied to the table",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C6a@390",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C6a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C6a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 390
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C6b@430",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C6b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C6b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 430
+    },
+    {
+      "caseId": "swiss|badminton|bwf|C7@768",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "C7",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom C7)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 768
+    },
+    {
+      "caseId": "swiss|badminton|bwf|E1@834",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "E1",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom E1)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 834
+    },
+    {
+      "caseId": "swiss|badminton|bwf|E4a@360",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "E4a",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom E4a)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 360
+    },
+    {
+      "caseId": "swiss|badminton|bwf|E4b@375",
+      "row": "swiss",
+      "sport": "badminton",
+      "variant": "bwf",
+      "scenario": "E4b",
+      "canary": false,
+      "state": "not_run",
+      "reason": "no scenario script yet (atom E4b)",
+      "checks": [],
+      "counts": {
+        "calls": 0,
+        "fixtures": 0,
+        "events": 0
+      },
+      "durationMs": 0,
+      "notes": [],
+      "layer": "L2",
+      "driver": "browser",
+      "width": 375
+    }
+  ]
+}

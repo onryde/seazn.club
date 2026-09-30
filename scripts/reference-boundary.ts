@@ -11,8 +11,10 @@
 // `.ts`, and nondeterministic tokens — is a violation. A token is a read of
 // the GLOBAL (`performance.now`, `globalThis.Date.now`), never a member that
 // merely shares its name (`r.performance.rating`, a FIDE performance rating —
-// final batch FB-2); so the global object itself may be named only as the
-// owner of a member read. Zero files scanned is a refusal.
+// final batch FB-2); so the global object itself, and a token's own global
+// (`performance`, `globalThis.Date`, … — W1b carry a), may be named only as
+// the owner of a member read, and a token's global may not be read by a
+// computed key (`Date[k]`). Zero files scanned is a refusal.
 //
 // The judge walks each file's TypeScript syntax tree, so comments, strings,
 // line breaks and ASI cannot hide a statement from it (review I-1 measured ten
@@ -63,6 +65,8 @@ const R = {
   notTs: "a relative import must name its .ts file (the house strip-types rule) — an extensionless or suffixed specifier hides which file loads",
   eval: "code built from a string (eval / Function) is refused — the gate cannot judge it",
   token: "nondeterministic token (the reference must answer the same way every time)",
+  tokenAlias: "a nondeterministic global (Date, Math, process, performance, crypto, Temporal) named outside a member read is refused — an alias or Reflect.get would hide a clock or entropy read",
+  tokenComputed: "a nondeterministic global (Date, Math, process, performance, crypto, Temporal) read by a computed key is refused — the gate cannot see which member it reads",
   symlink: "symlink in src is refused — the gate judges real files only",
   unscanned: "not a .ts source — the gate scans .ts only, so this file's imports would go unjudged",
 } as const;
@@ -130,11 +134,13 @@ const unparen = (e: TS.Expression): TS.Expression => (ts.isParenthesizedExpressi
 function globalNamed(e: TS.Expression): string | undefined {
   const x = unparen(e);
   if (ts.isIdentifier(x)) return x.text;
-  if (ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) {
-    const o = unparen(x.expression);
-    if (ts.isIdentifier(o) && GLOBAL_OBJECTS.has(o.text)) return nameOf(x);
-  }
+  if ((ts.isPropertyAccessExpression(x) || ts.isElementAccessExpression(x)) && isGlobalObject(x.expression)) return nameOf(x);
   return undefined;
+}
+/** `globalThis`, `global`, `(globalThis)`. */
+function isGlobalObject(e: TS.Expression): boolean {
+  const o = unparen(e);
+  return ts.isIdentifier(o) && GLOBAL_OBJECTS.has(o.text);
 }
 /** Where a name is a member or a key, not a reference: `x.global`, `{ global: 1 }`, `interface R { global: … }`, `{ global: g } = x`. */
 function namesNoBinding(node: TS.Identifier): boolean {
@@ -148,6 +154,11 @@ function ownsMemberRead(node: TS.Node): boolean {
   while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
   const p = n.parent;
   return (ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === n;
+}
+/** `node` sits in a type (`typeof Math.PI`, `d: Date`) — erased, never run. */
+function isTypePosition(node: TS.Node): boolean {
+  for (let n = node.parent; n !== undefined && !ts.isStatement(n); n = n.parent) if (ts.isTypeQueryNode(n) || ts.isTypeReferenceNode(n)) return true;
+  return false;
 }
 const literal = (e: TS.Expression | undefined) => (e === undefined ? "<none>" : ts.isStringLiteralLike(e) ? e.text : "<computed>");
 
@@ -237,13 +248,28 @@ function judgeFile(file: string, root: string, rel: string): Violation[] {
       const args = node.arguments ?? [];
       if (nn !== undefined && name !== undefined && LOADERS.has(name)) { handled.add(nn); add(nn.getStart(sf), literal(node.arguments?.[0]), `${name}() is refused`); }
       // The GLOBAL Date (FB-2); a spread-only argument list may be empty at runtime (FB-9, RR-3).
-      else if (globalNamed(node.expression) === "Date" && (ts.isCallExpression(node) || args.every((a) => ts.isSpreadElement(a)))) add(node.getStart(sf), ts.isCallExpression(node) ? "Date()" : "new Date", R.token);
+      // Called or constructed, Date is judged HERE — `new Date(0)` included — never
+      // again below as an alias of itself (W1b carry a).
+      else if (globalNamed(node.expression) === "Date") {
+        // The callee as written: `Date`, or the `globalThis.Date` access itself.
+        handled.add(unparen(node.expression));
+        if (ts.isCallExpression(node) || args.every((a) => ts.isSpreadElement(a))) add(node.getStart(sf), ts.isCallExpression(node) ? "Date()" : "new Date", R.token);
+      }
     } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       // The owner must BE the global (FB-2): `r.performance.rating` reads a field.
       const owner = globalNamed(node.expression);
       const member = nameOf(node);
       const want = owner === undefined ? undefined : TOKENS.get(owner);
       if (want !== undefined && member !== undefined && (want === "*" || want === member)) add(node.getStart(sf), `${owner ?? ""}.${member}`, R.token);
+      // `Date[k]()`: a key the gate cannot read may be the token itself (an
+      // access with no readable name is an element access by a computed key).
+      else if (owner !== undefined && TOKENS.has(owner) && member === undefined) add(node.getStart(sf), `${owner}[<computed>]`, R.tokenComputed);
+      // `globalThis.performance` IS `performance` (globalNamed): outside a member
+      // read it is an alias, exactly as the bare name is below (W1b carry a). No
+      // type-position guard: a type usually spells this as a QualifiedName, never
+      // an access — but a computed key in a type literal (`{ [globalThis.x]: T }`)
+      // parses as an access, and the gate refuses it: it fails closed there.
+      else if (member !== undefined && TOKENS.has(member) && isGlobalObject(node.expression) && !ownsMemberRead(node) && !handled.has(node)) add(node.getStart(sf), member, R.tokenAlias);
       // FB-9 (RR-2): `(() => {}).constructor` is Function, never named.
       else if (member === "constructor") add(node.getStart(sf), member, R.constructorRef);
     } else if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && !handled.has(node)) {
@@ -251,6 +277,10 @@ function judgeFile(file: string, root: string, rel: string): Violation[] {
       else if (EVALS.has(node.text)) add(node.getStart(sf), node.text, R.eval);
       // Only as a member read's owner: `const g = globalThis` would hide `g.performance.now()`.
       else if (ts.isIdentifier(node) && GLOBAL_OBJECTS.has(node.text) && !ownsMemberRead(node) && !namesNoBinding(node)) add(node.getStart(sf), node.text, R.globalRef);
+      // W1b carry (a): the owner of a TOKENS read may only appear AS that owner —
+      // `performance.now()`. Bound to a name, destructured, or passed on
+      // (`Reflect.get(Date, "now")`, `[Math][0]`), the gate can no longer see the read.
+      else if (ts.isIdentifier(node) && TOKENS.has(node.text) && !ownsMemberRead(node) && !namesNoBinding(node) && !isTypePosition(node)) add(node.getStart(sf), node.text, R.tokenAlias);
     }
     ts.forEachChild(node, visit);
   };

@@ -81,3 +81,8 @@ apps/web/parse-bench-results.json
 
 # Local CI runner (scripts/ci-local.sh) reporter output
 vitest-results-*.json
+
+# Format-matrix truth runs: every run writes a shots/ tree (hundreds of PNGs)
+# that stays local; only a finding crop under a run's evidence/ is committed
+# (W1c Task 7/8 rulings; final review m-13).
+docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/**/shots/

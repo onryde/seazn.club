@@ -13,14 +13,23 @@
 // record, as it records knownNoPath / l2NoPath (controller ruling, T7
 // dispatch). A genuinely inapplicable pair stays dropped. Ruling 30: atoms
 // with a known path gap still get their runs (W1c reads the catalogue).
+//
+// W1c Task 12: parseL2Pairs / loadL2Pairs read the COMMITTED file back, for
+// the L2 layer planner (lib/layers.ts), which filters it and never re-plans.
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
 import { MissingRule, RULES, decide, type Rule } from "./applicability.ts";
 import { l2Atomic } from "./scenario-catalogue.ts";
 import type { SportVariants } from "./variants.ts";
+import { L2_WIDTHS, type L2Width } from "./widths.ts";
 
-/** apps/web/playwright.config.ts mobile projects (pinned by pairs.test.ts). */
-export const L2_WIDTHS = Object.freeze([320, 360, 375, 390, 430, 768, 834] as const);
-export type L2Width = (typeof L2_WIDTHS)[number];
+// The widths live in the leaf widths.ts (W1c Task 4); re-exported here so
+// every existing `from "./pairs.ts"` import of them keeps working.
+export { L2_WIDTHS } from "./widths.ts";
+export type { L2Width } from "./widths.ts";
 
 export interface L2Run {
   readonly n: number;
@@ -157,4 +166,53 @@ export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants
     perScenario[a.id] = picks.length;
   }
   return { runs, targets, perScenario };
+}
+
+// --- the committed file, read back (W1c Task 12) ------------------------------
+
+/** gen-catalogue.ts writes it; lib/layers.ts reads it. */
+export const L2_PAIRS_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "..", "catalogue", "l2-pairs.json");
+
+const WIDTH_SET: ReadonlySet<number> = new Set(L2_WIDTHS);
+/** One committed run, strict: a key the planner does not know, or a row, sport
+ *  or width off the grid, is refused rather than planned from. Keys in the
+ *  order gen-catalogue writes them, so a parsed run serialises as its entry. */
+const L2RunSchema = z.strictObject({
+  n: z.number().int().min(1),
+  scenario: z.string().min(1),
+  row: z.custom<RowKey>((r) => typeof r === "string" && (ROW_KEYS as readonly string[]).includes(r), "row is not on the grid (ROW_KEYS)"),
+  sport: z.string().refine((s) => SPORT_KEYS.includes(s), "sport is not a registry sport (SPORT_KEYS)"),
+  preset: z.string().min(1),
+  bound: z.string().min(1).nullable(),
+  width: z.custom<L2Width>((w) => typeof w === "number" && WIDTH_SET.has(w), `width is not one of L2_WIDTHS (${L2_WIDTHS.join(", ")})`),
+  covers: z.array(z.enum(["row", "sport"])).min(1),
+  l3Gap: z.string().min(1).nullable(),
+});
+
+const L2PairsFileSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  generatedBy: z.string().min(1),
+  // One authority for the widths: the file must carry L2_WIDTHS, in order.
+  widths: z.array(z.number()).refine((w) => w.length === L2_WIDTHS.length && w.every((x, i) => x === L2_WIDTHS[i]), `widths are not L2_WIDTHS (${L2_WIDTHS.join(", ")})`),
+  targets: z.strictObject({ rowScenario: z.number().int().nonnegative(), sportScenario: z.number().int().nonnegative() }),
+  runs: z.array(L2RunSchema),
+}).superRefine((f, ctx) => {
+  // A run is named by its n: two runs under one n would be one run to a reader.
+  const seen = new Set<number>();
+  for (const [i, r] of f.runs.entries()) {
+    if (seen.has(r.n)) ctx.addIssue({ code: "custom", path: ["runs", i, "n"], message: `run n ${r.n} repeats` });
+    seen.add(r.n);
+  }
+});
+
+export interface L2PairsFile { readonly widths: readonly number[]; readonly targets: { rowScenario: number; sportScenario: number }; readonly runs: readonly L2Run[] }
+
+/** The committed l2-pairs.json, parsed; throws (ZodError) on anything else. */
+export function parseL2Pairs(json: unknown): L2PairsFile {
+  const f = L2PairsFileSchema.parse(json);
+  return { widths: f.widths, targets: f.targets, runs: f.runs };
+}
+
+export function loadL2Pairs(path: string = L2_PAIRS_PATH): L2PairsFile {
+  return parseL2Pairs(JSON.parse(readFileSync(path, "utf8")));
 }

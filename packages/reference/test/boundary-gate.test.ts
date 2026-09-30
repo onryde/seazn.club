@@ -65,6 +65,8 @@ const LOADER_REF = "a module loader named outside a call is refused — an alias
 const GLOBAL_REF = "the global object named outside a member read is refused — an alias would hide a clock or entropy read";
 const NOT_TS = "a relative import must name its .ts file (the house strip-types rule) — an extensionless or suffixed specifier hides which file loads";
 const CONSTRUCTOR_REF = "a `.constructor` read is refused — it reaches Function without naming it";
+const TOKEN_ALIAS = "a nondeterministic global (Date, Math, process, performance, crypto, Temporal) named outside a member read is refused — an alias or Reflect.get would hide a clock or entropy read";
+const TOKEN_COMPUTED = "a nondeterministic global (Date, Math, process, performance, crypto, Temporal) read by a computed key is refused — the gate cannot see which member it reads";
 
 describe("reference boundary gate (ruling 27: statement-form import type from @seazn/engine/core only)", () => {
   it("empty case first: a src dir with no .ts files scans zero — the CLI refuses that", () => {
@@ -191,6 +193,10 @@ describe("reference boundary gate (ruling 27: statement-form import type from @s
     ].join("\n") })).toEqual([
       `1 getBuiltinModule: ${LOADER_REF}`,
       `2 getBuiltinModule: ${LOADER_REF}`,
+      // W1b carry (a): `process` owns the hrtime token, so destructuring it or
+      // handing it to Reflect.get is also an alias of a nondeterministic global.
+      `2 process: ${TOKEN_ALIAS}`,
+      `3 process: ${TOKEN_ALIAS}`,
       `3 getBuiltinModule: ${LOADER_REF}`,
       "4 node:module: getBuiltinModule() is refused",
     ]);
@@ -377,6 +383,93 @@ describe("nondeterministic tokens are judged on the syntax tree (review M-2)", (
       `4 globalThis: ${GLOBAL_REF}`,
       `5 global: ${GLOBAL_REF}`,
     ]);
+  });
+  it("refused: a nondeterministic global named outside a member read — an alias would hide the read (W1b carry a)", () => {
+    expect(judged({ "a.ts": [
+      `const p = performance;`,
+      `export const a = p.now();`,
+      `const { now } = performance;`,
+      `export const b = Reflect.get(Date, "now");`,
+      `export const c = [Math][0].random();`,
+      `const cr = crypto;`,
+    ].join("\n") })).toEqual([
+      `1 performance: ${TOKEN_ALIAS}`,
+      `3 performance: ${TOKEN_ALIAS}`,
+      `4 Date: ${TOKEN_ALIAS}`,
+      `5 Math: ${TOKEN_ALIAS}`,
+      `6 crypto: ${TOKEN_ALIAS}`,
+    ]);
+  });
+  it("…while member reads the gate already judges stay as they were, and the harmless members stay allowed", () => {
+    expect(judged({ "a.ts": [
+      `export const a = Math.max(1, 2);`,
+      `export const b = Date.UTC(2026, 0, 1);`,
+      `export const c = (r: { performance: number }) => r.performance;`,
+      `export const d = { Date: 1, Math: 2 };`,
+      `export type T = typeof Math.PI;`,
+    ].join("\n") })).toEqual([]);
+    expect(judged({ "a.ts": `export const x = performance.now();` })).toEqual([`1 performance.now: ${TOKEN}`]);
+  });
+  it("refused: the globalThis-qualified spelling of a nondeterministic global, named outside a member read, is an alias too — and a constructed Date is reported once", () => {
+    expect(judged({ "a.ts": [
+      `const p = globalThis.performance;`,
+      `const { now } = globalThis.performance;`,
+      `export const b = Reflect.get(globalThis.Date, "now");`,
+      `export const c = [globalThis["Math"]][0].random();`,
+      `export const e = new globalThis.Date();`,
+    ].join("\n") })).toEqual([
+      `1 performance: ${TOKEN_ALIAS}`,
+      `2 performance: ${TOKEN_ALIAS}`,
+      `3 Date: ${TOKEN_ALIAS}`,
+      `4 Math: ${TOKEN_ALIAS}`,
+      `5 new Date: ${TOKEN}`,
+    ]);
+  });
+  it("…the positive pair: a globalThis-qualified Date constructed from an argument, and a harmless member read through globalThis, stay clean", () => {
+    expect(judged({ "a.ts": [
+      `export const a = new globalThis.Date(0);`,
+      `export const b = new globalThis["Date"](0);`,
+      `export const c = globalThis.Math.max(1, 2);`,
+      `export const d = globalThis.JSON;`,
+    ].join("\n") })).toEqual([]);
+  });
+  it("refused: a nondeterministic global read by a computed key, bare or through globalThis — while a string-literal key is still judged by its name", () => {
+    expect(judged({ "a.ts": `export const a = Math["max"](1, 2);\nexport const b = globalThis.Date["UTC"](2026, 0, 1);\nexport const c = (r: Record<string, () => number>, k: string) => r[k]?.();\n` })).toEqual([]);
+    expect(judged({ "a.ts": [
+      `declare const k: string;`,
+      `export const a = Date[k]();`,
+      `export const b = performance[k]();`,
+      `export const c = globalThis.crypto[k]();`,
+      "export const d = globalThis[\"Math\"][`r${k}`]();",
+    ].join("\n") })).toEqual([
+      `2 Date[<computed>]: ${TOKEN_COMPUTED}`,
+      `3 performance[<computed>]: ${TOKEN_COMPUTED}`,
+      `4 crypto[<computed>]: ${TOKEN_COMPUTED}`,
+      `5 Math[<computed>]: ${TOKEN_COMPUTED}`,
+    ]);
+  });
+  it("refused: an owner behind a comma, a non-null assertion or a type assertion is no member read's owner — each is an alias", () => {
+    expect(judged({ "a.ts": [
+      `type X = { now(): number };`,
+      `export const a = new (0, Date)();`,
+      `export const b = performance!.now();`,
+      `export const c = (performance as X).now();`,
+    ].join("\n") })).toEqual([
+      `2 Date: ${TOKEN_ALIAS}`,
+      `3 performance: ${TOKEN_ALIAS}`,
+      `4 performance: ${TOKEN_ALIAS}`,
+    ]);
+  });
+  it("sweep: every nondeterministic global the reason names is refused when aliased, bare and through globalThis — six names, never zero", () => {
+    // The list comes from the reason string spelled out above, never from the gate's table.
+    const names = /\(([^)]+)\)/.exec(TOKEN_ALIAS)?.[1]?.split(", ") ?? [];
+    let checked = 0;
+    for (const name of names) {
+      expect(judged({ "a.ts": `const x = ${name};` }), name).toEqual([`1 ${name}: ${TOKEN_ALIAS}`]);
+      expect(judged({ "a.ts": `const x = globalThis.${name};` }), `globalThis.${name}`).toEqual([`1 ${name}: ${TOKEN_ALIAS}`]);
+      checked++;
+    }
+    expect(checked).toBe(6);
   });
 });
 

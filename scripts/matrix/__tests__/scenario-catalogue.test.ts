@@ -16,7 +16,7 @@ import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
-  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions,
+  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
 } from "../lib/scenario-catalogue.ts";
 import { productMessageOf } from "../lib/driver/types.ts";
 import { FENCES } from "../lib/model/fences.ts";
@@ -258,7 +258,7 @@ describe("atomic cases", () => {
 });
 
 describe("regression cases (R29)", () => {
-  const base = { id: "MB-001", title: "t", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 42, path: "0:1", replayPath: "CC:B", fence: null, match: null, status: "open", found: "2026-09-28", runId: "fm-w1b-model" };
+  const base = { id: "MB-001", title: "t", issue: "#879", cell: "league|generic", variant: "score", check: "I7-rr-no-pair-over-legs", seed: 42, path: "0:1", replayPath: "CC:B", maxCommands: 30, fencesOn: false, fence: null, match: null, status: "open", found: "2026-09-28", runId: "fm-w1b-model" };
   const file = (...regressions: unknown[]) => ({ schemaVersion: 1, regressions });
   it("empty case first: the committed file parses to a list (empty until a shrunk failure is committed)", () => {
     const rs = parseRegressions(JSON.parse(readFileSync(resolve(REPO, REGRESSIONS_PATH), "utf8")));
@@ -284,6 +284,8 @@ describe("regression cases (R29)", () => {
       seed: [1.5, "42"],
       path: [""],
       replayPath: [""],
+      maxCommands: [0, -1, 1.5, "30", null],
+      fencesOn: ["true", 0, null],
       fence: ["", "no-such-fence"],
       match: ["", " ", "POST", "the second leg"],
       status: ["stale"],
@@ -314,16 +316,98 @@ describe("regression cases (R29)", () => {
       const [, key, expr] = /^(\w+): (.*)$/.exec(entry)!;
       stub[key!] = /^(".*"|null)$/.test(expr!) ? JSON.parse(expr!) : base[key as keyof typeof base];
     }
-    // The plan's stub predates `match` (T15 fix round 2): every other field, and match only.
-    expect(Object.keys(stub).sort()).toEqual(Object.keys(base).filter((k) => k !== "match").sort());
+    // The plan's stub predates `match` (T15 fix round 2) and the replay
+    // settings (W1c, W1b carry b): every other field, and those three only.
+    const LATER = ["match", "maxCommands", "fencesOn"];
+    expect(Object.keys(stub).sort()).toEqual(Object.keys(base).filter((k) => !LATER.includes(k)).sort());
     expect(stub.id).toBe("MB-NNN");
     expect(() => parseRegressions(file(stub))).toThrow();
     expect(() => parseRegressions(file({ ...stub, id: "MB-001" }))).toThrow(); // title and date still empty
     expect(() => parseRegressions(file({ ...stub, id: "MB-001", title: "named" }))).toThrow(); // date still YYYY-MM-DD
     // Completed as the plan knew it, it now lacks `match`: refused.
     expect(() => parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28" }))).toThrow(/match/);
-    // Positive pair: completed by a human, with match, the same stub parses.
-    expect(parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28", match: null }))).toHaveLength(1);
+    // …and, with match, the replay settings it never printed: refused.
+    expect(() => parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28", match: null }))).toThrow(/maxCommands/);
+    // Positive pair: completed by a human, with match and the settings, the same stub parses.
+    expect(parseRegressions(file({ ...stub, id: "MB-001", title: "named", found: "2026-09-28", match: null, maxCommands: 30, fencesOn: false }))).toHaveLength(1);
+  });
+  // W1b carry (b): replay regenerates the counterexample from the seed, and
+  // the command bound shapes what it generates — a case that does not say how
+  // it was found replays under a guess.
+  it("a regression case records how it was found: maxCommands (≥1) and fencesOn — without them replay guesses", () => {
+    const { maxCommands: _m, fencesOn: _f, ...found } = base;
+    expect(() => parseRegressions(file({ ...found }))).toThrow(/maxCommands/);
+    expect(() => parseRegressions(file({ ...found, maxCommands: 0, fencesOn: true }))).toThrow(/maxCommands/);
+    expect(() => parseRegressions(file({ ...found, maxCommands: 30 }))).toThrow(/fencesOn/);
+    expect(() => parseRegressions(file({ ...found, fencesOn: true }))).toThrow(/maxCommands/);
+    expect(parseRegressions(file({ ...found, maxCommands: 30, fencesOn: false }))[0]).toMatchObject({ maxCommands: 30, fencesOn: false });
+    // Both values of each: none is a default the schema supplies.
+    expect(parseRegressions(file({ ...found, maxCommands: 7, fencesOn: true }))[0]).toMatchObject({ maxCommands: 7, fencesOn: true });
+  });
+  it("the committed cases each record the settings their finding run's own report shows (truth-runs, W1b carry b)", () => {
+    // Every committed case names its run; that run's committed model report
+    // holds the cell it failed on, with the bound and fences it ran under.
+    const reports = new Map<string, { cells: { cell: string; seed: number; maxCommands: number; fences: boolean; failure: { seed: number; path: string } | null }[] }[]>();
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as { runId: string; cells: { cell: string; seed: number; maxCommands: number; fences: boolean; failure: { seed: number; path: string } | null }[] };
+          reports.set(rep.runId, [...(reports.get(rep.runId) ?? []), rep]);
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
+    const cases = loadRegressions();
+    expect(cases.length, "no committed case — the sweep would be vacuous").toBeGreaterThan(0);
+    let checked = 0;
+    for (const r of cases) {
+      const found = (reports.get(r.runId) ?? []).flatMap((rep) => rep.cells).filter((c) => c.cell === r.cell && c.failure?.seed === r.seed && c.failure.path === r.path);
+      expect(found.length, `${r.id}: no committed report of run ${r.runId} holds its failure on ${r.cell}`).toBeGreaterThan(0);
+      for (const c of found) expect({ maxCommands: r.maxCommands, fencesOn: r.fencesOn }, r.id).toEqual({ maxCommands: c.maxCommands, fencesOn: c.fences });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+  // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its
+  // finding, so honouring it would fence out the very command the case exists
+  // to reproduce. Expected values are the ruling's three branches, not the code.
+  it("replay fences (ruling Q1): found fenced and naming no fence → on; found fenced but naming its own fence → off; found unfenced → off", () => {
+    expect(FENCES.length, "no fence to name — the fenced-case branch would be vacuous").toBeGreaterThan(0);
+    // (1) fencesOn true, fence null → on.
+    expect(replayFences(parseRegressions(file({ ...base, fencesOn: true, fence: null }))[0]!)).toBe(true);
+    // (3) fencesOn false → off, with or without a fence of its own.
+    expect(replayFences(parseRegressions(file({ ...base, fencesOn: false, fence: null }))[0]!)).toBe(false);
+    let checked = 0;
+    for (const f of FENCES) {
+      // (2) fencesOn true, fence set → off: every fence the model has, not one sample.
+      expect(replayFences(parseRegressions(file({ ...base, fencesOn: true, fence: f.id }))[0]!), f.id).toBe(false);
+      expect(replayFences(parseRegressions(file({ ...base, fencesOn: false, fence: f.id }))[0]!), f.id).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(FENCES.length);
+  });
+  it("under the replay rule the committed cases replay with the fences the committed 5/5-known replays ran (truth-runs w1b-model-final, ruling Q1)", () => {
+    // The evidence: w1b-model-final's --regressions reports, every committed
+    // case known-failure. The rule must reproduce the fences those replays
+    // ran with — a replay that fences out a case's own command goes NOT REPRODUCED.
+    const dir = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final");
+    type Rep = { runId: string; settings: { regressions: boolean }; cells: { replayOf: string | null; verdict: string; fences: boolean }[] };
+    const reps = readdirSync(dir).filter((n) => /^model-report-regressions.*\.json$/.test(n)).map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as Rep);
+    expect(reps.length, "no committed replay report — the check would be vacuous").toBeGreaterThan(0);
+    const cases = loadRegressions();
+    expect(cases.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const rep of reps) {
+      expect(rep.settings.regressions, rep.runId).toBe(true);
+      for (const r of cases) {
+        const cell = rep.cells.find((c) => c.replayOf === r.id);
+        if (cell === undefined) throw new Error(`${rep.runId}: no replay of ${r.id}`);
+        expect([cell.verdict, replayFences(r)], `${rep.runId} ${r.id}`).toEqual(["known-failure", cell.fences]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(reps.length * cases.length);
   });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();

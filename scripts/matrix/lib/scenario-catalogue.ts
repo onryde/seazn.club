@@ -234,6 +234,13 @@ const RegressionSchema = z.strictObject({
    *  seed + path alone the shrunk command list may not reproduce (R-PF9).
    *  null only when the counterexample carried none. */
   replayPath: z.string().min(1).nullable(),
+  /** The command bound the finding run used (`--max-commands`). Replay uses it:
+   *  a shorter bound may never reach the failing command (W1b carry b). */
+  maxCommands: z.number().int().min(1),
+  /** Whether the finding run had its fences on (its report's cell `fences`),
+   *  as the run's own evidence (W1b carry b). Replay honours it while the case
+   *  names no fence of its own (replayFences). */
+  fencesOn: z.boolean(),
   fence: z.string().min(1).nullable(),
   /** Text that must appear in the product's own words (its refusal message,
    *  or a server assertion it carries — never RefusedCall's request line, never
@@ -263,6 +270,14 @@ const RegressionSchema = z.strictObject({
   }
 });
 export type RegressionCase = z.infer<typeof RegressionSchema>;
+
+/** The fences a --regressions replay of `r` runs with (W1c Task 2, controller
+ *  ruling Q1): the finding run's own, unless the case names a fence. A fence
+ *  named for a case is added after its finding — it fences out the very
+ *  command the case exists to reproduce — so such a case replays unfenced. */
+export function replayFences(r: Pick<RegressionCase, "fencesOn" | "fence">): boolean {
+  return r.fencesOn && r.fence === null;
+}
 const FileSchema = z.strictObject({ schemaVersion: z.literal(1), regressions: z.array(RegressionSchema) });
 
 export function parseRegressions(json: unknown): RegressionCase[] {

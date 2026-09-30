@@ -11,6 +11,9 @@ the moment the ~150 audit hypotheses become a list of reproduced problems.
 
 - `_RULES.md` (R5, R10, R12, R14, R14a, R25) and `_INDEX.md` (rulings 16, 19,
   20, 21 and the "going private" recommendation — **not** a ruling).
+- `_INDEX.md` "W1d first tasks": the harness items the W1c final review routed
+  to this wave by name, starting with the frozen-plan rule for every new
+  committed run (`truth-runs/plans.lock.json`).
 - Design §2 (case states, wave done), §6.4, §6.5 (cadence, cost, visibility
   guard, three green dispatches), §7.3 ("W1's truth run is a floor"), §7.5
   item 2 (Stryker), §8 (the routing table you triage into), §9.
@@ -30,8 +33,10 @@ W1a, W1b, W1c merged (design §8 order, R1).
 - Weekly Stryker run on engine scheduling, competition and tiebreaker modules;
   mutation-score floor set from the first measured run, only allowed to rise.
 - **The first full truth run** and triage of its reds into waves.
-- **Routed gaps: none owned.** Triage routes reds to the §8 owner; it never
-  re-routes a gap §8 already assigns.
+- **The harness items in `_INDEX.md` "W1d first tasks"**, routed by the W1c
+  final review. They are harness work, not §8 product gaps.
+- **Routed §8 product gaps: none owned.** Triage routes reds to the §8 owner;
+  it never re-routes a gap §8 already assigns.
 
 ## Lifecycle
 

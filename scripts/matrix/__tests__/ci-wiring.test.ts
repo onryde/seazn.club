@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const WORKFLOWS = resolve(REPO, ".github/workflows");
@@ -114,7 +115,7 @@ function runNamedStep(name: string, reportFile: string, o: { json: ReturnType<ty
       cwd: root,
       env: { PATH: process.env.PATH ?? "", FAKE_JSON: fakeJson, FAKE_EXIT: String(o.exit) },
       encoding: "utf8",
-      timeout: 20_000,
+      timeout: SPAWN_MS,
     });
     return { status: r.status, stdout: r.stdout, stderr: r.stderr };
   } finally {
@@ -177,28 +178,28 @@ describe("matrix CI wiring", () => {
       runStep({ json: (root) => report(root, { total: 1, passed: 1 }), exit: 0 });
       runStep({ json: null, exit: 1 });
       expect(scratch()).toEqual(before);
-    });
+    }, spawnBudget(2));
     it("a real pass is green, and says what it counted", () => {
       const r = runStep({ json: (root) => report(root, { total: 3, passed: 3 }), exit: 0 });
       expect(r.stderr).toBe("");
       expect(r.status).toBe(0);
       expect(r.stdout).toContain("3/3");
-    });
+    }, spawnBudget(1));
     it("ZERO tests is red, even when vitest exits 0 (a suite that fails to collect reads 0/0)", () => {
       const r = runStep({ json: (root) => report(root, { total: 0, passed: 0 }), exit: 0 });
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/ZERO tests/);
-    });
+    }, spawnBudget(1));
     it("a failed suite is red even when every counted test passed", () => {
       const r = runStep({ json: (root) => report(root, { total: 2, passed: 2, failedSuites: 1 }), exit: 0 });
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/1 matrix suite\(s\) failed/);
-    });
+    }, spawnBudget(1));
     it("fewer passed than total (a failed, skipped or todo test) is red", () => {
       const r = runStep({ json: (root) => report(root, { total: 3, passed: 2 }), exit: 0 });
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/only 2 of 3/);
-    });
+    }, spawnBudget(1));
     // The positional is a substring filter, so each of these is a file it
     // could really select; each one alone must red the step.
     it.each([
@@ -212,17 +213,17 @@ describe("matrix CI wiring", () => {
       });
       expect(r.status).toBe(1);
       expect(r.stderr).toMatch(/outside scripts\/matrix/);
-    });
+    }, spawnBudget(1));
     it("a non-zero vitest exit is red before the judge runs, even beside a green-looking report", () => {
       const r = runStep({ json: (root) => report(root, { total: 3, passed: 3 }), exit: 1 });
       expect(r.status).toBe(1);
       expect(r.stdout).not.toContain("3/3");
-    });
+    }, spawnBudget(1));
     it("no report at all is red", () => {
       const r = runStep({ json: null, exit: 0 });
       expect(r.status).not.toBe(0);
       expect(r.stderr).toMatch(/vitest-results-matrix\.json/);
-    });
+    }, spawnBudget(1));
     it("a STALE green report is never judged: vitest writes nothing and exits 0 ⇒ red (Task 10 review Minor 3)", () => {
       // The step removes any old report before vitest runs, so a run that
       // writes none cannot be read as the earlier run's pass.
@@ -230,7 +231,7 @@ describe("matrix CI wiring", () => {
       expect(r.status).not.toBe(0);
       expect(r.stdout).not.toContain("9/9");
       expect(r.stderr).toMatch(/vitest-results-matrix\.json/);
-    });
+    }, spawnBudget(1));
     it("the stale-report guard is the step's own `rm -f`, before vitest", () => {
       const lines = (matrixStep(ci).script ?? "").split("\n");
       const rm = lines.findIndex((l) => /^rm -f vitest-results-matrix\.json$/.test(l.trim()));
@@ -311,11 +312,11 @@ describe("matrix CI wiring", () => {
       expect(step).toBeDefined();
       const cmd = (step ?? "").trim().replace(/^- run: /, "");
       expect(cmd).toContain(" --against HEAD^1");
-      const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: 60_000 });
+      const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
       expect(r.status, r.stderr).toBe(0);
       // only --check --against prints this line: both flags reached the CLI through pnpm
       expect(r.stdout).toMatch(/single-sport: check passed against scripts\/matrix\/catalogue\/single-sport-baseline\.json and HEAD$/m);
-    });
+    }, spawnBudget(1));
   });
 
   it("matrix-report/ is ignored", () => {
@@ -381,14 +382,14 @@ describe("reference CI wiring (Task 12)", () => {
     expect(r.stderr).toBe("");
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("reference package: 4/4 tests passed in 1 files");
-  });
+  }, spawnBudget(1));
 
   it("red on zero tests, a failed-to-collect suite, a skip, and a stray file", () => {
     expect(run({ json: (root) => refReport(root, { total: 0, passed: 0, files: [] }), exit: 0 }).status).not.toBe(0);
     expect(run({ json: (root) => refReport(root, { total: 4, passed: 4, failedSuites: 1 }), exit: 0 }).status).not.toBe(0);
     expect(run({ json: (root) => refReport(root, { total: 4, passed: 3 }), exit: 0 }).status).not.toBe(0);
     expect(run({ json: (root) => refReport(root, { total: 4, passed: 4, files: [join(root, "scripts/x.test.ts")] }), exit: 0 }).status).not.toBe(0);
-  });
+  }, spawnBudget(4));
 
   // The positional is a substring filter; each of these is a file it could
   // really select, and each alone must red the step.
@@ -399,7 +400,7 @@ describe("reference CI wiring (Task 12)", () => {
     const r = run({ json: (root) => refReport(root, { total: 2, passed: 2, files: [join(root, "packages/reference/src/index.test.ts"), stray(root)] }), exit: 0 });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/outside packages\/reference/);
-  });
+  }, spawnBudget(1));
 
   it("a non-zero vitest exit, no report, and a STALE green report are each red", () => {
     const failed = run({ json: (root) => refReport(root, { total: 4, passed: 4 }), exit: 1 });
@@ -410,5 +411,5 @@ describe("reference CI wiring (Task 12)", () => {
     expect(stale.status).not.toBe(0);
     expect(stale.stdout).not.toContain("9/9");
     expect(stale.stderr).toMatch(/vitest-results-reference\.json/);
-  });
+  }, spawnBudget(3));
 });

@@ -6,7 +6,7 @@ import type { OrganiserDriver } from "../driver/types.ts";
 import type { ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED";
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF";
 
 /** `row` is any catalogue row, API-only ones included (W1b Task 3 carry):
  *  stagesForRow builds every one. `deny` (ruling 24) lists the feature keys
@@ -44,6 +44,10 @@ export interface Scenario {
   mandatedRefusal?: (spec: CaseSpec) => string;
   /** false: the fixture invariants do not apply (no stage was ever built). Default true. */
   evaluatesInvariants?: boolean;
+  /** Which scores a browser case taps on the pad (W1c Task 7; mixed.ts
+   *  PadPolicy): "first" per case (ruling 15), or "all" (PADPROOF, D3).
+   *  Default "first". run.ts hands it to the case's BrowserDriver. */
+  padPolicy?: "first" | "all";
   run(ctx: ScenarioContext): Promise<ScenarioOutput>;
 }
 

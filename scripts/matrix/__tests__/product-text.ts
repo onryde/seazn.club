@@ -97,14 +97,27 @@ export interface NextMatchText {
   everyAppend: boolean;
   /** next-match-started.ts nextMatchStartedMessage, for a label. */
   message: (label: string) => string;
+  /** Where the refusal names the fed match on the wire (W1b carry c): the
+   *  HttpError's extra `{ [key]: ref }`, whose `ref` is boardRef's over the fed
+   *  node with `[idField]: t.id`, which api-v1 http.ts spreads into `error` —
+   *  so `error[key][idField]` is the fed fixture's id. */
+  wire: { key: string; idField: string };
 }
 
 /** fed-seats.ts planRelease (ruling RR-1): a write that takes back a knockout
  *  decision whose next match has started is refused by name. */
 export function nextMatchStartedText(): NextMatchText {
   const fed = read("apps/web/src/server/engine-db/fed-seats.ts");
-  const thrown = /\n\s*if \(!reset && hasStarted\(t\)\) \{[\s\S]*?throw new HttpError\((\d{3}), nextMatchStartedMessage\([^;]*?\), ([A-Z_]+), \{ next_match: ref \}\);/.exec(fed);
+  const thrown = /\n\s*if \(!reset && hasStarted\(t\)\) \{\s*const ref = await boardRef\(tx, t\);\s*throw new HttpError\((\d{3}), nextMatchStartedMessage\([^;]*?\), ([A-Z_]+), \{ (\w+): ref \}\);/.exec(fed);
   if (thrown === null) throw new Error("product-text: fed-seats.ts NEXT_MATCH_STARTED refusal not found in the expected shape — re-read it and update the model's NEXT_MATCH_LOCK");
+  // The fed match's id inside that ref: boardRef's own field over the node it is given.
+  const idField = /\nasync function boardRef\(tx: Tx, t: Node\): Promise<NextMatchRef> \{[\s\S]*?\n\s*const ref: NextMatchRef = \{ (\w+): t\.id,/.exec(fed)?.[1];
+  if (idField === undefined) throw new Error("product-text: fed-seats.ts boardRef no longer names the fed fixture's id as `<field>: t.id` — re-read it and update nextMatchFixtureId");
+  // api-v1 http.ts: an HttpError's extra is spread into the envelope's `error`, beside code and message.
+  const http = read("apps/web/src/server/api-v1/http.ts");
+  const spreads = /\n\s*const body: ErrorBody = \{ ok: false, error: \{ code, message, \.\.\.extra \}, requestId \};/.test(http)
+    && /\n\s*if \(err instanceof HttpError\) \{[\s\S]*?return errorResponse\(\s*requestId,\s*err\.status,\s*err\.code \?\? statusCode\(err\.status\),\s*err\.message,\s*err\.extra,?\s*\);/.test(http);
+  if (!spreads) throw new Error("product-text: api-v1 http.ts no longer spreads an HttpError's extra into `error` — re-read it and update the driver's RefusedCall.extra");
   const from = new RegExp(`import \\{[^}]*\\b${thrown[2]}\\b[^}]*\\} from "@/([^"]+)";`).exec(fed);
   if (from === null) throw new Error(`product-text: fed-seats.ts does not import ${thrown[2]} from an @/ module — resolve it`);
   const lib = read(`apps/web/src/${from[1]}.ts`);
@@ -118,7 +131,7 @@ export function nextMatchStartedText(): NextMatchText {
   const everyAppend = /\n {2}const \w+ = await releaseFedSeats\(tx, fixtureId, fixture\.outcome, outcome\);/.test(read("apps/web/src/server/engine-db/append-event.ts"));
   const template = /\nexport function nextMatchStartedMessage\(label: string\): string \{\s*return `([^`]*)`;\s*\}/.exec(lib)?.[1];
   if (template === undefined) throw new Error(`product-text: ${from[1]}.ts nextMatchStartedMessage not found`);
-  return { status: Number(thrown[1]), code, notStarted: started[1], cascade: { status: cascade[1], outcomeKind: cascade[2] }, resetExempt, everyAppend, message: (label) => template.replace("${label}", label) };
+  return { status: Number(thrown[1]), code, notStarted: started[1], cascade: { status: cascade[1], outcomeKind: cascade[2] }, resetExempt, everyAppend, message: (label) => template.replace("${label}", label), wire: { key: thrown[3], idField } };
 }
 
 /** stages.ts bracketToGen: the round_no the product stores for an engine

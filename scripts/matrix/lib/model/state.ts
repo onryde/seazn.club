@@ -12,7 +12,7 @@
 // classed (`steps`), and informativeSteps() fails a cell with none that told
 // the model anything (R25).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import type { FixtureRow, FixtureStateOut, OrganiserDriver } from "../driver/types.ts";
+import { nextMatchFixtureId, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
 import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
@@ -118,6 +118,10 @@ export const ROSTER_LOCK_CHECK = "model-roster-lock";
 /** The roster lock's refusal carries no domain code (entrants.ts: a bare
  *  HttpError(422), which api-v1 stamps "ERROR"). Routed to W9. */
 export const ROSTER_LOCK_FINDING = "CD-T13b";
+/** A NEXT_MATCH_STARTED refusal named a fed match the model does not hold
+ *  (fedCandidates): counted, and the take-back is judged on the model's own
+ *  candidates instead (W1c Task 2, ruling Q2). */
+export const NEXT_MATCH_UNHELD_FINDING = "model-next-match-unheld";
 export const VACUITY_CHECK = "model-informative-steps";
 
 /** entrants.ts createEntrants: once the division is `active` or `completed`
@@ -165,8 +169,20 @@ export const NEXT_MATCH_LOCK: {
  *  bracket.ts through stages.ts bracketToGen, pinned) that seats one of f's
  *  entrants. Whether any of them has STARTED is judged on the driver's
  *  answer when the refusal comes (fedMatchStarted), never on the model's
- *  memory. Empty on a round robin: there the take-back must be accepted. */
-export function fedCandidates(m: ModelState, f: FixtureModel): FixtureModel[] {
+ *  memory. Empty on a round robin: there the take-back must be accepted.
+ *
+ *  Given the refusal (W1c Task 2, ruling Q2): the product names the fed match
+ *  itself (`next_match`, nextMatchFixtureId). One the model holds is the whole
+ *  answer, exactly that fixture; one it does not hold is recorded
+ *  (NEXT_MATCH_UNHELD_FINDING) and the superset judged instead; a refusal
+ *  naming none leaves the superset as it was. */
+export function fedCandidates(m: ModelState, f: FixtureModel, refusal?: RefusedCall): FixtureModel[] {
+  const named = refusal === undefined ? null : nextMatchFixtureId(refusal);
+  if (named !== null) {
+    const held = m.fixtures.get(named);
+    if (held !== undefined) return [held];
+    recordFinding(m, NEXT_MATCH_UNHELD_FINDING, `product named next match ${named}, which the model does not hold — ${f.id}'s take-back judged on the model's own candidates`);
+  }
   const round = f.round;
   if (!NEXT_MATCH_LOCK.kinds.includes(m.stageKind) || round === null) return [];
   const mine = [f.home, f.away].filter((e): e is string => e !== null);

@@ -1,20 +1,31 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
-import { RefusedCall } from "../lib/driver/types.ts";
+import { API_ONLY_ROWS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
+import { NoOrganiserPath, RefusedCall } from "../lib/driver/types.ts";
+import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
+import type { PageCtx } from "../lib/browser/pages/ctx.ts";
+import type { CaseBrowser } from "../lib/browser/session.ts";
+import { EMPTY_PADS, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
+import type { Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
+import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
+import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
+import { PAD_SPORTS } from "../lib/pad-sports.ts";
+import { PAD_ADAPTERS } from "../lib/pads/index.ts";
+import { HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
+import { main as renderMain } from "../render.ts";
 import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -23,7 +34,9 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, type DbFactories, type RunDeps } from "../run.ts";
+import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
+import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -201,7 +214,21 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET})`);
+  });
+  // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
+  it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
+    let checked = 0;
+    for (const extra of [[], ["--driver", "http"]]) {
+      const d = deps();
+      const io = capture();
+      expect(await runSlice(d, ["--set", PAD_PROOF_SET, ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
+      expect(d.order, extra.join(" ")).toEqual([]);
+      expect(io.err()).toContain(`matrix: --set ${PAD_PROOF_SET} scores every fixture on the pad; it runs with --driver browser only`);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
   it("--set with --only/--scenario/--canary is a usage refusal", async () => {
     for (const extra of [["--only", "league|generic"], ["--scenario", "M1"], ["--canary", "M1"]]) {
@@ -269,6 +296,43 @@ describe("runSlice — a run", () => {
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
   });
+  // W1c Task 8 review E-2 (fix round 1): writeResults and MATRIX.md overwrite
+  // <report-dir>/<run-id>/ unconditionally, and every case org's slug derives
+  // from the run id — so a rerun under a finished run's id destroyed that
+  // run's evidence AND redded every case on an unnamed duplicate-key error.
+  // The sequence: no results → runs; results → refused, evidence untouched;
+  // a fresh id beside it → runs.
+  it("E-2: a run id whose results.json exists is refused by name (exit 2) before the preflight or the DB, and the earlier evidence is left as it was", async () => {
+    const dir = dirFor();
+    const args = (id: string) => ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", id, "--report-dir", dir];
+    capture();
+    expect(await runSlice(deps(), args("t1"))).toBe(0);
+    const results = readFileSync(join(dir, "t1", "results.json"));
+    const matrix = readFileSync(join(dir, "t1", "MATRIX.md"));
+    vi.restoreAllMocks();
+    const io = capture();
+    const again = deps();
+    expect(await runSlice(again, args("t1"))).toBe(2);
+    expect(again.order).toEqual([]);
+    expect(io.err()).toMatch(/RunIdReused: run id t1 already has results at \S*t1\/results\.json/);
+    expect(io.out()).toBe("");
+    expect(readFileSync(join(dir, "t1", "results.json")).equals(results)).toBe(true);
+    expect(readFileSync(join(dir, "t1", "MATRIX.md")).equals(matrix)).toBe(true);
+    vi.restoreAllMocks();
+    capture();
+    const fresh = deps();
+    expect(await runSlice(fresh, args("t1-r2"))).toBe(0);
+    expect(fresh.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+    expect(existsSync(join(dir, "t1-r2", "results.json"))).toBe(true);
+  });
+  it("E-2, the empty case: a run directory with no results.json (an aborted run's shots) is no finished run, and is not refused", async () => {
+    capture();
+    const dir = dirFor();
+    mkdirSync(join(dir, "t1", "shots"), { recursive: true });
+    const d = deps();
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "t1", "--report-dir", dir])).toBe(0);
+    expect(d.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+  });
   // Fix round 1 (I-2): through the REAL runCase — scenarios.test's runOn is a
   // copy of its composition and cannot see runCase drop the invariants. A
   // scenario that does not declare `evaluatesInvariants` gets all of them.
@@ -287,6 +351,26 @@ describe("runSlice — a run", () => {
       expect(k.verdict, `${k.id}: ${k.reason}`).toBe("pass");
       expect(k.checked, k.id).toBeGreaterThan(0);
     }
+  });
+  // W1c Task 3 (D9): an HTTP run is L3 over http with no width (Task 6 makes
+  // these follow the CLI). Proven through the REAL producer (runSlice →
+  // writeResults) and the REAL consumer (render.ts → parseResults →
+  // renderMatrix), never a fixture on both ends.
+  it("D9: results.json is schema v3 — the run and every case read L3 over http, width null — and the render CLI reads it back to the MATRIX.md the run wrote", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(deps(), ["--only", "league|generic", "--run-id", "v3", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "v3", "results.json"), "utf8")) as { schemaVersion: unknown; layer: unknown; driver: unknown; cases: Record<string, unknown>[] };
+    expect({ schemaVersion: raw.schemaVersion, layer: raw.layer, driver: raw.driver }).toEqual({ schemaVersion: 3, layer: "L3", driver: "http" });
+    let checked = 0;
+    for (const c of raw.cases) {
+      expect({ layer: c.layer, driver: c.driver, width: c.width }, String(c.caseId)).toEqual({ layer: "L3", driver: "http", width: null });
+      checked++;
+    }
+    expect(checked, "cases read").toBe(SCENARIO_KEYS.length);
+    const out = join(dir, "re-rendered.md");
+    expect(renderMain([join(dir, "v3", "results.json"), "--out", out])).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe(readFileSync(join(dir, "v3", "MATRIX.md"), "utf8"));
   });
   it("M4: results.json snapshots the catalogue grid as it is at run time, and MATRIX.md is its render", async () => {
     capture();
@@ -961,7 +1045,7 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
 });
 
 describe("summariseRun (PF4) — empty first", () => {
-  const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [] };
+  const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [], layer: "L3" as const, driver: "http" as const, width: null };
   const chk = (verdict: CheckResult["verdict"], checked: number): CheckResult => ({ id: `k-${verdict}-${checked}`, kind: "invariant", verdict, checked, reason: "", evidence: [] });
   const kase = (caseId: string, state: CaseResult["state"], reason: string, checks: CheckResult[]): CaseResult => ({ ...base, caseId, state, reason, checks });
 
@@ -974,6 +1058,8 @@ describe("summariseRun (PF4) — empty first", () => {
       kase("zero-items", "red", "checked zero items (vacuous): k", [chk("pass", 0)]),
       // Controller ruling (fix round 1): ⏳ is an honest owner-assigned state, never vacuity.
       kase("deferred", "later", "W1b: team rosters", []),
+      // …and so is 🚫 (W1c Task 6, M-4 ruling): a path this layer does not drive, owned by a wave.
+      kase("no-path", "no_path", "W1-driving: the division builder takes no rule override", []),
       kase("works", "works", "1 checks, 3 items", [chk("pass", 3), chk("abstain", 0)]),
       kase("real-red", "red", "k: wrong", [chk("fail", 2)]),
       kase("refused", "red", "error: RefusedCall: POST /x → HTTP 400 VALIDATION: bad", []),
@@ -989,6 +1075,14 @@ describe("summariseRun (PF4) — empty first", () => {
         { caseId: "crashed", error: "TypeError: boom", refusal: null },
       ],
     });
+  });
+  it("W1c Task 12: a planned ░ not_run case is never vacuous, nor an error red — nor is a planned 🚫 — while a real vacuous red beside them still is", () => {
+    const cases = [
+      kase("not-run", "not_run", "no scenario script yet (atom R1)", []),
+      kase("no-path", "no_path", "W9: no organiser path, known at design time (design §4): two divisions merged", []),
+      kase("vacuous", "red", "no checks ran (vacuous)", []),
+    ];
+    expect(summariseRun(cases, new Map())).toEqual({ vacuous: ["vacuous"], errorReds: [] });
   });
 });
 
@@ -1165,5 +1259,665 @@ describe("describeCommit (final review m-6) — evidence never names a commit th
     const body = /harnessCommit: \(\) => ([^\n]+)/.exec(code)?.[1] ?? "";
     expect(body).toContain('describeCommit((args) => execFileSync("git", args');
     expect(code).not.toMatch(/execFileSync\("git", \["rev-parse"/);
+  });
+});
+
+// W1c Task 6: --driver browser --width. The browser itself is injected
+// (RunDeps.openBrowserRun); what is proven here is the runner's wiring: the
+// refusals, one case driver per case closed in a finally, the driver's checks
+// in the case, the D9 fields following the CLI, and one browser per run
+// closed exactly once.
+interface FakeBrowserRun { run: BrowserRun; log: string[]; opts: CaseDriverOptions[] }
+/** A browser run whose case drivers are league fakes carrying one check of their own.
+ *  `checksThrow`: reading the driver's checks throws (fix round 1, M-2). */
+function fakeBrowserRun(o: { failCaseAt?: number; checksThrow?: boolean } = {}): FakeBrowserRun {
+  const log: string[] = [];
+  const opts: CaseDriverOptions[] = [];
+  const run: BrowserRun = {
+    caseDriver: async (co) => {
+      opts.push(co);
+      if (o.failCaseAt === opts.length) throw new Error("browser: newContext refused");
+      log.push(`open ${co.evidenceId}`);
+      const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
+        checks: (): CheckResult[] => {
+          if (o.checksThrow) throw new Error("checks unreadable");
+          return [{ id: "browser-probe", kind: "assertion", verdict: "pass", checked: 1, reason: `driver of ${co.evidenceId}`, evidence: [] }];
+        },
+      });
+      return { driver, close: async () => { log.push(`close ${co.evidenceId}`); } };
+    },
+    close: async () => { log.push("run closed"); },
+  };
+  return { run, log, opts };
+}
+
+describe("runSlice — --driver browser --width (W1c Task 6)", () => {
+  it("usage: browser without a width, a width outside BROWSER_WIDTHS, a width on an http run, and an unknown driver are each refused (exit 2) before anything runs", async () => {
+    const io = capture();
+    const cases: [string[], RegExp][] = [
+      [["--driver", "browser"], /--driver browser needs --width/],
+      [["--driver", "browser", "--width", "999"], new RegExp(`--width must be one of ${BROWSER_WIDTHS.join(", ")}, got 999`)],
+      [["--driver", "browser", "--width", "320.5"], /--width must be one of .*, got 320\.5/],
+      [["--driver", "browser", "--width", ""], /--width must be one of .*, got/],
+      // Digits only: Number() reads both of these as 320 (found by mutation).
+      [["--driver", "browser", "--width", "320.0"], /--width must be one of .*, got 320\.0/],
+      [["--driver", "browser", "--width", "0x140"], /--width must be one of .*, got 0x140/],
+      [["--width", "320"], /--width is a browser run's width; it takes --driver browser/],
+      [["--driver", "http", "--width", "320"], /--width is a browser run's width; it takes --driver browser/],
+      [["--driver", "chrome"], /--driver must be http or browser, got chrome/],
+    ];
+    let checked = 0;
+    for (const [argv, want] of cases) {
+      const fb = fakeBrowserRun();
+      let opened = 0;
+      const d = deps({ openBrowserRun: async () => { opened++; return fb.run; } });
+      expect(await runSlice(d, [...argv, "--run-id", "u1", "--report-dir", dirFor()]), argv.join(" ")).toBe(2);
+      expect(d.order, argv.join(" ")).toEqual([]);
+      expect(opened, argv.join(" ")).toBe(0);
+      expect(io.err(), argv.join(" ")).toMatch(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // Positive pair: each allowed width is accepted (and the default driver is http).
+    expect(BROWSER_WIDTHS.length).toBeGreaterThan(0);
+  });
+
+  it("every case gets its own case driver on its own org, closed after it; its checks carry the driver's; results read the width's layer over browser (320 is L2: ruling 39 keeps L1 at 1280), caseIds suffixed @<width>", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fb.run; } });
+    expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", "b1", "--report-dir", dir])).toBe(0);
+    expect(opened).toBe(1);
+    const raw = JSON.parse(readFileSync(join(dir, "b1", "results.json"), "utf8")) as { layer: unknown; driver: unknown; cases: CaseResult[] };
+    // 320 is an L2 width (lib/widths.ts), never L1 (review fix round 1: it read L1 here before).
+    expect(L2_WIDTHS).toContain(320);
+    expect({ layer: raw.layer, driver: raw.driver }).toEqual({ layer: "L2", driver: "browser" });
+    expect(raw.cases).toHaveLength(SCENARIO_KEYS.length);
+    let probed = 0;
+    for (const [i, c] of raw.cases.entries()) {
+      expect({ layer: c.layer, driver: c.driver, width: c.width }, c.caseId).toEqual({ layer: "L2", driver: "browser", width: 320 });
+      expect(c.caseId).toMatch(/^league\|generic\|[^@]+@320$/);
+      if (!c.reason.startsWith("error:")) {
+        expect(c.checks.map((k) => k.id), c.caseId).toContain("browser-probe");
+        expect(c.checks.find((k) => k.id === "browser-probe")?.reason).toBe(`driver of case-${i + 1}`);
+        probed++;
+      }
+    }
+    expect(probed, "no case carried its driver's checks").toBeGreaterThan(0);
+    // One driver per case, each closed before the next opens; the run's browser closed once, last.
+    expect(fb.log).toEqual([...raw.cases.flatMap((_c, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
+    expect(fb.opts.map((o) => [o.width, o.padPolicy, o.reportDir, o.base])).toEqual(raw.cases.map(() => [320, "first", join(dir, "b1"), "http://localhost:3999"]));
+    expect(fb.opts.map((o) => o.orgId)).toEqual(d.orgs.map((org) => `org-${org.slug}`));
+    expect(fb.opts.map((o) => o.orgSlug)).toEqual(d.orgs.map((org) => org.slug));
+    expect(fb.opts.every((o) => o.session === d.session)).toBe(true);
+    expect(fb.opts.map((o) => o.spec.caseId)).toEqual(raw.cases.map((c) => c.caseId.replace(/@320$/, "")));
+    // The HTTP factory is not used on a browser run.
+    expect(d.drivers).toEqual([]);
+    expect(readFileSync(join(dir, "b1", "MATRIX.md"), "utf8")).toContain("| league |");
+  });
+
+  it("--set pad-proof --driver browser: one league PADPROOF case per pad sport, each case driver built with the scenario's padPolicy (all), its own org and case-<n>", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = deps({ openBrowserRun: async () => fb.run });
+    // Every pad sport's real builder order (W1c Tasks 9–11): the default fake's
+    // fixed ["bwf", "short"] is badminton's, and reads as drift for any other.
+    const open = d.openDb;
+    d.openDb = async () => ({ ...(await open()), variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s) });
+    expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "320", "--run-id", "pp1", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "pp1").cases.map((c) => c.variant)).toEqual(PAD_SPORTS.map((s) => offlineBuilderDefault(s)));
+    const raw = resultsIn(dir, "pp1");
+    expect(raw.cases.map((c) => [c.sport, c.scenario])).toEqual(PAD_SPORTS.map((s) => [s, "PADPROOF"]));
+    expect(fb.opts).toHaveLength(PAD_SPORTS.length);
+    expect(fb.opts.map((o) => o.padPolicy)).toEqual(PAD_SPORTS.map(() => "all"));
+    expect(fb.opts.map((o) => o.evidenceId)).toEqual(PAD_SPORTS.map((_s, i) => `case-${i + 1}`));
+    expect(fb.opts.map((o) => o.orgId)).toEqual(d.orgs.map((org) => `org-${org.slug}`));
+  });
+
+  it("a case whose scenario throws is red, and its case driver is still closed (finally)", async () => {
+    capture();
+    vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw new Error("scenario boom"); });
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = deps({ openBrowserRun: async () => fb.run });
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "b2", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "b2").cases;
+    expect(c).toMatchObject({ state: "red", width: 1280, driver: "browser" });
+    expect(c!.reason).toMatch(/scenario boom/);
+    expect(fb.log).toEqual(["open case-1", "close case-1", "run closed"]);
+    // Fix round 1, M-2: the thrown case keeps what its driver recorded (its evidence).
+    expect(c!.checks.map((k) => k.id)).toEqual(["browser-probe"]);
+    expect(c!.checks[0]!.reason).toBe("driver of case-1");
+  });
+
+  it("M-2: a driver whose checks cannot be read after a throw leaves the case's own error as its outcome, warned, never replaced", async () => {
+    const io = capture();
+    vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw new Error("scenario boom"); });
+    const dir = dirFor();
+    const fb = fakeBrowserRun({ checksThrow: true });
+    expect(await runSlice(deps({ openBrowserRun: async () => fb.run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "b2t", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "b2t").cases;
+    expect(c).toMatchObject({ state: "red", checks: [] });
+    expect(c!.reason).toMatch(/^error: .*scenario boom/);
+    expect(io.err()).toMatch(/its driver's checks could not be read — Error: checks unreadable/);
+    expect(fb.log).toEqual(["open case-1", "close case-1", "run closed"]);
+  });
+
+  it("M-4 ruling: a case whose driver has no organiser path for it is 🚫 no_path naming the owning wave — never an error red, never vacuous", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const run: BrowserRun = {
+      caseDriver: async (co) => {
+        const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
+          createDivision: async () => { throw new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"); },
+          checks: (): CheckResult[] => [],
+        });
+        return { driver, close: async () => undefined };
+      },
+      close: async () => undefined,
+    };
+    expect(await runSlice(deps({ openBrowserRun: async () => run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "np", "--report-dir", dir])).toBe(0);
+    const [c] = resultsIn(dir, "np").cases;
+    expect(c).toMatchObject({ state: "no_path", reason: "W1-driving: the division builder takes no rule override (pointsToWin)", checks: [] });
+    expect(io.out()).toMatch(/vacuous: none/);
+    expect(io.out()).toMatch(/error reds: none/);
+  });
+
+  it("fix round 1 (a): pnpm 10 forwards the `--` of `pnpm run matrix:browser -- --width W` into argv mid-list; every bare `--` is dropped, so the flags after it are read", async () => {
+    const io = capture();
+    // Measured (pnpm 10.34.5): the script's own flags, then the `--`, then the user's.
+    const opened: string[] = [];
+    const d0 = deps({ openBrowserRun: async () => { opened.push("d0"); return fakeBrowserRun().run; } });
+    expect(await runSlice(d0, ["--driver", "browser", "--", "--width", "999", "--run-id", "dd0", "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/--width must be one of .*, got 999/);
+    expect(io.err()).not.toMatch(/Unexpected argument/);
+    // Both scripts' forms run: matrix:browser's (mid-list) and matrix:l3's (leading).
+    let ran = 0;
+    for (const [argv, id, driver] of [
+      [["--driver", "browser", "--", "--width", "320", "--only", "league|generic", "--scenario", "LIFECYCLE"], "dd1", "browser"],
+      [["--", "--only", "league|generic", "--scenario", "LIFECYCLE"], "dd2", "http"],
+    ] as const) {
+      const dir = dirFor();
+      const d = deps({ openBrowserRun: async () => { opened.push(id); return fakeBrowserRun().run; } });
+      expect(await runSlice(d, [...argv, "--run-id", id, "--report-dir", dir]), id).toBe(0);
+      expect(resultsIn(dir, id).cases.map((c) => c.driver), id).toEqual([driver]);
+      ran++;
+    }
+    expect(ran).toBe(2);
+    expect(opened).toEqual(["dd1"]);
+    // A bare `--` is never a flag's value — parseArgs refuses `--run-id --` as
+    // ambiguous with or without the drop — and `--run-id=--` is one token, kept.
+    expect(await runSlice(deps(), ["--run-id", "--", "--report-dir", dirFor()])).toBe(2);
+    expect(withoutBareDashes(["--run-id=--", "--", "a", "--"])).toEqual(["--run-id=--", "a"]);
+  });
+
+  it("I-3: the REAL --driver browser path — openBrowserRun → caseDriver → BrowserDriver, faked only at the page and wire — carries each case's org slug, org id, expected org id, pad policy, pad registry and evidence id into its driver", async () => {
+    capture();
+    const dir = dirFor();
+    const runId = "i3";
+    const seen: { n: number; orgSlug: string; base: string; holdMs: number }[] = [];
+    const wire: { base: string; path: string; method: string | undefined; session: Session }[] = [];
+    let current = "";
+    const unexpected = async () => { throw new Error("an unexpected page call"); };
+    const pages = {
+      ...Object.fromEntries(Object.keys(REAL_PAGES).map((k) => [k, unexpected])),
+      createCompetitionUi: async (ctx: PageCtx, input: { name: string }) => {
+        const n = d.orgs.length; // prepareCaseOrg ran for this case first
+        seen.push({ n, orgSlug: ctx.orgSlug, base: ctx.base, holdMs: ctx.holdMs });
+        const shotPage = { evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }), screenshot: async () => new Uint8Array([137, 80, 78, 71]) };
+        await ctx.evidence.shot(shotPage as unknown as Parameters<PageCtx["evidence"]["shot"]>[0], "01-competition");
+        // The case org as the runner planned it — never read back from ctx.
+        return { id: `comp-${n}`, org_id: `org-${d.orgs.at(-1)!.slug}`, name: input.name, slug: `prod-slug-${n}`, visibility: "unlisted", status: "draft" };
+      },
+      createDivisionUi: async () => { throw new Error("STOP: past what this test drives"); },
+    } as unknown as BrowserPages;
+    const transport: Transport = {
+      raw: async (base, s, path, method, body) => {
+        wire.push({ base, path, method, session: s });
+        if (path === "/api/v1/competitions" && method === "POST") {
+          return { status: 201, json: { ok: true, data: { id: "c-http", slug: (body as { slug: string }).slug, org_id: current, visibility: "unlisted" } } };
+        }
+        return { status: 404, json: { ok: false, error: "NOT_FOUND" } };
+      },
+    };
+    const drivers: BrowserDriver[] = [];
+    const wrap = (r: OpenBrowserRun): BrowserRun => ({
+      caseDriver: async (o) => { const cd = await r.caseDriver(o); drivers.push(cd.driver); return cd; },
+      close: () => r.close(),
+    });
+    // Carry M-6: the served build's hold is read once, on the run's own base.
+    const preflights: string[] = [];
+    // The page fakes above read `d` only when a case runs, after this line.
+    const d = deps({
+      openBrowserRun: async (b) => wrap(await openBrowserRun(b, {
+        servedHold: async (base) => { preflights.push(base); return { holdMs: resolveHoldMs("2500"), found: 1, scanned: 1 }; },
+        launch: async () => ({ close: async () => undefined }),
+        newCase: async () => ({ page: { setDefaultTimeout: () => undefined } as unknown as CaseBrowser["page"], close: async () => undefined }),
+        // Carry (c): the REAL registry, so a driver built with any other is seen.
+        env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: PAD_ADAPTERS, pages, transport,
+      })),
+    });
+    expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", runId, "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, runId).cases;
+    expect(cases.length).toBeGreaterThanOrEqual(2);
+    // Every case reached the builder: nothing refused it earlier (an OrgMismatch on a wrong org id would).
+    for (const c of cases) expect(c.reason, c.caseId).toMatch(/^error: Error: STOP/);
+    // orgSlug and base reach the page context, per case.
+    expect(seen.map((s) => s.n)).toEqual(cases.map((_c, i) => i + 1));
+    expect(seen.map((s) => s.orgSlug)).toEqual(d.orgs.map((o) => o.slug));
+    expect(seen.every((s) => s.base === "http://localhost:3999")).toBe(true);
+    // Carry N-2: the build's hold window reaches every case's page context from
+    // the run's env, as the product itself resolves it (not the default).
+    expect(resolveHoldMs("2500")).not.toBe(resolveHoldMs(undefined));
+    expect(seen.map((s) => s.holdMs)).toEqual(cases.map(() => resolveHoldMs("2500")));
+    expect(preflights).toEqual(["http://localhost:3999"]);
+    // The evidence id: each case's shot lands under its own case-<n>, and the case keeps it (M-2).
+    let shots = 0;
+    for (const [i, c] of cases.entries()) {
+      expect(existsSync(join(dir, runId, "shots", `case-${i + 1}`, "01-competition.png")), c.caseId).toBe(true);
+      expect(c.checks.find((k) => k.id === "visual-evidence"), c.caseId).toMatchObject({ verdict: "pass", checked: 1 });
+      shots++;
+    }
+    expect(shots).toBe(cases.length);
+    // padPolicy and the HTTP side's expected org id: the second createCompetition
+    // goes over the wire ("first"), and lands only in the case's own org.
+    expect(drivers).toHaveLength(cases.length);
+    for (const [i, drv] of drivers.entries()) {
+      expect(drv.padPolicy, `case ${i + 1}`).toBe("first");
+      // Carry (c): the registry the run was opened with reaches every case's driver (the pad path reads it).
+      expect(drv.pads, `case ${i + 1}`).toBe(PAD_ADAPTERS);
+      expect(Object.keys(drv.pads).length, `case ${i + 1}`).toBeGreaterThan(0);
+      // Carry N-2: each driver scores the case it was built for.
+      const c = cases[i]!;
+      expect({ ...drv.spec }, `case ${i + 1}`).toEqual({ caseId: c.caseId.replace(/@320$/, ""), row: c.row, sport: c.sport, variant: c.variant, scenario: c.scenario, canary: c.canary });
+      current = `org-${d.orgs[i]!.slug}`;
+      await expect(drv.createCompetition({ name: "again", slug: `again-${i + 1}` }), `case ${i + 1}`).resolves.toMatchObject({ orgId: current });
+    }
+    expect(wire.map((w) => [w.base, w.path, w.method])).toEqual(drivers.map(() => ["http://localhost:3999", "/api/v1/competitions", "POST"]));
+    expect(wire.every((w) => w.session === d.session)).toBe(true);
+  });
+
+  it("no browser (openBrowserRun rejects, the runner has none, or the served build's hold is not the shell's — M-6): exit 3 aborted with the message, nothing recorded, the DB still closed", async () => {
+    let launched = 0;
+    // Carry M-6, through the REAL openBrowserRun: a shell of 2500 against a
+    // build left at the default is refused by name before chromium launches.
+    const mismatched: Partial<RunDeps> = {
+      openBrowserRun: (b) => openBrowserRun(b, {
+        servedHold: async () => ({ holdMs: resolveHoldMs(undefined), found: 1, scanned: 1 }),
+        launch: async () => { launched++; return { close: async () => undefined }; },
+        newCase: async () => { throw new Error("no case may open"); },
+        env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: EMPTY_PADS,
+      }),
+    };
+    for (const [name, over, why] of [
+      ["rejects", { openBrowserRun: async () => { throw new Error("browserType.launch: Executable doesn't exist"); } }, /Executable doesn't exist/],
+      ["absent", {}, /no browser/],
+      ["hold mismatch", mismatched, /HoldMismatch: .*10000 ms.*2500 ms/],
+    ] as const) {
+      const io = capture();
+      const dir = dirFor();
+      const d = deps(over as Partial<RunDeps>);
+      expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "390", "--run-id", "b3", "--report-dir", dir]), name).toBe(3);
+      expect(io.err(), name).toMatch(/aborted/);
+      expect(io.err(), name).toMatch(why);
+      expect(existsSync(join(dir, "b3", "results.json")), name).toBe(false);
+      expect(d.order.at(-1), name).toBe("dispose");
+      vi.restoreAllMocks();
+    }
+    expect(launched).toBe(0);
+  });
+
+  it("the browser run is closed exactly once, including when a case's browser cannot be set up (the run aborts, exit 3) or the DB stops proving it is ours (exit 2)", async () => {
+    const io = capture();
+    const failing = fakeBrowserRun({ failCaseAt: 2 });
+    const d1 = deps({ openBrowserRun: async () => failing.run });
+    expect(await runSlice(d1, ["--only", "league|generic", "--driver", "browser", "--width", "768", "--run-id", "b4", "--report-dir", dirFor()])).toBe(3);
+    expect(failing.log).toEqual(["open case-1", "close case-1", "run closed"]);
+    expect(io.err()).toMatch(/BrowserCaseAborted: .*newContext refused/);
+
+    const lost = fakeBrowserRun();
+    let n = 0;
+    const d2 = deps({
+      openBrowserRun: async () => lost.run,
+      prepareCaseOrg: async (_ctx, i) => { if (++n === 2) throw new DataDirMismatch("/tmp/pg", "/tmp/other"); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }; },
+    });
+    expect(await runSlice(d2, ["--only", "league|generic", "--driver", "browser", "--width", "768", "--run-id", "b5", "--report-dir", dirFor()])).toBe(2);
+    expect(lost.log).toEqual(["open case-1", "close case-1", "run closed"]);
+  });
+
+  it("a plain browser run records its width's layer, run and case alike: 1280 is L1 (ruling 39), every L2 width is L2 (review fix round 1)", async () => {
+    let checked = 0;
+    let l1 = 0;
+    for (const w of BROWSER_WIDTHS) {
+      capture();
+      const dir = dirFor();
+      const id = `pw-${w}`;
+      expect(await runSlice(deps({ openBrowserRun: async () => fakeBrowserRun().run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", String(w), "--run-id", id, "--report-dir", dir]), String(w)).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, id, "results.json"), "utf8")) as RunResults;
+      // From the declarations: L2 is lib/widths.ts's L2_WIDTHS; the one other declared width is ruling 39's 1280.
+      const want = (L2_WIDTHS as readonly number[]).includes(w) ? "L2" : "L1";
+      // W1c final review m-12: only the L1 side has a value to pin; the old L2 arm compared "L2" with "L2".
+      if (want === "L1") { expect(w, String(w)).toBe(1280); l1++; }
+      expect({ run: raw.layer, cases: raw.cases.map((c) => [c.layer, c.width]) }, String(w)).toEqual({ run: want, cases: [[want, w]] });
+      checked++;
+    }
+    expect(checked).toBe(BROWSER_WIDTHS.length);
+    expect(checked).toBeGreaterThan(1);
+    expect(l1, "exactly one declared width is L1").toBe(1);
+  });
+
+  it("an http run never opens a browser, and its results stay L3 over http", async () => {
+    capture();
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "h1", "--report-dir", dir])).toBe(0);
+    expect(opened).toBe(0);
+    expect(resultsIn(dir, "h1").cases[0]).toMatchObject({ layer: "L3", driver: "http", width: null, caseId: "league|generic|score|LIFECYCLE" });
+  });
+
+  it("realDeps opens the browser run lazily: a dynamic import of lib/browser/browser-run.ts inside openBrowserRun, never a static one", () => {
+    expect(typeof realDeps().openBrowserRun).toBe("function");
+    const code = readFileSync(RUN, "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(/openBrowserRun: [^\n]*await import\("\.\/lib\/browser\/browser-run\.ts"\)/.test(code)).toBe(true);
+    expect(code).not.toMatch(/^import [^;]*lib\/browser\//m);
+  });
+
+  it("N-3: a ⏳ or 🚫 browser case keeps none of its driver's checks (MATRIX.md reads 0/0 on it); only an error red keeps them (M-2)", async () => {
+    capture();
+    const throws: [string, () => Error, string][] = [
+      ["later", () => new ScenarioUnsupported("W1-driving", "team rosters"), "later"],
+      ["no_path", () => new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"), "no_path"],
+      ["error", () => new Error("scenario boom"), "red"],
+    ];
+    let checked = 0;
+    for (const [name, err, state] of throws) {
+      vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw err(); });
+      const dir = dirFor();
+      const fb = fakeBrowserRun();
+      // Digits, not the state name: a run id slugs `_` to `-`, so "n3-no_path" would write n3-no-path/.
+      const id = `n3-${checked}`;
+      expect(await runSlice(deps({ openBrowserRun: async () => fb.run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", id, "--report-dir", dir]), name).toBe(0);
+      const [c] = resultsIn(dir, id).cases;
+      expect(c!.state, name).toBe(state);
+      // Every case's driver HAD a check to keep (the fake records one per case).
+      expect(fb.opts, name).toHaveLength(1);
+      expect(c!.checks.map((k) => k.id), name).toEqual(state === "red" ? ["browser-probe"] : []);
+      const md = readFileSync(join(dir, id, "MATRIX.md"), "utf8");
+      expect(md, name).toMatch(state === "red" ? /\| 1\/1 \| 1 \|$/m : /\| 0\/0 \| 0 \|$/m);
+      vi.restoreAllMocks();
+      capture();
+      checked++;
+    }
+    expect(checked).toBe(throws.length);
+  });
+});
+
+describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", () => {
+  /** The committed file, read as plain JSON here — never through layers.ts or pairs.ts. */
+  interface RawRun { n: number; scenario: string; row: string; sport: string; preset: string; bound: string | null; width: number }
+  const RAW_L2 = (JSON.parse(readFileSync(join(REPO, "scripts/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: RawRun[] }).runs;
+  const SLICE_CELLS = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
+  const SLICE_L2 = RAW_L2.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
+  const scripted = (r: RawRun) => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
+  const owningWave = (r: RawRun) => { const a = ATOMIC.find((x) => x.id === r.scenario)!; return a.knownNoPath ?? a.l2NoPath; };
+  /** The fake DB's builder defaults (deps(): generic → score, every other sport → bwf). */
+  const fakeDefault = (s: string) => (s === "generic" ? "score" : "bwf");
+  const vacuousLine = (out: string) => /vacuous: (.*)/.exec(out)?.[1] ?? "(no summary line)";
+
+  it("usage: --layer L1 runs at 1280 only; --layer L2 and the layered sets refuse --width; --layer takes --driver browser and neither --set nor --canary; L2 takes no --scenario; a plain browser run still needs --width — each refused (exit 2) before anything runs", async () => {
+    // The flag: a USAGE refusal prints the usage line, so a planner-level
+    // backstop with the same words (l2Planner's L2TakesNoScenario) cannot
+    // stand in for the CLI guard; a layered set over http is a plan refusal
+    // and prints none.
+    const cases: [string[], RegExp, boolean][] = [
+      [["--driver", "browser", "--layer", "L1", "--width", "320"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 320/, true],
+      [["--driver", "browser", "--layer", "L1", "--width", "768"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 768/, true],
+      [["--driver", "browser", "--layer", "L1", "--width", "999"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 999/, true],
+      [["--driver", "browser", "--layer", "L1", "--width", "1280.0"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 1280\.0/, true],
+      [["--driver", "browser", "--layer", "L2", "--width", "320"], /--layer L2 takes no --width \(the plan sets each case's width\); got --width 320/, true],
+      [["--driver", "browser", "--layer", "L2", "--width", "1280"], /--layer L2 takes no --width \(the plan sets each case's width\); got --width 1280/, true],
+      [["--driver", "browser", "--set", "width-sweep", "--width", "320"], /--set width-sweep takes no --width/, true],
+      [["--driver", "browser", "--set", "api-only-browser", "--width", "320"], /--set api-only-browser runs at 1280 only \(ruling 39\); got --width 320/, true],
+      [["--layer", "L1"], /--layer runs a browser layer; it takes --driver browser/, true],
+      [["--driver", "http", "--layer", "L2"], /--layer runs a browser layer; it takes --driver browser/, true],
+      [["--driver", "browser", "--layer", "L3"], /--layer must be L1 or L2, got L3/, true],
+      [["--driver", "browser", "--layer", "L1", "--set", "width-sweep"], /--layer and --set each choose the plan; pass one/, true],
+      [["--driver", "browser", "--layer", "L1", "--canary", "M1"], /--layer takes no --canary/, true],
+      [["--driver", "browser", "--layer", "L2", "--scenario", "M1"], /--layer L2 plans the committed l2-pairs\.json runs; it takes no --scenario/, true],
+      [["--set", "width-sweep"], /--set width-sweep .*--driver browser only/, false],
+      [["--set", "api-only-browser"], /--set api-only-browser .*--driver browser only/, false],
+      [["--driver", "browser"], /--driver browser needs --width/, true],
+      [["--driver", "browser", "--only", "league|generic"], /--driver browser needs --width/, true],
+    ];
+    let checked = 0;
+    for (const [argv, want, usage] of cases) {
+      // Per case: the refusal read is THIS case's, never an earlier one's.
+      const io = capture();
+      let opened = 0;
+      const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+      expect(await runSlice(d, [...argv, "--run-id", "u12", "--report-dir", dirFor()]), argv.join(" ")).toBe(2);
+      expect(d.order, argv.join(" ")).toEqual([]);
+      expect(opened, argv.join(" ")).toBe(0);
+      expect(io.err(), argv.join(" ")).toMatch(want);
+      if (usage) expect(io.err(), argv.join(" ")).toMatch(/usage: run\.ts/);
+      else expect(io.err(), argv.join(" ")).not.toMatch(/usage: run\.ts/);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("6 slice cells × 1 scenario at 1280 = 6 cases; any other --width with --layer L1 is a usage refusal", async () => {
+    // Every other declared browser width (BROWSER_WIDTHS, lib/widths.ts) is refused by name, before anything runs.
+    const others = BROWSER_WIDTHS.filter((w) => w !== 1280);
+    expect(others.length).toBeGreaterThan(0);
+    let refused = 0;
+    for (const w of others) {
+      const io = capture();
+      let opened = 0;
+      const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+      expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--width", String(w), "--run-id", "l1w", "--report-dir", dirFor()]), String(w)).toBe(2);
+      expect(io.err(), String(w)).toMatch(new RegExp(`--layer L1 runs at 1280 only \\(ruling 39\\); got --width ${w}\\n.*usage: run\\.ts`));
+      expect({ order: d.order, opened }, String(w)).toEqual({ order: [], opened: 0 });
+      refused++;
+    }
+    expect(refused).toBe(others.length);
+    // 1280 — defaulted, or passed — runs: 6 cases, each suffixed @1280, results L1 over browser.
+    capture();
+    const want = SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}|${fakeDefault(s)}|LIFECYCLE@1280`));
+    expect(want).toHaveLength(6);
+    expect(want).toHaveLength(SLICE_ROWS.length * SLICE_SPORTS.length);
+    let ran = 0;
+    for (const [id, extra] of [["l1a", []], ["l1b", ["--width", "1280"]]] as const) {
+      const dir = dirFor();
+      const fb = fakeBrowserRun();
+      const d = deps({ openBrowserRun: async () => fb.run });
+      expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", ...extra, "--run-id", id, "--report-dir", dir]), id).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, id, "results.json"), "utf8")) as RunResults;
+      expect({ layer: raw.layer, driver: raw.driver }, id).toEqual({ layer: "L1", driver: "browser" });
+      expect(raw.cases.map((c) => c.caseId), id).toEqual(want);
+      expect(raw.cases.every((c) => c.layer === "L1" && c.driver === "browser" && c.width === 1280), id).toBe(true);
+      expect(fb.opts.map((o) => o.width), id).toEqual(want.map(() => 1280));
+      expect(d.orgs, id).toHaveLength(want.length);
+      ran++;
+    }
+    expect(ran).toBe(2);
+  });
+
+  it("--layer L2: every committed slice run is recorded (R13) — the scripted atoms driven at their committed widths, the rest 🚫/░ with no driver, no org and no check, never listed vacuous", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fb.run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--run-id", "l2a", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "l2a", "results.json"), "utf8")) as RunResults;
+    expect({ layer: raw.layer, driver: raw.driver }).toEqual({ layer: "L2", driver: "browser" });
+    expect(SLICE_L2.length).toBeGreaterThan(0);
+    expect(raw.cases.map((c) => c.caseId)).toEqual(SLICE_L2.map((r) => `${r.row}|${r.sport}|${r.preset}|${r.scenario}@${r.width}`));
+    expect(raw.cases.map((c) => c.width)).toEqual(SLICE_L2.map((r) => r.width));
+    const driven = SLICE_L2.filter(scripted);
+    expect(driven.length).toBeGreaterThan(0);
+    // Driven: one browser for the run, a case driver per scripted run at ITS committed width, an org each.
+    expect(opened).toBe(1);
+    expect(fb.opts.map((o) => [o.spec.caseId, o.spec.scenario, o.width])).toEqual(driven.map((r) => [`${r.row}|${r.sport}|${r.preset}|${r.scenario}`, HARNESS_SCENARIO[r.scenario], r.width]));
+    expect(fb.opts.map((o) => o.evidenceId)).toEqual(driven.map((r) => `case-${SLICE_L2.indexOf(r) + 1}`));
+    expect(d.orgs).toHaveLength(driven.length);
+    // Recorded: the catalogue's split, no check, zero counts.
+    const noPath = SLICE_L2.filter((r) => !scripted(r) && owningWave(r) !== null);
+    const notRun = SLICE_L2.filter((r) => !scripted(r) && owningWave(r) === null);
+    expect(noPath.length).toBeGreaterThan(0);
+    expect(notRun.length).toBeGreaterThan(0);
+    const recorded = raw.cases.filter((c) => c.state === "no_path" || c.state === "not_run");
+    expect(recorded).toHaveLength(noPath.length + notRun.length);
+    expect(raw.cases.filter((c) => c.state === "no_path")).toHaveLength(noPath.length);
+    expect(raw.cases.filter((c) => c.state === "not_run")).toHaveLength(notRun.length);
+    for (const c of recorded) {
+      expect({ checks: c.checks, counts: c.counts, layer: c.layer, driver: c.driver }, c.caseId).toEqual({ checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, layer: "L2", driver: "browser" });
+    }
+    for (const r of noPath) expect(raw.cases.find((c) => c.caseId.startsWith(`${r.row}|${r.sport}|${r.preset}|${r.scenario}@`))?.reason).toMatch(new RegExp(`^${owningWave(r)}: `));
+    const md = readFileSync(join(dir, "l2a", "MATRIX.md"), "utf8");
+    expect(md).toContain(`| 🚫 no_path | ${noPath.length} |`);
+    expect(md).toContain(`| ░ not_run | ${notRun.length} |`);
+    expect(md).toContain(`| total | ${SLICE_L2.length} |`);
+    const vac = vacuousLine(io.out());
+    for (const c of recorded) expect(vac, c.caseId).not.toContain(c.caseId);
+  });
+
+  it("empty case first: --layer L2 --only league|generic plans nothing (the cell has no committed run) — refused, exit 2 'nothing planned', nothing written, no browser, no org", async () => {
+    const io = capture();
+    expect(SLICE_CELLS.has("league|generic")).toBe(true);
+    expect(RAW_L2.filter((r) => r.row === "league" && r.sport === "generic")).toEqual([]);
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--only", "league|generic", "--run-id", "l2e", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/refused — NothingPlanned: .*--layer L2.*nothing planned/);
+    expect(existsSync(join(dir, "l2e"))).toBe(false);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(d.order.at(-1)).toBe("dispose");
+    // Positive pair: a cell with committed runs is not refused.
+    const some = SLICE_L2[0]!;
+    capture();
+    expect(await runSlice(deps({ openBrowserRun: async () => fakeBrowserRun().run }), ["--driver", "browser", "--layer", "L2", "--only", `${some.row}|${some.sport}`, "--run-id", "l2p", "--report-dir", dirFor()])).toBe(0);
+  });
+
+  it("an L2 plan with no driven case records its runs and opens no browser (--layer L2 --only swiss|generic)", async () => {
+    capture();
+    const cell = SLICE_L2.filter((r) => r.row === "swiss" && r.sport === "generic");
+    expect(cell.length).toBeGreaterThan(0);
+    expect(cell.some(scripted)).toBe(false);
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--only", "swiss|generic", "--run-id", "l2g", "--report-dir", dir])).toBe(0);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(resultsIn(dir, "l2g").cases.map((c) => c.state)).toEqual(cell.map((r) => (owningWave(r) === null ? "not_run" : "no_path")));
+  });
+
+  it("--set width-sweep --driver browser: knockout|badminton LIFECYCLE (owner ruling 43a) once per L2 width, in order, 320 included — a case driver at each case's own width; results L2", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = deps({ openBrowserRun: async () => fb.run });
+    expect(await runSlice(d, ["--set", "width-sweep", "--driver", "browser", "--run-id", "ws", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "ws", "results.json"), "utf8")) as RunResults;
+    expect(raw.layer).toBe("L2");
+    expect(raw.cases.map((c) => c.width)).toEqual([...L2_WIDTHS]);
+    expect(raw.cases.map((c) => c.width)).toContain(320);
+    expect(raw.cases.map((c) => c.caseId)).toEqual(L2_WIDTHS.map((w) => `knockout|badminton|bwf|LIFECYCLE@${w}`));
+    expect(fb.opts.map((o) => o.width)).toEqual([...L2_WIDTHS]);
+    expect(fb.log).toEqual([...L2_WIDTHS.flatMap((_w, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
+  });
+
+  it("--set api-only-browser --driver browser: one 🚫 per API-only row, in catalogue order, naming W4/W5 (D7 as ruled) — no browser, no org; exit 0; never vacuous, never an error red", async () => {
+    const io = capture();
+    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", page_playoff_only: "W4", stepladder_only: "W4", group_only: "W5", group_group_ko: "W5" };
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--set", "api-only-browser", "--driver", "browser", "--run-id", "ao", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "ao", "results.json"), "utf8")) as RunResults;
+    expect(raw.layer).toBe("L1");
+    expect(raw.cases.map((c) => c.row)).toEqual([...API_ONLY_ROWS]);
+    let checked = 0;
+    for (const c of raw.cases) {
+      expect(c).toMatchObject({ state: "no_path", reason: `${WAVE[c.row]}: no organiser control builds ${c.row}`, checks: [], caseId: `${c.row}|generic|score|LIFECYCLE@1280`, width: 1280, layer: "L1", driver: "browser" });
+      checked++;
+    }
+    expect(checked).toBe(API_ONLY_ROWS.length);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(io.out()).toMatch(/vacuous: none/);
+    expect(io.out()).toMatch(/error reds: none/);
+  });
+
+  it("a layered plan whose cases share a result id is refused by name (exit 2) before any case or browser", async () => {
+    const io = capture();
+    const spec = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false } as const;
+    const one = { spec, layer: "L1", width: 1280, noPath: null, notRun: null, run: null } as const;
+    let opened = 0;
+    const planCases: PlanLayers = () => ({ sports: ["generic"], deniesFeatures: false, layer: "L1", label: "a test plan", acceptsWidth: null, layered: () => [one, { ...one }] });
+    const dir = dirFor();
+    const d = deps({ planCases, openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--run-id", "dup", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/refused — DuplicateCaseId: .*league\|generic\|score\|LIFECYCLE@1280/);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "dup"))).toBe(false);
+    // Positive pair: the same plan with distinct widths runs.
+    capture();
+    const distinct: PlanLayers = () => ({ sports: ["generic"], deniesFeatures: false, layer: "L1", label: "a test plan", acceptsWidth: null, layered: () => [one, { ...one, width: 320 }] });
+    expect(await runSlice(deps({ planCases: distinct, openBrowserRun: async () => fakeBrowserRun().run }), ["--driver", "browser", "--run-id", "dup2", "--report-dir", dirFor()])).toBe(0);
+  });
+});
+
+// W1c Task 14 carry 6 (Task 12 review m-7): results.json names the plan that
+// produced it — the command line's own selection — through the REAL producer
+// (runSlice → writeResults), for every kind of plan the runner builds.
+describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () => {
+  const PLANS: readonly (readonly [string, readonly string[], string])[] = [
+    // The empty filter first: the whole slice.
+    ["the whole slice", [], "slice"],
+    ["a filtered slice", ["--only", "league|generic", "--scenario", "LIFECYCLE"], "slice --only league|generic --scenario LIFECYCLE"],
+    ["a plain browser run", ["--driver", "browser", "--width", "320", "--only", "knockout|badminton", "--scenario", "LIFECYCLE"], "slice --only knockout|badminton --scenario LIFECYCLE"],
+    ["a canary", ["--canary", "M1"], "--canary M1"],
+    ["--layer L1", ["--driver", "browser", "--layer", "L1"], "--layer L1"],
+    ["--layer L1, filtered", ["--driver", "browser", "--layer", "L1", "--only", "swiss|generic"], "--layer L1 --only swiss|generic"],
+    ["--layer L2", ["--driver", "browser", "--layer", "L2"], "--layer L2"],
+    ["the width sweep", ["--set", WIDTH_SWEEP_SET, "--driver", "browser"], `--set ${WIDTH_SWEEP_SET}`],
+    ["the API-only set", ["--set", API_ONLY_BROWSER_SET, "--driver", "browser"], `--set ${API_ONLY_BROWSER_SET}`],
+  ];
+  it.each(PLANS)("%s: results.json names it", async (_what, argv, plan) => {
+    capture();
+    const dir = dirFor();
+    const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
+    const exit = await runSlice(d, [...argv, "--run-id", "p1", "--report-dir", dir]);
+    // A canary that goes red on its own check exits 0; every other plan here writes results and exits 0.
+    expect(exit, argv.join(" ")).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
+    expect(raw.cases.length, argv.join(" ")).toBeGreaterThan(0);
+    expect(raw.plan).toBe(plan);
+  });
+  // Review m-6: the plan behind 7 of W1c Task 14's committed runs. Its own row:
+  // the set plans every pad sport, so the DB must hand each one the order the
+  // catalogue assumes (the table's fake knows generic and badminton only).
+  it("the pad-proof set: results.json names it", async () => {
+    capture();
+    const dir = dirFor();
+    const base = deps();
+    const d = deps({
+      openBrowserRun: async () => fakeBrowserRun().run,
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+    });
+    expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "1280", "--run-id", "p1", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
+    expect(raw.cases.length).toBe(PAD_SPORTS.length);
+    expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
   });
 });

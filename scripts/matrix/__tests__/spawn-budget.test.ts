@@ -41,19 +41,24 @@ describe("spawn budget (final batch FB-6)", () => {
   it("every covered spawning test file takes its caps and budgets from one constant — no numeric literal after `timeout:`", () => {
     // The four files the final batch names: the main-module CLIs, the
     // gen-catalogue CLI, the single-sport CLI, and the reference package's
-    // spawned eslint (its own package, so its own constant pair).
-    const covered: readonly [string, string][] = [
-      ["scripts/matrix/__tests__/main-module.test.ts", "./spawn-budget.ts"],
-      ["scripts/matrix/__tests__/committed-catalogue.test.ts", "./spawn-budget.ts"],
-      ["scripts/matrix/__tests__/single-sport.test.ts", "./spawn-budget.ts"],
-      ["packages/reference/test/eslint-inline-type.test.ts", "LINT_MS"],
+    // spawned eslint (its own package, so its own constant pair). Then W1b
+    // carry (d): the CI-step and single-sport spawns in ci-wiring, and
+    // workspace-wiring's turbo dry run. Each with the fewest named timeouts
+    // it holds — its spawn sites.
+    const covered: readonly [string, string, number][] = [
+      ["scripts/matrix/__tests__/main-module.test.ts", "./spawn-budget.ts", 2],
+      ["scripts/matrix/__tests__/committed-catalogue.test.ts", "./spawn-budget.ts", 2],
+      ["scripts/matrix/__tests__/single-sport.test.ts", "./spawn-budget.ts", 2],
+      ["packages/reference/test/eslint-inline-type.test.ts", "LINT_MS", 2],
+      ["scripts/matrix/__tests__/ci-wiring.test.ts", "./spawn-budget.ts", 2],
+      ["scripts/matrix/__tests__/workspace-wiring.test.ts", "./spawn-budget.ts", 1],
     ];
     let checked = 0;
-    for (const [path, source] of covered) {
+    for (const [path, source, sites] of covered) {
       const text = readFileSync(resolve(REPO, path), "utf8");
       expect(text.match(/\btimeout: \d/g) ?? [], `${path}: a literal timeout`).toEqual([]);
       expect(text, `${path}: its constant`).toContain(source);
-      expect(text.match(/\btimeout: [A-Za-z]/g)?.length ?? 0, `${path}: no timeout at all`).toBeGreaterThanOrEqual(2);
+      expect(text.match(/\btimeout: [A-Za-z]/g)?.length ?? 0, `${path}: no timeout at all`).toBeGreaterThanOrEqual(sites);
       checked++;
     }
     expect(checked).toBe(covered.length);

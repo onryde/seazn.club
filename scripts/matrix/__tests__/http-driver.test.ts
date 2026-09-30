@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded } from "../lib/driver/types.ts";
+import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
+import { nextMatchStartedText } from "./product-text.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
 function fake(replies: ((c: Call) => RawResult | undefined)[]): { t: Transport; calls: Call[] } {
@@ -302,6 +303,94 @@ describe("HttpDriver — denied stages (Task 9)", () => {
   });
 });
 
+// W1b carry (c): a refusal's other envelope fields ride on RefusedCall.extra.
+// The one the model reads is NEXT_MATCH_STARTED's `next_match`: the fed
+// fixture the product refused over. Its code, status, key and id field are
+// read from the product's source (product-text.ts), never typed here.
+describe("HttpDriver — a refusal's other envelope fields (W1b carry c)", () => {
+  const next = nextMatchStartedText();
+  /** fed-seats.ts boardRef's shape: the fed fixture's id, its round and seq. */
+  const ref = { [next.wire.idField]: "f-9", round: 2, seq: 1 };
+  /** postStream's read of the tip, then the product's answer to the post. */
+  const refusingPost = (answer: RawResult) => fake([
+    (c) => (c.method === "GET" ? ok({ status: "decided", last_seq: 3, outcome: { kind: "win", winner: "h" } }) : undefined),
+    () => answer,
+  ]);
+  it("the product's next-match refusal on a post: RefusedCall carries the ref as extra, and nextMatchFixtureId names the fed fixture", async () => {
+    const { t, calls } = refusingPost(err(next.status, next.code, { [next.wire.key]: ref }));
+    const e = await drv(t).postStream("f1", [START], "p").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    const r = e as RefusedCall;
+    expect([r.status, r.code]).toEqual([next.status, next.code]);
+    expect(r.extra).toEqual({ [next.wire.key]: ref });
+    expect(nextMatchFixtureId(r)).toBe("f-9");
+    // One post: the refusal is not SEQ_CONFLICT, so nothing was retried.
+    expect(posts(calls)).toHaveLength(1);
+  });
+  it("empty case: an envelope carrying only RefusedCall's own fields (code, message, current_seq, feature_key) — or a bare string — has a null extra and names no next match", async () => {
+    const answers: RawResult[] = [
+      err(422, "STAGE_NOT_READY"),
+      err(409, "UNDO_TARGET_MISSING", { current_seq: 4 }),
+      err(402, "PAYMENT_REQUIRED", { feature_key: "formats.double_elim" }),
+      { status: 502, json: { ok: false, error: "no json" } },
+      { status: 500, json: null as never },
+    ];
+    let checked = 0;
+    for (const a of answers) {
+      const { t } = fake([() => a]);
+      const e = (await drv(t).generate("s1").catch((x: unknown) => x)) as RefusedCall;
+      expect(e, JSON.stringify(a.json)).toBeInstanceOf(RefusedCall);
+      expect(e.extra, JSON.stringify(a.json)).toBeNull();
+      expect(nextMatchFixtureId(e)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(answers.length);
+  });
+  it("every other field rides along whole — a 402's `feature` and `reason` too — and every string in it is redacted (R14a)", async () => {
+    const secret = "token=abc123secret";
+    const { t } = fake([() => err(402, "PAYMENT_REQUIRED", { feature_key: "formats.double_elim", feature: "formats.double_elim", reason: `upgrade ${secret}`, [next.wire.key]: { ...ref, code: { key: "rounds.final", params: { name: secret } } } })]);
+    const e = (await drv(t).generate("s1").catch((x: unknown) => x)) as RefusedCall;
+    expect(e.featureKey).toBe("formats.double_elim");
+    expect(Object.keys(e.extra ?? {}).sort()).toEqual(["feature", "reason", next.wire.key].sort());
+    expect(e.extra?.feature).toBe("formats.double_elim");
+    expect(JSON.stringify(e.extra)).not.toContain("abc123secret");
+    expect(JSON.stringify(e.extra)).toContain("upgrade ");
+    expect(nextMatchFixtureId(e)).toBe("f-9");
+  });
+  it("a second refusal is read afresh: the first one's extra never leaks into the next", async () => {
+    const { t } = fake([(c) => (c.path.endsWith("/s1/generate") ? err(next.status, next.code, { [next.wire.key]: ref }) : undefined), () => err(422, "STAGE_NOT_READY")]);
+    const d = drv(t);
+    const first = (await d.generate("s1").catch((x: unknown) => x)) as RefusedCall;
+    const second = (await d.generate("s2").catch((x: unknown) => x)) as RefusedCall;
+    expect(nextMatchFixtureId(first)).toBe("f-9");
+    expect(second.extra).toBeNull();
+    expect(nextMatchFixtureId(second)).toBeNull();
+  });
+  it("nextMatchFixtureId: only a next_match object carrying a string fixture id names one", () => {
+    const at = (extra: Record<string, unknown> | null) => nextMatchFixtureId(new RefusedCall("POST", "/x", 409, next.code, "m", null, extra));
+    const ROWS: [Record<string, unknown> | null, string | null][] = [
+      [null, null],
+      [{}, null],
+      [{ [next.wire.key]: null }, null],
+      [{ [next.wire.key]: "f-9" }, null],
+      [{ [next.wire.key]: { [next.wire.idField]: 9 } }, null],
+      [{ [next.wire.key]: { id: "f-9" } }, null],
+      [{ other: { [next.wire.idField]: "f-9" } }, null],
+      [{ [next.wire.key]: { [next.wire.idField]: "f-9" } }, "f-9"],
+    ];
+    let checked = 0;
+    for (const [extra, want] of ROWS) {
+      expect(at(extra), JSON.stringify(extra)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+  it("a RefusedCall built with the six original arguments carries a null extra", () => {
+    expect(new RefusedCall("GET", "/x", 400, "X", "m").extra).toBeNull();
+    expect(new RefusedCall("GET", "/x", 402, "PAYMENT_REQUIRED", "m", "k").extra).toBeNull();
+  });
+});
+
 describe("driver errors are redacted (R14a — public repo)", () => {
   it("every driver error redacts its message, and RefusedCall its path", () => {
     const secret = "token=abc123secret";
@@ -391,5 +480,76 @@ describe("HttpDriver — a request that never answers (T14 fix round 1, M-5)", (
     expect(box.v).toBeInstanceOf(RequestTimedOut);
     await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
     expect(calls).toEqual(["POST /api/v1/stages/s1/complete"]);
+  });
+});
+
+// W1c Task 6. finalize: the product's own finalize route (fixtures/[id]/
+// finalize/route.ts:11, Body {expected_seq}), which appends core.finalize
+// through the scoring path (usecases/scoring.ts finalizeFixture). ledger: a
+// thin wrapper over the bench's hardened reader (bench/lib/ledger.ts
+// fetchFixtureLedger, ruling 38) through THIS driver's transport, so it is
+// counted and bounded like every other call.
+describe("HttpDriver — finalize and the fixture ledger (W1c Task 6)", () => {
+  it("finalize reads the tip first, posts {expected_seq} to /finalize, and answers the fixture's state from the product's answer", async () => {
+    const { t, calls } = fake([
+      (c) => (c.path === "/api/v1/fixtures/f1/state" ? ok({ status: "decided", last_seq: 5, outcome: { kind: "win", winner: "e1" } }) : undefined),
+      (c) => (c.path === "/api/v1/fixtures/f1/finalize" ? ok({ seq: 6, status: "finalized", outcome: { kind: "win", winner: "e1" }, event_id: "ev6" }) : undefined),
+    ]);
+    const d = drv(t);
+    expect(await d.finalize("f1")).toEqual({ status: "finalized", last_seq: 6, outcome: { kind: "win", winner: "e1" } });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/v1/fixtures/f1/state", "POST /api/v1/fixtures/f1/finalize"]);
+    expect(calls[1]!.body).toEqual({ expected_seq: 5 });
+    expect(d.callCount).toBe(2);
+  });
+
+  it("a refused finalize is the product's RefusedCall, code and all", async () => {
+    const { t } = fake([
+      (c) => (c.path.endsWith("/state") ? ok({ status: "in_play", last_seq: 2, outcome: null }) : undefined),
+      () => err(422, "NOT_DECIDED"),
+    ]);
+    const e = await drv(t).finalize("f1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).code).toBe("NOT_DECIDED");
+    expect((e as RefusedCall).path).toBe("/api/v1/fixtures/f1/finalize");
+  });
+
+  it("ledger(since) is EXCLUSIVE — since 3 never returns seq 3 — seq-sorted, and counted as one call", async () => {
+    const { t, calls } = fake([
+      (c) => (c.path === "/api/v1/fixtures/f1/events?since_seq=3"
+        ? ok([{ id: "e5", seq: 5, type: "core.finalize", payload: {} }, { id: "e3", seq: 3, type: "core.start", payload: {} }, { id: "e4", seq: 4, type: "generic.result", payload: { p1Score: 1, p2Score: 0 } }])
+        : undefined),
+    ]);
+    const d = drv(t);
+    const rows = await d.ledger("f1", 3);
+    expect(rows.map((r) => r.seq)).toEqual([4, 5]);
+    expect(rows.map((r) => r.type)).toEqual(["generic.result", "core.finalize"]);
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/v1/fixtures/f1/events?since_seq=3"]);
+    expect(d.callCount).toBe(1);
+  });
+
+  it("ledger with no bound reads from 0 (every row); an empty ledger is [] — and a bound that is no seq is refused before any call", async () => {
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/fixtures/f1/events?since_seq=0" ? ok([]) : undefined)]);
+    const d = drv(t);
+    expect(await d.ledger("f1")).toEqual([]);
+    expect(calls.length).toBe(1);
+    for (const bad of [-1, 1.5, Number.NaN]) await expect(d.ledger("f1", bad), String(bad)).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls.length).toBe(1);
+  });
+
+  it("a refused ledger read is loud, never an empty ledger (the bench reader's contract)", async () => {
+    const { t } = fake([() => err(403, "FORBIDDEN")]);
+    await expect(drv(t).ledger("f1", 0)).rejects.toThrow(/HTTP 403 FORBIDDEN/);
+  });
+
+  it("the ledger read is bounded like every other call", async () => {
+    vi.useFakeTimers();
+    try {
+      const t: Transport = { raw: () => new Promise(() => undefined) };
+      const p = drv(t).ledger("f1", 0).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+      expect(await p).toBeInstanceOf(RequestTimedOut);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

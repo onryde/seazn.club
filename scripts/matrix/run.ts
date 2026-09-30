@@ -1,10 +1,31 @@
-// L3 runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
-// plan seeding, the scenario over HttpDriver, the invariants → one redacted
-// results.json → MATRIX.md.
+// The runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
+// plan seeding, the scenario over its driver, the invariants → one redacted
+// results.json → MATRIX.md. L3 drives HttpDriver; `--driver browser --width W`
+// (W1c Task 6) drives each case through the organiser UI in one chromium
+// per run and one context per case (BrowserDriver), at width W — recorded as
+// W's layer: L1 at 1280, L2 at a phone width (layerOfWidth; T12 fix round 1).
+// `--driver browser --layer L1|L2` (W1c Task 12, ruling 39) runs a LAYERED
+// plan (lib/layers.ts): L1 is the slice at 1280 only; L2 is the committed
+// l2-pairs.json runs, each at its own width — the scripted ones driven, the
+// rest recorded 🚫/░ with no driver, org or check. `--set width-sweep` and
+// `--set api-only-browser` are layered too. The browser opens at the first
+// driven browser case, so a plan that only records opens none.
 //
-//   node --experimental-strip-types scripts/matrix/run.ts
+//   pnpm run matrix:l3 --
 //     [--base URL] [--run-id ID] [--report-dir DIR]
 //     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
+//   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
+//   pnpm run matrix:browser -- --layer L1|L2 [--only row|sport] [--scenario KEY (L1)]
+//
+// pnpm 10 passes that `--` through into argv — for matrix:browser AFTER the
+// script's own `--driver browser`, so mid-list (measured, W1c Task 6 fix
+// round 1) — and parseArgs reads everything after a `--` as a positional.
+// parseCli drops every bare `--` (withoutBareDashes), so the `-- …` form above
+// and `pnpm matrix:browser --width W` both reach the same flags.
+//
+// The browser layer is loaded LAZILY (realDeps.openBrowserRun's dynamic
+// import), so an L3 run never loads lib/browser (boundary.test.ts pins that
+// edge as the only one).
 //
 // Exit codes, each with one meaning:
 //   0  results written — reds are DATA, not a crash. In canary mode: the
@@ -14,7 +35,16 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter, a run id that is empty or too long once slugged); an unknown
+//      filter, a run id that is empty or too long once slugged; an unknown
+//      --driver, --driver browser without --width, a --width outside
+//      BROWSER_WIDTHS, or a --width on an http run; --layer other than L1/L2,
+//      without --driver browser, beside --set or --canary, L2 with --scenario;
+//      a layered plan given any --width but its own — L1 and api-only-browser
+//      take 1280 only, L2 and width-sweep none; a layered set over http); a
+//      layered plan with no case (NothingPlanned) or with one result id twice
+//      (DuplicateCaseId) — both after sign-in, before any case; a run id whose
+//      <report-dir>/<run-id>/results.json already exists (RunIdReused, W1c
+//      Task 8 E-2 — its evidence is kept, never overwritten); an unknown
 //      filter value (UnknownFilter — checked before anything else, PF13); an
 //      unknown --set (UnknownSet) or a planner that refuses to be built (a
 //      bound variant case the engine cannot score, BoundVariantUnscorable; a
@@ -34,20 +64,26 @@
 //      switches on the CLI, never on the code alone.
 //   3  aborted after the start gates, reason on stderr: the harness commit,
 //      the DB, sign-in, a planning read, a planner that plans a deny it did
-//      not declare (UndeclaredDeny), or writeResults refusing a secret
+//      not declare (UndeclaredDeny), no browser for a --driver browser run
+//      (openBrowserRun rejects: no chromium; or the served build's hold window
+//      is not this shell's, HoldMismatch, or cannot be read, ServedHoldUnreadable
+//      — carry M-6, before any case), a case whose browser cannot be
+//      set up (BrowserCaseAborted), or writeResults refusing a secret
 //      (nothing written); or MATRIX.md failing to render (results.json kept,
 //      the PF4 summary already printed).
 //   (3 also: a crash while the CLI LOADS, before any of its code runs — a
 //   strip-types parse error, a missing export, a module that throws — through
-//   `pnpm matrix:l3`, whose preload lib/crash-exit.ts maps it; a bare `node …`
-//   run exits 1 on one. Final batch F-6.)
+//   `pnpm run matrix:l3`, whose preload lib/crash-exit.ts maps it. Run it only
+//   through that script: without the preload a load crash exits 1
+//   (cli-invocation.test.ts refuses a documented run that skips it). Final
+//   batch F-6, W1b carry e.)
 // An uncaught throw would exit 1 — the "zero cases" code — and print an
 // unredacted stack, so every failure is caught here.
 //
 // Every line printed passes through redact(), and so does every string that
 // reaches results.json (R14a). Never print DATABASE_URL, cookies or links.
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { newSession, raw, signIn, type Session } from "../bench/lib/http.ts";
@@ -56,13 +92,18 @@ import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
 import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "./lib/catalogue.ts";
 import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
 import { HttpDriver } from "./lib/driver/http-driver.ts";
-import { RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
+import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
+import {
+  API_ONLY_BROWSER_SET, LAYER_PLANNERS, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, widthSweepPlanner,
+  type LayerCase, type PlannedLayerCase,
+} from "./lib/layers.ts";
+import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
-import { decideState, writeResults, type CaseResult, type CheckResult, type RunResults } from "./lib/results.ts";
+import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunResults } from "./lib/results.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
@@ -72,6 +113,7 @@ import {
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
+import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -104,8 +146,44 @@ export interface RunDeps {
   /** MATRIX.md from the results just written (realDeps: renderMatrix). A seam
    *  so the render-failure path is testable without bending shared state. */
   render(results: RunResults): string;
-  /** Defaults to `slicePlanner`, or to `SETS[--set]`. */
-  planCases?: PlanCases;
+  /** Defaults to `slicePlanner`, or to `SETS[--set]`, or to the `--layer`'s planner. */
+  planCases?: PlanCases | PlanLayers;
+  /** The run's browser, for `--driver browser` (W1c Task 6). realDeps loads
+   *  lib/browser/browser-run.ts lazily here; a runner without one aborts a
+   *  browser run. `base` is the run's own: the hold preflight reads the build
+   *  served there (carry M-6). */
+  openBrowserRun?(base: string): Promise<BrowserRun>;
+}
+
+/** What a case's browser driver is built from. `reportDir` is the run's own
+ *  report directory (the case's pictures go under it); `evidenceId` names the
+ *  case's shots directory — a plain segment, since a caseId carries `|`. */
+export interface CaseDriverOptions {
+  base: string;
+  session: Session;
+  orgId: string;
+  orgSlug: string;
+  spec: CaseSpec;
+  width: BrowserWidth;
+  padPolicy: "first" | "all";
+  reportDir: string;
+  evidenceId: string;
+}
+/** One case's driver and the close that releases its browser context. */
+export interface CaseBrowserDriver { driver: OrganiserDriver & { checks(): CheckResult[] }; close(): Promise<void> }
+/** One browser per run: a driver per case, then one close. */
+export interface BrowserRun {
+  caseDriver(o: CaseDriverOptions): Promise<CaseBrowserDriver>;
+  close(): Promise<void>;
+}
+
+/** A case whose browser could not be set up (no context, a refused cookie):
+ *  the environment, never a product red — the run aborts. */
+export class BrowserCaseAborted extends Error {
+  constructor(caseId: string, cause: unknown) {
+    super(`matrix: case ${caseId}: its browser could not be set up — ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`);
+    this.name = "BrowserCaseAborted";
+  }
 }
 
 /** What a planner may read from the command line. */
@@ -119,9 +197,31 @@ export interface PlannerCli { only?: string; scenario?: string; canary?: string;
 export interface CasePlanner {
   readonly sports: readonly string[];
   readonly deniesFeatures: boolean;
+  /** W1c Task 7: the set scores on the pad, so it runs under --driver browser
+   *  only; runSlice refuses it over HTTP before the DB. Default false. */
+  readonly needsBrowser?: boolean;
   plan(variantFor: (sport: string) => string): CaseSpec[];
 }
 export type PlanCases = (cli: PlannerCli) => CasePlanner;
+
+/** W1c Task 12: a planner that places every case itself — its layer, its
+ *  browser width, and whether it is DRIVEN or PLANNED 🚫/░ (recorded without
+ *  a driver, an org or a check). `--layer L1|L2` and the layered sets build
+ *  one; it runs under --driver browser only. lib/layers.ts. */
+export interface LayeredPlanner {
+  readonly sports: readonly string[];
+  readonly deniesFeatures: boolean;
+  /** The run's layer (results.json's run-level `layer`). */
+  readonly layer: "L1" | "L2";
+  /** How the command line chose it, for its refusals: "--layer L1", "--set width-sweep". */
+  readonly label: string;
+  /** The one --width it accepts — its own, ruling 39's 1280 for an L1 plan —
+   *  or null: it sets each case's width, and every --width is refused. */
+  readonly acceptsWidth: BrowserWidth | null;
+  layered(variantFor: (sport: string) => string): LayerCase[];
+}
+export type PlanLayers = (cli: PlannerCli) => LayeredPlanner;
+const isLayered = (p: CasePlanner | LayeredPlanner): p is LayeredPlanner => "layered" in p;
 
 /** A planner asked `variantFor` about a sport it did not declare in `sports`,
  *  so its variant order was never read. Named, so the abort blames the planner
@@ -144,12 +244,54 @@ export const slicePlanner: PlanCases = (cli) => ({
 });
 
 /** The named sets `--set` chooses from. */
-export const SETS: Readonly<Record<string, PlanCases>> = Object.freeze({ [PROBE_SET]: probePlanner });
+export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.freeze({
+  [PROBE_SET]: probePlanner, [PAD_PROOF_SET]: padProofPlanner,
+  // W1c Task 12 (ruling 39 / D7): layered — each places its own widths.
+  [WIDTH_SWEEP_SET]: widthSweepPlanner, [API_ONLY_BROWSER_SET]: apiOnlyBrowserPlanner,
+});
 
 export class UnknownSet extends Error {
   constructor(v: string) {
     super(`matrix: unknown --set '${v}' (allowed: ${Object.keys(SETS).join(", ")})`);
     this.name = "UnknownSet";
+  }
+}
+
+/** W1c Task 8 review E-2: a run id names its evidence directory
+ *  (<report-dir>/<run-id>/, which writeResults and MATRIX.md overwrite
+ *  unconditionally) AND every case org's slug (seed-org.ts caseOrgSlug). A
+ *  run under a finished run's id would destroy that run's results and red
+ *  every case on a duplicate slug — so a results.json already there refuses
+ *  the run before anything else touches the DB or the server. */
+export class RunIdReused extends Error {
+  readonly runId: string;
+  readonly path: string;
+  constructor(runId: string, path: string) {
+    super(`run id ${runId} already has results at ${path} — a run under it would overwrite that evidence (results.json, MATRIX.md) and red every case on the case-org slugs its id derives; pass a fresh --run-id`);
+    this.name = "RunIdReused";
+    this.runId = runId;
+    this.path = path;
+  }
+}
+
+/** W1c Task 12: a layered plan with no case at all (`--layer L2 --only` a cell
+ *  with no committed run). A layer that runs nothing must never read as a run,
+ *  so it is refused (exit 2) and nothing is written. */
+export class NothingPlanned extends Error {
+  constructor(label: string) {
+    super(`${label}: nothing planned — the plan holds no case (driven or recorded), so there is no run to write`);
+    this.name = "NothingPlanned";
+  }
+}
+
+/** W1c Task 12: a layered plan names one result id twice. results.json,
+ *  MATRIX.md and parity key every case by its id, so one would hide the other. */
+export class DuplicateCaseId extends Error {
+  readonly ids: readonly string[];
+  constructor(label: string, ids: readonly string[]) {
+    super(`${label} plans ${ids.join(", ")} more than once — every case is keyed by its id, so one would hide the other`);
+    this.name = "DuplicateCaseId";
+    this.ids = ids;
   }
 }
 
@@ -238,23 +380,90 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = "usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]";
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]`;
 
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined }
+/** `driver` and `widthArg` (W1c Task 6), `layer` (Task 12). The width is
+ *  kept as typed until the plan is chosen: a plain browser run needs one
+ *  (resolved by plainBrowserWidth), a layered plan sets its own and refuses
+ *  any other (layeredWidthRefusal). */
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined }
+
+/** The plan a run was made from, as its command line chose it — results.json's
+ *  `plan` (W1c Task 14 carry 6, Task 12 review m-7), so a reader never guesses
+ *  the set from its case ids. parseCli has already refused every combination
+ *  this does not name (--set or --canary beside a filter or a layer). The
+ *  driver and width are recorded apart (D9). */
+export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario">): string {
+  if (cli.set !== undefined) return `--set ${cli.set}`;
+  if (cli.canary !== undefined) return `--canary ${cli.canary}`;
+  const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
+  return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}`, ...filters].join(" ");
+}
+
+/** The driver the command line asked for, or the usage refusal. A width is a
+ *  browser run's only. */
+function parseDriver(driver: string | undefined, width: string | undefined): { driver: "http" | "browser" } | { usage: string } {
+  const d = driver ?? "http";
+  if (d !== "http" && d !== "browser") return { usage: `--driver must be http or browser, got ${d}` };
+  if (d === "http" && width !== undefined) return { usage: "--width is a browser run's width; it takes --driver browser" };
+  return { driver: d };
+}
+
+/** A plain (unlayered) browser run's one width: required, one of BROWSER_WIDTHS. */
+function plainBrowserWidth(width: string | undefined): { width: BrowserWidth } | { usage: string } {
+  if (width === undefined) return { usage: `--driver browser needs --width (one of ${BROWSER_WIDTHS.join(", ")})` };
+  // Digits only: Number("") is 0 and Number(" 320") is 320 — neither was asked for.
+  const w = /^\d+$/.test(width) ? BROWSER_WIDTHS.find((x) => x === Number(width)) : undefined;
+  if (w === undefined) return { usage: `--width must be one of ${BROWSER_WIDTHS.join(", ")}, got ${width}` };
+  return { width: w };
+}
+
+/** A layered plan sets every case's width (ruling 39: L1 at 1280 only; L2
+ *  from l2-pairs.json; the sets their own), so a --width is only ever the
+ *  plan's own, typed exactly — anything else is refused by name. */
+function layeredWidthRefusal(p: LayeredPlanner, width: string | undefined): string | null {
+  if (width === undefined) return null;
+  if (p.acceptsWidth !== null && width === String(p.acceptsWidth)) return null;
+  return p.acceptsWidth !== null
+    ? `${p.label} runs at ${p.acceptsWidth} only (ruling 39); got --width ${width}`
+    : `${p.label} takes no --width (the plan sets each case's width); got --width ${width}`;
+}
+
+/** The argv parseCli reads: every bare `--` dropped (pnpm 10 forwards the one
+ *  in `pnpm run <script> -- <flags>`, mid-list for a script that carries flags
+ *  of its own). Nothing is lost: this runner takes no positional, and a bare
+ *  `--` is never a flag's value (parseArgs refuses `--run-id --` as ambiguous
+ *  with or without it; `--run-id=--` is one token and is kept). */
+export function withoutBareDashes(argv: readonly string[]): string[] {
+  return argv.filter((a) => a !== "--");
+}
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string };
   try {
-    ({ values } = parseArgs({ args: argv, options: {
+    ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
       only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
+      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
+  }
+  const how = parseDriver(values.driver, values.width);
+  if ("usage" in how) return how;
+  // W1c Task 12: --layer chooses the plan, and it is a browser plan.
+  let layer: Cli["layer"];
+  if (values.layer !== undefined) {
+    if (values.layer !== "L1" && values.layer !== "L2") return { usage: `--layer must be L1 or L2, got ${values.layer}` };
+    if (how.driver !== "browser") return { usage: "--layer runs a browser layer; it takes --driver browser" };
+    if (values.set !== undefined) return { usage: "--layer and --set each choose the plan; pass one" };
+    if (values.canary !== undefined) return { usage: "--layer takes no --canary" };
+    if (values.layer === "L2" && values.scenario !== undefined) return { usage: "--layer L2 plans the committed l2-pairs.json runs; it takes no --scenario" };
+    layer = values.layer;
   }
   if (values.set !== undefined && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
     return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
@@ -265,7 +474,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -275,11 +484,14 @@ function parseCli(argv: string[]): Cli | { usage: string } {
  *    refused call.
  *  - A deferred case (⏳ `later`: ScenarioUnsupported / RowBuildDeferred) is an
  *    honest owner-assigned state naming its wave, not vacuity (controller
- *    ruling, Task 9 fix round 1). */
+ *    ruling, Task 9 fix round 1) — and so is 🚫 `no_path` (NoOrganiserPath,
+ *    W1c Task 6 M-4 ruling). */
 export function summariseRun(cases: readonly CaseResult[], refusals: ReadonlyMap<string, CallRefusal>): RunSummary {
   const isErrorRed = (c: CaseResult) => c.reason.startsWith("error:");
+  // W1c Task 12: ░ not_run is a planned case no script runs yet — honest, not vacuous.
+  const deferred = (c: CaseResult) => c.state === "later" || c.state === "no_path" || c.state === "not_run";
   return {
-    vacuous: cases.filter((c) => c.state !== "later" && !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
+    vacuous: cases.filter((c) => !deferred(c) && !isErrorRed(c) && !c.checks.some((k) => k.verdict !== "abstain" && k.checked > 0)).map((c) => c.caseId),
     errorReds: cases.filter(isErrorRed).map((c) => ({ caseId: c.caseId, error: c.reason.replace(/^error: ?/, ""), refusal: refusals.get(c.caseId) ?? null })),
   };
 }
@@ -307,16 +519,25 @@ export function keepNotes(notes: readonly string[]): string[] {
  *  never makes writeResults throw the whole run away (it still refuses, as the backstop). */
 const redactCheck = (c: CheckResult): CheckResult => ({ ...c, reason: redact(c.reason), evidence: c.evidence.map((x) => redact(x)) });
 
-interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string }
+/** `reportDir`: the run's own report directory. */
+interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string; reportDir: string }
 
-async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): Promise<{ result: CaseResult; refusal: CallRefusal | null }> {
+/** One case the runner DRIVES: its spec, the layer it records, and its browser
+ *  and width — null over HTTP. A plain run gives every case the CLI's width
+ *  (D9); a layered plan gives each its own (W1c Task 12). */
+interface DrivenCase { spec: CaseSpec; layer: Layer; browser: { run: BrowserRun; width: BrowserWidth } | null }
+
+async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number): Promise<{ result: CaseResult; refusal: CallRefusal | null }> {
+  const { spec } = item;
   const t0 = Date.now();
   let checks: CheckResult[] = [];
   let deferred: { wave: string; reason: string } | null = null;
   let mandated: string | null = null;
   let error: string | null = null;
+  let noPath: { wave: string; reason: string } | null = null;
   let refusal: CallRefusal | null = null;
   let driver: OrganiserDriver | null = null;
+  let caseBrowser: CaseBrowserDriver | null = null;
   let counts = { calls: 0, fixtures: 0, events: 0 };
   let notes: string[] = [];
   try {
@@ -324,35 +545,80 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
       { name: `Matrix ${run.runId} ${i + 1}`, slug: caseOrgSlug(run.runId, i + 1), deny: spec.deny },
     );
-    driver = deps.driverFor(run.base, run.session, org.orgId);
     const scenario = SCENARIOS[spec.scenario];
+    if (item.browser === null) {
+      driver = deps.driverFor(run.base, run.session, org.orgId);
+    } else {
+      // After the org switch, so the context carries the case org's cookie.
+      // The scenario says which scores go to the pad (W1c Task 7; default "first").
+      const o: CaseDriverOptions = { base: run.base, session: run.session, orgId: org.orgId, orgSlug: org.orgSlug, spec, width: item.browser.width, padPolicy: scenario.padPolicy ?? "first", reportDir: run.reportDir, evidenceId: `case-${i + 1}` };
+      try { caseBrowser = await item.browser.run.caseDriver(o); } catch (e) { throw new BrowserCaseAborted(spec.caseId, e); }
+      driver = caseBrowser.driver;
+    }
     // W1b Task 10: a variant case scores under preset + its override, as the
     // division it creates stores it (setUpDivision posts the override).
     const cfg = resolveSportCfg(spec.sport, spec.variant, { ...(spec.overrides ?? {}) });
     const out = await scenario.run({ driver, spec, orgSlug: org.orgSlug, cfg, tag: `${run.runId}-${i + 1}`, denied: org.denied });
     // ⛔ (Task 9): a scenario that builds no stage opts out of the fixture
-    // invariants, and one whose expected state is a refusal says so.
-    checks = [...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions].map(redactCheck);
+    // invariants, and one whose expected state is a refusal says so. A
+    // browser case adds its driver's own checks after them (W1c Task 6).
+    checks = [
+      ...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions,
+      ...(caseBrowser === null ? [] : caseBrowser.driver.checks()),
+    ].map(redactCheck);
     mandated = scenario.mandatedRefusal?.(spec) ?? null;
     counts = { calls: driver.callCount, fixtures: out.observed.stages.reduce((n, s) => n + s.fixtures.length, 0), events: out.events };
     notes = keepNotes(out.notes);
   } catch (e) {
-    // The DB stopped proving it is ours: that is the environment, not this
-    // case. Abort the run rather than record it as a product red.
-    if (e instanceof DataDirMismatch || e instanceof DataDirUnset) throw e;
+    // The DB stopped proving it is ours, or the case's browser could not be
+    // set up: that is the environment, not this case. Abort the run rather
+    // than record it as a product red.
+    if (e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted) throw e;
     if (e instanceof ScenarioUnsupported || e instanceof RowBuildDeferred) deferred = { wave: e.wave, reason: e.message };
+    // M-4 ruling: a path this layer does not drive is 🚫 naming its wave, never an error red.
+    else if (e instanceof NoOrganiserPath) noPath = { wave: e.wave, reason: e.reason };
     else {
       error = errText(e);
       if (e instanceof RefusedCall) refusal = { method: e.method, path: e.path, status: e.status, code: e.code };
     }
     if (driver !== null) counts = { ...counts, calls: driver.callCount };
+    // M-2: a thrown case keeps what its browser driver recorded before the
+    // throw (its screenshots' checks among them); reading them must not
+    // replace the case's own outcome. N-3 (W1c Task 12): an ERROR red only —
+    // a ⏳ or 🚫 case is deferred, and a deferred row carries no check (it
+    // would read "2/2 checks applied" on a case nothing judged).
+    if (caseBrowser !== null && error !== null) {
+      try { checks = caseBrowser.driver.checks().map(redactCheck); } catch (k) { warn(`matrix: case ${spec.caseId}: its driver's checks could not be read — ${errText(k)}`); }
+    }
+  } finally {
+    // Every case's context is closed, whatever the scenario did; a failed
+    // close is warned, never allowed to replace the case's own outcome.
+    if (caseBrowser !== null) {
+      try { await caseBrowser.close(); } catch (e) { warn(`matrix: case ${spec.caseId}: closing its browser failed — ${errText(e)}`); }
+    }
   }
-  const { state, reason } = decideState({ checks, deferred, error, mandated });
+  const { state, reason } = decideState({ checks, deferred, error, mandated, noPath });
+  const b = item.browser;
   const result: CaseResult = {
-    caseId: spec.caseId, row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
+    caseId: atWidth(spec.caseId, b === null ? null : b.width), row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
     state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,
+    // D9: the layer, driver and width the case ran at.
+    ...(b === null ? { layer: item.layer, driver: "http", width: null } as const : { layer: item.layer, driver: "browser", width: b.width } as const),
   };
   return { result, refusal };
+}
+
+/** W1c Task 12: a layered plan's 🚫/░ case, recorded as its state — no
+ *  driver, no org, no check (N-3), zero counts — so it reaches results.json
+ *  and MATRIX.md and is never dropped (R13). */
+function recordPlanned(c: PlannedLayerCase): CaseResult {
+  const id = identityOf(c);
+  const { state, reason } = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
+  return {
+    caseId: layerCaseId(c), row: id.row, sport: id.sport, variant: id.variant, scenario: id.scenario, canary: false,
+    state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
+    layer: c.layer, driver: "browser", width: c.width,
+  };
 }
 
 /** m-1: a canary is green only when its case is red on EXACTLY its own check,
@@ -377,13 +643,38 @@ export function canaryVerdict(key: string, c: CaseResult | undefined): number {
   return ok ? EXIT.OK : EXIT.NO_SIGNAL;
 }
 
-async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlanner): Promise<number> {
+/** One item of a run, in plan order: a case the runner drives at its layer
+ *  and width (null over HTTP), or a layered plan's 🚫/░ case, recorded. */
+type RunItem =
+  | { readonly kind: "driven"; readonly spec: CaseSpec; readonly layer: Layer; readonly width: BrowserWidth | null }
+  | { readonly kind: "planned"; readonly case: PlannedLayerCase };
+
+/** A plain plan's specs all run at the CLI's width (null over HTTP; D9); a
+ *  layered plan places each of its cases itself. */
+function runItems(planner: CasePlanner | LayeredPlanner, variantFor: (sport: string) => string, width: BrowserWidth | null): RunItem[] {
+  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : layerOfWidth(width), width }));
+  const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, width: c.width } : { kind: "planned", case: c }));
+  if (items.length === 0) throw new NothingPlanned(planner.label);
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const id of items.map(itemId)) (seen.has(id) ? dupes : seen).add(id);
+  if (dupes.size > 0) throw new DuplicateCaseId(planner.label, [...dupes]);
+  return items;
+}
+
+/** The id the item's result is keyed by (results.json, MATRIX.md, parity). */
+const itemId = (it: RunItem): string => (it.kind === "planned" ? layerCaseId(it.case) : atWidth(it.spec.caseId, it.width));
+
+async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlanner | LayeredPlanner, width: BrowserWidth | null): Promise<number> {
   const harnessCommit = await deps.harnessCommit(); // before the DB: a failure here costs nothing
   const dir = join(cli.reportDir, cli.runId);
   const owner = ownerEmail(cli.runId);
   const startedAt = new Date().toISOString();
   const cases: CaseResult[] = [];
   const refusals = new Map<string, CallRefusal>();
+  // A holder, not a `let`: it is opened inside browserFor, and the `finally`
+  // must see that (a `let` assigned only in a closure narrows to null there).
+  const opened: { run: BrowserRun | null } = { run: null };
   const db = await deps.openDb();
   try {
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
@@ -414,7 +705,8 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       if (keys === undefined) throw new UndeclaredPlannerSport(s, planner.sports);
       return builderDefaultVariant(s, keys);
     };
-    const specs = planner.plan(variantFor);
+    const items = runItems(planner, variantFor, width);
+    const specs = items.flatMap((it) => (it.kind === "driven" ? [it.spec] : []));
     const undeclared = planner.deniesFeatures ? [] : specs.filter((s) => (s.deny ?? []).length > 0).map((s) => s.caseId);
     if (undeclared.length > 0) throw new UndeclaredDeny(undeclared);
     // RR-1: before any case's DB work, the plan must grant every gate a case touches.
@@ -424,14 +716,38 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       const gaps = needed.filter((n) => !grants.has(n.gate));
       if (gaps.length > 0) throw new PlanLacksGate(plan, gaps);
     }
-    for (const [i, spec] of specs.entries()) {
-      const { result, refusal } = await runCase(deps, { base, session, userId, plan, runId: cli.runId }, spec, i);
+    // W1c Task 6: one browser per run, opened after every start gate has
+    // passed. No browser is the environment: the run aborts, and no case is
+    // ever recorded as a product red for it. Task 12: opened at the first
+    // DRIVEN browser case, so a plan that records only 🚫/░ opens none.
+    const browserFor = async (): Promise<BrowserRun> => {
+      if (opened.run === null) {
+        if (deps.openBrowserRun === undefined) throw new Error("matrix: --driver browser, and this runner has no browser (RunDeps.openBrowserRun)");
+        opened.run = await deps.openBrowserRun(base);
+      }
+      return opened.run;
+    };
+    const ctx: RunCtx = { base, session, userId, plan, runId: cli.runId, reportDir: dir };
+    for (const [i, item] of items.entries()) {
+      let result: CaseResult;
+      if (item.kind === "planned") {
+        result = recordPlanned(item.case);
+      } else {
+        // Outside runCase's try: a browser that cannot open aborts the run (above).
+        const browser = item.width === null ? null : { run: await browserFor(), width: item.width };
+        const ran = await runCase(deps, ctx, { spec: item.spec, layer: item.layer, browser }, i);
+        result = ran.result;
+        if (ran.refusal !== null) refusals.set(result.caseId, ran.refusal);
+      }
       cases.push(result);
-      if (refusal !== null) refusals.set(spec.caseId, refusal);
-      say(`[${i + 1}/${specs.length}] ${spec.caseId} → ${result.state} ${result.reason}`);
+      say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}`);
     }
   } finally {
-    // A failed close must not throw away the cases that already ran.
+    // A failed close must not throw away the cases that already ran. The
+    // browser is closed exactly once, after the last case or the abort.
+    if (opened.run !== null) {
+      try { await opened.run.close(); } catch (e) { warn(`matrix: browser close failed — ${errText(e)}`); }
+    }
     try { await db.dispose(); } catch (e) { warn(`matrix: db dispose failed — ${errText(e)}`); }
   }
 
@@ -440,7 +756,12 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
   // writeResults scans, THEN writes the run's base as LOCAL_BASE (final batch
   // FB-1); MATRIX.md renders what it wrote, so the two files agree.
-  const results: RunResults = { schemaVersion: 2, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid, cases };
+  const results: RunResults = {
+    schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid,
+    // A layered plan names its layer; a plain one is its width's (layerOfWidth:
+    // 1280 L1, a phone width L2), L3 over HTTP.
+    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli), cases,
+  };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
   if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
@@ -470,16 +791,37 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   // W1b Task 10: the planner is chosen — and built — before anything touches
   // the DB or the server: an unknown set and a set that cannot be built are
   // refusals, and whether the run plants denies must be known for the next guard.
-  let planner: CasePlanner;
+  let planner: CasePlanner | LayeredPlanner;
   try {
     // Own keys only: `toString` or `__proto__` would otherwise name a "set".
     if (cli.set !== undefined && !Object.prototype.hasOwnProperty.call(SETS, cli.set)) throw new UnknownSet(cli.set);
-    const choose = deps.planCases ?? (cli.set === undefined ? slicePlanner : SETS[cli.set]);
+    // W1c Task 12: --layer chooses a layered plan (parseCli refused it beside --set).
+    const choose = deps.planCases ?? (cli.layer !== undefined ? LAYER_PLANNERS[cli.layer] : cli.set === undefined ? slicePlanner : SETS[cli.set]);
     planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set });
   } catch (e) {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;
   }
+  // The width, once the plan is known (ruling 39): a layered plan places its
+  // cases and refuses any --width but its own; a plain browser run needs one.
+  let width: BrowserWidth | null = null;
+  if (isLayered(planner)) {
+    if (cli.driver !== "browser") { warn(`matrix: ${planner.label} places browser cases; it runs with --driver browser only`); return EXIT.REFUSED; }
+    const refusal = layeredWidthRefusal(planner, cli.widthArg);
+    if (refusal !== null) { warn(`matrix: ${refusal}\n${USAGE}`); return EXIT.REFUSED; }
+  } else {
+    // W1c Task 7: a set that proves the pad has nothing to prove over HTTP.
+    if (planner.needsBrowser === true && cli.driver !== "browser") { warn(`matrix: --set ${cli.set ?? "(injected)"} scores every fixture on the pad; it runs with --driver browser only`); return EXIT.REFUSED; }
+    if (cli.driver === "browser") {
+      const w = plainBrowserWidth(cli.widthArg);
+      if ("usage" in w) { warn(`matrix: ${w.usage}\n${USAGE}`); return EXIT.REFUSED; }
+      width = w.width;
+    }
+  }
+  // E-2: a finished run's evidence is never overwritten. Only results.json
+  // marks a finished run — an aborted one leaves at most its shots.
+  const prior = join(cli.reportDir, cli.runId, "results.json");
+  if (existsSync(prior)) { warn(`matrix: ${errText(new RunIdReused(cli.runId, prior))}`); return EXIT.REFUSED; }
   if (planner.deniesFeatures && (deps.env.REDIS_URL ?? "").trim() !== "") { warn(errText(new RedisHidesDeny())); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("matrix: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
@@ -491,9 +833,10 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   try { pf = await deps.preflight(base); } catch (e) { warn(`matrix: preflight: ${errText(e)}`); return EXIT.REFUSED; }
   if (!pf.ok) { for (const r of pf.refusals) warn(`preflight refused: ${r.reason} — ${r.detail}`); return EXIT.REFUSED; }
   try {
-    return await execute(deps, cli, base, planner);
+    return await execute(deps, cli, base, planner, width);
   } catch (e) {
-    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate;
+    const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate
+      || e instanceof NothingPlanned || e instanceof DuplicateCaseId;
     warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
@@ -578,6 +921,9 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
       } finally { await closeHandles(m, p); }
     },
     driverFor: (base, session, orgId) => new HttpDriver({ base, session, expectedOrgId: orgId }),
+    // LAZY (ruling A): the browser layer is loaded only when a browser run
+    // opens, so an L3 run never loads it (boundary.test.ts pins this edge).
+    openBrowserRun: async (base) => (await import("./lib/browser/browser-run.ts")).openBrowserRun(base),
   };
 }
 

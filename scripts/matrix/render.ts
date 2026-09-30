@@ -1,4 +1,4 @@
-// CLI: node --experimental-strip-types scripts/matrix/render.ts <results.json> [--out MATRIX.md]
+// CLI: pnpm run matrix:render -- <results.json> [--out MATRIX.md]
 // Exit codes, each with one meaning:
 //   0  rendered;
 //   1  zero cases (the file is still written, with the banner) or canary
@@ -6,9 +6,10 @@
 //   2  usage or input error, with a message on stderr and nothing written: no
 //      file, a second file, an unknown flag, a missing or unreadable file, bad
 //      JSON, results the schema refuses, or a case off the run's own grid;
-//   3  a crash while it loads, through `pnpm matrix:render` (its preload,
-//      lib/crash-exit.ts, final batch F-6); a bare `node …` run exits 1.
-// An uncaught throw would exit 1 on a bare run (3 through the package
+//   3  a crash while it loads, through `pnpm run matrix:render` (its preload,
+//      lib/crash-exit.ts, final batch F-6). Run it only through that script:
+//      without the preload a load crash exits 1 (W1b carry e).
+// An uncaught throw would exit 1 without the preload (3 through the package
 // script), so every input failure is caught here rather than left to read as
 // "zero cases".
 import { readFileSync, writeFileSync } from "node:fs";

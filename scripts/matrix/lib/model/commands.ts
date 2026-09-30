@@ -56,7 +56,7 @@ const decided = (m: ModelState) => [...m.fixtures.values()].filter((f) => seated
  *  whole: matched on status AND code, `judge` then decides it on what the
  *  driver says now — expected, unexpected (with why), or unverified. */
 type Judged = { kind: "expected" } | { kind: "unverified" } | { kind: "unexpected"; detail: string };
-interface PermittedRefusal { status: number; code: string; judge: (d: OrganiserDriver) => Promise<Judged> }
+interface PermittedRefusal { status: number; code: string; judge: (d: OrganiserDriver, refusal: RefusedCall) => Promise<Judged> }
 
 /** Ruling RR-1 (fix rounds 2 and 3): a take-back of `f` on a bracket may be
  *  refused under NEXT_MATCH_LOCK (fed-seats.ts). Judged in two parts:
@@ -69,20 +69,23 @@ interface PermittedRefusal { status: number; code: string; judge: (d: OrganiserD
  *    started (fedMatchStarted, the product's own rule with its cascade-
  *    walkover reset) makes it expected; none that has, and none unverified,
  *    makes it an unexpected refusal; otherwise the candidates the model
- *    cannot see are counted as unknowns and the refusal proves nothing. */
+ *    cannot see are counted as unknowns and the refusal proves nothing.
+ *  The candidates are the refusal's (W1c Task 2, ruling Q2): the fed match it
+ *  names, when the model holds it — else the structural superset, which also
+ *  decides whether the refusal is permitted at all. */
 function takeBackLock(m: ModelState, f: FixtureModel): PermittedRefusal | null {
-  const candidates = fedCandidates(m, f);
-  if (candidates.length === 0) return null;
+  if (fedCandidates(m, f).length === 0) return null;
   const known = [...knownLedger(f)];
   return {
     status: NEXT_MATCH_LOCK.status,
     code: NEXT_MATCH_LOCK.code,
-    judge: async (d) => {
+    judge: async (d, refusal) => {
       const tip = await d.fixtureState(f.id);
       if (tip.last_seq !== known.length) {
         throw new ModelViolation(NEXT_MATCH_CHECK, [`fixture ${f.id}: refused ${NEXT_MATCH_LOCK.code}, yet the product's tip moved from ${known.length} to ${tip.last_seq} — a refused take-back writes nothing (fed-seats.ts runs before the first write)`]);
       }
       f.ledger = known;
+      const candidates = fedCandidates(m, f, refusal);
       const read: { g: FixtureModel; line: string; verdict: ReturnType<typeof fedMatchStarted> }[] = [];
       for (const g of candidates) {
         const st = await d.fixtureState(g.id);
@@ -166,7 +169,7 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
         verdict = "expected-refusal";
         await this.afterExpectedRefusal(m, d);
       } else if (permitted !== null && e.status === permitted.status && e.code === permitted.code) {
-        const j = await permitted.judge(d);
+        const j = await permitted.judge(d, e);
         if (j.kind === "unexpected") {
           c.unexpected++;
           throw new ModelViolation(UNEXPECTED_REFUSAL, [`${line} — ${j.detail}`], said);

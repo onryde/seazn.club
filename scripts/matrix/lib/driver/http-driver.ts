@@ -8,10 +8,12 @@
 // progressCompletedStage), which computes a NEW draft seed proposal and marks
 // the previous draft stale (stages.ts:4942-4944).
 import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
+import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
+import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
-  DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, idempotencyKey, retryKey,
+  DriverMisuse, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
@@ -39,20 +41,6 @@ export interface HttpDriverOptions {
  *  awaited: it may still land, which is why a timed-out /complete is recorded
  *  as an unknown outcome (completeStage). */
 export const REQUEST_TIMEOUT_MS = 60_000;
-
-/** api-v1's envelope (server/api-v1/http.ts): `{ok:true, data}` or
- *  `{ok:false, error:{code, message, current_seq?, feature_key?}}` (a 402
- *  carries `feature_key`). A non-v1 or non-JSON answer can carry a bare string
- *  `error`; it then yields no code. */
-interface Envelope { ok?: boolean; data?: unknown; error?: { code?: string; message?: string; current_seq?: number; feature_key?: string } | string }
-
-function errorOf(r: RawResult): { code?: string; message?: string; current_seq?: number; feature_key?: string } {
-  const e = (r.json as unknown as Envelope | null)?.error;
-  if (typeof e === "string") return { message: e };
-  return e ?? {};
-}
-
-const is2xx = (r: RawResult) => r.status >= 200 && r.status < 300;
 
 const toDivisionRef = (d: { id: string; slug: string; sport_key: string; variant_key: string; config: Record<string, unknown> | null }): DivisionRef =>
   ({ id: d.id, slug: d.slug, sportKey: d.sport_key, variantKey: d.variant_key, config: d.config ?? {} });
@@ -97,13 +85,7 @@ export class HttpDriver implements OrganiserDriver {
   }
 
   #unwrap<T>(method: string, path: string, r: RawResult): T {
-    if (!is2xx(r)) {
-      const e = errorOf(r);
-      throw new RefusedCall(method, path, r.status, e.code ?? null, e.message ?? null, e.feature_key ?? null);
-    }
-    const data = (r.json as unknown as Envelope | null)?.data;
-    if (data === undefined) throw new RefusedCall(method, path, r.status, "NO_DATA", "response carried no data");
-    return data as T;
+    return unwrapEnvelope<T>(method, path, r.status, r.json);
   }
 
   async #call<T>(path: string, method = "GET", body?: unknown, anonymous = false): Promise<T> {
@@ -179,7 +161,7 @@ export class HttpDriver implements OrganiserDriver {
     for (const ev of events) {
       const body = { expected_seq: seq, type: ev.type, payload: ev.payload, idempotency_key: idempotencyKey(idempotencyPrefix, seq) };
       let r = await this.#send(path, "POST", body);
-      const e = errorOf(r);
+      const e = errorOf(r.json);
       const retried = r.status === 409 && e.code === "SEQ_CONFLICT";
       if (retried) {
         // Retry ONCE from the server's tip: current_seq when the 409 carries it
@@ -201,6 +183,31 @@ export class HttpDriver implements OrganiserDriver {
     // (streams/index.ts), so the declared points the scenario folds locally are
     // for exactly the events posted here.
     return this.postStream(fixtureId, state.status === "scheduled" ? [START, forfeitEv] : [forfeitEv], idempotencyPrefix);
+  }
+
+  /** Finalizes a decided fixture through the product's own route
+   *  (fixtures/[id]/finalize/route.ts:11, Body `{expected_seq}`), which
+   *  appends core.finalize through the scoring path (usecases/scoring.ts
+   *  finalizeFixture). The organiser's console posts the same event to the
+   *  events route instead (T5 fixture-console.ts); parity compares the LEDGER
+   *  rows the two leave, never the routes (controller ruling D). The state is
+   *  the product's own answer to the append. */
+  async finalize(fixtureId: string): Promise<FixtureStateOut> {
+    // RF5: never assume the tip — read it, as postStream does.
+    const tip = (await this.fixtureState(fixtureId)).last_seq;
+    const posted = await this.#call<PostedEvent>(`/api/v1/fixtures/${fixtureId}/finalize`, "POST", { expected_seq: tip });
+    return { status: posted.status, last_seq: posted.seq, outcome: posted.outcome };
+  }
+
+  /** The fixture's ledger rows AFTER `sinceSeq` (EXCLUSIVE — `since 3` never
+   *  returns seq 3), seq-sorted and envelope-checked: the bench's hardened
+   *  reader (bench/lib/ledger.ts fetchFixtureLedger, ruling 38), sent through
+   *  this driver's transport so the read is counted and bounded like any other.
+   *  A refusal throws, never reads as an empty ledger. */
+  async ledger(fixtureId: string, sinceSeq = 0): Promise<readonly LedgerRow[]> {
+    // The route 400s anything but a non-negative integer; refuse it here, by name, before a call.
+    if (!(Number.isInteger(sinceSeq) && sinceSeq >= 0)) throw new DriverMisuse(`driver: ledger since_seq must be a non-negative integer seq, got ${sinceSeq}`);
+    return fetchFixtureLedger(this.#base, this.#session, fixtureId, sinceSeq, { raw: (_base, _s, path, method) => this.#send(path, method ?? "GET") });
   }
 
   async withdraw(entrantId: string): Promise<WithdrawOut> {
@@ -249,13 +256,13 @@ export class HttpDriver implements OrganiserDriver {
 
   async patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     const r = await this.#send(`/api/v1/divisions/${divisionId}`, "PATCH", { config });
-    return { status: r.status, code: is2xx(r) ? null : (errorOf(r).code ?? null) };
+    return { status: r.status, code: is2xx(r.status) ? null : (errorOf(r.json).code ?? null) };
   }
 
   async replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe> {
     const r = await this.#send(`/api/v1/divisions/${divisionId}/stages`, "PUT", stages);
-    if (is2xx(r)) return { status: r.status, code: null, featureKey: null };
-    const e = errorOf(r);
+    if (is2xx(r.status)) return { status: r.status, code: null, featureKey: null };
+    const e = errorOf(r.json);
     return { status: r.status, code: e.code ?? null, featureKey: e.feature_key ?? null };
   }
 }

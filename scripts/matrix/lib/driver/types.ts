@@ -7,7 +7,7 @@
 // FixtureState, AppendEventResponse, CompleteResult; usecases/withdrawal.ts
 // WithdrawCascadeOut; usecases/public.ts publicStandings).
 import type { StagePostBody } from "../catalogue.ts";
-import { redact } from "../redact.ts";
+import { mapStrings, redact } from "../redact.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
 export type EntrantKind = "individual" | "pair" | "team";
@@ -33,6 +33,10 @@ export interface PostedEvent {
   /** Parked Task 6 (b): set (true) only when this event landed on the one
    *  SEQ_CONFLICT retry, so a parity trace can say which posts raced. */
   retried?: boolean;
+  /** W1c Task 7: the ledger row as the product holds it. Only the pad path
+   *  sets it, and it sets it on every event it answers. Its taps wrote the row,
+   *  so the scenario folds this and never the event it meant to send. */
+  stored?: StreamEvent;
 }
 
 /** Final review m-2: the product keeps a durable unique index on
@@ -86,6 +90,13 @@ export interface OrganiserDriver {
   patchDivisionConfig(divisionId: string, config: Record<string, unknown>): Promise<ProbeOutcome>;
   /** A probe: PUT /divisions/:id/stages; returns the refusal, never throws on 4xx. */
   replaceStagesProbe(divisionId: string, stages: readonly StagePostBody[]): Promise<StagesProbe>;
+  /** Finalizes a decided fixture and answers its state (W1c Task 6). Optional:
+   *  a driver without it cannot claim a finalize proof (Task 7's PADPROOF
+   *  refuses such a driver). HttpDriver posts the finalize route, BrowserDriver
+   *  taps the console's Finalize (the events route): both append ONE
+   *  core.finalize ledger row, and parity compares that row, never the route
+   *  (controller ruling D). */
+  finalize?(fixtureId: string): Promise<FixtureStateOut>;
   readonly callCount: number;
 }
 
@@ -111,14 +122,18 @@ export function productMessageOf(said: string): string | null {
 /** A product answer outside 2xx (or a 2xx with no data). Carries what I4's
  *  named-refusal check reads (observed.ts isNamedRefusal: status + code) and
  *  what a reader needs to find the call (method + path). Message and path are
- *  redacted (R14a). `featureKey` is a 402's `feature_key` (Task 9), else null. */
+ *  redacted (R14a). `featureKey` is a 402's `feature_key` (Task 9), else null.
+ *  `extra` is every other field of the product's error envelope — e.g. a
+ *  NEXT_MATCH_STARTED refusal's `next_match` (W1b carry c) — with every string
+ *  in it redacted, or null when there is none. */
 export class RefusedCall extends Error {
   readonly method: string;
   readonly path: string;
   readonly status: number;
   readonly code: string | null;
   readonly featureKey: string | null;
-  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null) {
+  readonly extra: Readonly<Record<string, unknown>> | null;
+  constructor(method: string, path: string, status: number, code: string | null, message: string | null, featureKey: string | null = null, extra: Readonly<Record<string, unknown>> | null = null) {
     super(redact(`${method} ${path} → HTTP ${status} ${code ?? NO_CODE}: ${message ?? NO_MESSAGE}`));
     this.name = "RefusedCall";
     this.method = method;
@@ -126,7 +141,16 @@ export class RefusedCall extends Error {
     this.status = status;
     this.code = code;
     this.featureKey = featureKey;
+    this.extra = extra === null ? null : mapStrings(extra, redact);
   }
+}
+
+/** The fixture a refusal says the result fed, or null (W1b carry c): the
+ *  product's NEXT_MATCH_STARTED names it as `next_match.fixture_id`
+ *  (fed-seats.ts boardRef; pinned by product-text.ts). */
+export function nextMatchFixtureId(e: RefusedCall): string | null {
+  const nm = e.extra?.next_match;
+  return typeof nm === "object" && nm !== null && typeof (nm as { fixture_id?: unknown }).fixture_id === "string" ? (nm as { fixture_id: string }).fixture_id : null;
 }
 
 /** The harness asked the driver for something it must never do. */
@@ -152,6 +176,20 @@ export class RequestTimedOut extends Error {
     this.method = method;
     this.path = path;
     this.ms = ms;
+  }
+}
+
+/** 🚫 (W1c Task 6, M-4 ruling): the case asked this driver for a path the
+ *  product has but this layer does not drive; `wave` owes it. The runner
+ *  records it through decideState's `noPath`, never as an error red. */
+export class NoOrganiserPath extends Error {
+  readonly wave: string;
+  readonly reason: string;
+  constructor(wave: string, reason: string) {
+    super(redact(`driver: no organiser path in this layer — ${reason} → ${wave}`));
+    this.name = "NoOrganiserPath";
+    this.wave = wave;
+    this.reason = redact(reason);
   }
 }
 

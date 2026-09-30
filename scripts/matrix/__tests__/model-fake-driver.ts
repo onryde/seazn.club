@@ -62,7 +62,16 @@ export interface ModelFakeOpts {
    *  the fed match has started — a cascade walkover included; "leaky"
    *  refuses it after writing the event. */
   fedSeatsFault?: "always" | "leaky";
+  /** What the NEXT_MATCH_STARTED refusal names as its fed match (W1c Task 2,
+   *  ruling Q2): "product" (the default) the fed fixture, in fed-seats.ts's
+   *  wire shape (product-text.ts nextMatchStartedText().wire); "absent" no
+   *  next_match at all; "foreign" FOREIGN_NEXT_MATCH, a fixture this division
+   *  does not have. */
+  nextMatchRef?: "product" | "absent" | "foreign";
 }
+
+/** The fixture a "foreign" nextMatchRef names: never one the fake seats. */
+export const FOREIGN_NEXT_MATCH = "f-not-in-this-division";
 
 const LOCK = rosterLockText();
 const NEXT = nextMatchStartedText();
@@ -249,7 +258,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     const occupant = edge.slot === 1 ? t.home_entrant_id : t.away_entrant_id;
     if (occupant === null || (occupant !== f.home_entrant_id && occupant !== f.away_entrant_id)) return null;
     const reset = this.#cascade(t);
-    if (this.opts.fedSeatsFault === "always" || (!reset && this.#started(t))) return new RefusedCall("POST", path, NEXT.status, NEXT.code, NEXT.message(`R${t.round_no ?? 0}·${t.fixture_no ?? 0}`));
+    if (this.opts.fedSeatsFault === "always" || (!reset && this.#started(t))) return new RefusedCall("POST", path, NEXT.status, NEXT.code, NEXT.message(`R${t.round_no ?? 0}·${t.fixture_no ?? 0}`), null, this.#nextMatch(t));
     plan.push(() => {
       if (edge.slot === 1) t.home_entrant_id = null;
       else t.away_entrant_id = null;
@@ -259,6 +268,14 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       }
     });
     return reset ? this.#release(t, null, path, plan) : null;
+  }
+  /** fed-seats.ts: the HttpError's extra, `{ [key]: boardRef(tx, t) }`, which
+   *  api-v1 spreads into `error` — key and id field read from the product's
+   *  text, never typed (ruling Q2). Only the id field: it is all the model reads. */
+  #nextMatch(t: FakeFixture): Record<string, unknown> | null {
+    const mode = this.opts.nextMatchRef ?? "product";
+    if (mode === "absent") return null;
+    return { [NEXT.wire.key]: { [NEXT.wire.idField]: mode === "foreign" ? FOREIGN_NEXT_MATCH : t.id } };
   }
   /** usecases/scoring.ts onDecided → fillSlot: the winner goes forward, into an empty seat only. */
   #fill(f: FakeFixture): void {

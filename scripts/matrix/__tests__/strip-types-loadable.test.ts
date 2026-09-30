@@ -53,6 +53,174 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(MODULES.some((f) => f.endsWith("lib/catalogue.ts"))).toBe(true);
   });
 
+  // W1c Task 4's modules, named: the walker finds them today, and a move or a
+  // rename that dropped one out of the walk would otherwise shrink the list
+  // below silently. The browser ones load playwright (a bare import) and the
+  // bench's tap helpers, so their load also proves those resolve.
+  const W1C_T4 = [
+    "lib/widths.ts", "lib/driver/envelope.ts", "lib/pads/execute.ts",
+    "lib/browser/budget.ts", "lib/browser/viewports.ts", "lib/browser/selectors.ts",
+    "lib/browser/session.ts", "lib/browser/respond.ts", "lib/browser/evidence.ts",
+  ];
+  it("W1c Task 4's modules are all in the walk", () => {
+    const missing = W1C_T4.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T4.length).toBe(9);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Task 5's page objects, named for the same reason. Their loads also
+  // prove the bench's scorer.ts and execute.ts resolve from lib/browser/pages,
+  // and that the functions evaluateAll serialises (standingsCellsOf,
+  // championFrom) survive strip-only mode as plain JS.
+  const W1C_T5 = [
+    "lib/browser/pages/ctx.ts", "lib/browser/pages/paths.ts", "lib/browser/pages/competition.ts",
+    "lib/browser/pages/division-builder.ts", "lib/browser/pages/entrants.ts", "lib/browser/pages/launch.ts",
+    "lib/browser/pages/stage-rail.ts", "lib/browser/pages/run-sheet.ts", "lib/browser/pages/fixture-console.ts",
+    "lib/browser/pages/standings.ts", "lib/browser/pages/public-division.ts",
+  ];
+  it("W1c Task 5's page objects are all in the walk", () => {
+    const missing = W1C_T5.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T5.length).toBe(11);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Task 6's modules, named for the same reason. browser-run.ts is what
+  // run.ts loads lazily (a dynamic import the module load never follows), so
+  // its own row below is the only strip-types load it gets before a live run.
+  const W1C_T6 = ["lib/driver/mixed.ts", "lib/driver/browser-driver.ts", "lib/browser/browser-run.ts"];
+  it("W1c Task 6's modules are all in the walk", () => {
+    const missing = W1C_T6.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T6.length).toBe(3);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Task 7's modules, named for the same reason. The adapters import the
+  // bench's generic adapter and tap vocabulary (ruling 38), so their load
+  // proves those resolve under strip-only mode too.
+  const W1C_T7 = [
+    "lib/pads/types.ts", "lib/pads/replay.ts", "lib/pads/generic.ts", "lib/pads/badminton.ts", "lib/pads/index.ts",
+    "lib/pads/padpage-assignability.ts", "lib/pad-sports.ts", "lib/pad-proof-set.ts", "lib/scenarios/pad-proof.ts",
+  ];
+  it("W1c Task 7's modules are all in the walk", () => {
+    const missing = W1C_T7.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T7.length).toBe(9);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Tasks 9–11: the other nine sports' pad adapters, each loaded on its own.
+  const W1C_T9_11 = [
+    "lib/pads/volleyball.ts", "lib/pads/tabletennis.ts", "lib/pads/tennis.ts",
+    "lib/pads/football.ts", "lib/pads/period.ts", "lib/pads/icehockey.ts", "lib/pads/hockey.ts",
+    "lib/pads/cricket.ts", "lib/pads/boardgame.ts", "lib/pads/carrom.ts",
+    "lib/pads/judge.ts", // fix round 1 (I-1): every fallback's judge
+  ];
+  it("W1c Tasks 9–11's modules are all in the walk", () => {
+    const missing = W1C_T9_11.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T9_11.length).toBe(11);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Task 8 (carry M-6): the served-hold preflight browser-run.ts calls
+  // before any case — its own row below is its only load before a live run.
+  const W1C_T8 = ["lib/browser/served-hold.ts"];
+  it("W1c Task 8's modules are all in the walk", () => {
+    const missing = W1C_T8.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T8.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Task 12: the layer planners and the D7 wave map (a leaf, so the
+  // planners reach it without the browser layer).
+  const W1C_T12 = ["lib/layers.ts", "lib/api-only-ui.ts"];
+  it("W1c Task 12's modules are all in the walk", () => {
+    const missing = W1C_T12.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T12.length).toBe(2);
+    expect(missing).toEqual([]);
+  });
+
+  // W1c Task 13: the parity CLI and its library (its package script's run is
+  // the only other load before Task 14's live parity).
+  const W1C_T13 = ["parity.ts", "lib/parity.ts"];
+  it("W1c Task 13's modules are all in the walk", () => {
+    const missing = W1C_T13.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T13.length).toBe(2);
+    expect(missing).toEqual([]);
+  });
+
+  // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
+  // strip-only mode that text is the stripped source, so it must compile as
+  // plain JS on its own, outside its module — rebuilt here from toString().
+  // It must also RUN there: a module constant referenced inside a loop body
+  // compiles fine and is a ReferenceError in the browser only once the loop
+  // has a row to visit. So the rebuilt functions are fed a real table and a
+  // real banner (a plain-JS twin of page-objects.test.ts's fake DOM), and each
+  // answer must equal the in-module function's on the same input.
+  const FAKE_DOM = String.raw`
+    function el(tag, attrs = {}, kids = []) {
+      const children = kids.filter((k) => typeof k !== "string");
+      const node = {
+        tagName: tag.toUpperCase(), children, nextElementSibling: null,
+        get textContent() { return kids.map((k) => (typeof k === "string" ? k : k.textContent ?? "")).join(""); },
+        getAttribute: (n) => (n in attrs ? attrs[n] : null),
+        matches(s) {
+          const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(s);
+          if (m === null) throw new Error("fake DOM: unsupported selector " + s);
+          return m[2] === undefined ? m[1] in attrs : attrs[m[1]] === m[2];
+        },
+        querySelector(s) {
+          for (const c of children) { if (c.matches(s)) return c; const deep = c.querySelector(s); if (deep !== null) return deep; }
+          return null;
+        },
+      };
+      children.forEach((c, i) => { c.nextElementSibling = children[i + 1] ?? null; });
+      return node;
+    }`;
+  it("the functions evaluateAll ships to the page compile and run from their own source, outside their module, on a real table and banner", () => {
+    const mod = (rel: string) => JSON.stringify(pathToFileURL(join(MATRIX, rel)).href);
+    const code = [
+      `const s = await import(${mod("lib/browser/pages/standings.ts")});`,
+      `const p = await import(${mod("lib/browser/pages/public-division.ts")});`,
+      `const { NAME } = await import(${mod("lib/browser/selectors.ts")});`,
+      FAKE_DOM,
+      "const rebuilt = (f) => new Function(\"return (\" + f.toString() + \")\")();",
+      "const row = (rank, name) => el('tr', {}, [el('td', {}, [rank]), el('th', { scope: 'row' }, [el('span', {}, [el('span', { title: name }, [name.slice(0, 6)])])]), el('td', {}, ['3'])]);",
+      "const table = el('table', {}, [el('caption', {}, ['Pool A']), el('thead', {}, [el('tr', {}, [el('th', { scope: 'col', title: 'Points' }, ['Pts'])])]), el('tbody', {}, [row('1', 'Matrix Player 1'), el('tr', {}, [el('td', { colspan: '3' }, ['Qualify'])]), row('2', 'Matrix Player 2')])]);",
+      "const label = NAME.championLabel.text;",
+      "const banner = el('div', {}, [el('p', {}, ['Intro']), el('p', {}, [label]), el('p', {}, [' Matrix Player 1 '])]);",
+      "const out = (cellsOf, championFrom) => ({ cells: cellsOf([table], s.CELL_SELECTORS), empty: cellsOf([], s.CELL_SELECTORS), champion: championFrom(banner.children, label), none: championFrom([], label) });",
+      "console.log(JSON.stringify({ rebuilt: out(rebuilt(s.standingsCellsOf), rebuilt(p.championFrom)), inModule: out(s.standingsCellsOf, p.championFrom) }));",
+    ].join("\n");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { cwd: resolve(MATRIX, "..", ".."), encoding: "utf8", timeout: 25_000 });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    const got = JSON.parse(r.stdout.trim()) as { rebuilt: { cells: string[][][] }; inModule: unknown };
+    expect(got.rebuilt).toEqual({ cells: [[["1", "Matrix Player 1"], ["2", "Matrix Player 2"]]], empty: [], champion: "Matrix Player 1", none: null });
+    expect(got.rebuilt).toEqual(got.inModule);
+    // The loop bodies ran: two rows were read, not zero.
+    expect(got.rebuilt.cells.flat().length).toBe(2);
+  });
+
+  // W1c Task 8 review I-1 (fix round 1): waitForFunction sends the hydration
+  // probe's SOURCE to the page as well, so it too must compile and run from
+  // its stripped source alone — fed hydrated, bare, replaced and zero elements.
+  it("the hydration probe waitForFunction ships to the page compiles and runs from its own source, outside its module", () => {
+    const code = [
+      `const c = await import(${JSON.stringify(pathToFileURL(join(MATRIX, "lib/browser/pages/ctx.ts")).href)});`,
+      "const rebuilt = new Function(\"return (\" + c.hydrationState.toString() + \")\")();",
+      "const key = c.REACT_PROPS_KEY + 'r4nd0m';",
+      "const el = (hydrated, connected = true) => Object.assign({ isConnected: connected }, hydrated ? { [key]: {} } : {});",
+      "const cases = [[el(true)], [el(true), el(false)], [el(false)], [el(true), el(true, false)], []];",
+      "const run = (f) => cases.map((els) => f({ els, prefix: c.REACT_PROPS_KEY }));",
+      "console.log(JSON.stringify({ rebuilt: run(rebuilt), inModule: run(c.hydrationState) }));",
+    ].join("\n");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { cwd: resolve(MATRIX, "..", ".."), encoding: "utf8", timeout: 25_000 });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    const got = JSON.parse(r.stdout.trim()) as { rebuilt: unknown[]; inModule: unknown[] };
+    expect(got.rebuilt).toEqual(["hydrated", false, false, "replaced", "replaced"]);
+    expect(got.rebuilt).toEqual(got.inModule);
+  });
+
   it.each(MODULES)("%s", (file) => {
     const r = spawnSync(
       process.execPath,
