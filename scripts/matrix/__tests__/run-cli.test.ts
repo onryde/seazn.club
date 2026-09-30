@@ -18,6 +18,7 @@ import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
 import { PAD_SPORTS } from "../lib/pad-sports.ts";
+import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import { HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
@@ -1436,7 +1437,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(withoutBareDashes(["--run-id=--", "--", "a", "--"])).toEqual(["--run-id=--", "a"]);
   });
 
-  it("I-3: the REAL --driver browser path — openBrowserRun → caseDriver → BrowserDriver, faked only at the page and wire — carries each case's org slug, org id, expected org id, pad policy and evidence id into its driver", async () => {
+  it("I-3: the REAL --driver browser path — openBrowserRun → caseDriver → BrowserDriver, faked only at the page and wire — carries each case's org slug, org id, expected org id, pad policy, pad registry and evidence id into its driver", async () => {
     capture();
     const dir = dirFor();
     const runId = "i3";
@@ -1478,7 +1479,8 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
         servedHold: async (base) => { preflights.push(base); return { holdMs: resolveHoldMs("2500"), found: 1, scanned: 1 }; },
         launch: async () => ({ close: async () => undefined }),
         newCase: async () => ({ page: { setDefaultTimeout: () => undefined } as unknown as CaseBrowser["page"], close: async () => undefined }),
-        env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: EMPTY_PADS, pages, transport,
+        // Carry (c): the REAL registry, so a driver built with any other is seen.
+        env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: PAD_ADAPTERS, pages, transport,
       })),
     });
     expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", runId, "--report-dir", dir])).toBe(0);
@@ -1508,6 +1510,9 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(drivers).toHaveLength(cases.length);
     for (const [i, drv] of drivers.entries()) {
       expect(drv.padPolicy, `case ${i + 1}`).toBe("first");
+      // Carry (c): the registry the run was opened with reaches every case's driver (the pad path reads it).
+      expect(drv.pads, `case ${i + 1}`).toBe(PAD_ADAPTERS);
+      expect(Object.keys(drv.pads).length, `case ${i + 1}`).toBeGreaterThan(0);
       // Carry N-2: each driver scores the case it was built for.
       const c = cases[i]!;
       expect({ ...drv.spec }, `case ${i + 1}`).toEqual({ caseId: c.caseId.replace(/@320$/, ""), row: c.row, sport: c.sport, variant: c.variant, scenario: c.scenario, canary: c.canary });

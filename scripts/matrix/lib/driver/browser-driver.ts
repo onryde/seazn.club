@@ -306,6 +306,8 @@ export class BrowserDriver implements OrganiserDriver {
   get padPolicy(): PadPolicy { return this.#policy; }
   /** The case this driver was built for (the same proof, carry N-2). */
   get spec(): CaseSpec { return this.#spec; }
+  /** The pad registry the score path reads (the same proof, Tasks 9–11 carry (c)). */
+  get pads(): PadRegistry { return this.#pads; }
 
   /** A write, on either path. Its time is taken when it SETTLES — answered,
    *  refused or unknown, the latest moment it could have committed — and the
