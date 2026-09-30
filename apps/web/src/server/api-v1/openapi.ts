@@ -222,6 +222,8 @@ export const ROUTES: RouteSpec[] = [
   // Never key-reachable (key-scopes.ts).
   { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key)", tag: "fixtures", response: z.array(S.StreamTarget) },
   { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
+  { path: "/orgs/{id}/stream-targets/{targetId}", method: "patch", summary: "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key)", tag: "fixtures", request: S.PatchStreamTarget, response: S.StreamTarget, errors: [404, 409, 422] },
+  { path: "/orgs/{id}/stream-targets/{targetId}", method: "delete", summary: "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed", tag: "fixtures", response: S.StreamTargetRemoved, errors: [404, 409] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/live", method: "get", summary: "Public org live status: every competition the org home lists, with its status and how many of its public fixtures are in play — what the org home's status chips poll", tag: "public", public: true, response: S.PublicOrgLive },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
@@ -608,6 +610,26 @@ function scopedErrorEnvelope(extra: Record<string, unknown>) {
     },
   } as const;
 }
+const STREAM_TARGET_HOLDER_PROPERTIES = {
+  type: "object",
+  description: "On TARGET_IN_USE (409): the match whose stream holds the destination (always this organisation's)",
+  properties: {
+    fixtureId: { type: ["string", "null"], format: "uuid", description: "The holding fixture; null if it was deleted" },
+    href: { type: ["string", "null"], description: "The holding fixture's organiser page; null if it was deleted" },
+    matchNo: { type: ["integer", "null"], description: "The holding fixture's number in its division; null if it was deleted" },
+    courtName: { type: ["string", "null"], description: "The holding fixture's court, when it has one" },
+    label: { type: "string", description: "The destination's own label" },
+    state: { enum: ["live", "waiting"], description: "live = a phone is sending (live or ending); waiting = requested, provisioning or warming" },
+  },
+} as const;
+const STREAM_TARGET_WRITE_409 = scopedErrorEnvelope({
+  holder: STREAM_TARGET_HOLDER_PROPERTIES,
+  other: {
+    type: "object",
+    description: "On DESTINATION_DUPLICATE (409): the active destination that already holds this stream key",
+    properties: { id: { type: "string", format: "uuid" }, label: { type: "string" } },
+  },
+});
 const STREAM_SESSION_CREATE_ERRORS = {
   402: scopedErrorEnvelope({
     featureKey: { type: "string", description: "On no_credits (402): the entitlement whose match credits ran out (streaming.relay)" },
@@ -645,6 +667,8 @@ const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> =
   },
   "POST /orgs/{id}/stream-targets": { 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
   "POST /fixtures/{id}/stream-sessions": STREAM_SESSION_CREATE_ERRORS,
+  "PATCH /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_WRITE_409, 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
+  "DELETE /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_WRITE_409 },
 };
 
 function pathParams(path: string): object[] {

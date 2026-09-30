@@ -15,7 +15,7 @@
 // D6 (owner 2026-09-30, spec §5.4): create takes NO url — the server fills it from the platform's preset. The A18
 // rtmpUrl refusals this file used to drive through createStreamTarget are unreachable through create now; each URL is
 // pinned per rule by lib/__tests__/stream-destinations.test.ts (the refusal table, plus the cases moved there in T2a).
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // The route test drives the REAL handler over the REAL session door: only
@@ -38,14 +38,15 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination } from "@/lib/stream-destinations";
-import { CreateStreamTarget, StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
-import { archiveStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
-import { rigTarget, targetEnvelope } from "@/server/relay/__tests__/_session-rig";
+import { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
+import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
+import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
+import { holdRig, rigTarget, sessionOnTarget, targetEnvelope } from "@/server/relay/__tests__/_session-rig";
 import { GET, POST } from "@/app/api/v1/orgs/[id]/stream-targets/route";
 import { createApiKey } from "../api-keys";
 import { seedOrg } from "./_rig";
 import { makeUser, seedOrg as seedSignedInOrg } from "./_seed";
-import { createStreamTarget, listStreamTargets } from "../stream-targets";
+import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -334,6 +335,147 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     await rigTarget(auth.orgId, "Unreadable");
     const list = await listStreamTargets(auth, auth.orgId);
     expect(list.find((t) => t.label === "Unreadable")).toMatchObject({ keyHint: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T2b — Rename, Replace key, Remove (spec §5.2, D2): held = an ACTIVE session references the target (holderRows).
+// Every state list is the domain's own ACTIVE_STATES / TERMINAL_STATES; every expected hold state is holdStateOf's.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
+  /** holdRig's org and fixture, with a REAL sealed youtube target (a fresh key each call). */
+  const realTarget = async () => {
+    const r = await holdRig();
+    const t = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Real", streamKey: `k-${randomUUID()}` });
+    return { ...r, targetId: t.id };
+  };
+
+  it("rename: allowed at ANY time — idle, waiting and live; the reply is the list's own row", async () => {
+    let checked = 0;
+    for (const state of [null, ...ACTIVE_STATES] as const) {
+      const r = await realTarget();
+      const targetId = r.targetId;
+      if (state) await sessionOnTarget(r.auth.orgId, r.fixtureId, targetId, state);
+      const got = await patchStreamTarget(r.auth, r.auth.orgId, targetId, { label: `Renamed ${state ?? "idle"}` });
+      expect(got).toMatchObject({ id: targetId, label: `Renamed ${state ?? "idle"}` });
+      checked++;
+    }
+    expect(checked).toBe(ACTIVE_STATES.length + 1);
+  });
+
+  it("replace key and remove are REFUSED 409 TARGET_IN_USE in EVERY active state, naming the holder; allowed in every terminal one", async () => {
+    let checked = 0;
+    for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
+      for (const op of ["replace", "remove"] as const) {
+        const r = await realTarget();
+        const targetId = r.targetId;
+        await sessionOnTarget(r.auth.orgId, r.fixtureId, targetId, state);
+        const call = op === "replace"
+          ? patchStreamTarget(r.auth, r.auth.orgId, targetId, { streamKey: `k-${randomUUID()}` })
+          : removeStreamTarget(r.auth, r.auth.orgId, targetId);
+        if (holdStateOf(state) === null) {
+          await expect(call, `${op} ${state}`).resolves.toBeTruthy();
+        } else {
+          await expect(call, `${op} ${state}`).rejects.toMatchObject({
+            status: 409, code: "TARGET_IN_USE",
+            extra: { holder: expect.objectContaining({ fixtureId: r.fixtureId, state: holdStateOf(state) }) },
+          });
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(2 * (ACTIVE_STATES.length + TERMINAL_STATES.length));
+  });
+
+  it("replace key onto a key ANOTHER active destination holds is 409 DESTINATION_DUPLICATE naming it; nothing is re-sealed", async () => {
+    const { auth } = await seedOrg();
+    const a = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "A", streamKey: "aaaa-1111-bbbb-2222-cccc" });
+    const b = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "B", streamKey: "dddd-3333-eeee-4444-ffff" });
+    await expect(patchStreamTarget(auth, auth.orgId, b.id, { streamKey: "aaaa-1111-bbbb-2222-cccc" }))
+      .rejects.toMatchObject({ status: 409, code: "DESTINATION_DUPLICATE", extra: { other: { id: a.id, label: "A" } } });
+    expect((await sql.begin((tx) => readTargetSecret(tx, auth.orgId, b.id))).streamKey).toBe("dddd-3333-eeee-4444-ffff");
+  });
+
+  it("Review Focus 2: replace key TRIMS surrounding whitespace and newlines (same fingerprint as create); whitespace-only is 422", async () => {
+    const { auth } = await seedOrg();
+    const t = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", streamKey: "aaaa-1111-bbbb-2222-cccc" });
+    await patchStreamTarget(auth, auth.orgId, t.id, { streamKey: "  abcd-1234-efgh-5678-ijkl\n" });
+    expect((await sql.begin((tx) => readTargetSecret(tx, auth.orgId, t.id))).streamKey).toBe("abcd-1234-efgh-5678-ijkl");
+    await expect(patchStreamTarget(auth, auth.orgId, t.id, { streamKey: "   " })).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("remove archives: gone from the list, 404 the second time, and re-adding the same key RESTORES the same id (sequence)", async () => {
+    const { auth } = await seedOrg();
+    const t = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Tw", streamKey: "live_42_abcdefghijklmnopqrstu" });
+    await removeStreamTarget(auth, auth.orgId, t.id);
+    expect((await listStreamTargets(auth, auth.orgId)).map((x) => x.id)).not.toContain(t.id);
+    await expect(removeStreamTarget(auth, auth.orgId, t.id)).rejects.toMatchObject({ status: 404 });
+    await expect(patchStreamTarget(auth, auth.orgId, t.id, { label: "x" })).rejects.toMatchObject({ status: 404 });
+    const back = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Tw again", streamKey: "live_42_abcdefghijklmnopqrstu" });
+    expect(back).toMatchObject({ id: t.id, label: "Tw again" });
+  });
+
+  it("another org's target is 404 for rename, replace and remove — never a 409 that confirms it exists", async () => {
+    const a = await seedOrg();
+    const b = await seedOrg();
+    const t = await createStreamTarget(a.auth, a.auth.orgId, { kind: "youtube", label: "A", streamKey: "aaaa-1111-bbbb-2222-cccc" });
+    let checked = 0;
+    for (const call of [
+      () => patchStreamTarget(b.auth, b.auth.orgId, t.id, { label: "x" }),
+      () => patchStreamTarget(b.auth, b.auth.orgId, t.id, { streamKey: "k-0123456789ab" }),
+      () => removeStreamTarget(b.auth, b.auth.orgId, t.id),
+    ]) {
+      await expect(call()).rejects.toMatchObject({ status: 404 });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the ROW LOCK, Remove's side and Replace key's side: each WAITS on a Go live holding the target, then refuses 409 once that Go live's session commits", async () => {
+    let checked = 0;
+    for (const op of ["remove", "replace"] as const) {
+      const r = await realTarget();
+      let release!: () => void;
+      const held = new Promise<void>((res) => { release = res; });
+      let locked!: () => void;
+      const lockTaken = new Promise<void>((res) => { locked = res; });
+      // Transaction A plays createSession's admission: lock the target, write a `requested` session on it, hold.
+      const goLive = sql.begin(async (tx) => {
+        expect(await lockStreamTarget(tx, r.auth.orgId, r.targetId)).toBe(true);
+        await sessionOnTarget(r.auth.orgId, r.fixtureId, r.targetId, "requested", tx);
+        locked();
+        await held;
+      });
+      try {
+        await lockTaken;
+        let settled = false;
+        const write = (op === "remove"
+          ? removeStreamTarget(r.auth, r.auth.orgId, r.targetId)
+          : patchStreamTarget(r.auth, r.auth.orgId, r.targetId, { streamKey: `k-${randomUUID()}` })
+        ).finally(() => { settled = true; });
+        write.catch(() => {});                                 // observed below; no unhandled rejection meanwhile
+        await new Promise((res) => setTimeout(res, 300));
+        expect(settled, `${op} did not wait on the target row lock`).toBe(false);
+        release();
+        await goLive;
+        // Under READ COMMITTED the waiter re-reads after A commits: the session A wrote is now the holder.
+        await expect(write, op).rejects.toMatchObject({ status: 409, code: "TARGET_IN_USE" });
+        checked++;
+      } finally {
+        release();                                             // a red above must not leave tx A holding the lock
+        await goLive.catch(() => {});                          // …or its pooled connection, until teardown times out
+      }
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("PatchStreamTarget: exactly one of label / streamKey", () => {
+    expect(PatchStreamTarget.safeParse({ label: "x" }).success).toBe(true);
+    expect(PatchStreamTarget.safeParse({ streamKey: "k" }).success).toBe(true);
+    expect(PatchStreamTarget.safeParse({}).success).toBe(false);
+    expect(PatchStreamTarget.safeParse({ label: "x", streamKey: "k" }).success).toBe(false);
+    expect(PatchStreamTarget.safeParse({ label: "x", rtmpUrl: "rtmp://a.rtmp.youtube.com/live2" }).success).toBe(false);
   });
 });
 

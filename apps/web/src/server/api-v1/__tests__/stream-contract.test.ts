@@ -201,10 +201,12 @@ const STREAM_ROUTE = /\/(stream-sessions|stream-targets)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
 describe("the relay's routes are never key-reachable", () => {
-  it("ROUTES declares exactly the five relay operations (design §6.3 / §6.1)", () => {
+  it("ROUTES declares exactly the SEVEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove)", () => {
     expect(streamRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
+      "DELETE /orgs/:id/stream-targets/:targetId",
       "GET /fixtures/:id/stream-sessions/current",
       "GET /orgs/:id/stream-targets",
+      "PATCH /orgs/:id/stream-targets/:targetId",
       "POST /fixtures/:id/stream-sessions",
       "POST /fixtures/:id/stream-sessions/:sid/stop",
       "POST /orgs/:id/stream-targets",
@@ -279,7 +281,13 @@ describe("the relay's routes are never key-reachable", () => {
     // pattern-matched, so a third route gaining `rule` still reds below.
     const sessionErr422 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["422"]!.content["application/json"].schema.properties.error;
     expect([...(sessionErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
-    const refusesDestinations = new Set(["post /api/v1/orgs/{id}/stream-targets", "post /api/v1/fixtures/{id}/stream-sessions"]);
+    // T2b: Replace key re-checks the platform's preset through the same validator (replaceTargetKey's `undialable`), so
+    // PATCH's 422 documents the same `rule` — the THIRD named route; DELETE has no 422 at all.
+    const patchErr422 = doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.patch!.responses["422"]!.content["application/json"].schema.properties.error;
+    expect([...(patchErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+    const refusesDestinations = new Set([
+      "post /api/v1/orgs/{id}/stream-targets", "post /api/v1/fixtures/{id}/stream-sessions", "patch /api/v1/orgs/{id}/stream-targets/{targetId}",
+    ]);
     let others = 0;
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
@@ -296,7 +304,7 @@ describe("the relay's routes are never key-reachable", () => {
   // Task 11 follow-up (controller ruling): a start refused `target_in_use` names the fixture holding the destination —
   // `holder: { fixtureId, courtName, label }`, or null when the index race gives no holder to name. It is a wire field,
   // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
-  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; no other route's 409 gains `holder`", () => {
+  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder` and DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
     type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
     type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
     const doc = buildOpenApiDocument() as Doc;
@@ -305,10 +313,24 @@ describe("the relay's routes are never key-reachable", () => {
     const holder = err409.properties!.holder!;
     expect(holder.type, "holder is nullable (the race-loser refusal has no holder to name)").toEqual(["object", "null"]);
     expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "label"]);
+    // T2b (spec §5.2): Replace key and Remove refuse TARGET_IN_USE naming the holder (the list's holder shape plus the
+    // destination's label — stream-target-holders.ts wireHolder), and Replace key refuses DESTINATION_DUPLICATE naming
+    // the other destination. Named routes, each with its exact key set.
+    const targetPath = "/api/v1/orgs/{id}/stream-targets/{targetId}";
+    let directory = 0;
+    for (const method of ["patch", "delete"] as const) {
+      const e = doc.paths[targetPath]![method]!.responses["409"]!.content["application/json"].schema.properties.error;
+      expect(Object.keys(e.properties ?? {}).sort(), method).toEqual(["code", "current_seq", "holder", "message", "other"]);
+      expect(Object.keys(e.properties!.holder!.properties ?? {}).sort(), method).toEqual(["courtName", "fixtureId", "href", "label", "matchNo", "state"]);
+      expect(Object.keys(e.properties!.other!.properties ?? {}).sort(), method).toEqual(["id", "label"]);
+      directory++;
+    }
+    expect(directory).toBe(2);
+    const documentsHolder = new Set(["post /api/v1/fixtures/{id}/stream-sessions", `patch ${targetPath}`, `delete ${targetPath}`]);
     let others = 0;
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
-        if (`${method} ${path}` === "post /api/v1/fixtures/{id}/stream-sessions") continue;
+        if (documentsHolder.has(`${method} ${path}`)) continue;
         const e = o.responses["409"]?.content["application/json"].schema.properties.error;
         if (!e) continue;
         expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");

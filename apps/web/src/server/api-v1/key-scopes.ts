@@ -340,6 +340,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/stream-sessions/:sid/stop",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
+  "PATCH /orgs/:id/stream-targets/:targetId",
+  "DELETE /orgs/:id/stream-targets/:targetId",
   "POST /registrations/:id/refund",
   // Destructive + money-adjacent (payments-hardening P0-1): deleting a
   // competition cascades registrations/passes; console has no button —

@@ -35,7 +35,7 @@ import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/e
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
-import { readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
+import { lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
@@ -45,6 +45,7 @@ import {
   lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError } from "./stream-targets";
+import { holderRows } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
@@ -1052,14 +1053,13 @@ export async function createSession(
     captureError(err, { orgId, route: "relay.session.monthly_grant" });
   }
 
-  const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
+  const [overlay, relay, balance, restartWithinReuseWindow, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
     creditBalance(sql, orgId),
     // I2 (§5.2): a restart of THIS fixture inside the reuse window costs nothing, so `admit` waives the balance gate for
     // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
     reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
-    sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`,
     deps.drivers.ingest.storageUsage().then(storageUsageForColumns),   // outside the transaction; G7: fitted to the integer columns
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
     // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
@@ -1070,11 +1070,15 @@ export async function createSession(
   const viaOverride = relayOverride?.bool_value === true;
 
   const sessionId = await (sql.begin(async (tx) => {
+    // Spec §5.2: the target ROW LOCK, taken inside the admission transaction and BEFORE admit reads it — Replace key and
+    // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
+    // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
+    const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
     const headroom = await storageHeadroomMinutes(tx, usage, deps.now());
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: target.length === 1, headroomMinutes: headroom,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {
@@ -1476,4 +1480,11 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
   if (!row || row.stream_url !== null || row.kind !== "youtube" || !row.watch_url) return;
   const actor: AuthCtx = { orgId: row.org_id, via: "session", userId: row.created_by, role: "owner", keyId: null };
   await setFixtureStreamUrl(actor, row.fixture_id, row.watch_url);
+}
+
+/** D2 — before Replace key or Remove reads "held", each current holder of the target gets its lazy expiry, the tick
+ *  Go live's `targetHolderFor` already gives it: a session stuck past its deadline must not refuse a Remove forever.
+ *  Outside any transaction (expiry may call the provider). Called by the stream-targets [targetId] route. */
+export async function expireTargetHolders(orgId: string, targetId: string, deps: SessionDeps): Promise<void> {
+  for (const h of await holderRows(sql, { orgId, targetId })) await applyExpiry(h.sessionId, deps);
 }

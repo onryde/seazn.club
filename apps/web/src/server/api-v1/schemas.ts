@@ -1403,6 +1403,14 @@ export const StreamTarget = z.object({
 });
 export type StreamTarget = z.infer<typeof StreamTarget>;
 
+/** Spec §5.2 — Rename (`{label}`, allowed at any time) or Replace key (`{streamKey}`, refused while held). Exactly one. */
+export const PatchStreamTarget = z
+  .object({ label: z.string().min(1).max(80).optional(), streamKey: z.string().min(1).max(200).optional() })
+  .strict()
+  .refine((b) => (b.label === undefined) !== (b.streamKey === undefined), { message: "send exactly one of label or streamKey" });
+export type PatchStreamTarget = z.infer<typeof PatchStreamTarget>;
+export const StreamTargetRemoved = z.object({ removed: z.literal(true) });
+
 /** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
 export const RelayHeartbeat = z
   .object({

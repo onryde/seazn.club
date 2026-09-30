@@ -11,9 +11,11 @@ import { HttpError } from "@/lib/errors";
 import { DESTINATION_NOT_ALLOWED, STREAM_PLATFORM_PRESETS, checkDestination, type DestinationRefusal } from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStreamTarget, StreamTarget } from "@/server/api-v1/schemas";
-import { insertStreamTarget, readKeyHints, type StoredStreamTarget } from "@/server/relay/secret-columns";
-import { holderRows, listHolder, type TargetHolder } from "./stream-target-holders";
+import type { CreateStreamTarget, PatchStreamTarget, StreamTarget } from "@/server/api-v1/schemas";
+import {
+  archiveStreamTarget, insertStreamTarget, lockStreamTarget, readKeyHints, replaceTargetKey, type StoredStreamTarget,
+} from "@/server/relay/secret-columns";
+import { holderRows, listHolder, wireHolder, type TargetHolder } from "./stream-target-holders";
 
 // English API sentences, one per rule. Never the URL: its path can carry the stream key.
 const REFUSAL_MESSAGE: Record<DestinationRefusal, string> = {
@@ -79,4 +81,57 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   const row = (await listStreamTargets(auth, orgId)).find((t) => t.id === stored.id);
   if (!row) throw new HttpError(409, "the destination changed while it was being saved; try again");
   return row;
+}
+
+/** Spec §5.2 — 409 TARGET_IN_USE, naming the match that holds the destination. Uppercase: the spec's code for the
+ *  Directory's refusals (Go live's own refusal keeps its lowercase `target_in_use`). */
+export function targetHeld(h: TargetHolder): HttpError {
+  return new HttpError(
+    409,
+    `the destination "${h.label}" is ${h.state === "live" ? "live" : "waiting for a phone"} on ${h.matchNo === null ? "another match" : `match ${h.matchNo}`}`,
+    "TARGET_IN_USE",
+    { holder: wireHolder(h) },
+  );
+}
+
+const targetNotFound = () => new HttpError(404, "stream target not found");
+
+export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: string, body: PatchStreamTarget): Promise<StreamTarget> {
+  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  if (body.label !== undefined) {
+    const renamed = await sql<{ id: string }[]>`
+      update org_stream_targets set label = ${body.label}
+       where id = ${targetId} and org_id = ${orgId} and archived_at is null returning id`;
+    if (renamed.length === 0) throw targetNotFound();
+  } else {
+    // Review Focus 2: trimmed exactly as create trims, so a re-paste of the same key fingerprints the same.
+    const streamKey = (body.streamKey ?? "").trim();
+    if (streamKey === "") throw new HttpError(422, "The stream key is empty");
+    await sql.begin(async (tx) => {
+      if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+      const [holder] = await holderRows(tx, { orgId, targetId });
+      if (holder) throw targetHeld(holder);
+      const r = await replaceTargetKey(tx, orgId, targetId, streamKey);
+      if (r.ok) return;
+      if (r.reason === "not_found") throw targetNotFound();
+      if (r.reason === "undialable") throw new DestinationNotAllowedError(r.rule);
+      throw new HttpError(409, `that stream key is already saved as "${r.other.label}"`, "DESTINATION_DUPLICATE", { other: r.other });
+    });
+  }
+  const row = (await listStreamTargets(auth, orgId)).find((t) => t.id === targetId);
+  if (!row) throw targetNotFound();
+  return row;
+}
+
+/** D2 — Remove is an archive, refused while held. The lock is taken BEFORE the holder check, and createSession takes
+ *  the same lock in its admission transaction, so a Remove and a Go live on one destination serialise. */
+export async function removeStreamTarget(auth: AuthCtx, orgId: string, targetId: string): Promise<{ removed: true }> {
+  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  await sql.begin(async (tx) => {
+    if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+    const [holder] = await holderRows(tx, { orgId, targetId });
+    if (holder) throw targetHeld(holder);
+    await archiveStreamTarget(tx, orgId, targetId);
+  });
+  return { removed: true };
 }

@@ -33,6 +33,7 @@ import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -50,7 +51,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
   creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
 } from "../stream-credits";
-import { createStreamTarget } from "../stream-targets";
+import { createStreamTarget, patchStreamTarget, removeStreamTarget } from "../stream-targets";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
@@ -2994,6 +2995,73 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
     expect(n).toBe(1);
+  });
+  // T2b (spec §5.2, D2): an ARCHIVED destination is absent to Go live — the existing not-found shape, nothing made.
+  // A credit on the rig: `admit` answers no_credits BEFORE target_not_found (domain/session.ts), so a creditless rig
+  // would be refused 402 and never reach the target — the brief's `rig()` was that premise.
+  it("an ARCHIVED target is refused at createSession with the existing not-found shape: 404, no live input, no machine, no session row", async () => {
+    const r = await rig({ credits: 1 });
+    await removeStreamTarget(r.auth, r.auth.orgId, r.target.id);
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    try {
+      await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps))
+        .rejects.toMatchObject({ status: 404, message: "stream target not found" });
+      expect(ingestSpy).not.toHaveBeenCalled();
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    expect(r.runner.created).toEqual([]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(n).toBe(0);
+  });
+
+  it("the ROW LOCK: createSession WAITS on a transaction that holds the target FOR UPDATE, and an archive committed there makes it 404", async () => {
+    const r = await rig({ credits: 1 });   // a credit: see the archived case above (no_credits outranks target_not_found)
+    let release!: () => void;
+    const held = new Promise<void>((res) => { release = res; });
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((res) => { locked = res; });
+    const holder = sql.begin(async (tx) => {
+      expect(await lockStreamTarget(tx, r.auth.orgId, r.target.id)).toBe(true);
+      locked();
+      await held;
+      await archiveStreamTarget(tx, r.auth.orgId, r.target.id);
+    });
+    try {
+      await lockTaken;
+      let settled = false;
+      const start = createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)
+        .finally(() => { settled = true; });
+      start.catch(() => {});                                 // observed below; no unhandled rejection meanwhile
+      await new Promise((res) => setTimeout(res, 300));
+      expect(settled, "createSession did not wait on the target row lock").toBe(false);
+      release();
+      await holder;
+      await expect(start).rejects.toMatchObject({ status: 404, message: "stream target not found" });
+    } finally {
+      release();                                             // a red above must not leave the holder tx open
+      await holder.catch(() => {});
+    }
+  });
+
+  // §9.1: the seam between the WRITER (replaceTargetKey reseals the stored destination and refingerprints) and the READER
+  // (createSession's readTargetSecret and addOutput) — nothing else drives both.
+  it("§9.1 sequence — replace a key, THEN go live: the output dials the NEW key, and the old key is dialled nowhere", async () => {
+    const r = await rig({ credits: 1 });
+    const before = await sql.begin((tx) => readTargetSecret(tx, r.auth.orgId, r.target.id));
+    const newKey = `k-${randomUUID()}`;
+    expect(newKey).not.toBe(before.streamKey);                        // or the test cannot tell the two apart
+    await patchStreamTarget(r.auth, r.auth.orgId, r.target.id, { streamKey: newKey });
+    const added = vi.spyOn(r.ingest, "addOutput");
+    try {
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      expect(added).toHaveBeenCalledTimes(1);
+      expect(added.mock.calls[0]![1]).toMatchObject({ url: before.url, streamKey: newKey });
+    } finally {
+      added.mockRestore();
+    }
+    expect(r.ingest.liveOutputsTo({ url: before.url, streamKey: newKey })).toBe(1);
+    expect(r.ingest.liveOutputsTo(before)).toBe(0);
   });
 });
 

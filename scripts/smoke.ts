@@ -4,9 +4,10 @@
 // Teardown: when DATABASE_URL is set (CI, or `node --env-file=.env.local`), the
 // run's own test users + their orgs are purged afterwards (see cleanup). The DB
 // must be the same one the target server uses.
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import postgres from "postgres";
+import { selectSmokeSuites, type SmokeSelection } from "./smoke-select.ts";
 import {
   startAiFixtureServer,
   FIXTURE_COMPILE_BRIEF,
@@ -901,6 +902,10 @@ async function main() {
   // an org-WIDE override-false row, and writing it on the shared Pro org would
   // take the OBS panel off every fixtures tab this file asserts on.
   await streamOverlaySuite();
+
+  // --- fixture-page stream T2b: streaming destinations over real HTTP — add, rename, replace key, remove (an archive),
+  // remove again (404), re-add the same key (restored: the same id). On the shared Pro org; archives all it creates.
+  await streamTargetsSuite(admin, org2.id);
 
   // --- the above-Pro rung (Task 11): community's save-point window and its
   // ungated officials, api.write re-armed above Pro, and the rung above Pro
@@ -18473,6 +18478,73 @@ async function seedOverlayOrg(label: string, cards: boolean): Promise<{
 }
 
 /**
+ * Streaming destinations over real HTTP (fixture-page stream T2b; spec §5.2, D2, D6): add a Twitch destination →
+ * rename → replace its key → remove (an ARCHIVE) → remove again (404) → add the same key again (RESTORED: the same id)
+ * → remove. Runs on the shared Pro org and archives everything it creates, so no later suite sees a destination. The
+ * stream key is never printed. SMOKE_ONLY=streamTargets runs it alone (SELECTABLE_SUITES).
+ */
+async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> {
+  const base = `/api/v1/orgs/${orgId}/stream-targets`;
+  const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const twitchKey = () => "live_1_" + Array.from(randomBytes(24), (b) => ALNUM[b % ALNUM.length]).join("");
+  type Target = { id: string; label: string; keyHint: string | null; inUse: unknown };
+  const EXPECTED_STEPS = 7;
+  let steps = 0;
+  const step = (label: string, cond: boolean) => {
+    check(`stream targets smoke: ${label}`, cond);
+    steps++;
+  };
+  const done = () => {
+    console.log(`stream targets smoke: ${steps} steps`);
+    check(`stream targets smoke: all ${EXPECTED_STEPS} steps ran (ran ${steps})`, steps === EXPECTED_STEPS);
+  };
+
+  const key1 = twitchKey();
+  const created = await raw(admin, base, "POST", { kind: "twitch", label: "smoke-tw", streamKey: key1 });
+  const t = created.json.data as Target | undefined;
+  step(
+    `POST a Twitch destination → 201 with keyHint = the key's last 3 and inUse null (got ${created.status})`,
+    created.status === 201 && t?.keyHint === key1.slice(-3) && t?.inUse === null,
+  );
+  if (!t?.id) return done();
+  const one = `${base}/${t.id}`;
+
+  const renamed = await raw(admin, one, "PATCH", { label: "smoke-tw-2" });
+  step(
+    `PATCH {label} → 200 with the new label (got ${renamed.status})`,
+    renamed.status === 200 && (renamed.json.data as Target | undefined)?.label === "smoke-tw-2",
+  );
+
+  // A new key whose hint DIFFERS from the old one's, or the hint could not witness the replace.
+  let key2 = twitchKey();
+  while (key2.slice(-3) === key1.slice(-3)) key2 = twitchKey();
+  const replaced = await raw(admin, one, "PATCH", { streamKey: key2 });
+  step(
+    `PATCH {streamKey} → 200 with the NEW key's hint (got ${replaced.status})`,
+    replaced.status === 200 && (replaced.json.data as Target | undefined)?.keyHint === key2.slice(-3),
+  );
+
+  const removed = await raw(admin, one, "DELETE");
+  step(
+    `DELETE → 200 {removed: true} (got ${removed.status})`,
+    removed.status === 200 && (removed.json.data as { removed?: unknown } | undefined)?.removed === true,
+  );
+
+  const again = await raw(admin, one, "DELETE");
+  step(`DELETE a removed destination → 404 (got ${again.status})`, again.status === 404);
+
+  const restored = await raw(admin, base, "POST", { kind: "twitch", label: "smoke-tw-back", streamKey: key2 });
+  step(
+    `POST the same key again → 201 with the SAME id (restored, never a second row) (got ${restored.status})`,
+    restored.status === 201 && (restored.json.data as Target | undefined)?.id === t.id,
+  );
+
+  const cleanup = await raw(admin, one, "DELETE");
+  step(`DELETE (cleanup) → 200 (got ${cleanup.status})`, cleanup.status === 200);
+  done();
+}
+
+/**
  * The overlay route over real HTTP (stream overlay W1, Task 8) — the smoke
  * `overlay-tokens.ts` was owed since T1: the module has no HTTP surface of its
  * own, so its palette could only ever be proven where it is painted.
@@ -20276,7 +20348,49 @@ async function cleanup(tag: string): Promise<void> {
   );
 }
 
-main()
+// --- SMOKE_ONLY (review R1): run named suites alone, without a full smoke -----
+type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
+
+/** Suites that may run alone under SMOKE_ONLY (name = the function name without `Suite`). Add a suite here only if it
+ *  needs nothing beyond SubsetCtx. */
+const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
+  streamTargets: (c) => streamTargetsSuite(c.admin, c.org2Id),
+  v1: (c) => v1Suite(c.admin, c.org2Id, c.org2Slug),
+};
+
+/** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan
+ *  bump that lets the owner create a second org (setPlan also writes this run's staff-audit row through
+ *  bustOrgEntitlements, which cleanup()'s audit conjunct needs), org2's create and rename, and org2's public-dashboard
+ *  headroom. Every inline check in main() and every unregistered suite is skipped. */
+async function subsetSetup(): Promise<SubsetCtx> {
+  const admin = newSession();
+  const ver = await signIn(admin, `delivered+admin_${tag}@resend.dev`);
+  check("subset setup: admin signed in", !!admin.cookies["seazn_session"]);
+  await setPlan(ver.org_id, "pro", admin);
+  const org2 = (await call(admin, "/api/orgs", "POST", { name: `Second Org ${tag}` })) as { id: string; slug: string };
+  const renamed = (await call(admin, `/api/orgs/${org2.id}`, "PATCH", { name: `Renamed Org ${tag}` })) as { slug: string };
+  check("subset setup: org2 created and renamed", !!org2.id && !!renamed.slug);
+  await insertEntitlementOverride(admin, org2.id, "dashboard.public.max", 100);
+  return { admin, org2Id: org2.id, org2Slug: renamed.slug };
+}
+
+async function runSubset(names: readonly string[]): Promise<void> {
+  const ctx = await subsetSetup();
+  // Every name here passed selectSmokeSuites against this registry's own keys, so each lookup is defined.
+  for (const n of names) await SELECTABLE_SUITES[n](ctx);
+  console.log(`SMOKE_ONLY: ran ${names.length} suite(s): ${names.join(", ")} — main()'s inline checks and every other suite were skipped`);
+}
+
+// A bad SMOKE_ONLY fails before any request: exit 1 with the selector's own message.
+let selection: SmokeSelection;
+try {
+  selection = selectSmokeSuites(Object.keys(SELECTABLE_SUITES), process.env.SMOKE_ONLY);
+} catch (e) {
+  console.error("ERROR:", e instanceof Error ? e.message : String(e));
+  process.exit(1);
+}
+
+(selection.mode === "all" ? main() : runSubset(selection.names))
   .then(async () => {
     await cleanup(tag);
     console.log(`${pass} passed, ${fail} failed`);
