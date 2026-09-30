@@ -1590,6 +1590,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
 
   it("a plain browser run records its width's layer, run and case alike: 1280 is L1 (ruling 39), every L2 width is L2 (review fix round 1)", async () => {
     let checked = 0;
+    let l1 = 0;
     for (const w of BROWSER_WIDTHS) {
       capture();
       const dir = dirFor();
@@ -1598,12 +1599,14 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
       const raw = JSON.parse(readFileSync(join(dir, id, "results.json"), "utf8")) as RunResults;
       // From the declarations: L2 is lib/widths.ts's L2_WIDTHS; the one other declared width is ruling 39's 1280.
       const want = (L2_WIDTHS as readonly number[]).includes(w) ? "L2" : "L1";
-      expect(want === "L1" ? w : "L2", String(w)).toBe(want === "L1" ? 1280 : "L2");
+      // W1c final review m-12: only the L1 side has a value to pin; the old L2 arm compared "L2" with "L2".
+      if (want === "L1") { expect(w, String(w)).toBe(1280); l1++; }
       expect({ run: raw.layer, cases: raw.cases.map((c) => [c.layer, c.width]) }, String(w)).toEqual({ run: want, cases: [[want, w]] });
       checked++;
     }
     expect(checked).toBe(BROWSER_WIDTHS.length);
     expect(checked).toBeGreaterThan(1);
+    expect(l1, "exactly one declared width is L1").toBe(1);
   });
 
   it("an http run never opens a browser, and its results stay L3 over http", async () => {

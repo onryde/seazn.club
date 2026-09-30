@@ -267,7 +267,8 @@ describe("results v3 — layer, driver, width (D9, W1c Task 3)", () => {
   it("a v3 case must carry layer, driver and width; http carries width null, browser a width from the seven or 1280", () => {
     expect(() => parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, width: 1280, driver: "http" }] })).toThrow(/width/);
     expect(() => parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: 999 }] })).toThrow(/width/);
-    expect(parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: 320, layer: "L1" }] }).cases[0]!.width).toBe(320);
+    const parsed = parseResults({ ...V3_RUN, cases: [{ ...V3_CASE, driver: "browser", width: 320, layer: "L1" }] }).cases[0]!;
+    expect("width" in parsed ? parsed.width : "no width").toBe(320);
     // Each refusal is the v3 schema's own, on the case's width, naming the case — not a
     // v2 branch complaining about keys it has never heard of.
     expect(issuesOf({ ...V3_RUN, cases: [{ ...V3_CASE, width: 1280, driver: "http" }] })).toEqual([
@@ -294,7 +295,10 @@ describe("results v3 — layer, driver, width (D9, W1c Task 3)", () => {
   it("every declared browser width parses — 1280 and each L2 width; every other width, null or a fraction is refused", () => {
     let accepted = 0;
     for (const w of DECLARED_WIDTHS) {
-      for (const layer of ["L1", "L2"] as const) expect(parseResults({ ...V3_RUN, layer, driver: "browser", cases: [{ ...V3_CASE, layer, driver: "browser", width: w }] }).cases[0]!.width).toBe(w);
+      for (const layer of ["L1", "L2"] as const) {
+        const c = parseResults({ ...V3_RUN, layer, driver: "browser", cases: [{ ...V3_CASE, layer, driver: "browser", width: w }] }).cases[0]!;
+        expect("width" in c ? c.width : "no width").toBe(w);
+      }
       accepted++;
     }
     expect(accepted).toBe(1 + L2_WIDTHS.length);

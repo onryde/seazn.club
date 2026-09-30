@@ -86,6 +86,7 @@ describe("PADPROOF", () => {
   });
 
   it("pad-outcome-as-requested: a pad that stores the other side's win fails it, per fixture, from the stored fold", async () => {
+    // single-sport: the check reads only each fixture's request parity (pad-proof.ts:107), which no sport branches; the live pad-proof runs sweep all 11.
     const d = new FakePadDriver();
     d.storedAs = otherWinner;
     const r = await run(d, "badminton");
@@ -96,6 +97,7 @@ describe("PADPROOF", () => {
   });
 
   it("the canary adds the deliberately wrong expectation: an honest pad fails the check only on the marked lines", async () => {
+    // single-sport: withCanary (assertions.ts:22) marks lines without reading the sport, so one sport proves the marking.
     const r = await run(new FakePadDriver(), "generic", true);
     const c = r.byId("pad-outcome-as-requested");
     expect(padProof.canaryCheck).toBe("pad-outcome-as-requested");

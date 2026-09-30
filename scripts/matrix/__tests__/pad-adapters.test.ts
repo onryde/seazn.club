@@ -93,7 +93,7 @@ describe("the pad adapter registry", () => {
     for (const [k, a] of ADAPTERS) expect(a.sport, k).toBe(k);
   });
 
-  it("the leaf run.ts plans from is the registry's key list, and every other sport names the W1c task that owes it", () => {
+  it("the leaf run.ts plans from is the registry's key list; a sport outside it would name the W1c task that owes it — none is owed today (carry f), so the owner loop checks 0", () => {
     expect([...PAD_SPORTS]).toEqual(Object.keys(PAD_ADAPTERS));
     const owned = Object.keys(PAD_OWNER);
     expect(owned.filter((s) => PAD_SPORTS.includes(s))).toEqual([]);

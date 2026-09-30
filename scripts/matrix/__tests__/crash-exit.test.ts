@@ -19,22 +19,29 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const PRELOAD = "./scripts/matrix/lib/crash-exit.ts";
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
-/** [package script, its CLI, an argv its main refuses as usage, that exit]. */
-const CLIS: readonly (readonly [string, string, readonly string[], number])[] = [
-  ["matrix:l3", "scripts/matrix/run.ts", ["--bogus"], 2],
-  ["matrix:render", "scripts/matrix/render.ts", [], 2],
-  ["matrix:catalogue", "scripts/matrix/gen-catalogue.ts", ["--bogus"], 2],
-  ["matrix:single-sport", "scripts/matrix/single-sport.ts", ["--bogus"], 2],
-  ["matrix:model", "scripts/matrix/model.ts", ["--bogus"], 2],
-  ["reference:boundary", "scripts/reference-boundary.ts", ["a", "b"], 2],
+/** [package script, its CLI, an argv its main refuses as usage, that exit,
+ *  the arguments the script itself passes after its CLI]. W1c added
+ *  matrix:browser and matrix:parity (final review m-11). */
+const CLIS: readonly (readonly [string, string, readonly string[], number, readonly string[]])[] = [
+  ["matrix:l3", "scripts/matrix/run.ts", ["--bogus"], 2, []],
+  ["matrix:browser", "scripts/matrix/run.ts", ["--bogus"], 2, ["--driver", "browser"]],
+  ["matrix:render", "scripts/matrix/render.ts", [], 2, []],
+  ["matrix:catalogue", "scripts/matrix/gen-catalogue.ts", ["--bogus"], 2, []],
+  ["matrix:single-sport", "scripts/matrix/single-sport.ts", ["--bogus"], 2, []],
+  ["matrix:model", "scripts/matrix/model.ts", ["--bogus"], 2, []],
+  ["matrix:parity", "scripts/matrix/parity.ts", [], 2, []],
+  ["reference:boundary", "scripts/reference-boundary.ts", ["a", "b"], 2, []],
 ];
 
-/** The package script's own argv (after `node`), with its CLI swapped for `file` when given. */
-function argvOf(key: string, cli: string, file?: string): string[] {
+/** The package script's own argv (after `node`), with its CLI swapped for
+ *  `file` when given; the script's own trailing arguments are kept. */
+function argvOf(key: string, cli: string, tail: readonly string[], file?: string): string[] {
   const words = (scripts[key] ?? "").split(" ");
   expect(words[0], `${key}: runs node`).toBe("node");
-  expect(words.at(-1), `${key}: runs ${cli}`).toBe(cli);
-  return [...words.slice(1, -1), ...(file === undefined ? [cli] : [file])];
+  const at = words.length - 1 - tail.length;
+  expect(words[at], `${key}: runs ${cli}`).toBe(cli);
+  expect(words.slice(at + 1), `${key}: passes ${tail.join(" ")}`).toEqual([...tail]);
+  return [...words.slice(1, at), file ?? cli, ...tail];
 }
 
 const meter = new SpawnMeter(5);
@@ -59,20 +66,20 @@ const MAINS: readonly (readonly [string, string, number])[] = [
   ["a verdict (exitCode 1)", put("main-verdict.mjs", "process.exitCode = 1;\n"), 1],
 ];
 
-describe("an import-time crash exits 3 in every W1b CLI (final batch F-6)", { timeout: meter.budget }, () => {
-  it("every W1b CLI's package script preloads crash-exit.ts, then runs its CLI", () => {
+describe("an import-time crash exits 3 in every W1b and W1c CLI (final batch F-6, W1c final review m-11)", { timeout: meter.budget }, () => {
+  it("every W1b and W1c CLI's package script preloads crash-exit.ts, then runs its CLI", () => {
     let checked = 0;
-    for (const [key, cli] of CLIS) {
-      expect(scripts[key], key).toBe(`node --experimental-strip-types --import ${PRELOAD} ${cli}`);
+    for (const [key, cli, , , tail] of CLIS) {
+      expect(scripts[key], key).toBe([`node --experimental-strip-types --import ${PRELOAD} ${cli}`, ...tail].join(" "));
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(8);
   });
 
-  it.each(CLIS)("%s's flags: each load failure exits 3, naming the crash; a clean load exits 0; a verdict stays 1", (key, cli) => {
+  it.each(CLIS)("%s's flags: each load failure exits 3, naming the crash; a clean load exits 0; a verdict stays 1", (key, cli, _usage, _code, tail) => {
     let checked = 0;
     for (const [what, main, code] of MAINS) {
-      const r = run(argvOf(key, cli, main));
+      const r = run(argvOf(key, cli, tail, main));
       expect({ what, status: r.status }, r.stderr).toEqual({ what, status: code });
       if (code === 3) expect(r.stderr, what).toMatch(/: crashed — nothing caught /);
       else expect(r.stderr, what).not.toContain("crashed");
@@ -81,8 +88,8 @@ describe("an import-time crash exits 3 in every W1b CLI (final batch F-6)", { ti
     expect(checked).toBe(MAINS.length);
   });
 
-  it.each(CLIS)("%s, run as its package script, still answers a usage error with its own exit — the preload changes no verdict", (key, cli, argv, code) => {
-    const r = run([...argvOf(key, cli), ...argv]);
+  it.each(CLIS)("%s, run as its package script, still answers a usage error with its own exit — the preload changes no verdict", (key, cli, argv, code, tail) => {
+    const r = run([...argvOf(key, cli, tail), ...argv]);
     expect(r.status, r.stderr).toBe(code);
     expect(r.stderr).not.toContain("crashed");
   });

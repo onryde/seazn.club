@@ -84,7 +84,8 @@ describe("the case browser", () => {
   });
 
   it("a jar without the session cookie is refused BEFORE a context opens (an anonymous case would click as nobody)", async () => {
-    for (const jar of [{}, { seazn_org: "o1" }, { [SESSION_COOKIE]: "" }]) {
+    const jars: readonly Readonly<Record<string, string>>[] = [{}, { seazn_org: "o1" }, { [SESSION_COOKIE]: "" }];
+    for (const jar of jars) {
       const f = fakeBrowser();
       await expect(newCaseBrowser(f.browser, { base: BASE, cookies: jar, width: 390 }), JSON.stringify(jar)).rejects.toThrow(NoSessionCookie);
       expect(f.log).toEqual([]);
