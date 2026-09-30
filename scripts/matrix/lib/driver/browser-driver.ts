@@ -477,7 +477,11 @@ export class BrowserDriver implements OrganiserDriver {
     }
     const where = this.#whereOfStage(stageId);
     this.#ledger.record("generate", "browser");
-    return this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId)));
+    const out = await this.#write(() => this.#ui((p) => p.generateUi(this.#ctx, where, stageId)));
+    // O-1: generate keeps the browser's turn until one of its calls here has
+    // created fixtures, so generateUi's create branch runs live, not only its no-op.
+    this.#ledger.created("generate", out.created);
+    return out;
   }
 
   listFixtures(divisionId: string): Promise<FixtureRow[]> { return this.#http.listFixtures(divisionId); }

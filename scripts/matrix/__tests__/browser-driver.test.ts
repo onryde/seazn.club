@@ -22,7 +22,7 @@ import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import { PAD_OWNER } from "../lib/pad-sports.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
@@ -184,17 +184,52 @@ describe("BrowserDriver — the mixed path", () => {
     expect(http.calls).toContain("start");
   });
 
-  it("first call browser, second http: two generates reach generateUi once and the http side once — under policy all too (all widens only score)", async () => {
+  // O-1 (W1c Task 8 review, fix round 1): a case's first generate follows
+  // Start, which for a league has seeded every fixture, so it creates nothing.
+  // Sending only that call to the browser left generateUi's create-fixtures
+  // branch never run live. generate now keeps the browser's turn until a
+  // browser call CREATED fixtures.
+  it("O-1: generate stays in the browser until a browser generate creates fixtures — the no-op after Start leaves the next in the browser; after a creating one, http — under policy all too", async () => {
     for (const padPolicy of ["first", "all"] as const) {
-      const { driver, http, pageCalls } = league({ padPolicy });
+      const answers: GenerateOut[] = [
+        { created: 0, existing: 2, fixtures: [] },
+        { created: 1, existing: 2, fixtures: [{ fixture_no: 3 } as FixtureRow] },
+      ];
+      const { driver, http, pageCalls } = league({ padPolicy, pages: { generateUi: async () => answers.shift()! } });
       // The policy the driver was built with is the one it reports (read by the runner's wiring test).
       expect(driver.padPolicy).toBe(padPolicy);
       await built(driver, spec("league"));
-      await driver.generate("s1");
-      await driver.generate("s1");
+      await driver.generate("s1"); // the no-op: browser
       expect(pageCalls.filter((c) => c === "generateUi"), padPolicy).toHaveLength(1);
+      await driver.generate("s1"); // still browser: it creates one
+      expect(pageCalls.filter((c) => c === "generateUi"), padPolicy).toHaveLength(2);
+      await driver.generate("s1"); // the create path ran: http from here
+      expect(pageCalls.filter((c) => c === "generateUi"), padPolicy).toHaveLength(2);
       expect(http.calls.filter((c) => c === "generate"), padPolicy).toHaveLength(1);
+      expect(answers, padPolicy).toEqual([]);
+      expect(only(driver, "mixed-driver-coverage").evidence, padPolicy).toEqual([expect.stringMatching(/^generate: .* ran in the browser — 1 of 2 browser call\(s\) created$/)]);
     }
+  });
+
+  it("O-1, the league's own shape: every generate a no-op keeps each in the browser, and coverage notes the create path never ran — still a pass", async () => {
+    const { driver, http, pageCalls } = league();
+    await built(driver, spec("league"));
+    for (let i = 0; i < 3; i++) await driver.generate("s1");
+    expect(pageCalls.filter((c) => c === "generateUi")).toHaveLength(3);
+    expect(http.calls).not.toContain("generate");
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 3, evidence: [expect.stringMatching(/^generate: .* never ran in the browser — 3 browser call\(s\), none created/)] });
+  });
+
+  it("O-1: a browser generate the page refused created nothing — the next one is the browser's again", async () => {
+    const refusal = new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_LOCKED", "locked");
+    let calls = 0;
+    const { driver, http, pageCalls } = league({ pages: { generateUi: async () => { calls++; if (calls === 1) throw refusal; return { created: 2, existing: 0, fixtures: [{ fixture_no: 1 } as FixtureRow, { fixture_no: 2 } as FixtureRow] }; } } });
+    await built(driver, spec("league"));
+    await expect(driver.generate("s1")).rejects.toBe(refusal);
+    await driver.generate("s1");
+    await driver.generate("s1");
+    expect(pageCalls.filter((c) => c === "generateUi")).toHaveLength(2);
+    expect(http.calls.filter((c) => c === "generate")).toHaveLength(1);
   });
 
   // M-3 (fix round 1): addEntrantsUi returns [] at once for no entrants
@@ -239,7 +274,8 @@ describe("BrowserDriver — the mixed path", () => {
   });
 
   it("callCount counts the page actions and the http side's calls", async () => {
-    const { driver, http, pageCalls } = league();
+    // A creating generate, so the second one is the http side's (O-1).
+    const { driver, http, pageCalls } = league({ pages: { generateUi: async () => ({ created: 1, existing: 0, fixtures: [{ fixture_no: 1 } as FixtureRow] }) } });
     await built(driver, spec("league"));
     await driver.generate("s1");
     await driver.generate("s1");
