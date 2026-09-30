@@ -1059,27 +1059,38 @@ export async function createSession(
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);
-  // The DESTINATION guard (gap 4), placed BEFORE the storage read and before `tearDownPriorMachines` — i.e. before any
-  // provider call this create would make FOR THE NEW SESSION, so a refused start leaves no Cloudflare live input, no Fly
-  // Machine and nothing to clean up. That early placement is the whole point of refusing in code at all (the index alone
-  // would refuse only at the insert, after `ingest.storageUsage()` had already been called), and it is what G-T1's
-  // zero-provider-call assertions witness. It sits AFTER this fixture's own lazy expiry on purpose: that expiry can
-  // RELEASE this very target. The one provider call that can precede it belongs to that OLD session's teardown.
-  const holder = await targetHolderFor(body.targetId, orgId, fixtureId, deps);
-  if (holder) {
-    log.warn({ fixtureId, targetId: body.targetId, holder: holder.sessionId, court: holder.courtName }, "stream session: the destination is already held by another fixture — start refused");
-    throw targetInUse(holder);
+  // F-A5 over the destination doors (owner, 2026-09-29, "a match already streaming answers a second start before
+  // credits, destination or storage are weighed"; applied to the holder guard by the owner's answer B, 2026-09-30): a
+  // fixture STILL streaming after its own lazy expiry skips every destination door below — the holder guard and both
+  // prior-teardown refusals, each a `target_in_use` naming ANOTHER match — and is carried to admission as this start's
+  // session, so `admit` answers it `active_session` in its own order (the plan first), under the same target row lock,
+  // with the same measurement as any refused admission and nothing spent. Carried, not re-read: were it to end between
+  // here and the admission transaction, this start has skipped the destination doors and must not proceed on that.
+  const stillRunning = existing ? await activeSessionIdFor(fixtureId) : null;
+  let priorMachineSessionId: string | null = stillRunning;
+  if (!stillRunning) {
+    // The DESTINATION guard (gap 4), placed BEFORE the storage read and before `tearDownPriorMachines` — i.e. before any
+    // provider call this create would make FOR THE NEW SESSION, so a refused start leaves no Cloudflare live input, no
+    // Fly Machine and nothing to clean up. That early placement is the whole point of refusing in code at all (the index
+    // alone would refuse only at the insert, after `ingest.storageUsage()` had already been called), and it is what
+    // G-T1's zero-provider-call assertions witness. It sits AFTER this fixture's own lazy expiry on purpose: that expiry
+    // can RELEASE this very target. The one provider call that can precede it belongs to that OLD session's teardown.
+    const holder = await targetHolderFor(body.targetId, orgId, fixtureId, deps);
+    if (holder) {
+      log.warn({ fixtureId, targetId: body.targetId, holder: holder.sessionId, court: holder.courtName }, "stream session: the destination is already held by another fixture — start refused");
+      throw targetInUse(holder);
+    }
+    // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while
+    // that destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the
+    // provider). I1: ANOTHER fixture's ended session with a Machine still listed on this destination is destroyed the
+    // same way; only when that destroy fails is the start `target_in_use`, naming its court, like an active holder.
+    const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
+    if (prior.otherFixture) throw targetInUse(prior.otherFixture);
+    // C1: the passthrough twin — an ended session whose output release failed is released now, refused only if it fails again.
+    const priorOutput = await releasePriorOutputs(fixtureId, body.targetId, orgId, deps);
+    if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
+    priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
   }
-  // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while that
-  // destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the provider).
-  // I1: ANOTHER fixture's ended session with a Machine still listed on this destination is destroyed the same way; only
-  // when that destroy fails is the start `target_in_use`, naming its court, like an active holder.
-  const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
-  if (prior.otherFixture) throw targetInUse(prior.otherFixture);
-  // C1: the passthrough twin — an ended session whose output release failed is released now, refused only if it fails again.
-  const priorOutput = await releasePriorOutputs(fixtureId, body.targetId, orgId, deps);
-  if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
-  const priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
 
   // V426 (Task 14b, R3a): this month's free match credits are granted BEFORE the balance is read, so an org that has
   // never bought a pack is admitted on its plan's allowance. Idempotent and one indexed read once the period's row

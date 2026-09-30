@@ -2852,6 +2852,83 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     expect([...seen].sort(), "both hold states were witnessed").toEqual(["live", "waiting"]);
   });
 
+  // F-A5 (owner, 2026-09-29: "a match already streaming answers a second start before credits, destination or storage
+  // are weighed"), applied to the holder guard by the owner's answer B to the B2 re-review's point 6 (2026-09-30): a
+  // stale second tab's Go live on a fixture that is ALREADY streaming is answered "already running", even when the
+  // destination it picked is held by another match. The expected answer is the unheld twin's — the same fixture's own
+  // second Go live on its own destination — so the held case is held to exactly what "already running" already means.
+  it("F-A5 over the holder guard: a fixture ALREADY streaming answers a second Go live 409 active_session even when the destination it picks is HELD by another match — exactly the unheld twin's answer, nothing spent, nothing started; once it has stopped, the same Go live is target_in_use naming the holder's match", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 2, fixtures: 2, recorder: rec });
+    const deps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const [a, b] = r.fixtureIds as [string, string];
+    const two = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID()}` });
+    const running = await createSession(r.auth, a, body(r.target.id), deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, a, deps))!.state, "A is really streaming").toBe("live");
+    await createSession(r.auth, b, body(two.id), deps);
+    const holder = (await currentSession(r.auth, b, deps))!;
+    expect(["warming", "live"], "B really holds the second destination").toContain(holder.state);
+    const money = async () => ({
+      balance: await creditBalance(sql, r.auth.orgId),
+      ledger: (await sql<{ n: number; net: number }[]>`
+        select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0],
+    });
+    const aRows = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${a}`)[0]!.n;
+    const attempt = async (targetId: string) => {
+      const before = { money: await money(), rows: await aRows() };
+      await new Promise((res) => setImmediate(res));
+      rec.calls.length = 0;
+      const err = await createSession(r.auth, a, body(targetId), deps).then(() => null, (e: unknown) => e);
+      await new Promise((res) => setImmediate(res));
+      expect(await money(), "a refusal spends nothing").toEqual(before.money);
+      expect(await aRows(), "a refusal writes no session row").toBe(before.rows);
+      expect(r.runner.created, "no Machine").toEqual([]);
+      expect(err).toBeInstanceOf(HttpError);
+      const e = err as HttpError;
+      return { status: e.status, code: e.code, extra: e.extra ?? null, calls: rec.calls.map((c) => `${c.operation}:${c.sessionId ?? "-"}`) };
+    };
+    const unheld = await attempt(r.target.id);
+    expect(unheld, "the twin: already running, on its own destination").toMatchObject({ status: 409, code: "active_session" });
+    const held = await attempt(two.id);
+    expect(held, "held by another match: still 'already running' — F-A5 — never target_in_use").toEqual(unheld);
+    // …and B's hold is untouched by the refused attempt.
+    expect((await currentSession(r.auth, b, deps))!.id).toBe(holder.id);
+    // The other side of the ruling: A stopped, the same Go live is the holder's refusal, naming B's match, and asks no provider.
+    await stopSession(r.auth, a, running.sessionId, deps);
+    expect(await currentSession(r.auth, a, deps).then((s) => s?.state ?? null), "A has stopped").not.toBe("live");
+    const page = await fixturePage(b);
+    const afterStop = await attempt(two.id);
+    expect(afterStop).toMatchObject({ status: 409, code: "target_in_use", calls: [] });
+    expect((afterStop.extra as { holder: { fixtureId: string; matchNo: number } }).holder).toMatchObject({ fixtureId: b, matchNo: page.matchNo });
+  });
+
+  it("F-A5 carry: a start that skipped the destination doors because its fixture was streaming is refused active_session even if that session ENDS before the admission transaction — it never goes on to take a destination another match holds", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    const two = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID()}` });
+    const running = await createSession(r.auth, a, body(r.target.id), r.deps);
+    await createSession(r.auth, b, body(two.id), r.deps);
+    // The storage read sits between the door decision and the admission transaction: A's session ends inside it.
+    const real = r.ingest.storageUsage.bind(r.ingest);
+    let ended = 0;
+    const spy = vi.spyOn(r.ingest, "storageUsage").mockImplementation(async () => {
+      await sql`update fixture_stream_sessions set state = 'completed', ended_at = now(), end_reason = 'stopped' where id = ${running.sessionId}`;
+      ended++;
+      return real();
+    });
+    let err: unknown;
+    try {
+      err = await createSession(r.auth, a, body(two.id), r.deps).then(() => null, (e: unknown) => e);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(ended, "the race really ran").toBe(1);
+    expect(err).toMatchObject({ status: 409, code: "active_session" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${a}`;
+    expect(n, "no second session for A").toBe(1);
+  });
+
   it("G-T2 ADMITS after `completed`: a holder in the index's `completed` terminal state no longer holds the destination, so fixture B starts on the SAME target (failure class 13's other direction — a guard nothing releases bricks a paid destination)", async () => {
     const { r, a, b } = await twoFixturesOneTarget();
     const held = await createSession(r.auth, a, body(r.target.id), r.deps);
@@ -3958,6 +4035,19 @@ const DEST_REGRESSION_FA5_UNREADABLE: DestCmd[] = [
   { kind: "goLive", org: 0, fixture: 1, slot: 1 },
   { kind: "add", org: 1, platform: "youtube", key: 0, label: 0 },
 ];
+/** NOT a seeded find — the owner's answer B to the B2 re-review's point 6 (2026-09-30): F-A5 over the destination-HOLDER
+ *  guard. A stale second tab's Go live on a fixture already LIVE, picking a destination another match holds, is 409
+ *  active_session — the holder guard answered target_in_use naming the other match. Once stopped, the same Go live IS
+ *  target_in_use naming it. Slot 3 is the org-0 target the `add` appends (the rig seeds slots 0-2). */
+const DEST_REGRESSION_FA5_HELD: DestCmd[] = [
+  { kind: "goLive", org: 0, fixture: 0, slot: 0 },
+  { kind: "connect", org: 0, fixture: 0 },                // fixture 0 is LIVE on slot 0
+  { kind: "add", org: 0, platform: "youtube", key: 1, label: 1 },
+  { kind: "goLive", org: 0, fixture: 1, slot: 3 },      // fixture 1 holds the new target, waiting
+  { kind: "goLive", org: 0, fixture: 0, slot: 3 },      // the stale second Go live → 409 active_session, not target_in_use
+  { kind: "stop", org: 0, fixture: 0 },
+  { kind: "goLive", org: 0, fixture: 0, slot: 3 },      // now → 409 target_in_use naming fixture 1's match
+];
 
 describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, both platforms, an unreadable key; a model predicts every step (rule 10)", () => {
   it("no drawn ordering of add, Replace key, Remove, Go live, connect, ageing, Stop and a void breaks: one holder per target, lists = the model, same-id restore, refused iff held (naming the match), no archived or foreign take, and refusals that spend nothing and call no provider", async () => {
@@ -3965,7 +4055,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
       runs: 0, steps: 0, skipped: 0, checks: 0, refusals: 0,
       targetHoldChecks: 0, listRowsChecked: 0, archivedAbsent: 0, sessionRowsChecked: 0, tableRowsChecked: 0, refusalMoneyChecks: 0, refusalCallChecks: 0,
       heldRemoveRefusals: 0, heldReplaceRefusals: 0, sameIdRestores: 0, crossOrgRefusals: 0, archivedTakeRefusals: 0, unreadableRefusals: 0,
-      duplicateRefusals: 0, staleExpired: 0, heldAfterVoid: 0, otherPlatformNew: 0,
+      duplicateRefusals: 0, staleExpired: 0, heldAfterVoid: 0, otherPlatformNew: 0, runningOverHeld: 0,
     };
     const seen = new Set<DestCmd["kind"]>();
     await fc.assert(
@@ -4086,17 +4176,20 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
               if (fx!.voided) { tally.skipped++; return; }   // the spec says nothing of starting a voided match; not drawn
               const target = t!;
               if (fx!.session?.status === "stale") expire(fx!);            // the fixture's own lazy expiry comes first
-              if (target.org === o) {
+              // Precedence, from the declarations. F-A5 (owner, 2026-09-29: "a match already streaming answers a second start
+              // before credits, destination or storage are weighed"), over the destination-HOLDER guard too (the owner's
+              // answer B, 2026-09-30): a fixture still streaming after its own lazy expiry is active_session, and no
+              // destination door runs for it — so no other fixture's stale holder is expired either. Otherwise the holder
+              // guard (createSession's gap-4 placement, before admission), then `admit`'s order (session.ts, §6.3): the
+              // target's existence; and only then the saved key's readability. The rigs never lack the plan or the credit.
+              if (!fx!.session && target.org === o) {
                 for (const g of fixtures[o]!) if (g !== fx && g.session?.target === target.id && g.session.status === "stale") expire(g);
               }
-              // Precedence, from the declarations: the destination-HOLDER guard runs before admission (createSession's gap-4
-              // placement — a documented exception, see the report); then `admit`'s own order (session.ts, §6.3 and F-A5:
-              // "a match already streaming answers a second start before credits, destination or storage are weighed"), so
-              // active_session, then the target's existence; and only then the saved key's readability (a destination
-              // question, so after active_session by F-A5). The rigs never lack the plan or the credit.
               const other = target.org === o ? fixtures[o]!.find((g) => g !== fx && g.session?.target === target.id) : undefined;
-              if (other) expected = { status: 409, code: "target_in_use", holderNo: other.no, holderState: holdWord(other.session!) };
-              else if (fx!.session) expected = { status: 409, code: "active_session" };
+              if (fx!.session) {
+                expected = { status: 409, code: "active_session" };
+                if (other) tally.runningOverHeld++;
+              } else if (other) expected = { status: 409, code: "target_in_use", holderNo: other.no, holderState: holdWord(other.session!) };
               else if (target.org !== o || target.archived) expected = { status: 404, code: null };
               else if (target.key === null) expected = { status: 422, code: TARGET_UNREADABLE };
               run = () => createSession(auth, fx!.id, body(target.id), deps[o]!);
@@ -4236,7 +4329,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
           await check(label);
         }
       }),
-      { numRuns: DEST_MODEL_RUNS, seed: DEST_MODEL_SEED, examples: [DEST_REGRESSION_FA5_UNREADABLE, DEST_REGRESSION_ADMISSION_READ, ...DEST_PINNED].map((seq) => [seq]) },
+      { numRuns: DEST_MODEL_RUNS, seed: DEST_MODEL_SEED, examples: [DEST_REGRESSION_FA5_HELD, DEST_REGRESSION_FA5_UNREADABLE, DEST_REGRESSION_ADMISSION_READ, ...DEST_PINNED].map((seq) => [seq]) },
     );
     console.info(`destination model: ${JSON.stringify(tally)}`);
     // Anti-vacuity (rule 2): the property ran every run, checked after every step, and reached every behaviour it claims.
@@ -4245,7 +4338,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
     expect([...seen].sort()).toEqual(["add", "age", "connect", "goLive", "remove", "replace", "stop", "void"]);
     for (const k of ["targetHoldChecks", "listRowsChecked", "archivedAbsent", "sessionRowsChecked", "tableRowsChecked", "refusalMoneyChecks", "refusalCallChecks",
       "heldRemoveRefusals", "heldReplaceRefusals", "sameIdRestores", "crossOrgRefusals", "archivedTakeRefusals", "unreadableRefusals", "duplicateRefusals",
-      "staleExpired", "heldAfterVoid", "otherPlatformNew"] as const) {
+      "staleExpired", "heldAfterVoid", "otherPlatformNew", "runningOverHeld"] as const) {
       expect(tally[k], `${k}: zero checked is a failure`).toBeGreaterThan(0);
     }
   }, 240_000);
