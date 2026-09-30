@@ -17,7 +17,7 @@ Parity (HTTP vs browser, 17 common checks): identical in every run. The three 32
 
 ## Per-screen verdicts
 
-Every screen of the four judged runs (1280-f × 2 and 320a × 2) was opened, as resized crops, and read. Format: `<screen> @<width>: ok | defect <what>`.
+Every screen of the four judged runs (1280-f × 2 and 320a × 2) was opened and read: the 1280 runs as downscaled single images, the 320a runs as native-size 4-up contact sheets. Format: `<screen> @<width>: ok | defect <what>`.
 
 Known and not re-investigated:
 - **PF-1:** at 320, badminton's set scores wrap ("21-" / "16").
@@ -95,6 +95,7 @@ Duplicates by hash are listed in the report. Each one is a `-before` baseline, t
 - 10-standings @320 generic: defect-minor P-3 (worse here) — League table 8 rows, P 7 each; ONLY P and W columns fit — D, L and points are off-card, so #1 and #2 (both W5) and the "4•/5•" tie markers cannot be explained from what is visible without sideways scrolling inside the card. Order is consistent with the public table.
 - 11-public @320 generic: ok (P-3) — Generic · SCORE · League ✓, Champion MATRIX PLAYER 1 (= standings #1), table P/W/D visible, L clipped at edge; wins 19 + draws 18/2 = 9 → 28 fixtures, consistent.
 Summary 320 generic: 19 shots viewed (17 distinct). ok 15 · new minor P-4 (entrants names wrap, STATUS off-card) · new minor P-5 (away entrant truncated to "Matrix …") · P-3 on division standings hides everything past W at 320 (ranking unexplainable without scrolling) · O-1 (league generate no-op). PF-1 does not occur for generic (headline "3 – 1" one line).
+Also at 320 (generic): P-7 on 08-pad-before / 08-pad-sheet (board HOME/AWAY, "HOME SCORE"); P-8 on 11-public (rank numbers 4–8 visibly smaller than 1–3).
 
 ### 320-badminton
 
@@ -118,6 +119,7 @@ Summary 320 generic: 19 shots viewed (17 distinct). ok 15 · new minor P-4 (entr
 - 10-standings @320 badminton: ok (P-3) — Completed, League table 8 rows P7 each, W 7..0 / L 0..7, wins sum 28 = 28 fixtures (consistent), medals on top 3; columns beyond L scroll inside the card (P-3); tie-break cascade note.
 - 11-public @320 badminton: ok (P-3) — public hub "MATRIX BADMINTON", Badminton · BWF (21 POINTS) · League ✓, Champion MATRIX PLAYER 1 (matches standings #1), same table; "GAM W" header clipped at the card edge (P-3, scrolls inside card).
 Summary 320 badminton: 19 shots viewed (17 distinct). ok 15 · known PF-1 ×1 (08-pad-scored) · new minor P-4 (entrants table names wrap word-per-line, STATUS column off-card) · new minor P-5 (run sheet/console away entrant truncated to "Matrix …", opponent unidentifiable at 320) · observations O-1 (league generate is a no-op after Start) and O-2 (pad side tiles half-width column).
+Also at 320 (badminton): P-7 on 08-pad-before / 08-pad-sheet ("Sanction Home/Away", "POINTS — HOME"); P-8 on 11-public (rank numbers 4–8 visibly smaller than 1–3).
 
 ## Findings from the screens (product — none fixed in W1c; routed via `_INDEX` in Task 15)
 
