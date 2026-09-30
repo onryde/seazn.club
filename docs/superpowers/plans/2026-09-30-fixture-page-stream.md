@@ -95,7 +95,10 @@ re-run before the next batch starts.
   image and the enlarged overlay. The stream QR holds capture credentials, the Remote scoring QR the `/score/<secret>`
   link, and the check-in QR a signed bearer token from `/api/v1/fixtures/[id]/checkin-link`
   (`usecases/checkin-token` `createCheckinLink`) with which anyone can check in. The cost if this is wrong: replay loses
-  the check-in QR visual.
+  the check-in QR visual. D10a extends to **every visible rendering of a sensitive QR's payload**, since it is the same
+  token: the check-in `checkin-link` text (checkin-qr.tsx:77-80, lacks the class today), the stream paste-code field
+  `stream-qr-text` (fixture-stream-panel.tsx:1716-1723, lacks it today) and the Remote scoring `device-link-url` text
+  (device-link-panel.tsx:244-246, already carries it) all carry `ph-no-capture`.
 
 **Server contract (spec §5):**
 - Create order: an active duplicate returns the existing row; otherwise the most recent archived row is un-archived
@@ -4913,7 +4916,9 @@ en `OBS overlay`, es `Superposición OBS`, fr `Incrustation OBS`, nl `OBS-overla
   - :1702-1711: the `stream-qr` img and its skeleton go from `w-[min(264px,100%)]` to `w-[min(320px,100%)]`, and the
     img renders through `SeaznQrImage`.
 - Modify: `apps/web/src/components/v2/device-link-panel.tsx:95` and :243 (the img through `SeaznQrImage`)
-- Modify: `apps/web/src/components/v2/checkin-qr.tsx:27` and :67 (the img through `SeaznQrImage`)
+- Modify: `apps/web/src/components/v2/checkin-qr.tsx:27`, :67 (the img through `SeaznQrImage`) and :77-80
+  (`ph-no-capture` on the `checkin-link` text, D10a); `fixture-stream-panel.tsx:1716-1723` (`ph-no-capture` on the
+  `stream-qr-text` paste-code field, D10a)
 - Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` §8a, the `QR size` (:961) and
   `QR encoding` (:962) rows (dated amendment citing spec 2026-09-30 D7)
 - Modify: dictionaries (`qr.tapToEnlarge`, `qr.enlarge`, `qr.enlarged.name`, `qr.enlarged.brightness`, `qr.enlarged.close`) + gen-keys
@@ -5417,8 +5422,10 @@ because each encodes a secret or a bearer token (review R2; ruling D10a):
   mints a signed bearer token (`usecases/checkin-token` `createCheckinLink`), and anyone holding the link can check
   in, so it must not land in session replay. Today's img (checkin-qr.tsx:67-74) lacks the class; this fixes it:
   `<SeaznQrImage testId="checkin-qr" sensitive src={qr} alt={msg("checkinQr.alt")} className="mx-auto rounded-lg border border-slate-200 p-1" width={176} height={176} />`.
-  The `checkin-link` URL text beside it paints the same token and is not covered by the ruling; it is listed as an
-  owner question in T11 Step 8 rather than changed here.
+  The payload TEXT beside each QR carries `ph-no-capture` too (D10a): the check-in `<code data-testid="checkin-link">`
+  (checkin-qr.tsx:77-80) gains it in its `className`; the stream paste-code `<input data-testid="stream-qr-text">`
+  (fixture-stream-panel.tsx:1716-1723) gains it in its `className`; the Remote scoring `device-link-url` (:244-246)
+  already has it and keeps it.
   Its mint button gains `data-testid="checkin-open"` for the e2e.
 Keep the panel's own eslint comment where the old `<img>` was removed. The check-in modal's inner card already stops
 propagation, and the overlay root now stops it too, so a tap on the overlay never also closes the modal behind it.
@@ -5588,7 +5595,9 @@ export async function expectQrEnlarges(page: Page, testId: string, opts: { sensi
   the ✕ is ≥ 44 × 44 and closes it; a tap on the enlarged image closes it ("any tap").
 - The same spec, a fixture-page case: `checkin-open` mints the check-in link, then
   `expectQrEnlarges(page, "checkin-qr", { sensitive: true })` at 320×568, so the inline img, the overlay root and
-  the enlarged img each assert `ph-no-capture`. The check-in modal is still open after the
+  the enlarged img each assert `ph-no-capture`; and `await expect(page.getByTestId("checkin-link")).toHaveClass(/\bph-no-capture\b/)`
+  (D10a, the visible payload text). The stream case likewise asserts it on `stream-qr-text`, and the handover
+  walkthrough on `device-link-url`. The check-in modal is still open after the
   overlay closes (the stopPropagation witness).
 - `scorer-sheets-handover-panel.spec.ts`, after it mints the device link:
   `expectQrEnlarges(page, "dlink-qr", { sensitive: true })` at its current viewport.
@@ -5617,6 +5626,8 @@ export async function expectQrEnlarges(page: Page, testId: string, opts: { sensi
     wake lock is … RELEASED on close". Restore it, then delete the `if (disposed) void s.release()…` arm. Red: "a lock
     granted AFTER close".
   - `enlargedQrSize` returns a constant `288`. Red: "the enlarged size is DERIVED from the viewport".
+  - `checkin-qr.tsx`: `ph-no-capture` removed from the `checkin-link` `<code>` (D10a's payload-text mutant). Red: the
+    check-in case's `toHaveClass` on `checkin-link`.
   - `checkin-qr.tsx`: `sensitive` changed to `sensitive={false}` (the check-in ruling's mutant). Red: the check-in
     case's `expectQrEnlarges(…, { sensitive: true })`, at its first `toHaveClass(/\bph-no-capture\b/)`. Run that
     walkthrough case for the mutant, then the whole file for the gate.
@@ -5747,8 +5758,6 @@ is called a defect.
     - the credits line reads "9 credits" (the plural key), not the mockup's "9 left";
     - D10 needed two strings beyond the three the ruling named (`qr.enlarged.close` for the ✕, `qr.enlarge` for the
       trigger's accessible name);
-    - the check-in `checkin-link` URL text paints the same bearer token as the (now sensitive) check-in QR: should it
-      carry `ph-no-capture` too, as device-link-panel.tsx:246 does for its URL?
   - the premises list at the top of this plan.
 
   Wait for the owner's go-ahead before `git push` and `gh pr create`.
