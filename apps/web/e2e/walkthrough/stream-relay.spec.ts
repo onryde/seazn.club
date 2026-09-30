@@ -38,7 +38,7 @@ import {
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { STREAM_PLATFORMS } from "../../src/lib/stream-destinations";
+import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
@@ -322,6 +322,9 @@ async function addTargetApi(
   return res.data!;
 }
 
+/** The picker's option for a destination (T8): its name and its platform, e.g. "Club (YouTube)". */
+const optionText = (label: string, kind: keyof typeof STREAM_KIND_BRAND = "youtube"): string => `${label} (${STREAM_KIND_BRAND[kind]})`;
+
 /** SETUP: a session LIVE through the API — create, then read `current` (the server's tick) until it goes live. */
 async function goLiveApi(page: Page, fixtureId: string, targetId: string): Promise<{ id: string }> {
   await streamSlot();
@@ -492,10 +495,10 @@ const WIDTHS = [320, 768, 1280] as const;
 // A1 — the full run, once per width
 // ===========================================================================
 for (const width of WIDTHS) {
-  test(`A1 @${width}: add a destination → Go live → QR while the camera warms → LIVE (pill, REC, a ticking clock) → Stop → ENDED with its duration and "1 credit used"; the ledger holds one monthly consume`, async ({
+  test(`A1 @${width}: add a destination (in Directory, D1) → pick it → Go live → QR while the camera warms → LIVE (pill, REC, a ticking clock) → Stop → ENDED with its duration and "1 credit used"; the ledger holds one monthly consume`, async ({
     page,
   }) => {
-    const NAVS = 1; // openPhoneTab
+    const NAVS = 3; // openPhoneTab, Directory → Streaming, openPhoneTab again
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
     const rig = await seedRelayRig(page);
@@ -514,24 +517,31 @@ for (const width of WIDTHS) {
     expect((await ledger(rig.orgId)).monthly, "the page's read granted exactly the plan's rate").toBe(rate);
     const goLive = body.getByTestId("stream-go-live");
     await expect(goLive, "no destination yet: Go live is offered but cannot start").toBeDisabled();
-    await expect(body.getByTestId("stream-target")).toHaveValue("");
+    // T8 (D1): no inline add — the empty state, and the way to Directory.
+    await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
+    await expect(body.getByTestId("stream-target"), "no select over nothing").toHaveCount(0);
+    await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
+    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/directory?tab=streaming");
     await expectNoHorizontalScroll(page);
     if (width === 320) expect(await expectTapTargets(body), "idle controls hit-tested").toBeGreaterThan(3);
     await shot(panel, `A1-${width}-1-idle.png`);
 
-    // ADD A DESTINATION, tapped through the form.
+    // ADD A DESTINATION — in Directory → Streaming (D1: the one place destinations are managed), tapped through its form.
     const label = `YT ${width} ${randomBytes(2).toString("hex")}`;
-    await body.getByTestId("stream-target-add").click();
-    const form = body.getByTestId("stream-target-form");
-    await form.getByTestId("stream-target-label").fill(label);
-    await form.getByTestId("stream-target-kind").selectOption("youtube");
-    await form.getByTestId("stream-target-key").fill(`e2e-${randomBytes(6).toString("hex")}`);
+    await page.goto("/directory?tab=streaming");
+    await page.getByTestId("stream-dest-empty-add").click();
+    const form = page.getByTestId("stream-dest-form");
+    await form.getByTestId("stream-dest-platform-youtube").click();
+    await form.getByTestId("stream-dest-name").fill(label);
+    await form.getByTestId("stream-dest-key").fill(`e2e-${randomBytes(6).toString("hex")}`);
     if (width === 320) expect(await expectTapTargets(form), "destination form controls hit-tested").toBeGreaterThan(3);
-    await form.getByTestId("stream-target-save").click();
+    await form.getByTestId("stream-dest-save").click();
     await expect(form, "a saved destination closes the form").toHaveCount(0, { timeout: POLL_WAIT_MS });
-    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(label);
     const saved = await withDb((sql) => sql<{ label: string }[]>`select label from org_stream_targets where org_id = ${rig.orgId}`);
     expect(saved.map((t) => t.label), "the destination row is the one the form saved").toEqual([label]);
+    // …and back on the match, the picker offers it, selected.
+    await openPhoneTab(page, rig, f);
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(label));
     await expect(goLive, "the positive half: with a destination, Go live can start").toBeEnabled();
 
     // GO LIVE → the QR while the camera warms.
@@ -611,7 +621,7 @@ test("A2: monthly + 2 bought → Go live draws the MONTHLY credit (monthly − 1
   await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rate + bought));
   // The positive half of the post-go-live split check below: both buckets held → the split is shown.
   await expect(body.getByTestId("stream-credits-split")).toHaveText(en("stream.credits.split", { m: rate, p: bought }));
-  await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
+  await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
 
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
@@ -677,7 +687,7 @@ for (const v of A3_BALANCES) {
     };
     await expectChip(start, "before the first run");
     await expect(body.getByTestId("stream-restart-free"), "nothing consumed yet → no reuse window, no restart line").toHaveCount(0);
-    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
 
     // First run: go live (one credit), stop.
     await streamSlot(); // this test's share of the deployment's stream capacity
@@ -793,7 +803,7 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
 test("A5: a SECOND TAB taps Go live — on the same match it is refused active_session and shows the running stream; on another match with the same destination it is refused target_in_use naming the match and its court; ONE session row either way", async ({
   page,
 }) => {
-  const NAVS = 3; // openPhoneTab on each tab, then tab 2's second match
+  const NAVS = 4; // openPhoneTab on each tab, then tab 2's second match, then the Open Match link
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page, { entrants: 3 });
@@ -838,7 +848,7 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
   // Another match, the SAME destination, while f1 holds it.
   const row3 = await openPhoneTab(tab2, rig, f2);
   const body3 = row3.locator("[data-phone-body]");
-  await expect(body3.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
+  await expect(body3.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
   await body3.getByTestId("stream-go-live").click();
   // T3 (spec §3.3, §5.5): the refusal names the MATCH and its court — f1's own number through the locale's
   // breadcrumb.match — and says whether f1's phone is live or still awaited. f1 may be in either state at this instant
@@ -851,6 +861,13 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
   const all = await sessionsOf({ orgId: rig.orgId });
   expect(all.map((s) => s.fixture_id), "ONE session in the org — f1's; the refused start wrote nothing").toEqual([f1.id]);
   await shot(row3.getByTestId("stream-panel"), "A5-target-in-use.png");
+  // T8: the refusal links the holding match's page — tapped, it lands on f1 with its Stream control.
+  const open = body3.getByTestId("stream-in-use-open");
+  await expect(open).toHaveText(en("stream.inUse.open", { match: en("breadcrumb.match", { no: f1.no }) }));
+  await expect(open).toHaveAttribute("href", `${rig.divPath}/f/${f1.no}`);
+  await open.click();
+  await tab2.waitForURL((u) => u.pathname === `${rig.divPath}/f/${f1.no}`, { timeout: NAV_MS });
+  await expect(streamControl(tab2), "the holding match's page offers its Stream control").toHaveCount(1, { timeout: NAV_MS });
   await tab2.close();
 
   // Tidy: tab 1 stops its own stream once it is live.
@@ -882,7 +899,7 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
   const row = await openPhoneTab(page, rig, f);
   const body = row.locator("[data-phone-body]");
   await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rig.monthlyRate));
-  await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(target.label);
+  await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
 
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
@@ -1162,61 +1179,47 @@ for (const width of [320, 1280] as const) {
 }
 
 // ===========================================================================
-// A8 — the destination form: exactly the platforms a destination can be created on
+// A8 moved (T8): the platform list and the one-POST-per-save half now live in directory-stream-destinations.spec.ts
+// (case 1 and the S sequence) — the form is Directory's (D1).
 // ===========================================================================
-// D6: a destination is YouTube or Twitch, and the server fills the ingest url from the platform's preset. The off-list
-// host half this test used to drive is unreachable through the form AND the API now (the create schema has no url
-// field — vitest "D6 over the real route" pins the 400); per-provider host acceptance is pinned in
-// stream-destinations.test.ts. T8 relocates this test to the Directory spec.
-test("A8: the platform list is exactly YouTube and Twitch — no LinkedIn, no Other, no ingest-URL field; one destination per platform saves through the form, one POST each", async ({
-  page,
-}) => {
-  // The platforms are the one list's own (lib/stream-destinations.ts STREAM_PLATFORMS), never a list typed here.
-  const platforms: readonly string[] = STREAM_PLATFORMS;
-  // The budget is the saves': one form round trip per platform, on top of the seed.
-  const NAVS = 1; // openPhoneTab
-  test.setTimeout(SEED_MS + platforms.length * POLL_WAIT_MS + 60_000 + NAVS * NAV_MS);
-  await page.setViewportSize({ width: 1280, height: 900 });
-  const rig = await seedRelayRig(page);
-  const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
-  const body = row.locator("[data-phone-body]");
-  await body.getByTestId("stream-target-add").click();
-  const form = body.getByTestId("stream-target-form");
-  const kind = form.getByTestId("stream-target-kind");
 
-  expect(platforms.length, "the platform list names platforms").toBeGreaterThan(0);
-  const options = await kind
-    .locator("option")
-    .evaluateAll((os) => os.map((o) => ({ value: (o as HTMLOptionElement).value, text: (o.textContent ?? "").trim() })));
-  expect(options.map((o) => o.value), "the form offers exactly STREAM_PLATFORMS, in its order").toEqual([...platforms]);
-  expect(options.map((o) => o.text), "and names them by brand").toEqual(["YouTube", "Twitch"]);
-  expect(options.filter((o) => /linkedin/i.test(o.value) || /linkedin/i.test(o.text)), "no LinkedIn option").toEqual([]);
-  await expect(form.getByTestId("stream-target-rtmp"), "no ingest-URL field: the server fills it").toHaveCount(0);
-  await shot(form, "A8-platforms.png");
+// ===========================================================================
+// A13 — a destination list that fails to load is an ERROR with Retry, never "none" (T8, spec §3.3)
+// ===========================================================================
+for (const width of [320, 1280] as const) {
+  test(`A13 @${width}: the destination read FAILS → the load error with Retry, Go live disabled and never "no destinations"; Retry after the route recovers → the seeded destination, selected, and Go live enabled`, async ({
+    page,
+  }) => {
+    const NAVS = 1; // openPhoneTab
+    test.setTimeout(SEED_MS + 2 * POLL_WAIT_MS + NAVS * NAV_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRelayRig(page);
+    const target = await addTargetApi(page, rig.orgId, { label: `A13 destination ${width}` });
+    const LIST = "**/api/v1/orgs/*/stream-targets";
+    let failed = 0;
+    await page.route(LIST, (r) => {
+      failed++;
+      return r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "INTERNAL", message: "boom" } }) });
+    });
+    const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
+    const body = row.locator("[data-phone-body]");
+    const loadError = body.getByTestId("stream-dest-load-error");
+    await expect(loadError).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(loadError).toContainText(en("stream.dest.loadError"));
+    expect(failed, "the list read WAS refused").toBeGreaterThan(0);
+    await expect(body.getByTestId("stream-dest-empty"), "an unread list is not an empty one").toHaveCount(0);
+    await expect(body.getByTestId("stream-go-live")).toBeDisabled();
+    await expectNoHorizontalScroll(page);
+    if (width === 320) expect(await expectTapTargets(body), "load-error controls hit-tested").toBeGreaterThan(1);
+    await shot(row.getByTestId("stream-panel"), `A13-${width}-load-error.png`);
 
-  let posts = 0;
-  page.on("request", (r) => {
-    if (r.method() === "POST" && r.url().includes(`/api/v1/orgs/${rig.orgId}/stream-targets`)) posts++;
+    await page.unroute(LIST);
+    await body.getByTestId("stream-dest-retry").click();
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label), { timeout: POLL_WAIT_MS });
+    await expect(loadError).toHaveCount(0);
+    await expect(body.getByTestId("stream-go-live")).toBeEnabled();
   });
-  let saved = 0;
-  for (const platform of platforms) {
-    const label = `Dest ${platform}`;
-    if ((await form.count()) === 0) await body.getByTestId("stream-target-add").click();
-    await form.getByTestId("stream-target-label").fill(label);
-    await kind.selectOption(platform);
-    await form.getByTestId("stream-target-key").fill(`k-${platform}-${randomBytes(3).toString("hex")}`);
-    await form.getByTestId("stream-target-save").click();
-    await expect(form, `${platform}: saved and closed`).toHaveCount(0, { timeout: POLL_WAIT_MS });
-    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(label);
-    saved++;
-  }
-  expect(saved, "one save per platform").toBe(platforms.length);
-  expect(posts, "every save WAS sent — one POST each").toBe(platforms.length);
-  const rows = await withDb((sql) => sql<{ label: string; kind: string }[]>`
-    select label, kind from org_stream_targets where org_id = ${rig.orgId} order by created_at`);
-  expect(rows, "every save is a row, of the platform chosen").toEqual(platforms.map((p) => ({ label: `Dest ${p}`, kind: p })));
-  await expect(body.getByTestId("stream-target").locator("option")).toHaveCount(platforms.length);
-});
+}
 
 // ===========================================================================
 // A9 — one control set, whatever the width

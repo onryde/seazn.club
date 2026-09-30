@@ -418,7 +418,12 @@ for (const width of [320, 1280] as const) {
     expect(await listApi(page, rig.orgId), "the API list excludes it").toEqual([]);
     // …and the fixture's picker no longer offers it.
     body = await openPhoneTab(page, rig, f.no);
+    // The match reopens on its ENDED card (the latest session); Start another is the way back to the picker.
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+    await body.getByTestId("stream-again").click();
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
     await expect(body.getByTestId("stream-target").locator(`option[value="${id}"]`), "gone from the fixture picker").toHaveCount(0);
+    await expect(body.getByTestId("stream-dest-empty"), "the org's only destination is gone: the picker's empty state").toBeVisible();
 
     // 7. RE-ADD the same key under a new name: the SAME destination comes back (D2).
     panel = await openStreaming(page);
@@ -830,3 +835,32 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
     select label, archived_at is not null as archived from org_stream_targets where id = ${t.id}`);
   expect(row, "the first org's destination is untouched").toEqual({ label: t.label, archived: false });
 });
+
+// ===========================================================================
+// 10 — the fixture panel's picker, and "Manage destinations" (T8, D1)
+// ===========================================================================
+for (const width of [320, 768, 1280] as const) {
+  test(`10 @${width}: the fixture panel's picker names each destination and its platform, offers no inline add, and 'Manage destinations' opens Directory → Streaming in a NEW tab`, async ({ page }) => {
+    const NAVS = 2; // the fixture page, the new tab
+    test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVE_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRig(page, { entrants: 2 });
+    const yt = await addTargetApi(page, rig.orgId, { label: `Court 1 ${rig.tag}` });
+    const tw = await addTargetApi(page, rig.orgId, { label: `Twitch ${rig.tag}`, kind: "twitch", streamKey: twitchKey() });
+    const body = await openPhoneTab(page, rig, rig.fixtures[0]!.no);
+    await expect(body.getByTestId("stream-target").locator("option")).toHaveText([`${yt.label} (${BRAND.youtube})`, `${tw.label} (${BRAND.twitch})`]);
+    await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
+    await expect(body.locator('input[type="password"]'), "D1: no key field on the match").toHaveCount(0);
+    const link = body.getByTestId("stream-manage-destinations");
+    await expect(link).toHaveText(en("stream.dest.manage"));
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expectNoHorizontalScroll(page);
+    await shot(page.locator('[data-role="fixture-stream-body"]'), `10-${width}-picker.png`);
+    const [tab] = await Promise.all([page.context().waitForEvent("page"), link.click()]);
+    await tab.waitForLoadState();
+    await expect(tab).toHaveURL(/\/directory\?tab=streaming$/);
+    await expect(tab.locator('a[href="/directory?tab=streaming"]'), "the Streaming tab is the current one").toHaveAttribute("aria-current", "page");
+    await expect(tab.locator(`[data-testid="stream-dest-row"][data-target-id="${yt.id}"]`)).toBeVisible({ timeout: NAV_MS });
+    await tab.close();
+  });
+}

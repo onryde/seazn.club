@@ -22,7 +22,8 @@
 //     effects) with the v1 transport, the checkout client, the confirm dialog
 //     and the QR encoder doubled — so the PATHS it calls, what it hands the
 //     body and what each action sends are pinned, not a source scan's guess;
-//   * `TargetForm` — its own island (it holds state).
+//   (T8, D1: the destination form moved to Directory → Streaming — the panel only picks; see
+//   stream-destinations-panel.test.tsx for the form.)
 // What none of this can see — layout, the cascade, a real Stripe iframe, a
 // real server — is the browser pass and Task 15's walkthrough.
 //
@@ -46,16 +47,15 @@ import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { LOCALES } from "@/lib/i18n-constants";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
-import { DESTINATION_NOT_ALLOWED } from "@/lib/stream-destinations";
 import {
-  DESTINATION_REFUSAL_KEYS,
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STREAM_POLL_MS,
   qrText,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
-import { StreamPlatform, type StreamTarget } from "@/server/api-v1/schemas";
+import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
+import { platformName } from "@/components/v2/stream-platform-mark";
 import {
   CheckoutSheetBoundary,
   FixtureStreamPanel,
@@ -63,14 +63,13 @@ import {
   PhoneTab,
   PhoneTabBody,
   QR_RENDER_OPTIONS,
-  TARGET_KINDS,
-  TargetForm,
   CANVAS_H,
   CANVAS_W,
   PREVIEW_MAX_W_PX,
   previewScaleFor,
   stepRadio,
   type PhoneTabBodyProps,
+  type TargetsState,
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
@@ -752,7 +751,7 @@ describe("phone first — the 44px floor is the BASE, not an override", () => {
       for (const id of ["stream-tab-obs", "stream-tab-phone", "stream-link", "stream-copy", "stream-url-input", "stream-save"]) {
         check(byTestId(island.tree(), id), id);
       }
-      // The Phone tab's own controls live in `PhoneTabBody` / `TargetForm`; their floor is swept state by state below.
+      // The Phone tab's own controls live in `PhoneTabBody`; their floor is swept state by state below.
     }
     // The positive pair: without it an empty tree passes every check above. Two passes × (the registry's style tabs +
     // the six OBS-tab controls) — derived from the registry, so a fourth theme moves the floor with it.
@@ -895,13 +894,23 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
 // ─── PhoneTabBody: every §8a / §8b state from the projection alone ──────────────────────────────────────────────────
 const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
-  view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
-  selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
+  view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
+  selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
-  onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
-  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {}, onTileIntent: () => {},
+  onSelectTarget: () => {}, onRetryTargets: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
+  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onTileIntent: () => {},
 };
-const body = (p: Partial<PhoneTabBodyProps> = {}): ReactElement[] => walk(expandWithHooks(PhoneTabBody, { ...BODY, ...p }));
+/** A loaded list — what most states render with. */
+const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
+/** `targets` may be given as a bare list (a LOADED one) — every state below that is not about the load itself. */
+type BodyArgs = Omit<Partial<PhoneTabBodyProps>, "targets"> & { targets?: StreamTarget[] | TargetsState };
+const body = ({ targets, ...p }: BodyArgs = {}): ReactElement[] =>
+  walk(expandWithHooks(PhoneTabBody, { ...BODY, ...p, targets: Array.isArray(targets) ? ok(targets) : targets ?? BODY.targets }));
+/** The list a TargetsState holds, or a failure naming the state it was in. */
+const listOf = (t: TargetsState): StreamTarget[] => {
+  if (t.status !== "ok") throw new Error(`the destinations are ${t.status}, not loaded`);
+  return t.list;
+};
 const textAt = (tree: ReactElement[], id: string): string => {
   const el = byTestId(tree, id);
   if (!el) throw new Error(`no ${id} in the tree`);
@@ -925,7 +934,9 @@ function bodyStates(): [string, ReactElement[]][] {
   return [
     ["idle, balance 0 (the credits card)", body({ view: null, balance: 0 })],
     ["idle, balance 2", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" })],
-    ["idle, the destination form open", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", showTargetForm: true })],
+    ["idle, no destinations yet", body({ view: null, balance: 2, targets: [], selectedTargetId: null })],
+    ["idle, the destination list failed to load", body({ view: null, balance: 2, targets: { status: "error" }, selectedTargetId: null })],
+    ["idle, the destination list loading", body({ view: null, balance: 2, targets: { status: "loading" }, selectedTargetId: null })],
     ["idle, a refused create", body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } })],
     ["idle, Buy more opened", body({ view: null, balance: 2, showBuy: true, checkoutError: "owner" })],
     ["provisioning", body({ view: session({ state: "provisioning", qr: null }), balance: 2 })],
@@ -1050,10 +1061,13 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(hidden).toBe(5);
   });
 
-  it("no destination yet: the select says to add one and Go live is disabled — the empty case", () => {
-    const tree = body({ view: null, balance: 2, targets: [], selectedTargetId: null });
-    expect(textAt(tree, "stream-target")).toBe(m("stream.phone.destination.none"));
-    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBe(true);
+  it("no destination yet: the empty copy with its Directory link, no select, and Go live DISABLED — even with a stale selection (the empty case)", () => {
+    for (const selectedTargetId of [null, "t1"]) {
+      const tree = body({ view: null, balance: 2, targets: [], selectedTargetId });
+      expect(textAt(tree, "stream-dest-empty"), String(selectedTargetId)).toContain(m("stream.dest.empty"));
+      expect(byTestId(tree, "stream-target"), "no select over nothing").toBeUndefined();
+      expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, String(selectedTargetId)).toBe(true);
+    }
   });
 
   it("balance ≥ 1: Buy more OPENS the pack chooser — it never picks a pack for the organiser", () => {
@@ -1463,8 +1477,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
   it("B7: each native select names its selection in a title, so a clipped option is still readable", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
-    expect(attr(byTestId(tree, "stream-target")!, "title")).toBe("Alt");
-    expect(attr(byTestId(body({ view: null, balance: 2, targets: [] }), "stream-target")!, "title")).toBe(m("stream.phone.destination.none"));
+    expect(attr(byTestId(tree, "stream-target")!, "title")).toBe(`Alt (${platformName(m, "twitch")})`);
     expect(String(attr(byTestId(tree, "stream-target")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "min-w-0"]));
   });
 
@@ -1520,73 +1533,93 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 });
 
-// ─── TargetForm (D10, D11) ─────────────────────────────────────────────────────────────────────────────────────────
-describe("TargetForm — the platform is labelled; D6: there is no ingest-URL field, the server fills it", () => {
-  type Save = PhoneTabBodyProps["onSaveTarget"];
-  const form = (onSave: Save = async () => {}) => renderIsland(TargetForm, { onSave, onCancel: () => {} });
-  const type = (island: ReturnType<typeof form>, id: string, value: string) =>
-    (propsOf(byTestId(island.tree(), id)!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
-  const submit = async (island: ReturnType<typeof form>) => {
-    await (propsOf(byTestId(island.tree(), "stream-target-form")!).onSubmit as (e: { preventDefault: () => void }) => Promise<void>)({ preventDefault: () => {} });
-    await Promise.resolve();
-  };
-  const fill = (island: ReturnType<typeof form>) => {
-    type(island, "stream-target-label", "Club channel");
-    type(island, "stream-target-key", "live-key-123");
-  };
-
-  it("D6: the kind select offers exactly the create schema's StreamPlatform enum (YouTube, Twitch), opens at YouTube, and never shows a raw enum id (no LinkedIn)", () => {
-    expect([...TARGET_KINDS]).toEqual([...StreamPlatform.options]);
-    const tree = form().tree();
-    const select = byTestId(tree, "stream-target-kind")!;
-    expect(attr(select, "value")).toBe("youtube");
-    const options = walk(propsOf(select).children as ReactElement[]).filter((el) => el.type === "option");
-    expect(options.map((o) => attr(o, "value"))).toEqual([...StreamPlatform.options]);
-    const labels = options.map((o) => textOf(o));
-    expect(labels).toEqual(["YouTube", "Twitch"]);
-    for (const l of labels) expect(l).not.toMatch(/custom_rtmp|linkedin/i);
-  });
-
-  it("m8: the stream KEY field keeps password managers out — never autofilled with a login, never offered for saving", () => {
-    const key = byTestId(form().tree(), "stream-target-key")!;
-    expect(attr(key, "type")).toBe("password");
-    expect(attr(key, "autoComplete")).toBe("new-password");
-    expect(attr(key, "data-1p-ignore")).toBe(true);
-    expect(attr(key, "data-lpignore")).toBe("true");
-  });
-
-  it("D6: the form has NO ingest-URL field and sends exactly kind, label, key and watch link — never a url", async () => {
-    const onSave = vi.fn<Save>(async () => {});
-    const island = form(onSave);
-    expect(byTestId(island.tree(), "stream-target-rtmp")).toBeUndefined();
-    fill(island);
-    await submit(island);
-    expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave.mock.calls[0]![0]).toEqual({ kind: "youtube", label: "Club channel", streamKey: "live-key-123", watchUrl: "" });
-    expect(byTestId(island.tree(), "stream-target-error")).toBeUndefined();
-  });
-
-  it("the server's 422 DESTINATION_NOT_ALLOWED shows the SAME rule copy; any other failure the generic one", async () => {
-    const refused = form(async () => { throw new ApiV1Error("refused", 422, DESTINATION_NOT_ALLOWED, { rule: "port" }); });
-    fill(refused);
-    await submit(refused);
-    expect(textAt(refused.tree(), "stream-target-error")).toBe(m(DESTINATION_REFUSAL_KEYS.port));
-    const other = form(async () => { throw new ApiV1Error("The stream key is empty", 422, "ERROR"); });
-    fill(other);
-    await submit(other);
-    expect(textAt(other.tree(), "stream-target-error")).toBe(m("stream.target.error"));
-  });
-
-  it("every field and button carries the unprefixed 44px floor", () => {
-    const TAPPABLE = /(^|\s)(min-h-11|h-11)(\s|$)/;
-    const tree = form().tree();
-    let seen = 0;
-    for (const el of tree) {
-      if (!["button", "select", "input"].includes(String(el.type))) continue;
-      seen++;
-      expect(String(attr(el, "className") ?? ""), String(attr(el, "data-testid") ?? el.type)).toMatch(TAPPABLE);
+// ─── T8: the picker picks from Directory (D1) ────────────────────────────────────────────────────────────────────────
+describe("T8 — the destination picker: Directory manages, the panel picks (D1)", () => {
+  it("D1: no inline add anywhere — no add button, no destination form, no key field in ANY state; 'Manage destinations' opens the Directory tab in a new tab", () => {
+    let checked = 0;
+    for (const [name, tree] of bodyStates()) {
+      for (const id of ["stream-target-add", "stream-target-form", "stream-dest-form", "stream-target-key", "stream-dest-key"]) {
+        expect(byTestId(tree, id), `${name}: ${id}`).toBeUndefined();
+      }
+      expect(tree.filter((el) => el.type === "input" && attr(el, "type") === "password"), `${name}: a key field`).toEqual([]);
+      expect(tree.filter((el) => el.type === "form"), `${name}: a form`).toEqual([]);
+      checked++;
     }
-    expect(seen).toBe(6); // label, kind, key, watch, save, cancel (D6: no url field)
+    expect(checked, "every body state was read").toBe(bodyStates().length);
+    let linked = 0;
+    for (const targets of [ok(TARGETS), ok([]), { status: "error" } as const]) {
+      const link = byTestId(body({ view: null, balance: 2, targets, selectedTargetId: null }), "stream-manage-destinations");
+      expect(link, targets.status).toBeDefined();
+      expect(link!.type).toBe("a");
+      expect(attr(link!, "href")).toBe("/directory?tab=streaming");
+      expect(attr(link!, "target")).toBe("_blank");
+      expect(attr(link!, "rel")).toBe("noopener");
+      expect(textOf(link!)).toBe(m("stream.dest.manage"));
+      linked++;
+    }
+    expect(linked).toBe(3);
+  });
+
+  it("one destination: the select and Go live ENABLED (the positive pair of the empty case)", () => {
+    const tree = body({ view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t1" });
+    expect(byTestId(tree, "stream-dest-empty")).toBeUndefined();
+    expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBeFalsy();
+  });
+
+  it("a failed destination load is an ERROR with Retry — never shown as 'none' (the silent catch this replaces)", () => {
+    let retried = 0;
+    const tree = body({ view: null, balance: 2, targets: { status: "error" }, selectedTargetId: "t1", onRetryTargets: () => retried++ });
+    const err = byTestId(tree, "stream-dest-load-error")!;
+    expect(attr(err, "role")).toBe("alert");
+    expect(textOf(err)).toContain(m("stream.dest.loadError"));
+    expect(byTestId(tree, "stream-dest-empty"), "an unread list is not an empty one").toBeUndefined();
+    expect(byTestId(tree, "stream-target")).toBeUndefined();
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "no Go live on a list nobody read").toBe(true);
+    expect(textAt(tree, "stream-dest-retry")).toBe(m("stream.dest.retry"));
+    click(byTestId(tree, "stream-dest-retry"));
+    expect(retried).toBe(1);
+  });
+
+  it("loading: neither 'none' nor an error, no select, and Go live waits", () => {
+    const tree = body({ view: null, balance: 2, targets: { status: "loading" }, selectedTargetId: "t1" });
+    for (const id of ["stream-dest-empty", "stream-dest-load-error", "stream-target"]) expect(byTestId(tree, id), id).toBeUndefined();
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBe(true);
+  });
+
+  it("each option names the destination AND its platform — every stored kind, legacy ones included", () => {
+    const all = StreamTargetKind.options.map((kind, i) => ({ ...TARGETS[0]!, id: `k${i}`, kind, label: `Dest ${i}` }));
+    const select = byTestId(body({ view: null, balance: 2, targets: all, selectedTargetId: "k0" }), "stream-target")!;
+    const options = walk(propsOf(select).children as ReactElement[]).filter((el) => el.type === "option");
+    expect(options.map((o) => textOf(o))).toEqual(all.map((t) => `${t.label} (${platformName(m, t.kind)})`));
+    expect(options.length, "every stored kind was offered").toBe(StreamTargetKind.options.length);
+  });
+
+  it("a target_in_use refusal names the match and links 'Open Match {n}' to its page; a holder whose fixture is gone shows no link", () => {
+    const held = body({
+      view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1",
+      createError: { code: "target_in_use", holder: { label: "Club YouTube", matchNo: 5, courtName: "Court 1", href: "/o/a/c/b/d/c/f/5", state: "waiting" } },
+    });
+    expect(textAt(held, "stream-create-error")).toBe(
+      m("stream.inUse.waiting", { label: "Club YouTube", match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 5 }), court: "Court 1" }) }),
+    );
+    const open = byTestId(held, "stream-in-use-open")!;
+    expect(open.type).toBe("a");
+    expect(attr(open, "href")).toBe("/o/a/c/b/d/c/f/5");
+    expect(textOf(open)).toBe(m("stream.inUse.open", { match: m("breadcrumb.match", { no: 5 }) }));
+    let none = 0;
+    for (const holder of [
+      { label: "X", matchNo: null, courtName: null, href: null, state: "live" as const },
+      { label: "X", matchNo: 7, courtName: null, href: null, state: "live" as const },
+      { label: "X", matchNo: null, courtName: null, href: "/o/a/c/b/d/c/f/7", state: "live" as const },
+    ]) {
+      const gone = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder } });
+      expect(byTestId(gone, "stream-in-use-open"), JSON.stringify(holder)).toBeUndefined();
+      none++;
+    }
+    expect(none).toBe(3);
+    const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
+    expect(byTestId(other, "stream-in-use-open"), "only an in-use refusal links a match").toBeUndefined();
   });
 });
 
@@ -1596,9 +1629,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     current: StreamSessionView | null;
     targets: StreamTarget[];
     failCurrent?: boolean;
+    /** The destination list's read fails (a network error) while set. */
+    failTargets?: boolean;
     create?: () => unknown;
     stop?: () => unknown;
-    saveTarget?: (json: unknown) => unknown;
   };
   const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
@@ -1616,8 +1650,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         // A fresh object per response, as JSON off the wire is — an identity-keyed effect must not be flattered.
         return s.current === null ? null : structuredClone(s.current);
       }
-      if (key === "GET /api/v1/orgs/o-1/stream-targets") return s.targets;
-      if (key === "POST /api/v1/orgs/o-1/stream-targets") return s.saveTarget!(options?.json);
+      if (key === "GET /api/v1/orgs/o-1/stream-targets") {
+        if (s.failTargets) throw new TypeError("Failed to fetch");
+        return structuredClone(s.targets);
+      }
       if (key === "POST /api/v1/fixtures/f-1/stream-sessions") return s.create!();
       if (/^POST \/api\/v1\/fixtures\/f-1\/stream-sessions\/[^/]+\/stop$/.test(key)) return s.stop!();
       throw new Error(`unrouted ${key}`);
@@ -1741,7 +1777,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const two = track(await mount({ current: null, targets: TARGETS }));
     expect(bodyOf(two).selectedTargetId).toBe("t1");
     expect(bodyOf(two).mode).toBe("clean");
-    expect(bodyOf(two).targets.map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(listOf(bodyOf(two).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     const none = track(await mount({ current: null, targets: [] }));
     expect(bodyOf(none).selectedTargetId).toBeNull();
   });
@@ -2442,28 +2478,40 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).view?.state).toBe("live");
   });
 
-  it("D11: re-saving the SAME destination replaces its row (A19 answers with the existing one); a new one is appended and selected", async () => {
-    const s = serve({ current: null, targets: TARGETS });
-    s.saveTarget = () => ({ ...TARGETS[0]!, label: "Club HQ" });
-    const island = track(await mount(s));
-    bodyOf(island).onAddTarget();
-    expect(bodyOf(island).showTargetForm).toBe(true);
-    bodyOf(island).onSelectTarget("t2");
-    const resaved = bodyOf(island).onSaveTarget({ kind: "youtube", label: "Club HQ", streamKey: "k", watchUrl: "" });
+  it("the list's first read is LOADING, then ok; a FAILED read is the error state (never 'none'), and Retry re-reads it and selects the first destination", async () => {
+    const s = serve({ current: null, targets: TARGETS, failTargets: true });
+    const island = track(renderIsland(PhoneTab, TAB));
     await settle();
-    await resaved;
-    expect(bodyOf(island).targets.map((t) => t.id), "a duplicate option / React key").toEqual(["t1", "t2"]);
-    expect(bodyOf(island).targets[0]!.label).toBe("Club HQ");
+    expect(bodyOf(island).targets).toEqual({ status: "error" });
+    expect(bodyOf(island).selectedTargetId, "nothing selected from a list nobody read").toBeNull();
+    const reads = () => calls().filter((c) => c === "GET /api/v1/orgs/o-1/stream-targets").length;
+    expect(reads()).toBe(1);
+    s.failTargets = false;
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(reads(), "Retry re-reads the list").toBe(2);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     expect(bodyOf(island).selectedTargetId).toBe("t1");
-    expect(bodyOf(island).showTargetForm).toBe(false);
-    const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/orgs/o-1/stream-targets" && o?.method === "POST");
-    expect(post?.[1]?.json, "an empty watch link is omitted, never sent as ''; D6: never a url").toEqual({ kind: "youtube", label: "Club HQ", streamKey: "k" });
-    s.saveTarget = () => ({ id: "t3", kind: "twitch", label: "Twitch", watchUrl: null, createdAt: "2026-09-03T10:00:00.000Z", keyHint: null, inUse: null });
-    const added = bodyOf(island).onSaveTarget({ kind: "twitch", label: "Twitch", streamKey: "k2", watchUrl: "https://www.twitch.tv/club" });
+    // A second Retry keeps a selection that still exists, and drops one that does not.
+    bodyOf(island).onSelectTarget("t2");
+    bodyOf(island).onRetryTargets();
     await settle();
-    await added;
-    expect(bodyOf(island).targets.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
-    expect(bodyOf(island).selectedTargetId).toBe("t3");
+    expect(bodyOf(island).selectedTargetId, "kept: still in the list").toBe("t2");
+    s.targets = [TARGETS[0]!];
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "t2 was removed in Directory: the first remaining").toBe("t1");
+    expect(reads()).toBe(4);
+  });
+
+  it("D1: the container never writes a destination — every call it makes is a read of the list or a session route", async () => {
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onRetryTargets();
+    await settle();
+    const writes = apiV1.mock.calls.filter(([url, o]) => /stream-targets/.test(url) && (o?.method ?? "GET") !== "GET");
+    expect(writes, "no POST, PATCH or DELETE to the destination routes").toEqual([]);
+    expect(calls().filter((c) => c === "GET /api/v1/orgs/o-1/stream-targets").length, "the positive pair: the list WAS read").toBe(2);
   });
 
   it("Try again on a failed session is the same return to idle as Start another — the refusal cleared, the destination kept", async () => {

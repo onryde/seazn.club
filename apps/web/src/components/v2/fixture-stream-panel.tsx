@@ -29,7 +29,7 @@
 //     public endpoint is unreachable still previews instead of showing an
 //     empty strip.
 import {
-  Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent, type ReactNode,
+  Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode,
 } from "react";
 import { Check, Copy, RotateCcw, Smartphone, Video } from "lucide-react";
 import QRCode from "qrcode";
@@ -43,6 +43,7 @@ import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-prov
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
+import { platformName } from "./stream-platform-mark";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
@@ -51,9 +52,7 @@ import { formatMinor, type Currency } from "@/lib/currency";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
 } from "@/lib/stream-credit-packs";
-import { STREAM_PLATFORMS, type StreamPlatform } from "@/lib/stream-destinations";
 import {
-  DESTINATION_REFUSAL_KEYS,
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STATE_PILL_KEYS,
@@ -67,7 +66,6 @@ import {
   phoneTabState,
   qrText,
   stepFor,
-  targetRefusalRule,
   type CreateErrorCode,
   type CreateErrorHolder,
   type PhoneTabState,
@@ -664,7 +662,8 @@ export function FixtureStreamPanel({
 // ─── The Phone tab (Streaming R1, lane D) ─────────────────────────────────────────────────────────────────────────────
 // §8a option A ("Stepper") and §8b option A ("Three tiles"), values from `_THEMES.md`. Three pieces, each tested where
 // it CAN be in a node harness: `PhoneTab` (the container — fetch, poll, reveal and every action), `PhoneTabBody` (pure:
-// every state is a function of its props) and `TargetForm` (the destination form, which holds its own fields).
+// every state is a function of its props). Destinations are managed in Directory → Streaming (T8, D1): the tab only
+// PICKS one, and links there.
 
 /** §7.6 via §8a's `QR encoding` row: EC-M and a 4-module quiet zone. `width` is the RASTER size — twice §8a's 264 CSS
  *  px box, so the symbol stays crisp on a 2× screen; the box, not this number, decides the painted size. */
@@ -674,15 +673,13 @@ export const QR_RENDER_OPTIONS = { errorCorrectionLevel: "M", margin: 4, width: 
  *  class, which is what "the QR box's own width, not the card's" means — two elements that cannot drift apart. */
 const QR_COLUMN_W = "w-full max-w-[290px]";
 
-/** The platform select's options (D6: YouTube and Twitch only) — lib/stream-destinations.ts STREAM_PLATFORMS itself,
- *  held EQUAL to the create schema's `StreamPlatform` enum by the panel test. */
-export const TARGET_KINDS = STREAM_PLATFORMS;
+/** The org's destinations as the picker knows them (spec §3.3): a failed read is an ERROR with Retry, never "none" —
+ *  "none" told an organiser with five saved destinations to go and add one. */
+export type TargetsState = { status: "loading" } | { status: "error" } | { status: "ok"; list: StreamTarget[] };
 
-/** Brand names are not copy. D6: the form offers the two platforms only — never an enum id, never LinkedIn. */
-const KIND_BRAND: Record<StreamPlatform, string> = {
-  youtube: "YouTube",
-  twitch: "Twitch",
-};
+/** Where destinations are managed (D1) — the Directory's Streaming tab. */
+const MANAGE_DESTINATIONS_HREF = "/directory?tab=streaming";
+const LINK = "font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700";
 
 /**
  * Arrow-key movement through a radiogroup (WAI-ARIA radio pattern): Right/Down forward, Left/Up back, wrapping, and
@@ -708,7 +705,6 @@ const ARROW = /^Arrow(Up|Down|Left|Right)$/;
 type CreateError = { code: CreateErrorCode; holder: CreateErrorHolder | null };
 /** D13: which sentence a refused checkout gets — keyed on the route's STATUS (`CheckoutSecretResult` has no code). */
 type CheckoutError = "owner" | "unknown";
-type TargetFormValues = { kind: StreamPlatform; label: string; streamKey: string; watchUrl: string };
 
 /**
  * One fixture's relay session as the organiser sees it — shared by the Phone tab and the unentitled stop probe (G2), so
@@ -933,7 +929,9 @@ export function PhoneTab({
   const msg = useMsg();
   const session = usePhoneSession(fixtureId);
   const { view, shown, state, read, setBusy } = session;
-  const [targets, setTargets] = useState<StreamTarget[]>([]);
+  const [targets, setTargets] = useState<TargetsState>({ status: "loading" });
+  // Bumped by Retry: re-runs the list's read.
+  const [targetsTry, setTargetsTry] = useState(0);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [mode, setMode] = useState<FeedMode>("clean");
   const [createError, setCreateError] = useState<CreateError | null>(null);
@@ -946,7 +944,6 @@ export function PhoneTab({
   const [noCredits, setNoCredits] = useState(false);
   const [qrImage, setQrImage] = useState<{ text: string; url: string } | null>(null);
   const [copied, setCopied] = useState(false);
-  const [showTargetForm, setShowTargetForm] = useState(false);
   const [showBuy, setShowBuy] = useState(false);
   // N2: one Checkout Session per sheet. Held from the tap until the sheet closes or the attempt is refused — a ref, so a
   // double tap landing on ONE render's handler (before `busy` has disabled anything) is refused too.
@@ -963,17 +960,27 @@ export function PhoneTab({
   };
 
   useEffect(() => {
+    let live = true;
+    // A retry shows the read in flight again, never the last answer.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTargets({ status: "loading" });
     void (async () => {
       try {
         // created_at order (listStreamTargets), so the first is the org's oldest destination.
         const list = await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`);
-        setTargets(list);
-        setSelectedTargetId((cur) => cur ?? list[0]?.id ?? null);
+        if (!live) return;
+        setTargets({ status: "ok", list });
+        // A selection that is still listed stays; one removed in Directory falls to the oldest remaining.
+        setSelectedTargetId((cur) => (cur && list.some((t) => t.id === cur) ? cur : list[0]?.id ?? null));
       } catch {
-        // an unreadable list reads as none: the select says to add one and Go live stays disabled
+        // Spec §3.3: an unreadable list is an ERROR with Retry — never "none" (the silent catch this replaces).
+        if (live) setTargets({ status: "error" });
       }
     })();
-  }, [orgId]);
+    return () => {
+      live = false;
+    };
+  }, [orgId, targetsTry]);
 
   // The QR is rendered CLIENT-SIDE from the projection — never in page HTML. m10: keyed on the payload STRING, not the
   // object — every poll is a fresh object off the wire, and an object key re-encoded the same symbol on each. The ref
@@ -1087,26 +1094,6 @@ export function PhoneTab({
     void read(true).catch(() => {}); // De: taking the paste code IS a reveal
   };
 
-  const onSaveTarget = async (form: TargetFormValues) => {
-    const watchUrl = form.watchUrl.trim();
-    const made = await apiV1<StreamTarget>(`/api/v1/orgs/${orgId}/stream-targets`, {
-      method: "POST",
-      json: {
-        kind: form.kind,
-        label: form.label,
-        streamKey: form.streamKey,
-        ...(watchUrl ? { watchUrl } : {}),
-      },
-    });
-    // D11: A19 answers a re-save of the SAME destination with the existing row — replace it by id, never append a twin
-    // (a duplicate option and a duplicate React key).
-    setTargets((list) =>
-      list.some((t) => t.id === made.id) ? list.map((t) => (t.id === made.id ? made : t)) : [...list, made],
-    );
-    setSelectedTargetId(made.id);
-    setShowTargetForm(false);
-  };
-
   // I1: a plan refusal REPLACES the tab only when there is nothing to protect. With a session up, Stop (and Cancel)
   // must survive it — the body renders the gate in the buy slot instead.
   if (planGate && state === "idle") return switchedOff(msg);
@@ -1132,7 +1119,6 @@ export function PhoneTab({
         qrDataUrl={qrDataUrl}
         now={session.now}
         copied={copied}
-        showTargetForm={showTargetForm}
         showBuy={showBuy}
         planGate={planGate}
         stopFailed={session.stopFailed}
@@ -1144,7 +1130,7 @@ export function PhoneTab({
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window.
         restartFree={view?.restartFree ?? false}
         onSelectTarget={setSelectedTargetId}
-        onAddTarget={() => setShowTargetForm((v) => !v)}
+        onRetryTargets={() => setTargetsTry((n) => n + 1)}
         onMode={setMode}
         onGoLive={() => void onGoLive()}
         onStop={() => {
@@ -1168,7 +1154,6 @@ export function PhoneTab({
           setShowBuy((v) => !v);
           setCheckoutError(null);
         }}
-        onSaveTarget={onSaveTarget}
         onTileIntent={onTileIntent}
       />
       {checkoutSecret && (
@@ -1204,7 +1189,8 @@ export interface PhoneTabBodyProps {
   split: StreamCreditSplit | null;
   /** Task 14b (R4): the plan's free match credits per month; the credits card's note names it. None below 1. */
   monthlyAllowance: number;
-  targets: StreamTarget[];
+  /** The org's destinations (T8): loading, a failed read (Retry), or the list — managed in Directory, picked here. */
+  targets: TargetsState;
   busy: boolean;
   createError: CreateError | null;
   checkoutError: CheckoutError | null;
@@ -1213,7 +1199,6 @@ export interface PhoneTabBodyProps {
   qrDataUrl: string | null;
   now: Date;
   copied: boolean;
-  showTargetForm: boolean;
   showBuy: boolean;
   /** I1: the relay was refused (a create or a checkout: plan_lacks_relay) while a session is up — the switched-off state
    *  (I4) takes the buy slot. */
@@ -1228,7 +1213,8 @@ export interface PhoneTabBodyProps {
    *  window). At balance 0 it is what keeps Go live reachable instead of the forced chooser. */
   restartFree: boolean;
   onSelectTarget: (id: string) => void;
-  onAddTarget: () => void;
+  /** Re-read the destination list after a failed read. */
+  onRetryTargets: () => void;
   onMode: (m: FeedMode) => void;
   onGoLive: () => void;
   onStop: () => void;
@@ -1237,7 +1223,6 @@ export interface PhoneTabBodyProps {
   onAgain: () => void;
   onCopy: () => void;
   onShowBuy: () => void;
-  onSaveTarget: (form: TargetFormValues) => Promise<void>;
   /** M2: a hand is on a credit tile (pointerenter, focus, touchstart) — warm the checkout sheet's chunk now. */
   onTileIntent: () => void;
 }
@@ -1376,9 +1361,11 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // m12: §8a's ending row — "every control disabled" while the last seconds flush.
   const frozen = state === "ending";
   const stopFailure = p.stopFailed ? stopError(msg, state) : null;
-  const selectedLabel =
-    p.targets.find((t) => t.id === p.selectedTargetId)?.label ??
-    (p.targets.length === 0 ? msg("stream.phone.destination.none") : undefined);
+  const targetList = p.targets.status === "ok" ? p.targets.list : [];
+  const selected = targetList.find((t) => t.id === p.selectedTargetId);
+  const optionText = (t: StreamTarget) => `${t.label} (${platformName(msg, t.kind)})`;
+  // A target_in_use refusal whose holder still has a page to open (T8): the Open Match link.
+  const inUseHolder = p.createError?.code === "target_in_use" ? p.createError.holder : null;
 
   const onModeKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!ARROW.test(e.key)) return;
@@ -1554,34 +1541,55 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
 
       {state === "idle" && !buyCard && (
         <div className="mt-3 space-y-3">
-          <label className="block text-xs text-slate-500">
-            {msg("stream.phone.destination")}
-            <select
-              data-testid="stream-target"
-              // B7: a phone's native select clips a long label — the title still names the selection.
-              title={selectedLabel}
-              value={p.selectedTargetId ?? ""}
-              onChange={(e) => p.onSelectTarget(e.target.value)}
-              className={FIELD}
-            >
-              {p.targets.length === 0 && <option value="">{msg("stream.phone.destination.none")}</option>}
-              {p.targets.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            data-testid="stream-target-add"
-            aria-expanded={p.showTargetForm}
-            onClick={p.onAddTarget}
-            className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
-          >
-            {msg("stream.phone.addDestination")}
-          </button>
-          {p.showTargetForm && <TargetForm onSave={p.onSaveTarget} onCancel={p.onAddTarget} />}
+          <div>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              {p.targets.status === "ok" && targetList.length > 0 ? (
+                <label htmlFor="stream-target" className="text-xs text-slate-500">
+                  {msg("stream.dest.label")}
+                </label>
+              ) : (
+                <span className="text-xs text-slate-500">{msg("stream.dest.label")}</span>
+              )}
+              {/* D1: destinations are added, renamed and removed in Directory only — never inline here. */}
+              <a
+                data-testid="stream-manage-destinations"
+                href={MANAGE_DESTINATIONS_HREF}
+                target="_blank"
+                rel="noopener"
+                className={`${LINK} inline-flex min-h-11 items-center text-sm md:min-h-0`}
+              >
+                {msg("stream.dest.manage")}
+              </a>
+            </div>
+            {p.targets.status === "error" ? (
+              <div data-testid="stream-dest-load-error" role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-sm text-red-700">
+                <span>{msg("stream.dest.loadError")}</span>
+                <button type="button" data-testid="stream-dest-retry" onClick={p.onRetryTargets} className="btn btn-ghost min-h-11 md:min-h-10">
+                  {msg("stream.dest.retry")}
+                </button>
+              </div>
+            ) : p.targets.status === "ok" && targetList.length === 0 ? (
+              <p data-testid="stream-dest-empty" className="mt-1 text-sm text-slate-600">
+                {msg("stream.dest.empty")}
+              </p>
+            ) : p.targets.status === "ok" ? (
+              <select
+                id="stream-target"
+                data-testid="stream-target"
+                // B7: a phone's native select clips a long label — the title still names the selection.
+                title={selected ? optionText(selected) : undefined}
+                value={p.selectedTargetId ?? ""}
+                onChange={(e) => p.onSelectTarget(e.target.value)}
+                className={FIELD}
+              >
+                {targetList.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {optionText(t)}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
           <div
             role="radiogroup"
             aria-label={msg("stream.phone.mode")}
@@ -1629,7 +1637,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           <button
             type="button"
             data-testid="stream-go-live"
-            disabled={p.busy || !p.selectedTargetId}
+            // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
+            // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
+            disabled={p.busy || !p.selectedTargetId || targetList.length === 0}
             onClick={p.onGoLive}
             className="btn btn-primary min-h-11 w-full md:min-h-10"
           >
@@ -1813,120 +1823,12 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
           {createErrorText(p.createError, msg)}
         </p>
       )}
-    </div>
-  );
-}
-
-/**
- * The destination form (D10). The platform is LABELLED, never an enum id. D6: there is no ingest-URL field — the server
- * fills it from the platform's preset — and a server 422 DESTINATION_NOT_ALLOWED still maps to its rule sentence.
- * (Kept minimal here; destinations move to Directory in T8.)
- */
-export function TargetForm({ onSave, onCancel }: { onSave: PhoneTabBodyProps["onSaveTarget"]; onCancel: () => void }) {
-  const msg = useMsg();
-  const [kind, setKind] = useState<StreamPlatform>("youtube");
-  const [label, setLabel] = useState("");
-  const [streamKey, setStreamKey] = useState("");
-  const [watchUrl, setWatchUrl] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  async function submit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setError(null);
-    setSaving(true);
-    try {
-      await onSave({ kind, label, streamKey, watchUrl });
-    } catch (err) {
-      const rule = targetRefusalRule(err);
-      setError(msg(rule ? DESTINATION_REFUSAL_KEYS[rule] : "stream.target.error"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form data-testid="stream-target-form" onSubmit={submit} className="space-y-2 rounded-lg border border-slate-200 p-3">
-      <label className="block text-xs text-slate-500">
-        {msg("stream.target.label")}
-        <input
-          data-testid="stream-target-label"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          required
-          maxLength={80}
-          autoComplete="off"
-          className={FIELD}
-        />
-      </label>
-      <label className="block text-xs text-slate-500">
-        {msg("stream.target.kind")}
-        <select
-          data-testid="stream-target-kind"
-          title={KIND_BRAND[kind]}
-          value={kind}
-          onChange={(e) => setKind(e.target.value as StreamPlatform)}
-          className={FIELD}
-        >
-          {TARGET_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {KIND_BRAND[k]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="block text-xs text-slate-500">
-        {msg("stream.target.key")}
-        <input
-          data-testid="stream-target-key"
-          type="password"
-          value={streamKey}
-          onChange={(e) => setStreamKey(e.target.value)}
-          required
-          maxLength={200}
-          // m8: a stream key is not a login. `new-password` stops the browser autofilling a saved password into it,
-          // and the two data attributes keep 1Password and LastPass from offering to save or fill it.
-          autoComplete="new-password"
-          data-1p-ignore
-          data-lpignore="true"
-          className={FIELD}
-        />
-      </label>
-      <label className="block text-xs text-slate-500">
-        {msg("stream.target.watch")}
-        <input
-          data-testid="stream-target-watch"
-          value={watchUrl}
-          onChange={(e) => setWatchUrl(e.target.value)}
-          inputMode="url"
-          autoComplete="off"
-          spellCheck={false}
-          className={FIELD}
-        />
-      </label>
-      {error !== null && (
-        <p data-testid="stream-target-error" role="alert" className="text-xs text-red-600">
-          {error}
-        </p>
+      {/* T8: the holding match's page, when it still has one — a deleted fixture has neither a number nor a page. */}
+      {inUseHolder?.href && inUseHolder.matchNo !== null && (
+        <a data-testid="stream-in-use-open" href={inUseHolder.href} className={`${LINK} inline-flex min-h-11 items-center text-xs md:min-h-0`}>
+          {msg("stream.inUse.open", { match: msg("breadcrumb.match", { no: inUseHolder.matchNo }) })}
+        </a>
       )}
-      <div className="flex flex-col gap-2 md:flex-row">
-        <button
-          type="submit"
-          data-testid="stream-target-save"
-          disabled={saving}
-          className="btn btn-primary min-h-11 w-full md:min-h-10 md:w-auto"
-        >
-          {msg("stream.target.save")}
-        </button>
-        <button
-          type="button"
-          data-testid="stream-target-cancel"
-          onClick={onCancel}
-          className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
-        >
-          {msg("stream.target.cancel")}
-        </button>
-      </div>
-    </form>
+    </div>
   );
 }
