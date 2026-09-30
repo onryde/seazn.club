@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { StreamFailReason } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
@@ -81,7 +82,7 @@ async function rig(mode: "passthrough" | "composed" = "passthrough") {
   }
   await invalidateOrgEntitlements(auth.orgId);
   await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
-  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k", watchUrl: "https://www.youtube.com/watch?v=sweep" });
+  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", streamKey: "k", watchUrl: "https://www.youtube.com/watch?v=sweep" });
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
   // Admission reserves against EVERY active session in the database (one account-wide pool), so the fake's default
@@ -966,7 +967,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
 
   it("C1 SWEEP backstop: an ended passthrough session whose output release FAILED is released by the daily pass — counted, marked, recorded with reason sweep; a pass whose removal fails again counts it failed and leaves it for tomorrow; a pass with nothing unreleased selects nothing (mutant: drop the pass → red)", async () => {
     const r = await rig();   // passthrough, warming: add_output has run
-    const dest = { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };   // the rig's own saved target
+    const dest = { url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "k" };   // the rig's own saved target (D6: the preset url)
     const [{ out }] = await sql<{ out: string | null }[]>`select output_uid as out from fixture_stream_sessions where id = ${r.sessionId}`;
     expect(out).not.toBeNull();
     expect(r.ingest.liveOutputsTo(dest)).toBe(1);

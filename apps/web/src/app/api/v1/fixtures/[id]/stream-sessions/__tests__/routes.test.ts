@@ -72,7 +72,6 @@ afterAll(() => {
 });
 
 const BASE = "https://test.local/api/v1";
-const YT = "rtmps://a.rtmps.youtube.com/live2";
 /** A pool no plausible number of foreign reservations can exhaust — the pool is ONE account across the whole test
  *  database (Task 10 deviation 4); only the storage test sets its own. */
 const ROOMY: StorageUsage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };
@@ -103,7 +102,7 @@ async function organiser(opts: { credits?: number; overlay?: boolean; relay?: bo
   // whole balance these refusal tests are written against.
   await spendMonthlyStreamGrant(auth.orgId);
   const streamKey = `k-${randomUUID().slice(0, 8)}`;
-  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", rtmpUrl: YT, streamKey });
+  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey });
   // The fake ingest never connects inside a test, so a passthrough session stays `warming` (its QR on show).
   const ingest = new FakeIngest({ connectAfterMs: 10 * 60_000 });
   ingest.storage = opts.storage ?? ROOMY;
@@ -430,7 +429,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
   it("N3: a completion whose forced destroy FAILS still fills the replay link — the fill_replay effect after it runs", async () => {
     const o = await organiser();
     const watchUrl = `https://www.youtube.com/watch?v=${randomUUID().slice(0, 11)}`;
-    const replayTarget = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Replay", rtmpUrl: YT, streamKey: `k-${randomUUID().slice(0, 8)}`, watchUrl });
+    const replayTarget = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Replay", streamKey: `k-${randomUUID().slice(0, 8)}`, watchUrl });
     const sid = (await create(o.fixtureId, { mode: "composed", targetId: replayTarget.id })).body.data!.sessionId;
     await heartbeat(sid, o.runner.created[0]!.jobToken, { state: "playing" }, defaultDeps("http://app.test"));   // live: startedAt set
     const streamUrl = async () => (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${o.fixtureId}`)[0]!.stream_url;

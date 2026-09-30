@@ -1075,7 +1075,6 @@ test("B6 · mid-stream at 320px, a checkout sheet whose code cannot load says so
   const target = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/stream-targets`, "POST", {
     kind: "youtube",
     label: "B6 channel",
-    rtmpUrl: "rtmp://a.rtmp.youtube.com/live2",
     streamKey: `b6-${randomBytes(6).toString("hex")}`,
   });
   expect(target.status, `POST stream-targets -> ${JSON.stringify(target.error)}`).toBeLessThan(300);

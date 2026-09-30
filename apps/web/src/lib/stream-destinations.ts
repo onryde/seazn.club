@@ -1,5 +1,5 @@
 // The ONE streaming-destination validator (Streaming R1, A18 — G2, OWNER
-// 2026-09-28). A stream target's `rtmpUrl` is the address the relay's ffmpeg
+// 2026-09-28). A stream target's ingest url is the address the relay's ffmpeg
 // DIALS OUT to, so whatever host it names, the relay connects to: an unchecked
 // value reaches localhost, the Fly private network (`*.internal`,
 // `*.flycast`) and cloud metadata (169.254.169.254). The rule: the scheme is
@@ -102,6 +102,24 @@ export const STREAM_DESTINATION_HOSTS: readonly DestinationHost[] = [
   // Re-add LinkedIn only from a real, current LinkedIn Live custom-stream URL,
   // with its extra ports bound PER SCHEME (re-review m2).
 ];
+
+/** D6 (owner 2026-09-30): the platforms a NEW destination may name. Stored rows of other kinds keep listing and
+ *  streaming until removed (spec §5.4), so the host allowlist above is NOT narrowed. A tuple, not an enum: this module
+ *  is loaded under bare strip-types by openapi-gen. */
+export const STREAM_PLATFORMS = ["youtube", "twitch"] as const;
+export type StreamPlatform = (typeof STREAM_PLATFORMS)[number];
+
+/** The ingest address the SERVER fills per platform — the organiser never types one (spec §4 "No server field").
+ *  YouTube: rtmp://a.rtmp.youtube.com/live2 — delivered to YouTube on staging 2026-09-30 (spec §5.4); also OBS
+ *  services' "YouTube - RTMPS" primary RTMP entry (the allowlist's source above).
+ *  Twitch: the "Default" entry (priority 0) of Twitch's ingest list, https://ingest.twitch.tv/ingests (read
+ *  2026-09-30): url_template_secure `rtmps://ingest.global-contribute.live-video.net/app/{stream_key}` — Twitch's global
+ *  auto-ingest; the key is the output's own field, so the url stops at `/app`. Its host is admitted by the
+ *  `.global-contribute.live-video.net` entry above. Each passes `checkDestination` (stream-destinations.test.ts). */
+export const STREAM_PLATFORM_PRESETS: Readonly<Record<StreamPlatform, string>> = {
+  youtube: "rtmp://a.rtmp.youtube.com/live2",
+  twitch: "rtmps://ingest.global-contribute.live-video.net/app",
+};
 
 /** The only ports admitted: no listed provider publishes a non-default one. */
 const DEFAULT_PORT = { rtmp: 1935, rtmps: 443 } as const;

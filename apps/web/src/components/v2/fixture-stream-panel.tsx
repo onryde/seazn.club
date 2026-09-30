@@ -51,7 +51,7 @@ import { formatMinor, type Currency } from "@/lib/currency";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
 } from "@/lib/stream-credit-packs";
-import { destinationRefusal } from "@/lib/stream-destinations";
+import { STREAM_PLATFORMS, type StreamPlatform } from "@/lib/stream-destinations";
 import {
   DESTINATION_REFUSAL_KEYS,
   END_REASON_KEYS,
@@ -75,7 +75,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
-import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
+import type { StreamTarget } from "@/server/api-v1/schemas";
 
 // I2: the embedded-checkout sheet, and Stripe.js with it, is its own chunk — never fetched with the fixtures tab.
 // `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships on every organiser fixtures
@@ -723,18 +723,14 @@ export const QR_RENDER_OPTIONS = { errorCorrectionLevel: "M", margin: 4, width: 
  *  class, which is what "the QR box's own width, not the card's" means — two elements that cannot drift apart. */
 const QR_COLUMN_W = "w-full max-w-[290px]";
 
-/** The platform select's options, in the `StreamTargetKind` enum's order. A client-safe copy — the schema module is
- *  server code — held EQUAL to the enum by the panel test, so a kind added there reds here. */
-export const TARGET_KINDS = ["youtube", "facebook", "twitch", "kick", "custom_rtmp"] as const satisfies readonly StreamTargetKind[];
+/** The platform select's options (D6: YouTube and Twitch only) — lib/stream-destinations.ts STREAM_PLATFORMS itself,
+ *  held EQUAL to the create schema's `StreamPlatform` enum by the panel test. */
+export const TARGET_KINDS = STREAM_PLATFORMS;
 
-/** Brand names are not copy. `custom_rtmp` is labelled from the dictionary with the services it covers (Vimeo,
- *  Restream, Cloudflare Stream — the allowlist's other providers), never with its enum id. No LinkedIn: it is not on the
- *  allowlist (lib/stream-destinations.ts). */
-const KIND_BRAND: Record<Exclude<StreamTargetKind, "custom_rtmp">, string> = {
+/** Brand names are not copy. D6: the form offers the two platforms only — never an enum id, never LinkedIn. */
+const KIND_BRAND: Record<StreamPlatform, string> = {
   youtube: "YouTube",
-  facebook: "Facebook",
   twitch: "Twitch",
-  kick: "Kick",
 };
 
 /**
@@ -761,7 +757,7 @@ const ARROW = /^Arrow(Up|Down|Left|Right)$/;
 type CreateError = { code: CreateErrorCode; holder: CreateErrorHolder | null };
 /** D13: which sentence a refused checkout gets — keyed on the route's STATUS (`CheckoutSecretResult` has no code). */
 type CheckoutError = "owner" | "unknown";
-type TargetFormValues = { kind: StreamTargetKind; label: string; rtmpUrl: string; streamKey: string; watchUrl: string };
+type TargetFormValues = { kind: StreamPlatform; label: string; streamKey: string; watchUrl: string };
 
 /**
  * One fixture's relay session as the organiser sees it — shared by the Phone tab and the unentitled stop probe (G2), so
@@ -1147,7 +1143,6 @@ export function PhoneTab({
       json: {
         kind: form.kind,
         label: form.label,
-        rtmpUrl: form.rtmpUrl,
         streamKey: form.streamKey,
         ...(watchUrl ? { watchUrl } : {}),
       },
@@ -1872,15 +1867,14 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
 }
 
 /**
- * The destination form (D10). The platform is LABELLED, never an enum id; the ingest URL is checked BEFORE it is sent,
- * by the same validator the server applies (lib/stream-destinations.ts), and a server 422 DESTINATION_NOT_ALLOWED maps
- * to the SAME rule sentence — so the two can never disagree about why a URL was refused.
+ * The destination form (D10). The platform is LABELLED, never an enum id. D6: there is no ingest-URL field — the server
+ * fills it from the platform's preset — and a server 422 DESTINATION_NOT_ALLOWED still maps to its rule sentence.
+ * (Kept minimal here; destinations move to Directory in T8.)
  */
 export function TargetForm({ onSave, onCancel }: { onSave: PhoneTabBodyProps["onSaveTarget"]; onCancel: () => void }) {
   const msg = useMsg();
-  const [kind, setKind] = useState<StreamTargetKind>("youtube");
+  const [kind, setKind] = useState<StreamPlatform>("youtube");
   const [label, setLabel] = useState("");
-  const [rtmpUrl, setRtmpUrl] = useState("");
   const [streamKey, setStreamKey] = useState("");
   const [watchUrl, setWatchUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -1889,15 +1883,9 @@ export function TargetForm({ onSave, onCancel }: { onSave: PhoneTabBodyProps["on
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
-    // The server trims before it judges (Task 9 minor 7), so a pasted trailing space is not a refusal here either.
-    const refused = destinationRefusal(rtmpUrl.trim());
-    if (refused) {
-      setError(msg(DESTINATION_REFUSAL_KEYS[refused]));
-      return;
-    }
     setSaving(true);
     try {
-      await onSave({ kind, label, rtmpUrl, streamKey, watchUrl });
+      await onSave({ kind, label, streamKey, watchUrl });
     } catch (err) {
       const rule = targetRefusalRule(err);
       setError(msg(rule ? DESTINATION_REFUSAL_KEYS[rule] : "stream.target.error"));
@@ -1924,31 +1912,17 @@ export function TargetForm({ onSave, onCancel }: { onSave: PhoneTabBodyProps["on
         {msg("stream.target.kind")}
         <select
           data-testid="stream-target-kind"
-          title={kind === "custom_rtmp" ? msg("stream.target.kind.other") : KIND_BRAND[kind]}
+          title={KIND_BRAND[kind]}
           value={kind}
-          onChange={(e) => setKind(e.target.value as StreamTargetKind)}
+          onChange={(e) => setKind(e.target.value as StreamPlatform)}
           className={FIELD}
         >
           {TARGET_KINDS.map((k) => (
             <option key={k} value={k}>
-              {k === "custom_rtmp" ? msg("stream.target.kind.other") : KIND_BRAND[k]}
+              {KIND_BRAND[k]}
             </option>
           ))}
         </select>
-      </label>
-      <label className="block text-xs text-slate-500">
-        {msg("stream.target.rtmp")}
-        <input
-          data-testid="stream-target-rtmp"
-          value={rtmpUrl}
-          onChange={(e) => setRtmpUrl(e.target.value)}
-          required
-          maxLength={500}
-          inputMode="url"
-          autoComplete="off"
-          spellCheck={false}
-          className={FIELD}
-        />
       </label>
       <label className="block text-xs text-slate-500">
         {msg("stream.target.key")}

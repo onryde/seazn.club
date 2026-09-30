@@ -37,9 +37,8 @@ import {
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
 import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
-import { STREAM_DESTINATION_HOSTS } from "../../src/lib/stream-destinations";
+import { STREAM_PLATFORMS } from "../../src/lib/stream-destinations";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
-import { StreamTargetKind } from "../../src/server/api-v1/schemas";
 import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
@@ -302,17 +301,17 @@ async function drainMonthlyTo(orgId: string, keep: number): Promise<void> {
   );
 }
 
-/** SETUP: a distinct, allowlisted destination (A19 dedupes on url + key, so the key carries a nonce). */
+/** SETUP: a distinct destination (A19 dedupes on url + key, so the key carries a nonce). D6: the body names a platform,
+ *  never a url — the server fills the platform's preset ingest url. */
 async function addTargetApi(
   page: Page,
   orgId: string,
-  t: { label: string; kind?: string; rtmpUrl?: string },
+  t: { label: string; kind?: "youtube" | "twitch"; streamKey?: string },
 ): Promise<{ id: string; label: string }> {
   const res = await apiJson<{ id: string; label: string }>(page.request, `/api/v1/orgs/${orgId}/stream-targets`, "POST", {
     kind: t.kind ?? "youtube",
     label: t.label,
-    rtmpUrl: t.rtmpUrl ?? "rtmps://a.rtmps.youtube.com/live2",
-    streamKey: `e2e-${randomBytes(6).toString("hex")}`,
+    streamKey: t.streamKey ?? `e2e-${randomBytes(6).toString("hex")}`,
   });
   if (res.status !== 201 && res.status !== 200) throw new Error(`addTargetApi -> ${res.status} ${JSON.stringify(res.error)}`);
   return res.data!;
@@ -471,7 +470,6 @@ for (const width of WIDTHS) {
     const form = body.getByTestId("stream-target-form");
     await form.getByTestId("stream-target-label").fill(label);
     await form.getByTestId("stream-target-kind").selectOption("youtube");
-    await form.getByTestId("stream-target-rtmp").fill("rtmps://a.rtmps.youtube.com/live2");
     await form.getByTestId("stream-target-key").fill(`e2e-${randomBytes(6).toString("hex")}`);
     if (width === 320) expect(await expectTapTargets(form), "destination form controls hit-tested").toBeGreaterThan(3);
     await form.getByTestId("stream-target-save").click();
@@ -808,10 +806,14 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
-  // An allowlisted host (Restream's `.restream.io` suffix) the FAKE ingest reports as rejecting the output — its one
-  // scripted refusal (server/relay/fakes.ts `outputState`: a hostname containing "reject"). The real ingest reports
-  // the same output state when a platform refuses the key.
-  const target = await addTargetApi(page, rig.orgId, { label: "A6 refused", kind: "custom_rtmp", rtmpUrl: "rtmp://reject.restream.io/live" });
+  // A stream KEY the FAKE ingest reports as rejecting the output — its scripted refusal (server/relay/fakes.ts
+  // `outputState`: a key starting FAKE_REJECT_KEY_PREFIX; D6 made the url a server preset, so no host can carry it).
+  // The literal is fakes.ts FAKE_REJECT_KEY_PREFIX: an e2e file cannot import server code. The real ingest reports the
+  // same output state when a platform refuses the key.
+  const FAKE_REJECT_KEY_PREFIX = "reject-";
+  const target = await addTargetApi(page, rig.orgId, {
+    label: "A6 refused", kind: "youtube", streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomBytes(6).toString("hex")}`,
+  });
   const f = rig.fixtures[0]!;
   const row = await openPhoneTab(page, rig, f);
   const body = row.locator("[data-phone-body]");
@@ -911,15 +913,19 @@ for (const sw of A7_SWITCHES) {
 }
 
 // ===========================================================================
-// A8 — the destination form: the allowlist, from both sides
+// A8 — the destination form: exactly the platforms a destination can be created on
 // ===========================================================================
-test("A8: the platform list has no LinkedIn; an off-list RTMP host is refused with the host rule's copy and never sent (the server refuses it by the same rule); one destination per allowlisted provider saves", async ({
+// D6: a destination is YouTube or Twitch, and the server fills the ingest url from the platform's preset. The off-list
+// host half this test used to drive is unreachable through the form AND the API now (the create schema has no url
+// field — vitest "D6 over the real route" pins the 400); per-provider host acceptance is pinned in
+// stream-destinations.test.ts. T8 relocates this test to the Directory spec.
+test("A8: the platform list is exactly YouTube and Twitch — no LinkedIn, no Other, no ingest-URL field; one destination per platform saves through the form, one POST each", async ({
   page,
 }) => {
-  // The providers are the allowlist's own (lib/stream-destinations.ts), never a list typed here.
-  const providers = [...new Set(STREAM_DESTINATION_HOSTS.map((h) => h.provider))];
-  // The budget is the saves': one form round trip per provider, on top of the seed and the refused-host half.
-  test.setTimeout(SEED_MS + providers.length * POLL_WAIT_MS + 60_000);
+  // The platforms are the one list's own (lib/stream-destinations.ts STREAM_PLATFORMS), never a list typed here.
+  const platforms: readonly string[] = STREAM_PLATFORMS;
+  // The budget is the saves': one form round trip per platform, on top of the seed.
+  test.setTimeout(SEED_MS + platforms.length * POLL_WAIT_MS + 60_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
@@ -928,68 +934,38 @@ test("A8: the platform list has no LinkedIn; an off-list RTMP host is refused wi
   const form = body.getByTestId("stream-target-form");
   const kind = form.getByTestId("stream-target-kind");
 
-  expect(providers.length, "the allowlist names providers").toBeGreaterThan(0);
-  expect(providers, "LinkedIn is off the allowlist (orchestrator ruling 2026-09-28)").not.toContain("linkedin");
+  expect(platforms.length, "the platform list names platforms").toBeGreaterThan(0);
   const options = await kind
     .locator("option")
-    .evaluateAll((os) => os.map((o) => ({ value: (o as HTMLOptionElement).value, text: o.textContent ?? "" })));
-  expect(options.length, "the platform list has options").toBeGreaterThan(1);
+    .evaluateAll((os) => os.map((o) => ({ value: (o as HTMLOptionElement).value, text: (o.textContent ?? "").trim() })));
+  expect(options.map((o) => o.value), "the form offers exactly STREAM_PLATFORMS, in its order").toEqual([...platforms]);
+  expect(options.map((o) => o.text), "and names them by brand").toEqual(["YouTube", "Twitch"]);
   expect(options.filter((o) => /linkedin/i.test(o.value) || /linkedin/i.test(o.text)), "no LinkedIn option").toEqual([]);
-  // The brand options are EXACTLY the allowlisted providers the server's kind enum names (schemas.ts StreamTargetKind);
-  // every other provider is reached through "Other".
-  const own = options.filter((o) => o.value !== "custom_rtmp").map((o) => o.value);
-  const serverKinds: readonly string[] = StreamTargetKind.options;
-  const branded = providers.filter((p) => serverKinds.includes(p));
-  expect(branded.length, "the allowlist and the server's kinds share providers").toBeGreaterThan(0);
-  expect([...own].sort(), "brand options = allowlisted providers ∩ the server's kinds").toEqual([...branded].sort());
-  expect(serverKinds, "the form's Other is a kind the server accepts").toContain("custom_rtmp");
-  await expect(kind.locator('option[value="custom_rtmp"]')).toHaveText(en("stream.target.kind.other"));
+  await expect(form.getByTestId("stream-target-rtmp"), "no ingest-URL field: the server fills it").toHaveCount(0);
+  await shot(form, "A8-platforms.png");
 
-  // An off-list host: refused in the form with the HOST rule's sentence, and nothing is POSTed.
   let posts = 0;
   page.on("request", (r) => {
     if (r.method() === "POST" && r.url().includes(`/api/v1/orgs/${rig.orgId}/stream-targets`)) posts++;
   });
-  const offList = "rtmp://live.evil-streams.example.com/app";
-  await form.getByTestId("stream-target-label").fill("Off-list");
-  await kind.selectOption("custom_rtmp");
-  await form.getByTestId("stream-target-rtmp").fill(offList);
-  await form.getByTestId("stream-target-key").fill("k-off-list");
-  await form.getByTestId("stream-target-save").click();
-  await expect(form.getByTestId("stream-target-error")).toHaveText(en("stream.target.refused.host"));
-  expect(posts, "the form refused before sending").toBe(0);
-  // The server's own verdict on the same URL is the same rule — the copy cannot disagree with it.
-  const server = await page.request.post(`/api/v1/orgs/${rig.orgId}/stream-targets`, {
-    data: { kind: "custom_rtmp", label: "Off-list", rtmpUrl: offList, streamKey: "k-off-list" },
-  });
-  expect(server.status(), "the server refuses the off-list host too").toBe(422);
-  const refusal = JSON.stringify(await server.json());
-  expect(refusal, "DESTINATION_NOT_ALLOWED").toContain("DESTINATION_NOT_ALLOWED");
-  expect(refusal, "rule: host").toMatch(/"rule":"host"/);
-  await shot(form, "A8-refused-host.png");
-
-  // The positive half: one destination per allowlisted provider saves, through the form.
   let saved = 0;
-  for (const provider of providers) {
-    const entry = STREAM_DESTINATION_HOSTS.find((h) => h.provider === provider)!;
-    const host = entry.match === "exact" ? entry.host : `e2e${entry.host}`;
-    const label = `Dest ${provider}`;
+  for (const platform of platforms) {
+    const label = `Dest ${platform}`;
     if ((await form.count()) === 0) await body.getByTestId("stream-target-add").click();
     await form.getByTestId("stream-target-label").fill(label);
-    await kind.selectOption(own.includes(provider) ? provider : "custom_rtmp");
-    await form.getByTestId("stream-target-rtmp").fill(`rtmps://${host}/live`);
-    await form.getByTestId("stream-target-key").fill(`k-${provider}-${randomBytes(3).toString("hex")}`);
+    await kind.selectOption(platform);
+    await form.getByTestId("stream-target-key").fill(`k-${platform}-${randomBytes(3).toString("hex")}`);
     await form.getByTestId("stream-target-save").click();
-    await expect(form, `${provider}: saved and closed`).toHaveCount(0, { timeout: POLL_WAIT_MS });
+    await expect(form, `${platform}: saved and closed`).toHaveCount(0, { timeout: POLL_WAIT_MS });
     await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(label);
     saved++;
   }
-  expect(saved, "one save per allowlisted provider").toBe(providers.length);
-  expect(posts, "the positive half: every accepted save WAS sent — one POST each").toBe(providers.length);
-  const rows = await withDb((sql) => sql<{ label: string }[]>`
-    select label from org_stream_targets where org_id = ${rig.orgId} order by created_at`);
-  expect(rows.map((r) => r.label), "every save is a row; the refused one is not").toEqual(providers.map((p) => `Dest ${p}`));
-  await expect(body.getByTestId("stream-target").locator("option")).toHaveCount(providers.length);
+  expect(saved, "one save per platform").toBe(platforms.length);
+  expect(posts, "every save WAS sent — one POST each").toBe(platforms.length);
+  const rows = await withDb((sql) => sql<{ label: string; kind: string }[]>`
+    select label, kind from org_stream_targets where org_id = ${rig.orgId} order by created_at`);
+  expect(rows, "every save is a row, of the platform chosen").toEqual(platforms.map((p) => ({ label: `Dest ${p}`, kind: p })));
+  await expect(body.getByTestId("stream-target").locator("option")).toHaveCount(platforms.length);
 });
 
 // ===========================================================================

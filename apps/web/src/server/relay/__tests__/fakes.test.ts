@@ -6,7 +6,7 @@
 // a scripted 409-once on deleteVideo; outputState rejects on a host that
 // says so and is `ok` otherwise (positive pair).
 import { describe, expect, it } from "vitest";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
 import { machineNameFor } from "../domain/runner";
@@ -134,6 +134,21 @@ describe("FakeIngest", () => {
     expect(outB).not.toBe(outA);          // one uid per output, not a constant
     expect(await fake.outputState(b.inputId)).toBe("ok");
     expect(fake.outputsFor(b.inputId)).toHaveLength(1);
+  });
+
+  it("outputState: a stream KEY starting with FAKE_REJECT_KEY_PREFIX is rejected on an allowlisted url, and the SAME url with another key is ok (D6: the url is a server preset, so the key is what a walkthrough can steer)", async () => {
+    const fake = new FakeIngest();
+    const url = "rtmp://a.rtmp.youtube.com/live2";
+    const bad = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    await fake.addOutput(bad.inputId, { url, streamKey: `${FAKE_REJECT_KEY_PREFIX}abc123` });
+    expect(await fake.outputState(bad.inputId)).toBe("rejected");
+    const good = await fake.createLiveInput({ sessionId: "s2", slot: 0 });
+    await fake.addOutput(good.inputId, { url, streamKey: "abc123" });
+    expect(await fake.outputState(good.inputId)).toBe("ok");
+    // The prefix is a PREFIX: the same letters later in a key do not reject.
+    const inner = await fake.createLiveInput({ sessionId: "s3", slot: 0 });
+    await fake.addOutput(inner.inputId, { url, streamKey: `abc-${FAKE_REJECT_KEY_PREFIX}` });
+    expect(await fake.outputState(inner.inputId)).toBe("ok");
   });
 
   it("C1: removeOutput takes exactly that output off its input — a repeat (Cloudflare's 404) resolves and changes nothing; the LIVE count per input and per destination only counts outputs on inputs that still exist", async () => {

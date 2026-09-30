@@ -8,7 +8,8 @@
 // server/relay/** — tests included. Session shape: migration-shape.test.ts's insertSession —
 // the snapshot columns read from the fixture's own rows, never typed.
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { seal } from "../crypto";
 import { creditBreakdown, ensureMonthlyStreamGrant } from "@/server/usecases/stream-credits";
@@ -72,12 +73,35 @@ export async function spendMonthlyStreamGrant(orgId: string): Promise<number> {
 /** A destination row for `orgId` with a FAKE envelope — for DB tests outside server/relay/** that need a session's
  *  target but must not name the sealed column (enc-boundary.test.ts r3; the realtime-token route test, PR #904 CI).
  *  A raw insert with no dest_fingerprint (a legacy-shaped row — V421's partial index ignores it), because nothing here
- *  opens the envelope. Returns the target id. */
-export async function rigTarget(orgId: string, label = "Rig"): Promise<string> {
+ *  opens the envelope — which also makes it the "envelope that will not open" row (Review Focus 1). `kind` defaults to
+ *  youtube; a stored LEGACY kind (D6: no longer creatable) is written the same way. Returns the target id. */
+export async function rigTarget(orgId: string, label = "Rig", kind = "youtube"): Promise<string> {
   const [target] = await sql<{ id: string }[]>`
     insert into org_stream_targets (org_id, kind, label, rtmp_enc)
-    values (${orgId}, 'youtube', ${label}, ${Buffer.from("not-a-real-envelope")}) returning id`;
+    values (${orgId}, ${kind}, ${label}, ${Buffer.from("not-a-real-envelope")}) returning id`;
   return target!.id;
+}
+
+/** An org + one started fixture + one fake-envelope target, with the org's AuthCtx — for tests that seat sessions on a
+ *  target THEY choose (holders, Replace key / Remove refusals). */
+export async function holdRig(): Promise<{ auth: AuthCtx; fixtureId: string; targetId: string }> {
+  const { auth } = await seedOrg();
+  const { fixtureId } = await startedDivisionWithFixture(auth);
+  return { auth, fixtureId, targetId: await rigTarget(auth.orgId) };
+}
+
+/** A session on `targetId` in `state`, written raw: only the READ of held-ness is under test, never `decide`. `exec`
+ *  lets a row-lock test write the session INSIDE the transaction that holds the lock; `rigUser()` stays on the pool (its
+ *  user row is committed before the session names it). */
+export async function sessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string, exec: Tx | typeof sql = sql): Promise<string> {
+  const createdBy = await rigUser();
+  const [s] = await exec<{ id: string }[]>`
+    insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
+    select f.id, ${orgId}, 'passthrough', ${state}, ${targetId}, ${createdBy}, d.sport_key, d.competition_id, f.division_id, true
+      from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
+    returning id`;
+  if (!s) throw new Error(`sessionOnTarget: no fixture ${fixtureId}`);
+  return s.id;
 }
 
 export interface StreamRig {

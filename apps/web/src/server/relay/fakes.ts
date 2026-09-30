@@ -32,6 +32,10 @@ import type {
   RunnerObservation, RunnerProvider, RunnerSpec, StorageUsage,
 } from "./ports";
 
+/** A destination whose stream KEY starts with this is refused by the fake "platform" — how a walkthrough drives
+ *  `target_rejected` now that the ingest url is a server preset (D6) and no longer carries a "reject" host. */
+export const FAKE_REJECT_KEY_PREFIX = "reject-";
+
 export const FAKE_CONNECT_AFTER_MS_DEFAULT = 3000;
 
 /** `FAKE_INGEST_CONNECT_AFTER_MS`, parsed STRICTLY (lane-A minors, Task 3 review
@@ -183,7 +187,7 @@ export class FakeIngest implements IngestProvider {
     this.record("outputState", "GET", `/live_inputs/${inputId}/outputs`, [inputId], inputId);
     const row = this.inputs.get(inputId);
     if (!row || row.outputs.length === 0) return "unknown";
-    return row.outputs.some((o) => new URL(o.url).hostname.includes("reject")) ? "rejected" : "ok";
+    return row.outputs.some((o) => new URL(o.url).hostname.includes("reject") || o.streamKey.startsWith(FAKE_REJECT_KEY_PREFIX)) ? "rejected" : "ok";
   }
 
   async deleteInput(inputId: string): Promise<void> {

@@ -221,7 +221,7 @@ export const ROUTES: RouteSpec[] = [
   // "fixtures" with the relay sessions they feed: there is no "organizations" tag (lane C A11).
   // Never key-reachable (key-scopes.ts).
   { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key)", tag: "fixtures", response: z.array(S.StreamTarget) },
-  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, Restream, Cloudflare Stream) at the scheme's default port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
+  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/live", method: "get", summary: "Public org live status: every competition the org home lists, with its status and how many of its public fixtures are in play — what the org home's status chips poll", tag: "public", public: true, response: S.PublicOrgLive },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
@@ -576,7 +576,7 @@ const DESTINATION_NOT_ALLOWED_ENVELOPE = {
         rule: {
           type: "string",
           enum: [...DESTINATION_REFUSALS],
-          description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself",
+          description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused the ingest URL — never the URL itself",
         },
       },
       additionalProperties: true,

@@ -19,6 +19,24 @@ export const TERMINAL_STATES: readonly SessionState[] = ["completed", "failed"];
 export const isTerminal = (s: SessionState): boolean => TERMINAL_STATES.includes(s);
 export const isActive = (s: SessionState): boolean => ACTIVE_STATES.includes(s);
 
+/** Spec §5.3 — how a person reads an ACTIVE session that holds a destination: a phone has connected (`live`, and
+ *  `ending` while it drains) or not yet (`waiting`). Terminal sessions hold nothing. */
+export type HoldState = "live" | "waiting";
+export function holdStateOf(state: SessionState): HoldState | null {
+  switch (state) {
+    case "live":
+    case "ending":
+      return "live";
+    case "requested":
+    case "provisioning":
+    case "warming":
+      return "waiting";
+    case "completed":
+    case "failed":
+      return null;
+  }
+}
+
 export interface Session {
   // fixtureId is NULL once the fixture is deleted (V410: `on delete set null`) — the session, its money and
   // its history outlive the fixture and it ends through the normal commands. Nothing in this file reads it.

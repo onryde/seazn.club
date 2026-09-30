@@ -30,7 +30,8 @@ import { createErrorCode } from "@/lib/stream-session-view";
 import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
-import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
@@ -196,7 +197,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** `monthly: true` leaves this period's free match credits for createSession to grant (V426); by default the rig grants
  *  and spends them (`spendMonthlyStreamGrant`), so `credits` is the whole balance, as every pre-V426 test assumes. */
-async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; targetHost?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
+async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; streamKey?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null (_rig.ts:37), and fixture_stream_sessions.created_by is `uuid not null` — the
   // organiser who starts a stream is a REAL users row, so every `created_by` / `actor_user_id` below is a real id and
@@ -210,8 +211,9 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
   if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
   if (!opts.monthly) await spendMonthlyStreamGrant(auth.orgId);
   const target = await createStreamTarget(auth, auth.orgId, {
-    kind: opts.kind ?? "youtube", label: "Club",
-    rtmpUrl: `rtmps://${opts.targetHost ?? "a.rtmps.youtube.com"}/live2`, streamKey: "yt-key",
+    // D6: the url is the platform's preset (the server fills it); a rig steers the fake platform through the KEY
+    // (FAKE_REJECT_KEY_PREFIX makes it refuse the output).
+    kind: opts.kind ?? "youtube", label: "Club", streamKey: opts.streamKey ?? "yt-key",
     ...(opts.watchUrl ? { watchUrl: opts.watchUrl } : {}),
   });
   // The clock is LIVE (rows carry the DB's now()) and tickable: the fake
@@ -496,7 +498,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     // The positive pair: the same full pool refuses a start that has no running stream to name. Its own destination, so
     // the destination guard (decided before admission) is not what answers.
     const own = await createStreamTarget(r.auth, r.auth.orgId, {
-      kind: "youtube", label: "Court 2", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key-court-2",
+      kind: "youtube", label: "Court 2", streamKey: "yt-key-court-2",
     });
     await expect(createSession(r.auth, f2, body(own.id), r.deps)).rejects.toMatchObject({ status: 503, code: "storage_exhausted" });
     const rows = await sql<{ id: string; fixture_id: string }[]>`
@@ -721,17 +723,17 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     await currentSession(own.auth, own.fixtureId, own.deps);
     expect((await stopSession(own.auth, own.fixtureId, s2.sessionId, own.deps)).replayUrl).toBe("https://www.twitch.tv/club");
 
-    const tw = await rig({ credits: 1, kind: "twitch", targetHost: "live.twitch.tv", watchUrl: "https://www.twitch.tv/club" });
+    const tw = await rig({ credits: 1, kind: "twitch", watchUrl: "https://www.twitch.tv/club" });
     const s3 = await createSession(tw.auth, tw.fixtureId, body(tw.target.id), tw.deps);
     tw.tick(3000);
     await currentSession(tw.auth, tw.fixtureId, tw.deps);
     expect((await stopSession(tw.auth, tw.fixtureId, s3.sessionId, tw.deps)).replayUrl).toBeNull();
   });
 
-  // The brief's `reject.example` is REFUSED by the A18 allowlist at createStreamTarget (422), so the rig could not even
-  // save it. The fake rejects any output whose hostname contains "reject"; an allowlisted Restream host does.
+  // D6: the ingest url is the platform's preset, so no rig can name a "reject" host any more. The fake platform
+  // refuses an output whose stream KEY starts with FAKE_REJECT_KEY_PREFIX instead.
   it("a rejected destination fails the session with target_rejected", async () => {
-    const r = await rig({ credits: 1, targetHost: "reject.restream.io" });
+    const r = await rig({ credits: 1, streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}` });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(cur.state).toBe("failed");
@@ -837,7 +839,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(r.runner.created[0]!.attempt).toBe(1);
     const jobToken = r.runner.created[0]!.jobToken;
     const facts = await sessionFactsForJob(sessionId, jobToken, r.deps);
-    expect(facts.target).toEqual({ url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key" });
+    expect(facts.target).toEqual({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "yt-key" });
     expect(facts.mode).toBe("composed");
     expect(facts.pageToken.split(".")).toHaveLength(3);
     const pageToken = await mintRelayToken({ sid: sessionId, scope: "relay-page", expiresAt: new Date(Date.now() + 60_000) });
@@ -2038,7 +2040,7 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   });
 
   it("P1-F-b: a FAILED session carries fail_reason and NO end_reason, even when it was ending first (the DDL check would refuse the other order)", async () => {
-    const r = await rig({ credits: 1, targetHost: "reject.restream.io" });
+    const r = await rig({ credits: 1, streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}` });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(cur.state).toBe("failed");
@@ -3210,7 +3212,8 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
 // own saved target (url + key), never read back from the code under test.
 describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is removed on every way it ends", () => {
   type Rig = Awaited<ReturnType<typeof rig>>;
-  const destOf = (host = "a.rtmps.youtube.com") => ({ url: `rtmps://${host}/live2`, streamKey: "yt-key" });
+  // D6: every rig destination is the YouTube preset url; what differs between rigs is the key.
+  const destOf = (streamKey = "yt-key") => ({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey });
   const facts = async (sid: string) => (await sql<{ state: string; fail_reason: string | null; end_reason: string | null; output_uid: string | null; output_released_at: Date | null }[]>`
     select state, fail_reason, end_reason, output_uid, output_released_at from fixture_stream_sessions where id = ${sid}`)[0]!;
   const releaseRows = (sid: string) => sql<{ result: string; source: string; reason: string | null; output: string | null }[]>`
@@ -3234,7 +3237,7 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
   };
 
   // Every terminal path the brief names, each driven through the REAL readers (the organiser's Stop and poll).
-  const PATHS: { name: string; host?: string; connectAfterMs?: number; drive: (r: Rig, sid: string) => Promise<unknown>; ends: Record<string, string | null> }[] = [
+  const PATHS: { name: string; streamKey?: string; connectAfterMs?: number; drive: (r: Rig, sid: string) => Promise<unknown>; ends: Record<string, string | null> }[] = [
     { name: "the organiser's Stop", drive: async (r, sid) => { await goLive(r); return stopSession(r.auth, r.fixtureId, sid, r.deps); },
       ends: { state: "completed", end_reason: "stopped", fail_reason: null } },
     { name: "a credit refused at go-live", drive: async (r) => {
@@ -3251,15 +3254,15 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
       r.tick((WARMING_TIMEOUT_MINUTES * 60 + 60) * 1000);
       return currentSession(r.auth, r.fixtureId, r.deps);
     }, ends: { state: "failed", fail_reason: "no_inbound_timeout", end_reason: null } },
-    { name: "a destination that rejects the output", host: "reject.restream.io", drive: (r) => currentSession(r.auth, r.fixtureId, r.deps),
+    { name: "a destination that rejects the output", streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}`, drive: (r) => currentSession(r.auth, r.fixtureId, r.deps),
       ends: { state: "failed", fail_reason: "target_rejected", end_reason: null } },
   ];
 
   it("every terminal path — Stop, credit refused, wall clock, warming timeout, target rejected — leaves ZERO live outputs on the destination, the output released on the row, and one ok release_output effect row (mutants: drop the domain predicate; drop the runEffects case → red at every path)", async () => {
     let paths = 0;
     for (const p of PATHS) {
-      const r = await rig({ credits: 1, ...(p.host ? { targetHost: p.host } : {}), ...(p.connectAfterMs ? { connectAfterMs: p.connectAfterMs } : {}) });
-      const dest = destOf(p.host);
+      const r = await rig({ credits: 1, ...(p.streamKey ? { streamKey: p.streamKey } : {}), ...(p.connectAfterMs ? { connectAfterMs: p.connectAfterMs } : {}) });
+      const dest = destOf(p.streamKey);
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
       expect(r.ingest.liveOutputsTo(dest), `${p.name}: the positive pair — the broadcast's output exists before it ends`).toBe(1);
       await p.drive(r, sessionId);

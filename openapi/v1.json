@@ -38343,7 +38343,7 @@
                             "port",
                             "path"
                           ],
-                          "description": "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself"
+                          "description": "On DESTINATION_NOT_ALLOWED (422): which destination rule refused the ingest URL — never the URL itself"
                         }
                       },
                       "additionalProperties": true
@@ -53176,6 +53176,89 @@
                           },
                           "createdAt": {
                             "type": "string"
+                          },
+                          "keyHint": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "inUse": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "sessionId": {
+                                    "type": "string"
+                                  },
+                                  "fixtureId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "href": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "matchNo": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "courtName": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "state": {
+                                    "type": "string",
+                                    "enum": [
+                                      "live",
+                                      "waiting"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "sessionId",
+                                  "fixtureId",
+                                  "href",
+                                  "matchNo",
+                                  "courtName",
+                                  "state"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -53183,7 +53266,9 @@
                           "kind",
                           "label",
                           "watchUrl",
-                          "createdAt"
+                          "createdAt",
+                          "keyHint",
+                          "inUse"
                         ],
                         "additionalProperties": false
                       }
@@ -53202,7 +53287,16 @@
                       "kind": "youtube",
                       "label": "example",
                       "watchUrl": "example",
-                      "createdAt": "example"
+                      "createdAt": "example",
+                      "keyHint": "example",
+                      "inUse": {
+                        "sessionId": "example",
+                        "fixtureId": "example",
+                        "href": "example",
+                        "matchNo": -9007199254740991,
+                        "courtName": "example",
+                        "state": "live"
+                      }
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -53353,7 +53447,7 @@
         ]
       },
       "post": {
-        "summary": "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, Restream, Cloudflare Stream) at the scheme's default port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`",
+        "summary": "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`",
         "tags": [
           "fixtures"
         ],
@@ -53380,20 +53474,13 @@
                     "type": "string",
                     "enum": [
                       "youtube",
-                      "facebook",
-                      "twitch",
-                      "kick",
-                      "custom_rtmp"
+                      "twitch"
                     ]
                   },
                   "label": {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 80
-                  },
-                  "rtmpUrl": {
-                    "type": "string",
-                    "maxLength": 500
                   },
                   "streamKey": {
                     "type": "string",
@@ -53414,7 +53501,6 @@
                 "required": [
                   "kind",
                   "label",
-                  "rtmpUrl",
                   "streamKey"
                 ],
                 "additionalProperties": false
@@ -53422,8 +53508,8 @@
               "example": {
                 "kind": "youtube",
                 "label": "example",
-                "rtmpUrl": "example",
-                "streamKey": "example"
+                "streamKey": "example",
+                "watchUrl": "example"
               }
             }
           }
@@ -53475,6 +53561,89 @@
                         },
                         "createdAt": {
                           "type": "string"
+                        },
+                        "keyHint": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "inUse": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "sessionId": {
+                                  "type": "string"
+                                },
+                                "fixtureId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "href": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "matchNo": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "courtName": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "live",
+                                    "waiting"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "sessionId",
+                                "fixtureId",
+                                "href",
+                                "matchNo",
+                                "courtName",
+                                "state"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -53482,7 +53651,9 @@
                         "kind",
                         "label",
                         "watchUrl",
-                        "createdAt"
+                        "createdAt",
+                        "keyHint",
+                        "inUse"
                       ],
                       "additionalProperties": false
                     },
@@ -53499,7 +53670,16 @@
                     "kind": "youtube",
                     "label": "example",
                     "watchUrl": "example",
-                    "createdAt": "example"
+                    "createdAt": "example",
+                    "keyHint": "example",
+                    "inUse": {
+                      "sessionId": "example",
+                      "fixtureId": "example",
+                      "href": "example",
+                      "matchNo": -9007199254740991,
+                      "courtName": "example",
+                      "state": "live"
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -53724,7 +53904,7 @@
                             "port",
                             "path"
                           ],
-                          "description": "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself"
+                          "description": "On DESTINATION_NOT_ALLOWED (422): which destination rule refused the ingest URL — never the URL itself"
                         }
                       },
                       "additionalProperties": true

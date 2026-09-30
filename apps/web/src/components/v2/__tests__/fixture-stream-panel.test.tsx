@@ -46,7 +46,7 @@ import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { LOCALES } from "@/lib/i18n-constants";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED } from "@/lib/stream-destinations";
 import {
   DESTINATION_REFUSAL_KEYS,
   END_REASON_KEYS,
@@ -55,7 +55,7 @@ import {
   qrText,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
-import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
+import { StreamPlatform, type StreamTarget } from "@/server/api-v1/schemas";
 import {
   CheckoutSheetBoundary,
   FixtureStreamPanel,
@@ -563,8 +563,8 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
 });
 
 const TARGETS: StreamTarget[] = [
-  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z" },
-  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z" },
+  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null },
+  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: null, inUse: null },
 ];
 
 describe("the Phone tab reads the §5.3 gate, then hands the container the context (D15)", () => {
@@ -1552,7 +1552,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 });
 
 // ─── TargetForm (D10, D11) ─────────────────────────────────────────────────────────────────────────────────────────
-describe("TargetForm — the platform is labelled, the ingest URL is checked BEFORE it is sent", () => {
+describe("TargetForm — the platform is labelled; D6: there is no ingest-URL field, the server fills it", () => {
   type Save = PhoneTabBodyProps["onSaveTarget"];
   const form = (onSave: Save = async () => {}) => renderIsland(TargetForm, { onSave, onCancel: () => {} });
   const type = (island: ReturnType<typeof form>, id: string, value: string) =>
@@ -1561,50 +1561,21 @@ describe("TargetForm — the platform is labelled, the ingest URL is checked BEF
     await (propsOf(byTestId(island.tree(), "stream-target-form")!).onSubmit as (e: { preventDefault: () => void }) => Promise<void>)({ preventDefault: () => {} });
     await Promise.resolve();
   };
-  const fill = (island: ReturnType<typeof form>, rtmpUrl: string) => {
+  const fill = (island: ReturnType<typeof form>) => {
     type(island, "stream-target-label", "Club channel");
-    type(island, "stream-target-rtmp", rtmpUrl);
     type(island, "stream-target-key", "live-key-123");
   };
 
-  it("the kind select offers exactly the StreamTargetKind enum, opens at YouTube, and never shows a raw enum id (no LinkedIn)", () => {
-    expect([...TARGET_KINDS]).toEqual([...StreamTargetKind.options]);
+  it("D6: the kind select offers exactly the create schema's StreamPlatform enum (YouTube, Twitch), opens at YouTube, and never shows a raw enum id (no LinkedIn)", () => {
+    expect([...TARGET_KINDS]).toEqual([...StreamPlatform.options]);
     const tree = form().tree();
     const select = byTestId(tree, "stream-target-kind")!;
     expect(attr(select, "value")).toBe("youtube");
     const options = walk(propsOf(select).children as ReactElement[]).filter((el) => el.type === "option");
-    expect(options.map((o) => attr(o, "value"))).toEqual([...StreamTargetKind.options]);
+    expect(options.map((o) => attr(o, "value"))).toEqual([...StreamPlatform.options]);
     const labels = options.map((o) => textOf(o));
-    expect(labels).toEqual(["YouTube", "Facebook", "Twitch", "Kick", m("stream.target.kind.other")]);
+    expect(labels).toEqual(["YouTube", "Twitch"]);
     for (const l of labels) expect(l).not.toMatch(/custom_rtmp|linkedin/i);
-  });
-
-  it("an ingest URL the allowlist refuses is refused INLINE, by its rule, and never sent (D10) — one URL per rule", async () => {
-    // The rulebook is lane C's validator: each URL's premise is asserted against it, then the FORM must show that rule's
-    // copy. Keyed by EVERY DestinationRefusal (a Record, so a rule added to lane C's list is a type error here until it
-    // gets a URL) and counted against DESTINATION_REFUSALS itself.
-    const URL_FOR: Record<DestinationRefusal, string> = {
-      scheme: "https://a.rtmps.youtube.com/live2",
-      userinfo: "rtmps://user:pass@a.rtmps.youtube.com/live2",
-      ip_literal: "rtmps://203.0.113.7/live2",
-      host: "rtmps://evil.example/live2",
-      port: "rtmps://a.rtmps.youtube.com:8443/live2",
-      path: "rtmps://a.rtmps.youtube.com",
-    };
-    let checked = 0;
-    for (const rule of DESTINATION_REFUSALS) {
-      const url = URL_FOR[rule];
-      expect(destinationRefusal(url), `premise: ${url}`).toBe(rule);
-      const onSave = vi.fn<Save>(async () => {});
-      const island = form(onSave);
-      fill(island, url);
-      await submit(island);
-      expect(onSave, url).not.toHaveBeenCalled();
-      expect(textAt(island.tree(), "stream-target-error"), url).toBe(m(DESTINATION_REFUSAL_KEYS[rule]));
-      checked++;
-    }
-    expect(checked).toBe(DESTINATION_REFUSALS.length);
-    expect(checked).toBeGreaterThanOrEqual(6);
   });
 
   it("m8: the stream KEY field keeps password managers out — never autofilled with a login, never offered for saving", () => {
@@ -1615,23 +1586,24 @@ describe("TargetForm — the platform is labelled, the ingest URL is checked BEF
     expect(attr(key, "data-lpignore")).toBe("true");
   });
 
-  it("an allowed URL is sent — with surrounding whitespace too, which the server trims (it is not a refusal)", async () => {
+  it("D6: the form has NO ingest-URL field and sends exactly kind, label, key and watch link — never a url", async () => {
     const onSave = vi.fn<Save>(async () => {});
     const island = form(onSave);
-    fill(island, "  rtmps://a.rtmps.youtube.com/live2 ");
+    expect(byTestId(island.tree(), "stream-target-rtmp")).toBeUndefined();
+    fill(island);
     await submit(island);
     expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave.mock.calls[0]![0]).toMatchObject({ kind: "youtube", label: "Club channel", streamKey: "live-key-123" });
+    expect(onSave.mock.calls[0]![0]).toEqual({ kind: "youtube", label: "Club channel", streamKey: "live-key-123", watchUrl: "" });
     expect(byTestId(island.tree(), "stream-target-error")).toBeUndefined();
   });
 
   it("the server's 422 DESTINATION_NOT_ALLOWED shows the SAME rule copy; any other failure the generic one", async () => {
     const refused = form(async () => { throw new ApiV1Error("refused", 422, DESTINATION_NOT_ALLOWED, { rule: "port" }); });
-    fill(refused, "rtmps://a.rtmps.youtube.com/live2");
+    fill(refused);
     await submit(refused);
     expect(textAt(refused.tree(), "stream-target-error")).toBe(m(DESTINATION_REFUSAL_KEYS.port));
     const other = form(async () => { throw new ApiV1Error("The stream key is empty", 422, "ERROR"); });
-    fill(other, "rtmps://a.rtmps.youtube.com/live2");
+    fill(other);
     await submit(other);
     expect(textAt(other.tree(), "stream-target-error")).toBe(m("stream.target.error"));
   });
@@ -1645,7 +1617,7 @@ describe("TargetForm — the platform is labelled, the ingest URL is checked BEF
       seen++;
       expect(String(attr(el, "className") ?? ""), String(attr(el, "data-testid") ?? el.type)).toMatch(TAPPABLE);
     }
-    expect(seen).toBe(7); // label, kind, url, key, watch, save, cancel
+    expect(seen).toBe(6); // label, kind, key, watch, save, cancel (D6: no url field)
   });
 });
 
@@ -2501,7 +2473,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onAddTarget();
     expect(bodyOf(island).showTargetForm).toBe(true);
     bodyOf(island).onSelectTarget("t2");
-    const resaved = bodyOf(island).onSaveTarget({ kind: "youtube", label: "Club HQ", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k", watchUrl: "" });
+    const resaved = bodyOf(island).onSaveTarget({ kind: "youtube", label: "Club HQ", streamKey: "k", watchUrl: "" });
     await settle();
     await resaved;
     expect(bodyOf(island).targets.map((t) => t.id), "a duplicate option / React key").toEqual(["t1", "t2"]);
@@ -2509,9 +2481,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).selectedTargetId).toBe("t1");
     expect(bodyOf(island).showTargetForm).toBe(false);
     const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/orgs/o-1/stream-targets" && o?.method === "POST");
-    expect(post?.[1]?.json, "an empty watch link is omitted, never sent as ''").toEqual({ kind: "youtube", label: "Club HQ", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
-    s.saveTarget = () => ({ id: "t3", kind: "custom_rtmp", label: "Vimeo", watchUrl: null, createdAt: "2026-09-03T10:00:00.000Z" });
-    const added = bodyOf(island).onSaveTarget({ kind: "custom_rtmp", label: "Vimeo", rtmpUrl: "rtmps://rtmp-global.cloud.vimeo.com/live", streamKey: "k2", watchUrl: "https://vimeo.com/123" });
+    expect(post?.[1]?.json, "an empty watch link is omitted, never sent as ''; D6: never a url").toEqual({ kind: "youtube", label: "Club HQ", streamKey: "k" });
+    s.saveTarget = () => ({ id: "t3", kind: "twitch", label: "Twitch", watchUrl: null, createdAt: "2026-09-03T10:00:00.000Z", keyHint: null, inUse: null });
+    const added = bodyOf(island).onSaveTarget({ kind: "twitch", label: "Twitch", streamKey: "k2", watchUrl: "https://www.twitch.tv/club" });
     await settle();
     await added;
     expect(bodyOf(island).targets.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);

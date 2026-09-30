@@ -14,7 +14,7 @@ import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
 import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
-import { DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, destinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 
 /** The quoted members of `<column> text … check (<column> in ('a','b'))` inside ONE table of V410. */
 function checkList(table: string, column: string): string[] {
@@ -100,34 +100,26 @@ describe("relay wire enums equal their declarations", () => {
 });
 
 describe("relay request schemas refuse what they must", () => {
-  const target = { kind: "youtube", label: "Club", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };
+  const target = { kind: "youtube", label: "Club", streamKey: "k" };
 
-  it("CreateStreamTarget checks rtmpUrl's TYPE and LENGTH only — every destination rule is lib/stream-destinations.ts's, so its refusal reaches the typed 422 (A18)", () => {
-    // Off-list destinations PARSE here: were the schema to refuse them, the route would answer a generic
-    // 400 VALIDATION and DESTINATION_NOT_ALLOWED could never be sent. The one validator refuses each.
-    const offList = [
-      "https://a.rtmps.youtube.com/live2", // not an ingest scheme
-      "srt://live.cloudflare.com:778/x",   // the phone's leg, not a destination
-      "rtmps://a.rtmps.youtube.com",       // no path
-      "rtmp://127.0.0.1/live",             // an IP literal
-      "rtmp://seazn-relay.internal/live",  // the Fly private network
-      "",
-    ];
+  it("CreateStreamTarget (D6): the kind is exactly STREAM_PLATFORMS and the body carries NO ingest url — the server fills it from the platform's preset", () => {
+    // Every kind the one platform list declares parses; every stored kind outside it (the legacy rows a Directory
+    // still lists) is refused at create; an `rtmpUrl` field is refused by the strict schema, never silently dropped.
     let checked = 0;
-    for (const rtmpUrl of offList) {
-      expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl }).success, rtmpUrl).toBe(true);
-      expect(destinationRefusal(rtmpUrl), rtmpUrl).not.toBeNull();
+    for (const kind of STREAM_PLATFORMS) {
+      expect(S.CreateStreamTarget.safeParse({ ...target, kind }).success, kind).toBe(true);
       checked++;
     }
-    expect(checked).toBe(6);
-    // What the schema DOES own: a string of at most 500.
-    const at500 = `rtmps://a.rtmps.youtube.com/${"a".repeat(500 - "rtmps://a.rtmps.youtube.com/".length)}`;
-    expect(at500.length).toBe(500);
-    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: at500 }).success).toBe(true);
-    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: at500 + "a" }).success).toBe(false);
-    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: 42 }).success).toBe(false);
+    const legacy = S.StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    for (const kind of legacy) {
+      expect(S.CreateStreamTarget.safeParse({ ...target, kind }).success, kind).toBe(false);
+      checked++;
+    }
+    expect(legacy.length).toBeGreaterThan(0);
+    expect(checked).toBe(S.StreamTargetKind.options.length);
+    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: STREAM_PLATFORM_PRESETS.youtube }).success).toBe(false);
     const missing: Record<string, unknown> = { ...target };
-    delete missing.rtmpUrl;
+    delete missing.kind;
     expect(S.CreateStreamTarget.safeParse(missing).success).toBe(false);
   });
 
@@ -257,18 +249,27 @@ describe("the relay's routes are never key-reachable", () => {
     const doc = buildOpenApiDocument() as Doc;
     const op = doc.paths["/api/v1/orgs/{id}/stream-targets"]!.post!;
     expect(op.summary).toContain("DESTINATION_NOT_ALLOWED");
-    // The summary names exactly the admitted providers: each one on the list, and LinkedIn (dropped in R1) nowhere.
+    // D6: the summary names exactly the platforms a destination can be CREATED on (STREAM_PLATFORMS) — every other
+    // allowlisted provider is a host a stored legacy row may still name, never one this route offers — and LinkedIn
+    // (dropped in R1) nowhere.
     const displayName: Record<string, string> = {
       youtube: "YouTube", facebook: "Facebook", twitch: "Twitch", kick: "Kick",
       vimeo: "Vimeo", restream: "Restream", cloudflare_stream: "Cloudflare Stream",
     };
     let named = 0;
+    let offered = 0;
     for (const provider of new Set(STREAM_DESTINATION_HOSTS.map((e) => e.provider))) {
       expect(displayName[provider], `no display name for ${provider}`).toBeDefined();
-      expect(op.summary).toContain(displayName[provider]);
+      if ((STREAM_PLATFORMS as readonly string[]).includes(provider)) {
+        expect(op.summary).toContain(displayName[provider]);
+        offered++;
+      } else {
+        expect(op.summary, provider).not.toContain(displayName[provider]);
+      }
       named++;
     }
     expect(named).toBe(7);
+    expect(offered).toBe(STREAM_PLATFORMS.length);
     expect(op.summary).not.toMatch(/linkedin/i);
     const err422 = op.responses["422"]!.content["application/json"].schema.properties.error;
     expect(Object.keys(err422.properties ?? {}).sort()).toEqual(["code", "current_seq", "message", "rule"]);

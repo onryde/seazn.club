@@ -48,6 +48,9 @@ import { CaptureQrV1 } from "../../lib/capture-qr.ts";
 // `node --experimental-strip-types` with no tsconfig `paths` resolution.
 // lib/tz.ts is deliberately import-free, so it is safe for that generator.
 import { isValidIana } from "../../lib/tz.ts";
+// D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
+// for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
+import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1358,27 +1361,45 @@ export const StreamSessionCurrent = z
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
 
+/** D6: the platforms a NEW destination may name — a subset of `StreamTargetKind`, which stays whole for stored rows. */
+export const StreamPlatform = z.enum(STREAM_PLATFORMS);
+export type StreamPlatform = z.infer<typeof StreamPlatform>;
+
 export const CreateStreamTarget = z
   .object({
-    kind: StreamTargetKind,
+    kind: StreamPlatform,
     label: z.string().min(1).max(80),
-    /** Shape only here. Every destination rule — rtmp/rtmps, an allowlisted
-     *  provider host, its documented port, a path — lives in ONE place,
-     *  lib/stream-destinations.ts, applied by the usecase so its refusal is a
-     *  typed 422 DESTINATION_NOT_ALLOWED rather than a generic 400 (A18). */
-    rtmpUrl: z.string().max(500),
+    /** The platform's stream key. The ingest URL is filled by the server from the platform's preset
+     *  (lib/stream-destinations.ts STREAM_PLATFORM_PRESETS) — there is no url field (spec §5.2). */
     streamKey: z.string().min(1).max(200),
     /** The destination's PUBLIC watch link (R16 allowlist) — what the replay fill copies. */
     watchUrl: streamUrlSchema.optional(),
   })
   .strict();
 export type CreateStreamTarget = z.infer<typeof CreateStreamTarget>;
+
+/** Spec §5.3 — the session holding a destination. Nullable fields: a holder whose fixture was deleted
+ *  (`fixture_id` is `on delete set null`) still holds, and cannot be named or linked. `matchNo` is a number, never an
+ *  English "Match n": every client renders it through its own locale's `breadcrumb.match`. */
+export const StreamTargetHolder = z.object({
+  sessionId: z.string(),
+  fixtureId: z.string().nullable(),
+  href: z.string().nullable(),
+  matchNo: z.number().int().nullable(),
+  courtName: z.string().nullable(),
+  state: z.enum(["live", "waiting"]),
+});
+export type StreamTargetHolder = z.infer<typeof StreamTargetHolder>;
+
 export const StreamTarget = z.object({
   id: z.string(),
   kind: StreamTargetKind,
   label: z.string(),
   watchUrl: z.string().nullable(),
   createdAt: z.string(),
+  /** The key's last 3 characters, or null for a key under 12 characters or an envelope that will not open (§5.3). */
+  keyHint: z.string().nullable(),
+  inUse: StreamTargetHolder.nullable(),
 });
 export type StreamTarget = z.infer<typeof StreamTarget>;
 

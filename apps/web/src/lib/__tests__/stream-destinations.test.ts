@@ -15,6 +15,8 @@ import { describe, expect, it } from "vitest";
 import {
   DESTINATION_REFUSALS,
   STREAM_DESTINATION_HOSTS,
+  STREAM_PLATFORMS,
+  STREAM_PLATFORM_PRESETS,
   checkDestination,
   destinationIdentity,
   destinationRefusal,
@@ -380,5 +382,47 @@ describe("destinationIdentity — one destination, one identity (A19b)", () => {
       rules.add(rule);
     }
     expect([...rules].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D6 (owner 2026-09-30, spec §5.4): a NEW destination names a platform, and the
+// server fills its ingest url from that platform's preset — so the one
+// validator must admit every preset, or create refuses every add for it.
+// ---------------------------------------------------------------------------
+describe("platform presets (D6)", () => {
+  it("every platform preset passes checkDestination, and every platform has one (D6)", () => {
+    let checked = 0;
+    for (const p of STREAM_PLATFORMS) {
+      expect(checkDestination(STREAM_PLATFORM_PRESETS[p]), p).toMatchObject({ ok: true });
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length);
+    expect(Object.keys(STREAM_PLATFORM_PRESETS).sort()).toEqual([...STREAM_PLATFORMS].sort());
+  });
+
+  // Moved here in T2a from stream-targets.test.ts, whose A18 cases drove these URLs through createStreamTarget's
+  // `rtmpUrl` — a field D6 removed. Only the URLs the refusal table and PUBLISHED above did not already pin are moved;
+  // expected rules and canonical forms are typed as they were there, never read back from the validator.
+  it("moved from stream-targets.test.ts (create takes no url since D6): the route's three off-list urls refuse by rule; two pasted spellings seal their canonical form", () => {
+    const refused: [string, DestinationRefusal][] = [
+      ["rtmp://seazn-relay.internal:1935/live", "host"],
+      ["rtmps://169.254.169.254/latest", "ip_literal"],
+      ["https://not-an-ingest.example/app", "scheme"],
+    ];
+    let checked = 0;
+    for (const [url, rule] of refused) {
+      expect(checkDestination(url), url).toEqual({ ok: false, rule });
+      checked++;
+    }
+    const canonical: [string, string][] = [
+      ["rtmps://A.RTMPS.YOUTUBE.COM:443/live2?backup=1", "rtmps://a.rtmps.youtube.com:443/live2?backup=1"],
+      ["rtmp://Live.Restream.IO/Live", "rtmp://live.restream.io/Live"],
+    ];
+    for (const [pasted, sealed] of canonical) {
+      expect(checkDestination(pasted), pasted).toEqual({ ok: true, url: sealed });
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });
