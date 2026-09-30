@@ -787,6 +787,27 @@ a peer session as the other.
       - The Q-A guard is widened to read the six blind-spot routes. The W1-driving status row reads "in progress"
         while deferrals remain.
       - A `W1-driving.md` prompt file is written, and R1's sequence gains W1-driving.
+50–52. **W1-driving plan review 1** (2026-09-30). The controller put two questions from plan review 1 and the plan's
+    D1–D13 to the owner, and the owner answered "all rec". They are recorded here as the owner's rulings on those
+    recommendations (class 17). Plan: `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`.
+    - **50. The `l2-pairs.json` reshuffle is accepted once.**
+      - Dropping F1 on `page_playoff_only` renumbers 931 of 1,731 L2 runs and re-widths 949. The cause is global
+        numbering plus a lap shift every 7 picks (`pairs.ts:132-165`).
+      - The reshuffle is accepted and named in the commit.
+      - Committed evidence stays judged against `plans.lock.json`.
+      - Task 10's regen must change only `l3Gap` fields.
+    - **51. M1 and R4 get a defined meaning on the ladder family.**
+      - M1 on americano and mexicano targets the first fixture whose pair entrant has seed 1's person as a member.
+      - R4 on the ladder withdraws seed 3 after its first challenge.
+      - R4 on americano and mexicano, where the withdrawn player keeps playing their pair games, is a predicted
+        product red routed to W7.
+      - Not dropped as unfit, per ruling 42.
+    - **52. Plan decisions D1–D13 are accepted as written.**
+      - D6 amends ruling 49: model refusals route by design §8, which adds **W3** for `swiss_playoff` and
+        `swiss_knockout` beside W4, W5 and W7.
+      - D5: future generator gaps route to W2.
+      - D10: `--workers > 1` is HTTP-only in this wave.
+      - D13: the L1 proof excludes cricket `test`, and the pad routes for its new events go to W1d's list.
 
 ## Recommendations (mine — not rulings)
 
