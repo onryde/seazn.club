@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
 import { NoOrganiserPath, RefusedCall } from "../lib/driver/types.ts";
 import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
 import type { PageCtx } from "../lib/browser/pages/ctx.ts";
@@ -16,6 +16,7 @@ import type { Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
+import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
 import { PAD_SPORTS } from "../lib/pad-sports.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
@@ -33,8 +34,9 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type RunDeps } from "../run.ts";
-import { BROWSER_WIDTHS } from "../lib/widths.ts";
+import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
+import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -212,7 +214,7 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET})`);
   });
   // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
   it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
@@ -1074,6 +1076,14 @@ describe("summariseRun (PF4) — empty first", () => {
       ],
     });
   });
+  it("W1c Task 12: a planned ░ not_run case is never vacuous, nor an error red — nor is a planned 🚫 — while a real vacuous red beside them still is", () => {
+    const cases = [
+      kase("not-run", "not_run", "no scenario script yet (atom R1)", []),
+      kase("no-path", "no_path", "W9: no organiser path, known at design time (design §4): two divisions merged", []),
+      kase("vacuous", "red", "no checks ran (vacuous)", []),
+    ];
+    expect(summariseRun(cases, new Map())).toEqual({ vacuous: ["vacuous"], errorReds: [] });
+  });
 });
 
 describe("realDeps wiring (Task 7 M3)", () => {
@@ -1591,5 +1601,239 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     const code = readFileSync(RUN, "utf8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
     expect(/openBrowserRun: [^\n]*await import\("\.\/lib\/browser\/browser-run\.ts"\)/.test(code)).toBe(true);
     expect(code).not.toMatch(/^import [^;]*lib\/browser\//m);
+  });
+
+  it("N-3: a ⏳ or 🚫 browser case keeps none of its driver's checks (MATRIX.md reads 0/0 on it); only an error red keeps them (M-2)", async () => {
+    capture();
+    const throws: [string, () => Error, string][] = [
+      ["later", () => new ScenarioUnsupported("W1-driving", "team rosters"), "later"],
+      ["no_path", () => new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"), "no_path"],
+      ["error", () => new Error("scenario boom"), "red"],
+    ];
+    let checked = 0;
+    for (const [name, err, state] of throws) {
+      vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw err(); });
+      const dir = dirFor();
+      const fb = fakeBrowserRun();
+      // Digits, not the state name: a run id slugs `_` to `-`, so "n3-no_path" would write n3-no-path/.
+      const id = `n3-${checked}`;
+      expect(await runSlice(deps({ openBrowserRun: async () => fb.run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", id, "--report-dir", dir]), name).toBe(0);
+      const [c] = resultsIn(dir, id).cases;
+      expect(c!.state, name).toBe(state);
+      // Every case's driver HAD a check to keep (the fake records one per case).
+      expect(fb.opts, name).toHaveLength(1);
+      expect(c!.checks.map((k) => k.id), name).toEqual(state === "red" ? ["browser-probe"] : []);
+      const md = readFileSync(join(dir, id, "MATRIX.md"), "utf8");
+      expect(md, name).toMatch(state === "red" ? /\| 1\/1 \| 1 \|$/m : /\| 0\/0 \| 0 \|$/m);
+      vi.restoreAllMocks();
+      capture();
+      checked++;
+    }
+    expect(checked).toBe(throws.length);
+  });
+});
+
+describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", () => {
+  /** The committed file, read as plain JSON here — never through layers.ts or pairs.ts. */
+  interface RawRun { n: number; scenario: string; row: string; sport: string; preset: string; bound: string | null; width: number }
+  const RAW_L2 = (JSON.parse(readFileSync(join(REPO, "scripts/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: RawRun[] }).runs;
+  const SLICE_CELLS = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
+  const SLICE_L2 = RAW_L2.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
+  const scripted = (r: RawRun) => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
+  const owningWave = (r: RawRun) => { const a = ATOMIC.find((x) => x.id === r.scenario)!; return a.knownNoPath ?? a.l2NoPath; };
+  /** The fake DB's builder defaults (deps(): generic → score, every other sport → bwf). */
+  const fakeDefault = (s: string) => (s === "generic" ? "score" : "bwf");
+  const vacuousLine = (out: string) => /vacuous: (.*)/.exec(out)?.[1] ?? "(no summary line)";
+
+  it("usage: --layer L1 runs at 1280 only; --layer L2 and the layered sets refuse --width; --layer takes --driver browser and neither --set nor --canary; L2 takes no --scenario; a plain browser run still needs --width — each refused (exit 2) before anything runs", async () => {
+    // The flag: a USAGE refusal prints the usage line, so a planner-level
+    // backstop with the same words (l2Planner's L2TakesNoScenario) cannot
+    // stand in for the CLI guard; a layered set over http is a plan refusal
+    // and prints none.
+    const cases: [string[], RegExp, boolean][] = [
+      [["--driver", "browser", "--layer", "L1", "--width", "320"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 320/, true],
+      [["--driver", "browser", "--layer", "L1", "--width", "768"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 768/, true],
+      [["--driver", "browser", "--layer", "L1", "--width", "999"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 999/, true],
+      [["--driver", "browser", "--layer", "L1", "--width", "1280.0"], /--layer L1 runs at 1280 only \(ruling 39\); got --width 1280\.0/, true],
+      [["--driver", "browser", "--layer", "L2", "--width", "320"], /--layer L2 takes no --width \(the plan sets each case's width\); got --width 320/, true],
+      [["--driver", "browser", "--layer", "L2", "--width", "1280"], /--layer L2 takes no --width \(the plan sets each case's width\); got --width 1280/, true],
+      [["--driver", "browser", "--set", "width-sweep", "--width", "320"], /--set width-sweep takes no --width/, true],
+      [["--driver", "browser", "--set", "api-only-browser", "--width", "320"], /--set api-only-browser runs at 1280 only \(ruling 39\); got --width 320/, true],
+      [["--layer", "L1"], /--layer runs a browser layer; it takes --driver browser/, true],
+      [["--driver", "http", "--layer", "L2"], /--layer runs a browser layer; it takes --driver browser/, true],
+      [["--driver", "browser", "--layer", "L3"], /--layer must be L1 or L2, got L3/, true],
+      [["--driver", "browser", "--layer", "L1", "--set", "width-sweep"], /--layer and --set each choose the plan; pass one/, true],
+      [["--driver", "browser", "--layer", "L1", "--canary", "M1"], /--layer takes no --canary/, true],
+      [["--driver", "browser", "--layer", "L2", "--scenario", "M1"], /--layer L2 plans the committed l2-pairs\.json runs; it takes no --scenario/, true],
+      [["--set", "width-sweep"], /--set width-sweep .*--driver browser only/, false],
+      [["--set", "api-only-browser"], /--set api-only-browser .*--driver browser only/, false],
+      [["--driver", "browser"], /--driver browser needs --width/, true],
+      [["--driver", "browser", "--only", "league|generic"], /--driver browser needs --width/, true],
+    ];
+    let checked = 0;
+    for (const [argv, want, usage] of cases) {
+      // Per case: the refusal read is THIS case's, never an earlier one's.
+      const io = capture();
+      let opened = 0;
+      const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+      expect(await runSlice(d, [...argv, "--run-id", "u12", "--report-dir", dirFor()]), argv.join(" ")).toBe(2);
+      expect(d.order, argv.join(" ")).toEqual([]);
+      expect(opened, argv.join(" ")).toBe(0);
+      expect(io.err(), argv.join(" ")).toMatch(want);
+      if (usage) expect(io.err(), argv.join(" ")).toMatch(/usage: run\.ts/);
+      else expect(io.err(), argv.join(" ")).not.toMatch(/usage: run\.ts/);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("--layer L1: 6 slice cells × LIFECYCLE at 1280 — the width defaults to 1280 and --width 1280 is accepted; caseIds suffixed @1280; results L1 over browser", async () => {
+    capture();
+    const want = SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}|${fakeDefault(s)}|LIFECYCLE@1280`));
+    expect(want).toHaveLength(SLICE_ROWS.length * SLICE_SPORTS.length);
+    let ran = 0;
+    for (const [id, extra] of [["l1a", []], ["l1b", ["--width", "1280"]]] as const) {
+      const dir = dirFor();
+      const fb = fakeBrowserRun();
+      const d = deps({ openBrowserRun: async () => fb.run });
+      expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", ...extra, "--run-id", id, "--report-dir", dir]), id).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, id, "results.json"), "utf8")) as RunResults;
+      expect({ layer: raw.layer, driver: raw.driver }, id).toEqual({ layer: "L1", driver: "browser" });
+      expect(raw.cases.map((c) => c.caseId), id).toEqual(want);
+      expect(raw.cases.every((c) => c.layer === "L1" && c.driver === "browser" && c.width === 1280), id).toBe(true);
+      expect(fb.opts.map((o) => o.width), id).toEqual(want.map(() => 1280));
+      expect(d.orgs, id).toHaveLength(want.length);
+      ran++;
+    }
+    expect(ran).toBe(2);
+  });
+
+  it("--layer L2: every committed slice run is recorded (R13) — the scripted atoms driven at their committed widths, the rest 🚫/░ with no driver, no org and no check, never listed vacuous", async () => {
+    const io = capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fb.run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--run-id", "l2a", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "l2a", "results.json"), "utf8")) as RunResults;
+    expect({ layer: raw.layer, driver: raw.driver }).toEqual({ layer: "L2", driver: "browser" });
+    expect(SLICE_L2.length).toBeGreaterThan(0);
+    expect(raw.cases.map((c) => c.caseId)).toEqual(SLICE_L2.map((r) => `${r.row}|${r.sport}|${r.preset}|${r.scenario}@${r.width}`));
+    expect(raw.cases.map((c) => c.width)).toEqual(SLICE_L2.map((r) => r.width));
+    const driven = SLICE_L2.filter(scripted);
+    expect(driven.length).toBeGreaterThan(0);
+    // Driven: one browser for the run, a case driver per scripted run at ITS committed width, an org each.
+    expect(opened).toBe(1);
+    expect(fb.opts.map((o) => [o.spec.caseId, o.spec.scenario, o.width])).toEqual(driven.map((r) => [`${r.row}|${r.sport}|${r.preset}|${r.scenario}`, HARNESS_SCENARIO[r.scenario], r.width]));
+    expect(fb.opts.map((o) => o.evidenceId)).toEqual(driven.map((r) => `case-${SLICE_L2.indexOf(r) + 1}`));
+    expect(d.orgs).toHaveLength(driven.length);
+    // Recorded: the catalogue's split, no check, zero counts.
+    const noPath = SLICE_L2.filter((r) => !scripted(r) && owningWave(r) !== null);
+    const notRun = SLICE_L2.filter((r) => !scripted(r) && owningWave(r) === null);
+    expect(noPath.length).toBeGreaterThan(0);
+    expect(notRun.length).toBeGreaterThan(0);
+    const recorded = raw.cases.filter((c) => c.state === "no_path" || c.state === "not_run");
+    expect(recorded).toHaveLength(noPath.length + notRun.length);
+    expect(raw.cases.filter((c) => c.state === "no_path")).toHaveLength(noPath.length);
+    expect(raw.cases.filter((c) => c.state === "not_run")).toHaveLength(notRun.length);
+    for (const c of recorded) {
+      expect({ checks: c.checks, counts: c.counts, layer: c.layer, driver: c.driver }, c.caseId).toEqual({ checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, layer: "L2", driver: "browser" });
+    }
+    for (const r of noPath) expect(raw.cases.find((c) => c.caseId.startsWith(`${r.row}|${r.sport}|${r.preset}|${r.scenario}@`))?.reason).toMatch(new RegExp(`^${owningWave(r)}: `));
+    const md = readFileSync(join(dir, "l2a", "MATRIX.md"), "utf8");
+    expect(md).toContain(`| 🚫 no_path | ${noPath.length} |`);
+    expect(md).toContain(`| ░ not_run | ${notRun.length} |`);
+    expect(md).toContain(`| total | ${SLICE_L2.length} |`);
+    const vac = vacuousLine(io.out());
+    for (const c of recorded) expect(vac, c.caseId).not.toContain(c.caseId);
+  });
+
+  it("empty case first: --layer L2 --only league|generic plans nothing (the cell has no committed run) — refused, exit 2 'nothing planned', nothing written, no browser, no org", async () => {
+    const io = capture();
+    expect(SLICE_CELLS.has("league|generic")).toBe(true);
+    expect(RAW_L2.filter((r) => r.row === "league" && r.sport === "generic")).toEqual([]);
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--only", "league|generic", "--run-id", "l2e", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/refused — NothingPlanned: .*--layer L2.*nothing planned/);
+    expect(existsSync(join(dir, "l2e"))).toBe(false);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(d.order.at(-1)).toBe("dispose");
+    // Positive pair: a cell with committed runs is not refused.
+    const some = SLICE_L2[0]!;
+    capture();
+    expect(await runSlice(deps({ openBrowserRun: async () => fakeBrowserRun().run }), ["--driver", "browser", "--layer", "L2", "--only", `${some.row}|${some.sport}`, "--run-id", "l2p", "--report-dir", dirFor()])).toBe(0);
+  });
+
+  it("an L2 plan with no driven case records its runs and opens no browser (--layer L2 --only swiss|generic)", async () => {
+    capture();
+    const cell = SLICE_L2.filter((r) => r.row === "swiss" && r.sport === "generic");
+    expect(cell.length).toBeGreaterThan(0);
+    expect(cell.some(scripted)).toBe(false);
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--only", "swiss|generic", "--run-id", "l2g", "--report-dir", dir])).toBe(0);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(resultsIn(dir, "l2g").cases.map((c) => c.state)).toEqual(cell.map((r) => (owningWave(r) === null ? "not_run" : "no_path")));
+  });
+
+  it("--set width-sweep --driver browser: league|badminton LIFECYCLE once per L2 width, in order, 320 included — a case driver at each case's own width; results L2", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = deps({ openBrowserRun: async () => fb.run });
+    expect(await runSlice(d, ["--set", "width-sweep", "--driver", "browser", "--run-id", "ws", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "ws", "results.json"), "utf8")) as RunResults;
+    expect(raw.layer).toBe("L2");
+    expect(raw.cases.map((c) => c.width)).toEqual([...L2_WIDTHS]);
+    expect(raw.cases.map((c) => c.width)).toContain(320);
+    expect(raw.cases.map((c) => c.caseId)).toEqual(L2_WIDTHS.map((w) => `league|badminton|bwf|LIFECYCLE@${w}`));
+    expect(fb.opts.map((o) => o.width)).toEqual([...L2_WIDTHS]);
+    expect(fb.log).toEqual([...L2_WIDTHS.flatMap((_w, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
+  });
+
+  it("--set api-only-browser --driver browser: one 🚫 per API-only row, in catalogue order, naming W4/W5 (D7 as ruled) — no browser, no org; exit 0; never vacuous, never an error red", async () => {
+    const io = capture();
+    const WAVE: Readonly<Record<string, string>> = { knockout_third_place: "W4", page_playoff_only: "W4", stepladder_only: "W4", group_only: "W5", group_group_ko: "W5" };
+    const dir = dirFor();
+    let opened = 0;
+    const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--set", "api-only-browser", "--driver", "browser", "--run-id", "ao", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "ao", "results.json"), "utf8")) as RunResults;
+    expect(raw.layer).toBe("L1");
+    expect(raw.cases.map((c) => c.row)).toEqual([...API_ONLY_ROWS]);
+    let checked = 0;
+    for (const c of raw.cases) {
+      expect(c).toMatchObject({ state: "no_path", reason: `${WAVE[c.row]}: no organiser control builds ${c.row}`, checks: [], caseId: `${c.row}|generic|score|LIFECYCLE@1280`, width: 1280, layer: "L1", driver: "browser" });
+      checked++;
+    }
+    expect(checked).toBe(API_ONLY_ROWS.length);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(io.out()).toMatch(/vacuous: none/);
+    expect(io.out()).toMatch(/error reds: none/);
+  });
+
+  it("a layered plan whose cases share a result id is refused by name (exit 2) before any case or browser", async () => {
+    const io = capture();
+    const spec = { caseId: "league|generic|score|LIFECYCLE", row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false } as const;
+    const one = { spec, layer: "L1", width: 1280, noPath: null, notRun: null, run: null } as const;
+    let opened = 0;
+    const planCases: PlanLayers = () => ({ sports: ["generic"], deniesFeatures: false, layer: "L1", label: "a test plan", acceptsWidth: null, layered: () => [one, { ...one }] });
+    const dir = dirFor();
+    const d = deps({ planCases, openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+    expect(await runSlice(d, ["--driver", "browser", "--run-id", "dup", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/refused — DuplicateCaseId: .*league\|generic\|score\|LIFECYCLE@1280/);
+    expect(opened).toBe(0);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "dup"))).toBe(false);
+    // Positive pair: the same plan with distinct widths runs.
+    capture();
+    const distinct: PlanLayers = () => ({ sports: ["generic"], deniesFeatures: false, layer: "L1", label: "a test plan", acceptsWidth: null, layered: () => [one, { ...one, width: 320 }] });
+    expect(await runSlice(deps({ planCases: distinct, openBrowserRun: async () => fakeBrowserRun().run }), ["--driver", "browser", "--run-id", "dup2", "--report-dir", dirFor()])).toBe(0);
   });
 });

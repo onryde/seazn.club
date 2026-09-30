@@ -28,6 +28,7 @@
 // Every wait is derived from the product's constants (AGENTS class 20;
 // browser-budget.test.ts scans this file for a flat timeout).
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
+import { apiOnlyUiPath } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
 import { createCompetitionUi } from "../browser/pages/competition.ts";
@@ -103,16 +104,6 @@ export interface BrowserDriverOptions {
   clock?: Clock;
   replay?: Replay;
 }
-
-/** D7 (plan; design §8's scopes): the wave that owns the organiser control each
- *  API-only row lacks. */
-export const API_ONLY_UI_WAVE: Readonly<Record<ApiOnlyRowKey, string>> = Object.freeze({
-  knockout_third_place: "W4", page_playoff_only: "W4", stepladder_only: "W4", group_only: "W5", group_group_ko: "W5",
-});
-/** The two API-only cells a catalog template does reach (template-card-<key>);
- *  W1c does not drive the gallery. */
-export const TEMPLATE_ONLY_CELLS: Readonly<Record<string, string>> = Object.freeze({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
-const TEMPLATE_DRIVING_WAVE = "W1-driving";
 
 /** d/[divSlug]/page.tsx TABLE_KINDS (text-pinned): the organiser standings tab draws a table for these only. */
 export const ORGANISER_TABLE_KINDS: ReadonlySet<string> = new Set(["league", "group", "swiss"]);
@@ -380,16 +371,14 @@ export class BrowserDriver implements OrganiserDriver {
     return { id: c.id, slug: c.slug, orgId: c.org_id };
   }
 
-  /** D7: an API-only row has no organiser control; the text names who owns it. */
+  /** D7: an API-only row has no organiser control; the text names who owns it
+   *  (api-only-ui.ts, the one authority the layer planner reads too). */
   #judgeApiOnlyPath(row: ApiOnlyRowKey): string {
-    const cell = `${row}|${this.#spec.sport}`;
-    const template = Object.prototype.hasOwnProperty.call(TEMPLATE_ONLY_CELLS, cell) ? TEMPLATE_ONLY_CELLS[cell] : null;
-    const text = template === null
-      ? `no organiser control builds ${row} → ${API_ONLY_UI_WAVE[row]}`
-      : `reachable only through catalog template ${template}; driving it → ${TEMPLATE_DRIVING_WAVE}`;
+    const path = apiOnlyUiPath(row, this.#spec.sport);
+    const text = `${path.reason} → ${path.wave}`;
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
-      this.#checks.push(template === null ? assertion("organiser-ui-path", [{ ok: false, note: text }]) : assertion("organiser-ui-path", [], text));
+      this.#checks.push(path.template === null ? assertion("organiser-ui-path", [{ ok: false, note: text }]) : assertion("organiser-ui-path", [], text));
     }
     return text;
   }
