@@ -112,7 +112,9 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
     const page = fakePage(deps);
     const r = await run(sheetAdapter, [SUMMARY(21, 13)], deps, page);
     expect(r.rows.map((x) => x.verdict)).toEqual(["equal"]);
-    expect(r.stored).toEqual([{ type: SUMMARY_TYPE, payload: { home: 21, away: 13 } }]);
+    // The rows as the product holds them: type, payload, and the seq and id the driver answers with.
+    expect(r.stored.map(({ seq, type, payload }) => ({ seq, type, payload }))).toEqual([{ seq: 5, type: SUMMARY_TYPE, payload: { home: 21, away: 13 } }]);
+    expect(r.stored[0]!.id).toEqual(expect.any(String));
     expect(r.rows[0]!.stored.map((s) => s.seq)).toEqual([5]);
     expect(r.findings).toEqual([]);
     expect(deps.tips).toBe(1);
@@ -128,7 +130,8 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
     const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 }), ROW(SUMMARY_TYPE, { home: 21, away: 16 })]);
     const r = await run(sheetAdapter, [SUMMARY(21, 13), SUMMARY(21, 16)], deps);
     expect(r.rows.map((x) => [x.verdict, x.stored.map((s) => s.seq)])).toEqual([["equal", [2]], ["equal", [3]]]);
-    expect(r.stored).toEqual([SUMMARY(21, 13), SUMMARY(21, 16)]);
+    expect(r.stored.map(({ type, payload }) => ({ type, payload }))).toEqual([SUMMARY(21, 13), SUMMARY(21, 16)]);
+    expect(r.stored.map((s) => s.seq)).toEqual([2, 3]);
   });
 
   it("a row whose payload differs is a mismatch naming the key, and replay stops there (the next tap would build on a wrong state)", async () => {
@@ -140,7 +143,7 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
     expect(r.findings).toHaveLength(1);
     expect(r.findings[0]).toMatch(/stopped after event 1 of 2/);
     // What the product holds is still returned: the fold judges the stored stream.
-    expect(r.stored).toEqual([SUMMARY(21, 12)]);
+    expect(r.stored.map(({ type, payload }) => ({ type, payload }))).toEqual([SUMMARY(21, 12)]);
     // The second event was never tapped.
     expect(page.taps.filter((t) => t.startsWith("click [data-tile-id"))).toHaveLength(1);
   });

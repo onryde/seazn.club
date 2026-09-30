@@ -19,6 +19,10 @@
 //    differs then is a FAIL verdict (ruling C as amended, fix round 1);
 //  - finalize-ledger-row: the ONE core.finalize the console's Finalize left
 //    (ruling D: the row is compared, never the route);
+//  - pad-ledger-as-generated (W1c Task 7): every event the pad scored, each
+//    row it wrote compared with the generated event (pads/replay.ts), across
+//    every fixture the case scored on the pad; pad-route abstains, naming the
+//    W1c task that owes the adapter, when the case's sport has none;
 //  - mixed-driver-coverage, then the case's Evidence checks.
 //
 // Every wait is derived from the product's constants (AGENTS class 20;
@@ -27,7 +31,7 @@ import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
 import { createCompetitionUi } from "../browser/pages/competition.ts";
-import { boundActions, navBudget, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
+import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
 import { finalizeUi, forfeitUi } from "../browser/pages/fixture-console.ts";
@@ -36,6 +40,9 @@ import { readPublicUi } from "../browser/pages/public-division.ts";
 import { openFixtureUi } from "../browser/pages/run-sheet.ts";
 import { completeStageUi, generateUi } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
+import { noPadReason } from "../pad-sports.ts";
+import { replayEvents, type ReplayResult } from "../pads/replay.ts";
+import type { MatrixPadAdapter } from "../pads/types.ts";
 import type { CheckResult } from "../results.ts";
 import { assertion, type Item } from "../scenarios/assertions.ts";
 import type { CaseSpec } from "../scenarios/types.ts";
@@ -49,9 +56,12 @@ import {
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
-/** The sport → pad adapter table Task 7 fills; empty until then. */
-export type PadRegistry = Readonly<Partial<Record<string, unknown>>>;
+/** sport → pad adapter (pads/index.ts PAD_ADAPTERS). A sport without one is
+ *  scored over HTTP, and its case says which task owes it (pad-route). */
+export type PadRegistry = Readonly<Partial<Record<string, MatrixPadAdapter>>>;
 export const EMPTY_PADS: PadRegistry = Object.freeze({});
+/** The pad replay (pads/replay.ts replayEvents); a seam for the unit suite. */
+export type Replay = typeof replayEvents;
 
 /** The page objects the driver clicks through; injectable so its tests need no browser. */
 export interface BrowserPages {
@@ -91,6 +101,7 @@ export interface BrowserDriverOptions {
   orgId: string;
   pages?: BrowserPages;
   clock?: Clock;
+  replay?: Replay;
 }
 
 /** D7 (plan; design §8's scopes): the wave that owns the organiser control each
@@ -214,6 +225,28 @@ export function builderVsHarness(built: readonly StageOut[], bodies: readonly St
     : { id: "builder-posted-as-harness", kind: "assertion", verdict: "fail", checked, reason: `the builder posted other than the harness's bodies: ${evidence[0]}`, evidence };
 }
 
+/** One item per event the replay judged, then one per finding (why it
+ *  stopped), each naming the fixture and the event's index. */
+export function padItems(fixtureId: string, total: number, r: ReplayResult): Item[] {
+  const ok = new Set(["equal", "tolerated", "fallback"]);
+  return [
+    ...r.rows.map((row, i) => ({
+      ok: ok.has(row.verdict),
+      note: `${fixtureId} event ${i + 1} of ${total} (${row.expected.type}): ${row.verdict}${row.note === null ? "" : ` — ${row.note}`}`,
+    })),
+    ...r.findings.map((f) => ({ ok: false, note: `${fixtureId}: ${f}` })),
+  ];
+}
+
+/** `pad-ledger-as-generated`: the case's pad rows, all fixtures together.
+ *  Zero items fails (R25). A tolerated or fallback row passes, and its note
+ *  is kept as evidence after any failure: an observation, never silent. */
+function padCheck(items: readonly Item[]): CheckResult {
+  const c = assertion("pad-ledger-as-generated", items);
+  const seen = items.filter((i) => i.ok && !/: equal$/.test(i.note)).map((i) => i.note);
+  return { ...c, evidence: [...c.evidence, ...seen].slice(0, 12) };
+}
+
 const toStageRef = (s: StageOut): StageRef => ({ id: s.id, seq: s.seq, kind: s.kind, config: s.config, status: s.status });
 const isApiOnly = (row: string): row is ApiOnlyRowKey => (API_ONLY_ROWS as readonly string[]).includes(row);
 type ChampionWant = { kind: "abstain"; reason: string } | { kind: "fail"; note: string } | { kind: "name"; name: string };
@@ -227,9 +260,14 @@ export class BrowserDriver implements OrganiserDriver {
   readonly #orgId: string;
   readonly #pages: BrowserPages;
   readonly #clock: Clock;
+  readonly #replay: Replay;
   readonly #ledger = new MixedLedger();
   readonly #checks: CheckResult[] = [];
   readonly #finalized: Item[] = [];
+  /** Every pad-scored row compared, and every replay finding, across the case's fixtures (null: the pad never scored). */
+  #padItems: Item[] | null = null;
+  #padRouteJudged = false;
+  #sheetShot = false;
   /** competition id → the product's slug; only competitions whose org and visibility held. */
   readonly #competitions = new Map<string, string>();
   /** division id → where it lives, in the product's slugs. */
@@ -257,6 +295,7 @@ export class BrowserDriver implements OrganiserDriver {
     this.#orgId = o.orgId;
     this.#pages = o.pages ?? REAL_PAGES;
     this.#clock = o.clock ?? REAL_CLOCK;
+    this.#replay = o.replay ?? replayEvents;
     // Ruling F: every tap no page object bounds itself is one step's budget.
     boundActions(o.ctx.page, o.ctx);
   }
@@ -278,8 +317,9 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   checks(): CheckResult[] {
+    const pad = this.#padItems === null ? [] : [padCheck(this.#padItems)];
     const fin = this.#finalized.length === 0 ? [] : [assertion("finalize-ledger-row", this.#finalized)];
-    return [...this.#checks, ...fin, this.#ledger.coverage(), ...this.#ctx.evidence.checks()];
+    return [...this.#checks, ...pad, ...fin, this.#ledger.coverage(), ...this.#ctx.evidence.checks()];
   }
 
   #ui<T>(act: (p: BrowserPages) => Promise<T>): Promise<T> {
@@ -441,15 +481,58 @@ export class BrowserDriver implements OrganiserDriver {
   listFixtures(divisionId: string): Promise<FixtureRow[]> { return this.#http.listFixtures(divisionId); }
   fixtureState(fixtureId: string): Promise<FixtureStateOut> { return this.#http.fixtureState(fixtureId); }
 
-  /** The pad path is Task 7's: until then a sport with a pad, under a policy
-   *  that wants the browser, is refused by name rather than scored over HTTP
-   *  and counted as covered. */
+  /** A score the policy sends to the browser is tapped on the fixture's own
+   *  pad (W1c Task 7) and answered from the ledger rows the taps wrote. A
+   *  sport with no adapter is scored over HTTP, its case says which task owes
+   *  the adapter (pad-route), and it is never exempt, so coverage reds score
+   *  by name rather than a case going green on a promise. An empty stream has
+   *  no act to drive, so it takes the HTTP path, as it always did. */
   async postStream(fixtureId: string, events: readonly StreamEvent[], idempotencyPrefix: string): Promise<PostedEvent[]> {
-    if (this.#wants("score") && Object.prototype.hasOwnProperty.call(this.#pads, this.#spec.sport)) {
-      throw new DriverMisuse(`browser: the ${this.#spec.sport} pad path lands in Task 7 — this driver cannot score it yet`);
+    const wanted = events.length > 0 && this.#wants("score");
+    const sport = this.#spec.sport;
+    const pad = wanted && Object.prototype.hasOwnProperty.call(this.#pads, sport) ? this.#pads[sport] : undefined;
+    if (pad !== undefined) {
+      this.#ledger.record("score", "browser");
+      return this.#write(() => this.#ui(() => this.#padStream(pad, fixtureId, events)));
+    }
+    if (wanted && !this.#padRouteJudged) {
+      this.#padRouteJudged = true;
+      this.#checks.push(assertion("pad-route", [], noPadReason(sport)));
     }
     this.#ledger.record("score", "http");
     return this.#write(() => this.#http.postStream(fixtureId, events, idempotencyPrefix));
+  }
+
+  /** One fixture scored on its pad. The console is opened by the fixture's
+   *  number, the replay taps each event and reads back the rows it wrote after
+   *  the server's tip, and every row the product then holds is answered as a
+   *  PostedEvent carrying `stored`, so the scenario folds what the product
+   *  stored. It never finalizes; PADPROOF finalizes as its own step. */
+  async #padStream(pad: MatrixPadAdapter, fixtureId: string, events: readonly StreamEvent[]): Promise<PostedEvent[]> {
+    const { where, row, no } = await this.#findFixture(fixtureId);
+    const home = row.home_entrant_id;
+    const away = row.away_entrant_id;
+    if (home === null || away === null) throw new DriverMisuse(`browser: fixture ${fixtureId} does not seat two entrants — the pad scores a seated fixture only`);
+    const cfg = (await this.#http.getDivision(where.divisionId)).config;
+    await this.#pages.openFixtureUi(this.#ctx, where, no);
+    const before = await shoot(this.#ctx, "08-pad-before");
+    const result = await this.#replay(this.#ctx.page, pad, events, { cfg, entrants: { home, away } }, {
+      ledger: (since) => this.#http.ledger(fixtureId, since),
+      tip: async () => (await this.#http.fixtureState(fixtureId)).last_seq,
+      sleep: (ms) => this.#clock.sleep(ms),
+      holdMs: this.#ctx.holdMs,
+      // The case's one mid-sheet picture: the first number step it ever types.
+      onTap: async (_i, step) => {
+        if (this.#sheetShot || step.kind !== "number") return;
+        this.#sheetShot = true;
+        await shoot(this.#ctx, "08-pad-sheet");
+      },
+    });
+    await shoot(this.#ctx, "08-pad-scored", before);
+    (this.#padItems ??= []).push(...padItems(fixtureId, events.length, result));
+    if (result.stored.length === 0) return [];
+    const state = await this.#http.fixtureState(fixtureId);
+    return result.stored.map((r) => ({ seq: r.seq, event_id: r.id, status: state.status, outcome: state.outcome, stored: { type: r.type, payload: r.payload } }));
   }
 
   async forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]> {

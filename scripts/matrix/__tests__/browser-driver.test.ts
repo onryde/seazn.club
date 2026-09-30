@@ -20,9 +20,14 @@ import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
-  compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry,
+  compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { PAD_OWNER } from "../lib/pad-sports.ts";
+import { genericPad } from "../lib/pads/generic.ts";
+import { PAD_ADAPTERS } from "../lib/pads/index.ts";
+import type { ReplayDeps, ReplayResult } from "../lib/pads/replay.ts";
+import type { StreamEvent } from "../lib/streams/types.ts";
 import type { CheckResult } from "../lib/results.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
@@ -127,12 +132,12 @@ function fakeClock(): Clock & { sleeps: number[]; t: number } {
 }
 
 interface Made { driver: BrowserDriver; pageCalls: string[]; pageArgs: Record<string, unknown[][]>; defaults: number[]; ctx: PageCtx }
-function make<H extends HttpSide>(o: { http: H; spec?: CaseSpec; pages?: Partial<BrowserPages>; padPolicy?: "first" | "all"; pads?: PadRegistry; clock?: Clock }): Made & { http: H } {
+function make<H extends HttpSide>(o: { http: H; spec?: CaseSpec; pages?: Partial<BrowserPages>; padPolicy?: "first" | "all"; pads?: PadRegistry; clock?: Clock; replay?: Replay; page?: object }): Made & { http: H } {
   const fp = fakePages(o.pages);
   const defaults: number[] = [];
-  const page = { setDefaultTimeout: (ms: number) => { defaults.push(ms); } };
+  const page = { ...o.page, setDefaultTimeout: (ms: number) => { defaults.push(ms); } };
   const ctx: PageCtx = { page: page as unknown as PageCtx["page"], base: "http://localhost:3999", orgSlug: ORG_SLUG, holdMs: 3000, evidence: new Evidence("/report", "case-1", memFs()) };
-  const driver = new BrowserDriver({ http: o.http, ctx, spec: o.spec ?? spec("league"), padPolicy: o.padPolicy ?? "first", pads: o.pads ?? EMPTY_PADS, orgId: ORG, pages: fp.pages, clock: o.clock ?? fakeClock() });
+  const driver = new BrowserDriver({ http: o.http, ctx, spec: o.spec ?? spec("league"), padPolicy: o.padPolicy ?? "first", pads: o.pads ?? EMPTY_PADS, orgId: ORG, pages: fp.pages, clock: o.clock ?? fakeClock(), ...(o.replay === undefined ? {} : { replay: o.replay }) });
   return { driver, http: o.http, pageCalls: fp.calls, pageArgs: fp.args, defaults, ctx };
 }
 const league = (o: { spec?: CaseSpec; pages?: Partial<BrowserPages>; padPolicy?: "first" | "all"; pads?: PadRegistry } = {}) => make({ ...o, http: new FakeHttp(ORG) });
@@ -845,15 +850,188 @@ describe("BrowserDriver — forfeit and finalize on the console", () => {
   });
 });
 
-describe("BrowserDriver — the pad branch (Task 7 fills it)", () => {
-  it("a sport with a pad under a browser-wanting policy is refused by name until Task 7; without a pad the score goes over http, and coverage reds score by name", async () => {
-    const padded = league({ pads: { generic: {} } });
-    await expect(padded.driver.postStream("f1", [], "p")).rejects.toThrow(/Task 7/);
-    expect(padded.http.calls).not.toContain("postStream");
+describe("BrowserDriver — the pad path (W1c Task 7)", () => {
+  const PAD_FIXTURE = fixture("f1", "s1", null, 4);
+  const DIV_CONFIG = { resultMode: "score", allowDraws: true };
+  const DECIDED: FixtureStateOut = { status: "decided", last_seq: 3, outcome: { kind: "win", winner: "e1" } };
+  const lrow = (seq: number, type: string, payload: unknown): LedgerRow => ({ id: `r${seq}`, seq, type, payload });
+  const EVENTS: StreamEvent[] = [{ type: "core.start", payload: {} }, { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } }];
+  const STORED = [lrow(2, "core.start", {}), lrow(3, "generic.result", { p1Score: 3, p2Score: 1 })];
+  const OK: ReplayResult = {
+    rows: [
+      { expected: EVENTS[0]!, stored: [STORED[0]!], verdict: "equal", note: null },
+      { expected: EVENTS[1]!, stored: [STORED[1]!], verdict: "equal", note: null },
+    ],
+    stored: STORED,
+    findings: [],
+  };
+  /** The http side the pad path reads: the fixture's row, its division's config, its state and ledger. */
+  const padHttp = (o: { state?: FixtureStateOut; ledgerRows?: LedgerRow[] } = {}) => stubHttp({
+    listFixtures: async () => [PAD_FIXTURE],
+    getDivision: async () => ({ id: "d1", slug: PRODUCT_DIV_SLUG, sportKey: "generic", variantKey: "score", config: DIV_CONFIG }),
+    fixtureState: async () => o.state ?? DECIDED,
+    ledger: async (...a: never[]) => (o.ledgerRows ?? STORED).filter((r) => r.seq > (a[1] as number)),
+    postStream: async () => [],
+    listStages: async () => [stageRef("s1", 1, "league")],
+    listEntrants: async () => ENTRANTS,
+    publicStandings: async () => ({ division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: rows("e1", "e2") }] }),
+  });
+  /** A replay that records what it was handed and answers `result` (or `each` per call). */
+  const fakeReplay = (result: ReplayResult | ((call: number, deps: ReplayDeps) => Promise<ReplayResult>)) => {
+    const calls: Parameters<Replay>[] = [];
+    const fn: Replay = async (...a) => {
+      calls.push(a);
+      return typeof result === "function" ? result(calls.length, a[4]) : result;
+    };
+    return { fn, calls };
+  };
+  const PADS = { generic: genericPad };
 
-    const bare = make({ http: stubHttp({ postStream: async () => [] }) });
-    expect(await bare.driver.postStream("f1", [], "p")).toEqual([]);
-    expect(bare.http.calls).toEqual(["postStream"]);
-    expect(only(bare.driver, "mixed-driver-coverage")).toMatchObject({ verdict: "fail", checked: 1, evidence: ["score: invoked 1×, never in the browser"] });
+  it("postStream taps through the injected replay, then answers PostedEvents carrying `stored`, the seq and id from the rows, and status/outcome from one trailing fixtureState", async () => {
+    const r = fakeReplay(OK);
+    const { driver, http, pageArgs, pageCalls } = make({ http: padHttp(), pads: PADS, replay: r.fn });
+    await built(driver, spec("league"));
+    const posted = await driver.postStream("f1", EVENTS, "p");
+    expect(posted).toEqual([
+      { seq: 2, event_id: "r2", status: DECIDED.status, outcome: DECIDED.outcome, stored: { type: "core.start", payload: {} } },
+      { seq: 3, event_id: "r3", status: DECIDED.status, outcome: DECIDED.outcome, stored: { type: "generic.result", payload: { p1Score: 3, p2Score: 1 } } },
+    ]);
+    // The replay got the page, the sport's adapter, the events, the division's cfg and the fixture's two seats.
+    expect(r.calls).toHaveLength(1);
+    const [page, adapter, events, ctx, deps] = r.calls[0]!;
+    expect(page).toBeDefined();
+    expect(adapter).toBe(genericPad);
+    expect(events).toEqual(EVENTS);
+    expect(ctx).toEqual({ cfg: DIV_CONFIG, entrants: { home: "e1", away: "e2" } });
+    // Its deps are the server's: the tip is /state's last_seq, the ledger is this fixture's, the hold is the build's.
+    expect(deps.holdMs).toBe(3000);
+    expect(await deps.tip()).toBe(DECIDED.last_seq);
+    expect((await deps.ledger(2)).map((x) => x.seq)).toEqual([3]);
+    // The console was opened by the fixture's number first; nothing went over the events route.
+    expect(pageArgs.openFixtureUi![0]![2]).toBe(4);
+    expect(pageCalls).toContain("openFixtureUi");
+    expect(http.calls).not.toContain("postStream");
+    expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 2 });
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("the pad path never finalizes: no Finalize tap, no finalize call — PADPROOF finalizes as its own step", async () => {
+    const r = fakeReplay(OK);
+    const { driver, http, pageCalls } = make({ http: padHttp(), pads: PADS, replay: r.fn });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", EVENTS, "p");
+    expect(r.calls).toHaveLength(1);
+    expect(pageCalls).not.toContain("finalizeUi");
+    expect(http.calls.filter((c) => c.includes("inalize"))).toEqual([]);
+    expect(driver.checks().map((c) => c.id)).not.toContain("finalize-ledger-row");
+  });
+
+  it("a replay finding is a failing pad-ledger-as-generated naming the fixture and the event index; the rows the product did store are still answered", async () => {
+    const partial: ReplayResult = {
+      rows: [
+        { expected: EVENTS[0]!, stored: [STORED[0]!], verdict: "equal", note: null },
+        { expected: EVENTS[1]!, stored: [lrow(3, "generic.result", { p1Score: 3, p2Score: 2 })], verdict: "mismatch", note: "p2Score: stored 2, generated 1" },
+      ],
+      stored: [STORED[0]!, lrow(3, "generic.result", { p1Score: 3, p2Score: 2 })],
+      findings: ["stopped after event 2 of 2: p2Score: stored 2, generated 1"],
+    };
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: fakeReplay(partial).fn });
+    await built(driver, spec("league"));
+    const posted = await driver.postStream("f1", EVENTS, "p");
+    expect(posted.map((p) => p.stored)).toEqual([{ type: "core.start", payload: {} }, { type: "generic.result", payload: { p1Score: 3, p2Score: 2 } }]);
+    const c = only(driver, "pad-ledger-as-generated");
+    expect(c).toMatchObject({ verdict: "fail", checked: 3 });
+    expect(c.evidence).toEqual([
+      "f1 event 2 of 2 (generic.result): mismatch — p2Score: stored 2, generated 1",
+      "f1: stopped after event 2 of 2: p2Score: stored 2, generated 1",
+    ]);
+  });
+
+  it("a replay that stored nothing answers no event and fails the check, never a vacuous pass", async () => {
+    const none: ReplayResult = { rows: [], stored: [], findings: ["event 1 of 2 (core.start): no tap route — the adapter answered no steps"] };
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: fakeReplay(none).fn });
+    await built(driver, spec("league"));
+    expect(await driver.postStream("f1", EVENTS, "p")).toEqual([]);
+    expect(only(driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "fail", checked: 1, evidence: ["f1: event 1 of 2 (core.start): no tap route — the adapter answered no steps"] });
+  });
+
+  it("every pad write joins ONE check across fixtures; `first` sends only the first score to the pad, `all` sends every one", async () => {
+    const first = fakeReplay(OK);
+    const a = make({ http: padHttp(), pads: PADS, replay: first.fn, padPolicy: "first" });
+    await built(a.driver, spec("league"));
+    await a.driver.postStream("f1", EVENTS, "p");
+    await a.driver.postStream("f1", EVENTS, "q");
+    expect(first.calls).toHaveLength(1);
+    expect(a.http.calls.filter((c) => c === "postStream")).toHaveLength(1);
+    expect(only(a.driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 2 });
+
+    const all = fakeReplay(OK);
+    const b = make({ http: padHttp(), pads: PADS, replay: all.fn, padPolicy: "all" });
+    await built(b.driver, spec("league"));
+    await b.driver.postStream("f1", EVENTS, "p");
+    await b.driver.postStream("f1", EVENTS, "q");
+    expect(all.calls).toHaveLength(2);
+    expect(b.http.calls).not.toContain("postStream");
+    expect(only(b.driver, "pad-ledger-as-generated")).toMatchObject({ verdict: "pass", checked: 4 });
+  });
+
+  it("an empty stream has no pad act: it goes over http as before, and nothing is tapped", async () => {
+    const r = fakeReplay(OK);
+    const { driver, http } = make({ http: padHttp(), pads: PADS, replay: r.fn });
+    await built(driver, spec("league"));
+    expect(await driver.postStream("f1", [], "p")).toEqual([]);
+    expect(r.calls).toEqual([]);
+    expect(http.calls).toContain("postStream");
+    expect(driver.checks().map((c) => c.id)).not.toContain("pad-ledger-as-generated");
+  });
+
+  it("a sport with no adapter is not tapped: it goes over http, and pad-route abstains ONCE naming the task that owes it; coverage still reds score", async () => {
+    const r = fakeReplay(OK);
+    const { driver, http } = make({ http: padHttp(), spec: spec("league", "football"), pads: PAD_ADAPTERS, replay: r.fn });
+    await built(driver, spec("league", "football"));
+    await driver.postStream("f1", EVENTS, "p");
+    await driver.postStream("f1", EVENTS, "q");
+    expect(r.calls).toEqual([]);
+    expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
+    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: `no pad adapter for football yet → ${PAD_OWNER.football}` });
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "fail", evidence: ["score: invoked 2×, never in the browser"] });
+  });
+
+  it("the pad write goes through the write stamp (carry N-1): a pad score at the window's end restarts the public page's freshness window", async () => {
+    const windowMs = publicFreshnessMs({ holdMs: 3000 });
+    const stale = { readPublicUi: async () => ({ tables: [uiRows("Bob", "Ann")], champion: null }) };
+    const ref = (b: { compSlug: string; divSlug: string }) => ({ orgSlug: ORG_SLUG, competitionSlug: b.compSlug, divisionSlug: b.divSlug });
+    // Control: no write after the build — one read decides.
+    const clockA = fakeClock();
+    const a = make({ http: padHttp(), pads: PADS, replay: fakeReplay(OK).fn, clock: clockA, pages: stale });
+    const bA = await built(a.driver, spec("league"));
+    clockA.t = windowMs;
+    await a.driver.publicStandings(ref(bA));
+    expect(clockA.sleeps).toEqual([]);
+    // A pad score at t = window: the page is polled for a whole window again.
+    const clockB = fakeClock();
+    const b = make({ http: padHttp(), pads: PADS, replay: fakeReplay(OK).fn, clock: clockB, pages: stale });
+    const bB = await built(b.driver, spec("league"));
+    clockB.t = windowMs;
+    await b.driver.postStream("f1", EVENTS, "p");
+    await b.driver.publicStandings(ref(bB));
+    expect(clockB.sleeps.length).toBe(Math.ceil(windowMs / SLACK_MS));
+  });
+
+  it("pictures: before and after every pad write, the second must differ; the mid-sheet picture once per case, at the first number step", async () => {
+    let n = 0;
+    const page = { evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }), screenshot: async () => new Uint8Array([++n]) };
+    const replay = fakeReplay(async (_call, deps) => {
+      for (const step of [{ kind: "tile", tileId: "setScore" }, { kind: "number", value: 21 }, { kind: "confirm" }, { kind: "number", value: 13 }] as const) await deps.onTap?.(0, step);
+      return OK;
+    });
+    const { driver } = make({ http: padHttp(), pads: PADS, replay: replay.fn, padPolicy: "all", page });
+    await built(driver, spec("league"));
+    await driver.postStream("f1", EVENTS, "p");
+    await driver.postStream("f1", EVENTS, "q");
+    const v = only(driver, "visual-evidence");
+    expect(v).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(v.reason).toMatch(/2 must-differ pair\(s\) differ/);
+    expect(v.evidence.map((e) => e.split(":")[0])).toEqual(["08-pad-before", "08-pad-sheet", "08-pad-scored", "08-pad-before-2", "08-pad-scored-2"]);
   });
 });

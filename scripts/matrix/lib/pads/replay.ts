@@ -41,7 +41,7 @@ export type RowVerdict = "equal" | "tolerated" | "fallback" | "mismatch" | "miss
 export interface ReplayRow { expected: StreamEvent; stored: readonly LedgerRow[]; verdict: RowVerdict; note: string | null }
 /** `stored`: every row the replay read, as the product holds it, in seq order —
  *  what the fold judges. `findings`: why the replay stopped early, if it did. */
-export interface ReplayResult { rows: ReplayRow[]; stored: StreamEvent[]; findings: string[] }
+export interface ReplayResult { rows: ReplayRow[]; stored: LedgerRow[]; findings: string[] }
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -129,7 +129,7 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
     }
     if (rows.length < want) {
       out.rows.push({ expected: ev, stored: rows, verdict: "missing", note: `${rows.length} of ${want} row(s) within ${deadline}ms` });
-      out.stored.push(...rows.map((r) => ({ type: r.type, payload: r.payload })));
+      out.stored.push(...rows);
       out.findings.push(`stopped after event ${i + 1} of ${events.length}: row missing`);
       break;
     }
@@ -138,13 +138,13 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
     if (rows.length > want) {
       const note = `${rows.length} row(s) after seq ${tip}, the route writes ${want}`;
       out.rows.push({ expected: ev, stored: rows, verdict: "mismatch", note });
-      out.stored.push(...rows.map((r) => ({ type: r.type, payload: r.payload })));
+      out.stored.push(...rows);
       out.findings.push(`stopped after event ${i + 1} of ${events.length}: ${note}`);
       break;
     }
     const mine = rows;
     tip = mine.at(-1)!.seq;
-    out.stored.push(...mine.map((r) => ({ type: r.type, payload: r.payload })));
+    out.stored.push(...mine);
     if (fallback !== null) {
       out.rows.push({ expected: ev, stored: mine, verdict: "fallback", note: fallback.why });
       continue;
@@ -161,7 +161,7 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
   // event's is never left unread (the bench's NB4, unreadRowsAfterFinalize).
   const late = await deps.ledger(tip);
   if (late.length > 0) {
-    out.stored.push(...late.map((r) => ({ type: r.type, payload: r.payload })));
+    out.stored.push(...late);
     out.findings.push(`${late.length} row(s) after the last event's (seq ${tip}): ${late.map((r) => r.type).join(", ")}`);
   }
   return out;

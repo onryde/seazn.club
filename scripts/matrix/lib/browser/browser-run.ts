@@ -7,7 +7,8 @@
 // this module never imports the runner.
 import type { Browser } from "playwright";
 import type { Session } from "../../../bench/lib/http.ts";
-import { BrowserDriver, EMPTY_PADS, REAL_PAGES, type BrowserPages, type PadRegistry } from "../driver/browser-driver.ts";
+import { BrowserDriver, REAL_PAGES, type BrowserPages, type PadRegistry } from "../driver/browser-driver.ts";
+import { PAD_ADAPTERS } from "../pads/index.ts";
 import { HttpDriver, type Transport } from "../driver/http-driver.ts";
 import type { PadPolicy } from "../driver/mixed.ts";
 import type { CaseSpec } from "../scenarios/types.ts";
@@ -47,13 +48,14 @@ export interface BrowserRunDeps {
   transport?: Transport;
 }
 
-const REAL: BrowserRunDeps = {
+/** A real run's seams. Its pads are every registered adapter (W1c Task 7). */
+export const REAL_RUN_DEPS: Readonly<BrowserRunDeps> = Object.freeze<BrowserRunDeps>({
   launch: openBrowser,
   newCase: (browser, o) => newCaseBrowser(browser as Browser, o),
   env: process.env,
-  pads: EMPTY_PADS,
+  pads: PAD_ADAPTERS,
   pages: REAL_PAGES,
-};
+});
 
 export class BrowserRunClosed extends Error {
   constructor() {
@@ -66,7 +68,7 @@ export class BrowserRunClosed extends Error {
  *  session jar as the runner (its org cookie included), its width, and a
  *  BrowserDriver over a fresh HttpDriver on that session. A case whose
  *  driver cannot be built closes its context before the error leaves. */
-export async function openBrowserRun(deps: BrowserRunDeps = REAL): Promise<OpenBrowserRun> {
+export async function openBrowserRun(deps: BrowserRunDeps = REAL_RUN_DEPS): Promise<OpenBrowserRun> {
   const browser = await deps.launch();
   let closed = false;
   return {

@@ -33,6 +33,10 @@ export interface PostedEvent {
   /** Parked Task 6 (b): set (true) only when this event landed on the one
    *  SEQ_CONFLICT retry, so a parity trace can say which posts raced. */
   retried?: boolean;
+  /** W1c Task 7: the ledger row as the product holds it. Only the pad path
+   *  sets it, and it sets it on every event it answers. Its taps wrote the row,
+   *  so the scenario folds this and never the event it meant to send. */
+  stored?: StreamEvent;
 }
 
 /** Final review m-2: the product keeps a durable unique index on

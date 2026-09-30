@@ -6,9 +6,10 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "../../bench/lib/http.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
-import { BrowserRunClosed, openBrowserRun, type BrowserRunDeps, type CaseOptions } from "../lib/browser/browser-run.ts";
+import { BrowserRunClosed, REAL_RUN_DEPS, openBrowserRun, type BrowserRunDeps, type CaseOptions } from "../lib/browser/browser-run.ts";
 import type { CaseBrowser } from "../lib/browser/session.ts";
-import { BrowserDriver, EMPTY_PADS } from "../lib/driver/browser-driver.ts";
+import { BrowserDriver, EMPTY_PADS, REAL_PAGES } from "../lib/driver/browser-driver.ts";
+import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 
 interface Fake { deps: BrowserRunDeps; log: string[]; asked: { base: string; cookies: Readonly<Record<string, string>>; width: number }[]; defaults: number[] }
@@ -38,6 +39,13 @@ const opts = (over: Partial<CaseOptions> = {}): CaseOptions =>
   ({ base: "http://localhost:3999", session, orgId: "org-1", orgSlug: "m-r-1", spec, width: 320, padPolicy: "first", reportDir: "/report/run", evidenceId: "case-1", ...over });
 
 describe("openBrowserRun", () => {
+  it("a real run scores on every registered pad adapter (W1c Task 7), through the real page objects and the process env", () => {
+    expect(Object.keys(PAD_ADAPTERS).length).toBeGreaterThan(0);
+    expect(REAL_RUN_DEPS.pads).toBe(PAD_ADAPTERS);
+    expect(REAL_RUN_DEPS.pages).toBe(REAL_PAGES);
+    expect(REAL_RUN_DEPS.env).toBe(process.env);
+  });
+
   it("each case gets its own context on the runner's session jar and width, and a BrowserDriver whose page is bounded (ruling F)", async () => {
     const f = fake();
     const run = await openBrowserRun(f.deps);
