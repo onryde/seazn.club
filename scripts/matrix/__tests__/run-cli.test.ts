@@ -1351,7 +1351,12 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     const dir = dirFor();
     const fb = fakeBrowserRun();
     const d = deps({ openBrowserRun: async () => fb.run });
+    // Every pad sport's real builder order (W1c Tasks 9–11): the default fake's
+    // fixed ["bwf", "short"] is badminton's, and reads as drift for any other.
+    const open = d.openDb;
+    d.openDb = async () => ({ ...(await open()), variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s) });
     expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "320", "--run-id", "pp1", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "pp1").cases.map((c) => c.variant)).toEqual(PAD_SPORTS.map((s) => offlineBuilderDefault(s)));
     const raw = resultsIn(dir, "pp1");
     expect(raw.cases.map((c) => [c.sport, c.scenario])).toEqual(PAD_SPORTS.map((s) => [s, "PADPROOF"]));
     expect(fb.opts).toHaveLength(PAD_SPORTS.length);
