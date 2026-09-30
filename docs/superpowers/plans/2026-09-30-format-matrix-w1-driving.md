@@ -412,11 +412,11 @@ Noted for W7, not asserted: `finalRanks` is the raw `ladder_order` (`engine-db/c
   - `m1-walkover-recorded` expects status `forfeited` and winner = seed 1's PAIR entrant id (canary: the absent pair). `m1-winner-progresses` abstains ("not a bracket stage").
   - On mexicano the walkover is `forfeited`, which stalls every later round (false premise 14): predicted signature `mexicano-stalled-on-non-decided` → W7.
   - The M1 hook takes a `targetOf(batch)` strategy chosen by stage kind: entrant-id match (today's, every other kind) or pair-member match (americano). A lookup table keyed by kind, not an if-chain in the hook.
-- **`r4-cascade-consistent` becomes kind-aware (false premise 16, plan review 2 I-1).** `cascadeItems(policy, w, before, after, walkovers, voided, kind)` chooses its walkover model by kind, through a lookup keyed on the product's two sets. Both sets are text-pinned: `TABLE_KINDS` from `withdrawal.ts:37` and `BRACKET_WALKOVER_KINDS` from `stages.ts:880-884`.
+- **`r4-cascade-consistent` becomes kind-aware (false premise 16, plan review 2 I-1).** `cascadeItems(policy, w, before, after, walkovers, voided, kind)` chooses its walkover model by kind, through a lookup keyed on the product's two sets. The runtime lookup is one harness constant, `FORFEIT_MODEL_KINDS` in `lib/observed.ts` beside `PENDING_STATUSES`. A text-pin test holds it equal to the union of the product's `TABLE_KINDS` (`withdrawal.ts:37`) and `BRACKET_WALKOVER_KINDS` (`stages.ts:880-884`), just as `PENDING_STATUSES` is held to `table-withdrawal.ts:18` (plan review 3 m-6: one runtime authority per fact).
   - For a kind in either set, the model is today's: a pending fixture with a seated opponent is `forfeited` to that opponent, and one with a TBD opponent is `abandoned`.
   - For any other kind (the open-format branch: ladder, `page_playoff`, americano), `walkover` means every pending fixture is `abandoned` and counted in `voided`, and no fixture is forfeited (reported walkovers 0).
   - "Pending" is the product's `WITHDRAWAL_PENDING_STATUSES`, text-pinned from `apps/web/src/lib/table-withdrawal.ts:18` (`{scheduled, in_play}`), never a typed list (plan review 2 m-3).
-  - The `league|generic` R4 canary stays byte-identical, because `league` is in `TABLE_KINDS` and canary runs are league-only (`run.ts:630-643` `canaryVerdict`; `slice.ts:74-77` `planCanaryCase`). A test pins the canary's verdict before and after.
+  - The `league|generic` R4 canary's verdict and its `r4-policy-reported` / `r4-cascade-consistent` entries stay byte-identical, because `league` is in `TABLE_KINDS` and canary runs are league-only (`run.ts:630-643` `canaryVerdict`; `slice.ts:74-77` `planCanaryCase`). A test pins those before and after. The whole checks JSON does change: the new `r4-not-challenged-later` appears as an abstain, which the test asserts separately (plan review 3 m-2).
 - **R4 on the ladder (ruling 51; the expectation is ruled (53) — false premise 13, plan review 2 Q3).**
   - The hook withdraws seed 3 in `afterRound` of the FIRST ladder step whose batch seats seed 3 (today's hook fires on `round === 1`). The R4 trigger is a per-kind strategy beside M1's: `round === 1` for every other kind, "first batch seating seed 3" for `ladder`.
   - The case asserts five product facts, and nothing else:
@@ -436,12 +436,7 @@ Noted for W7, not asserted: `finalRanks` is the raw `ladder_order` (`engine-db/c
   - The signature needs `before.length === 0` AND seed 3's person seated in any fixture of round ≥ 2 **through any entrant**. Seed 3 can come back through its round-1 pair entrant, which the product still counts as a player (false premise 17).
   - Without that leg, the case goes to normal triage.
   - The round-2 duplicate (`mexicano-pair-entrants-counted-as-players`) is expected on these cases too.
-- **Triage rule (Task 15 Step 3).** A ❌ is a predicted product red → W7, counted as NOT harness-caused for ruling 48, only when EVERY failing check on the case is covered by a signature the case carries:
-  - `r4-policy-reported` on an americano or mexicano R4 case → `r4-withdrawn-player-kept-playing`;
-  - `life-loop-bounded` with `exited stalled_rounds` on a mexicano M1 case → `mexicano-stalled-on-non-decided`;
-  - I10 "seated N×" items, or a refused or 500 generate after round 1, on any mexicano case → `mexicano-pair-entrants-counted-as-players`. Every duplicated person named must be a member of an earlier-round pair entrant.
-
-  Any other failing check (a crash before round 2, `life-built-as-posted`, `fold-parity`, `results-as-posted`, `m1-walkover-recorded`, `r4-cascade-consistent`, an I10 item that the pair-entrant evidence does not explain) sends the case to normal triage, harness first.
+- **Triage rule.** A ❌ is a predicted product red → W7, counted as NOT harness-caused for ruling 48, only when EVERY failing check on the case is covered by a signature the case carries. The coverage table is kept in ONE place, Task 15 Step 3 item 4, and this decision points to it rather than copying it (plan review 3 I-2: two copies had already drifted). The table covers each signature's companions: a non-`drained` exit also reds I4 and `life-stage-completed` with "never asked", because Task 6 skips `finishStage` on such an exit.
 - Owner value: every one of the 55 cells × scenario pairs these rules touch (22 M1 + 11 ladder R4 + 22 americano R4) ends as ✅ or a named, routed product finding, never an unexplained harness red, which is what ruling 48's "no ❌ with a harness cause" needs.
 - Rejected: dropping the pairs as unfit (ruling 42 forbids it, ruling 51 says so); keeping `policy !== "none"` on the ladder (it asserts a policy the product is right not to report).
 
@@ -752,14 +747,20 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
 
   **R4 on `page_playoff_only` once it seeds 4 — the prediction** (plan review 1, m-5). Seed 3 plays `pp-elim` (round 0 → `round_no` 1) against seed 4 (`packages/engine/src/scheduling/bracket.ts:390-393`). The harness's default winner is the better seed (`scripts/matrix/lib/scenarios/common.ts:161`), so seed 3 WINS `pp-elim` and is seated in `pp-q2`. R4 then withdraws it after round 1. `page_playoff` is not in `BRACKET_WALKOVER_KINDS` (`usecases/stages.ts:880-884`), so the open-format branch applies (`withdrawal.ts:213-217`). `pp-q2` is **abandoned**, even though its other seat (the loser of `pp-q1`) is filled. Nothing is forfeited. The product reports policy `"walkover"` with walkovers 0 and voided 1, and `pp-final`'s away seat (`winnerOf("pp-q2")`) is never filled (corrected at plan review 2, I-1: the first version of this prediction assumed a forfeit to the opponent).
 
-  Predicted outcome, once Task 7 makes `r4-cascade-consistent` kind-aware (D14, false premise 16): `r4-policy-reported` and `r4-cascade-consistent` pass, and the stage never completes (`life-loop-bounded` / `life-stage-completed` red). That is a **product red → W4** ("a page-playoff withdrawal voids the path to the final"). Between Task 2 and Task 7, `r4-cascade-consistent` still uses the table/bracket model and would red on this shape for a harness reason. No live R4 `page_playoff_only` evidence is taken before Task 7.
+  Predicted outcome, once Task 7 makes `r4-cascade-consistent` kind-aware (D14, false premise 16): `r4-policy-reported` and `r4-cascade-consistent` pass, and the stage never completes. The full failing set is `["I4-nothing-ends-stuck", "life-loop-bounded"]` (corrected at plan review 3, I-2):
+  - the loop runs out of seated open fixtures, because `pp-final` is unseated, so `finishStage` runs;
+  - the product answers `200 completed: false` with no code (`stages.ts:4153-4154`), which I4 reds as "did not complete … and named no reason" (`invariants.ts:238`);
+  - `life-stage-completed` ABSTAINS, because `pp-final` is still open (`assertions.ts:225`, "life-loop-bounded judges an unfinished one");
+  - `life-loop-bounded` reds on the unfinished stage.
+
+  That is a **product red → W4** ("a page-playoff withdrawal voids the path to the final"). Between Task 2 and Task 7, `r4-cascade-consistent` still uses the table/bracket model and would red on this shape for a harness reason. No live R4 `page_playoff_only` evidence is taken before Task 7.
 
   A fake test pins the harness side, on `FakeKnockoutDriver` (`__tests__/fake-driver.ts:400`) with a new option `pagePlayoff: true`: 4 seats, the `pp-*` shape from `generatePagePlayoff`, and the open-format abandon on withdrawal mirrored from `withdrawal.ts:213-217`. In Task 2 it asserts:
   - policy `walkover`, walkovers 0, voided 1;
   - `pp-q2` `abandoned`, `pp-final` never seated;
   - no `/complete` retry.
 
-  Task 7 adds `expect(verdict("r4-cascade-consistent")).toBe("pass")` to the same test, which is its killer for the kind-aware mutant. Task 15 Step 3 lists the case among the predicted reds.
+  Task 7 adds `expect(verdict("r4-cascade-consistent")).toBe("pass")` to the same test, which is its killer for the kind-aware mutant, together with the full failing set `["I4-nothing-ends-stuck", "life-loop-bounded"]` and `expect(verdict("life-stage-completed")).toBe("abstain")`. Task 15 Step 3 lists the case among the predicted reds.
 
 - [ ] **Step 2: Run: expect FAIL** (no module; F1 is `ALWAYS`).
 
@@ -927,7 +928,12 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
 
   **Fallback catalogs (plan review 1, m-2).** Football (`packages/engine/src/sports/football/football.ts:1740,2445`), cricket (`sports/cricket/cricket.ts:2600,3532`) and the period kernel (`sports/period/kernel.ts:2451`, used by hockey and ice hockey) declare `positionsFor(cfg)`. The setbased kernel (volleyball, badminton, table tennis) does not: it answers one static `positions` per preset (`sports/setbased/kernel.ts:2281`) through `resolvePositions` (`packages/engine/src/sport/catalog.ts:53-55`). (Corrected at plan review 2, m-2: the first version said "only football".) So, by review 1's reading, volleyball's builder-default **beach** variant (2-a-side) gets a 6-starter catalog (14 members with the bench). The roster follows the engine's catalog, as D2 says, so this is not a harness bug. It is a **W2 finding**: "a variant whose side size differs from its catalog's `lineup.size`".
 
-  The counted sweep must also report the mismatches. It keys the flag on SIZE, not on the absence of `positionsFor`, which would also flag indoor volleyball, whose catalog is correct. It collects `{sport, preset, sideSize, lineupSize, mismatch: sideSize !== null && sideSize !== lineupSize}`. `sideSize` is the preset's own declared players-per-side, read from the cfg field that Task 3 Step 1 pins per sport (for example a `teamSize`/`playersPerSide` field), or `null` where the cfg declares none. The test pins the exact mismatch list the executor observed on first run. It is expected to be `volleyball/beach`; if not, that is a note, and the list is pinned as found. This way the finding cannot silently vanish or silently grow. Task 16 records it in `_INDEX.md` → W2.
+  The counted sweep must also report the mismatches. It keys the flag on SIZE, not on the absence of `positionsFor`, which would also flag indoor volleyball, whose catalog is correct. It collects `{sport, preset, sideSize, lineupSize, mismatch: sideSize !== lineupSize}`.
+  - **`sideSize` comes from a cited rulebook table, not from the cfg** (plan review 3 m-5). No setbased cfg declares players-per-side: beach differs from indoor only in `bestOf`/`setTo`/`finalSetTo`/`pointsMap`/`records` (`sports/setbased/DOMAIN.volleyball.md:38-59`), and volleyball has one static 6-starter `positions` (`setbased/volleyball.ts:16,65`). A cfg-read size would be `null` everywhere, and the finding would vanish.
+  - The table is `RULEBOOK_SIDE_SIZE` in the test file, one row per team preset, each row citing its source: for example `volleyball/beach: 2` (FIVB Official Beach Volleyball Rules, team composition: a team is two players) and `volleyball/indoor: 6` (FIVB Official Volleyball Rules, six players on court). Each row carries the rule number from the current edition, which the executor records when writing the table. TEST-STRATEGY allows the rulebook as the oracle. A preset with no row reds, "no rulebook side size for <sport>/<preset>", so the table cannot silently skip a preset.
+  - The finding is recorded BY NAME: `expect(mismatches.map((m) => \`${m.sport}/${m.preset}\`)).toContain("volleyball/beach")`. The full list is pinned as found, and it must contain `volleyball/beach`. **An empty mismatch list is a FAILURE**, and so is a list without beach: the W2 finding cannot vanish until W2 closes it, and closing it means changing this assertion in W2's own commit.
+
+  This way the finding cannot silently vanish or silently grow. Task 16 records it in `_INDEX.md` → W2.
 
   `http-driver.test.ts`, on the existing stub transport:
   - `addEntrants` with members posts `members: [{new_person: {full_name}, squad_number, is_captain}]`, one per member, in order;
@@ -1031,6 +1037,8 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - `rosterSize` without the bench → killed by the size assertion (a sport with `benchMax > 0`);
   - `addEntrants` always sends `members: []` → killed by the byte-for-byte no-members test;
   - `mixed.filler` accepts any name → killed by the refusal test.
+  - the side-size sweep reads `sideSize` from the cfg (null everywhere, so no mismatch) → killed by "the mismatch list contains `volleyball/beach`" and by the empty-list failure (review 3 m-5);
+  - delete the `volleyball/beach` row from `RULEBOOK_SIDE_SIZE` → killed by "no rulebook side size for volleyball/beach".
 - [ ] **Step 6: tsc + eslint; commit** `feat(matrix): roster seam — members on addEntrants, putLineup, entrantMembers; browser seeds them as filler (W1-driving T3, D2, ruling 47)`.
 
 ---
@@ -1277,7 +1285,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     // Plan review 2 m-6: the expected count is derived from the ENGINE's own slot expansion, never from declaredTake and
     // never from the text test (which pins the kind SET only, not count semantics).
     const take = [{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }] as const;
-    const engineSlots = expandTake(take as never, { poolKeys: ["A", "B", "C"] }).flat().length;   // @seazn/engine/competition, progression.ts:160
+    const engineSlots = expandTake(take as never, { poolKeys: ["A", "B", "C"] }).flat().length;   // @seazn/engine/competition, progression.ts:161
     expect(engineSlots).toBe(8);                                      // the rule's answer, and it differs from the naive 12
     const body = { kind: "knockout", name: "x", config: {}, seq: 2, progression: { sources: [{ stage: "previous", take }], placement: "rank_order", timing: "setup" } } as never;
     expect(declaredTake(body, 3)).toBe(engineSlots);
@@ -1384,7 +1392,10 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(h.seeded()).toContain(seededFirst);                              // still seated: the product does not unseat
     const itsFixture = d.fixturesOfStage(2).find((f) => f.home_entrant_id === seededFirst || f.away_entrant_id === seededFirst)!;
     expect(itsFixture.status).toBe("forfeited");                            // knockout is in BRACKET_WALKOVER_KINDS: walked over
-    expect(itsFixture.outcome?.winner).not.toBe(seededFirst);
+    // Review 3 m-3: FixtureRow.outcome is `unknown` (driver/types.ts:22), and `.not.toBe` would pass on undefined.
+    const opponent = itsFixture.home_entrant_id === seededFirst ? itsFixture.away_entrant_id : itsFixture.home_entrant_id;
+    expect(opponent).not.toBeNull();
+    expect(winnerOf(toObservedOutcome(itsFixture.outcome))).toBe(opponent);
   });
   ```
   `AdvanceHarness` is a test helper in the same file. It keeps `withdrawnBeforeConfirm()` / `withdrawnAfterConfirm()`, split at the step where the first confirm answered 200. `playStage1` calls the harness's `playStage` on stage 1 until it exits. It maps each step onto the harness's own functions (`recordGenerate`, `playStage`, `finishStage`, `confirmAdvance`) against the fake, keeping one `Recorder`. `withdrawOne(i)` calls `ctx.driver.withdraw(<entrant at seed i+1>)` and adds it to `rec.withdrawn`, exactly as R4's hook does; withdrawing an already-withdrawn entrant is a named `RefusedCall` recorded, never thrown out. The fake mirrors the product's rule that a withdrawn entrant is never seeded (it drops withdrawn entrants from its standings before taking the top `declaredTake`). A shrunk counterexample is committed as a named `it(...)` with its seed and path BEFORE any fix (rule 10).
@@ -1617,7 +1628,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - whether `formats.advanced` is on the case org's plan (`seed-org.ts` `chooseTopPublicPlan`);
   - (D14, ruling 51) the M1 and R4 meanings on a ladder, each with file:line: the open-format withdrawal branch (`withdrawal.ts:213-217` at plan time: void pending, walkover policy only when something was pending), the raw-vs-live `ladder_order` rule (`usecases/stages.ts:5562-5572` never prunes; `:5601-5625` reach counted on live rungs), and `LADDER_ENTRANT_WITHDRAWN` for a challenge naming a departed entrant (`:5539-5590`).
 
-  Record each with file:line. Capture the `league|generic` R4 canary's checks JSON on `FakeLeagueDriver` with TODAY's code into `__tests__/fixtures/r4-canary-before.json` (the byte-identical test compares against it). **Before any implementation**, run the D14 ladder tests below against TODAY's `r4-withdrawal.ts` and paste the red (`r4-policy-reported`: "policy none on a started division", or the hook firing at step 1 before seed 3 has played). A D14 test that is green today is not testing the new meaning.
+  Record each with file:line. Capture the `league|generic` R4 canary's `{verdict, checks}` on `FakeLeagueDriver` with TODAY's code into `__tests__/fixtures/r4-canary-before.json`. The canary test compares the verdict and the `r4-policy-reported` / `r4-cascade-consistent` entries against it, and the fixture is never regenerated in this task (review 3 m-2). **Before any implementation**, run the D14 ladder tests below against TODAY's `r4-withdrawal.ts` and paste the red (`r4-policy-reported`: "policy none on a started division", or the hook firing at step 1 before seed 3 has played). A D14 test that is green today is not testing the new meaning.
 
 - [ ] **Step 1: Failing tests.** Transitions: empty ladder; the first challenge; the last; a withdrawn entrant in the middle (R4, D14 timing); a walkover challenge (M1, which lands on the last challenge, D8); a withdrawal at any step (the rule-10 `withdrawOne`, plan review 1 I-5); a second sport.
   ```ts
@@ -1666,9 +1677,15 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   });
   it("the product's pending set, read as text: WITHDRAWAL_PENDING_STATUSES is {scheduled, in_play} (plan review 2 m-3)", () => {
     // Reads apps/web/src/lib/table-withdrawal.ts as text, extracts the Set literal of WITHDRAWAL_PENDING_STATUSES,
-    // and exports it to the tests as PENDING. Also reads TABLE_KINDS (withdrawal.ts:37) and BRACKET_WALKOVER_KINDS
-    // (stages.ts:880-884) the same way for the kind-aware cascade. Each set is asserted non-empty; a product change moves them.
+    // and exports it to the tests as PENDING. Also reads TABLE_KINDS (withdrawal.ts:37, the withdrawal module's own copy,
+    // which excludes americano, unlike engine-db/competition.ts:39) and BRACKET_WALKOVER_KINDS (stages.ts:880-884) the same
+    // way, as TABLE_KINDS_PINNED and BRACKET_KINDS_PINNED. Each set is asserted non-empty; a product change moves them.
     expect([...PENDING].sort()).toEqual(["in_play", "scheduled"]);
+    // Review 3 m-6: ONE runtime authority. The harness already hand-copies PENDING_STATUSES (lib/observed.ts:145); it must
+    // equal the product's set, and cascadeItems / expectedPolicy read PENDING_STATUSES, never a second list.
+    expect([...PENDING_STATUSES].sort()).toEqual([...PENDING].sort());
+    // The runtime kind lookup (FORFEIT_MODEL_KINDS, WALKOVER_MODEL's forfeit set) must equal the pinned union, so the harness cannot drift either.
+    expect([...FORFEIT_MODEL_KINDS].sort()).toEqual([...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED].sort());
   });
   it("R4 on a ladder (ruling 53): policy derived from the product's pending set — none here — and the canary's opposite reds", async () => {
     const driver = new FakeLadderDriver({ challengeRange: 3 });
@@ -1710,22 +1727,48 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");  // kind-aware (false premise 16)
   });
   it("cascadeItems is kind-aware (false premise 16): open-format walkover = every pending abandoned and counted voided; table/bracket unchanged", () => {
-    const before = [{ id: "f1", status: "scheduled", home: "w", away: "x" }, { id: "f2", status: "decided", home: "w", away: "y" }] as never;
-    const abandonedAfter = [{ id: "f1", status: "abandoned", home: "w", away: "x", outcome: null }, { id: "f2", status: "decided", home: "w", away: "y", outcome: { winner: "w" } }] as never;
-    const forfeitedAfter = [{ id: "f1", status: "forfeited", home: "w", away: "x", outcome: { winner: "x" } }, { id: "f2", status: "decided", home: "w", away: "y", outcome: { winner: "w" } }] as never;
-    const ok = (items: { ok: boolean }[]) => items.every((i) => i.ok);
-    for (const kind of ["ladder", "page_playoff", "americano"]) {
-      expect(ok(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)), kind).toBe(true);
-      expect(ok(cascadeItems("walkover", "w", before, forfeitedAfter, 1, 0, kind)), `${kind}: a forfeit is NOT the open-format shape`).toBe(false);
+    // Plan review 3 I-3: product-shaped, typed fixtures, no `as never`. winnerOf reads only outcome.kind ∈ {win, award}
+    // (observed.ts:124-126), and sameResult reads `before[].outcome` (observed.ts:130-137), so both must be real.
+    const fx = (id: string, status: string, outcome: ObservedOutcome | null, home: string, away: string): ObservedFixture =>
+      ({ id, stageId: "s1", poolId: null, roundNo: 1, home, away, status, outcome, declared: null });
+    const decidedW = { kind: "win", winner: "w" } as const satisfies ObservedOutcome;         // f2, identical before and after
+    const before: FixtureSnap[] = [fx("f1", "scheduled", null, "w", "x"), fx("f2", "decided", decidedW, "w", "y")].map(snap);
+    const abandonedAfter: ObservedFixture[] = [fx("f1", "abandoned", null, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
+    const forfeitedAfter: ObservedFixture[] = [fx("f1", "forfeited", { kind: "award", winner: "x" }, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
+    const failing = (items: { ok: boolean; note: string }[]) => items.filter((i) => !i.ok).map((i) => i.note);
+    // Kinds are read from the product's text-pinned sets (withdrawal.ts:37 TABLE_KINDS, stages.ts:880-884
+    // BRACKET_WALKOVER_KINDS), plus the open-format kinds the catalogue uses; each list asserted non-empty.
+    const openKinds = ["ladder", "page_playoff", "americano"].filter((k) => !TABLE_KINDS_PINNED.has(k) && !BRACKET_KINDS_PINNED.has(k));
+    const forfeitKinds = [...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED];
+    expect([openKinds.length, forfeitKinds.length]).toEqual([3, 6]);
+    for (const kind of openKinds) {
+      // POSITIVE: the abandon shape passes. Reds when kind-awareness is removed (forfeit model: f1 abandoned with x seated → item fails).
+      expect(failing(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)), kind).toEqual([]);
+      // NEGATIVE: a forfeit to x is not the open-format shape. Reds when kind is ignored (the forfeit model accepts it).
+      expect(failing(cascadeItems("walkover", "w", before, forfeitedAfter, 1, 0, kind)).length, `${kind}: forfeit rejected`).toBeGreaterThan(0);
     }
-    for (const kind of ["league", "group", "swiss", "knockout", "double_elim", "stepladder"]) {
-      expect(ok(cascadeItems("walkover", "w", before, forfeitedAfter, 1, 0, kind)), kind).toBe(true);
-      expect(ok(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)), `${kind}: an abandon with a seated opponent is not the table/bracket shape`).toBe(false);
+    for (const kind of forfeitKinds) {
+      // POSITIVE: the forfeit-to-opponent shape passes (award to x, walkovers 1). Reds when the abandon model is applied to every kind.
+      expect(failing(cascadeItems("walkover", "w", before, forfeitedAfter, 1, 0, kind)), kind).toEqual([]);
+      // NEGATIVE: an abandon with a seated opponent is not the table/bracket shape. Reds when the abandon model is applied to every kind.
+      expect(failing(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)).length, `${kind}: abandon rejected`).toBeGreaterThan(0);
     }
   });
-  it("the league|generic R4 canary verdict is byte-identical before and after the kind-aware cascade", async () => {
-    // Runs the R4 canary case (planCanaryCase(variantFor, "R4")) on FakeLeagueDriver and compares its checks JSON with the
-    // pre-change snapshot captured at Step 0 into __tests__/fixtures/r4-canary-before.json (committed in this task).
+  it("the league|generic R4 canary: its verdict and its r4-policy-reported / r4-cascade-consistent entries are byte-identical before and after the kind-aware cascade; the NEW ladder-only check abstains on league", async () => {
+    // Review 3 m-2: the WHOLE checks JSON cannot be byte-identical, because Task 7 adds r4-not-challenged-later, which is
+    // emitted on every kind (abstain off the ladder), as r4-not-paired-later already is (r4-withdrawal.ts:115-117). So the
+    // test compares exactly what should not move, and asserts the new entry separately. Re-snapshotting after the change is
+    // forbidden: the fixture is captured at Step 0 from TODAY's code and never regenerated in this task.
+    const before = JSON.parse(readFileSync(R4_CANARY_BEFORE, "utf8")) as { verdict: string; checks: CheckResult[] };   // __tests__/fixtures/r4-canary-before.json
+    const now = await runCanary(planCanaryCase(variantFor, "R4"), new FakeLeagueDriver());
+    expect(now.verdict).toBe(before.verdict);
+    for (const id of ["r4-policy-reported", "r4-cascade-consistent"]) {
+      expect(JSON.stringify(now.checks.find((c) => c.id === id)), id).toBe(JSON.stringify(before.checks.find((c) => c.id === id)));
+    }
+    expect(before.checks.some((c) => c.id === "r4-not-challenged-later")).toBe(false);          // proves the snapshot predates the change
+    const added = now.checks.find((c) => c.id === "r4-not-challenged-later")!;
+    expect([added.verdict, added.checked]).toEqual(["abstain", 0]);
+    expect(added.reason).toMatch(/ladder only/);
   });
   it("M1 on a ladder lands on the last challenge (D8, m-4): forfeited to seed 1, m1-winner-progresses abstains", async () => {
     const driver = new FakeLadderDriver({ challengeRange: 3 });
@@ -1775,7 +1818,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   `r4-withdrawal.ts` changes (D14, ruling 53):
   - the trigger becomes a per-kind strategy (`R4_TRIGGER: Record<"default" | "ladder", (round, batch, seed3) => boolean>`);
   - `r4-policy-reported` on `ladder` asserts `policy === expectedPolicy(before)` over the text-pinned `PENDING` (with the canary judging the opposite);
-  - `cascadeItems` gains a `kind` argument and picks its walkover model from `WALKOVER_MODEL: Record<"forfeit" | "abandon", …>` by membership in the text-pinned `TABLE_KINDS ∪ BRACKET_WALKOVER_KINDS` (false premise 16). Every existing caller passes the stage kind, so `league` keeps today's model byte-for-byte;
+  - `cascadeItems` gains a `kind` argument and picks its walkover model from `WALKOVER_MODEL: Record<"forfeit" | "abandon", …>` by membership in `FORFEIT_MODEL_KINDS` (false premise 16). That constant is held equal to the product's `TABLE_KINDS ∪ BRACKET_WALKOVER_KINDS` by the pending-set text-pin test, and pending is read from `PENDING_STATUSES` only (plan review 3 m-6). Every existing caller passes the stage kind, so `league` keeps today's model byte-for-byte;
   - on `ladder` the case pushes the W7 note "ladder finalRanks keep withdrawn <id> at rung <i> (raw ladder_order) — W7 rulebook question" and asserts nothing about it;
   - the new `r4-not-challenged-later` check (items: seed 3 absent from the live order; seed 3 present in the raw `ladder_order` at its held index; one item per later challenge, none seating seed 3) (ladder only; abstains elsewhere) reads the challenge fixtures `playLadder` issued AFTER the withdrawal step (`playLadder` records `rec.ladderSteps: {step, fixtureId}[]`; a challenge fixture's product `round_no` is not relied on). Zero challenges after the withdrawal is an abstain with its reason ("no challenge followed the withdrawal"), never a pass (TEST-STRATEGY rule 2); under D8 with 8 entrants one challenge follows (step 6).
 - [ ] **Step 2: FAIL.**
@@ -1828,8 +1871,9 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - the R4 ladder trigger fires on `round === 1` (today's) → killed by the D14 timing test;
   - `expectedPolicy` hard-coded `"none"` → killed by the `withdrawWhilePending` test;
   - the fake's `withdraw` answers `walkover` always → the "derived policy" test reds (proves the test reads the fake's product-shaped answer, not a constant);
-  - `cascadeItems` ignores `kind` (always the forfeit model) → killed by the kind-aware unit test and by `withdrawWhilePending`'s `r4-cascade-consistent` pass (and by Task 2's page-playoff test once Task 7 adds that assertion);
-  - `cascadeItems` always uses the abandon model → killed by the kind-aware unit test's table/bracket half and by the byte-identical canary test;
+  - `cascadeItems` ignores `kind` (always the forfeit model) → the kind-aware unit test reds on BOTH open-format halves: the POSITIVE (`abandonedAfter` → f1 abandoned with x seated fails the forfeit item) and the NEGATIVE (`forfeitedAfter` → the award to x now passes, so `failing(...).length` is 0). Also killed by `withdrawWhilePending`'s `r4-cascade-consistent` pass and by Task 2's page-playoff test once Task 7 adds that assertion. Run each half alone once (comment out the other) and paste both reds (review 3 I-3);
+  - `cascadeItems` always uses the abandon model → the kind-aware unit test reds on BOTH table/bracket halves: the POSITIVE (`forfeitedAfter` → the forfeit is not an abandon) and the NEGATIVE (`abandonedAfter` now passes). Run each half alone once and paste both reds. The canary test's `r4-cascade-consistent` comparison also kills it;
+  - `cascadeItems` reads a second pending list instead of `PENDING_STATUSES`, or `FORFEIT_MODEL_KINDS` drifts from the pinned union → killed by the pending-set text-pin test (review 3 m-6);
   - drop the raw-`ladder_order` item → killed by "gone from the LIVE order, still in the RAW";
   - turn the W7 finalRanks note into a check → killed by `checks.some(/finalRanks/) === false`.
   - `plan.length === 0` returns `drained` → killed by the empty case;
@@ -1927,14 +1971,34 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(active).not.toMatch(/\bkind\b/);                          // no kind filter: pair entrants are "players" (false premise 17)
     expect(FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT).toBe(true);
   });
+  it("the fake serves a mexicano stage in the product's shape: kind americano, config.mode mexicano (review 3 I-1)", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
+    await runOn(driver, "LIFECYCLE", { row: "mexicano" });
+    const s = driver.stageAt(1);
+    expect([s.kind, s.config.mode]).toEqual(["americano", "mexicano"]);
+    // And the template the product ships is the same shape (format-templates.ts:261, read as text):
+    expect(readFileSync(FORMAT_TEMPLATES_TS, "utf8")).toMatch(/kind: "americano",[^}]*mode: "mexicano"/);
+  });
   it("mexicano round 2 (false premise 17): the product-shaped fake repeats a person; the case records the signature with its evidence, routed W7", async () => {
+    // A field whose round-2 pairing produces no self-pair, so this test isolates the duplicate (the self-pair path is its own test).
     const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "mexicano" });
+    expect(driver.selfPairsIn(2)).toBe(0);                           // not vacuous about which path ran
     const dup = driver.firstDuplicate();                             // {round_no, person, viaPairEntrant} from the fake's own rows
     expect(dup.round_no).toBeGreaterThanOrEqual(2);
     expect(out.notes.some((n) => n.includes("mexicano-pair-entrants-counted-as-players") && n.includes(dup.person) && n.includes(dup.viaPairEntrant) && /→ W7/.test(n))).toBe(true);
-    // The FULL failing-check set, which Task 15's "only covered checks" rule reads (review 2 m-8): I10 only.
-    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["I10"]);
+    // The FULL failing-check set, which Task 15's "only covered checks" rule reads (review 2 m-8). At Task 8 no check can
+    // see the duplicate yet: I10 is created in Task 9, and Task 9 Step 1 changes this expectation to
+    // ["I10-americano-seats-each-person-once"] (review 3 m-1, the Task 2 → Task 7 pattern).
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual([]);
+  });
+  it("mexicano self-pair (review 3 I-2; fake option selfPairAnswers500, set per the Step 0 pin): round 2 refused, signature written, full failing set pinned", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7, selfPairAnswers500: true });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "mexicano" });
+    expect(driver.selfPairsIn(2)).toBeGreaterThan(0);
+    expect(checks.find((c) => c.id === "life-loop-bounded")?.evidence.some((e) => /exited refused_generate/.test(e))).toBe(true);
+    expect(out.notes.some((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused") && /→ W7/.test(n))).toBe(true);
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["I4-nothing-ends-stuck", "I8-generate-named", "life-loop-bounded", "life-stage-completed"]);
   });
   it("mexicano M1 walkover (D14, false premise 14): the forfeit stalls every later round → stalled_rounds, a note, predicted W7", async () => {
     const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
@@ -1942,20 +2006,41 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(checks.find((c) => c.id === "m1-walkover-recorded")?.verdict).toBe("pass");
     expect(checks.find((c) => c.id === "life-loop-bounded")?.evidence.some((e) => /exited stalled_rounds/.test(e))).toBe(true);
     expect(out.notes.some((n) => /mexicano-stalled-on-non-decided/.test(n) && /→ W7/.test(n))).toBe(true);
-    // The FULL failing-check set (review 2 m-8), derived from the rule, not from a run: M1 forfeits in round 1, so the
-    // stall comes before any round 2 (no duplicate, so I10 passes); the loop exits stalled_rounds (life-loop-bounded) and
-    // the stage never completes (life-stage-completed).
-    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["life-loop-bounded", "life-stage-completed"]);
+    // The FULL failing-check set (review 2 m-8; corrected at review 3 Q3/I-2), derived from the rule, not from a run:
+    //  - M1 forfeits in round 1, so the stall comes before any round 2 (no duplicate; I10, from Task 9, passes);
+    //  - the loop exits stalled_rounds → life-loop-bounded;
+    //  - Task 6's playDivision skips finishStage on a non-drained exit, so complete is null → I4 "stage 1: never asked to
+    //    complete" (invariants.ts:235; no cut_short, so no abstain) and life-stage-completed "never asked" (round 1 is all terminal);
+    //  - I8 passes: the created-0 generate is a 2xx whose total is the stage's full list (> 0).
+    // Decision: the stall does NOT add cut_short. cut_short means "stopped at the harness's cap"; a stall is the product
+    // refusing to go on, and masking I4 with it would also hide a genuine "never asked to complete" on any other path.
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["I4-nothing-ends-stuck", "life-loop-bounded", "life-stage-completed"]);
+    for (const id of ["I4-nothing-ends-stuck", "life-stage-completed"]) {
+      expect(checks.find((c) => c.id === id)!.evidence.every((e) => /never asked/.test(e)), `${id}: only "never asked" items`).toBe(true);
+    }
   });
   it("mexicano R4 does NOT stall (review 2 I-3): round 2 is generated; the signature needs seed 3's person seated in round ≥ 2 through ANY entrant", async () => {
     const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7 });
-    const { out } = await runOn(driver, "R4", { row: "mexicano" });
+    const { out, checks } = await runOn(driver, "R4", { row: "mexicano" });
     expect(out.notes.some((n) => /mexicano-stalled-on-non-decided/.test(n))).toBe(false);
     expect(driver.roundsGenerated()).toContain(2);
     const p3 = driver.personOfSeed(3);
     const seatedLater = driver.fixturesAfterRound(1).some((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => driver.membersOf(e!).includes(p3)));
     // Signature present iff its second leg holds, read from the fake's rows (the oracle), never from r4-withdrawal.ts.
     expect(out.notes.some((n) => /r4-withdrawn-player-kept-playing/.test(n))).toBe(seatedLater);
+    expect(seatedLater, "the product-shaped default seats seed 3's person later (false premise 17)").toBe(true);
+    // Full failing set at Task 8 (review 3 I-2; Task 9 Step 1 adds "I10-americano-seats-each-person-once" for the round-2 duplicate):
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort()).toEqual(["r4-policy-reported"]);
+  });
+  it("mexicano R4 WITHOUT the second leg (dropWithdrawnFromPlan, committed; review 3 m-4): no signature", async () => {
+    // On mexicano the option drops the withdrawn individual AND every pair entrant containing their person, or
+    // false premise 17 would keep seating them through a round-1 pair and seatedLater would stay true.
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", rounds: 7, dropWithdrawnFromPlan: true });
+    const { out } = await runOn(driver, "R4", { row: "mexicano" });
+    const p3 = driver.personOfSeed(3);
+    expect(driver.fixturesAfterRound(1).some((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => driver.membersOf(e!).includes(p3)))).toBe(false);
+    expect(driver.roundsGenerated()).toContain(2);                   // round 2 exists, so "no signature" is not vacuous
+    expect(out.notes.some((n) => /r4-withdrawn-player-kept-playing/.test(n))).toBe(false);
   });
   it("M1 on americano (D14, ruling 51): targets the first fixture whose pair entrant has seed 1's person as a member — reds on today's hook", async () => {
     const driver = new FakeAmericanoDriver({ mode: "americano", rounds: 7 });
@@ -1982,6 +2067,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     // the signature's second leg, from the fake's members: seed 3's person sits in a pair on a round > 1
     const p3 = driver.personOfSeed(3);
     expect(driver.fixturesAfterRound(1).some((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => driver.membersOf(e!).includes(p3)))).toBe(true);
+    expect(checks.filter((c) => c.verdict === "fail").map((c) => c.id).sort(), "full failing set (review 3 I-2)").toEqual(["r4-policy-reported"]);
   });
   it("R4 on americano WITHOUT the second leg (fake option `dropWithdrawnFromPlan`): no predicted signature — the red goes to normal triage", async () => {
     // The differing case: a product that DID drop the withdrawn player from later pairs must not be labelled with the W7 signature.
@@ -2012,13 +2098,17 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     // If a product fix adds either, this pin reds and false premise 10's prediction must move (to a refusal or a roster-aware plan).
   });
   ```
-  **The fake's default is the product's shape (plan review 2 I-3, false premise 17).** From mexicano round 2 on, `FakeAmericanoDriver` counts every active entrant as a player, pair entrants included (no kind filter, status `registered`/`confirmed`, as `stages.ts:2290-2293` does). It pairs them by points then id (`americano.ts:93-95`), so a person can sit in round 2 both alone and inside a round-1 pair entrant. The option `individualsOnly: true` models the corrected product; only the loop-mechanics test and a harness-isolating unit use it. The old `duplicateInRound2` option is gone: the duplicate is the default, never an opt-in. Whether a self-pair (a pair entrant paired with its own member) reaches the `entrant_members` PK as a 500 is pinned at Step 0. The fake mirrors that answer: a refused generate exits `refused_generate`, and the round-2 test's full failing set then gains `life-loop-bounded`, recorded as a Step 0 deviation. The harness must NOT fix the duplicate. The case records it as the I10 red (Task 9) with the signature note below, and the loop still ends at its bound.
+  **The fake's default is the product's shape (plan review 2 I-3, false premise 17).** From mexicano round 2 on, `FakeAmericanoDriver` counts every active entrant as a player, pair entrants included (no kind filter, status `registered`/`confirmed`, as `stages.ts:2290-2293` does). It pairs them by points then id (`americano.ts:93-95`), so a person can sit in round 2 both alone and inside a round-1 pair entrant. The option `individualsOnly: true` models the corrected product; only the loop-mechanics test and a harness-isolating unit use it. The old `duplicateInRound2` option is gone: the duplicate is the default, never an opt-in. The default is DERIVED from the exported constant, `individualsOnly = opts.individualsOnly ?? !FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT`, so the text-pin test's assertion on the constant moves the fake with it (plan review 3 m-4).
 
-  `FakeAmericanoDriver` waits on exactly `status !== "decided"` (a forfeit and a void both block, false premise 14) and reads persons the way `americanoGen` does (every member row, last one wins). The notes the loop writes carry the predicted signatures `mexicano-stalled-on-non-decided`, `mexicano-pair-entrants-counted-as-players` and `r4-withdrawn-player-kept-playing` verbatim. `playMexicano` writes `mexicano-pair-entrants-counted-as-players: round <r> seats <person> twice, directly and via pair entrant <id> (a round-<q> pair, q < r) → W7` for the first such duplicate per stage. The evidence (the person is a member of an earlier pair entrant) is required: a duplicate it cannot explain gets no signature and goes to normal triage. because Task 15 Step 3's triage rule matches on them. On a team sport (`setup.kind === "team"`), `playAmericano`/`playMexicano` also push, once, "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10)", naming for each team the one person the product seated (read from the pair entrants' members against `setup.persons`); that note is the finding, since every check may still pass.
+  **The fake serves the product's stage shape (plan review 3 I-1).** A mexicano stage is `{ kind: "americano", config: { mode: "mexicano", … } }` (`format-templates.ts:261`, `api-v1/schemas.ts:1019`, the product branches on `cfg.mode` at `stages.ts:756`). `FakeAmericanoDriver({ mode: "mexicano" })` answers `listStages` with exactly that: `kind: "americano"` and `config.mode: "mexicano"`, never `kind: "mexicano"`. Every mexicano branch in the harness keys on `stage.kind === "americano" && stage.config.mode === "mexicano"`: `playStage`'s dispatch, `notePairEntrantDuplicates`, the stall note and the R4 second leg. A test pins the fake's shape: `driver.stageAt(1)` has `kind === "americano"` and `config.mode === "mexicano"`, so a fake that drifts to `kind: "mexicano"` reds there before it can keep a dead gate green.
+
+  **The self-pair path (plan review 3 I-2).** Whether a self-pair (a pair entrant paired with its own member) reaches the `entrant_members` PK as a 500 is pinned at Step 0. The fake mirrors that answer. If it is a 500, the round-2 generate exits `refused_generate`, round 2 is never created, and the case's full failing set is `["I4-nothing-ends-stuck", "I8-generate-named", "life-loop-bounded", "life-stage-completed"]`: an unnamed 500 generate (I4, I8), the loop exit (life-loop-bounded), and a finished round 1 never asked to complete (I4, life-stage-completed). I10 passes, because no round 2 exists. `playMexicano` then writes the signature with the self-pair evidence (`mexicano-pair-entrants-counted-as-players: round 2 generate refused <status> after round 1 created pair entrants <ids> → W7`). A fake test with option `selfPairAnswers500: true` pins that set. The harness must NOT fix the duplicate. The case records it as the I10 red (Task 9) with the signature note below, and the loop still ends at its bound.
+
+  `FakeAmericanoDriver` waits on exactly `status !== "decided"` (a forfeit and a void both block, false premise 14) and reads persons the way `americanoGen` does (every member row, last one wins). The notes the loop writes carry the predicted signatures `mexicano-stalled-on-non-decided`, `mexicano-pair-entrants-counted-as-players` and `r4-withdrawn-player-kept-playing` verbatim. `playMexicano` writes `mexicano-pair-entrants-counted-as-players: round <r> seats <person> twice, directly and via pair entrant <id> (a round-<q> pair, q < r) → W7` for the first such duplicate per stage. The evidence (the person is a member of an earlier pair entrant) is required: a duplicate it cannot explain gets no signature and goes to normal triage. The signatures are written verbatim because Task 15 Step 3's triage rule matches on them. On a team sport (`setup.kind === "team"`), `playAmericano`/`playMexicano` also push, once, "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10)", naming for each team the one person the product seated (read from the pair entrants' members against `setup.persons`); that note is the finding, since every check may still pass.
 
   **The M1 hook on americano** (`m1-walkover.ts`, D14): `targetOf` for kind `americano` resolves `setup.persons.get(seed1)`, then for each fixture in the batch reads `ctx.driver.entrantMembers(side)` for both sides (cached per pair entrant) and takes the first fixture where either side's members intersect seed 1's persons. `absent` is the other side; `m1-walkover-recorded`'s expected winner is seed 1's pair entrant (canary: the absent pair). For every other kind `targetOf` is today's entrant-id match, byte-for-byte.
 
-  **The R4 signature on americano** (`r4-withdrawal.ts`, D14): after `snapshot`, on kind `americano`, when `w.policy === "none"` and `w.before.length === 0`, the scenario reads seed 3's persons from `setup.persons` and the observed stage's `persons` map; if any of them belongs to a pair entrant seated on a fixture with `roundNo > w.afterRound`, it pushes `r4-withdrawn-player-kept-playing: <person> still seated in <k> later fixture(s) — predicted product red → W7`. On mexicano the same rule applies with a real second leg (plan review 2 I-3: R4 does not stall mexicano, so round 2 is generated). The signature is pushed only when seed 3's person is seated in a round ≥ 2 through ANY entrant (alone, or as a member of a pair entrant, which false premise 17 makes likely). Policy `none` and an empty `before` are not enough on their own. `r4-policy-reported` is NOT relaxed: it still reds, and the note is what Task 15 Step 3's triage rule reads.
+  **The R4 signature on americano** (`r4-withdrawal.ts`, D14): after `snapshot`, on kind `americano`, when `w.policy === "none"` and `w.before.length === 0`, the scenario reads seed 3's persons from `setup.persons` and the observed stage's `persons` map; if any of them belongs to a pair entrant seated on a fixture with `roundNo > w.afterRound`, it pushes `r4-withdrawn-player-kept-playing: <person> still seated in <k> later fixture(s) — predicted product red → W7`. On mexicano (`stage.config.mode === "mexicano"` on the same `americano` kind, plan review 3 I-1) the same rule applies with a real second leg (plan review 2 I-3: R4 does not stall mexicano, so round 2 is generated). The signature is pushed only when seed 3's person is seated in a round ≥ 2 through ANY entrant (alone, or as a member of a pair entrant, which false premise 17 makes likely). Policy `none` and an empty `before` are not enough on their own. `r4-policy-reported` is NOT relaxed: it still reds, and the note is what Task 15 Step 3's triage rule reads.
 - [ ] **Step 2: FAIL.**
 - [ ] **Step 3: Implement** `americano-loop.ts`:
   ```ts
@@ -2083,7 +2173,9 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     const out: Record<string, readonly string[]> = {};
     for (const e of sides) out[e] = (await ctx.driver.entrantMembers(e)).map((m) => m.person_id);
     rec.stagePersons.set(stage.id, out);
-    if (stage.kind === "mexicano") notePairEntrantDuplicates(rec, setup, stage, out);   // review 2 I-3, false premise 17
+    // Review 3 I-1: mexicano is { kind: "americano", config.mode: "mexicano" } (format-templates.ts:261, schemas.ts:1019,
+    // stages.ts:756). StageRef.kind is the raw kind (driver/types.ts:16), so a `kind === "mexicano"` gate is never true live.
+    if (stage.kind === "americano" && stage.config.mode === "mexicano") notePairEntrantDuplicates(rec, setup, stage, out);
   }
 
   /** From round 2 on: the first person seated twice in one round, directly and via a pair entrant that an EARLIER
@@ -2106,10 +2198,13 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
   - the stall note loses the `mexicano-stalled-on-non-decided` signature → killed by the M1 mexicano test;
   - M1 `targetOf` for americano falls back to the entrant-id match → killed by the D14 M1 americano test (today's red returns);
   - the R4 signature ignores its second leg (labels every `policy none` americano case) → killed by the `dropWithdrawnFromPlan` test;
-  - the mexicano R4 signature fires on `policy none` alone (the first draft's shape) → killed by "mexicano R4 does NOT stall" (its `toBe(seatedLater)`), run once with the fake's `dropWithdrawnFromPlan` so `seatedLater` is false;
+  - the mexicano R4 signature fires on `policy none` alone (the first draft's shape) → killed by the COMMITTED "mexicano R4 WITHOUT the second leg" test (review 3 m-4);
+  - gate `notePairEntrantDuplicates` (or the R4 second leg, or the stall note) on `stage.kind === "mexicano"` → killed by the mexicano round-2 test (no signature), because the fake serves `kind: "americano"` (review 3 I-1); and a fake drifting to `kind: "mexicano"` is killed by the stage-shape test;
+  - `dropWithdrawnFromPlan` on mexicano drops only the individual, not the pair entrants holding their person → killed by the committed "WITHOUT the second leg" test (`seatedLater` stays true);
   - `notePairEntrantDuplicates` drops its evidence requirement (labels any duplicate) → killed by a unit case with a duplicate that no earlier pair explains;
   - drop the `notePairEntrantDuplicates` call → killed by the mexicano round-2 test;
-  - the fake's default flips to `individualsOnly` → killed by the text-pin test's `FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT` and by the fast-check `dupRuns > 0` count;
+  - the fake's default flips to `individualsOnly` → killed by the fast-check `dupRuns > 0` count and by the text-pin test, because the default is DERIVED from `FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT` (review 3 m-4);
+  - the stall adds `cut_short` → killed by the M1 mexicano full-set test (I4 would abstain);
   - `ensureLineups` loses the `entrantIds.has` gate → killed by the americano|football zero-lineups test (the named throw fires).
 - [ ] **Step 6: tsc + eslint; commit** `feat(matrix): americano and mexicano round loops on linked persons; M1/R4 on the pair entrants per ruling 51; pair-entrant duplicate signature (W1-driving T8, D9, D14)`.
 
@@ -2133,7 +2228,11 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
 
   Both new specs are `stepSafe: false`.
 
-- [ ] **Step 1: Failing tests.** List the empty case first for each: no stage, a stage with no fixtures, a stage with no final. Then:
+- [ ] **Step 1: Failing tests.** List the empty case first for each: no stage, a stage with no fixtures, a stage with no final.
+
+  **Task 8's mexicano round-2 test changes here (plan review 3 m-1).** In `americano-loop.test.ts`, "mexicano round 2 (false premise 17)" changes its full failing set from `[]` to `["I10-americano-seats-each-person-once"]`, with the I10 evidence `round 2: <dup.person> seated 2×`. "mexicano R4 does NOT stall" changes likewise, from `["r4-policy-reported"]` to `["I10-americano-seats-each-person-once", "r4-policy-reported"]`. Task 8's other pinned sets are unchanged: the M1 stall has no round 2, and the self-pair path creates none, so I10 passes on both. Run that test red before the I10 implementation (it still reads `[]`), then green after.
+
+  Then:
   ```ts
   describe("I2 structural (ruling 45)", () => {
     const kinds = ["page_playoff", "stepladder", "double_elim"] as const;
@@ -2879,19 +2978,33 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
      - `ko_plate|*|F1` → W4: `409 STAGE_COMPLETED_SEEDING_FAILED` after stage 1 committed complete, `CompleteObs.completed = false`, never retried (m-6, Task 6 Step 9);
      - `group_group_ko|*|F1`;
      - the 10 americano/mexicano × team-sport cells (false premise 10, corrected at plan review 1): the stage GENERATES on one arbitrary roster member per team; the cases carry the note "americano generated on team entrants with one arbitrary roster member each" → W7 finding. They may still be ✅ on every check, which is exactly why the note is the finding;
-     - every mexicano M1 case and any mexicano case with a forfeit or void: `mexicano-stalled-on-non-decided` → W7 (false premise 14, plan review 1 I-3). **R4 does not stall mexicano** (plan review 2 I-3): its withdrawal voids nothing that is pending, so round 2 is generated;
+     A "mexicano case" below means the catalogue row `mexicano`, whose stage is `{ kind: "americano", config.mode: "mexicano" }` (plan review 3 I-1). Every harness branch and signature keys on `config.mode`, never on the kind.
+     - every mexicano M1 case and any mexicano case with a forfeit or void: `mexicano-stalled-on-non-decided` → W7 (false premise 14, plan review 1 I-3), with the full failing set `["I4-nothing-ends-stuck", "life-loop-bounded", "life-stage-completed"]` (plan review 3 Q3). **R4 does not stall mexicano** (plan review 2 I-3): its withdrawal voids nothing that is pending, so round 2 is generated;
+     - any mexicano case whose round-2 generate is refused because the pairing seats a pair entrant with its own member (the self-pair PK path, if Step 0 of Task 8 pinned it as a 500): `mexicano-pair-entrants-counted-as-players` with the self-pair evidence → W7. The full failing set is `["I4-nothing-ends-stuck", "I8-generate-named", "life-loop-bounded", "life-stage-completed"]` (plan review 3 I-2). If Step 0 found a NAMED refusal instead, I8 and I4's generate item pass, and the set is I4 ("never asked" only), `life-loop-bounded` and `life-stage-completed`;
      - every mexicano case that reaches round 2 (about 33 cases: LIFECYCLE, M1-free, R4 and F1 across the mexicano cells): `mexicano-pair-entrants-counted-as-players` → W7, with I10 failing on `round <n>: <person> seated 2×` (false premise 17, plan review 2 I-3). The note names the person and the earlier pair entrant that contains them;
      - every americano R4 case, and every mexicano R4 case where seed 3's person is seated in a round ≥ 2 through any entrant: `r4-withdrawn-player-kept-playing` → W7 (ruling 51, D14; the mexicano second leg, plan review 2 I-3);
-     - `page_playoff_only|*|R4`: `pp-q2` abandoned by the open-format branch (policy `walkover`, walkovers 0, voided 1; false premise 16), so `r4-policy-reported` and the kind-aware `r4-cascade-consistent` pass; the final is never seated and the stage never completes (`life-loop-bounded` / `life-stage-completed`) → W4 (plan review 1 m-5, plan review 2 I-1, Task 2);
+     - `page_playoff_only|*|R4`: `pp-q2` abandoned by the open-format branch (policy `walkover`, walkovers 0, voided 1; false premise 16), so `r4-policy-reported` and the kind-aware `r4-cascade-consistent` pass; the final is never seated, `/complete` answers `200 completed: false` with no code, and the full failing set is `["I4-nothing-ends-stuck", "life-loop-bounded"]` with `life-stage-completed` abstaining (plan review 3 I-2) → W4 (plan review 1 m-5, plan review 2 I-1, Task 2);
      - the ladder R4 cases carry **no predicted red** (ruling 53): the policy is derived (`none`), seed 3 is live-absent and raw-present, and no later challenge seats it. Each carries the W7 note "ladder finalRanks keep withdrawn <id> at rung <i>", counted in TRIAGE.md as a W7 note, not a red;
      - `double_elim` with an unplayed `gf-reset` (Task 9 Step 0).
-  4. **Triage rules for the predicted signatures** (ruling 51, D14; plan review 1 C-1, I-3). A ❌ is classified **product (predicted) → W7** without a harness hunt ONLY when every one of its failing checks is covered by a signature on the same case:
-     - `r4-policy-reported` failing on an `americano`/`mexicano` R4 case that carries `r4-withdrawn-player-kept-playing`;
-     - `life-loop-bounded` failing with `exited stalled_rounds` on a `mexicano` case that carries `mexicano-stalled-on-non-decided`;
-     - `I10` failing ONLY with `round <n ≥ 2>: <person> seated 2×` items on a `mexicano` case that carries `mexicano-pair-entrants-counted-as-players`, where every such person is named in that case's signature evidence (a member of an earlier pair entrant; false premise 17). An I10 item for round 1, a `never played` item, or a person the evidence does not name is uncovered;
-     - on a `mexicano` case, any combination of the above, provided each failing check is covered by its own signature (for example `r4-policy-reported` + I10 on a mexicano R4 case). A mexicano R4 case never gets `life-loop-bounded` covered by the stall signature, since R4 does not stall (plan review 2 I-3).
+  4. **Triage rules for the predicted signatures: the ONE coverage table** (ruling 51, D14; plan review 1 C-1, I-3; plan review 3 I-2 made this the single copy, and D14 points here). A ❌ is classified **product (predicted) → W7** without a harness hunt ONLY when every one of its failing checks is covered by a signature on the same case:
+     - **`r4-withdrawn-player-kept-playing`** (americano or mexicano R4) covers:
+       - `r4-policy-reported`.
+     - **`mexicano-stalled-on-non-decided`** (mexicano; M1, or any case with a forfeit or void) covers:
+       - `life-loop-bounded`, when its evidence is `exited stalled_rounds`;
+       - `life-stage-completed`, when its ONLY items are "complete → never asked";
+       - `I4-nothing-ends-stuck`, when its ONLY items are "stage <n>: never asked to complete".
+     - **`mexicano-pair-entrants-counted-as-players`** (mexicano; any case reaching round 2) covers:
+       - `I10-americano-seats-each-person-once`, when its ONLY items are `round <n ≥ 2>: <person> seated 2×` and every such person is named in the signature's evidence (a member of an earlier pair entrant; false premise 17). An I10 item for round 1, a `never played` item, or a person the evidence does not name is uncovered.
+       - On the self-pair path (a refused round-2 generate with the self-pair evidence), it also covers:
+         - `life-loop-bounded`, when its evidence is `exited refused_generate`;
+         - `I8-generate-named`, when its only item is that round-2 generate;
+         - `I4-nothing-ends-stuck`, when its only items are that generate and "never asked to complete";
+         - `life-stage-completed`, when its only items are "never asked".
+     - Any combination of the above on one case is covered, provided each failing check is covered by its own signature (for example `r4-policy-reported` + I10 on a mexicano R4 case). A mexicano R4 case never gets `life-loop-bounded`, I4 or `life-stage-completed` covered by the stall signature, since R4 does not stall (plan review 2 I-3).
 
-     A failing check NOT on that list (a crash, `life-built-as-posted`, `fold-parity`, `results-as-posted`, I10 outside the pair-entrant rule, `m1-walkover-recorded`, a refused call) sends the whole case to normal triage, **harness first**. A signature on a case whose failing checks do not match it is itself a harness finding (the signature fired on the wrong shape). The count of cases classified by each signature is pasted into TRIAGE.md, and a signature count of 0 where the prediction said "every case" is recorded as "prediction not confirmed", never silently dropped. On the ladder, R4 carries no predicted red (ruling 53): `r4-policy-reported` is derived (D14), and any red there is triaged normally, harness first.
+     The coverage table is checked by one fake test per signature set in Task 8 (the M1 stall, round 2 plus Task 9's I10, the self-pair path, the R4 cases), each asserting its case's full failing set, so the table and the pinned sets cannot drift apart. The general rule behind the companions (review 3's gap hunt): after Task 6, every non-`drained` exit leaves `complete: null`, which reds I4 and, on an all-terminal stage, `life-stage-completed` with "never asked". Every pinned full set in this plan was checked for that companion.
+
+     A failing check NOT in that table (a crash, `life-built-as-posted`, `fold-parity`, `results-as-posted`, I10 outside the pair-entrant rule, I4 or `life-stage-completed` with any item other than "never asked", `m1-walkover-recorded`, a refused call without its signature) sends the whole case to normal triage, **harness first**. A signature on a case whose failing checks do not match it is itself a harness finding (the signature fired on the wrong shape). The count of cases classified by each signature is pasted into TRIAGE.md, and a signature count of 0 where the prediction said "every case" is recorded as "prediction not confirmed", never silently dropped. On the ladder, R4 carries no predicted red (ruling 53): `r4-policy-reported` is derived (D14), and any red there is triaged normally, harness first.
 - [ ] **Step 4: The generated `MATRIX.md`.** `pnpm matrix:render truth-runs/w1drv-l3/results.json`. Confirm that `MATRIX.md` exists, is non-empty, and carries one row per planned case (the renderer's own count).
 - [ ] **Step 5: `plans.lock.json`.** Add one entry per new committed run: `w1drv-http-slice`, `w1drv-l3` (or each split id), `w1drv-l1-r1..r3`, and the Task 11 and Task 14 runs if committed. Copy the missing-entry failure's printed entry (`committed-plans.ts`). Editing an existing entry is a stop.
 - [ ] **Step 6: Parity.** `pnpm matrix:parity truth-runs/w1drv-http-slice/results.json truth-runs/w1drv-l1/w1drv-l1-r1/results.json --out truth-runs/w1drv-l1/parity.md; echo EXIT=$?`, over the cells the two runs share. Each difference is triaged as W1c Task 14 did.
@@ -2938,7 +3051,7 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
   - any seeding tie the harness had to pick (`seeding_tie_picked` cases) → W4/W5 by row;
   - every suspected americano/mexicano product red (D9) → W7, including the mexicano stall on any non-`decided` fixture (false premise 14);
   - R4 on americano/mexicano: the withdrawn player keeps playing (ruling 51; on mexicano only where the second leg holds) → W7;
-  - mexicano from round 2 counts round-1 pair entrants as players, so a person sits twice in one round (`stages.ts:2290-2293` has no kind filter; false premise 17, plan review 2 I-3) → W7;
+  - mexicano from round 2 counts round-1 pair entrants as players, so a person sits twice in one round, or the round-2 generate 500s on a self-pair (`stages.ts:2290-2293` has no kind filter; false premise 17, plan review 2 I-3, review 3 I-2) → W7;
   - the ladder keeps a withdrawn player's rung in `finalRanks` (the raw `ladder_order`, `competition.ts:606`; ruling 53's note, never asserted) → W7;
   - R4 on `page_playoff_only`: the open-format branch abandons `pp-q2` and strands the final → W4 (review 1 m-5, review 2 I-1);
   - a variant whose side size differs from its catalog's `lineup.size` (volleyball beach, by review 1's reading; the setbased kernel has no `positionsFor`) → W2 (m-2, Task 3);
@@ -2987,6 +3100,18 @@ Before starting: a fresh DB and prod server via the `seazn-local-env` skill. Con
    - m-7 → expected values written out in Tasks 6, 7 and 8;
    - m-8 → Task 7 files, Task 8's full failing-check sets, probe-set `:58`;
    - FP13 and W7 → ruling 53, D14, Task 7, Task 9, Task 15, Task 16.
+
+   Plan review 3 (fix round 3) is folded in:
+   - I-1 → Task 8: every mexicano gate keys on `config.mode` (`notePairEntrantDuplicates`, the R4 second leg); the fake serves `kind: "americano"` + `config.mode`, pinned by a stage-shape test; a `kind === "mexicano"` mutant is listed;
+   - I-2 and Q3 → the mexicano M1 set is `[I4-nothing-ends-stuck, life-loop-bounded, life-stage-completed]` (no `cut_short`, reason given); the self-pair 500 path has its own test and set; ONE coverage table in Task 15 Step 3 item 4, with D14 pointing to it and the "never asked" companions covered; the page-playoff set is `[I4-nothing-ends-stuck, life-loop-bounded]` with `life-stage-completed` abstaining (Task 2, Task 7, Task 15); every pinned set was checked for the I4 companion (gap hunt);
+   - I-3 → Task 7's `cascadeItems` unit test uses typed, product-shaped fixtures (`snap()`, `kind: "win"/"award"` outcomes, `outcome` on `before`), with each half's killing mutation written out;
+   - m-1 → full spec ids; the I10 expectations move in at Task 9 Step 1;
+   - m-2 → the canary compares the verdict and two entries, and asserts the new check's abstain;
+   - m-3 → `winnerOf(toObservedOutcome(...))` against the named opponent;
+   - m-4 → the fake's default is derived from the constant; a committed mexicano `dropWithdrawnFromPlan` case (which also drops the pair entrants holding the person);
+   - m-5 → `RULEBOOK_SIDE_SIZE` (cited), `volleyball/beach` asserted by name, and an empty mismatch list fails;
+   - m-6 → `PENDING_STATUSES` and `FORFEIT_MODEL_KINDS` are the single runtime authorities, each held to the product's text;
+   - m-7 → `expandTake` at `:161`; the stray fragment is repaired.
 2. **Placeholder scan.** Some values are deliberate Step 0 pins, each confirmed in its task before use:
    - the product's refusal codes (`SEEDING_TIE_CODE`, the lineup refusal, the ladder codes);
    - the cricket payload literals (`MATCH_CLOSE_DRAW`, `FOLLOW_ON_PAYLOAD`);
