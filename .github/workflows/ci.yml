@@ -938,7 +938,9 @@ jobs:
       # Live-Stripe against real test-mode Stripe (sk_test, already in the job env)
       # on the real Postgres this job runs. Sync prices first, then run ONLY the
       # CI-safe live suites: billing-tiers (self-contained) + billing-proration
-      # (needs synced prices). Deliberately EXCLUDED: billing-automatic-tax (needs
+      # (needs synced prices) + stream-pack-checkout (stream-credit pack prices,
+      # checkout session, and a real charge.refunded claw-back through the signed
+      # webhook route). Deliberately EXCLUDED: billing-automatic-tax (needs
       # a Stripe tax registration this account lacks) and schedule-ai-effort-ab
       # (issues real model calls). These files self-skip in the src/server+src/lib
       # step above (no BILLING_LIVE); here they run live. Skips cleanly on fork PRs,
@@ -947,7 +949,7 @@ jobs:
         if: env.STRIPE_SECRET_KEY != ''
         run: |
           npm run stripe:sync
-          BILLING_LIVE=1 npm test --workspace apps/web -- src/lib/__tests__/billing-tiers.live.test.ts src/lib/__tests__/billing-proration.live.test.ts
+          BILLING_LIVE=1 npm test --workspace apps/web -- src/lib/__tests__/billing-tiers.live.test.ts src/lib/__tests__/billing-proration.live.test.ts src/lib/__tests__/stream-pack-checkout.live.test.ts
 
       # Nothing after this needs the placement container.
       - name: Placement service logs and teardown
