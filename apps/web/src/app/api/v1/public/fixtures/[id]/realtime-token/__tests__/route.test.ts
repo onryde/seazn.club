@@ -34,6 +34,7 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
+import { rigTarget } from "@/server/relay/__tests__/_session-rig";
 import { OVERLAY_REALTIME_PURPOSE, realtimeTokenPath } from "@/components/public-site/live-score-data";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { GET } from "../route";
@@ -85,8 +86,7 @@ async function seed(opts: { overlay: boolean; realtime: boolean; visibility?: "p
 
 /** A stream session on the fixture in `state` — used only to show that a session no longer matters either way. */
 async function session(fx: Seeded, state: string): Promise<void> {
-  const [{ id: targetId }] = await sql<{ id: string }[]>`
-    insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${fx.orgId}, 'youtube', 'Club', '\\x00'::bytea) returning id`;
+  const targetId = await rigTarget(fx.orgId, "Club"); // the sealed column is named only inside server/relay/** (r3)
   await sql`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, fail_reason, ended_at, target_id, created_by,
                                          sport_key, competition_id, division_id, entitlement_via_override)
