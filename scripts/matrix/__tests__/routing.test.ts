@@ -65,27 +65,44 @@ describe("routeTo", () => {
   });
 });
 
-// T1-R3 (review m-5): the W1-driving row is open, cites the wave's rulings and
-// points at its plan and its prompt. The pointers are read from the row and
-// resolved on disk, so a moved file or a dropped pointer reds.
-describe("the W1-driving status row", () => {
-  const row = INDEX.split("\n").find((l) => l.startsWith("| W1-driving |"));
-  const state = row?.split(" | ")[2] ?? "";
-  it("is open: it starts 'in progress —'", () => {
-    expect(row, "no W1-driving Status row").toBeDefined();
-    expect(state.replace(/\*\*/g, "")).toMatch(/^in progress — /);
+// T1-R3 (review m-5), reshaped by I-3: every Status row's links resolve and
+// every owner ruling a row cites exists, whatever state the row is in. The
+// W1-driving row's own text is never pinned (brief: Task 16 closes it), and
+// its openness is the Q-A guard's job (scenario-catalogue.test.ts: open
+// exactly while a route names it). The sweep reads every row, so its counts
+// stay above zero when any one row is rewritten.
+describe("the Status rows' links and cited rulings (any row, open or closed)", () => {
+  const PROMPTS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts";
+  /** Each Status body row's cells after the wave and the scope: its state. */
+  const states = (): Array<{ wave: string; state: string }> => {
+    const start = INDEX.indexOf("## Status");
+    const lines = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1)).split("\n");
+    const sep = lines.findIndex((l) => /^\| -+ \|/.test(l));
+    const out: Array<{ wave: string; state: string }> = [];
+    for (const line of lines.slice(sep + 1)) {
+      if (!line.startsWith("|")) break;
+      const cells = line.split(" | ");
+      out.push({ wave: cells[0]!.slice(2), state: cells.slice(2).join(" | ") });
+    }
+    return out;
+  };
+  it("every backticked .md a row names resolves on disk (from the repo root, the prompts dir, or a directory the same row names)", () => {
+    const rows = states();
+    expect(rows.length, "Status rows read").toBeGreaterThan(0);
+    let checked = 0;
+    for (const { wave, state } of rows) {
+      // A row may name a directory (`truth-runs/`) and then files inside it.
+      const roots = [REPO, resolve(REPO, PROMPTS)];
+      const bases = [...roots, ...[...state.matchAll(/`([^`\s]+\/)`/g)].flatMap(([, d]) => roots.map((r) => resolve(r, d!)))];
+      for (const [, link] of state.matchAll(/`([^`]+\.md)`/g)) {
+        expect(bases.some((b) => existsSync(resolve(b, link!))), `${wave}: ${link}`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, ".md links checked").toBeGreaterThan(0);
+    console.info(`Status rows: ${checked} .md links resolved across ${rows.length} rows`);
   });
-  it("points at its plan and its prompt, and both exist", () => {
-    const plan = /plan `([^`]+\.md)`/.exec(state)?.[1];
-    const prompt = /prompt `([^`]+\.md)`/.exec(state)?.[1];
-    expect(plan, "no plan pointer").toBeDefined();
-    expect(prompt, "no prompt pointer").toBe("W1-driving.md");
-    expect(existsSync(resolve(REPO, plan!)), plan).toBe(true);
-    expect(existsSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts", prompt!)), prompt).toBe(true);
-  });
-  it("cites rulings 44–54, and each one is an owner ruling in the index", () => {
-    const m = /rulings (\d+)–(\d+)/.exec(state);
-    expect(m?.slice(1, 3), "the row cites no ruling range").toEqual(["44", "54"]);
+  it("every owner ruling a row cites ('ruling N', 'rulings N–M, K and J') is an entry of ## Owner rulings", () => {
     // "## Owner rulings" numbers its entries "N." or, for a batch, "N–M.".
     const start = INDEX.indexOf("\n## Owner rulings");
     expect(start, "no Owner rulings section").toBeGreaterThan(0);
@@ -95,8 +112,18 @@ describe("the W1-driving status row", () => {
       for (let n = Number(lo); n <= Number(hi ?? lo); n++) numbered.add(n);
     }
     expect(numbered.size, "owner rulings read").toBeGreaterThan(0);
-    const cited = Array.from({ length: 54 - 44 + 1 }, (_, i) => 44 + i);
-    for (const n of cited) expect(numbered.has(n), `ruling ${n}`).toBe(true);
-    expect(cited.length).toBe(11);
+    let checked = 0;
+    for (const { wave, state } of states()) {
+      for (const [, list] of state.matchAll(/\brulings? (\d+(?:–\d+)?(?:(?:,| and|, and) \d+(?:–\d+)?)*)/gi)) {
+        for (const [, lo, hi] of list!.matchAll(/(\d+)(?:–(\d+))?/g)) {
+          for (let n = Number(lo); n <= Number(hi ?? lo); n++) {
+            expect(numbered.has(n), `${wave} cites ruling ${n}`).toBe(true);
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked, "cited rulings checked").toBeGreaterThan(0);
+    console.info(`Status rows: ${checked} cited owner rulings found among ${numbered.size}`);
   });
 });
