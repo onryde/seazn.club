@@ -1309,11 +1309,20 @@ test("decider consoles: no horizontal scroll, score pad renders (not just a 2xx)
 //
 // Hence a geometry assertion against the scroller's own visible box. This is
 // the only instrument in the repo that can fail for the real reason.
+//
+// 2026-09-30 (fixture-page stream T7): a FIFTH tab, Streaming, now ends the
+// strip, so the test drives the LAST tab — the one furthest past the edge.
+// With Venues it went vacuous at 430, where Venues now fits unscrolled while
+// the strip still overflows (its own control below caught that).
 test("Directory: the active tab is scrolled into view at this width", async ({ page }) => {
-  await page.goto("/directory?tab=venues", { waitUntil: "load" });
+  await page.goto("/directory?tab=streaming", { waitUntil: "load" });
 
   const active = page.locator('nav [aria-current="page"]');
-  await expect(active).toHaveText(/venue/i);
+  await expect(active).toHaveText(/streaming/i);
+  expect(
+    await active.evaluate((el) => el === el.closest("nav")!.querySelector("a:last-of-type")),
+    "the driven tab is the strip's LAST one",
+  ).toBe(true);
 
   // Proves the assertion below can actually fail: force the strip back to the
   // unscrolled state this test exists to catch, and confirm the geometry check
