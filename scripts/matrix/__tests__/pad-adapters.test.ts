@@ -207,6 +207,19 @@ describe("badminton", () => {
     expect(() => badmintonPad.stepsFor({ type: "badminton.rally", payload: { side: "home" } }, ctxOf(req("badminton", cfg, { kind: "win", winner: "home" })))).toThrow(/badminton\.rally/);
   });
 
+  it("a summary that is not the sheet's {home, away} of whole numbers is refused by name, never typed as a guess (the sheet has exactly two number steps)", () => {
+    const r = req("badminton", cfg, { kind: "win", winner: "home" });
+    const bad: unknown[] = [null, { home: 21 }, { home: 21, away: 13, extra: 1 }, { home: 21.5, away: 13 }, { home: "21", away: 13 }];
+    let checked = 0;
+    for (const payload of bad) {
+      expect(() => badmintonPad.stepsFor({ type: BADMINTON_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+    // Its positive pair: a whole-number pair is typed.
+    expect(badmintonPad.stepsFor({ type: BADMINTON_SUMMARY, payload: { home: 21, away: 13 } }, ctxOf(r))).toHaveLength(5);
+  });
+
   it("tolerates no extra key: Step 0 item 2 saw the row carry exactly home and away", () => {
     expect(badmintonPad.tolerableExtraKeys?.(BADMINTON_SUMMARY) ?? []).toEqual([]);
     const seen = { id: "r2", seq: 2, type: BADMINTON_SUMMARY, payload: { away: 13, home: 21 } };
