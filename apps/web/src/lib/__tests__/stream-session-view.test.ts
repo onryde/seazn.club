@@ -26,12 +26,12 @@ import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
-import { StreamEndReason, StreamFailReason, StreamIngest, StreamSessionState } from "@/server/api-v1/schemas";
+import { StreamEndReason, StreamFailReason, StreamIngest, StreamOutput, StreamSessionState } from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError } from "@/server/usecases/stream-targets";
 import {
-  BEAT_STALE_SECONDS, CREATE_ERROR_CODES, CREATE_ERROR_KEYS, DESTINATION_REFUSAL_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
+  BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, DESTINATION_REFUSAL_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  createErrorCode, createErrorHolder, createErrorText, elapsedLabel, healthChips, phoneTabState, qrText, stepFor, targetRefusalRule,
+  createErrorCode, createErrorHolder, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText, stepFor, targetRefusalRule,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -60,7 +60,7 @@ function inEveryLocale(keys: readonly string[]): number {
 const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", state: "live", desiredState: "live", failReason: null,
-  health: null, ingest: { state: "connected", protocol: "srt" }, qr: null, balance: 2,
+  health: null, ingest: { state: "connected", protocol: "srt" }, output: null, qr: null, balance: 2,
   startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null,
   target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: true, restartFree: false, ...over,
 });
@@ -389,5 +389,46 @@ describe("stream-session-view — health, elapsed, the paste code", () => {
     expect(JSON.parse(text)).toEqual(fixture);
     expect(parseCaptureQr(JSON.parse(text), NOW)).toEqual({ ok: true, payload: fixture });
     expect(STREAM_POLL_MS).toBe(5000);
+  });
+});
+
+describe("D3 — the destination warning (spec §5.6)", () => {
+  const view = (state: string, output: { state: string; since: string } | null) => ({ state, output }) as never;
+  const since = new Date("2026-09-30T12:00:00Z");
+  const at = (ms: number) => new Date(since.getTime() + ms);
+  // The non-ok words come from the wire schema's own enum, so a new output state cannot ship without this sweep seeing it.
+  const NON_OK = StreamOutput.shape.state.options.filter((s) => s !== "ok");
+  it("the owner's number: 30 s", () => {
+    expect(OUTPUT_WARNING_AFTER_MS).toBe(30_000);
+  });
+  it("fires at exactly OUTPUT_WARNING_AFTER_MS, not one millisecond before, for every non-ok state", () => {
+    let checked = 0;
+    for (const s of NON_OK) {
+      const v = view("live", { state: s, since: since.toISOString() });
+      expect(destinationWarning(v, at(OUTPUT_WARNING_AFTER_MS - 1)), s).toBe(false);
+      expect(destinationWarning(v, at(OUTPUT_WARNING_AFTER_MS)), s).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("never while output is ok, never outside live, never without output", () => {
+    const late = at(OUTPUT_WARNING_AFTER_MS * 10);
+    expect(destinationWarning(view("live", { state: "ok", since: since.toISOString() }), late)).toBe(false);
+    let checked = 0;
+    for (const st of StreamSessionState.options.filter((x) => x !== "live")) {
+      expect(destinationWarning(view(st, { state: "connecting", since: since.toISOString() }), late), st).toBe(false);
+      checked++;
+    }
+    expect(checked, "every state but live").toBe(StreamSessionState.options.length - 1);
+    expect(destinationWarning(view("live", null), late)).toBe(false);
+    // The positive pair of the loop above, on the same inputs: live itself does warn.
+    expect(destinationWarning(view("live", { state: "connecting", since: since.toISOString() }), late)).toBe(true);
+  });
+  it("Review Focus 5: a since in the browser's FUTURE (clock skew) gives no warning and an elapsed of 0, never negative", () => {
+    const v = view("live", { state: "connecting", since: at(5_000).toISOString() });
+    expect(outputElapsedMs(v, since)).toBe(0);
+    expect(destinationWarning(v, since)).toBe(false);
+    expect(outputElapsedMs(view("live", null), since), "no output, nothing to time").toBeNull();
+    expect(outputElapsedMs(view("live", { state: "connecting", since: since.toISOString() }), at(1234))).toBe(1234);
   });
 });

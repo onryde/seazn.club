@@ -30,7 +30,12 @@ export interface IngestStatus {
    *  returns no location field (probe, 2026-09-14). Null when absent. */
   reason: string | null;
 }
-export type OutputState = "ok" | "rejected" | "unknown";
+/** D3 (spec §5.6): `connecting` is an output that is still dialling — or re-dialling — its destination. It is NOT ok:
+ *  staging round 1 (2026-09-30) showed Live while YouTube received nothing because the adapter read it as ok. */
+export type OutputState = "ok" | "connecting" | "rejected" | "unknown";
+/** Spec §5.7 — what a per-session provider call is FOR, so its stream_provider_calls row carries the session (staging
+ *  2026-09-30 found removeOutput rows with a NULL session_id). Optional: a caller with no session passes nothing. */
+export interface ProviderCallMeta { sessionId?: string | null }
 export interface StorageUsage { totalStorageMinutes: number; totalStorageMinutesLimit: number; videoCount: number }
 /** Dd — a recording, with every fact Cloudflare's video object carries.
  *  While `state` is "live-inprogress" the probe (2026-09-14) reads `duration`
@@ -64,13 +69,13 @@ export interface IngestCapabilities {
 export interface IngestProvider {
   readonly capabilities: IngestCapabilities;
   createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials>;
-  inputStatus(inputId: string): Promise<IngestStatus>;            // C5: the per-input GET
-  addOutput(inputId: string, target: IngestTarget): Promise<string>; // passthrough only, exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
-  outputState(inputId: string): Promise<OutputState>;             // target_rejected source
+  inputStatus(inputId: string, meta?: ProviderCallMeta): Promise<IngestStatus>;   // C5: the per-input GET
+  addOutput(inputId: string, target: IngestTarget, meta?: ProviderCallMeta): Promise<string>; // passthrough only, exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
+  outputState(inputId: string, meta?: ProviderCallMeta): Promise<OutputState>;   // target_rejected source; D3
   /** C1 (lane C final review): takes the passthrough output off its input, which is what stops Cloudflare simulcasting
    *  to the destination — the ONE teardown of a passthrough broadcast. Idempotent: an output already gone is success.
    *  Never `deleteInput` for this (the input carries the recording — C2). */
-  removeOutput(inputId: string, outputId: string): Promise<void>;
+  removeOutput(inputId: string, outputId: string, meta?: ProviderCallMeta): Promise<void>;
   deleteInput(inputId: string): Promise<void>;                    // LEAKS recordings (C2) — videos first
   storageUsage(): Promise<StorageUsage>;                          // C3: raw usage; headroom is the usecase's
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;

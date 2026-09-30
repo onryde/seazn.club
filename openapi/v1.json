@@ -38630,6 +38630,35 @@
                                 }
                               ]
                             },
+                            "output": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "state": {
+                                      "type": "string",
+                                      "enum": [
+                                        "ok",
+                                        "connecting",
+                                        "rejected",
+                                        "unknown"
+                                      ]
+                                    },
+                                    "since": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "state",
+                                    "since"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "qr": {
                               "anyOf": [
                                 {
@@ -38829,6 +38858,7 @@
                             "failReason",
                             "health",
                             "ingest",
+                            "output",
                             "qr",
                             "balance",
                             "startedAt",
@@ -38870,6 +38900,10 @@
                     "ingest": {
                       "state": "connected",
                       "protocol": "srt"
+                    },
+                    "output": {
+                      "state": "ok",
+                      "since": "example"
                     },
                     "qr": {
                       "v": 1,
@@ -39284,6 +39318,35 @@
                             }
                           ]
                         },
+                        "output": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "ok",
+                                    "connecting",
+                                    "rejected",
+                                    "unknown"
+                                  ]
+                                },
+                                "since": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "state",
+                                "since"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "qr": {
                           "anyOf": [
                             {
@@ -39483,6 +39546,7 @@
                         "failReason",
                         "health",
                         "ingest",
+                        "output",
                         "qr",
                         "balance",
                         "startedAt",
@@ -39519,6 +39583,10 @@
                     "ingest": {
                       "state": "connected",
                       "protocol": "srt"
+                    },
+                    "output": {
+                      "state": "ok",
+                      "since": "example"
                     },
                     "qr": {
                       "v": 1,

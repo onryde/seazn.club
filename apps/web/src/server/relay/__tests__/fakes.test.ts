@@ -6,7 +6,7 @@
 // a scripted 409-once on deleteVideo; outputState rejects on a host that
 // says so and is `ok` otherwise (positive pair).
 import { describe, expect, it } from "vitest";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
+import { FAKE_CONNECTING_KEY_PREFIX, FAKE_CONNECT_AFTER_MS_DEFAULT, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
 import { machineNameFor } from "../domain/runner";
@@ -436,5 +436,49 @@ describe("the provider-call recorder seam (ruling 13)", () => {
       ["fly", "destroyMachine", "DELETE", `${fly}/{id}`, runnerId, null],
     ]);
     expect(new Set(rec.calls.map((c) => `${c.status}/${c.latencyMs}/${c.attempt}`))).toEqual(new Set(["200/0/1"]));
+  });
+});
+
+describe("T4 — the fake's output state and session ids (spec §5.6 D3, §5.7)", () => {
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it("the four per-session calls record their session id on the provider-call row, exactly as the real adapter does", async () => {
+    const rec = new FakeRecorder();
+    const ingest = new FakeIngest({ clock: () => 0, recorder: rec });
+    const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    const out = await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" }, { sessionId: "sess-9" });
+    let checked = 0;
+    for (const [op, run] of [
+      ["inputStatus", () => ingest.inputStatus(inputId, { sessionId: "sess-9" })],
+      ["addOutput", () => ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k2" }, { sessionId: "sess-9" })],
+      ["outputState", () => ingest.outputState(inputId, { sessionId: "sess-9" })],
+      ["removeOutput", () => ingest.removeOutput(inputId, out, { sessionId: "sess-9" })],
+    ] as const) {
+      await run();
+      await flush();
+      expect(rec.calls.at(-1), op).toMatchObject({ operation: op, sessionId: "sess-9" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it(`a key starting with FAKE_CONNECTING_KEY_PREFIX reads unknown before the input connects and connecting after — never ok — and reads nothing else to decide`, async () => {
+    let now = 0;
+    const rec = new FakeRecorder();
+    const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000, recorder: rec });
+    const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: `${FAKE_CONNECTING_KEY_PREFIX}abc` });
+    await flush();
+    const before = rec.calls.length;
+    expect(await ingest.outputState(inputId)).toBe("unknown");
+    now = 3000;   // exactly connectAfterMs: inputStatus's own boundary (connected at >=)
+    expect(await ingest.outputState(inputId)).toBe("connecting");
+    await flush();
+    expect(rec.calls.slice(before).map((c) => c.operation), "no hidden inputStatus").toEqual(["outputState", "outputState"]);
+    // The positive pair: an ordinary key on a connected input is ok.
+    const plain = await ingest.createLiveInput({ sessionId: "s2", slot: 0 });
+    await ingest.addOutput(plain.inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "plain" });
+    now = 6000;
+    expect(await ingest.outputState(plain.inputId)).toBe("ok");
   });
 });

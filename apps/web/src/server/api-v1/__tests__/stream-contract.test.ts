@@ -168,11 +168,23 @@ describe("relay request schemas refuse what they must", () => {
   it("StreamSessionCurrent is strict, and its qr is the v1 payload or null — never a default object", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
+      health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
       restartFree: false,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // T4 D3: output is REQUIRED (null, or {state, since}) — an absent field would read as "nothing to warn about".
+    const withoutOutput: Record<string, unknown> = { ...current };
+    delete withoutOutput.output;
+    expect(S.StreamSessionCurrent.safeParse(withoutOutput).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: {} }).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "healthy", since: "2026-09-30T12:00:00Z" } }).success).toBe(false);
+    let outputStates = 0;
+    for (const state of ["ok", "connecting", "rejected", "unknown"] as const) {   // ports.ts OutputState, the wire's source
+      expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state, since: "2026-09-30T12:00:00Z" } }).success, state).toBe(true);
+      outputStates++;
+    }
+    expect(outputStates).toBe(S.StreamOutput.shape.state.options.length);
     // D3: creditUsed is REQUIRED and a boolean — an absent field must not read as "no credit used" on the client.
     const withoutCreditUsed: Record<string, unknown> = { ...current };
     delete withoutCreditUsed.creditUsed;

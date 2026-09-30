@@ -555,7 +555,7 @@ const QR = JSON.parse(
 
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", state: "warming", desiredState: "live",
-  failReason: null, health: null, ingest: { state: "disconnected", protocol: null },
+  failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
   qr: QR, balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
   restartFree: false,

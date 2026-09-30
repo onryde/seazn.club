@@ -13,7 +13,7 @@ import { join, relative, resolve } from "node:path";
 import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT } from "../ingest-cf";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
-import type { ProviderCallRecord } from "../ports";
+import type { OutputState, ProviderCallRecord } from "../ports";
 import {
   CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
 } from "../config";
@@ -496,6 +496,65 @@ describe("CloudflareIngest", () => {
     await expect(cf.createLiveInput({ sessionId: "s1", slot: 0 })).resolves.toMatchObject({ inputId: "in_abc" });
     await new Promise((r) => setImmediate(r));
     expect(port.calls).toHaveLength(0);   // the throw ate it, and nothing else broke
+  });
+});
+
+// T4 (spec §5.6 D3, §5.7). Cloudflare's OpenAPI (fetched 2026-09-30, MCP search over spec.paths, GET
+// /accounts/{account_id}/stream/live_inputs/{live_input_identifier}/outputs) documents NO status on an output — only
+// enabled, streamKey, uid, url — so the words below are the plan's rule ("error → rejected; every output connected →
+// ok; any connecting/reconnecting → connecting; else unknown"), not a declared enum.
+describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
+  let states: string[] = [];
+  const port = new FakeRecorder();
+  const adapter = new CloudflareIngest({
+    fetchImpl: recorder((c) => {
+      if (c.init.method === "GET" && /\/outputs$/.test(c.url))
+        return { status: 200, body: { success: true, result: states.map((s, i) => ({ uid: `out_${i}`, enabled: true, status: { current: { state: s } } })) } };
+      return cfReply(c);
+    }).fetchImpl,
+    accountId: "acct", token: "tok", recorder: port,
+  });
+  const stubOutputs = (s: string[]) => { states = s; };
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it("outputState (D3, round-1 regression): 'connecting' and 'reconnecting' are CONNECTING, never ok — staging's panel said Live while YouTube received nothing", async () => {
+    const cases: [string[], OutputState][] = [
+      [["connected"], "ok"],
+      [["connecting"], "connecting"],
+      [["reconnecting"], "connecting"],
+      [["connected", "connecting"], "connecting"],
+      [["connected", "error"], "rejected"],
+      [[], "unknown"],
+      [["some-future-word"], "unknown"],
+      [["connected", "some-future-word"], "unknown"],
+    ];
+    let checked = 0;
+    for (const [s, want] of cases) {
+      stubOutputs(s);
+      expect(await adapter.outputState("in_abc", { sessionId: "sess-1" }), s.join(",")).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("the four per-session calls record their session id on the provider-call row (spec §5.7) — and a call with no meta records null", async () => {
+    stubOutputs(["connected"]);
+    let checked = 0;
+    for (const [op, run] of [
+      ["inputStatus", () => adapter.inputStatus("in_abc", { sessionId: "sess-9" })],
+      ["addOutput", () => adapter.addOutput("in_abc", { url: "rtmp://a.rtmp.youtube.com/live2", streamKey: "k" }, { sessionId: "sess-9" })],
+      ["outputState", () => adapter.outputState("in_abc", { sessionId: "sess-9" })],
+      ["removeOutput", () => adapter.removeOutput("in_abc", "out_1", { sessionId: "sess-9" })],
+    ] as const) {
+      await run();
+      await flush();
+      expect(port.calls.at(-1), op).toMatchObject({ operation: op, sessionId: "sess-9" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    await adapter.outputState("in_abc");
+    await flush();
+    expect(port.calls.at(-1), "no meta: the row says so").toMatchObject({ operation: "outputState", sessionId: null });
   });
 });
 

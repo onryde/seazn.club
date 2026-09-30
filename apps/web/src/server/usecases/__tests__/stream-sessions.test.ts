@@ -26,11 +26,11 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { createErrorCode } from "@/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, createErrorCode, destinationWarning } from "@/lib/stream-session-view";
 import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
-import { FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
 import { holdStateOf, type SessionState } from "@/server/relay/domain/session";
@@ -46,7 +46,7 @@ import {
 } from "@/server/relay/config";
 import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
-import type { RunnerSpec } from "@/server/relay/ports";
+import type { OutputState, ProviderCallRecorder, RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
@@ -200,7 +200,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** `monthly: true` leaves this period's free match credits for createSession to grant (V426); by default the rig grants
  *  and spends them (`spendMonthlyStreamGrant`), so `credits` is the whole balance, as every pre-V426 test assumes. */
-async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; streamKey?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
+async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; streamKey?: string; watchUrl?: string; kind?: "youtube" | "twitch"; recorder?: ProviderCallRecorder } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null (_rig.ts:37), and fixture_stream_sessions.created_by is `uuid not null` — the
   // organiser who starts a stream is a REAL users row, so every `created_by` / `actor_user_id` below is a real id and
@@ -222,7 +222,7 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
   // The clock is LIVE (rows carry the DB's now()) and tickable: the fake
   // ingest connects `connectAfterMs` after creation on this same clock.
   let now = Date.now();
-  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: opts.connectAfterMs ?? 3000 });
+  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: opts.connectAfterMs ?? 3000, ...(opts.recorder ? { recorder: opts.recorder } : {}) });
   // Recording storage is ONE account-wide pool, so admission reserves against EVERY active session in the database —
   // including the ones other suites (stream-credits.test.ts seats `live` rows) and earlier runs left behind, which run
   // concurrently in CI's thread pool. The fake's default 1000-minute pool is exhausted by four of them, and every start
@@ -3342,9 +3342,9 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
   const flakyRemoval = (r: Rig) => {
     const down = { on: true, err: Object.assign(new Error("cloudflare remove output: HTTP 503 code 10000"), { status: 503 }) };
     const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
-      async removeOutput(inputId: string, outputId: string) {
+      async removeOutput(inputId: string, outputId: string, meta?: { sessionId?: string | null }) {
         if (down.on) throw down.err;
-        return FakeIngest.prototype.removeOutput.call(r.ingest, inputId, outputId);
+        return FakeIngest.prototype.removeOutput.call(r.ingest, inputId, outputId, meta);
       },
     });
     return { down, deps: { ...r.deps, drivers: { ...r.deps.drivers, ingest } } as SessionDeps };
@@ -3479,5 +3479,146 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     expect(r.ingest.liveOutputsTo(dest)).toBe(0);
     expect(f.output_released_at).toBeInstanceOf(Date);
     expect(await releaseRows(sessionId)).toEqual([{ result: "ok", source: "output", reason: "late_add", output: f.output_uid }]);
+  });
+});
+
+// T4 (spec §5.6 D3, §5.7). The destination's side of a passthrough broadcast reaches the projection as {state, since},
+// and every provider call a session makes carries that session's id on its stream_provider_calls row.
+describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the session id on every per-session provider call", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  const goLive = async (r: Rig) => {
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+  };
+  const flush = () => new Promise((res) => setImmediate(res));
+  const iso = (d: Date) => d.toISOString();
+
+  it("output.since is when the CURRENT output state began — the first ingest_status event of the trailing run of that state, not the latest poll and not the latest event", async () => {
+    const r = await rig({ credits: 1, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomUUID()}` });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const tLive = r.deps.now();
+    const first = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(first.output).toEqual({ state: "connecting", since: iso(tLive) });   // the real fake: a destination that never accepts
+    r.tick(10_000);
+    const second = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(second.output!.since, "unchanged state: since does not move with the poll").toBe(first.output!.since);
+    // The state MOVES while live, so the trailing run starts after live_at and the clamp cannot answer for it.
+    let out: OutputState = "ok";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    try {
+      r.tick(5_000);
+      const tOk = r.deps.now();
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output).toEqual({ state: "ok", since: iso(tOk) });
+      out = "connecting";
+      r.tick(5_000);
+      const tBack = r.deps.now();
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "a second run of connecting starts at ITS first event").toEqual({ state: "connecting", since: iso(tBack) });
+      // An ingest_status event whose INGEST word changes but whose output word does not is inside the same run.
+      const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId}`;
+      r.ingest.setState(inp!.ingest_input_id, "disconnected");
+      r.tick(5_000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest event").toEqual({ state: "connecting", since: iso(tBack) });
+      r.tick(5_000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest poll").toEqual({ state: "connecting", since: iso(tBack) });
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect(n, "connected+connecting, ok, connecting, disconnected — four events, so the run really had a boundary and an inside").toBe(4);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("D3's clock starts at LIVE, never during warming: warm 45 s with the output non-ok, go live — no warning at live+0 s or live+29.999 s, a warning at live+30 s", async () => {
+    const WARM_MS = 45_000;
+    const POLL_MS = 5_000;
+    let checked = 0;
+    for (const nonOk of ["unknown", "connecting"] as const) {
+      // The output reads the SAME non-ok state before and after go-live — Cloudflare's shape when the destination has
+      // not been tried yet — so the trailing run of that state starts in warming. Only the live clamp stops the clock.
+      const r = await rig({ credits: 1, connectAfterMs: WARM_MS });
+      const outSpy = vi.spyOn(r.ingest, "outputState").mockResolvedValue(nonOk);
+      try {
+        await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+        let polls = 0;
+        for (let t = 0; t < WARM_MS; t += POLL_MS) {                // the organiser's poll through warming
+          expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, `${nonOk} t=${t}`).not.toBe("live");
+          polls++;
+          r.tick(POLL_MS);
+        }
+        expect(polls).toBe(WARM_MS / POLL_MS);
+        const live = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(live!.state, nonOk).toBe("live");
+        expect(live!.output, nonOk).toEqual({ state: nonOk, since: iso(r.deps.now()) });   // clamped to live_at
+        expect(destinationWarning(live!, r.deps.now()), `${nonOk} live+0`).toBe(false);
+        r.tick(OUTPUT_WARNING_AFTER_MS - 1);
+        const early = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(destinationWarning(early!, r.deps.now()), `${nonOk} live+29.999`).toBe(false);
+        r.tick(1);
+        const due = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(destinationWarning(due!, r.deps.now()), `${nonOk} live+30`).toBe(true);
+        expect(due!.state, "D3 warns; it never ends the stream").toBe("live");
+      } finally {
+        outSpy.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("output is null for a composed session (warming and live), and for a passthrough session once it has ended", async () => {
+    const composed = await rig({ credits: 1 });
+    const c = await createSession(composed.auth, composed.fixtureId, body(composed.target.id, "composed"), composed.deps);
+    const cWarming = (await currentSession(composed.auth, composed.fixtureId, composed.deps))!;
+    expect(cWarming.state).toBe("warming");
+    expect(cWarming.output).toBeNull();
+    await heartbeat(c.sessionId, composed.runner.created[0]!.jobToken, { state: "playing" }, composed.deps);
+    const cLive = (await currentSession(composed.auth, composed.fixtureId, composed.deps))!;
+    expect(cLive.state).toBe("live");
+    expect(cLive.output).toBeNull();
+    const ended = await rig({ credits: 1 });
+    const e = await createSession(ended.auth, ended.fixtureId, body(ended.target.id), ended.deps);
+    await goLive(ended);
+    expect((await currentSession(ended.auth, ended.fixtureId, ended.deps))!.output, "the positive twin").toEqual({ state: "ok", since: expect.any(String) });
+    const stopped = await stopSession(ended.auth, ended.fixtureId, e.sessionId, ended.deps);
+    expect(stopped.state).toBe("completed");
+    expect(stopped.output, "the Stop route's projection").toBeNull();
+    const view = (await currentSession(ended.auth, ended.fixtureId, ended.deps))!;
+    expect(view.state).toBe("completed");
+    expect(view.output).toBeNull();
+  });
+
+  it("spec §5.7: every per-session provider call records its session id — add_output, the poll's inputStatus + outputState, the expiry's pre-read, and releaseOutput's removeOutput", async () => {
+    const PER_SESSION = ["inputStatus", "addOutput", "outputState", "removeOutput"] as const;
+    // Leg 1, the golden path: create (addOutput), a warming poll, live, Stop (removeOutput).
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, recorder: rec });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    await goLive(r);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    await flush();
+    const rows = rec.calls.filter((c) => (PER_SESSION as readonly string[]).includes(c.operation));
+    expect(new Set(rows.map((c) => c.operation)), "every one of the four was reached").toEqual(new Set(PER_SESSION));
+    let checked = 0;
+    for (const c of rows) {
+      expect(c.sessionId, `${c.operation} #${checked}`).toBe(sessionId);
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(PER_SESSION.length);
+    expect(rows.filter((c) => c.operation === "removeOutput")).toHaveLength(1);
+    // Leg 2, the expiry's pre-read (observeIngestBeforeExpiry): a warming session nobody polled, past its timeout. Its
+    // ONLY inputStatus is that pre-read — the poll never runs, because the reconcile ends the session first.
+    const rec2 = new FakeRecorder();
+    const x = await rig({ credits: 1, recorder: rec2, connectAfterMs: 24 * 3600_000 });
+    const made = await createSession(x.auth, x.fixtureId, body(x.target.id), x.deps);
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${made.sessionId}`;
+    expect((await currentSession(x.auth, x.fixtureId, x.deps))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+    await flush();
+    const pre = rec2.calls.filter((c) => c.operation === "inputStatus");
+    expect(pre, "the expiry's pre-read, alone").toHaveLength(1);
+    expect(pre[0]!.sessionId).toBe(made.sessionId);
+    const released = rec2.calls.filter((c) => c.operation === "removeOutput");
+    expect(released, "the failure releases the output too").toHaveLength(1);
+    expect(released[0]!.sessionId).toBe(made.sessionId);
   });
 });

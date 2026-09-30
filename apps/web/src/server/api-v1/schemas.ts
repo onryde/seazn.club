@@ -1328,6 +1328,13 @@ export const StreamIngest = z.object({
   protocol: z.enum(["srt", "rtmps"]).nullable(),
 });
 export type StreamIngest = z.infer<typeof StreamIngest>;
+/** D3 (spec §5.6) — the destination's side of a passthrough broadcast: `since` is when the CURRENT state began, clamped
+ *  to go-live (the destination is not tried before it). `connecting` is still dialling, never ok. */
+export const StreamOutput = z.object({
+  state: z.enum(["ok", "connecting", "rejected", "unknown"]),
+  since: z.string(),
+});
+export type StreamOutput = z.infer<typeof StreamOutput>;
 
 export const StreamSessionCurrent = z
   .object({
@@ -1339,6 +1346,9 @@ export const StreamSessionCurrent = z
     failReason: StreamFailReason.nullable(),
     health: StreamHealth.nullable(),
     ingest: StreamIngest.nullable(),
+    /** D3: null for a composed session, and whenever the server's poll did not read the destination (not warming/live,
+     *  or the provider read failed) — never a default object. */
+    output: StreamOutput.nullable(),
     /** Present only while provisioning/warming and only when the slot row exists — else null, never a default object. */
     qr: CaptureQrV1.nullable(),
     balance: z.number().int(),

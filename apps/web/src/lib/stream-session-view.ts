@@ -37,6 +37,23 @@ export const STREAM_POLL_MS = 5_000;
 export const BEAT_STALE_SECONDS = 45;
 
 export type StreamSessionView = StreamSessionCurrent;
+
+/** D3 (owner 2026-09-30): how long a live stream's destination may be not-receiving before the panel warns. The stream
+ *  keeps running — a warning, never an ending; only `rejected` fails the session, and the server decides that. */
+export const OUTPUT_WARNING_AFTER_MS = 30_000;
+
+/** How long the destination has been in its current state, clamped at 0 — a server `since` ahead of the browser clock
+ *  (Review Focus 5) is "just now", never negative. Null when there is no output to judge. */
+export function outputElapsedMs(view: Pick<StreamSessionCurrent, "output">, now: Date): number | null {
+  if (!view.output) return null;
+  return Math.max(0, now.getTime() - Date.parse(view.output.since));
+}
+
+/** D3: live, the destination not `ok`, for at least OUTPUT_WARNING_AFTER_MS. */
+export function destinationWarning(view: Pick<StreamSessionCurrent, "state" | "output">, now: Date): boolean {
+  if (view.state !== "live" || !view.output || view.output.state === "ok") return false;
+  return (outputElapsedMs(view, now) ?? 0) >= OUTPUT_WARNING_AFTER_MS;
+}
 export type PhoneTabState = "idle" | "provisioning" | "warming" | "live" | "ending" | "ended" | "failed";
 
 export function phoneTabState(view: StreamSessionView | null): PhoneTabState {

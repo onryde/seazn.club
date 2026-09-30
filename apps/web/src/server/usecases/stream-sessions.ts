@@ -34,7 +34,7 @@ import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffe
 import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
-import { createFailureOf, createRefusedBeforeCall, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
+import { createFailureOf, createRefusedBeforeCall, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
@@ -478,7 +478,7 @@ export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: 
     // a guard, not an assumption — it is reported like any failed removal rather than silently marked released.
     const inputId = row.ingest_input_uid;
     if (!inputId) throw new Error("stream session: an output is recorded with no live input to remove it from");
-    await recordEffect(s, "release_output", site === "sweep" ? "sweep" : "output", () => deps.drivers.ingest.removeOutput(inputId, outputUid),
+    await recordEffect(s, "release_output", site === "sweep" ? "sweep" : "output", () => deps.drivers.ingest.removeOutput(inputId, outputUid, { sessionId }),
       { inputUid: inputId, outputUid, reason: site });
     await sql`update fixture_stream_sessions set output_released_at = coalesce(output_released_at, ${deps.now()}) where id = ${sessionId}`;
     return true;
@@ -525,7 +525,7 @@ async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): 
   if (!inputId) return false;
   let status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>;
   try {
-    status = await deps.drivers.ingest.inputStatus(inputId);
+    status = await deps.drivers.ingest.inputStatus(inputId, { sessionId });
   } catch (err) {
     reportIngestReadFailure(err, { sessionId, orgId: row.org_id, inputUid: inputId, site: "expiry" });
     return true;
@@ -613,7 +613,7 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
           return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id, tx))!.target_id) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
         if (inputId) {
-          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target), { inputUid: inputId });   // C9: exactly one, passthrough only
+          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target, { sessionId: current.id }), { inputUid: inputId });   // C9: exactly one, passthrough only
           // Dg: the slot-0 destination output's uid, beside ingest_input_uid (not a secret). The port
           // RETURNS it (Tasks 3/4); throwing that return away is what would leave the column inert.
           // coalesce so a re-run of an idempotent effect cannot move a recorded uid.
@@ -1267,6 +1267,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // The server-side ingest poll (design §6.4): passthrough warming → live on
   // connected; a rejected destination fails it. The client never decides.
   let ingestState: StreamSessionCurrent["ingest"] = null;
+  let outputObserved: OutputState | null = null;   // D3: what THIS poll read of the destination; null when it read nothing
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
@@ -1275,7 +1276,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     let read: { status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>; output: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["outputState"]>> } | null = null;
     if (inputId) {
       try {
-        read = { status: await deps.drivers.ingest.inputStatus(inputId), output: await deps.drivers.ingest.outputState(inputId) };
+        read = { status: await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id }), output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
       } catch (err) {
         reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
       }
@@ -1283,6 +1284,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     if (read) {
       const { status, output } = read;
       ingestState = { state: status.state, protocol: status.protocol };
+      outputObserved = output;
       // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed.
       const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
         select ingest_state, output_state from fixture_stream_samples where session_id = ${row.id} and source = 'poll' order by id desc limit 1`;
@@ -1355,10 +1357,30 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   const [spend] = await sql<{ net: number }[]>`
     select coalesce(sum(delta), 0)::int as net from org_stream_credits
      where org_id = ${row.org_id} and session_id = ${row.id} and reason in ('consume', 'refund')`;
+  // D3: `since` is the start of the trailing run of ingest_status events whose outputState equals the current one —
+  // the events the poll above already records on every change (Ruling 13) — CLAMPED to the session's `live_at`. The
+  // destination is not tried before the phone is live, and Cloudflare reads `unknown` (non-ok) all through warming,
+  // so an unclamped run would start the 30 s clock during warming and warn on the first live render (review #9). While
+  // live, `since` is therefore "non-ok while live". `greatest` ignores a null `live_at` (not live yet). Null for
+  // composed sessions and whenever this poll did not read the output.
+  let output: StreamSessionCurrent["output"] = null;
+  if (row.mode === "passthrough" && outputObserved !== null) {
+    const [first] = await sql<{ since: Date | null }[]>`
+      select greatest(
+        (select occurred_at from fixture_stream_events
+          where session_id = ${row.id} and type = 'ingest_status'
+            and seq > coalesce((select max(seq) from fixture_stream_events
+                                 where session_id = ${row.id} and type = 'ingest_status'
+                                   and payload->>'outputState' is distinct from ${outputObserved}), 0)
+          order by seq asc limit 1),
+        (select live_at from fixture_stream_sessions where id = ${row.id})
+      ) as since`;
+    output = { state: outputObserved, since: new Date(first?.since ?? deps.now()).toISOString() };
+  }
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
-    ingest: ingestState, qr,
+    ingest: ingestState, output, qr,
     balance: await creditBalance(sql, row.org_id),
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,

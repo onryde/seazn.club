@@ -27,7 +27,7 @@ import { runnerCreateErrorFrom } from "./runner-fly";  // …mapped onto the por
 import { NOOP_RECORDER } from "./ports";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallRecord,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecord,
   ProviderCallRecorder, RunnerHandle, RunnerListing,
   RunnerObservation, RunnerProvider, RunnerSpec, StorageUsage,
 } from "./ports";
@@ -35,6 +35,11 @@ import type {
 /** A destination whose stream KEY starts with this is refused by the fake "platform" — how a walkthrough drives
  *  `target_rejected` now that the ingest url is a server preset (D6) and no longer carries a "reject" host. */
 export const FAKE_REJECT_KEY_PREFIX = "reject-";
+
+/** D3 (spec §5.6): a destination whose stream KEY starts with this never accepts the output — the fake reads it
+ *  `unknown` until the input connects, then `connecting` for as long as it is asked, which is Cloudflare's shape for a
+ *  destination still dialling. How a walkthrough crosses go-live into the amber warning. */
+export const FAKE_CONNECTING_KEY_PREFIX = "connecting-";
 
 export const FAKE_CONNECT_AFTER_MS_DEFAULT = 3000;
 
@@ -116,13 +121,18 @@ export class FakeIngest implements IngestProvider {
     row.scripted = state;
   }
 
-  async inputStatus(inputId: string): Promise<IngestStatus> {
-    this.record("inputStatus", "GET", `/live_inputs/${inputId}`, [inputId], inputId);
+  /** The ONE connect rule (scripted state, else the clock), shared by `inputStatus` and `outputState` — the latter must
+   *  not call `inputStatus`, which would record a provider call nobody made and move every provider-call count. */
+  private stateOf(row: FakeInput | undefined, createdAt: number): IngestState {
+    return row?.scripted ?? (this.clock() - createdAt >= this.connectAfterMs ? "connected" : "disconnected");
+  }
+
+  async inputStatus(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestStatus> {
+    this.record("inputStatus", "GET", `/live_inputs/${inputId}`, [inputId], inputId, meta.sessionId ?? null);
     const row = this.inputs.get(inputId);
     const createdAt = row ? (row.deleted ? null : row.createdAt) : createdAtFromId(inputId);
     if (createdAt === null) return { state: "unknown", protocol: null, enteredAt: null, lastSeenAt: null, reason: null };
-    const state: IngestState =
-      row?.scripted ?? (this.clock() - createdAt >= this.connectAfterMs ? "connected" : "disconnected");
+    const state = this.stateOf(row, createdAt);
     const connected = state === "connected";
     const enteredAt = new Date(createdAt + this.connectAfterMs).toISOString();
     return {
@@ -137,8 +147,8 @@ export class FakeIngest implements IngestProvider {
     };
   }
 
-  async addOutput(inputId: string, target: IngestTarget): Promise<string> {
-    this.record("addOutput", "POST", `/live_inputs/${inputId}/outputs`, [inputId], inputId);
+  async addOutput(inputId: string, target: IngestTarget, meta: ProviderCallMeta = {}): Promise<string> {
+    this.record("addOutput", "POST", `/live_inputs/${inputId}/outputs`, [inputId], inputId, meta.sessionId ?? null);
     const row = this.inputs.get(inputId);
     if (!row) throw new Error(`FakeIngest.addOutput: unknown input ${inputId}`);
     row.outputs.push(target);
@@ -156,8 +166,8 @@ export class FakeIngest implements IngestProvider {
 
   /** C1: Cloudflare's "Delete an output". An output already gone (or an input the fake never made) is its 404 — success,
    *  and nothing changes. Only the named output leaves; its neighbours stay. */
-  async removeOutput(inputId: string, outputId: string): Promise<void> {
-    this.record("removeOutput", "DELETE", `/live_inputs/${inputId}/outputs/${outputId}`, [inputId, outputId], outputId);
+  async removeOutput(inputId: string, outputId: string, meta: ProviderCallMeta = {}): Promise<void> {
+    this.record("removeOutput", "DELETE", `/live_inputs/${inputId}/outputs/${outputId}`, [inputId, outputId], outputId, meta.sessionId ?? null);
     this.removedOutputs.push(outputId);
     const row = this.inputs.get(inputId);
     const i = row ? row.outputUids.indexOf(outputId) : -1;
@@ -183,11 +193,17 @@ export class FakeIngest implements IngestProvider {
     return n;
   }
 
-  async outputState(inputId: string): Promise<OutputState> {
-    this.record("outputState", "GET", `/live_inputs/${inputId}/outputs`, [inputId], inputId);
+  async outputState(inputId: string, meta: ProviderCallMeta = {}): Promise<OutputState> {
+    this.record("outputState", "GET", `/live_inputs/${inputId}/outputs`, [inputId], inputId, meta.sessionId ?? null);
     const row = this.inputs.get(inputId);
     if (!row || row.outputs.length === 0) return "unknown";
-    return row.outputs.some((o) => new URL(o.url).hostname.includes("reject") || o.streamKey.startsWith(FAKE_REJECT_KEY_PREFIX)) ? "rejected" : "ok";
+    if (row.outputs.some((o) => new URL(o.url).hostname.includes("reject") || o.streamKey.startsWith(FAKE_REJECT_KEY_PREFIX))) return "rejected";
+    // Cloudflare reports no output status before inbound video (ingest-cf.ts outputState): `unknown` until the input
+    // connects, then `connecting` for a destination that never accepts. The walkthrough then crosses go-live in the
+    // real shape, not a friendlier one.
+    if (row.outputs.some((o) => o.streamKey.startsWith(FAKE_CONNECTING_KEY_PREFIX)))
+      return !row.deleted && this.stateOf(row, row.createdAt) === "connected" ? "connecting" : "unknown";
+    return "ok";
   }
 
   async deleteInput(inputId: string): Promise<void> {

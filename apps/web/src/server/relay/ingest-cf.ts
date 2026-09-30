@@ -38,7 +38,7 @@ import { NOOP_RECORDER } from "./ports";
 import { redact } from "./sanitise";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallRecorder, StorageUsage,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
 } from "./ports";
 
 export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -235,11 +235,11 @@ export class CloudflareIngest implements IngestProvider {
     };
   }
 
-  async inputStatus(inputId: string): Promise<IngestStatus> {
+  async inputStatus(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestStatus> {
     const r = await this.call<{
       status?: { current?: { ingestProtocol?: string; state?: string; reason?: string | null; statusEnteredAt?: string; statusLastSeen?: string } } | null;
     }>("GET", `/live_inputs/${encodeURIComponent(inputId)}`, undefined,
-      { operation: "inputStatus", ids: [inputId], subjectId: inputId });
+      { operation: "inputStatus", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404) return { state: "unknown", protocol: null, enteredAt: null, lastSeenAt: null, reason: null };
     if (!r.json.success || !r.json.result) this.fail("input status", r);
     const cur = r.json.result.status?.current;
@@ -256,20 +256,28 @@ export class CloudflareIngest implements IngestProvider {
   /** Dg: returns the created output's uid — Task 10 persists it as
    *  sessions.output_uid. The output object carries only uid/url/streamKey/
    *  enabled, so there is no error code here to capture. */
-  async addOutput(inputId: string, target: IngestTarget): Promise<string> {
+  async addOutput(inputId: string, target: IngestTarget, meta: ProviderCallMeta = {}): Promise<string> {
     const r = await this.call<{ uid: string }>("POST", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, {
       url: target.url, streamKey: target.streamKey, enabled: true,
-    }, { operation: "addOutput", ids: [inputId], subjectId: inputId });
+    }, { operation: "addOutput", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     // Review I4: the body carried the organiser's real destination stream key, so the refusal is redacted against
     // THAT value as well as the account token. This is the one call in the adapter that sends a secret.
     if (!r.json.success || !r.json.result) this.fail("add output", r, [target.streamKey]);
     return r.json.result.uid;
   }
 
-  async outputState(inputId: string): Promise<OutputState> {
+  /** D3 (spec §5.6). The words are the plan's rule, NOT a documented enum: Cloudflare's OpenAPI (fetched 2026-09-30, the
+   *  Cloudflare MCP `search` over `spec.paths`, `GET /accounts/{account_id}/stream/live_inputs/{live_input_identifier}/
+   *  outputs`) documents an output as `{enabled, streamKey, uid, url}` and NO `status` at all; the only connection enum
+   *  it documents is the live INPUT's `status` (`connected`, `reconnected`, `reconnecting`, `client_disconnect`,
+   *  `ttl_exceeded`, `failed_to_connect`, `failed_to_reconnect`, `new_configuration_accepted`), and the docs search finds
+   *  no output-status vocabulary either. Staging round 1 recorded only the adapter's mapped `ok`, never the raw word.
+   *  So: `error` → rejected; any `connecting`/`reconnecting` → connecting; every output `connected` → ok; anything else
+   *  (none, or a word this code has never seen) → unknown — an unseen word is never read as a healthy destination. */
+  async outputState(inputId: string, meta: ProviderCallMeta = {}): Promise<OutputState> {
     const r = await this.call<{ enabled?: boolean; status?: { current?: { state?: string } } | null }[]>(
       "GET", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, undefined,
-      { operation: "outputState", ids: [inputId], subjectId: inputId },
+      { operation: "outputState", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null },
     );
     // A failed envelope's body is not authoritative, and a missing array is not
     // an empty one. An EMPTY array needs no clause of its own: it yields no
@@ -283,8 +291,13 @@ export class CloudflareIngest implements IngestProvider {
     // all: its `status.current.state` cannot move before inbound video. "ok"
     // there would be a positive claim about something never observed, and Task
     // 10 writes this answer straight into fixture_stream_samples.output_state.
-    // Absent evidence is `unknown` — the port has the word for it (ports.ts:33).
-    return states.length === 0 ? "unknown" : "ok";
+    // Absent evidence is `unknown` — the port has the word for it (ports.ts OutputState).
+    if (states.length === 0) return "unknown";
+    // D3 (spec §5.6; staging round 1, 2026-09-30): a present, non-error state is NOT "ok". An output still dialling — or
+    // re-dialling — the destination reads `connecting`/`reconnecting`; the panel said Live while YouTube received nothing
+    // because this returned "ok" for them.
+    if (states.some((s) => s === "connecting" || s === "reconnecting")) return "connecting";
+    return states.every((s) => s === "connected") ? "ok" : "unknown";
   }
 
   /** C1 (lane C final review): "Delete an output" — `DELETE /accounts/{account_id}/stream/live_inputs/{live_input_
@@ -294,9 +307,9 @@ export class CloudflareIngest implements IngestProvider {
    *  whose documented success is HTTP 200 with the body `{}` — no `success` envelope, so a 2xx is success on its own
    *  (the DELETE tolerance below, I-3). A 404 is an output already gone: success, so every retry (the daily sweep, the
    *  next admission on the destination) is idempotent. The subject is the OUTPUT — the object the call is about. */
-  async removeOutput(inputId: string, outputId: string): Promise<void> {
+  async removeOutput(inputId: string, outputId: string, meta: ProviderCallMeta = {}): Promise<void> {
     const r = await this.call("DELETE", `/live_inputs/${encodeURIComponent(inputId)}/outputs/${encodeURIComponent(outputId)}`, undefined,
-      { operation: "removeOutput", ids: [inputId, outputId], subjectId: outputId });
+      { operation: "removeOutput", ids: [inputId, outputId], subjectId: outputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
     this.fail("remove output", r);
   }
