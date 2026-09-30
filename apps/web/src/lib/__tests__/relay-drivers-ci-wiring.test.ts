@@ -141,6 +141,9 @@ describe("R5: every production server a streaming suite boots runs the fake rela
       expect(boot).toMatch(/RELAY_DRIVERS="\$\{RELAY_DRIVERS:-fake\}"/);
       expect(boot).toMatch(/\bENV_NAME=ci\b/);
       expect(FAKE_DRIVER_ENV_NAMES).toContain("ci");
+      // PR #904: like CI, a per-run generated KEK (never a literal) and the walkthrough's fake connect delay.
+      expect(boot).toMatch(/RELAY_KEK="\$\{RELAY_KEK:-\$\(openssl rand -hex 32\)\}"/);
+      expect(boot).toMatch(/FAKE_INGEST_CONNECT_AFTER_MS="\$\{FAKE_INGEST_CONNECT_AFTER_MS:-\d+\}"/);
     }
   });
 });
