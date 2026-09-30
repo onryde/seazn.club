@@ -361,7 +361,9 @@ This closes the NULL `session_id` seen on staging for `removeOutput`.
   min(viewport width, viewport height) − 2 × 16 px and the caption "Turn up brightness if it won't scan"; it holds a
   Screen Wake Lock while open (feature-detected; a missing API or refused request never throws or blocks) and releases
   it on close; any tap, a 44 px ✕ or Esc closes it and focus returns to the QR. The real-phone gate covers the normal
-  and the enlarged size.
+  and the enlarged size. A QR that paints a secret (the stream capture QR, the Remote scoring QR) keeps `ph-no-capture`
+  on both the inline image and the enlarged overlay, which is a portal outside any blocked ancestor, so PostHog replay
+  never records it (device-link-panel.tsx:238-243).
 - **A follow-up PR** moves the remaining six call sites: `(public)/r/[ref]/page.tsx`, `ticket.png`, the poster page
   and its PDF, `doc-theme.ts`, and `copy-link.tsx`.
 

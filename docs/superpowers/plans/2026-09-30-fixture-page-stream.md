@@ -37,9 +37,9 @@ per task**, in task order, so each commit stays bisectable and each task's own g
 
 | Batch | Tasks | Boundary gate (the orchestrator re-runs it, scoped) |
 |---|---|---|
-| B1 | T1 + T2a + T2b | T1, T2a and T2b scope commands; T2a Step 8's walkthroughs, whole; `SMOKE_ONLY=streamTargets` |
+| B1 | T1 + T2a + T2b | T1, T2a and T2b scope commands (with `scripts/__tests__/smoke-select.test.ts`); T2a Step 8's walkthroughs, whole; `SMOKE_ONLY=streamTargets` |
 | B2 | T3 + T4 | T3 and T4 scope commands, then the **Wave S gate** (end of T4) |
-| B3 | T5 + T6 | T5 Step 19 and T6 Step 6 (walkthroughs and e2e whole) |
+| B3 | T5 + T6 | the **Wave P gate** (T5 Step 13's and T6 Step 6's unit lists together), then T5 Step 19, then T6 Step 6 (walkthroughs and e2e whole) |
 | B4 | T7 + T8 | the Wave D gate (end of T8) |
 | B5 | T9a + T9b | T9a Step 5 and T9b Step 6, including `mobile.spec.ts` whole; T9b's screenshots |
 | B6 | T10 | T10 Step 4, then the owner's real-phone STOP (Step 6) |
@@ -262,6 +262,8 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
 | `apps/web/src/components/v2/stream-session-provider.tsx` | one `usePhoneSession` poller shared by button dot + panel | T9b |
 | `apps/web/src/lib/seazn-qr.ts` | `seaznQrLayout`, `seaznQrSvg`, `renderSeaznQr` | T10 |
 | `apps/web/src/lib/qr-enlarge.ts` | D10: `enlargedQrSize`, `holdScreenWakeLock` | T10 |
+| `scripts/smoke-select.ts` + `scripts/__tests__/smoke-select.test.ts` | pure `selectSmokeSuites` (SMOKE_ONLY) and its contract test | T2b |
+| `apps/web/e2e/helpers/qr-enlarge.ts` | `expectQrEnlarges` — the D10 call-site witness | T10 |
 | `apps/web/src/components/v2/seazn-qr-image.tsx` | D10: `SeaznQrImage` (tap to enlarge overlay) | T10 |
 
 **Modified:**
@@ -285,11 +287,11 @@ These were re-pinned against `origin/main` 770bdca07 on 2026-09-30. Each item sa
 | `apps/web/src/components/v2/desk/run-sheet-row.tsx`, `desk/run-sheet.tsx`, `stages-panel.tsx` | toggle and panel become the chip | T6 |
 | `apps/web/src/app/directory/page.tsx` | `streaming` tab | T7 |
 | `apps/web/src/components/v2/device-link-panel.tsx`, `checkin-qr.tsx` | `renderSeaznQr`, `SeaznQrImage` | T10 |
-| `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` | §8a `QR size` and `QR encoding` rows, dated amendment (D7) | T10 |
+| `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` | §8a `QR size` and `QR encoding` rows, dated amendment (D7), with the fixture page's own 320-wide figure | T10 |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` + generated `lib/i18n-keys.ts` | keys per task | T3, T5–T9b |
 | `apps/web/e2e/walkthrough/stream-relay.spec.ts`, `stream-credits.spec.ts`, `e2e/stream-overlay.spec.ts`, `e2e/mobile.spec.ts` | fixture-page helpers, twin checks | T2a, T5, T6, T8, T9b |
 | `apps/web/src/lib/__tests__/e2e-ci-wiring.test.ts` | registers the new walkthrough | T7 |
-| `scripts/smoke.ts` | `streamTargetsSuite` and the `SMOKE_ONLY` suite filter; stream-twin presence (in `v1Suite`) | T2b, T5 |
+| `scripts/smoke.ts` | `streamTargetsSuite`; the `SELECTABLE_SUITES` registry, `subsetSetup`/`runSubset` and the `SMOKE_ONLY` entry; stream-twin presence (in `v1Suite`) | T2b, T5 |
 | `docs/superpowers/specs/2026-09-02-scorepad-v3-phone-composition-design.md`, `AGENTS.md` | dated "two duplicated controls" amendment | T5 |
 
 ---
@@ -1290,7 +1292,10 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
   - append `expireTargetHolders`.
 - Modify: `apps/web/src/server/api-v1/openapi.ts:223-224` (two ROUTES rows) and `ERROR_SCHEMA_OVERRIDES` :641
 - Modify: `apps/web/src/server/api-v1/key-scopes.ts:341-342` (two entries)
-- Modify: `scripts/smoke.ts` (new `streamTargetsSuite`, registered where the stream suites are registered)
+- Modify: `scripts/smoke.ts` (new `streamTargetsSuite`, called in `main()` after `streamOverlaySuite`; the
+  `SELECTABLE_SUITES` registry, `subsetSetup`, `runSubset` and the selected entry point)
+- Create: `scripts/smoke-select.ts` (`selectSmokeSuites`, `SmokeSelectionError`)
+- Test (new): `scripts/__tests__/smoke-select.test.ts`
 - Test: `apps/web/src/server/usecases/__tests__/stream-targets.test.ts` (PATCH and DELETE cases; the row lock from
   Remove's and Replace key's side)
 - Test: `apps/web/src/server/usecases/__tests__/stream-sessions.test.ts` (archived refused; the lock test from Go
@@ -1417,20 +1422,25 @@ Expected: EXIT=0, with the passed count equal to the file's test count. Paste th
         locked();
         await held;
       });
-      await lockTaken;
-      let settled = false;
-      const write = (op === "remove"
-        ? removeStreamTarget(r.auth, r.auth.orgId, r.targetId)
-        : patchStreamTarget(r.auth, r.auth.orgId, r.targetId, { streamKey: `k-${randomUUID()}` })
-      ).finally(() => { settled = true; });
-      write.catch(() => {});                                   // observed below; no unhandled rejection meanwhile
-      await new Promise((res) => setTimeout(res, 300));
-      expect(settled, `${op} did not wait on the target row lock`).toBe(false);
-      release();
-      await goLive;
-      // Under READ COMMITTED the waiter re-reads after A commits: the session A wrote is now the holder.
-      await expect(write, op).rejects.toMatchObject({ status: 409, code: "TARGET_IN_USE" });
-      checked++;
+      try {
+        await lockTaken;
+        let settled = false;
+        const write = (op === "remove"
+          ? removeStreamTarget(r.auth, r.auth.orgId, r.targetId)
+          : patchStreamTarget(r.auth, r.auth.orgId, r.targetId, { streamKey: `k-${randomUUID()}` })
+        ).finally(() => { settled = true; });
+        write.catch(() => {});                                 // observed below; no unhandled rejection meanwhile
+        await new Promise((res) => setTimeout(res, 300));
+        expect(settled, `${op} did not wait on the target row lock`).toBe(false);
+        release();
+        await goLive;
+        // Under READ COMMITTED the waiter re-reads after A commits: the session A wrote is now the holder.
+        await expect(write, op).rejects.toMatchObject({ status: 409, code: "TARGET_IN_USE" });
+        checked++;
+      } finally {
+        release();                                             // a red above must not leave tx A holding the lock
+        await goLive.catch(() => {});                          // …or its pooled connection, until teardown times out
+      }
     }
     expect(checked).toBe(2);
   });
@@ -1475,15 +1485,21 @@ Append to `stream-sessions.test.ts`, beside the G-T6 race test (:2973), and reus
       await held;
       await archiveStreamTarget(tx, r.auth.orgId, r.target.id);
     });
-    await lockTaken;
-    let settled = false;
-    const start = createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)
-      .finally(() => { settled = true; });
-    await new Promise((res) => setTimeout(res, 300));
-    expect(settled, "createSession did not wait on the target row lock").toBe(false);
-    release();
-    await holder;
-    await expect(start).rejects.toMatchObject({ status: 404, message: "stream target not found" });
+    try {
+      await lockTaken;
+      let settled = false;
+      const start = createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)
+        .finally(() => { settled = true; });
+      start.catch(() => {});                                 // observed below; no unhandled rejection meanwhile
+      await new Promise((res) => setTimeout(res, 300));
+      expect(settled, "createSession did not wait on the target row lock").toBe(false);
+      release();
+      await holder;
+      await expect(start).rejects.toMatchObject({ status: 404, message: "stream target not found" });
+    } finally {
+      release();                                             // a red above must not leave the holder tx open
+      await holder.catch(() => {});
+    }
   });
 ```
 
@@ -1738,8 +1754,10 @@ const STREAM_TARGET_WRITE_409 = scopedErrorEnvelope({
   "DELETE /orgs/:id/stream-targets/:targetId",
 ```
 
-`scripts/smoke.ts`: add `streamTargetsSuite`, next to `streamOverlaySuite` (:18468) and registered in the same suite
-list. Model its fetch helpers on that suite. The suite:
+`scripts/smoke.ts`: add `async function streamTargetsSuite(admin: Session, orgId: string)` beside
+`streamOverlaySuite` (:18468), and call it from `main()` right after `await streamOverlaySuite();` (:903) as
+`await streamTargetsSuite(admin, org2.id);` (org2 is the shared Pro org; the suite archives everything it creates).
+Model its fetch helpers on that suite. The suite:
 1. POST `{kind:"twitch", label:"smoke-tw", streamKey:"live_1_" + 24 random alphanumerics}` gives 201 with
    `keyHint === key.slice(-3)` and `inUse === null`.
 2. PATCH `{label:"smoke-tw-2"}` gives 200 with the label.
@@ -1749,23 +1767,151 @@ list. Model its fetch helpers on that suite. The suite:
 6. POST the same key gives 201 with **the same id** (restored).
 7. DELETE (cleanup).
 
-Each step asserts its status, and the suite counts its steps and fails on fewer than 7. `scripts/smoke.ts` has no
-suite filter (its suites run as sequential awaits, :903), and a full local smoke run breaks the owner's 2026-09-28
-scoped-run rule. So:
-- add an env-gated filter to the runner in this task: when `SMOKE_ONLY` is set (a comma list of suite names, each a
-  suite function's name without its `Suite` suffix: `streamTargets`, `v1`), the runner runs only its setup plus the
-  named suites and prints `ran N suite(s)`, and an unknown name fails the run rather than running nothing; unset, it runs everything as today,
-  so CI is unchanged. Model the switch on how the runner already skips a suite (read the top of `smoke.ts`);
-- run just this suite: `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && SMOKE_ONLY=streamTargets pnpm test:smoke`
-  against the local prod server. Expected: exit 0, `ran 1 suite(s)`, and the suite's own "7 steps" line;
-- mutate the filter once (ignore `SMOKE_ONLY`) and confirm the run then prints more than one suite. That is the
-  filter's own witness; zero suites run is a failure, never a pass.
-The full smoke is CI's, and runs on this branch's PR.
+Each step asserts its status, and the suite counts its steps and fails on fewer than 7.
+
+**Running one suite without a full local smoke (review R1).** `scripts/smoke.ts` has NO suite filter and no skip
+mechanism today (the only `SMOKE_*` variable is `SMOKE_BASE`, :51). `main()` (:177) interleaves inline checks with 81
+`await …Suite(…)` calls that share `admin`, `org` and `org2`, so "skip the other suites" is not a meaningful switch
+inside it. The filter therefore does NOT touch `main()`; it adds a second, explicit entry point beside it:
+
+1. A pure selector, `scripts/smoke-select.ts`:
+
+```ts
+// scripts/smoke-select.ts — which smoke suites a run executes. Pure, so its contract is unit-tested
+// (scripts/__tests__/smoke-select.test.ts) rather than witnessed by a full local smoke run.
+export type SmokeSelection = { mode: "all" } | { mode: "subset"; names: readonly string[] };
+
+export class SmokeSelectionError extends Error {}
+
+/** `raw` is `process.env.SMOKE_ONLY`. UNSET is the default and means `main()` runs exactly as before — CI never sets
+ *  it, so CI's smoke is unchanged. SET means "only these": a set-but-empty value, a list of only commas, or any name
+ *  outside `known` fails loudly rather than running fewer suites than the caller believes. */
+export function selectSmokeSuites(known: readonly string[], raw: string | undefined): SmokeSelection {
+  if (raw === undefined) return { mode: "all" };
+  const names = [...new Set(raw.split(",").map((s) => s.trim()).filter((s) => s !== ""))];
+  if (names.length === 0) {
+    throw new SmokeSelectionError(`SMOKE_ONLY is set but names no suite (${JSON.stringify(raw)}); unset it to run everything`);
+  }
+  const unknown = names.filter((n) => !known.includes(n));
+  if (unknown.length > 0) {
+    throw new SmokeSelectionError(`SMOKE_ONLY names unknown suite(s): ${unknown.join(", ")}. Selectable: ${known.join(", ")}`);
+  }
+  return { mode: "subset", names };
+}
+```
+
+2. In `smoke.ts`, a registry of the suites that may run alone, and one explicit subset setup. **"Setup" for a subset
+   is exactly the state the registered suites read, reproduced from `main()`'s own calls, and nothing else:** the
+   admin sign-in (:177-179: `newSession()` + `signIn(admin, …)`), the plan bump that lets that owner create a second
+   org (:383: `setPlan(org.id, "pro", admin)`), `org2`'s create and rename (:386-399), and the shared org's public
+   dashboard headroom (:721: `insertEntitlementOverride(admin, org2.id, "dashboard.public.max", 100)`). Every inline
+   check in `main()` and every unregistered suite is skipped under a subset — that is the point, and the run says so.
+
+```ts
+type SubsetCtx = { admin: Session; org2Id: string; org2Slug: string };
+
+/** Suites that may run alone under SMOKE_ONLY (name = the function name without `Suite`). Add a suite here only if it
+ *  needs nothing beyond SubsetCtx. */
+const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
+  streamTargets: (c) => streamTargetsSuite(c.admin, c.org2Id),
+  v1: (c) => v1Suite(c.admin, c.org2Id, c.org2Slug),
+};
+
+/** The subset's setup: the same calls main() makes for this state, in main()'s order (see the lines cited above). */
+async function subsetSetup(): Promise<SubsetCtx> {
+  const admin = newSession();
+  const ver = await signIn(admin, `delivered+admin_${tag}@resend.dev`);
+  check("subset setup: admin signed in", !!admin.cookies["seazn_session"]);
+  await setPlan(ver.org_id, "pro", admin);
+  const org2 = (await call(admin, "/api/orgs", "POST", { name: `Second Org ${tag}` })) as { id: string; slug: string };
+  const renamed = (await call(admin, `/api/orgs/${org2.id}`, "PATCH", { name: `Renamed Org ${tag}` })) as { slug: string };
+  check("subset setup: org2 created and renamed", !!org2.id && !!renamed.slug);
+  await insertEntitlementOverride(admin, org2.id, "dashboard.public.max", 100);
+  return { admin, org2Id: org2.id, org2Slug: renamed.slug };
+}
+
+async function runSubset(names: readonly string[]): Promise<void> {
+  const ctx = await subsetSetup();
+  for (const n of names) await SELECTABLE_SUITES[n]!(ctx);
+  console.log(`SMOKE_ONLY: ran ${names.length} suite(s): ${names.join(", ")} — main()'s inline checks and every other suite were skipped`);
+}
+```
+
+   The entry at the bottom (:20259) becomes:
+
+```ts
+const selection = selectSmokeSuites(Object.keys(SELECTABLE_SUITES), process.env.SMOKE_ONLY);
+(selection.mode === "all" ? main() : runSubset(selection.names))
+  .then(async () => { /* unchanged: cleanup(tag), the pass/fail line, the exit code */ })
+  .catch(async (e) => { /* unchanged */ });
+```
+
+   A `SmokeSelectionError` thrown by the selector happens before any request, exits 1, and prints the message (wrap
+   the `selectSmokeSuites` call so it logs and `process.exit(1)`s). `cleanup(tag)` runs after a subset exactly as
+   after `main()`; its audit conjunct needs at least one staff-audit row from this run, which the setup's `setPlan`
+   writes (read `setPlan` to confirm; if it does not, that conjunct reds under a subset and the fix is in
+   `subsetSetup`, never in the conjunct). Import the selector as `./smoke-select.ts` (bare `node
+   --experimental-strip-types`, no alias).
+
+3. `scripts/__tests__/smoke-select.test.ts` (run like its siblings: from the repo root,
+   `./packages/engine/node_modules/.bin/vitest run scripts/__tests__/smoke-select.test.ts`, as ci.yml:755 does), on the
+   model of `smoke-db-shard-partition.test.ts`:
+
+```ts
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { SmokeSelectionError, selectSmokeSuites } from "../smoke-select.ts";
+
+const KNOWN = ["streamTargets", "v1"] as const;
+
+describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
+  it("UNSET means run everything, and unset is the default: CI never sets SMOKE_ONLY, so CI's smoke is unchanged", () => {
+    expect(selectSmokeSuites(KNOWN, undefined)).toEqual({ mode: "all" });
+    const workflows = ["ci.yml", "e2e.yml"].map((f) => readFileSync(join(import.meta.dirname, "..", "..", ".github", "workflows", f), "utf8"));
+    expect(workflows.length).toBe(2);
+    for (const w of workflows) expect(w).not.toContain("SMOKE_ONLY");
+  });
+  it("a named subset returns exactly those names, in the given order, de-duplicated and trimmed", () => {
+    expect(selectSmokeSuites(KNOWN, "streamTargets")).toEqual({ mode: "subset", names: ["streamTargets"] });
+    expect(selectSmokeSuites(KNOWN, " v1 ,streamTargets,v1")).toEqual({ mode: "subset", names: ["v1", "streamTargets"] });
+  });
+  it("an UNKNOWN name fails loudly, naming it and the selectable list — never a silently shorter run", () => {
+    expect(() => selectSmokeSuites(KNOWN, "streamTargets,streamTarget")).toThrow(SmokeSelectionError);
+    expect(() => selectSmokeSuites(KNOWN, "streamTargets,streamTarget")).toThrow(/streamTarget\b.*Selectable: streamTargets, v1/);
+  });
+  it("ZERO matched is a failure: set-but-empty, whitespace, and commas only", () => {
+    let checked = 0;
+    for (const raw of ["", "   ", ",", " , ,"]) {
+      expect(() => selectSmokeSuites(KNOWN, raw), JSON.stringify(raw)).toThrow(SmokeSelectionError);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+  it("the registry smoke.ts passes in is the one this test assumes", () => {
+    const src = readFileSync(join(import.meta.dirname, "..", "smoke.ts"), "utf8");
+    const block = /const SELECTABLE_SUITES[^=]*=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+    expect(names).toEqual([...KNOWN]);
+  });
+});
+```
+
+Mutants, each run against THIS unit test only (never a smoke run): `raw === undefined` returning a subset of `[]`
+(red: "UNSET means run everything"); the unknown-name check deleted (red: "an UNKNOWN name fails loudly"); the
+`names.length === 0` check deleted (red: "ZERO matched").
+
+Then run just the new suite against the local prod server:
+`cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && SMOKE_ONLY=streamTargets pnpm test:smoke`.
+Expected: exit 0, the `SMOKE_ONLY: ran 1 suite(s): streamTargets` line, the suite's own "7 steps" line, and the
+`N passed, 0 failed` line. The full smoke is CI's, and runs on this branch's PR.
 
 - [ ] **Step 5: Run T2b's scope.** Use the Step 3 command, plus `src/server/api-v1/__tests__/key-scopes.test.ts`,
   `src/server/api-v1/__tests__/openapi-coverage.test.ts`, `src/server/api-v1/__tests__/openapi-published.test.ts`,
   `src/server/usecases/__tests__/api-key-scopes.test.ts` and `src/server/relay/__tests__/enc-boundary.test.ts`.
-  Expected: `f: 0`, and every file is collected.
+  Expected: `f: 0`, and every file is collected. Then the selector's unit test, from the repo root:
+  `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && rm -f /tmp/fs-smoke-select.json && ./packages/engine/node_modules/.bin/vitest run scripts/__tests__/smoke-select.test.ts --reporter=json --outputFile=/tmp/fs-smoke-select.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/fs-smoke-select.json`.
+  Expected: 5 of 5, and the one file listed.
 
 - [ ] **Step 6: Mutate once each.**
   - `removeStreamTarget`: the `holderRows` check deleted. Red: "REFUSED 409 TARGET_IN_USE in EVERY active state".
@@ -1890,6 +2036,12 @@ Then update the existing cases at :222-250 to the new shape, keeping every negat
   `toBe("Club channel is live on Match 4 · Court 3. Stop it there or pick another destination.")`, still with the
   `toContain` and `not.toMatch(/[{}]/)` lines. The court-without-match and null-holder rows both expect
   `msg("stream.error.target_in_use.unknown")`. The loop over the other codes is unchanged.
+- `fixture-stream-panel.test.tsx:1115-1123` (D12) reads the retired key and the old holder shape too, and reds at
+  Step 5 otherwise. Its `named` row feeds a FULL holder
+  (`{ courtName: "Court 3", label: "Club channel", matchNo: 4, href: "/x", state: "live" }`) and expects
+  `m("stream.inUse.live", { label: "Club channel", match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 4 }), court: "Court 3" }) })`;
+  the `holder: null` row expects `m("stream.error.target_in_use.unknown")` (unchanged); the storage_exhausted row and
+  the empty case are kept. Retitle it "target_in_use NAMES the match and court (D12, spec §5.5)".
 
 - [ ] **Step 2: Run and confirm red.**
 
@@ -2008,7 +2160,8 @@ Dictionary keys (flat, beside the existing `stream.error.*`):
 
 Then run `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && pnpm i18n:gen-keys && pnpm i18n:check`.
 
-- [ ] **Step 5: Run T3's scope.** Use the Step 2 command, plus
+- [ ] **Step 5: Run T3's scope.** Use the Step 2 command (its `fixture-stream-panel.test.tsx` D12 case updated in
+  Step 1), plus
   `"src/app/api/v1/fixtures/[id]/stream-sessions/__tests__/routes.test.ts"` (wire ⊆ spec for the enriched holder),
   `src/components/v2/__tests__/fixture-stream-panel.test.tsx` and
   `src/server/api-v1/__tests__/openapi-published.test.ts`. Expected: `f: 0`.
@@ -4758,12 +4911,15 @@ en `OBS overlay`, es `Superposición OBS`, fr `Incrustation OBS`, nl `OBS-overla
 - Modify: `apps/web/src/components/v2/checkin-qr.tsx:27` and :67 (the img through `SeaznQrImage`)
 - Modify: `docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md` §8a, the `QR size` (:961) and
   `QR encoding` (:962) rows (dated amendment citing spec 2026-09-30 D7)
-- Modify: dictionaries (`qr.tapToEnlarge`, `qr.enlarged.name`, `qr.enlarged.brightness`, `qr.enlarged.close`) + gen-keys
+- Modify: dictionaries (`qr.tapToEnlarge`, `qr.enlarge`, `qr.enlarged.name`, `qr.enlarged.brightness`, `qr.enlarged.close`) + gen-keys
+- Create: `apps/web/e2e/helpers/qr-enlarge.ts` (`expectQrEnlarges`)
+- Modify (e2e): `apps/web/e2e/walkthrough/scorer-sheets-handover-panel.spec.ts` (the Remote scoring QR enlarges)
 - Test (new): `apps/web/src/lib/__tests__/seazn-qr.test.ts`, `apps/web/src/lib/__tests__/qr-enlarge.test.ts`,
   `apps/web/src/components/v2/__tests__/seazn-qr-image.test.tsx`
 - Test: `fixture-stream-panel.test.tsx` (its `qrcode` mock now mocks `@/lib/seazn-qr`; :66 import, :1130 size pin and
   :1871-1878 encoding pin rewritten against the amended sheet), `device-link-panel.test.tsx` (same mock change)
-- Test (e2e): `apps/web/e2e/walkthrough/stream-relay.spec.ts` (painted QR width; tap to enlarge at 320 and 1280)
+- Test (e2e): `apps/web/e2e/walkthrough/stream-relay.spec.ts` (painted QR width; the stream and check-in QRs enlarge,
+  at 320×568, 568×320 and 1280×800), `scorer-sheets-handover-panel.spec.ts` (the Remote scoring QR enlarges)
 
 **Interfaces:**
 - Produces:
@@ -4777,11 +4933,14 @@ en `OBS overlay`, es `Superposición OBS`, fr `Incrustation OBS`, nl `OBS-overla
     (= `max(0, min(vw, vh) − 2 × QR_ENLARGE_GUTTER_PX)`); `holdScreenWakeLock(nav): () => void` (requests a screen
     wake lock if the API exists; the returned disposer releases it, including one that resolves after the dispose;
     never throws, never rejects).
-  - D10 (`components/v2/seazn-qr-image.tsx`): `SeaznQrImage({src, alt, testId, className?, width?, height?})`. It
-    renders `<button data-testid="{testId}-enlarge" aria-haspopup="dialog">` around the `<img data-testid={testId}>`,
-    the caption "Tap to enlarge", and, when open, a portal overlay `data-testid="qr-enlarged"` (`role="dialog"`,
-    `aria-modal="true"`, `aria-label` = `qr.enlarged.name`) holding `qr-enlarged-img`, the brightness caption and a
-    44 px ✕ `qr-enlarged-close`.
+  - D10 (`components/v2/seazn-qr-image.tsx`): `SeaznQrImage({src, alt, testId, sensitive, className?, width?, height?})`
+    — `sensitive` is REQUIRED. It renders `<button data-testid="{testId}-enlarge" aria-haspopup="dialog"
+    aria-label="Enlarge QR code">` around the `<img data-testid={testId}>`, the caption "Tap to enlarge", and, when
+    open, a portal overlay. Exported pure parts: `QR_NO_CAPTURE`, `qrCaptureClass(sensitive)`, and the effect-free
+    `QrEnlargedView({src, alt, sensitive, size, label, closeLabel, caption, onClose, closeRef?})` —
+    `data-testid="qr-enlarged"` (`role="dialog"`, `aria-modal="true"`, an accessible name) holding `qr-enlarged-img`,
+    the brightness caption and a 44 px ✕ `qr-enlarged-close`. When `sensitive`, the inline img, the overlay root and
+    the enlarged img all carry `ph-no-capture`.
 
 - [ ] **Step 1: Write the failing test** — `apps/web/src/lib/__tests__/seazn-qr.test.ts`. It uses `jsqr` and `sharp`,
   as `src/server/__tests__/_sheet-raster.ts` does:
@@ -4848,7 +5007,7 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
     // The stream QR's three measured sizes are the amended _THEMES.md §8a `QR size` row's (1280, 320, 320 @ 125 %).
     const row = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"))!;
     const streamPx = [...row.matchAll(/\*\*(\d+) CSS px at/g)].map((m) => Number(m[1]));
-    expect(streamPx).toHaveLength(3);
+    expect(streamPx.length).toBeGreaterThanOrEqual(3);                   // 1280, 320, 320 @ 125 % — more if Step 3a adds
     // Remote scoring and check-in: the display size their own components declare.
     const dlinkPx = 4 * Number(/dlink\.alt[^>]*\bw-(\d+)\b/.exec(readFileSync(DLINK_PANEL_PATH, "utf8"))![1]);
     const checkinPx = Number(/checkinQr\.alt[\s\S]{0,200}?width=\{(\d+)\}/.exec(readFileSync(CHECKIN_PATH, "utf8"))![1]);
@@ -4865,7 +5024,7 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
       expect(await decode(seaznQrSvg(text, { size: px, logoHref: LOGO }), px), `${name} @ ${px}px`).toBe(text);
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(streamPx.length + 2 + enlarged.length);
   });
 });
 ```
@@ -5004,12 +5163,22 @@ string"): assert that `renderSeaznQr` was called with the payload and `{ size: 6
     the component against the AMENDED sheet (neither is deleted):
 
 ```ts
-    // :1130 — the img's width is the sheet's rule, read from the row, not typed here
+    // :1126-1130 — the QR is now a <SeaznQrImage> element (renderIsland does not expand it): find it by type and
+    // `testId` prop, never by data-testid, and pin its props. The width is the sheet's rule, read from the row.
+    const qrEl = walk(tree).find((el) => el.type === SeaznQrImage && propsOf(el).testId === "stream-qr");
+    expect(qrEl, "the Waiting state renders the stream QR through SeaznQrImage").toBeDefined();
+    expect(byTestId(tree, "stream-qr"), "no bare img bypasses the component").toBeUndefined();
+    expect(propsOf(qrEl!).src).toBe("data:image/png;base64,AAAA");
+    expect(propsOf(qrEl!).alt).toBe(m("stream.phone.qr.alt"));
+    expect(propsOf(qrEl!).sensitive).toBe(true);
     const sizeRow = readFileSync(SHEET_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"))!;
     const cap = /min\((\d+)px, available\)/.exec(sizeRow)![1];
     expect(Number(cap)).toBeGreaterThanOrEqual(320);                       // spec §7's floor on desktop
-    expect(String(attr(img, "className"))).toContain(`w-[min(${cap}px,100%)]`);
+    expect(String(propsOf(qrEl!).className)).toContain(`w-[min(${cap}px,100%)]`);
 ```
+
+The old `const img = byTestId(tree, "stream-qr")!` and its `attr(img, …)` lines are deleted: that lookup finds nothing
+once the img is inside the component. Import `walk` from the harness and `SeaznQrImage` from `../seazn-qr-image`.
 
 ```ts
   it("§8a's encoding settings are the helper's: EC-H, a 4-module quiet zone, and the Seazn logo (amended 2026-09-30, D7)", () => {
@@ -5022,9 +5191,16 @@ string"): assert that `renderSeaznQr` was called with the payload and `{ size: 6
   });
 ```
 
+  - The row's 236 / 172 are the division page's arithmetic (page gutter 12, `.card` border, `p-4`, :961). The panel
+    now lives in the fixture console, so re-derive the 320-wide figure from THAT container: measure, at 320 × 568, the
+    content width of the stream panel's QR box on the fixture page (`boundingBox()` of the `stream-qr-field`'s parent
+    column, minus the box's 2 × 12 padding and 2 × 1 border), and write it into the row as
+    `**N CSS px at 320 (fixture page)**`, with the subtraction spelled out like the existing ones, and the 125 % figure
+    likewise. The division-page figures stay only if a QR is still rendered there (after T6 it is not: replace them).
   - e2e (`stream-relay.spec.ts`, the case that reaches Waiting): at 1280 the painted `stream-qr` box is
-    `≥ 320 − 0.5` CSS px wide (`boundingBox()`), and at 320 it equals the sheet's 236 ± 1. Read both numbers from the
-    `QR size` row in the spec file too (the walkthrough already reads repo files by path), never typed.
+    `≥ 320 − 0.5` CSS px wide (`boundingBox()`), and at 320 it equals the row's fixture-page figure ± 1. Read both
+    numbers from the `QR size` row (the walkthrough already reads repo files by path), never typed. The trigger
+    button is `w-full` (Step 3b), so `min(320px,100%)` resolves against the column, not the SVG's intrinsic 640 px.
 
 - [ ] **Step 3b: Tap to enlarge (owner ruling D10, 2026-10-04).** Every QR rendered through `SeaznQrImage` opens full
   screen on a single tap.
@@ -5076,12 +5252,24 @@ export function holdScreenWakeLock(nav: WakeNavigator): () => void {
 // Owner ruling D10 (2026-10-04): every Seazn QR opens full screen on a SINGLE tap (a double tap is the browser's zoom),
 // on white, as large as the viewport allows, with the screen kept awake. Esc, the ✕ or any tap closes it, and focus
 // returns to the QR.
-import { useEffect, useRef, useState } from "react";
+//
+// `sensitive` is REQUIRED, never defaulted: a QR that paints a live secret (the capture credentials, the Remote
+// scoring `/score/<secret>` link) carries `ph-no-capture` on the inline image AND on the enlarged overlay, because
+// PostHog replay compresses its DOM frames before the `before_send` scrub can see them and its recorder blocks only
+// this class (device-link-panel.tsx:238-243). The overlay is a portal on `document.body`, outside any ancestor that
+// carries the class, so it must carry it itself.
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { enlargedQrSize, holdScreenWakeLock } from "@/lib/qr-enlarge";
 
-export function SeaznQrImage(p: { src: string; alt: string; testId: string; className?: string; width?: number; height?: number }) {
+/** The replay-blocking class, applied to every element that paints a sensitive QR. */
+export const QR_NO_CAPTURE = "ph-no-capture";
+export const qrCaptureClass = (sensitive: boolean): string => (sensitive ? QR_NO_CAPTURE : "");
+
+export function SeaznQrImage(p: {
+  src: string; alt: string; testId: string; sensitive: boolean; className?: string; width?: number; height?: number;
+}) {
   const msg = useMsg();
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -5092,18 +5280,27 @@ export function SeaznQrImage(p: { src: string; alt: string; testId: string; clas
         type="button"
         data-testid={`${p.testId}-enlarge`}
         aria-haspopup="dialog"
+        aria-label={msg("qr.enlarge")}
         onClick={() => setOpen(true)}
-        className="mx-auto block touch-manipulation rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+        className="mx-auto block w-full touch-manipulation rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
       >
         {/* A data: URL encoded in the browser — nothing for next/image to optimise. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img data-testid={p.testId} src={p.src} alt={p.alt} className={p.className} width={p.width} height={p.height} />
+        <img
+          data-testid={p.testId}
+          src={p.src}
+          alt={p.alt}
+          className={[qrCaptureClass(p.sensitive), p.className].filter(Boolean).join(" ")}
+          width={p.width}
+          height={p.height}
+        />
       </button>
       <p className="mt-1 text-center text-xs text-slate-500">{msg("qr.tapToEnlarge")}</p>
       {open && (
         <QrEnlarged
           src={p.src}
           alt={p.alt}
+          sensitive={p.sensitive}
           onClose={() => {
             setOpen(false);
             trigger.current?.focus();
@@ -5114,7 +5311,53 @@ export function SeaznQrImage(p: { src: string; alt: string; testId: string; clas
   );
 }
 
-function QrEnlarged({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+/** The overlay's markup, with no effects and no portal — exported so a node test can render it and pin its classes
+ *  (the effects and the portal are the browser's, and the e2e witnesses them). Portrait stacks the caption under the
+ *  QR; landscape (`landscape:flex-row`) puts it beside the QR, where the free space is, so the QR keeps the ruling's
+ *  full `min(vw, vh) − 32` and never overlaps the caption or leaves the viewport (review R6). */
+export function QrEnlargedView(p: {
+  src: string; alt: string; sensitive: boolean; size: number; label: string; closeLabel: string; caption: string;
+  onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={p.label}
+      data-testid="qr-enlarged"
+      onClick={(e) => {
+        e.stopPropagation();                         // a portal still bubbles through the React tree to its owner
+        p.onClose();
+      }}
+      className={`${qrCaptureClass(p.sensitive)} fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-white landscape:flex-row`}
+    >
+      <button
+        ref={p.closeRef}
+        type="button"
+        data-testid="qr-enlarged-close"
+        aria-label={p.closeLabel}
+        onClick={(e) => {
+          e.stopPropagation();
+          p.onClose();
+        }}
+        className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-lg text-2xl text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+      >
+        ✕
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        data-testid="qr-enlarged-img"
+        src={p.src}
+        alt={p.alt}
+        className={`${qrCaptureClass(p.sensitive)} shrink-0`}
+        style={{ width: p.size, height: p.size }}
+      />
+      <p className="max-w-xs px-4 text-center text-sm text-slate-600">{p.caption}</p>
+    </div>
+  );
+}
+
+function QrEnlarged({ src, alt, sensitive, onClose }: { src: string; alt: string; sensitive: boolean; onClose: () => void }) {
   const msg = useMsg();
   const closeBtn = useRef<HTMLButtonElement>(null);
   const onCloseRef = useRef(onClose);
@@ -5140,49 +5383,47 @@ function QrEnlarged({ src, alt, onClose }: { src: string; alt: string; onClose: 
     };
   }, []);
   return createPortal(
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={msg("qr.enlarged.name")}
-      data-testid="qr-enlarged"
-      onClick={() => onCloseRef.current()}
-      className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-3 bg-white"
-    >
-      <button
-        ref={closeBtn}
-        type="button"
-        data-testid="qr-enlarged-close"
-        aria-label={msg("qr.enlarged.close")}
-        onClick={(e) => {
-          e.stopPropagation();
-          onCloseRef.current();
-        }}
-        className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-lg text-2xl text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
-      >
-        ✕
-      </button>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img data-testid="qr-enlarged-img" src={src} alt={alt} style={{ width: size, height: size }} />
-      <p className="px-4 text-center text-sm text-slate-600">{msg("qr.enlarged.brightness")}</p>
-    </div>,
+    <QrEnlargedView
+      src={src}
+      alt={alt}
+      sensitive={sensitive}
+      size={size}
+      label={msg("qr.enlarged.name")}
+      closeLabel={msg("qr.enlarged.close")}
+      caption={msg("qr.enlarged.brightness")}
+      onClose={() => onCloseRef.current()}
+      closeRef={closeBtn}
+    />,
     document.body,
   );
 }
 ```
 
-The three call sites render their QR through it, keeping their test ids and classes:
-`<SeaznQrImage testId="stream-qr" src={p.qrDataUrl} alt={msg("stream.phone.qr.alt")} className="mx-auto block aspect-square h-auto w-[min(320px,100%)]" />`,
-`<SeaznQrImage testId="dlink-qr" src={minted.qr} alt={msg("dlink.alt")} className="ph-no-capture mx-auto h-56 w-56" />`
-(use the device-link img's existing test id if it has one; read :243), and
-`<SeaznQrImage testId="checkin-qr" src={qr} alt={msg("checkinQr.alt")} className="mx-auto rounded-lg border border-slate-200 p-1" width={176} height={176} />`.
-Keep the panel's own eslint comment where the old `<img>` was removed.
+The three call sites render their QR through it, keeping their test ids and classes. `sensitive` follows what each QR
+encodes and what its markup does today (review R2):
+- stream capture QR — `sensitive` (capture credentials with 65-character secrets; today's img lacks the class, which
+  this fixes):
+  `<SeaznQrImage testId="stream-qr" sensitive src={p.qrDataUrl} alt={msg("stream.phone.qr.alt")} className="mx-auto block aspect-square h-auto w-[min(320px,100%)]" />`;
+- Remote scoring QR — `sensitive` (the live `/score/<secret>`; today's img already carries `ph-no-capture`, :243, which
+  moves into the component, so the call site drops it from `className`):
+  `<SeaznQrImage testId="dlink-qr" sensitive src={minted.qr} alt={msg("dlink.alt")} className="mx-auto h-56 w-56" />`.
+  Keep the :238-242 comment above it; the device-link img has no test id today, so `dlink-qr` is new;
+- check-in QR — `sensitive={false}`: its markup today (checkin-qr.tsx:67-74) carries no `ph-no-capture`, and this branch
+  follows that. The link it encodes is a signed day-of check-in link; whether it should be blocked too is recorded as
+  an owner question in T11 Step 8, not decided here:
+  `<SeaznQrImage testId="checkin-qr" sensitive={false} src={qr} alt={msg("checkinQr.alt")} className="mx-auto rounded-lg border border-slate-200 p-1" width={176} height={176} />`.
+  Its mint button gains `data-testid="checkin-open"` for the e2e.
+Keep the panel's own eslint comment where the old `<img>` was removed. The check-in modal's inner card already stops
+propagation, and the overlay root now stops it too, so a tap on the overlay never also closes the modal behind it.
 
-Dictionaries (the owner named three strings; the ✕ needs its own accessible name, so there is a fourth, reported to
-the owner as such rather than borrowing another namespace's "Close"):
+Dictionaries (the owner named three strings. Two more are needed for accessible names: the ✕'s, and the trigger's,
+which must name the action rather than read the image's alt (review R7; controller: "Enlarge QR code"). Both are
+reported to the owner rather than borrowing another namespace's "Close"):
 
 | key | en | es | fr | nl |
 |---|---|---|---|---|
 | `qr.tapToEnlarge` | `Tap to enlarge` | `Toca para ampliar` | `Touchez pour agrandir` | `Tik om te vergroten` |
+| `qr.enlarge` | `Enlarge QR code` | `Ampliar código QR` | `Agrandir le code QR` | `QR-code vergroten` |
 | `qr.enlarged.name` | `Enlarged QR code` | `Código QR ampliado` | `Code QR agrandi` | `Vergrote QR-code` |
 | `qr.enlarged.brightness` | `Turn up brightness if it won't scan` | `Sube el brillo si no se escanea` | `Augmentez la luminosité si le code ne se scanne pas` | `Zet de helderheid hoger als hij niet scant` |
 | `qr.enlarged.close` | `Close` | `Cerrar` | `Fermer` | `Sluiten` |
@@ -5253,32 +5494,109 @@ describe("D10 — tap to enlarge", () => {
 ```
 
 `apps/web/src/components/v2/__tests__/seazn-qr-image.test.tsx` (node, `renderToStaticMarkup` inside the `en`
-provider, as the panel tests do): closed, it renders `data-testid="stream-qr-enlarge"` with `aria-haspopup="dialog"`
-wrapping `data-testid="stream-qr"`, and the caption text `Tap to enlarge`; there is no `qr-enlarged` in the markup. In
-each of the three call-site tests (panel Waiting state, device-link minted state, check-in), assert the `-enlarge`
-button and the caption are present, so no call site bypasses the component. Opening is a browser behaviour (portal,
-effects, focus): the e2e below witnesses it.
+provider, as the panel tests do). It tests the component through its exported pure parts, because opening it (the
+portal, the effects, the focus) is the browser's and the e2e below witnesses that:
 
-e2e, in `stream-relay.spec.ts`, in the case that reaches Waiting, once at `page.setViewportSize({width: 320, height: 568})`
-and once at `{width: 1280, height: 800}`:
-- `stream-qr-enlarge` is visible, with the caption; a single `click()` on it (not `dblclick`).
-- `qr-enlarged` is visible, has `role="dialog"`, `aria-modal="true"` and the `qr.enlarged.name` label.
-- `qr-enlarged-img`'s `boundingBox().width >= Math.min(vw, vh) - 32 - 0.5`, with `vw`/`vh` read from
-  `page.viewportSize()` (never typed).
-- `qr-enlarged-close` is focused, and its `boundingBox()` is ≥ 44 × 44.
-- `page.keyboard.press("Escape")`: `qr-enlarged` has count 0, and `stream-qr-enlarge` is focused (`toBeFocused`).
-- Open again and click the ✕: closed. Open again and click the enlarged image: closed ("any tap").
-- The wake lock in a real browser: before the first open, `page.addInitScript` wraps `navigator.wakeLock.request` (when
-  it exists) to count requests and releases on `window.__wake`; after open, `requests === 1`; after Escape,
-  `releases === 1`. When the browser has no `wakeLock`, the script defines none and the case asserts only that the
-  overlay opened and closed (the no-crash path). Record which path ran in the report.
-- Budget: add `2 * NAV_MS` to that case's timeout (two viewport passes).
+```tsx
+describe("SeaznQrImage / QrEnlargedView — D10, and the replay block (review R2)", () => {
+  const view = (sensitive: boolean) => renderToStaticMarkup(
+    <QrEnlargedView src="data:image/svg+xml,x" alt="QR" sensitive={sensitive} size={288} label="Enlarge"
+      closeLabel="Close" caption="Turn up" onClose={() => {}} />,
+  );
+  const closed = (sensitive: boolean) => render(<SeaznQrImage testId="stream-qr" sensitive={sensitive} src="data:image/svg+xml,x" alt="QR" />);
+
+  it("sensitive: the overlay ROOT and the enlarged IMG both carry ph-no-capture", () => {
+    const html = view(true);
+    expect(html).toMatch(new RegExp(`data-testid="qr-enlarged"[^>]*class="[^"]*\\b${QR_NO_CAPTURE}\\b`));
+    expect(html).toMatch(new RegExp(`data-testid="qr-enlarged-img"[^>]*class="[^"]*\\b${QR_NO_CAPTURE}\\b`));
+  });
+  it("not sensitive: neither does (the positive twin, so the class is not simply always on)", () => {
+    expect(view(false)).not.toMatch(new RegExp(QR_NO_CAPTURE));
+  });
+  it("the inline image follows `sensitive` too; the trigger names the action and wraps the image; the caption shows", () => {
+    expect(closed(true)).toMatch(new RegExp(`data-testid="stream-qr"[^>]*class="[^"]*\\b${QR_NO_CAPTURE}\\b`));
+    expect(closed(false)).not.toMatch(new RegExp(QR_NO_CAPTURE));
+    const html = closed(true);
+    expect(html).toMatch(/data-testid="stream-qr-enlarge"[^>]*aria-haspopup="dialog"[^>]*aria-label="Enlarge QR code"[^>]*>[\s\S]*data-testid="stream-qr"/);
+    expect(html).toContain(">Tap to enlarge<");
+    expect(html).not.toContain('data-testid="qr-enlarged"');                 // closed renders no overlay
+  });
+  it("the overlay is a named modal dialog with a 44 px ✕ and the brightness caption", () => {
+    const html = view(true);
+    expect(html).toMatch(/role="dialog"[^>]*aria-modal="true"[^>]*aria-label="Enlarge"/);
+    expect(html).toMatch(/data-testid="qr-enlarged-close"[^>]*class="[^"]*\bh-11 w-11\b/);
+    expect(html).toContain("Turn up");
+    expect(html).toMatch(/data-testid="qr-enlarged-img"[^>]*style="width:288px;height:288px"/);
+  });
+});
+```
+
+`render` is the file's `renderToStaticMarkup` inside the `en` dictionary provider (`useMsg` needs it); read how
+`stream-signal-chain.test.tsx` (T9a) wraps it and reuse that. Order the attribute regexes after reading React's
+serialised order once (React keeps JSX prop order); adjust the order, never loosen to a bare substring.
+
+The call-site unit tests use `renderIsland`, which renders ONE level deep, so `<SeaznQrImage>` stays an unexpanded
+element there: its button and caption never appear, and its `testId` is a prop, not `data-testid` (review R3). They
+therefore pin the WIRING, and the e2e pins the behaviour:
+- `fixture-stream-panel.test.tsx` (Waiting): find the element with
+  `walk(tree).find((el) => el.type === SeaznQrImage && propsOf(el).testId === "stream-qr")`; assert its `src` is the
+  mocked data URL, `sensitive === true`, and its `className` carries the sheet's `w-[min(${cap}px,100%)]` (Step 3a).
+  Assert `byTestId(tree, "stream-qr")` is `undefined`: no bare `img` bypasses the component.
+- `device-link-panel.test.tsx` (minted): the same find for `testId === "dlink-qr"`, `sensitive === true`, `src` the
+  minted QR, and no bare `img` with `alt === m("dlink.alt")` left in the tree.
+- check-in has no unit test file today; its witness is the e2e below.
+
+e2e — every call site, on the fixture page, where the person sees it (review R3). One shared helper in
+`apps/web/e2e/helpers/qr-enlarge.ts`:
+
+```ts
+/** D10: open a Seazn QR by a single tap, check the overlay, close it by Esc, check focus came back. */
+export async function expectQrEnlarges(page: Page, testId: string, opts: { sensitive: boolean }): Promise<void> {
+  const trigger = page.getByTestId(`${testId}-enlarge`);
+  await expect(page.getByTestId(testId)).toBeVisible();
+  await trigger.click();                                                   // one tap, never dblclick
+  const overlay = page.getByTestId("qr-enlarged");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toHaveAttribute("role", "dialog");
+  await expect(overlay).toHaveAttribute("aria-modal", "true");
+  const img = page.getByTestId("qr-enlarged-img");
+  for (const el of [overlay, img, page.getByTestId(testId)]) {
+    if (opts.sensitive) await expect(el).toHaveClass(/\bph-no-capture\b/);
+    else await expect(el).not.toHaveClass(/\bph-no-capture\b/);
+  }
+  const { width: vw, height: vh } = page.viewportSize()!;
+  const box = (await img.boundingBox())!;
+  expect(box.width).toBeGreaterThanOrEqual(Math.min(vw, vh) - 32 - 0.5);
+  expect(box.y).toBeGreaterThanOrEqual(0);                                 // inside the viewport (review R6)
+  expect(box.y + box.height).toBeLessThanOrEqual(vh + 0.5);
+  await expect(page.getByTestId("qr-enlarged-close")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(overlay).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+}
+```
+
+- `stream-relay.spec.ts`, the case that reaches Waiting: `expectQrEnlarges(page, "stream-qr", { sensitive: true })` at
+  `setViewportSize` 320×568, 568×320 (landscape, where the caption sits beside the QR) and 1280×800. At 1280 also:
+  the ✕ is ≥ 44 × 44 and closes it; a tap on the enlarged image closes it ("any tap").
+- The same spec, a fixture-page case: `checkin-open` mints the check-in link, then
+  `expectQrEnlarges(page, "checkin-qr", { sensitive: false })` at 320×568. The check-in modal is still open after the
+  overlay closes (the stopPropagation witness).
+- `scorer-sheets-handover-panel.spec.ts`, after it mints the device link:
+  `expectQrEnlarges(page, "dlink-qr", { sensitive: true })` at its current viewport.
+- The wake lock, in every browser (review R5): before the first navigation,
+  `page.addInitScript(() => { const w = { requests: 0, releases: 0 }; (window as any).__wake = w; Object.defineProperty(navigator, "wakeLock", { configurable: true, value: { request: async () => { w.requests++; return { release: async () => { w.releases++; } }; } } }); })`.
+  After the stream QR opens: `__wake.requests === 1`, `releases === 0`; after Escape: `releases === 1` (poll: the
+  release is async). The real API is never exercised here; the owner's phone gate (Step 6) is where it is real. A
+  second case with the stub script defining `wakeLock` as `undefined` opens and closes the overlay (the no-API path).
+- Budget: add `3 * NAV_MS` to the stream case (three viewport passes) and `NAV_MS` to the others.
 
 - [ ] **Step 4: Run the scope.** The JSON command over `seazn-qr.test.ts`, `qr-enlarge.test.ts`,
   `seazn-qr-image.test.tsx`, `fixture-stream-panel.test.tsx`, `device-link-panel.test.tsx` and
   `device-link-panel-i18n.test.tsx`, then the stream walkthroughs (A-case "the QR at 125% zoom" still decodes in the
-  browser) and `scorer-sheets-handover-panel` / `scorer-sheets-print-scan`, whole. Also check-in's own spec if one
-  exists (`rtk proxy grep -rlaE "checkin-qr" apps/web/e2e`), whole.
+  browser; the three `expectQrEnlarges` call sites) and `scorer-sheets-handover-panel` / `scorer-sheets-print-scan`,
+  whole. There is no check-in spec today (`checkin-qr` appears in no e2e file); its witness is the new fixture-page
+  case in `stream-relay.spec.ts`.
 
 - [ ] **Step 5: Mutate once each.**
   - `SEAZN_QR_ERROR_CORRECTION` changed to `"M"`. Red: "encodes at the declared EC level" (and decoding may still
@@ -5291,6 +5609,10 @@ and once at `{width: 1280, height: 800}`:
     wake lock is … RELEASED on close". Restore it, then delete the `if (disposed) void s.release()…` arm. Red: "a lock
     granted AFTER close".
   - `enlargedQrSize` returns a constant `288`. Red: "the enlarged size is DERIVED from the viewport".
+  - `QrEnlargedView`: `${qrCaptureClass(p.sensitive)}` removed from the overlay root's `className` (review R2's named
+    mutant). Red: "sensitive: the overlay ROOT and the enlarged IMG both carry ph-no-capture", and the e2e's
+    `toHaveClass` on `qr-enlarged` for `stream-qr` / `dlink-qr`. Restore it, then remove it from the enlarged img
+    only: the same unit case reds on its second line.
 
 - [ ] **Step 6: REAL-PHONE SCAN — STOP for the owner. This cannot be automated.**
   1. Start the prod build (`seazn-local-env`), open a fixture page at 1280, and take a session to Waiting, so the
@@ -5368,11 +5690,13 @@ is called a defect.
 
 - [ ] **Step 4: Smoke, scoped to the changed routes only.** The full smoke is CI's job: it runs on this branch's PR
   before merge (smoke is PR-triggered). Locally, run only the suites that cover the routes this branch changed, through
-  T2b's `SMOKE_ONLY` filter, against the local prod server with `RELAY_KEK` set as CI sets it:
+  T2b's `SMOKE_ONLY` entry point, against the local prod server with `RELAY_KEK` set as CI sets it:
   `cd /Users/ashokhein/github/seazn.club/.claude/worktrees/fixture-stream && SMOKE_ONLY=streamTargets,v1 pnpm test:smoke`.
   `streamTargets` covers the new PATCH/DELETE and the changed POST; `v1` holds the fixture-console Stream twin check
-  (T5 Step 16 sits in `v1Suite`, smoke.ts:16864). Expected: `ran 2 suite(s)`, the `streamTargetsSuite` "7 steps" line,
-  and the Stream check passing. Report both; at PR time, also report CI smoke's own `streamTargetsSuite` count.
+  (T5 Step 16 sits in `v1Suite`, smoke.ts:16864). Both are in `SELECTABLE_SUITES` and need only `subsetSetup`'s
+  state. Expected: `SMOKE_ONLY: ran 2 suite(s)`, the `streamTargetsSuite` "7 steps" line, the Stream check passing,
+  and `0 failed`. Re-run `scripts/__tests__/smoke-select.test.ts` too. Report both; at PR time, also report CI smoke's
+  own `streamTargetsSuite` count.
 
 - [ ] **Step 5: The control-set diff, 320 against 1280, from the live DOM** (AGENTS.md phone composition). On TWO
   entitled organiser fixture pages whose header strips differ, with the scoring pad mounted: a **badminton** v3 pad
@@ -5410,7 +5734,10 @@ is called a defect.
     - the Directory mockup's "Change server" was not built;
     - the problem link is static, not animated;
     - the credits line reads "9 credits" (the plural key), not the mockup's "9 left";
-    - the D10 ✕ needed a fourth string (`qr.enlarged.close`) beyond the three the ruling named;
+    - D10 needed two strings beyond the three the ruling named (`qr.enlarged.close` for the ✕, `qr.enlarge` for the
+      trigger's accessible name);
+    - the check-in QR stays replay-visible (`sensitive={false}`, matching its markup today): should its signed day-of
+      link be blocked like the other two?
   - the premises list at the top of this plan.
 
   Wait for the owner's go-ahead before `git push` and `gh pr create`.
@@ -5499,7 +5826,9 @@ and naming them from memory would be a guess.
 - `StreamSessionProvider`, `useSharedPhoneSession`, `PhoneSession`;
 - `seaznQrLayout`, `seaznQrSvg`, `renderSeaznQr`;
 - `CreateErrorHolder` (widened, T3; the panel stores it parsed), `inUseText`, `TARGET_IN_USE_ELSEWHERE_KEY`;
-- `QR_ENLARGE_GUTTER_PX`, `enlargedQrSize`, `holdScreenWakeLock`, `SeaznQrImage`.
+- `QR_ENLARGE_GUTTER_PX`, `enlargedQrSize`, `holdScreenWakeLock`, `SeaznQrImage` (required `sensitive`),
+  `QrEnlargedView`, `QR_NO_CAPTURE`, `qrCaptureClass`, `expectQrEnlarges`;
+- `selectSmokeSuites`, `SmokeSelectionError`, `SELECTABLE_SUITES`, `subsetSetup`, `runSubset`.
 
 `holdRig` / `sessionOnTarget` are defined in T2a, and T2b and T3 use them.
 
