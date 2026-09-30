@@ -165,3 +165,58 @@ describe("Evidence — the visual gate", () => {
     expect(check(ev, "visual-evidence").checked).toBe(0);
   });
 });
+
+// W1c Task 8 (Walkthrough A) found two ways a picture showed something the
+// page was not: the builder's tab indicator caught mid-CSS-transition (ten
+// animations running, the old tab's border at 82–97% alpha — settled, the
+// page was right), and a full-page capture taken while the page was scrolled
+// painting the sticky header at the scroll offset, over the content (H-2, H-3).
+describe("Evidence — the picture is the settled page, from its top", () => {
+  it("the full-page shot fast-forwards finite transitions and animations (animations: disabled)", async () => {
+    const seen: unknown[] = [];
+    const page: ShotPage = {
+      async screenshot(opts) { seen.push(opts); return new TextEncoder().encode("A"); },
+      async evaluate<R>(): Promise<R> { return { scrollWidth: 320, clientWidth: 320 } as unknown as R; },
+    };
+    const ev = new Evidence("/r", "case", memFs());
+    await ev.shot(page, "01-built");
+    await ev.shot(page, "02-next");
+    expect(seen).toEqual([{ fullPage: true, animations: "disabled" }, { fullPage: true, animations: "disabled" }]);
+    expect(check(ev, "visual-evidence")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("the page is scrolled to its top BEFORE the picture, by the probe Playwright ships into the page", async () => {
+    const log: string[] = [];
+    let y = 900; // the organiser's last click left the page 900px down
+    const page: ShotPage = {
+      async screenshot() { log.push(`screenshot at y=${y}`); return new TextEncoder().encode(`A${y}`); },
+      async evaluate<R>(fn: () => R): Promise<R> {
+        // What Playwright does with a function: ship its SOURCE and run it in
+        // the page. So rebuild it from its text (a closure over module scope
+        // would throw here, as it would in the page) and run it against a
+        // fake page scrolled 900px down.
+        const shipped = new Function(`return (${String(fn)})`)() as () => R;
+        const g = globalThis as Record<string, unknown>;
+        const saved = { window: g.window, document: g.document };
+        const scroller = {
+          scrollWidth: 330, clientWidth: 320,
+          get scrollTop() { return y; },
+          set scrollTop(v: number) { y = v; log.push(`scrollTop=${v}`); },
+        };
+        g.window = {
+          get scrollY() { return y; },
+          scrollTo(a: number | { top?: number }, b?: number) { y = typeof a === "object" ? a.top ?? y : b ?? y; log.push(`scrollTo y=${y}`); },
+        };
+        g.document = { scrollingElement: scroller, documentElement: scroller };
+        try { return shipped(); } finally { g.window = saved.window; g.document = saved.document; }
+      },
+    };
+    const ev = new Evidence("/r", "case", memFs());
+    await ev.shot(page, "01-built");
+    expect(log.at(-1)).toBe("screenshot at y=0");
+    expect(log.filter((l) => l.startsWith("screenshot"))).toEqual(["screenshot at y=0"]);
+    // The same probe still measures the page: 330 > 320 is one sideways state.
+    expect(check(ev, "no-horizontal-scroll")).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(check(ev, "no-horizontal-scroll").evidence.join(" ")).toMatch(/01-built: page scrollWidth 330 > clientWidth 320/);
+  });
+});

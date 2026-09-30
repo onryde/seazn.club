@@ -29,9 +29,11 @@ export const nodeEvidenceFs: EvidenceFs = {
 
 /** The page surface a shot uses — a structural subset a Playwright Page meets.
  *  The picture comes back as bytes (no `path`), so its write goes through
- *  EvidenceFs and can be read back. */
+ *  EvidenceFs and can be read back. `animations: "disabled"` fast-forwards a
+ *  finite CSS transition or animation to its end: a picture taken mid-
+ *  transition shows a state the page never settles in. */
 export interface ShotPage {
-  screenshot(o: { fullPage: boolean }): Promise<Uint8Array>;
+  screenshot(o: { fullPage: boolean; animations: "disabled" }): Promise<Uint8Array>;
   evaluate<R>(fn: () => R): Promise<R>;
 }
 
@@ -62,8 +64,12 @@ interface Probe { label: string; problem: string | null; scrollWidth: number; cl
 
 const firstLine = (e: unknown): string => (e instanceof Error ? e.message : String(e)).split("\n")[0];
 
-/** Runs INSIDE the page: the document's own scroll box. */
-function pageWidths(): { scrollWidth: number; clientWidth: number } {
+/** Runs INSIDE the page (Playwright ships its source, so no closure): scrolls
+ *  the document to its top, then measures its own scroll box. A full-page
+ *  capture of a scrolled page paints a sticky header at the scroll offset,
+ *  over the content; from the top, the picture is the page as it lays out. */
+function topAndWidths(): { scrollWidth: number; clientWidth: number } {
+  window.scrollTo(0, 0);
   const el = document.scrollingElement ?? document.documentElement;
   return { scrollWidth: el.scrollWidth, clientWidth: el.clientWidth };
 }
@@ -80,7 +86,8 @@ export class Evidence {
     this.#fs = fs;
   }
 
-  /** Probes the page's horizontal scroll, then writes a full-page PNG to
+  /** Scrolls the page to its top and probes its horizontal scroll, then writes
+   *  a full-page PNG, transitions settled, to
    *  `<dir>/shots/<caseSlug>/<label>.png` and reads it back. A failure to
    *  probe, shoot, write or read back is RECORDED against the label, never
    *  rethrown: the case still judges its other checks. */
@@ -90,7 +97,7 @@ export class Evidence {
     const path = join(this.#dir, `${label}.png`);
 
     try {
-      const w = await page.evaluate(pageWidths);
+      const w = await page.evaluate(topAndWidths);
       if (!Number.isFinite(w?.scrollWidth) || !Number.isFinite(w?.clientWidth)) throw new Error(`probe answered ${JSON.stringify(w)}`);
       this.#probes.push({ label, problem: null, scrollWidth: w.scrollWidth, clientWidth: w.clientWidth });
     } catch (e) {
@@ -99,7 +106,7 @@ export class Evidence {
 
     const shot: Shot = { label, path, bytes: 0, sha256: null, problem: null, mustDiffer: o.mustDiffer ?? null };
     try {
-      const png = await page.screenshot({ fullPage: true });
+      const png = await page.screenshot({ fullPage: true, animations: "disabled" });
       this.#fs.mkdir(this.#dir);
       this.#fs.writeFile(path, png);
       const back = this.#fs.readFile(path);
