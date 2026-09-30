@@ -1873,3 +1873,32 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(await runSlice(deps({ planCases: distinct, openBrowserRun: async () => fakeBrowserRun().run }), ["--driver", "browser", "--run-id", "dup2", "--report-dir", dirFor()])).toBe(0);
   });
 });
+
+// W1c Task 14 carry 6 (Task 12 review m-7): results.json names the plan that
+// produced it — the command line's own selection — through the REAL producer
+// (runSlice → writeResults), for every kind of plan the runner builds.
+describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () => {
+  const PLANS: readonly (readonly [string, readonly string[], string])[] = [
+    // The empty filter first: the whole slice.
+    ["the whole slice", [], "slice"],
+    ["a filtered slice", ["--only", "league|generic", "--scenario", "LIFECYCLE"], "slice --only league|generic --scenario LIFECYCLE"],
+    ["a plain browser run", ["--driver", "browser", "--width", "320", "--only", "knockout|badminton", "--scenario", "LIFECYCLE"], "slice --only knockout|badminton --scenario LIFECYCLE"],
+    ["a canary", ["--canary", "M1"], "--canary M1"],
+    ["--layer L1", ["--driver", "browser", "--layer", "L1"], "--layer L1"],
+    ["--layer L1, filtered", ["--driver", "browser", "--layer", "L1", "--only", "swiss|generic"], "--layer L1 --only swiss|generic"],
+    ["--layer L2", ["--driver", "browser", "--layer", "L2"], "--layer L2"],
+    ["the width sweep", ["--set", WIDTH_SWEEP_SET, "--driver", "browser"], `--set ${WIDTH_SWEEP_SET}`],
+    ["the API-only set", ["--set", API_ONLY_BROWSER_SET, "--driver", "browser"], `--set ${API_ONLY_BROWSER_SET}`],
+  ];
+  it.each(PLANS)("%s: results.json names it", async (_what, argv, plan) => {
+    capture();
+    const dir = dirFor();
+    const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
+    const exit = await runSlice(d, [...argv, "--run-id", "p1", "--report-dir", dir]);
+    // A canary that goes red on its own check exits 0; every other plan here writes results and exits 0.
+    expect(exit, argv.join(" ")).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
+    expect(raw.cases.length, argv.join(" ")).toBeGreaterThan(0);
+    expect(raw.plan).toBe(plan);
+  });
+});

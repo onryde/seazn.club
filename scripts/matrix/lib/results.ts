@@ -104,6 +104,11 @@ export interface RunResults {
   grid: Grid;
   layer: Layer;
   driver: DriverKind;
+  /** The plan that produced the run, as the command line chose it ("slice
+   *  --only …", "--layer L1", "--set pad-proof", "--canary M1") — W1c Task 14
+   *  carry 6. run.ts always writes it; v3 evidence written before the field
+   *  (Task 8's walkthrough-a) has none, so it is optional to READ. */
+  plan?: string;
   cases: CaseResult[];
 }
 
@@ -172,6 +177,7 @@ export const RunResultsSchemaV3 = z.strictObject({
   ...runFieldsV2,
   layer: z.enum(LAYERS),
   driver: z.enum(DRIVER_KINDS),
+  plan: z.string().min(1).optional(),
   cases: z.array(CaseSchemaV3),
 });
 

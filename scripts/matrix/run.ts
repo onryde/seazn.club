@@ -392,6 +392,18 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
  *  any other (layeredWidthRefusal). */
 interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined }
 
+/** The plan a run was made from, as its command line chose it — results.json's
+ *  `plan` (W1c Task 14 carry 6, Task 12 review m-7), so a reader never guesses
+ *  the set from its case ids. parseCli has already refused every combination
+ *  this does not name (--set or --canary beside a filter or a layer). The
+ *  driver and width are recorded apart (D9). */
+export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario">): string {
+  if (cli.set !== undefined) return `--set ${cli.set}`;
+  if (cli.canary !== undefined) return `--canary ${cli.canary}`;
+  const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
+  return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}`, ...filters].join(" ");
+}
+
 /** The driver the command line asked for, or the usage refusal. A width is a
  *  browser run's only. */
 function parseDriver(driver: string | undefined, width: string | undefined): { driver: "http" | "browser" } | { usage: string } {
@@ -748,7 +760,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid,
     // A layered plan names its layer; a plain one is its width's (layerOfWidth:
     // 1280 L1, a phone width L2), L3 over HTTP.
-    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, cases,
+    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli), cases,
   };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);

@@ -352,6 +352,35 @@ describe("results v3 — layer, driver, width (D9, W1c Task 3)", () => {
   });
 });
 
+// W1c Task 14 carry 6 (Task 12 review m-7): a results.json names the plan that
+// produced it — "--layer L1", "--set pad-proof", "slice --only …" — so a
+// reader never guesses the set from its case ids. v3 evidence written before
+// the field (walkthrough-a, Task 8) has none, and still parses.
+describe("results v3 — the plan that produced a run (W1c Task 14 carry 6)", () => {
+  it("empty case first: a v3 run with no plan (written before the field) parses, and carries none", () => {
+    const old = parseResults(V3_RUN);
+    expect(old.schemaVersion).toBe(3);
+    expect("plan" in old).toBe(false);
+  });
+  it("a plan parses and round-trips through writeResults unchanged", () => {
+    const run: RunResults = { ...V3_RUN, plan: "--layer L1" };
+    expect(parseResults(run)).toEqual(run);
+    const dir = mkdtempSync(join(tmpdir(), "fm-"));
+    const { path, written } = writeResults(dir, { ...V3_RUN, plan: "--set pad-proof" }, RUN_BASE);
+    expect(written.plan).toBe("--set pad-proof");
+    expect((JSON.parse(readFileSync(path, "utf8")) as { plan: unknown }).plan).toBe("--set pad-proof");
+  });
+  it("an empty or non-string plan is refused by the v3 schema, on the field", () => {
+    expect(issuesOf({ ...V3_RUN, plan: "" }).some((i) => i.startsWith("plan: "))).toBe(true);
+    expect(issuesOf({ ...V3_RUN, plan: 3 }).some((i) => i.startsWith("plan: "))).toBe(true);
+  });
+  it("v2 evidence carries no plan: the v2 schema refuses one", () => {
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => parseResults(v2)).not.toThrow();
+    expect(() => parseResults({ ...v2, plan: "slice" })).toThrow();
+  });
+});
+
 describe("redaction (R14a)", () => {
   it("scrubs tokens, JWTs, device-link secrets, DB URLs, stripe keys", () => {
     const dirty = 'token=abc123def cookie: sb-access=xyz eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl dl_ABCDEFGH12345 postgres://u:p@h/db sk_test_ABCDEFGHIJ';
