@@ -822,6 +822,13 @@ a peer session as the other.
       - zero challenges are refused.
     - **Noted for W7, not asserted:** `finalRanks` is the raw `ladder_order` (`competition.ts:606`), so a withdrawn
       player keeps their rung.
+54. **The W1-driving plan is approved; execution is subagent-driven** (2026-09-30). The owner answered "Yes" to the
+    controller's three questions: does the plan capture what you want, which execution method (the controller
+    recommended subagent-driven), and push the branch.
+    - Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` at `dc85a7741`, after plan review 4
+      (Approved, five minors carried to the executor).
+    - Execution worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. Same-shape tasks are
+      batched per ruling 41.
 
 ## Recommendations (mine — not rulings)
 
