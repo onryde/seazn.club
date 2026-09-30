@@ -5307,6 +5307,8 @@
   "runsheet.action.view": "Bekijken",
   "runsheet.stream.live": "Live",
   "runsheet.stream.waiting": "Wacht op telefoon",
+  "runsheet.stream.liveName": "Live: {match}",
+  "runsheet.stream.waitingName": "Wacht op telefoon: {match}",
   "runsheet.sub.noScorer": "Nog geen scorer",
   "runsheet.sub.awaitingDraw": "Wacht op loting",
   "runsheet.emptyFilter.message": "Geen wedstrijden voor “{filter}” op dit moment.",

@@ -12,7 +12,8 @@ import { renderIsland, propsOf, textOf, walk } from "@/components/__tests__/_hoo
 import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
 import { messages } from "@/lib/messages";
 import type { RunSheetFixture } from "@/lib/run-sheet-groups";
-import type { HoldState } from "@/server/relay/domain/session";
+import { ACTIVE_STATES, holdStateOf, type HoldState } from "@/server/relay/domain/session";
+import { Fixture } from "@/server/api-v1/schemas";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -25,8 +26,18 @@ const ORG_TZ = "UTC";
 const NOW_MS = Date.UTC(2026, 8, 10, 12, 0, 0);
 const ENTRANTS = { e1: "Alpha", e2: "Bravo" };
 const HREF = "/o/a/c/b/d/c/f/7";
-/** Every hold state a person can read (server/relay/domain/session.ts `holdStateOf`'s non-null answers). */
-const HOLD_STATES: readonly HoldState[] = ["live", "waiting"];
+/** Every hold state a session that is UP reads as — `holdStateOf` over the domain's ACTIVE_STATES, never typed here
+ *  (B3 fix round 1, Minor 3). */
+const HOLD_STATES: readonly HoldState[] = [
+  ...new Set(ACTIVE_STATES.map((s) => holdStateOf(s)).filter((h): h is HoldState => h !== null)),
+];
+/** Every fixture status the v1 contract declares (Minor 3: the typed list missed `forfeited`). */
+const STATUSES: readonly string[] = Fixture.shape.status.options;
+/** The chip's accessible name per state: its visible words plus the match (Minor 11) — from the dictionary. */
+const NAME: Record<HoldState, string> = {
+  live: messages["runsheet.stream.liveName"].replace("{match}", `Alpha ${messages["schedule.vs"]} Bravo`),
+  waiting: messages["runsheet.stream.waitingName"].replace("{match}", `Alpha ${messages["schedule.vs"]} Bravo`),
+};
 /** The chip's label per state — from the dictionary, never typed here. */
 const LABEL: Record<HoldState, string> = {
   live: messages["runsheet.stream.live"],
@@ -100,6 +111,18 @@ describe("the run sheet's stream chip (spec 2026-09-30 §2) — the path to Stop
     expect(checked).toBe(HOLD_STATES.length);
     // The two states must read differently, or the words above could not tell a waiting phone from a live one.
     expect(LABEL.live).not.toBe(LABEL.waiting);
+  });
+
+  it("the chip's accessible name says WHICH match — its visible words first (label in name), then home vs away (Minor 11)", () => {
+    let checked = 0;
+    for (const state of HOLD_STATES) {
+      const p = propsOf(chipOf(row({ streamState: state }))!);
+      expect(p["aria-label"], state).toBe(NAME[state]);
+      expect(String(p["aria-label"]).startsWith(LABEL[state]), `${state}: the visible words lead the name`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(HOLD_STATES.length);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
   });
 
   it("no session: no chip — and no stream toggle or in-row panel in ANY state (the mount moved to the fixture page)", () => {
@@ -177,12 +200,12 @@ describe("the run sheet's stream chip (spec 2026-09-30 §2) — the path to Stop
   });
 
   it("every fixture status carries the chip while its session is up — a stream outlives the whistle", () => {
-    const statuses = ["scheduled", "in_play", "decided", "finalized", "cancelled", "abandoned"];
     let checked = 0;
-    for (const status of statuses) {
+    for (const status of STATUSES) {
       expect(chipOf(row({ fixture: fx({ status }), streamState: "live" })), `${status} lost the chip`).toBeDefined();
       checked++;
     }
-    expect(checked).toBe(statuses.length);
+    expect(checked).toBe(STATUSES.length);
+    expect(STATUSES, "anti-vacuity: the declared set includes the status the typed list missed").toContain("forfeited");
   });
 });

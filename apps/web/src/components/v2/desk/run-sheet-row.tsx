@@ -535,6 +535,11 @@ export function RunSheetRow({
               href={`${href}?stream=open`}
               data-testid="run-sheet-stream-chip"
               data-state={streamState}
+              // Minor 11 (B3 fix round 1): several rows can carry a "Live" link — the name says WHICH match, its
+              // visible words first (label in name).
+              aria-label={msg(streamState === "live" ? "runsheet.stream.liveName" : "runsheet.stream.waitingName", {
+                match: `${home} ${msg("schedule.vs")} ${away}`,
+              })}
               className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 max-md:min-h-11 md:order-first"
             >
               <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${streamState === "live" ? "bg-red-600" : "bg-amber-500"}`} />

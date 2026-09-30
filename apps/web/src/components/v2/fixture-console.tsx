@@ -1165,8 +1165,10 @@ export function FixtureConsole({
           the card is empty until the strip icon opens the body, so it hides there while closed. */}
       {stream && !scoringSection && (
         <section className={`card p-5 max-md:p-3${streamOpen ? "" : " max-md:hidden"}`} data-role="console-stream">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 max-md:hidden">
-            <h2 className="text-sm font-semibold text-slate-700">{msg("stream.title")}</h2>
+          {/* B3 fix round 1, Minor 7: the card names itself only while CLOSED — open, the panel (or the stop probe)
+              inside carries the title, which otherwise read twice at ≥768. */}
+          <div className={`mb-3 flex flex-wrap items-center gap-2 max-md:hidden ${streamOpen ? "justify-end" : "justify-between"}`}>
+            {!streamOpen && <h2 className="text-sm font-semibold text-slate-700">{msg("stream.title")}</h2>}
             {streamButton}
           </div>
           {streamBody}

@@ -5307,6 +5307,8 @@
   "runsheet.action.view": "Ver",
   "runsheet.stream.live": "En directo",
   "runsheet.stream.waiting": "Esperando al teléfono",
+  "runsheet.stream.liveName": "En directo: {match}",
+  "runsheet.stream.waitingName": "Esperando al teléfono: {match}",
   "runsheet.sub.noScorer": "Aún sin anotador",
   "runsheet.sub.awaitingDraw": "Pendiente del sorteo",
   "runsheet.emptyFilter.message": "Ningún partido coincide con «{filter}» ahora mismo.",

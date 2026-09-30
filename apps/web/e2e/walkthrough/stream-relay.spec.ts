@@ -989,7 +989,7 @@ for (const sw of A7_SWITCHES) {
 test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring section; the fallback Stream card opens the panel on its Phone tab showing LIVE, fits at 1280 and 320 → Stop (at 320) → ended", async ({
   page,
 }) => {
-  const NAVS = 2; // openFixture (the grant) + openPhoneTab
+  const NAVS = 3; // openFixture (the grant) + openPhoneTab + the reload at 320
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
@@ -1015,7 +1015,18 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: POLL_WAIT_MS });
   await expectNoHorizontalScroll(page);
   await shot(card, "A7d-fallback.png");
+  // B3 fix round 1, Minor 6: the organiser at the court opens it on a PHONE, through the strip icon — a fresh load at
+  // 320 with the panel closed: the card hides while closed, and the strip icon opens it, Stop inside.
   await page.setViewportSize({ width: 320, height: 900 });
+  await page.reload();
+  await expect(card, "closed on a phone, the empty fallback card hides").toBeHidden({ timeout: NAV_MS });
+  const phoneIcon = page.locator('[data-role="fixture-stream-phone"]');
+  await expect(phoneIcon, "the strip's Stream icon").toBeVisible();
+  await phoneIcon.click();
+  await expect(card, "the strip icon opens the fallback card on the phone").toBeVisible();
+  const phoneTab = card.getByTestId("stream-tab-phone");
+  if (await phoneTab.count()) await phoneTab.click();
+  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: POLL_WAIT_MS });
   await expect(body.getByTestId("stream-stop")).toBeVisible();
   await expectNoHorizontalScroll(page);
   expect(await expectTapTargets(body), "live controls hit-tested at 320, in the fallback card").toBeGreaterThan(0);
@@ -1205,9 +1216,9 @@ test("A8: the platform list is exactly YouTube and Twitch — no LinkedIn, no Ot
 // ===========================================================================
 // A9 — one control set, whatever the width
 // ===========================================================================
-test("A9: the Phone tab offers the SAME controls — membership, order and repeats — at 320 as at 1280, idle and live", async ({ page }) => {
+test("A9: the Phone tab offers the SAME controls — membership, order and repeats — at 320 as at 1280, idle and live; Stream and Remote scoring are one open panel at a time, tapped at both widths", async ({ page }) => {
   const NAVS = 1; // openPhoneTab
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   await addTargetApi(page, rig.orgId, { label: "A9 destination" });
@@ -1215,6 +1226,32 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
   const row = await openPhoneTab(page, rig, f);
   const body = row.locator("[data-phone-body]");
   await expect(body.getByTestId("stream-go-live")).toBeEnabled();
+
+  // B3 fix round 1, Minor 5: ONE open panel at a time, TAPPED at both widths — `nextOpenPanel` is pinned as a pure pair
+  // table; this is its click wiring through each width's own twins (the desktop buttons, then the strip icons).
+  const handover = page.locator('[data-role="device-handover"]:visible, [data-role="device-handover-phone"]:visible');
+  let swaps = 0;
+  for (const w of [1280, 320]) {
+    await page.setViewportSize({ width: w, height: 900 });
+    const stream = streamControl(page);
+    await expect(stream, `@${w}: one visible Stream control`).toHaveCount(1);
+    await expect(handover, `@${w}: one visible Remote scoring control`).toHaveCount(1);
+    await expect(stream, `@${w}: premise — Stream is open`).toHaveAttribute("aria-expanded", "true");
+    await handover.click();
+    await expect(handover, `@${w}: Remote scoring opened`).toHaveAttribute("aria-expanded", "true");
+    await expect(stream, `@${w}: …and closed Stream`).toHaveAttribute("aria-expanded", "false");
+    await expect(row, `@${w}: the Stream body is gone`).toHaveCount(0);
+    await stream.click();
+    await expect(stream, `@${w}: Stream opened`).toHaveAttribute("aria-expanded", "true");
+    await expect(handover, `@${w}: …and closed Remote scoring`).toHaveAttribute("aria-expanded", "false");
+    await expect(row, `@${w}: the Stream body is back`).toHaveCount(1);
+    const phoneTab = row.getByTestId("stream-tab-phone");
+    if (await phoneTab.count()) await phoneTab.click(); // a re-mounted panel opens on its default tab
+    await expect(body.getByTestId("stream-go-live")).toBeEnabled();
+    swaps++;
+  }
+  expect(swaps).toBe(2);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   const compare = async (state: string, min: number): Promise<number> => {
     await page.setViewportSize({ width: 1280, height: 900 });

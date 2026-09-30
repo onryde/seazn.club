@@ -5307,6 +5307,8 @@
   "runsheet.action.view": "Afficher",
   "runsheet.stream.live": "En direct",
   "runsheet.stream.waiting": "En attente du téléphone",
+  "runsheet.stream.liveName": "En direct : {match}",
+  "runsheet.stream.waitingName": "En attente du téléphone : {match}",
   "runsheet.sub.noScorer": "Pas encore de marqueur",
   "runsheet.sub.awaitingDraw": "En attente du tirage",
   "runsheet.emptyFilter.message": "Aucun match ne correspond à « {filter} » pour le moment.",

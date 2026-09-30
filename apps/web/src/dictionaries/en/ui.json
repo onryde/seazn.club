@@ -5307,6 +5307,8 @@
   "runsheet.action.view": "View",
   "runsheet.stream.live": "Live",
   "runsheet.stream.waiting": "Waiting for phone",
+  "runsheet.stream.liveName": "Live: {match}",
+  "runsheet.stream.waitingName": "Waiting for phone: {match}",
   "runsheet.sub.noScorer": "No scorer yet",
   "runsheet.sub.awaitingDraw": "Awaiting draw",
   "runsheet.emptyFilter.message": "No fixtures match “{filter}” right now.",

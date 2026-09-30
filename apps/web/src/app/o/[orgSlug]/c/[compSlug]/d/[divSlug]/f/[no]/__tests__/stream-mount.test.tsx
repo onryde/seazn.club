@@ -54,6 +54,8 @@ vi.mock("@/server/usecases/divisions", () => ({
     id: "div-1",
     slug: "div-one",
     name: "Division One",
+    // Single sport on purpose (Minor 4): the mount is sport-agnostic — `sportKey` only passes through to the loader and
+    // the overlay themes, and no gate here reads it; generic, cricket and badminton drive the real mount in e2e.
     sport_key: "football",
     module_version: "1.0.0",
     config: {},

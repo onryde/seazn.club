@@ -25,6 +25,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
 import { FixtureConsole } from "@/components/v2/fixture-console";
+import { messages } from "@/lib/messages";
 import type { EventIn, FixtureStreamMount, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 
 vi.mock("next/navigation", () => ({
@@ -316,6 +317,33 @@ describe("phone composition — the match strip (spec §3.1)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  // B3 fix round 1, Minor 6: the OPEN fallback card must show on a phone — the path an organiser at the court takes on a
+  // finalized or frozen fixture (the strip icon). Its closed class is pinned above; this pins the open one, anchored on the
+  // whole attribute value so a class list that still carries `max-md:hidden` cannot match.
+  // Minor 7: the card's own heading shows only while CLOSED — open, the panel (or the stop probe) inside carries the
+  // title, and at ≥768 "Stream this match" read twice (A7d-fallback.png).
+  it("the OPEN fallback card shows on phones (no max-md:hidden) and drops its own heading; closed, it hides on phones and keeps it", () => {
+    const shapes: { name: string; props: Parameters<typeof consoleHtml>[0] }[] = [
+      { name: "finalized", props: { status: "finalized" } },
+      { name: "cancelled", props: { status: "cancelled" } },
+      { name: "read-only", props: { canEdit: false } },
+      { name: "TBD side", props: { away: null } },
+    ];
+    const heading = `<h2 class="text-sm font-semibold text-slate-700">${messages["stream.title"]}</h2>`;
+    let checked = 0;
+    for (const s of shapes) {
+      const open = consoleHtml({ ...s.props, stream: { mode: "stop-only" }, streamReturn: true });
+      expect(open, `${s.name}: open`).toMatch(/<section class="card p-5 max-md:p-3" data-role="console-stream">/);
+      expect(open, `${s.name}: the body is inside the card`).toMatch(/data-role="console-stream">[\s\S]*data-role="fixture-stream-body"/);
+      expect(open.includes(heading), `${s.name}: open, no second heading`).toBe(false);
+      const closed = consoleHtml({ ...s.props, stream: { mode: "stop-only" } });
+      expect(closed, `${s.name}: closed`).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
+      expect(closed.includes(heading), `${s.name}: closed, the card names itself`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(shapes.length);
   });
 
   it("the fallback card is absent whenever the Scoring section renders (no second Stream button)", () => {

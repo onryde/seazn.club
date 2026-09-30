@@ -381,3 +381,50 @@ describe("a stream that is up keeps its row under Today (I-2, owner option a)", 
     expect(runSheetKeeps(untimedStreamed, "today", { ...ctx(states), stageId: "s1" }), "positive pair: its own stage").toBe(true);
   });
 });
+
+// B3 fix round 1, Minor 1: ported from the deleted stages-panel-checkout-return-filter.test.tsx ("rendered, venue zone ≠
+// org zone", its ordinary-visit half) — the ONLY test that ran "Today" with the venue zone and the org zone apart.
+// "Today" is the VENUE's day (the sheet's `tz`), never the org's (`orgTz`, the Set-time editor's zone). Auckland is
+// UTC+13 on 2026-03-01 (NZDT): at 12:00Z it is already 01:00 on 2 March there, so a fixture at 09:00Z (22:00 on 1 March,
+// local) is today in UTC and YESTERDAY at the venue, and one at 15:00Z (04:00 on 2 March) is today at the venue. The
+// expected days come from the engine's own `dayKeyInTz`, never from the sheet.
+describe("'Today' is the venue's day, not the org's (venue zone ≠ org zone)", () => {
+  const VENUE = "Pacific/Auckland";
+  const ORG = "UTC";
+  const NOW = Date.parse("2026-03-01T12:00:00Z");
+  const todayAtVenue = fx(201, { scheduled_at: "2026-03-01T15:00:00.000Z" });
+  const yesterdayAtVenue = fx(202, { scheduled_at: "2026-03-01T09:00:00.000Z" });
+  const set = [todayAtVenue, yesterdayAtVenue];
+  const html = () =>
+    renderToStaticMarkup(
+      <RunSheet
+        blocks={buildRunSheet({ fixtures: set, stages: STAGES, tz: VENUE, nowMs: NOW })}
+        stages={STAGES}
+        tz={VENUE}
+        orgTz={ORG}
+        nowMs={NOW}
+        matchMinutes={MATCH_MINUTES}
+        entrantNames={{ e1: "Alpha", e2: "Bravo" }}
+        canEdit={true}
+        hrefFor={(f) => `/f/${f.fixture_no}`}
+        filter="today"
+        onFilter={() => {}}
+        stageId={null}
+        onStageFilter={() => {}}
+      />,
+    );
+
+  it("premises: the two zones disagree about both fixtures", () => {
+    const day = (iso: string, tz: string) => dayKeyInTz(Date.parse(iso), tz);
+    expect(day(todayAtVenue.scheduled_at!, VENUE)).toBe(dayKeyInTz(NOW, VENUE));
+    expect(day(todayAtVenue.scheduled_at!, ORG), "…and is today in the org's zone too — the discriminating row is the other").toBe(dayKeyInTz(NOW, ORG));
+    expect(day(yesterdayAtVenue.scheduled_at!, VENUE)).not.toBe(dayKeyInTz(NOW, VENUE));
+    expect(day(yesterdayAtVenue.scheduled_at!, ORG)).toBe(dayKeyInTz(NOW, ORG));
+  });
+
+  it("an ordinary visit on Today renders the venue's today and hides the venue's yesterday (the positive pair)", () => {
+    const rows = renderedRows(html());
+    expect(rows, "the venue's today").toContain(201);
+    expect(rows, "today in the ORG zone, yesterday at the venue").not.toContain(202);
+  });
+});
