@@ -1417,6 +1417,15 @@ export const StreamTarget = z.object({
 });
 export type StreamTarget = z.infer<typeof StreamTarget>;
 
+/** How a create landed (secret-columns.ts `insertStreamTarget`, spec §5.2 create order): `existing` — the key is already
+ *  an active destination, returned UNCHANGED (A19, owner decision (a): the typed name and watch link are not applied);
+ *  `restored` — a removed one brought back under the typed name and watch link (D2); `inserted` — a new row. */
+export const StreamTargetSaveOutcome = z.enum(["existing", "restored", "inserted"]);
+export type StreamTargetSaveOutcome = z.infer<typeof StreamTargetSaveOutcome>;
+/** POST /orgs/{id}/stream-targets — the stored row as the list reads it, plus how the save landed. */
+export const StreamTargetSaved = StreamTarget.extend({ outcome: StreamTargetSaveOutcome });
+export type StreamTargetSaved = z.infer<typeof StreamTargetSaved>;
+
 /** Spec §5.2 — Rename (`{label}`, allowed at any time) or Replace key (`{streamKey}`, refused while held). Exactly one. */
 export const PatchStreamTarget = z
   .object({ label: z.string().min(1).max(80).optional(), streamKey: z.string().min(1).max(200).optional() })

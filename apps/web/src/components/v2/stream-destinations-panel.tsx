@@ -21,7 +21,7 @@ import {
   type StreamPlatform,
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
-import type { StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
+import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -95,7 +95,9 @@ export function destinationErrorText(msg: Msg, err: unknown, kind: StreamTargetK
   }
 }
 
-type Run = (op: Op, kind: StreamTargetKind, call: () => Promise<unknown>) => Promise<boolean>;
+/** A mutation's result: `ok` with what the call answered (null when a row op's 404 meant "already done"), or not. */
+type RunResult<T> = { ok: true; value: T | null } | { ok: false };
+type Run = <T>(op: Op, kind: StreamTargetKind, call: () => Promise<T>) => Promise<RunResult<T>>;
 type AddBody = { kind: StreamPlatform; label: string; streamKey: string; watchUrl?: string };
 
 export function StreamDestinationsPanel({
@@ -118,20 +120,20 @@ export function StreamDestinationsPanel({
   const run: Run = async (op, kind, call) => {
     setError(null);
     try {
-      await call();
+      const value = await call();
       router.refresh();
-      return true;
+      return { ok: true, value };
     } catch (err) {
       const w = wireOf(err);
       if (op !== "add" && w && destinationMutationOutcome(w.status, op) === "refresh") {
         router.refresh();
-        return true;
+        return { ok: true, value: null };
       }
       setError(destinationErrorText(msg, err, kind));
       // A refusal naming a holder means this page was stale: the destination is held NOW, so the list is re-read and the
       // row locks with its badge (the error line stays until the next action).
       if (w?.code === "TARGET_IN_USE") router.refresh();
-      return false;
+      return { ok: false };
     }
   };
 
@@ -157,8 +159,18 @@ export function StreamDestinationsPanel({
         <AddForm
           onCancel={() => setAddOpen(false)}
           onSave={async (body) => {
-            const ok = await run("add", body.kind, () => apiV1(`/api/v1/orgs/${orgId}/stream-targets`, { method: "POST", json: body }));
-            if (ok) setAddOpen(false);
+            const saved = await run("add", body.kind, () =>
+              apiV1<StreamTargetSaved>(`/api/v1/orgs/${orgId}/stream-targets`, { method: "POST", json: body }),
+            );
+            if (!saved.ok) return;
+            // A19, owner decision (a): a key already saved is that destination, UNCHANGED — nothing was added and the
+            // typed name was not applied, so the form stays open and names the destination that holds the key (the
+            // refresh above has put it on the list).
+            if (saved.value?.outcome === "existing") {
+              setError(msg("streamDest.error.duplicate", { label: saved.value.label }));
+              return;
+            }
+            setAddOpen(false);
           }}
         />
       )}
@@ -429,8 +441,8 @@ export function DestinationRow({
     busy.current = true;
     setSaving(true);
     try {
-      const ok = await run(op, t.kind, () => apiV1(path, { method: "PATCH", json: body }));
-      if (ok) setMode(null);
+      const done = await run(op, t.kind, () => apiV1(path, { method: "PATCH", json: body }));
+      if (done.ok) setMode(null);
     } finally {
       busy.current = false;
       setSaving(false);

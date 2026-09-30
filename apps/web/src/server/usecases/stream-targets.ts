@@ -14,7 +14,7 @@ import {
 } from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStreamTarget, PatchStreamTarget, StreamTarget } from "@/server/api-v1/schemas";
+import type { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetSaved } from "@/server/api-v1/schemas";
 import {
   archiveStreamTarget, insertStreamTarget, lockStreamTarget, readKeyHints, replaceTargetKey, type StoredStreamTarget,
 } from "@/server/relay/secret-columns";
@@ -81,7 +81,7 @@ export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<S
   });
 }
 
-export async function createStreamTarget(auth: AuthCtx, orgId: string, body: CreateStreamTarget): Promise<StreamTarget> {
+export async function createStreamTarget(auth: AuthCtx, orgId: string, body: CreateStreamTarget): Promise<StreamTargetSaved> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   // Task 9 review minor 7: surrounding whitespace is the commonest paste error from a platform dashboard, and it is
   // part of no stream key any listed service issues. It is TRIMMED, not refused: the organiser cannot see it, so a
@@ -98,8 +98,10 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   const watch = body.watchUrl === undefined ? null : streamUrlSchema.safeParse(body.watchUrl);
   if (watch && !watch.success) throw new HttpError(422, "invalid watch link");
   const watchUrl = watch ? watch.data : null;
-  // A19 + D2: the same destination again is the EXISTING target, or its most recently archived row restored
-  // (insertStreamTarget), so the reply is the STORED row — never this body echoed onto an id it did not write.
+  // A19 + D2: the same destination again is the EXISTING target (unchanged — owner decision (a)), or its most recently
+  // archived row restored under this body's label and watch link (insertStreamTarget), so the reply is the STORED row —
+  // never this body echoed onto an id it did not write — plus the `outcome`, the only way the Directory can tell
+  // "already saved as {label}" from a save.
   const stored = (await sql.begin((tx) =>
     insertStreamTarget(tx, { orgId, kind: body.kind, label, watchUrl, rtmp: { url: destination.url, streamKey } }),
   )) as StoredStreamTarget;
@@ -107,7 +109,7 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   // insert and this read is a 409 retry, never a 500.
   const row = (await listStreamTargets(auth, orgId)).find((t) => t.id === stored.id);
   if (!row) throw new HttpError(409, "the destination changed while it was being saved; try again");
-  return row;
+  return { ...row, outcome: stored.outcome };
 }
 
 /** Spec §5.2 — 409 TARGET_IN_USE, naming the match that holds the destination. Uppercase: the spec's code for the

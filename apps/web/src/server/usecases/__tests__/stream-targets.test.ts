@@ -40,7 +40,7 @@ import { sql } from "@/lib/db";
 import {
   DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE, checkDestination,
 } from "@/lib/stream-destinations";
-import { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
+import { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
 import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
 import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { holdRig, rigTarget, sessionOnTarget, targetEnvelope } from "@/server/relay/__tests__/_session-rig";
@@ -84,8 +84,9 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     });
     expect(made).toMatchObject({ kind: "youtube", label: "Club channel", watchUrl: "https://www.youtube.com/watch?v=abc123" });
     // Exactly the wire shape (the schema's own keys) — there is no field a key could ride in, not merely an absent value.
-    expect(Object.keys(made).sort()).toEqual(Object.keys(StreamTarget.shape).sort());
-    expect(StreamTarget.parse(made)).toEqual(made);
+    expect(Object.keys(made).sort()).toEqual(Object.keys(StreamTargetSaved.shape).sort());
+    expect(StreamTargetSaved.parse(made)).toEqual(made);
+    expect(made.outcome).toBe("inserted");
     expect(JSON.stringify(made)).not.toContain(streamKey);
     const list = await listStreamTargets(auth, auth.orgId);
     expect(list.map((t) => t.id)).toEqual([made.id]);
@@ -201,8 +202,10 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     const first = await createStreamTarget(auth, auth.orgId, { ...same, streamKey: k1 });
     const second = await createStreamTarget(auth, auth.orgId, { ...same, streamKey: k2 });
     expect(second.id).not.toBe(first.id);
-    // The list projection is exactly what create returned, in creation order.
-    expect(await listStreamTargets(auth, auth.orgId)).toEqual([first, second]);
+    // The list projection is exactly what create returned (less how it landed), in creation order.
+    expect([first.outcome, second.outcome]).toEqual(["inserted", "inserted"]);
+    // The list's own schema drops `outcome` (zod strips unknown keys) — nothing else may differ.
+    expect(await listStreamTargets(auth, auth.orgId)).toEqual([StreamTarget.parse(first), StreamTarget.parse(second)]);
     const keys = await sql.begin(async (tx) => [
       (await readTargetSecret(tx, auth.orgId, first.id)).streamKey,
       (await readTargetSecret(tx, auth.orgId, second.id)).streamKey,
@@ -234,15 +237,18 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
   // to add twice. The repeat is idempotent: the EXISTING target comes back and no second sealed copy is written.
   // A19b's default-port spelling is unreachable through create since D6 (the url is the preset); it is pinned at the
   // writer (secret-columns.test.ts "even spelled with its default port") and in destinationIdentity's own tests.
-  it("A19: the SAME destination twice is ONE row — the repeat returns the stored target (its label, not the new body's) and seals nothing new", async () => {
+  it("A19 (owner decision a, B4 fix round 1): the SAME destination twice is ONE row — the repeat is outcome `existing` and RENAMES NOTHING: the stored label and watch link stand, not the new body's, and nothing new is sealed", async () => {
     const { auth } = await seedOrg();
     const [kTw, kYt] = [key(), key()];
     const tw = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Twitch", streamKey: kTw });
-    const twAgain = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Twitch again", streamKey: kTw });
-    expect(twAgain).toEqual(tw);
+    expect(tw.outcome, "the first save is a new row").toBe("inserted");
+    const twAgain = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Twitch again", streamKey: kTw, watchUrl: "https://www.twitch.tv/other" });
+    expect(twAgain).toEqual({ ...tw, outcome: "existing" });
+    expect(twAgain.label, "the typed name is NOT applied").toBe("Twitch");
+    expect(twAgain.watchUrl, "the typed watch link is NOT applied").toBeNull();
     const yt = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "YouTube", streamKey: kYt });
     const ytAgain = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "YouTube again", streamKey: kYt });
-    expect(ytAgain).toEqual(yt);
+    expect(ytAgain).toEqual({ ...yt, outcome: "existing" });
     expect(yt.id).not.toBe(tw.id);
     // The FIRST envelope is the one kept: the platform's preset url and the first key.
     expect(await sql.begin((tx) => readTargetSecret(tx, auth.orgId, tw.id))).toEqual({ url: STREAM_PLATFORM_PRESETS.twitch, streamKey: kTw });
@@ -250,7 +256,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
       select id, dest_fingerprint as fp from org_stream_targets where org_id = ${auth.orgId} order by created_at`;
     expect(rows.map((r) => r.id)).toEqual([tw.id, yt.id]);
     expect(rows.every((r) => /^[0-9a-f]{64}$/.test(r.fp ?? ""))).toBe(true);
-    expect(await listStreamTargets(auth, auth.orgId)).toEqual([tw, yt]);
+    expect(await listStreamTargets(auth, auth.orgId), "the list still holds the FIRST names").toEqual([StreamTarget.parse(tw), StreamTarget.parse(yt)]);
   });
 
   it("A19: a different KEY on the same platform, another PLATFORM with the same key, or ANOTHER ORG with the same platform + key is a new row (the dedupe never crosses an org)", async () => {
@@ -473,8 +479,13 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
     expect((await listStreamTargets(auth, auth.orgId)).map((x) => x.id)).not.toContain(t.id);
     await expect(removeStreamTarget(auth, auth.orgId, t.id)).rejects.toMatchObject({ status: 404 });
     await expect(patchStreamTarget(auth, auth.orgId, t.id, { label: "x" })).rejects.toMatchObject({ status: 404 });
-    const back = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "Tw again", streamKey: "live_42_abcdefghijklmnopqrstu" });
-    expect(back).toMatchObject({ id: t.id, label: "Tw again" });
+    // D2 + owner decision (a): the restore takes the NEWLY typed name AND watch link — and says it restored.
+    const back = await createStreamTarget(auth, auth.orgId, {
+      kind: "twitch", label: "Tw again", streamKey: "live_42_abcdefghijklmnopqrstu", watchUrl: "https://www.twitch.tv/club",
+    });
+    expect(back).toMatchObject({ id: t.id, label: "Tw again", watchUrl: "https://www.twitch.tv/club", outcome: "restored" });
+    expect((await listStreamTargets(auth, auth.orgId)).find((x) => x.id === t.id), "the list reads the restored row's new name")
+      .toMatchObject({ label: "Tw again", watchUrl: "https://www.twitch.tv/club" });
   });
 
   it("another org's target is 404 for rename, replace and remove — never a 409 that confirms it exists", async () => {
@@ -580,6 +591,12 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets — the route", () =>
     expect(text).not.toContain(streamKey);
     const created = StreamTarget.parse(JSON.parse(text).data);
     expect(created).toMatchObject({ kind: "youtube", label: "Club", watchUrl: "https://youtu.be/abc" });
+    expect(StreamTargetSaved.parse(JSON.parse(text).data).outcome, "the wire says how the save landed").toBe("inserted");
+    // A19 (owner decision a): the same key again answers the SAME row, outcome `existing`, its stored name unchanged —
+    // the only thing the Directory can tell "already saved" by.
+    const again = await post(auth.orgId, { kind: "youtube", label: "Another name", streamKey });
+    expect(again.status).toBe(201);
+    expect(StreamTargetSaved.parse((await again.json()).data)).toEqual({ ...created, outcome: "existing" });
 
     const listed = await get(auth.orgId);
     expect(listed.status).toBe(200);

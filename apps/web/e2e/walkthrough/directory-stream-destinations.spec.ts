@@ -204,7 +204,7 @@ async function seedRig(page: Page, opts: { entrants?: number } = {}): Promise<Ri
   return { orgId, orgSlug, tag, divPath, fixtures };
 }
 
-interface Target { id: string; kind: string; label: string; keyHint: string | null; inUse: { matchNo: number | null; state: string; href: string | null } | null }
+interface Target { id: string; kind: string; label: string; watchUrl: string | null; keyHint: string | null; inUse: { matchNo: number | null; state: string; href: string | null } | null }
 async function listApi(page: Page, orgId: string): Promise<Target[]> {
   const res = await apiJson<Target[]>(page.request, `/api/v1/orgs/${orgId}/stream-targets`);
   expect(res.status, "the list reads").toBe(200);
@@ -330,7 +330,7 @@ for (const width of [320, 1280] as const) {
     page,
   }) => {
     const NAVS = 9; // directory ×5, fixture ×3, + the rig's sign-in
-    const SAVES = 6; // add, remove, re-add, replace, twitch, + go live / stop round trips
+    const SAVES = 7; // add, remove, re-add, the A19 repeat, replace, twitch, + go live / stop round trips
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS + SAVES * SAVE_MS);
     await page.setViewportSize({ width, height: width < 768 ? 700 : 900 });
     const rig = await seedRig(page, { entrants: 2 });
@@ -433,6 +433,21 @@ for (const width of [320, 1280] as const) {
     list = await listApi(page, rig.orgId);
     expect(list.map((t) => [t.id, t.label]), "the SAME id, restored under the new name").toEqual([[id, label2]]);
     await expect(rowOf(page, id)).toContainText(label2);
+
+    // 7b. A19, owner decision (a): the same key AGAIN — now an active destination — under yet another name and a watch
+    //     link. Nothing is added and nothing renamed: the form stays open and names the destination holding the key.
+    const postsBefore = log.filter((r) => r.method === "POST").length;
+    const again = await addViaForm(page, { platform: "youtube", label: `Third name ${rig.tag}`, key, watch: "https://www.youtube.com/@elsewhere" });
+    await expect(page.getByTestId("stream-dest-error")).toHaveText(en("streamDest.error.duplicate", { label: label2 }), { timeout: SAVE_MS });
+    await expect(again, "the form stays open").toBeVisible();
+    expect(log.filter((r) => r.method === "POST").length - postsBefore, "one POST").toBe(1);
+    expect((await listApi(page, rig.orgId)).map((t) => [t.id, t.label, t.watchUrl]), "nothing added, nothing renamed, no watch link applied")
+      .toEqual([[id, label2, null]]);
+    await expect(rows(page)).toHaveCount(1);
+    await expectNoHorizontalScroll(page);
+    await shot(panel, `fix1-A19-${width}-already-saved.png`);
+    await again.getByTestId("stream-dest-cancel").click();
+    await expect(again).toHaveCount(0);
 
     // 8. REPLACE KEY.
     const key2 = ytKey();

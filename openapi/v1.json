@@ -53559,7 +53559,7 @@
         ]
       },
       "post": {
-        "summary": "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed. 409 when a concurrent save of the same destination won: try again",
+        "summary": "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination UNCHANGED (`outcome: existing` — its name and watch link stand), or restores a removed one under the submitted name and watch link (`outcome: restored`); a new destination is `outcome: inserted`. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed. 409 when a concurrent save of the same destination won: try again",
         "tags": [
           "fixtures"
         ],
@@ -53756,6 +53756,14 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "outcome": {
+                          "type": "string",
+                          "enum": [
+                            "existing",
+                            "restored",
+                            "inserted"
+                          ]
                         }
                       },
                       "required": [
@@ -53765,7 +53773,8 @@
                         "watchUrl",
                         "createdAt",
                         "keyHint",
-                        "inUse"
+                        "inUse",
+                        "outcome"
                       ],
                       "additionalProperties": false
                     },
@@ -53791,7 +53800,8 @@
                       "matchNo": -9007199254740991,
                       "courtName": "example",
                       "state": "live"
-                    }
+                    },
+                    "outcome": "existing"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

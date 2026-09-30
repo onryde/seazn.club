@@ -28,7 +28,7 @@ import {
   DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isStreamPlatform,
 } from "@/lib/stream-destinations";
 import { v1, parseBody } from "@/server/api-v1/http";
-import { CreateStreamTarget, StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
+import { CreateStreamTarget, StreamTargetKind, StreamTargetSaveOutcome, type StreamTarget, type StreamTargetSaved } from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError, TargetUnreadableError, targetHeld } from "@/server/usecases/stream-targets";
 import type { TargetHolder } from "@/server/usecases/stream-target-holders";
 import { STREAM_KIND_BRAND, STREAM_MARK_KINDS, platformName } from "../stream-platform-mark";
@@ -629,6 +629,36 @@ describe("StreamDestinationsPanel — the add path, driven", () => {
     await settle();
     expect(textAt(refused.tree(), "stream-dest-error")).toBe(m("streamDest.error.duplicate", { label: "Old cam" }));
     expect(refused.tree().find((el) => el.type === AddForm), "open after a refusal").toBeDefined();
+  });
+
+  it("A19 (owner decision a): a key already saved answers `existing` — the form stays OPEN and says 'already saved as {the STORED name}', the list refreshes; `restored` and `inserted` close it", async () => {
+    const save = async (outcome: StreamTargetSaved["outcome"], stored: Partial<StreamTarget> = {}) => {
+      refresh.mockReset();
+      const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [], locale: "en", initialAddOpen: true });
+      transport.impl = async (url, opts) => {
+        apiCalls.push({ url, method: opts?.method ?? "GET", json: opts?.json });
+        return { ...target(stored), outcome } satisfies StreamTargetSaved;
+      };
+      await (propsOf(panel.tree().find((el) => el.type === AddForm)!).onSave as (b: unknown) => Promise<void>)({ kind: "youtube", label: "Typed name", streamKey: "k" });
+      await settle();
+      return panel;
+    };
+    // The stored name differs from the typed one — the copy must name the SAVED destination, never echo the form.
+    const existing = await save("existing", { label: "Court 1 camera" });
+    expect(existing.tree().find((el) => el.type === AddForm), "open: nothing was added").toBeDefined();
+    expect(textAt(existing.tree(), "stream-dest-error")).toBe(m("streamDest.error.duplicate", { label: "Court 1 camera" }));
+    expect(textAt(existing.tree(), "stream-dest-error")).not.toContain("Typed name");
+    expect(refresh, "the list is re-read, so the saved row is on screen").toHaveBeenCalledTimes(1);
+
+    let checked = 0;
+    for (const outcome of ["restored", "inserted"] as const) {
+      const panel = await save(outcome);
+      expect(panel.tree().find((el) => el.type === AddForm), `${outcome}: closed`).toBeUndefined();
+      expect(byTestId(panel.tree(), "stream-dest-error"), `${outcome}: no message`).toBeUndefined();
+      expect(refresh, outcome).toHaveBeenCalledTimes(1);
+      checked++;
+    }
+    expect(checked).toBe(StreamTargetSaveOutcome.options.length - 1);
   });
 
   it("an add refused 404 is an ERROR, not 'already done' — the 404 rule is for rows that exist", async () => {

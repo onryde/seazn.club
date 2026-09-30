@@ -4146,7 +4146,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
     const tally = {
       runs: 0, steps: 0, skipped: 0, checks: 0, refusals: 0,
       targetHoldChecks: 0, listRowsChecked: 0, archivedAbsent: 0, sessionRowsChecked: 0, tableRowsChecked: 0, refusalMoneyChecks: 0, refusalCallChecks: 0,
-      heldRemoveRefusals: 0, heldReplaceRefusals: 0, sameIdRestores: 0, crossOrgRefusals: 0, archivedTakeRefusals: 0, unreadableRefusals: 0,
+      heldRemoveRefusals: 0, heldReplaceRefusals: 0, sameIdRestores: 0, existingKept: 0, crossOrgRefusals: 0, archivedTakeRefusals: 0, unreadableRefusals: 0,
       duplicateRefusals: 0, staleExpired: 0, heldAfterVoid: 0, otherPlatformNew: 0, runningOverHeld: 0,
     };
     const seen = new Set<DestCmd["kind"]>();
@@ -4215,15 +4215,22 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
               const archived = targets.filter((x) => same(x) && x.archived).sort((a, b) => b.archivedAt - a.archivedAt)[0];
               run = () => createStreamTarget(auth, orgId, { kind: c.platform, label: lbl, streamKey: key });
               onOk = (v) => {
-                const got = (v as { id: string }).id;
+                const { id: got, label: gotLabel, outcome } = v as { id: string; label: string; outcome: string };
                 if (active) {
                   expect(got, `${label}: §5.2 create order 1 — the ACTIVE row with this destination`).toBe(active.id);
+                  // A19, owner decision (a): nothing is renamed — the model's label stands, and the wire says `existing`.
+                  expect(outcome, `${label}: A19 — the already-saved destination is reported as existing`).toBe("existing");
+                  expect(gotLabel, `${label}: A19 — the typed name is not applied`).toBe(active.label);
+                  tally.existingKept++;
                 } else if (archived) {
                   expect(got, `${label}: D2 — re-adding a removed key restores the SAME id`).toBe(archived.id);
                   archived.archived = false;
                   archived.label = lbl;
+                  expect(outcome, `${label}: D2 — reported as restored`).toBe("restored");
+                  expect(gotLabel, `${label}: D2 — the restore takes the NEWLY typed name`).toBe(archived.label);
                   tally.sameIdRestores++;
                 } else {
+                  expect(outcome, `${label}: §5.2 create order 3 — reported as inserted`).toBe("inserted");
                   expect(targets.map((x) => x.id), `${label}: §5.2 create order 3 — a NEW row`).not.toContain(got);
                   if (targets.some((x) => x.org === o && x.key === key && x.platform !== c.platform && !x.archived)) tally.otherPlatformNew++;
                   targets.push({ id: got, org: o, platform: c.platform, key, label: lbl, archived: false, archivedAt: 0 });
@@ -4429,7 +4436,7 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
     expect(tally.checks, "one invariant pass per step plus one per rig").toBe(tally.steps + tally.runs);
     expect([...seen].sort()).toEqual(["add", "age", "connect", "goLive", "remove", "replace", "stop", "void"]);
     for (const k of ["targetHoldChecks", "listRowsChecked", "archivedAbsent", "sessionRowsChecked", "tableRowsChecked", "refusalMoneyChecks", "refusalCallChecks",
-      "heldRemoveRefusals", "heldReplaceRefusals", "sameIdRestores", "crossOrgRefusals", "archivedTakeRefusals", "unreadableRefusals", "duplicateRefusals",
+      "heldRemoveRefusals", "heldReplaceRefusals", "sameIdRestores", "existingKept", "crossOrgRefusals", "archivedTakeRefusals", "unreadableRefusals", "duplicateRefusals",
       "staleExpired", "heldAfterVoid", "otherPlatformNew", "runningOverHeld"] as const) {
       expect(tally[k], `${k}: zero checked is a failure`).toBeGreaterThan(0);
     }
