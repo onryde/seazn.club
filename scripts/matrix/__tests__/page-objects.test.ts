@@ -15,8 +15,9 @@ import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON } from "../lib/browser/pages/competition.ts";
 import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
-import { LandedElsewhere, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, boundActions, entrantNameMatcher, exactPath, navBudget, selectorValue, shotLabel, stepBudget, visit } from "../lib/browser/pages/ctx.ts";
-import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages } from "../lib/browser/pages/division-builder.ts";
+import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
+import { LandedElsewhere, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, boundActions, entrantNameMatcher, exactPath, navBudget, selectorValue, shotLabel, stepBudget, visit, type PageCtx } from "../lib/browser/pages/ctx.ts";
+import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
 import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit } from "../lib/browser/pages/fixture-console.ts";
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
@@ -25,7 +26,7 @@ import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelec
 import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector } from "../lib/browser/pages/run-sheet.ts";
 import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
-import { DATA, NAME } from "../lib/browser/selectors.ts";
+import { DATA, NAME, TESTID, templateLabel } from "../lib/browser/selectors.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -543,6 +544,118 @@ describe("awaitDivisionAndStages: the builder's two answers", () => {
     const f = fakePage();
     await expect(awaitDivisionAndStages(f.page, "comp-1", async () => undefined, 30)).rejects.toMatchObject({ name: "NoProductResponse", reason: "no-response" });
     expect(NoProductResponse).toBeDefined();
+  });
+});
+
+// W1c Task 8 (Walkthrough A, H-1): the builder's only picture before Create
+// was taken on its LAST tab, Scheduling, so no picture of the run showed the
+// sport, the variant or the format the organiser picked. Driven here through
+// a recording page: every action and every picture lands in one log, in order.
+describe("createDivisionUi: the organiser's picks are pictured before Create", () => {
+  const BASE = "http://localhost:3999";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  interface Loc { d: string; [k: string]: unknown }
+  function builderPage(o: { inert?: boolean } = {}) {
+    const log: string[] = [];
+    let screen = 0; // every UI action changes what the page shows, unless inert
+    let url = "about:blank";
+    let onLastTab = false;
+    let built = 0;
+    type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const resp = (path: string, data: unknown): Resp => ({ request: () => ({ method: () => "POST" }), url: () => `${BASE}${path}`, status: () => 201, json: () => Promise.resolve({ ok: true, data }) });
+    const act = (line: string) => { log.push(line); if (!o.inert) screen++; };
+    const loc = (d: string): Loc => ({
+      d,
+      filter: (f: { has: Loc }) => loc(`${d}[has ${f.has.d}]`),
+      locator: (s: string) => loc(`${d} ${s}`),
+      fill: async (v: string) => act(`fill ${d} = ${v}`),
+      selectOption: async (v: { value: string }) => act(`select ${d} = ${v.value}`),
+      waitFor: async () => undefined,
+      check: async () => act(`check ${d}`),
+      count: async () => (d === `testid:${TESTID.builderCreate.id}` && onLastTab ? 1 : 0),
+      innerText: async () => "",
+      click: async () => {
+        act(`click ${d}`);
+        if (d === `testid:${TESTID.builderNext.id}`) onLastTab = true;
+        if (d !== `testid:${TESTID.builderCreate.id}`) return;
+        built++;
+        const division = { id: `div-${built}`, slug: `open-${built}`, sport_key: "badminton", variant_key: "bwf" };
+        emit(resp("/api/v1/competitions/comp-1/divisions", division));
+        await new Promise((r) => setTimeout(r, 0));
+        emit(resp(`/api/v1/divisions/div-${built}/stages`, [{ id: `st-${built}`, seq: 1, kind: "league" }]));
+        url = `${BASE}${paths.division("org", "comp", division.slug)}`;
+      },
+    });
+    const page = {
+      goto: async (u: string) => { log.push(`goto ${new URL(u).pathname}`); url = u; onLastTab = false; },
+      url: () => url,
+      request: { post: async () => ({ ok: () => true, status: () => 200 }) },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      getByText: (t: string) => loc(`text:${t}`),
+      getByRole: (role: string, n: { name: string }) => loc(`${role}:${n.name}`),
+      locator: (s: string) => loc(s),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForURL: async (pred: (u: URL) => boolean) => { if (!pred(new URL(url))) throw new Error(`fake: never landed (at ${url})`); },
+      evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { log, ctx, evidence };
+  }
+  const INPUT = { name: "Open", sportKey: "badminton", variantKey: "bwf", row: "league" as const };
+  const field = (text: string) => `label[has text:${text}] select`;
+  const template = `label[has ${DATA.templateRadio.selector}][has text:${templateLabel("league")}]`;
+  const walk = (n: string) => [
+    `goto ${paths.divisionNew("org", "comp")}`,
+    `fill testid:${TESTID.builderName.id} = Open`,
+    `select ${field(NAME.sportSelect.text)} = badminton`,
+    `select ${field(NAME.variantSelect.text)} = bwf`,
+    `shot 02-builder-basics${n}`,
+    `click button:${NAME.formatTab.text}`,
+    `check ${template}`,
+    `shot 02-builder-format${n}`,
+    `click testid:${TESTID.builderNext.id}`,
+    `shot 02-division-built-before${n}`,
+    `click testid:${TESTID.builderCreate.id}`,
+    `shot 02-division-built${n}`,
+  ];
+  const visual = (ev: Evidence) => ev.checks().find((c) => c.id === "visual-evidence")!;
+
+  it("the sport and variant are pictured once picked, the format once checked — both before the walk to Create; a second division numbers its own", async () => {
+    const b = builderPage();
+    const first = await createDivisionUi(b.ctx, "comp", "comp-1", INPUT);
+    expect(first.division.slug).toBe("open-1");
+    expect(b.log).toEqual(walk(""));
+    // The sequence: a second division in the same case is pictured under its own numbered labels.
+    b.log.length = 0;
+    await createDivisionUi(b.ctx, "comp", "comp-1", INPUT);
+    expect(b.log).toEqual(walk("-2"));
+    // Each picture must differ from the one before it: basics → format → Scheduling (before Create) → built.
+    expect(visual(b.evidence)).toMatchObject({ verdict: "pass", checked: 8, reason: "8 shot(s) written and non-empty; 6 must-differ pair(s) differ" });
+  });
+
+  it("a builder whose screen never changes is refused picture by picture, format against basics first", async () => {
+    const b = builderPage({ inert: true });
+    await createDivisionUi(b.ctx, "comp", "comp-1", INPUT);
+    const v = visual(b.evidence);
+    expect([v.verdict, v.checked]).toEqual(["fail", 4]);
+    expect(v.evidence.map((e) => e.split(" (sha256")[0])).toEqual([
+      "02-builder-format: identical to 02-builder-basics",
+      "02-division-built-before: identical to 02-builder-format",
+      "02-division-built: identical to 02-division-built-before",
+    ]);
   });
 });
 

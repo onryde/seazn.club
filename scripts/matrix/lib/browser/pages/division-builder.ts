@@ -92,9 +92,13 @@ export async function createDivisionUi(c: PageCtx, compSlug: string, compId: str
   // The sport's own variant list, re-derived by the pick above.
   await awaitScreen(() => variant.locator(`option[value="${selectorValue("variant key", input.variantKey)}"]`).waitFor({ state: "attached", timeout: t }), `variant ${input.variantKey} under sport ${input.sportKey}`, t);
   await variant.selectOption({ value: input.variantKey }, { timeout: t });
+  // Each pick is pictured on the tab that shows it: Create lives on the LAST
+  // tab, so the shot before it can show neither the sport nor the format.
+  const basics = await shoot(c, "02-builder-basics");
   await page.getByRole("button", { name: NAME.formatTab.text, exact: true }).click({ timeout: t });
   // check() on the template's <label> checks its sr-only radio and throws unless it ends checked.
   await page.locator("label").filter({ has: page.locator(DATA.templateRadio.selector) }).filter({ has: page.getByText(templateLabel(input.row), { exact: true }) }).check({ timeout: t });
+  const format = await shoot(c, "02-builder-format", basics);
   const create = page.getByTestId(TESTID.builderCreate.id);
   for (let pressed = 0; pressed < BUILDER_TABS && (await create.count()) === 0; pressed++) {
     await page.getByTestId(TESTID.builderNext.id).click({ timeout: t });
@@ -103,7 +107,7 @@ export async function createDivisionUi(c: PageCtx, compSlug: string, compId: str
     const error = page.getByTestId(TESTID.builderError.id);
     throw new BuilderNeverOfferedCreate(BUILDER_TABS, (await error.count()) > 0 ? await error.innerText({ timeout: t }) : null);
   }
-  const before = await shoot(c, "02-division-built-before");
+  const before = await shoot(c, "02-division-built-before", format);
   const built = await awaitDivisionAndStages(page, compId, () => create.click({ timeout: t }), actBudget(c, 2));
   assertBuiltAsAsked(built.division, input);
   const landing = paths.division(c.orgSlug, compSlug, built.division.slug);
