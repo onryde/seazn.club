@@ -808,6 +808,20 @@ a peer session as the other.
       - D5: future generator gaps route to W2.
       - D10: `--workers > 1` is HTTP-only in this wave.
       - D13: the L1 proof excludes cricket `test`, and the pad routes for its new events go to W1d's list.
+53. **R4 on the ladder is judged by what a withdrawal actually leaves** (2026-09-30). The owner said "apply rec" to
+    the controller's recommendation from plan review 2. It is recorded here as the owner's ruling on that
+    recommendation (class 17).
+    - **Why.** False premise 13 was confirmed by the review. After seed 3's decided first challenge, nothing is
+      pending. The ladder takes the open-format branch (`withdrawal.ts:213-217`), so the policy is `none` and
+      nothing is voided.
+    - **What a ladder R4 asserts:**
+      - the policy is derived from the product's pending set;
+      - seed 3's decided challenge is unchanged;
+      - seed 3 is gone from the live ladder order but stays in the raw `ladder_order`;
+      - no later challenge seats seed 3;
+      - zero challenges are refused.
+    - **Noted for W7, not asserted:** `finalRanks` is the raw `ladder_order` (`competition.ts:606`), so a withdrawn
+      player keeps their rung.
 
 ## Recommendations (mine — not rulings)
 
