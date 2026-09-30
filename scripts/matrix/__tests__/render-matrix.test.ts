@@ -173,13 +173,43 @@ describe("renderMatrix — v3 results, 🚫 and ░ (W1c Task 3)", () => {
       expect(cells(lineStarting(renderMatrix(run3(cases)), "| league |")!)[1]).toBe("🚫");
     }
   });
-  it("v2 and v3 holding the same cases render identically, bar the schema version in the header", () => {
+  it("v2 and v3 holding the same cases render identically, bar the schema version and v3's layer line in the header", () => {
     const v3cases = [works("league", "generic"), noPath, notRun];
     const v2cases: CaseResultV2[] = v3cases.map(({ layer: _l, driver: _d, width: _w, ...c }) => c);
     const v3md = renderMatrix(run3(v3cases));
     const v2md = renderMatrix({ ...run(v2cases, small), runId: "r3" });
     expect(v3md).toContain("schema v3");
     expect(v2md).toContain("schema v2");
-    expect(v3md.replace("schema v3", "schema v2")).toBe(v2md);
+    const layerLine = "> Layer **L2** · driver **browser** · plan not recorded (written before W1c Task 14).\n\n";
+    expect(v3md).toContain(layerLine);
+    expect(v3md.replace("schema v3", "schema v2").replace(layerLine, "")).toBe(v2md);
+  });
+});
+
+// W1c Task 14 carry 5 (Task 3 review minor): MATRIX.md's header named only the
+// schema version, so a reader could not tell an L1 browser run from an L3 HTTP
+// one without opening results.json. A v3 header names the run's layer, its
+// driver and — once recorded (carry 6) — the plan that produced it. v2
+// evidence renders byte-for-byte as before (committed-matrix.test.ts pins it).
+describe("renderMatrix — the header names the layer, driver and plan (W1c Task 14 carry 5)", () => {
+  const small = { rows: ["league"], sports: ["generic"] };
+  const v3 = (p: Partial<RunResults>): RunResults => ({ schemaVersion: 3, runId: "r3", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid: small, layer: "L3", driver: "http", cases: [], ...p });
+  const line = (md: string) => lineStarting(md, "> Layer ");
+  it("empty case first: a v3 run with zero cases still names them above the banner", () => {
+    const md = renderMatrix(v3({ layer: "L1", driver: "browser", plan: "--layer L1" }));
+    expect(line(md)).toBe("> Layer **L1** · driver **browser** · plan `--layer L1`.");
+    expect(md.indexOf("> Layer ")).toBeLessThan(md.indexOf("**No cases run.**"));
+  });
+  it("each run names its own layer, driver and plan", () => {
+    const k = { ...kase({}), layer: "L3" as const, driver: "http" as const, width: null };
+    expect(line(renderMatrix(v3({ plan: "slice --only league|generic", cases: [k] })))).toBe("> Layer **L3** · driver **http** · plan `slice --only league|generic`.");
+    expect(line(renderMatrix(v3({ layer: "L2", driver: "browser", plan: "--set width-sweep", cases: [{ ...k, layer: "L2", driver: "browser", width: 768 }] })))).toBe("> Layer **L2** · driver **browser** · plan `--set width-sweep`.");
+  });
+  it("a v3 run written before the plan was recorded says so, never a blank", () => {
+    expect(line(renderMatrix(v3({})))).toBe("> Layer **L3** · driver **http** · plan not recorded (written before W1c Task 14).");
+  });
+  it("v2 evidence carries no layer line", () => {
+    expect(line(renderMatrix(run([kase({})])))).toBeUndefined();
+    expect(line(renderMatrix(run([])))).toBeUndefined();
   });
 });
