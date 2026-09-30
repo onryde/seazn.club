@@ -7,7 +7,7 @@
 //
 // Expected values come from the product's own TEXT (routes.ts, the components,
 // the dictionaries), read here — never from the page objects under test.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -16,7 +16,11 @@ import { NoProductResponse } from "../lib/browser/respond.ts";
 import { COMPETITION_ENDS_ON } from "../lib/browser/pages/competition.ts";
 import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
-import { LandedElsewhere, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, boundActions, entrantNameMatcher, exactPath, navBudget, selectorValue, shotLabel, stepBudget, visit, type PageCtx } from "../lib/browser/pages/ctx.ts";
+import {
+  LandedElsewhere, READS_ONLY, REACT_PROPS_KEY, REPLACEMENTS_MAX, ScreenNeverShowed, UnsafeSelectorValue, actBudget, attrEquals, awaitHydrated, awaitScreen, boundActions,
+  entrantNameMatcher, exactPath, hydrationState, navBudget, reload, selectorValue, shotLabel, stepBudget, visit,
+  type HydrationTarget, type PageCtx, type ReloadPage, type VisitPage,
+} from "../lib/browser/pages/ctx.ts";
 import { BUILDER_TABS, BuiltOtherThanAsked, StagesForAnotherDivision, assertBuiltAsAsked, awaitDivisionAndStages, createDivisionUi } from "../lib/browser/pages/division-builder.ts";
 import { EntrantNotAsTyped, assertEntrantAsTyped } from "../lib/browser/pages/entrants.ts";
 import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postForfeit } from "../lib/browser/pages/fixture-console.ts";
@@ -31,6 +35,10 @@ import { RefusedCall } from "../lib/driver/types.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const src = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
+/** The React the BROWSER runs: Next's vendored react-dom client (App Router), not apps/web's own react-dom. */
+const reactDomClient = (channel: string) => `apps/web/node_modules/next/dist/compiled/${channel}/cjs/react-dom-client.production.js`;
+/** React's props key as that React declares it (I-1) — read, never typed. */
+const PRODUCT_PROPS_KEY = /\binternalPropsKey = "([^"]+)" \+ randomKey/.exec(src(reactDomClient("react-dom")))?.[1] ?? "(React's props key: unread)";
 const V2 = "apps/web/src/components/v2";
 const ORG_DIV_PAGE = "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx";
 const PUBLIC_DIV_PAGE = "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx";
@@ -316,27 +324,29 @@ describe("the shared steps", () => {
     const base = "http://localhost:3999";
     const gotos: string[] = [];
     const posts: string[] = [];
-    const fake = (landings: string[]) => {
+    const fake = (landings: string[]): VisitPage => {
       let current = "about:blank";
       return {
         goto: async (url: string, o: { timeout: number }) => { gotos.push(`${url} @${o.timeout}`); current = landings.shift() ?? url; return null; },
         url: () => current,
         request: { post: async (u: string) => { posts.push(u); return { ok: () => true, status: () => 200 }; } },
-      };
+        // A screen that is only read waits for no hydration (I-1).
+        waitForFunction: () => { throw new Error("fake: a READS_ONLY visit waited for hydration"); },
+      } as unknown as VisitPage;
     };
     const t = navBudget({ holdMs: 3000 });
-    await visit({ base, holdMs: 3000, page: fake([`${base}/onboarding`]) }, "/o/org/c/new");
+    await visit({ base, holdMs: 3000, page: fake([`${base}/onboarding`]) }, "/o/org/c/new", READS_ONLY);
     expect(gotos).toEqual([`${base}/o/org/c/new @${t}`, `${base}/o/org/c/new @${t}`]);
     expect(posts).toEqual(["/api/onboarding/complete", "/api/tour"]);
     // A second visit that lands at once: one goto, no onboarding.
     gotos.length = 0;
     posts.length = 0;
-    await visit({ base, holdMs: 3000, page: fake([]) }, "/o/org/c/c1/d/d1?tab=entrants");
+    await visit({ base, holdMs: 3000, page: fake([]) }, "/o/org/c/c1/d/d1?tab=entrants", READS_ONLY);
     expect(gotos).toEqual([`${base}/o/org/c/c1/d/d1?tab=entrants @${t}`]);
     expect(posts).toEqual([]);
-    await expect(visit({ base, holdMs: 3000, page: fake([`${base}/sign-in`]) }, "/o/org/c/new")).rejects.toThrow(LandedElsewhere);
+    await expect(visit({ base, holdMs: 3000, page: fake([`${base}/sign-in`]) }, "/o/org/c/new", READS_ONLY)).rejects.toThrow(LandedElsewhere);
     // Onboarding again on the revisit is refused, never looped.
-    await expect(visit({ base, holdMs: 3000, page: fake([`${base}/onboarding`, `${base}/onboarding`]) }, "/o/org/c/new")).rejects.toThrow(/\/onboarding/);
+    await expect(visit({ base, holdMs: 3000, page: fake([`${base}/onboarding`, `${base}/onboarding`]) }, "/o/org/c/new", READS_ONLY)).rejects.toThrow(/\/onboarding/);
   });
 
   it("the page budgets are budgetMs in the product's constants: a navigation is the floor; each request an action waits on adds a tap and its slack", () => {
@@ -425,6 +435,176 @@ describe("the shared steps", () => {
     await expect(awaitScreen(closed, "x", 1)).rejects.toThrow(/has been closed/);
     await expect(awaitScreen(closed, "x", 1)).rejects.not.toThrow(ScreenNeverShowed);
     await expect(awaitScreen(() => Promise.resolve(), "x", 1)).resolves.toBeUndefined();
+  });
+});
+
+// W1c Task 8 review I-1 (fix round 1; ruling 151's hydration carry). React
+// attaches its props to a server-rendered element only as it HYDRATES it, and
+// reads them for every delegated handler — so an act fired before that
+// reaches no handler, and the dropped click surfaces later as
+// NoProductResponse / BuiltOtherThanAsked / EntrantNotAsTyped: a product red
+// for a harness reason (class 20). The key and the mechanism are the
+// browser's own React — Next's vendored copy — read here as text.
+describe("hydration: no act before React has hydrated the control it targets (I-1)", () => {
+  type El = { isConnected: boolean; d: string; dispose: () => Promise<void>; [k: string]: unknown };
+  const el = (d: string): El => ({ isConnected: true, d, dispose: async () => undefined });
+  /** What React does as it hydrates an element: its props land under the key, suffixed by the root's random key. */
+  const hydrate = (e: El) => { e[`${PRODUCT_PROPS_KEY}r4nd0m`] = { onClick: () => undefined }; };
+  const timeoutError = () => { const e = new Error("Timeout 15000ms exceeded"); e.name = "TimeoutError"; return e; };
+  const T = navBudget({ holdMs: 3000 });
+  type ProbePage = Parameters<typeof awaitHydrated>[0]["page"];
+
+  /** A page whose waitForFunction polls the probe frame by frame, as
+   *  Playwright's raf polling does, running `onFrame` before each poll; out of
+   *  frames is Playwright's TimeoutError. Every wait and answer lands in `log`. */
+  function probePage(log: string[], onFrame: (frame: number) => void, frames = 20): ProbePage {
+    return {
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: { els: El[]; prefix: string }, o: { polling: string; timeout: number }) => {
+        log.push(`wait ${o.polling} ${o.timeout} [${arg.els.map((e) => e.d).join(",")}]`);
+        for (let f = 0; f < frames; f++) {
+          onFrame(f);
+          const v = fn(arg);
+          if (v) { log.push(`frame ${f}: ${String(v)}`); return { jsonValue: async () => v, dispose: async () => undefined }; }
+          await Promise.resolve();
+        }
+        throw timeoutError();
+      },
+    } as unknown as ProbePage;
+  }
+  /** A locator over whatever the page holds now: first() waits for one attached. */
+  function target(current: () => El[]): HydrationTarget {
+    return {
+      first: () => ({ waitFor: async () => { if (current().length === 0) throw timeoutError(); } }),
+      elementHandles: async () => current(),
+    } as unknown as HydrationTarget;
+  }
+
+  it("the key is the browser's React's own, in both of Next's channels: '__reactProps$' + the root's random key, set on a server-rendered element only as it hydrates, and read for every delegated handler", () => {
+    let checked = 0;
+    for (const channel of ["react-dom", "react-dom-experimental"]) {
+      const r = src(reactDomClient(channel));
+      expect(/\binternalPropsKey = "([^"]+)" \+ randomKey/.exec(r)?.[1], channel).toBe(REACT_PROPS_KEY);
+      // completeWork's hydration branch attaches it…
+      expect(r, channel).toMatch(/function prepareToHydrateHostInstance\(fiber\) \{[^}]*?instance\[internalPropsKey\] = props;/);
+      // …and without it getListener answers no handler at all.
+      expect(r, channel).toMatch(/function getListener\(inst, registrationName\) \{[\s\S]{0,160}?var props = stateNode\[internalPropsKey\] \|\| null;\s+if \(null === props\) return null;/);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(PRODUCT_PROPS_KEY).toBe(REACT_PROPS_KEY);
+  });
+
+  it("awaitHydrated: the wait ends on the frame React hydrates the control — never before — as Playwright's raf poll, bounded by the navigation budget", async () => {
+    const log: string[] = [];
+    const e = el("start-blank");
+    await awaitHydrated({ page: probePage(log, (f) => { if (f === 3) hydrate(e); }), holdMs: 3000 }, { control: target(() => [e]), what: "Start blank" });
+    expect(log).toEqual([`wait raf ${T} [start-blank]`, "frame 3: hydrated"]);
+  });
+
+  it("React's fiber alone, a props key on the prototype, or a lookalike name is no hydration: NeverHydrated, naming the control and the budget", async () => {
+    const fiberKey = /\binternalInstanceKey = "([^"]+)" \+ randomKey/.exec(src(reactDomClient("react-dom")))?.[1];
+    expect(fiberKey).toBeDefined();
+    const decoys: [string, El][] = [
+      ["its fiber only", Object.assign(el("a"), { [`${fiberKey!}r4nd0m`]: {} })],
+      ["props inherited, not its own", Object.assign(Object.create({ [`${PRODUCT_PROPS_KEY}r4nd0m`]: {} }) as El, el("b"))],
+      ["a lookalike name", Object.assign(el("c"), { [`x${PRODUCT_PROPS_KEY}`]: {}, [PRODUCT_PROPS_KEY.replace("$", "")]: {} })],
+    ];
+    let checked = 0;
+    for (const [what, e] of decoys) {
+      const log: string[] = [];
+      await expect(awaitHydrated({ page: probePage(log, () => undefined), holdMs: 3000 }, { control: target(() => [e]), what }), what).rejects.toMatchObject({ name: "NeverHydrated", what, ms: T });
+      expect(log, what).toEqual([`wait raf ${T} [${e.d}]`]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    await expect(awaitHydrated({ page: probePage([], () => undefined), holdMs: 3000 }, { control: target(() => [el("x")]), what: "the form" })).rejects.toThrow(/the form was never hydrated/);
+  });
+
+  it("every control the target matches must hydrate (a union of the first act's candidates), and at least one must be there — zero is ScreenNeverShowed, never a pass", async () => {
+    const log: string[] = [];
+    const chip = el("chip");
+    const name = el("name");
+    await awaitHydrated({ page: probePage(log, (f) => { if (f === 1) hydrate(chip); if (f === 4) hydrate(name); }), holdMs: 3000 }, { control: target(() => [chip, name]), what: "the form" });
+    expect(log).toEqual([`wait raf ${T} [chip,name]`, "frame 4: hydrated"]);
+    const none: string[] = [];
+    await expect(awaitHydrated({ page: probePage(none, () => undefined), holdMs: 3000 }, { control: target(() => []), what: "the form" })).rejects.toThrow(ScreenNeverShowed);
+    expect(none).toEqual([]);
+  });
+
+  it("a control React replaced (a client render after a mismatch) is found again and the new one's props end the wait; one replaced on every look is refused by name, never looped", async () => {
+    const log: string[] = [];
+    const old = el("old");
+    const fresh = el("fresh");
+    let current = [old];
+    const page = probePage(log, (f) => { if (f === 2 && current[0] === old) { old.isConnected = false; current = [fresh]; hydrate(fresh); } });
+    await awaitHydrated({ page, holdMs: 3000 }, { control: target(() => current), what: "x" });
+    expect(log).toEqual([`wait raf ${T} [old]`, "frame 2: replaced", `wait raf ${T} [fresh]`, "frame 0: hydrated"]);
+    const churn: string[] = [];
+    let n = 0;
+    await expect(awaitHydrated({ page: probePage(churn, () => undefined), holdMs: 3000 }, { control: target(() => [Object.assign(el(`e${++n}`), { isConnected: false })]), what: "the rail" }))
+      .rejects.toMatchObject({ name: "NeverHydrated", what: "the rail", message: expect.stringMatching(/replaced it 3 time/) });
+    expect(REPLACEMENTS_MAX).toBe(2);
+    expect(churn.filter((l) => l.startsWith("wait"))).toHaveLength(REPLACEMENTS_MAX + 1);
+  });
+
+  it("the probe shipped to the page reads nothing outside its argument (waitForFunction sends its source) and answers as the module's own — never 'hydrated' over zero elements", () => {
+    const shipped = new Function(`return (${hydrationState.toString()})`)() as typeof hydrationState;
+    const a = el("a");
+    const b = el("b");
+    const gone = Object.assign(el("g"), { isConnected: false });
+    hydrate(a);
+    hydrate(gone);
+    const cases: El[][] = [[a], [a, b], [b], [a, gone], []];
+    const answers = cases.map((els) => shipped({ els, prefix: REACT_PROPS_KEY }));
+    expect(answers).toEqual(["hydrated", false, false, "replaced", "replaced"]);
+    expect(answers).toEqual(cases.map((els) => hydrationState({ els, prefix: REACT_PROPS_KEY })));
+  });
+
+  it("visit waits, once it has landed, for the page object's first act to hydrate; a page that never hydrates is NeverHydrated, naming the control", async () => {
+    const base = "http://localhost:3999";
+    const visitPage = (log: string[], probe: ProbePage): VisitPage => ({
+      goto: async (u: string) => { log.push(`goto ${new URL(u).pathname}`); return null; },
+      url: () => `${base}/o/org/c/c1/d/new`,
+      request: { post: async () => ({ ok: () => true, status: () => 200 }) },
+      waitForFunction: probe.waitForFunction,
+    }) as unknown as VisitPage;
+    const log: string[] = [];
+    const e = el("builder-name");
+    await visit({ base, holdMs: 3000, page: visitPage(log, probePage(log, (f) => { if (f === 2) hydrate(e); })) }, "/o/org/c/c1/d/new", { control: target(() => [e]), what: "the builder's name" });
+    expect(log).toEqual(["goto /o/org/c/c1/d/new", `wait raf ${T} [builder-name]`, "frame 2: hydrated"]);
+    const never: string[] = [];
+    await expect(visit({ base, holdMs: 3000, page: visitPage(never, probePage(never, () => undefined)) }, "/o/org/c/c1/d/new", { control: target(() => [el("n")]), what: "the builder's name" }))
+      .rejects.toMatchObject({ name: "NeverHydrated", what: "the builder's name", ms: T });
+  });
+
+  it("reload: the page reloads under the navigation budget, then waits for the first act to hydrate", async () => {
+    const log: string[] = [];
+    const e = el("finalize");
+    const probe = probePage(log, (f) => { if (f === 1) hydrate(e); });
+    const page = { reload: async (o: { timeout: number }) => { log.push(`reload ${o.timeout}`); return null; }, waitForFunction: probe.waitForFunction } as unknown as ReloadPage;
+    await reload({ page, holdMs: 3000 }, { control: target(() => [e]), what: "Finalize" });
+    expect(log).toEqual([`reload ${T}`, `wait raf ${T} [finalize]`, "frame 1: hydrated"]);
+  });
+
+  // The gate holds only if nothing loads a page around it. A full load is a
+  // goto or a reload; the console is reached by a client-side Link click, and
+  // a client render attaches props as it creates each element.
+  it("every full page load in the harness passes the gate: goto and reload are called in ctx.ts alone, and a READS_ONLY page object acts on nothing", () => {
+    const LIB = resolve(REPO, "scripts/matrix/lib");
+    const files = (readdirSync(LIB, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts")).map((f) => join(LIB, f));
+    const code = (f: string) => readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    const loads: Record<string, number> = {};
+    for (const f of files) {
+      const n = (code(f).match(/\.(goto|reload)\(/g) ?? []).length;
+      if (n > 0) loads[f.slice(REPO.length + 1)] = n;
+    }
+    expect(files.length).toBeGreaterThan(20);
+    // visit's goto and its post-onboarding revisit, and reload's reload.
+    expect(loads).toEqual({ "scripts/matrix/lib/browser/pages/ctx.ts": 3 });
+    const PAGES = join(LIB, "browser", "pages");
+    const readers = files.filter((f) => f.startsWith(PAGES) && !f.endsWith("ctx.ts") && /\bREADS_ONLY\b/.test(code(f))).map((f) => f.slice(PAGES.length + 1)).sort();
+    expect(readers).toEqual(["public-division.ts", "standings.ts"]);
+    for (const r of readers) expect(code(join(PAGES, r)), r).not.toMatch(/\.(click|fill|check|uncheck|selectOption|press|tap|type|setInputFiles)\(|actAndAwait|executeStep/);
   });
 });
 
@@ -573,6 +753,9 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
       fill: async (v: string) => act(`fill ${d} = ${v}`),
       selectOption: async (v: { value: string }) => act(`select ${d} = ${v.value}`),
       waitFor: async () => undefined,
+      // I-1: every control here is already hydrated, as React leaves it.
+      first: () => loc(d),
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
       check: async () => act(`check ${d}`),
       count: async () => (d === `testid:${TESTID.builderCreate.id}` && onLastTab ? 1 : 0),
       innerText: async () => "",
@@ -601,6 +784,11 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
         waiters.push(w);
       }),
       waitForURL: async (pred: (u: URL) => boolean) => { if (!pred(new URL(url))) throw new Error(`fake: never landed (at ${url})`); },
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: { els: { d: string }[] }) => {
+        const v = fn(arg);
+        log.push(`${String(v)} ${arg.els.map((e) => e.d).join(",")}`);
+        return { jsonValue: async () => v, dispose: async () => undefined };
+      },
       evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }),
       screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
     };
@@ -619,6 +807,8 @@ describe("createDivisionUi: the organiser's picks are pictured before Create", (
   const template = `label[has ${DATA.templateRadio.selector}][has text:${templateLabel("league")}]`;
   const walk = (n: string) => [
     `goto ${paths.divisionNew("org", "comp")}`,
+    // I-1: the first act's control is hydrated before anything touches it.
+    `hydrated testid:${TESTID.builderName.id}`,
     `fill testid:${TESTID.builderName.id} = Open`,
     `select ${field(NAME.sportSelect.text)} = badminton`,
     `select ${field(NAME.variantSelect.text)} = bwf`,

@@ -1,7 +1,7 @@
 // What every organiser page object shares (W1c Task 5): the context it runs
 // in, where a division lives, the budgets its waits take, the one way it
 // navigates, and how it files its pictures. Nothing here clicks.
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { FLOOR_MS, budgetMs } from "../budget.ts";
 import type { Evidence } from "../evidence.ts";
 import { ONBOARDING_PATH, ensureOnboarded, type OnboardPage } from "../session.ts";
@@ -51,21 +51,116 @@ export class LandedElsewhere extends Error {
   }
 }
 
+/** W1c Task 8 review I-1 (ruling 151's hydration carry). React's key for the
+ *  props it attaches to a DOM element as it hydrates (or creates) it. The
+ *  browser runs Next's VENDORED React — next/dist/compiled/react-dom/cjs/
+ *  react-dom-client.production.js, `internalPropsKey = "__reactProps$" +
+ *  randomKey` — which sets it on a server-rendered element only in
+ *  prepareToHydrateHostInstance, and whose getListener reads it for every
+ *  delegated handler. So an element without it has NO handler: an act on it
+ *  reaches nothing, and the dropped click reads later as a product red
+ *  (page-objects.test.ts text-pins all three). */
+export const REACT_PROPS_KEY = "__reactProps$";
+
+/** The control(s) a page object acts on FIRST after a full page load, so the
+ *  load can wait until React has hydrated them. Every element `control`
+ *  matches must hydrate — a union (`a.or(b)`) where the first act depends on
+ *  the screen (a filter pressed only when it is not, a fold opened only when
+ *  folded). */
+export type HydrationTarget = Pick<Locator, "first" | "elementHandles">;
+export interface FirstAct { readonly control: HydrationTarget; readonly what: string }
+/** A screen its page object only READS (text, tables): nothing it does needs
+ *  a handler, so its load waits for no hydration (page-objects.test.ts pins
+ *  that such a page object acts on nothing). */
+export const READS_ONLY = "reads only";
+
+/** React replaces a server-rendered subtree when a hydration mismatch makes it
+ *  client-render it — once. A control replaced more often than this is being
+ *  re-rendered, and that is no hydration signal. */
+export const REPLACEMENTS_MAX = 2;
+
+export class NeverHydrated extends Error {
+  readonly what: string;
+  readonly ms: number;
+  constructor(what: string, ms: number, why: string) {
+    super(`browser: ${what} was never hydrated — ${why}. React attaches its props (${REACT_PROPS_KEY}…) as it hydrates an element and finds no handler without them, so an act now would be dropped and read as a product red`);
+    this.name = "NeverHydrated";
+    this.what = what;
+    this.ms = ms;
+  }
+}
+
+/** The probe waitForFunction ships to the page — as SOURCE, so it reads
+ *  nothing but its argument. Falsy keeps Playwright polling: a matched element
+ *  React has not hydrated yet. "replaced": one left the document (React
+ *  client-rendered it anew), or none was left to judge — never a pass over
+ *  zero elements. */
+export function hydrationState(a: { readonly els: readonly { readonly isConnected: boolean }[]; readonly prefix: string }): "hydrated" | "replaced" | false {
+  let judged = 0;
+  let gone = 0;
+  for (const el of a.els) {
+    if (!el.isConnected) { gone++; continue; }
+    if (!Object.keys(el).some((k) => k.startsWith(a.prefix))) return false;
+    judged++;
+  }
+  return gone > 0 || judged === 0 ? "replaced" : "hydrated";
+}
+
+/** Waits until React has hydrated every element `first.control` matches: at
+ *  least one attached (else ScreenNeverShowed), then Playwright's own
+ *  frame-by-frame poll of the probe — no sleep — each wait bounded by the
+ *  navigation budget. Never hydrated is NeverHydrated, naming the control; a
+ *  control React replaced is found again, at most REPLACEMENTS_MAX times. */
+export async function awaitHydrated(c: { page: Pick<Page, "waitForFunction">; holdMs: number }, first: FirstAct): Promise<void> {
+  const ms = navBudget(c);
+  for (let replaced = 0; ; replaced++) {
+    await awaitScreen(() => first.control.first().waitFor({ state: "attached", timeout: ms }), first.what, ms);
+    const els = await first.control.elementHandles();
+    let state: unknown;
+    try {
+      const answer = await c.page.waitForFunction(hydrationState, { els, prefix: REACT_PROPS_KEY }, { polling: "raf", timeout: ms });
+      state = await answer.jsonValue();
+      await answer.dispose();
+    } catch (e) {
+      if (e instanceof Error && e.name === "TimeoutError") throw new NeverHydrated(first.what, ms, `not within ${ms} ms (${els.length} element(s) matched)`);
+      throw e;
+    } finally {
+      await Promise.allSettled(els.map((h) => h.dispose()));
+    }
+    if (state === "hydrated") return;
+    if (replaced >= REPLACEMENTS_MAX) throw new NeverHydrated(first.what, ms, `React replaced it ${replaced + 1} time(s) — it is being re-rendered, not hydrated`);
+  }
+}
+
 /** The page surface `visit` uses; a Playwright Page meets it. */
-export interface VisitPage extends OnboardPage { goto(url: string, o: { timeout: number }): Promise<unknown> }
+export interface VisitPage extends OnboardPage, Pick<Page, "waitForFunction"> { goto(url: string, o: { timeout: number }): Promise<unknown> }
 
 /** Navigates to `path` on the case's base. A fresh sign-in lands on
  *  onboarding: e2e's own onboarding step runs (session.ts ensureOnboarded) and
  *  the page is visited once more. Wherever it lands after that must be the
  *  path asked for — anything else is LandedElsewhere, never a later timeout
- *  on a control that screen does not have. */
-export async function visit(c: Pick<PageCtx, "base" | "holdMs"> & { page: VisitPage }, path: string): Promise<void> {
+ *  on a control that screen does not have. Then (I-1) it waits until React
+ *  has hydrated the control the page object acts on first — unless the screen
+ *  is only read. */
+export async function visit(c: Pick<PageCtx, "base" | "holdMs"> & { page: VisitPage }, path: string, first: FirstAct | typeof READS_ONLY): Promise<void> {
   const url = new URL(path, c.base);
   const t = navBudget(c);
   await c.page.goto(url.href, { timeout: t });
   if (await ensureOnboarded(c.page)) await c.page.goto(url.href, { timeout: t });
   const landed = new URL(c.page.url());
   if (landed.pathname !== url.pathname) throw new LandedElsewhere(url.pathname, landed.pathname === ONBOARDING_PATH ? `${ONBOARDING_PATH} (again, after completing it)` : landed.pathname);
+  if (first !== READS_ONLY) await awaitHydrated(c, first);
+}
+
+/** The page surface `reload` uses; a Playwright Page meets it. */
+export type ReloadPage = Pick<Page, "reload" | "waitForFunction">;
+
+/** Reloads the page — a full load, so (I-1) it too waits until React has
+ *  hydrated the control the page object acts on first. With visit, the only
+ *  full loads the harness makes (page-objects.test.ts pins that). */
+export async function reload(c: { page: ReloadPage; holdMs: number }, first: FirstAct): Promise<void> {
+  await c.page.reload({ timeout: navBudget(c) });
+  await awaitHydrated(c, first);
 }
 
 export class ScreenNeverShowed extends Error {

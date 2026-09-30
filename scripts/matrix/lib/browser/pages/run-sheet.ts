@@ -37,6 +37,10 @@ export function fixtureLinkSelector(org: string, comp: string, div: string, no: 
   return `[href="${paths.fixture(selectorValue("org slug", org), selectorValue("competition slug", comp), selectorValue("division slug", div), no)}"]`;
 }
 
+/** Every option of the run sheet's filter: a first act on the fixtures tab
+ *  whenever "all" is not already pressed (I-1, the hydration wait). */
+export const RUN_SHEET_FILTER_OPTIONS = `[data-testid="${TESTID.runSheetFilter.id}"] ${DATA.runSheetFilterOption.selector}`;
+
 /** Presses the run sheet's "all" filter unless it is pressed already. A sheet
  *  that offers no filter (nothing to filter yet) is left as it is. */
 export async function showAllFixtures(c: PageCtx): Promise<void> {
@@ -57,7 +61,8 @@ const CONSOLE_MOUNTED = [START_MATCH_TESTID, TESTID.scorePad.id, FORFEIT_TESTID,
 export async function openFixtureUi(c: PageCtx, where: DivisionWhere, fixtureNo: number): Promise<void> {
   const { page } = c;
   const row = page.locator(fixtureRowSelector(fixtureNo));
-  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "fixtures"));
+  // The first act is the filter (when "all" is not pressed), else the row's link.
+  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "fixtures"), { control: page.locator(RUN_SHEET_FILTER_OPTIONS).or(row.locator("a")), what: `the run sheet's filter and row #${fixtureNo}'s links` });
   await showAllFixtures(c);
   const t = navBudget(c);
   await awaitScreen(() => row.waitFor({ state: "attached", timeout: t }), `run-sheet row #${fixtureNo}`, t);

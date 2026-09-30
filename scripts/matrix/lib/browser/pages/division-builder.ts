@@ -84,9 +84,10 @@ export function assertBuiltAsAsked(division: Pick<DivisionOut, "sport_key" | "va
 export async function createDivisionUi(c: PageCtx, compSlug: string, compId: string, input: { name: string; sportKey: string; variantKey: string; row: TemplateRowKey }): Promise<{ division: DivisionOut; stages: StageOut[] }> {
   const { page } = c;
   const t = actBudget(c, 1);
-  await visit(c, paths.divisionNew(c.orgSlug, compSlug));
+  const name = page.getByTestId(TESTID.builderName.id);
+  await visit(c, paths.divisionNew(c.orgSlug, compSlug), { control: name, what: "the division builder's name field" });
   const field = (label: string) => page.locator("label").filter({ has: page.getByText(label, { exact: true }) }).locator("select");
-  await page.getByTestId(TESTID.builderName.id).fill(input.name, { timeout: t });
+  await name.fill(input.name, { timeout: t });
   await field(NAME.sportSelect.text).selectOption({ value: input.sportKey }, { timeout: t });
   const variant = field(NAME.variantSelect.text);
   // The sport's own variant list, re-derived by the pick above.

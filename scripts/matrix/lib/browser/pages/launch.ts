@@ -36,8 +36,8 @@ export async function startUi(c: PageCtx, where: DivisionWhere): Promise<StartOu
   const { page } = c;
   const t = actBudget(c, 1);
   const nav = navBudget(c);
-  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug));
   const launch = page.getByTestId(TESTID.launchStart.id);
+  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug), { control: launch, what: "the division's Start button" });
   await awaitScreen(() => launch.waitFor({ state: "visible", timeout: nav }), "the division's Start button", nav);
   const before = await shoot(c, "04-started-before");
   await launch.click({ timeout: t });

@@ -29,7 +29,7 @@ import { executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";
 import type { FixtureRow, PostedEvent } from "../../driver/types.ts";
-import { actBudget, awaitScreen, exactPath, navBudget, shoot, stepBudget, type PageCtx } from "./ctx.ts";
+import { actBudget, awaitScreen, exactPath, navBudget, reload, shoot, stepBudget, type PageCtx } from "./ctx.ts";
 
 /** The route every console send answers on — finalize's included. */
 export function eventsPath(fixtureId: string): RegExp {
@@ -92,9 +92,10 @@ export async function forfeitUi(c: PageCtx, fixture: ForfeitFixture, by: string,
   const steps = forfeitSteps(fixture, by, reason);
   const t = actBudget(c, 1);
   const nav = navBudget(c);
-  await page.reload({ timeout: nav });
-  const posted: PostedEvent[] = [];
   const start = page.getByTestId(START_MATCH_TESTID);
+  // The first act is Start while the match is scheduled, else the Forfeit toggle.
+  await reload(c, { control: start.or(page.getByTestId(FORFEIT_TESTID)), what: "the console's Start or Forfeit" });
+  const posted: PostedEvent[] = [];
   if ((await start.count()) > 0) {
     posted.push((await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixture.id) }, () => start.click({ timeout: t }), t)).data);
     await awaitScreen(() => start.waitFor({ state: "detached", timeout: nav }), "the console, started", nav);
@@ -112,8 +113,8 @@ export async function finalizeUi(c: PageCtx, fixtureId: string): Promise<PostedE
   const { page } = c;
   const t = actBudget(c, 1);
   const nav = navBudget(c);
-  await page.reload({ timeout: nav });
   const finalize = page.getByTestId(FINALIZE_TESTID);
+  await reload(c, { control: finalize, what: "the console's Finalize" });
   await awaitScreen(() => finalize.waitFor({ state: "visible", timeout: nav }), "the console's Finalize, for a decided match", nav);
   const before = await shoot(c, "09-finalized-before");
   const { data } = await actAndAwait<PostedEvent>(page, { method: "POST", path: eventsPath(fixtureId) }, () => finalize.click({ timeout: t }), t);

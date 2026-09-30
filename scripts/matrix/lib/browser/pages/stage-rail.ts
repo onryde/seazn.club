@@ -18,7 +18,7 @@ import { TESTID } from "../selectors.ts";
 import type { CompleteOut, FixtureRow, GenerateOut } from "../../driver/types.ts";
 import { actBudget, awaitScreen, exactPath, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
-import { fixtureRowSelector, showAllFixtures } from "./run-sheet.ts";
+import { RUN_SHEET_FILTER_OPTIONS, fixtureRowSelector, showAllFixtures } from "./run-sheet.ts";
 
 const SHEET_ID_PREFIX = "stage-rail-sheet-";
 
@@ -53,12 +53,15 @@ export async function openFoldIfFolded(
 /** The fixtures tab with `stageId`'s rail open, every run-sheet row showing. */
 async function railFor(c: PageCtx, where: DivisionWhere, stageId: string): Promise<Locator> {
   const { page } = c;
-  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "fixtures"));
-  const t = navBudget(c);
   const sheet = page.locator(railSheetSelector(stageId));
+  const trigger = page.locator(railTriggerSelector(stageId));
+  // The first act is the run sheet's filter, the fold's trigger or the sheet's
+  // own button — whichever the screen asks for first (I-1).
+  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "fixtures"), { control: page.locator(RUN_SHEET_FILTER_OPTIONS).or(trigger).or(sheet.locator("button")), what: `the run sheet's filter and stage ${stageId}'s rail` });
+  const t = navBudget(c);
   await awaitScreen(() => sheet.waitFor({ state: "attached", timeout: t }), `the stage rail for stage ${stageId}`, t);
   await showAllFixtures(c);
-  await openFoldIfFolded(page, page.locator(railTriggerSelector(stageId)), sheet, actBudget(c, 1));
+  await openFoldIfFolded(page, trigger, sheet, actBudget(c, 1));
   return sheet;
 }
 

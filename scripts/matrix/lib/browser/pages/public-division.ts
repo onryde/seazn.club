@@ -15,7 +15,7 @@
 //    and no note, so the SELECTED TAB is this read's proof the screen rendered.
 // The page needs no auth; it is read in the case's own context.
 import { NAME } from "../selectors.ts";
-import { awaitScreen, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
+import { READS_ONLY, awaitScreen, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths, type PublicTab } from "./paths.ts";
 import { CELL_SELECTORS, TABLE_SELECTOR, standingsCellsOf, tablesFromCells, type UiTable } from "./standings.ts";
 
@@ -46,7 +46,7 @@ export function championFrom(paragraphs: ArrayLike<BannerElement>, label: string
 /** The public standings tab's tables and the champion banner's name. */
 export async function readPublicUi(c: PageCtx, where: DivisionWhere): Promise<{ tables: UiTable[]; champion: string | null }> {
   const { page } = c;
-  await visit(c, paths.publicDivision(c.orgSlug, where.compSlug, where.divSlug, PUBLIC_STANDINGS_TAB));
+  await visit(c, paths.publicDivision(c.orgSlug, where.compSlug, where.divSlug, PUBLIC_STANDINGS_TAB), READS_ONLY);
   const t = navBudget(c);
   await awaitScreen(() => page.locator(publicTabSelector(PUBLIC_STANDINGS_TAB)).waitFor({ state: "attached", timeout: t }), "the public page's standings tab, selected", t);
   const cells = await page.locator(publicPanelSelector(PUBLIC_STANDINGS_TAB)).locator(TABLE_SELECTOR).evaluateAll(standingsCellsOf, CELL_SELECTORS);

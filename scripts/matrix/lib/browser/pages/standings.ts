@@ -14,7 +14,7 @@
 //    The qualification cut line is a <tr> with no th (QualCutRow).
 //  - The results grid (ResultsMatrix, inside <details>) is not in a region.
 import type { PageCtx, DivisionWhere } from "./ctx.ts";
-import { awaitScreen, navBudget, shoot, visit } from "./ctx.ts";
+import { READS_ONLY, awaitScreen, navBudget, shoot, visit } from "./ctx.ts";
 import { DATA, NAME } from "../selectors.ts";
 import { paths } from "./paths.ts";
 
@@ -83,7 +83,7 @@ export const CELL_SELECTORS = Object.freeze({ rowHeader: DATA.standingsRowHeader
  *  answer is never read off a screen that did not render). */
 export async function readStandingsUi(c: PageCtx, where: DivisionWhere): Promise<UiTable[]> {
   const { page } = c;
-  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "standings"));
+  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "standings"), READS_ONLY);
   const tables = page.locator(TABLE_SELECTOR);
   const none = page.getByText(NAME.standingsEmpty.text, { exact: true });
   const t = navBudget(c);

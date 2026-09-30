@@ -169,6 +169,27 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(got.rebuilt.cells.flat().length).toBe(2);
   });
 
+  // W1c Task 8 review I-1 (fix round 1): waitForFunction sends the hydration
+  // probe's SOURCE to the page as well, so it too must compile and run from
+  // its stripped source alone — fed hydrated, bare, replaced and zero elements.
+  it("the hydration probe waitForFunction ships to the page compiles and runs from its own source, outside its module", () => {
+    const code = [
+      `const c = await import(${JSON.stringify(pathToFileURL(join(MATRIX, "lib/browser/pages/ctx.ts")).href)});`,
+      "const rebuilt = new Function(\"return (\" + c.hydrationState.toString() + \")\")();",
+      "const key = c.REACT_PROPS_KEY + 'r4nd0m';",
+      "const el = (hydrated, connected = true) => Object.assign({ isConnected: connected }, hydrated ? { [key]: {} } : {});",
+      "const cases = [[el(true)], [el(true), el(false)], [el(false)], [el(true), el(true, false)], []];",
+      "const run = (f) => cases.map((els) => f({ els, prefix: c.REACT_PROPS_KEY }));",
+      "console.log(JSON.stringify({ rebuilt: run(rebuilt), inModule: run(c.hydrationState) }));",
+    ].join("\n");
+    const r = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--input-type=module", "-e", code], { cwd: resolve(MATRIX, "..", ".."), encoding: "utf8", timeout: 25_000 });
+    expect(r.stderr).toBe("");
+    expect(r.status).toBe(0);
+    const got = JSON.parse(r.stdout.trim()) as { rebuilt: unknown[]; inModule: unknown[] };
+    expect(got.rebuilt).toEqual(["hydrated", false, false, "replaced", "replaced"]);
+    expect(got.rebuilt).toEqual(got.inModule);
+  });
+
   it.each(MODULES)("%s", (file) => {
     const r = spawnSync(
       process.execPath,

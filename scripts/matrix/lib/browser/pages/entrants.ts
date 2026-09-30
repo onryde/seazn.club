@@ -59,10 +59,11 @@ export async function addEntrantsUi(c: PageCtx, where: DivisionWhere, entrants: 
   const { page } = c;
   const t = actBudget(c, 1);
   const nav = navBudget(c);
-  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "entrants"));
   const submit = page.getByRole("button", { name: NAME.addEntrant.text, exact: true });
   const form = page.locator("form").filter({ has: submit });
   const name = form.getByLabel(NAME.entrantName.text, { exact: true });
+  // The first act is a kind chip where the form offers them, else the name.
+  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "entrants"), { control: form.locator(DATA.entrantKind.selector).or(name), what: "the add-entrant form's kind chips and name field" });
   await awaitScreen(() => name.waitFor({ state: "visible", timeout: nav }), "the add-entrant form", nav);
   const before = await shoot(c, "03-entrants-before");
   const out: EntrantOut[] = [];
@@ -92,11 +93,12 @@ export async function withdrawUi(c: PageCtx, where: DivisionWhere, entrant: { id
   const { page } = c;
   const t = actBudget(c, 1);
   const nav = navBudget(c);
-  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "entrants"));
   const row = entrantRow(page, entrant.displayName);
+  const withdraw = row.getByTestId(TESTID.entrantWithdraw.id);
+  await visit(c, paths.division(c.orgSlug, where.compSlug, where.divSlug, "entrants"), { control: withdraw, what: `${entrant.displayName}'s Withdraw` });
   await awaitScreen(() => row.waitFor({ state: "attached", timeout: nav }), `${entrant.displayName}'s row`, nav);
   const before = await shoot(c, "06-withdrawn-before");
-  await row.getByTestId(TESTID.entrantWithdraw.id).click({ timeout: t });
+  await withdraw.click({ timeout: t });
   const { data } = await actAndAwait<WithdrawOut>(page, { method: "POST", path: exactPath(`/api/v1/entrants/${entrant.id}/withdraw`) },
     () => page.getByRole("alertdialog").getByRole("button", { name: NAME.withdrawConfirm.text, exact: true }).click({ timeout: t }), t);
   const status = attrEquals(DATA.entrantStatus.selector, "entrant status", data.status);

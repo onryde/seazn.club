@@ -30,8 +30,9 @@ export interface CompetitionOut { id: string; org_id: string; name: string; slug
 export async function createCompetitionUi(c: PageCtx, input: { name: string }): Promise<CompetitionOut> {
   const { page } = c;
   const t = actBudget(c, 1);
-  await visit(c, paths.competitionNew(c.orgSlug));
-  await page.getByTestId(TESTID.templateStartBlank.id).click({ timeout: t });
+  const startBlank = page.getByTestId(TESTID.templateStartBlank.id);
+  await visit(c, paths.competitionNew(c.orgSlug), { control: startBlank, what: "the competition wizard's Start blank" });
+  await startBlank.click({ timeout: t });
   await page.getByPlaceholder(NAME.competitionNamePlaceholder.text, { exact: true }).fill(input.name, { timeout: t });
   await page.getByLabel(NAME.endsOn.text, { exact: true }).fill(COMPETITION_ENDS_ON, { timeout: t });
   // check() on the option's <label> checks its radio and throws unless it ends checked.
