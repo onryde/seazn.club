@@ -1898,8 +1898,12 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
   });
   it("the registry smoke.ts passes in is the one this test assumes", () => {
     const src = readFileSync(join(import.meta.dirname, "..", "smoke.ts"), "utf8");
-    const block = /const SELECTABLE_SUITES[^=]*=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
+    // Lazy `[\s\S]*?` so the type annotation's `=>` (`Record<string, (c: SubsetCtx) => Promise<void>>`) is skipped
+    // and the match stops at `= {`; a `[^=]*` stops at that `=>` and matches nothing (re-review N1). Proven in node
+    // against smoke.ts with this registry inserted: 2 names, ["streamTargets", "v1"].
+    const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+    expect(names.length, "the registry block was found and read").toBeGreaterThan(0);
     expect(names).toEqual([...KNOWN]);
   });
 });
@@ -5593,7 +5597,11 @@ export async function expectQrEnlarges(page: Page, testId: string, opts: { sensi
 - `stream-relay.spec.ts`, the case that reaches Waiting: `expectQrEnlarges(page, "stream-qr", { sensitive: true })` at
   `setViewportSize` 320×568, 568×320 (landscape, where the caption sits beside the QR) and 1280×800. At 1280 also:
   the ✕ is ≥ 44 × 44 and closes it; a tap on the enlarged image closes it ("any tap").
-- The same spec, a fixture-page case: `checkin-open` mints the check-in link, then
+- The same spec, a fixture-page case. **Precondition:** `CheckinQr` renders only for a scorer who is not an official
+  scorer, on a competition that is not frozen, for a fixture whose `status === "scheduled"` (page.tsx:150-153). So the
+  case seeds a SCHEDULED fixture (never started) and opens it as the organiser, then asserts `checkin-open` is visible
+  before the tap, so a missing trigger reds on its precondition, not as a D10 failure. `checkin-open` mints the
+  check-in link, then
   `expectQrEnlarges(page, "checkin-qr", { sensitive: true })` at 320×568, so the inline img, the overlay root and
   the enlarged img each assert `ph-no-capture`; and `await expect(page.getByTestId("checkin-link")).toHaveClass(/\bph-no-capture\b/)`
   (D10a, the visible payload text). The stream case likewise asserts it on `stream-qr-text`, and the handover
@@ -5608,10 +5616,22 @@ export async function expectQrEnlarges(page: Page, testId: string, opts: { sensi
   second case with the stub script defining `wakeLock` as `undefined` opens and closes the overlay (the no-API path).
 - Budget: add `3 * NAV_MS` to the stream case (three viewport passes) and `NAV_MS` to the others.
 
+- [ ] **Step 3c: The walkthrough's pinned QR format.** `stream-relay.spec.ts:492` pins the stream QR's `src` to
+  `/^data:image\/png;base64,/`, and `renderSeaznQr` returns `data:image/svg+xml;charset=utf-8,…`, so that line reds
+  at Step 4 unless it changes. It becomes:
+
+```ts
+    await expect(body.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
+```
+
+  Keep its place in the sequence (it runs before the QR state ends). Mutant: `renderSeaznQr` returning the old
+  `QRCode.toDataURL` output. Red: this line.
+
 - [ ] **Step 4: Run the scope.** The JSON command over `seazn-qr.test.ts`, `qr-enlarge.test.ts`,
   `seazn-qr-image.test.tsx`, `fixture-stream-panel.test.tsx`, `device-link-panel.test.tsx` and
-  `device-link-panel-i18n.test.tsx`, then the stream walkthroughs (A-case "the QR at 125% zoom" still decodes in the
-  browser; the three `expectQrEnlarges` call sites) and `scorer-sheets-handover-panel` / `scorer-sheets-print-scan`,
+  `device-link-panel-i18n.test.tsx`, then the stream walkthroughs (with Step 3c's `src` pin; the A-case at 125 % zoom,
+  :1100-1125, which checks the QR's GEOMETRY at that zoom, not a decode — the decode is `seazn-qr.test.ts`'s 172 px
+  row; the three `expectQrEnlarges` call sites) and `scorer-sheets-handover-panel` / `scorer-sheets-print-scan`,
   whole. There is no check-in spec today (`checkin-qr` appears in no e2e file); its witness is the new fixture-page
   case in `stream-relay.spec.ts`.
 
