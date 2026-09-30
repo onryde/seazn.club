@@ -23,7 +23,7 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
 import { RunSheetRow } from "./run-sheet-row";
-import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
+import type { HoldState } from "@/server/relay/domain/session";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -70,9 +70,9 @@ export type RunSheetKeepContext = {
 // either, so this cannot reuse the `all`-wins-first ordering the TYPE
 // filter uses for byes — it runs before that ladder even starts.
 //
-// Module scope and exported (D2, stream-credits walkthrough, 2026-09-29) so the division page's MOUNTING filter
-// (`initialRunSheetFilter`, stages-panel.tsx) asks this same predicate whether a checkout-returned fixture's row is
-// on the sheet, instead of restating the "Today" rule beside it.
+// Module scope and exported (D2, stream-credits walkthrough, 2026-09-29). Its D2 caller (`initialRunSheetFilter`) was
+// removed with the checkout return's move to the fixture page (spec 2026-09-30 §2); it stays exported as the sheet's
+// one row test, read below and by its own tests.
 export function runSheetKeeps(f: RunSheetFixture, filter: RunSheetFilter, ctx: RunSheetKeepContext): boolean {
   const { stageId, tz, today, nowMs, matchMinutes } = ctx;
   if (stageId !== null && f.stage_id !== stageId) return false;
@@ -103,7 +103,7 @@ export function RunSheet({
   onStageFilter,
   boardSlotOptions,
   onRescheduled,
-  stream,
+  streamStates,
   feedLabels,
 }: {
   blocks: RunSheetBlock[];
@@ -152,14 +152,13 @@ export function RunSheet({
   onStageFilter: (stageId: string | null) => void;
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
-  /** Stream Overlay W1 — threaded straight through to each row's stream
-   *  panel, exactly as `venues` and `orgTz` above are. This component never
-   *  reads it. */
-  stream?: StreamPanelContext;
+  /** Spec 2026-09-30 §2 (T6) — each fixture's stream hold state (`openStreamStates`), keyed by fixture id; every row
+   *  gets ITS OWN entry as `streamState` (its "● Live" / "● Waiting for phone" chip). Absent = no chips. */
+  streamStates?: Record<string, HoldState>;
   /** Feeder labels for unfilled bracket seats, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
    *  through to every `RunSheetRow` below and never read here, exactly as
-   *  `venues`/`orgTz`/`stream` are.
+   *  `venues`/`orgTz` are.
    *
    *  Built by the PANEL, not here, and deliberately: the map must be derived
    *  from the division's WHOLE fixture list, and `blocks` is already a
@@ -341,7 +340,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
-                stream={stream}
+                streamState={streamStates?.[f.id]}
                 feedLabels={feedLabels}
               />
             ))}
@@ -424,7 +423,7 @@ export function RunSheet({
                     venues={venues}
                     boardSlotOptions={boardSlotOptions}
                     onRescheduled={onRescheduled}
-                    stream={stream}
+                    streamState={streamStates?.[f.id]}
                     feedLabels={feedLabels}
                   />
                 ))}
@@ -461,7 +460,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
-                stream={stream}
+                streamState={streamStates?.[f.id]}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
               />
@@ -501,7 +500,7 @@ export function RunSheet({
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
                 onRescheduled={onRescheduled}
-                stream={stream}
+                streamState={streamStates?.[f.id]}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
               />
@@ -733,9 +732,9 @@ function RowWithNow({
   venues?: readonly Venue[];
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
-  stream?: StreamPanelContext;
+  streamState?: HoldState;
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
-   *  wrapper reads nothing off it (same posture as `stream`/`venues`). */
+   *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;
 }) {
   return (

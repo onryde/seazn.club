@@ -59,7 +59,7 @@ import { scoreEvent } from "../scoring";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
-  openStreamFixtureIds, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -2500,36 +2500,88 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(after).toEqual({ monthly: pro, pack: 2, total: pro + 2, monthlyAllowance: pro });
   });
 
-  it("F1: openStreamFixtureIds names exactly the fixtures with a session still UP — every active state in, every terminal state out, another org's never", async () => {
-    // The billing-frozen division page mounts a stop probe for each id this returns, so an org whose competition froze
-    // mid-stream can still stop it. The states come from the engine's own ACTIVE_STATES / TERMINAL_STATES.
+  // Spec 2026-09-30 §2 (T6): `openStreamStates` feeds the run sheet's chip (the division's path to Stop) and the fixture
+  // page's Stop-only mount. ONE guard decides "active" — the SQL `state in ACTIVE_STATES` filter; the loop throws on a
+  // terminal row that got past it (an assumption made loud, not a second filter covering for the first).
+  /** SETUP: a session row in `state` on `fixtureId`, created `ageSec` seconds ago (so a case controls which is newest). Two
+   *  ACTIVE rows at once need two destinations (V421: one active session per target). */
+  const seedSessionRow = async (r: Awaited<ReturnType<typeof rig>>, fixtureId: string, state: SessionState, ageSec: number, targetId = r.target.id): Promise<string> => {
+    const [row] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at, created_at,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      select ${fixtureId}, ${r.auth.orgId}, 'passthrough', ${state}, ${targetId}, ${r.auth.userId}, now(),
+             now() - make_interval(secs => ${ageSec}), d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
+      returning id`;
+    return row!.id;
+  };
+
+  it("openStreamStates: every ACTIVE state maps to the hold state the domain declares; every terminal state, an unlisted fixture and another org's read are absent", async () => {
     const r = await rig({ fixtures: 2 });
     const [a, b] = r.fixtureIds as [string, string];
-    expect(await openStreamFixtureIds(r.auth, []), "the empty case asks nothing").toEqual([]);
-    expect(await openStreamFixtureIds(r.auth, [a, b]), "no session at all").toEqual([]);
-    const [row] = await sql<{ id: string }[]>`
-      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
-                                           sport_key, competition_id, division_id, entitlement_via_override)
-      select ${a}, ${r.auth.orgId}, 'passthrough', 'completed', ${r.target.id}, ${r.auth.userId}, now(),
-             d.sport_key, d.competition_id, f.division_id, true
-        from fixtures f join divisions d on d.id = f.division_id where f.id = ${a}
-      returning id`;
+    expect(await openStreamStates(r.auth, []), "the empty case asks nothing").toEqual({});
+    expect(await openStreamStates(r.auth, [a, b]), "no session at all").toEqual({});
+    const id = await seedSessionRow(r, a, "completed", 0);
+    const other = await seedOrg();
     let checked = 0;
     for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
-      await sql`update fixture_stream_sessions set state = ${state} where id = ${row!.id}`;
-      const open = ACTIVE_STATES.includes(state);
-      expect(await openStreamFixtureIds(r.auth, [a, b]), state).toEqual(open ? [a] : []);
+      await sql`update fixture_stream_sessions set state = ${state} where id = ${id}`;
+      // The expectation is the DOMAIN's declaration (relay/domain/session.ts), never this function's own table.
+      const hold = holdStateOf(state);
+      expect(hold !== null, `${state}: the domain calls it held exactly when it is ACTIVE`).toBe(ACTIVE_STATES.includes(state));
+      expect(await openStreamStates(r.auth, [a, b]), state).toEqual(hold ? { [a]: hold } : {});
       // Tenancy: another org naming the same fixture ids reads nothing.
-      const other = await seedOrg();
-      expect(await openStreamFixtureIds(other.auth, [a, b]), `${state}, another org`).toEqual([]);
+      expect(await openStreamStates(other.auth, [a, b]), `${state}, another org`).toEqual({});
+      // An id outside the list is never reported, even while it is up.
+      expect(await openStreamStates(r.auth, [b]), `${state}, unlisted`).toEqual({});
       checked++;
     }
     expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
-    expect(checked).toBeGreaterThan(0);
-    // An id outside the list is never reported, even while it is up.
-    await sql`update fixture_stream_sessions set state = 'live' where id = ${row!.id}`;
-    expect(await openStreamFixtureIds(r.auth, [b])).toEqual([]);
-    await sql`update fixture_stream_sessions set state = 'completed' where id = ${row!.id}`;
+    // Both hold states were witnessed, so neither answer can be a constant.
+    expect(new Set(ACTIVE_STATES.map((s) => holdStateOf(s)))).toEqual(new Set(["live", "waiting"]));
+    await sql`update fixture_stream_sessions set state = 'completed' where id = ${id}`;
+  });
+
+  it("openStreamStates: a fixture whose NEWEST rows are terminal still reports its active session — terminal rows never reach the loop (the SQL filter is the one guard)", async () => {
+    const r = await rig({ fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "twitch", label: "Second", streamKey: "tw-key" });
+    const live = await seedSessionRow(r, a, "live", 60);
+    const provisioning = await seedSessionRow(r, b, "provisioning", 60, second.id);
+    let terminal = 0;
+    for (const s of TERMINAL_STATES) {
+      await seedSessionRow(r, b, s, 0, second.id); // NEWER than b's active row: `distinct on … created_at desc` would pick it
+      terminal++;
+    }
+    expect(terminal).toBe(TERMINAL_STATES.length);
+    expect(await openStreamStates(r.auth, [a, b])).toEqual({ [a]: holdStateOf("live"), [b]: holdStateOf("provisioning") });
+    await sql`update fixture_stream_sessions set state = 'completed' where id in (${live}, ${provisioning})`;
+  });
+
+  it("openStreamStates: ONLY terminal sessions on a fixture — absent (each terminal state alone)", async () => {
+    let checked = 0;
+    for (const s of TERMINAL_STATES) {
+      const r = await rig();
+      await seedSessionRow(r, r.fixtureId, s, 0);
+      expect(await openStreamStates(r.auth, [r.fixtureId]), s).toEqual({});
+      checked++;
+    }
+    expect(checked).toBe(TERMINAL_STATES.length);
+  });
+
+  it("§9.1 sequence — the run-sheet chip's state through a real session: waiting while the camera warms, live, then the organiser's Stop, then absent", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const before = (await currentSession(r.auth, r.fixtureId, r.deps))!.state;
+    expect(holdStateOf(before), `premise: ${before} is a waiting state`).toBe("waiting");
+    expect(await openStreamStates(r.auth, [r.fixtureId]), "the camera is warming").toEqual({ [r.fixtureId]: "waiting" });
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    expect(await openStreamStates(r.auth, [r.fixtureId]), "on air").toEqual({ [r.fixtureId]: "live" });
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    const [{ state }] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sessionId}`;
+    expect(state, "the organiser's Stop ends the session (PATHS: completed)").toBe("completed");
+    expect(await openStreamStates(r.auth, [r.fixtureId]), "after Stop the chip is gone").toEqual({});
   });
 
   it("F18: a `requested` row nobody admitted is failed with admission_timeout on the next read (the net for a crash between the insert and provisioning)", async () => {

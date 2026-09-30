@@ -59,7 +59,6 @@ import { StreamPlatform, type StreamTarget } from "@/server/api-v1/schemas";
 import {
   CheckoutSheetBoundary,
   FixtureStreamPanel,
-  FixtureStreamToggle,
   PhoneStopProbe,
   PhoneTab,
   PhoneTabBody,
@@ -85,7 +84,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
   apiV1: (url: string, options?: { method?: string; json?: unknown }) => apiV1(url, options),
 }));
 
-// Both `?stream=open` readers (the panel's tab and the toggle's auto-open) call `useSearchParams`.
+// The panel reads the URL only to STRIP a consumed return (G5); whether it opens on a return is the page's word.
 const searchParamsMock = vi.hoisted(() => {
   let p = new URLSearchParams("");
   return { set: (n: URLSearchParams) => { p = n; }, get: () => p };
@@ -761,12 +760,6 @@ describe("phone first — the 44px floor is the BASE, not an override", () => {
     expect(seen.length).toBeGreaterThanOrEqual(16);
   });
 
-  it("and the toggle in the row itself does too", () => {
-    const button = renderIsland(FixtureStreamToggle, { open: false, onToggle: () => {}, fixtureId: "f-1" })
-      .tree()
-      .find((el) => attr(el, "data-testid") === "fixture-stream-toggle");
-    expect(String(propsOf(button!).className ?? "")).toMatch(TAPPABLE);
-  });
 });
 
 describe("one DOM, branched — never a second phone tree", () => {
@@ -818,87 +811,63 @@ describe("one DOM, branched — never a second phone tree", () => {
   });
 });
 
-describe("the toggle", () => {
-  it("carries the wave's testid, an accessible name and its expanded state", () => {
-    const tree = renderIsland(FixtureStreamToggle, { open: false, onToggle: () => {}, fixtureId: "f-1" }).tree();
-    const button = byTestId(tree, "fixture-stream-toggle");
-    expect(button, "no fixture-stream-toggle").toBeDefined();
-    expect(propsOf(button!)["aria-expanded"]).toBe(false);
-    expect(propsOf(button!)["aria-label"]).toBe(messages["stream.toggle"]);
-  });
-});
+// ─── The return (spec 2026-09-30 §2) ────────────────────────────────────────────────────────────────────────────────
+// The checkout return and the run sheet's chip both land on the FIXTURE page with `?stream=open`. The page reads it on the
+// server and hands the panel `openedByReturn`; the URL on its own opens nothing (T6 removed `checkoutReturnFor` and the
+// run-sheet toggle it drove). The page IS the fixture, so there is no `fixture` param to name a row any more.
+describe("the return opens the panel on the Phone tab — on the fixture page's word, `openedByReturn`", () => {
+  const RETURN = "stream=open&checkout=success&session_id=cs_test_1";
+  const panel = (openedByReturn?: boolean, relayEntitled = true) =>
+    renderIsland(FixtureStreamPanel, { fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled }), openedByReturn });
 
-// ─── The checkout return (owner ruling 4, re-ruled on C19) ────────────────────────────────────────────────────────
-describe("the checkout return opens THIS row's panel on the Phone tab", () => {
-  const RETURN = "tab=fixtures&fixture=f1&stream=open&checkout=success&session_id=cs_test_1";
-
-  it("?stream=open&fixture=<this id> fires onToggle once; another fixture's id, an absent query, and an already-open row do not", () => {
-    const calls: string[] = [];
+  it("T5: `openedByReturn` opens on the PHONE tab and strips the return; without it, OBS (the positive pair)", () => {
     searchParamsMock.set(new URLSearchParams(RETURN));
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("f1") });
-    expect(calls, "the row this URL names opens itself").toEqual(["f1"]);
-    // The three negatives, each on its own — two guards covering for each other are each untested (class 3).
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f2", onToggle: () => calls.push("f2") });
-    searchParamsMock.set(new URLSearchParams("tab=fixtures&fixture=f1"));
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("no-flag") });
-    searchParamsMock.set(new URLSearchParams(""));
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("bare") });
-    searchParamsMock.set(new URLSearchParams(RETURN));
-    renderIsland(FixtureStreamToggle, { open: true, fixtureId: "f1", onToggle: () => calls.push("already") });
-    expect(calls, "no other row, no bare URL, and never a toggle on an open row").toEqual(["f1"]);
-  });
-
-  it("the second render is not a second open: once the organiser shuts the row, it STAYS shut (class 13, the ref)", () => {
-    const calls: number[] = [];
-    searchParamsMock.set(new URLSearchParams(RETURN));
-    const onToggle = () => calls.push(calls.length);
-    const island = renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle });
-    expect(calls).toHaveLength(1);
-    island.rerender({ open: true, fixtureId: "f1", onToggle }); // the row opened
-    island.rerender({ open: false, fixtureId: "f1", onToggle }); // the organiser shut it — the URL still says open
-    expect(calls, "a shut row sprang back open").toHaveLength(1);
-  });
-
-  it("the panel it opens starts on the PHONE tab for that fixture, and on OBS for any other", () => {
-    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", `fixture=${FIXTURE.id}`)));
-    const here = open({ relayEntitled: true }).tree();
-    expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected")).toBe(true);
+    const here = panel(true).tree();
+    expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected"), "the fixture page's return lands on Phone").toBe(true);
     expect(byTestId(here, "stream-phone-gate"), "the Phone tab body").toBeDefined();
-    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", "fixture=some-other-row")));
-    const other = open({ relayEntitled: true }).tree();
-    expect(attr(byTestId(other, "stream-tab-obs")!, "aria-selected")).toBe(true);
-    expect(byTestId(other, "stream-phone-gate")).toBeUndefined();
-    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}`));
-    expect(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-tab-obs")!, "aria-selected"), "no flag, no Phone tab").toBe(true);
+    expect(router.replace, "the return's params are stripped (G5)").toHaveBeenCalledWith(PATHNAME, { scroll: false });
+    router.replace.mockReset();
+    // The same URL without the page's word: an ordinary open.
+    const ordinary = panel(false).tree();
+    expect(attr(byTestId(ordinary, "stream-tab-obs")!, "aria-selected"), "no openedByReturn, no Phone tab").toBe(true);
+    expect(byTestId(ordinary, "stream-phone-gate")).toBeUndefined();
+    expect(router.replace, "an ordinary open strips nothing").not.toHaveBeenCalled();
   });
 
-  it("G5: once THIS row has consumed the return, its params are stripped with router.replace — every other param kept, once", () => {
+  it("T6: the old run-sheet return URL (`?stream=open&fixture=<this id>`) opens nothing by itself — the URL is no longer a reader", () => {
+    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}&${RETURN}`));
+    const tree = panel(undefined).tree();
+    expect(attr(byTestId(tree, "stream-tab-obs")!, "aria-selected"), "OBS, as any ordinary open").toBe(true);
+    expect(byTestId(tree, "stream-phone-gate")).toBeUndefined();
+    expect(router.replace, "nothing consumed, nothing stripped").not.toHaveBeenCalled();
+  });
+
+  it("G5: once consumed, the return's params are stripped with router.replace — every other param kept, once", () => {
     // A reload or a shared link must not re-open the panel (or re-run the reconcile) on a URL whose purchase is done.
-    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}&stream=open&checkout=success&session_id=cs_test_1&court=2`));
-    const island = open({ relayEntitled: true });
+    searchParamsMock.set(new URLSearchParams(`${RETURN}&court=2`));
+    const island = panel(true);
     expect(router.replace).toHaveBeenCalledTimes(1);
-    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?tab=fixtures&court=2`, { scroll: false });
-    island.rerender({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }) });
+    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?court=2`, { scroll: false });
+    island.rerender({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }), openedByReturn: true });
     expect(router.replace, "a re-render stripped again").toHaveBeenCalledTimes(1);
-    // The empty cases: another row's return, and an ordinary visit, touch nothing.
-    router.replace.mockReset();
-    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", "fixture=some-other-row")));
-    open({ relayEntitled: true });
-    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}`));
-    open({ relayEntitled: true });
-    expect(router.replace).not.toHaveBeenCalled();
     // …and a return with nothing else on the URL lands on the bare path.
-    searchParamsMock.set(new URLSearchParams(`fixture=${FIXTURE.id}&stream=open`));
-    open({ relayEntitled: false });
+    router.replace.mockReset();
+    searchParamsMock.set(new URLSearchParams("stream=open"));
+    panel(true, false);
     expect(router.replace).toHaveBeenCalledWith(PATHNAME, { scroll: false });
+    // A `fixture` param is no longer the return's (the page IS the fixture): it is kept like any other.
+    router.replace.mockReset();
+    searchParamsMock.set(new URLSearchParams("stream=open&fixture=kept"));
+    panel(true, false);
+    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?fixture=kept`, { scroll: false });
   });
 
   it("B2: the return scrolls the opened panel into view ONCE — smooth, instant under reduced motion; an ordinary open never scrolls", () => {
     const REDUCE = "(prefers-reduced-motion: reduce)";
-    const attach = (reduce: boolean, query: string) => {
+    const attach = (reduce: boolean, openedByReturn: boolean) => {
       vi.stubGlobal("matchMedia", (q: string) => ({ matches: reduce && q === REDUCE, media: q }));
-      searchParamsMock.set(new URLSearchParams(query));
-      const section = byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!;
+      searchParamsMock.set(new URLSearchParams(openedByReturn ? RETURN : ""));
+      const section = byTestId(panel(openedByReturn).tree(), "stream-panel")!;
       const el = { scrollIntoView: vi.fn() };
       const ref = attr(section, "ref");
       if (typeof ref === "function") {
@@ -907,39 +876,19 @@ describe("the checkout return opens THIS row's panel on the Phone tab", () => {
       }
       return el.scrollIntoView;
     };
-    const RETURN_HERE = RETURN.replace("fixture=f1", `fixture=${FIXTURE.id}`);
     try {
-      const smooth = attach(false, RETURN_HERE);
+      const smooth = attach(false, true);
       expect(smooth).toHaveBeenCalledTimes(1);
       expect(smooth).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
-      const still = attach(true, RETURN_HERE);
+      const still = attach(true, true);
       expect(still).toHaveBeenCalledWith({ block: "start", behavior: "auto" });
-      expect(attach(false, `tab=fixtures&fixture=${FIXTURE.id}`), "an ordinary open scrolled").not.toHaveBeenCalled();
-      expect(attach(false, RETURN.replace("fixture=f1", "fixture=some-other-row")), "another row's return scrolled this one").not.toHaveBeenCalled();
+      expect(attach(false, false), "an ordinary open scrolled").not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
     // The landing clears the console's sticky bars rather than tucking the panel's heading under them.
-    const cls = String(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!, "className")).split(/\s+/);
+    const cls = String(attr(byTestId(panel(true).tree(), "stream-panel")!, "className")).split(/\s+/);
     expect(cls.some((c) => /^scroll-mt-/.test(c)), "no scroll margin").toBe(true);
-  });
-
-  // Spec 2026-09-30 §2: the fixture page reads `?stream=open` on the SERVER and says so with `openedByReturn` — its URL
-  // names no `fixture` (the page IS the fixture), so `checkoutReturnFor` alone would answer no there.
-  it("T5: `openedByReturn` opens on the PHONE tab with no `fixture` param, and strips the return; without it, OBS (the positive pair)", () => {
-    const panel = (openedByReturn?: boolean) =>
-      renderIsland(FixtureStreamPanel, { fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }), openedByReturn });
-    searchParamsMock.set(new URLSearchParams("stream=open&checkout=success&session_id=cs_test_1"));
-    const here = panel(true).tree();
-    expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected"), "the fixture page's return lands on Phone").toBe(true);
-    expect(byTestId(here, "stream-phone-gate"), "the Phone tab body").toBeDefined();
-    expect(router.replace, "the return's params are stripped on the fixture page too (G5)").toHaveBeenCalledWith(PATHNAME, { scroll: false });
-    router.replace.mockReset();
-    // The same URL without the server's word: nothing in it names this fixture, so it is an ordinary open.
-    const ordinary = panel(false).tree();
-    expect(attr(byTestId(ordinary, "stream-tab-obs")!, "aria-selected"), "no openedByReturn, no Phone tab").toBe(true);
-    expect(byTestId(ordinary, "stream-phone-gate")).toBeUndefined();
-    expect(router.replace, "an ordinary open strips nothing").not.toHaveBeenCalled();
   });
 });
 

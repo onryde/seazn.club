@@ -27,8 +27,8 @@ import {
   relayEnvironment,
 } from "@/server/relay/config";
 import {
-  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, isTerminal,
-  type Command, type Decision, type Effect, type Session,
+  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
+  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState,
 } from "@/server/relay/domain/session";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
@@ -1295,17 +1295,25 @@ export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayC
   return { ...(await creditBreakdown(sql, orgId)), monthlyAllowance };
 }
 
-/** F1: which of `fixtureIds` have a session still UP (an ACTIVE state) — THIS org's only. A billing-frozen competition
- *  renders no stream panel (the division page gates it on `editable`), yet the stop route still serves a frozen org's
- *  organiser, so the page mounts a stop probe for exactly these fixtures: a freeze never strands a stream on air. */
-export async function openStreamFixtureIds(auth: AuthCtx, fixtureIds: readonly string[]): Promise<string[]> {
-  if (fixtureIds.length === 0) return [];
-  const rows = await sql<{ fixture_id: string }[]>`
-    select distinct fixture_id from fixture_stream_sessions
-     where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}`;
-  // In the caller's order (the division's fixture order), so the probes stack the way the run sheet lists them.
-  const open = new Set(rows.map((r) => r.fixture_id));
-  return fixtureIds.filter((id) => open.has(id));
+/** Spec 2026-09-30 §2 — each listed fixture with a session still up, as a person reads it (live | waiting), THIS org's
+ *  only. Feeds the run sheet's chip (the division's path to Stop, frozen or not) and the fixture page's Stop-only mount.
+ *  At most one ACTIVE session per fixture (V410 `fixture_stream_sessions_one_active`); `distinct on … created_at desc`
+ *  still names the newest should that ever not hold. */
+export async function openStreamStates(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Record<string, HoldState>> {
+  if (fixtureIds.length === 0) return {};
+  const rows = await sql<{ fixture_id: string; state: SessionState }[]>`
+    select distinct on (fixture_id) fixture_id, state from fixture_stream_sessions
+     where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}
+     order by fixture_id, created_at desc`;
+  const out: Record<string, HoldState> = {};
+  for (const r of rows) {
+    // ONE guard decides "active": the SQL filter above. This line is the assumption made loud (TEST-STRATEGY:
+    // assumptions are guards), not a second filter that would cover for the first and leave both untested.
+    const s = holdStateOf(r.state);
+    if (s === null) throw new Error(`openStreamStates: a terminal session (${r.state}) passed the ACTIVE_STATES filter`);
+    out[r.fixture_id] = s;
+  }
+  return out;
 }
 
 export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {

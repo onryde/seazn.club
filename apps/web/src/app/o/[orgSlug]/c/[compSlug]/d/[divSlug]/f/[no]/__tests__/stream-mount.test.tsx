@@ -91,7 +91,7 @@ vi.mock("@/components/v2/checkin-qr", () => ({ CheckinQr: () => null }));
 vi.mock("@/components/v2/fixture-officials-strip", () => ({ FixtureOfficialsStrip: () => null }));
 vi.mock("@/components/v2/fixture-console", () => ({ FixtureConsole: () => null }));
 vi.mock("@/server/stream-panel-context", () => ({ loadStreamPanelContext: spies.loader }));
-vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamFixtureIds: spies.openStreams }));
+vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: spies.openStreams }));
 
 import FixturePage from "../page";
 import { FixtureConsole } from "@/components/v2/fixture-console";
@@ -126,7 +126,7 @@ beforeEach(() => {
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
   spies.openStreams.mockReset();
-  spies.openStreams.mockImplementation(async () => scene.open);
+  spies.openStreams.mockImplementation(async () => Object.fromEntries(scene.open.map((id) => [id, "live"])));
 });
 
 describe("the organiser fixture page mounts Stream (spec 2026-09-30 §2)", () => {

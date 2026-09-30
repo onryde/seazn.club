@@ -13,7 +13,7 @@ export function fixtureStreamMode(i: {
   entitled: boolean;
   /** The org is billing-frozen. */
   frozen: boolean;
-  /** This fixture has a session in an ACTIVE state (`openStreamFixtureIds`). */
+  /** This fixture has a session in an ACTIVE state (`openStreamStates`). */
   activeSession: boolean;
 }): FixtureStreamMode {
   if (!i.canEdit) return null;

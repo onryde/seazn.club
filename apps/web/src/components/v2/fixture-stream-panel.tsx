@@ -222,62 +222,9 @@ export interface StreamPanelContext {
   overlayKeys: Record<string, string>;
 }
 
-/**
- * Owner ruling 4 (re-ruled on C19): a return from checkout carries `?stream=open&fixture=<id>` and lands with THIS
- * row's panel open on the Phone tab. Every reader — which tab the panel opens on, whether the row opens at all, and
- * (D2) which filter the division's run sheet mounts on so that row is rendered in the first place (stages-panel.tsx
- * `initialRunSheetFilter`) — asks this one function, so they cannot disagree about which row the URL names.
- * `useSearchParams` can be null outside the app router, hence the `?.`.
- */
-export function checkoutReturnFor(params: { get(name: string): string | null } | null, fixtureId: string): boolean {
-  return params?.get("stream") === "open" && params.get("fixture") === fixtureId;
-}
-
-/** G5: what the checkout return put on the URL, and nothing else — every other param (the tab, a filter) is kept. */
-const RETURN_PARAMS = ["stream", "fixture", "checkout", "session_id"] as const;
-
-/** The row's own control. Separate from the panel body because the two mount in
- *  different places: the toggle sits beside the run sheet's time cell, the body
- *  spans the row underneath it. The open state therefore lives in the row. */
-export function FixtureStreamToggle({
-  open,
-  onToggle,
-  fixtureId,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  fixtureId: string;
-}) {
-  const msg = useMsg();
-  // The MOUNTING half of the checkout return. The read belongs to the panel module, not to `run-sheet-row.tsx` — the
-  // row's whole contribution is the `fixtureId` prop. Fired once per mount and only while CLOSED, so a customer who
-  // lands on the URL, reads the panel and shuts it does not have it spring back open under them. The row hands a fresh
-  // `onToggle` every render, so this effect re-runs on each: the ref is what keeps it to ONE open (class 13 — and
-  // `open` is what keeps a manual close sticky).
-  const searchParams = useSearchParams();
-  const autoOpened = useRef(false);
-  useEffect(() => {
-    if (autoOpened.current || open) return;
-    if (!checkoutReturnFor(searchParams, fixtureId)) return;
-    autoOpened.current = true;
-    onToggle();
-  }, [searchParams, fixtureId, open, onToggle]);
-  return (
-    <button
-      type="button"
-      data-testid="fixture-stream-toggle"
-      aria-expanded={open}
-      aria-label={msg("stream.toggle")}
-      title={msg("stream.toggle")}
-      onClick={onToggle}
-      className={`-my-1 flex min-h-11 w-8 shrink-0 items-center justify-center rounded-md hover:text-purple-700 ${
-        open ? "text-purple-700" : "text-slate-400"
-      }`}
-    >
-      <Video className="h-4 w-4" strokeWidth={1.75} />
-    </button>
-  );
-}
+/** G5: what the checkout return put on the URL, and nothing else — every other param is kept. (Spec 2026-09-30 §2: the
+ *  return lands on the fixture page, whose path IS the fixture, so it no longer carries a `fixture` param.) */
+const RETURN_PARAMS = ["stream", "checkout", "session_id"] as const;
 
 export function FixtureStreamPanel({
   fixture,
@@ -292,8 +239,8 @@ export function FixtureStreamPanel({
    *  and what the seeded payload carries as `venueTz`. Never the org zone. */
   tz: string;
   stream: StreamPanelContext;
-  /** Spec 2026-09-30 §2: the fixture page's `?stream=open` (server-read). The run-sheet mount still passes nothing and
-   *  reads `checkoutReturnFor` until T6 removes it. */
+  /** Spec 2026-09-30 §2: the fixture page's `?stream=open` (server-read) — the checkout return, and the run sheet's
+   *  chip. Opens the panel on its Phone tab, strips the return's params (G5) and scrolls it into view (B2). */
   openedByReturn?: boolean;
 }) {
   const msg = useMsg();
@@ -301,10 +248,10 @@ export function FixtureStreamPanel({
   const locale = useLocaleOrDefault();
 
   const themes = themesForSport(stream.sportKey);
-  // The TAB half of the checkout return: a lazy initialiser, so the URL picks the opening tab and never overrides the
+  // The TAB half of the return: a lazy initialiser, so the page's word picks the opening tab and never overrides the
   // organiser's own choice afterwards. Read ONCE into state: G5 below strips the params, and the answer must survive it.
   const searchParams = useSearchParams();
-  const [returnedHere] = useState(() => !!openedByReturn || checkoutReturnFor(searchParams, fixture.id));
+  const [returnedHere] = useState(() => !!openedByReturn);
   const [tab, setTab] = useState<"obs" | "phone">(() => (returnedHere ? "phone" : "obs"));
 
   // G5: the return has done its job once this row is open on the Phone tab, so its params come off the URL — a reload

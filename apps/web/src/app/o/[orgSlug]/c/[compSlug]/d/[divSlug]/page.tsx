@@ -31,10 +31,7 @@ import { getScheduleSettings } from "@/server/usecases/schedule";
 // already makes for CourtMultiPicker (default includeArchived: false; the
 // picker excludes archived courts either way via `courtGroups`).
 import { listVenues } from "@/server/usecases/venues";
-import { openStreamFixtureIds } from "@/server/usecases/stream-sessions";
-import { loadStreamPanelContext } from "@/server/stream-panel-context";
-import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
-import { resolveSlotLabel, type SlotLabel } from "@/lib/slot-label";
+import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes } from "@/server/usecases/competition-desk";
@@ -86,27 +83,16 @@ const EDIT_TABS = [...TABS, "discipline", "settings"] as const;
 type Tab = (typeof EDIT_TABS)[number];
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
-/** A search param as `URLSearchParams.get` reads it: the first value of a repeated key (D2 — see `checkoutReturn`). */
-function firstParam(v: string | string[] | undefined): string | undefined {
-  return typeof v === "string" ? v : v?.[0];
-}
-
 export default async function DivisionPage({
   params,
   searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string }>;
-  searchParams: Promise<{
-    tab?: string;
-    checkout?: string;
-    session_id?: string;
-    stream?: string | string[];
-    fixture?: string | string[];
-  }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const [
     { orgSlug, compSlug, divSlug },
-    { tab: rawTab, checkout, session_id: checkoutSessionId, stream: streamParam, fixture: fixtureParam },
+    { tab: rawTab },
   ] = await Promise.all([
     params,
     searchParams,
@@ -512,36 +498,12 @@ export default async function DivisionPage({
         })
       : null;
 
-  // Stream Overlay W1 (task 6) — the per-PAGE half of every run-sheet row's stream panel, resolved ONCE here rather
-  // than per row, through THE loader (server/stream-panel-context.ts — spec 2026-09-30 §2, "one loader means one
-  // authority for the context"). Skipped entirely off the fixtures tab and for a viewer who cannot edit: neither can
-  // reach a panel at all, and `offered: false` reads nothing.
-  const streamPanel = await loadStreamPanelContext({
-    auth,
-    competitionId: competition.id,
-    sportKey: division.sport_key,
-    fixtureIds: fixtures.map((f) => f.id),
-    locale,
-    offered: tab === "fixtures" && editable,
-    checkout: { status: checkout, sessionId: checkoutSessionId },
-  });
-  const streamEntitled = streamPanel?.entitled ?? false;
-  // F1 (Task 14 fix round 2): a BILLING freeze takes the stream panel away with everything else editable, but it must not
-  // strand a stream already on air — the stop route still serves a frozen org's organiser. So a frozen competition's
-  // fixtures tab mounts the stop-only probe for each fixture with a session still up, named by its entrants. Never
-  // alongside the live panel (the row's own Phone tab owns Stop there), and never for a viewer who cannot edit.
-  // I-2 (lane-close review): the same holds when staff switch `streaming.overlay` OFF mid-stream. Since V426 an override
-  // is the only way it goes false, and the panel and the row's toggle are both gated on it — so without the probe the
-  // relay kept sending with no Stop anywhere. `streamEntitled` is false whenever the panel is not offered, so this also
-  // covers a frozen page (`editable` false) — `billingFrozen` stays named for the reader.
-  const frozenOnAir =
-    tab === "fixtures" && canEdit && (billingFrozen || !streamEntitled)
-      ? await openStreamFixtureIds(auth, fixtures.map((f) => f.id))
-      : [];
-  // An unfilled side reads as its slot ("Winner of R1·2") or TBD — the one resolver every fixture renderer uses.
-  const sideName = (entrantId: string | null, slotLabel: SlotLabel | null) =>
-    (entrantId ? entrantNames[entrantId] : undefined) ??
-    resolveSlotLabel(slotLabel, (key, vars) => t(dict, key, vars), "schedule.tbd");
+  // Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; the run sheet keeps a chip ("● Live" /
+  // "● Waiting for phone") per fixture with a session up, linking there with `?stream=open` — the division's path to
+  // Stop. Read for the PAGE-level organiser (`canEdit`), deliberately NOT `editable`: a billing-frozen or overlay-off
+  // page must still lead to Stop (it replaced F1's probe stack and I-2's). A viewer and every other tab read nothing.
+  const streamStates =
+    tab === "fixtures" && canEdit ? await openStreamStates(auth, fixtures.map((f) => f.id)) : {};
 
   return (
     <>
@@ -724,19 +686,6 @@ export default async function DivisionPage({
 
         {tab === "fixtures" && (
           <>
-            {frozenOnAir.length > 0 && (
-              <div data-testid="frozen-stream-probes" className="mb-6">
-                {fixtures
-                  .filter((f) => frozenOnAir.includes(f.id))
-                  .map((f) => (
-                    <PhoneStopProbe
-                      key={f.id}
-                      fixtureId={f.id}
-                      label={`${sideName(f.home_entrant_id, f.home_slot_label)} ${t(dict, "schedule.vs")} ${sideName(f.away_entrant_id, f.away_slot_label)}`}
-                    />
-                  ))}
-              </div>
-            )}
             {/* PROMPT-62: two-sided tree for each knockout stage, above the
                 flat list (which keeps scheduling + Documents). Renders nothing
                 until the bracket is generated or for non-single-elim shapes. */}
@@ -824,12 +773,7 @@ export default async function DivisionPage({
               phase={phase}
               matchMinutes={matchMinutes}
               viewerPlan={viewerPlan}
-              stream={streamPanel}
-              // D2 — a stream-credit checkout returns with `?stream=open&fixture=<id>`; the panel decides (through
-              // `checkoutReturnFor`) which row that names and mounts the run sheet on a filter that renders it.
-              // A repeated key reaches a server component as string[]; the panel's auto-open reads
-              // `useSearchParams().get`, which answers the FIRST value — so the filter is derived from the same one.
-              checkoutReturn={{ stream: firstParam(streamParam), fixture: firstParam(fixtureParam) }}
+              streamStates={streamStates}
             />
           </>
         )}

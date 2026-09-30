@@ -350,6 +350,15 @@ async function openFixture(page: Page, rig: RelayRig, f: RelayFixture, query = "
   await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(), `fixture ${f.no}'s console rendered`).toBeAttached({ timeout: 30_000 });
 }
 
+/** The division fixtures tab, filtered to every fixture (the sheet opens on "Today"; the rig schedules nothing) — where
+ *  the run sheet's chip (T6) shows a session that is up. */
+async function openRunSheet(page: Page, rig: RelayRig): Promise<void> {
+  await page.goto(`${rig.divPath}?tab=fixtures`);
+  await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1, { timeout: 30_000 });
+  await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
+}
+const rowOf = (page: Page, f: RelayFixture): Locator => page.locator(`li[data-fixture-no="${f.no}"]`);
+
 /** The width's own Stream control — the desktop button at ≥768, the strip icon below. Exactly one is visible. */
 const streamControl = (page: Page): Locator =>
   page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
@@ -979,6 +988,90 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
   const row = (await sessionsOf({ fixtureId: f.id })).find((s) => s.id === live.id)!;
   expect(row, "the tap ended the stream").toMatchObject({ state: "completed", end_reason: "stopped" });
 });
+
+// ===========================================================================
+// A12 — the run sheet's chip (spec 2026-09-30 §2, T6): the division's path to Stop
+// ===========================================================================
+// The panel lives on the fixture page; the run sheet keeps a chip per fixture with a session up. The whole loop, TAPPED:
+// Go live on the fixture page → the division's chip reads WAITING while the camera warms → the chip opens the fixture
+// page with the panel open, whose poll brings it LIVE → the chip reads LIVE → the chip again, Stop → the chip is gone
+// while the row stays. WAITING is observable because the server flips warming → live only on a read of `current` (the
+// Phone tab's poll) and nothing reads it while the organiser is on the division — its premise is read from the DB.
+for (const width of [320, 1280] as const) {
+  test(`A12 @${width}: Go live on the fixture page → the run sheet's chip reads WAITING, then (after the chip opens the panel) LIVE → the chip leads to Stop → after Stop no chip, the row still there`, async ({
+    page,
+  }) => {
+    const NAVS = 6; // openPhoneTab, run sheet (waiting), chip → fixture page, run sheet (live), chip → fixture page, run sheet (gone)
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRelayRig(page);
+    await addTargetApi(page, rig.orgId, { label: `A12 destination ${width}` });
+    const f = rig.fixtures[0]!;
+    const fixturePath = `${rig.divPath}/f/${f.no}`;
+
+    // 1. Go live — tapped on the fixture page — and leave as soon as the QR says the camera is warming.
+    const body = (await openPhoneTab(page, rig, f)).locator("[data-phone-body]");
+    await streamSlot(); // this test's share of the deployment's stream capacity
+    await body.getByTestId("stream-go-live").click();
+    await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+
+    // 2. The division: WAITING. Premise first — the row itself is still warming (nothing has read `current` since).
+    await openRunSheet(page, rig);
+    const chip = rowOf(page, f).getByTestId("run-sheet-stream-chip");
+    const warming = await latestSession(f.id);
+    expect(["requested", "provisioning", "warming"], `premise: the session is still waiting (${warming.state})`).toContain(warming.state);
+    await expect(chip).toHaveAttribute("data-state", "waiting");
+    await expect(chip).toHaveText(en("runsheet.stream.waiting"));
+    await expect(chip).toHaveAttribute("href", `${fixturePath}?stream=open`);
+    await expectNoHorizontalScroll(page);
+    if (width === 320) {
+      // The phone floor, hit-tested on the chip itself (expectTapTargets scans descendants; the chip has none).
+      await chip.scrollIntoViewIfNeeded();
+      const hit = await chip.evaluate((el: HTMLElement) => {
+        const r = el.getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const lands = [r.top + r.height / 2, r.top + 2, r.bottom - 2].filter((y) => {
+          const h = document.elementFromPoint(cx, y);
+          return !!h && (h === el || el.contains(h));
+        }).length;
+        return { h: r.height, lands };
+      });
+      expect(hit, "the chip is a 44-px tap target at 320, really hit there").toEqual({ h: expect.any(Number), lands: 3 });
+      expect(hit.h).toBeGreaterThanOrEqual(43.5);
+    }
+    await shot(rowOf(page, f), `A12-chip-waiting-${width}.png`);
+
+    // 3. The chip opens the fixture page with the panel open on its Phone tab; the tab's poll brings it LIVE.
+    await chip.click();
+    await expect.poll(() => new URL(page.url()).pathname, { message: "the chip lands on THIS fixture's page", timeout: NAV_MS }).toBe(fixturePath);
+    const opened = page.locator('[data-role="fixture-stream-body"] [data-phone-body]');
+    await expect(opened, "the chip opened the Stream panel on its Phone tab").toBeVisible({ timeout: NAV_MS });
+    await expect(opened.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+
+    // 4. The division again: LIVE.
+    await openRunSheet(page, rig);
+    await expect(chip).toHaveAttribute("data-state", "live");
+    await expect(chip).toHaveText(en("runsheet.stream.live"));
+    await expectNoHorizontalScroll(page);
+    await shot(rowOf(page, f), `A12-chip-live-${width}.png`);
+
+    // 5. The chip is the path to Stop.
+    await chip.click();
+    await expect.poll(() => new URL(page.url()).pathname, { timeout: NAV_MS }).toBe(fixturePath);
+    const stop = page.locator('[data-role="fixture-stream-body"]').getByTestId("stream-stop");
+    await expect(stop, "Stop, one tap from the chip").toBeVisible({ timeout: NAV_MS });
+    await stop.click();
+    await confirmStop(page);
+    await expect
+      .poll(async () => (await latestSession(f.id)).state, { message: "the Stop ended the session", timeout: POLL_WAIT_MS })
+      .toBe("completed");
+
+    // 6. After Stop: no chip — and the POSITIVE twin, the row itself, so an empty sheet cannot pass.
+    await openRunSheet(page, rig);
+    await expect(rowOf(page, f), "the fixture's row is on the sheet").toHaveCount(1);
+    await expect(chip, "no session up, no chip").toHaveCount(0);
+  });
+}
 
 // ===========================================================================
 // A8 — the destination form: exactly the platforms a destination can be created on

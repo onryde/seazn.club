@@ -26,7 +26,7 @@ import {
 import { resolveLocale } from "@/lib/resolve-locale";
 import { loadStreamPanelContext } from "@/server/stream-panel-context";
 import { fixtureStreamMode } from "@/lib/fixture-stream-mount";
-import { openStreamFixtureIds } from "@/server/usecases/stream-sessions";
+import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
@@ -143,13 +143,13 @@ export default async function FixturePage({
       offered: canEdit && !frozen,
       checkout: { status: first(sp.checkout), sessionId: first(sp.session_id) },
     }),
-    canEdit ? openStreamFixtureIds(auth, [id]) : Promise.resolve([] as string[]),
+    canEdit ? openStreamStates(auth, [id]) : Promise.resolve({} as Awaited<ReturnType<typeof openStreamStates>>),
   ]);
   const streamMode = fixtureStreamMode({
     canEdit,
     entitled: streamContext?.entitled ?? false,
     frozen,
-    activeSession: openStreams.length > 0,
+    activeSession: openStreams[id] !== undefined,
   });
   const streamMount: FixtureStreamMount | undefined =
     streamMode === "panel" && streamContext
