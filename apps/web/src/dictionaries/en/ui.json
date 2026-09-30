@@ -5430,6 +5430,7 @@
   "stream.inUse.matchCourt": "{match} · {court}",
   "stream.inUse.open": "Open {match}",
   "stream.error.destination_not_allowed": "This destination is no longer supported. Add it again or pick another.",
+  "stream.error.target_unreadable": "This destination's saved stream key can't be read. Replace the key (or remove the destination and add it again), then go live.",
   "stream.error.plan_lacks_relay": "Phone streaming isn't on your plan.",
   "stream.target.refused.scheme": "The ingest URL must start with rtmp:// or rtmps://.",
   "stream.target.refused.userinfo": "Remove the username and password from the ingest URL.",

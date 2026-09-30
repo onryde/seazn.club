@@ -35,7 +35,7 @@ import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/e
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
-import { lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
+import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
@@ -44,7 +44,7 @@ import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
   lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
-import { DestinationNotAllowedError } from "./stream-targets";
+import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
 
@@ -1106,7 +1106,15 @@ export async function createSession(
     // validator — after `admit` (so a target of another org is still 404 `target_not_found`, and nothing is opened for
     // it) and before the insert, i.e. before any credit, Cloudflare input or Machine exists for this start. The refusal is
     // the same typed 422 the save would have given, and like it never carries the url (its path can hold the key).
-    const destination = checkDestination((await readTargetSecret(tx, orgId, body.targetId)).url);
+    // B2 (B1 review): a saved key that will not open (a KEK change, a damaged byte) was an unmapped 500 here. It is the
+    // organiser's to fix, so it is a typed 422 naming the remedy — thrown inside this transaction, so no row is written
+    // and nothing is spent (the credit is consumed only at live).
+    const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => {
+      if (!(err instanceof TargetSecretUnreadableError)) throw err;
+      log.warn({ fixtureId, targetId: body.targetId, kind: err.kind }, "stream session: the saved destination will not open — start refused; the organiser replaces the key");
+      throw TargetUnreadableError.forKind(err.kind);
+    });
+    const destination = checkDestination(saved.url);
     if (!destination.ok) {
       log.warn({ fixtureId, targetId: body.targetId, rule: destination.rule }, "stream session: a saved destination the allowlist no longer admits — start refused");
       throw new DestinationNotAllowedError(destination.rule);

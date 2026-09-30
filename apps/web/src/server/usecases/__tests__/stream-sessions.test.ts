@@ -31,10 +31,10 @@ import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
 import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
-import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
+import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
 import { holdStateOf, type SessionState } from "@/server/relay/domain/session";
-import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { inputEnvelopesHex, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
@@ -3620,5 +3620,50 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     const released = rec2.calls.filter((c) => c.operation === "removeOutput");
     expect(released, "the failure releases the output too").toHaveLength(1);
     expect(released[0]!.sessionId).toBe(made.sessionId);
+  });
+});
+
+// B2 carried (B1 review): Go live on a destination whose saved key will not open (a KEK change, a damaged byte) was an
+// unmapped 500 out of the admission transaction. It is a clean refusal the organiser can act on — and, being inside that
+// transaction, it spends nothing and leaves no row.
+describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
+  it("is 422 TARGET_UNREADABLE telling the organiser to replace the key — no session row, no credit spent, no provider asked to create anything; Replace key then recovers it and Go live starts (sequence)", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, recorder: rec });
+    const targetId = await rigTarget(r.auth.orgId, "Unreadable", "youtube");   // the boundary's own rig: an envelope that will not open
+    const balance = await creditBalance(sql, r.auth.orgId);
+    const warns: unknown[][] = [];
+    const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
+    let err: unknown;
+    try {
+      err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+    expect((err as Error).message).toMatch(/replace the key/i);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n, "no session row, in any state").toBe(0);
+    expect(await creditBalance(sql, r.auth.orgId), "no credit spent").toBe(balance);
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.filter((c) => c.operation === "createLiveInput" || c.operation === "addOutput"), "nothing was provisioned").toEqual([]);
+    expect(r.runner.created).toEqual([]);
+    // The operator's side: one warn naming the fixture and target, never a key.
+    expect(warns.filter(([o]) => (o as { targetId?: string }).targetId === targetId).map(([o]) => o)).toEqual([{ fixtureId: r.fixtureId, targetId, kind: "youtube" }]);
+    // The organiser's remedy works: Replace key re-seals the platform row, and the same Go live now starts.
+    await patchStreamTarget(r.auth, r.auth.orgId, targetId, { streamKey: `k-${randomUUID()}` });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(targetId), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");
+  });
+
+  it("a LEGACY-kind row (no platform preset to re-seal on) says remove it and add it again — the same code, the remedy that works for it", async () => {
+    const r = await rig({ credits: 1 });
+    const targetId = await rigTarget(r.auth.orgId, "Old", "custom_rtmp");
+    const err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+    expect((err as Error).message).toMatch(/remove .*add it again/i);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n).toBe(0);
   });
 });

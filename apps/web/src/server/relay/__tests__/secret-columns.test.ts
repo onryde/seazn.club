@@ -12,11 +12,12 @@
 //     label and watch link it was given (`rtmp_enc` is NOT NULL, so there is no unsealed row to update later);
 //     `readFirstInput` reads the LOWEST slot of THIS session, or null — never a literal slot 0.
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination } from "@/lib/stream-destinations";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+import { log } from "@/server/logger";
 import { fingerprintDestination, seal } from "../crypto";
 import {
   KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, archiveStreamTarget, insertStreamTarget, keyHintOf,
@@ -505,6 +506,44 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${legacy!.id}`;
     expect(Buffer.from(kept!.rtmp_enc).equals(stale)).toBe(true);
     expect(kept!.dest_fingerprint).toBeNull();
+  });
+
+  // N3 (B1 review): the recovery above was SILENT — an operator could not tell a KEK change from a quiet week. One warn
+  // per unopenable envelope, carrying the target id and kind ONLY: never the new key, the preset url, a hint, or bytes.
+  it("N3: an unopenable envelope is LOGGED once on Replace key — target id and kind only, for a platform row and a legacy one; an openable row logs nothing", async () => {
+    const warns: unknown[][] = [];
+    const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
+    try {
+      const stale = Buffer.from("sealed-under-another-kek");
+      const { orgId } = await rig();
+      const cases: { kind: string; want: string }[] = [{ kind: "youtube", want: "recovered" }, { kind: "custom_rtmp", want: "unreadable" }];
+      let checked = 0;
+      for (const c of cases) {
+        const [row] = await sql<{ id: string }[]>`
+          insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, ${c.kind}, 'stale', ${stale}) returning id`;
+        const next = secret65();
+        const before = warns.length;
+        const r = await sql.begin((tx) => replaceTargetKey(tx, orgId, row!.id, next));
+        expect(r.ok ? "recovered" : (r as { reason: string }).reason, c.kind).toBe(c.want);
+        const mine = warns.slice(before);
+        expect(mine, `${c.kind}: exactly one warn`).toHaveLength(1);
+        expect(mine[0]![0], c.kind).toEqual({ targetId: row!.id, kind: c.kind });
+        const text = JSON.stringify(mine[0]);
+        for (const leak of [next, next.slice(-3), STREAM_PLATFORM_PRESETS.youtube, "sealed-under-another-kek", stale.toString("hex")]) {
+          expect(text, `${c.kind}: the log line carries no secret`).not.toContain(leak);
+        }
+        checked++;
+      }
+      expect(checked).toBe(cases.length);
+      // The positive pair: a row whose envelope opens is an ordinary replace, and says nothing.
+      const preset = checkDestination(STREAM_PLATFORM_PRESETS.twitch);
+      const t = await put(orgId, { url: preset.ok ? preset.url : "", streamKey: secret65() });
+      const quiet = warns.length;
+      expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, secret65()))).toEqual({ ok: true, changed: true });
+      expect(warns.length, "an openable envelope logs nothing").toBe(quiet);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("I2: a DAMAGED envelope whose fingerprint still matches (same KEK, same key) is re-sealed by replacing the SAME key — not the no-op an openable row gets (mutant: short-circuit on the fingerprint alone)", async () => {

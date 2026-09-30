@@ -27,7 +27,7 @@ vi.mock("next/headers", () => ({
 import { sql } from "@/lib/db";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamTarget, StreamTargetKind, StreamTargetRemoved } from "@/server/api-v1/schemas";
-import { STREAM_PLATFORMS } from "@/lib/stream-destinations";
+import { STREAM_PLATFORMS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { REQUESTED_TIMEOUT_SECONDS } from "@/server/relay/config";
@@ -206,6 +206,7 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets/{targetId} — the ro
       expect(res.status, kind).toBe(422);
       const error = ((await res.json()) as Envelope).error!;
       expect(error.message, kind).toMatch(/remove .*add it again/i);
+      expect(error.code, `${kind}: N1 — a machine code, not the generic ERROR`).toBe(TARGET_UNREADABLE);
       expect(documented("patch", 422, error, `patch ${kind} unreadable`), kind).toBe(0);
       legacies++;
     }

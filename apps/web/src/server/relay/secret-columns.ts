@@ -5,6 +5,7 @@ import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination, type DestinationRefusal, type StreamPlatform } from "@/lib/stream-destinations";
 import { fingerprintDestination, open, seal } from "./crypto";
+import { log } from "@/server/logger";
 
 export interface InputCredentials {
   srt: { url: string; streamId: string; passphrase: string };
@@ -208,11 +209,26 @@ export async function readFirstInput(tx: Tx, sessionId: string): Promise<InputRo
  *  unrecoverable the moment it is used. A wrong `orgId` therefore reads exactly like a missing row — no oracle, one
  *  sentence, and the id is not a secret so it stays in the message. */
 export async function readTargetSecret(tx: Tx, orgId: string, targetId: string): Promise<{ url: string; streamKey: string }> {
-  const [row] = await tx<{ rtmp_enc: Uint8Array }[]>`
-    select rtmp_enc from org_stream_targets where id = ${targetId} and org_id = ${orgId}`;
+  const [row] = await tx<{ rtmp_enc: Uint8Array; kind: string }[]>`
+    select rtmp_enc, kind from org_stream_targets where id = ${targetId} and org_id = ${orgId}`;
   if (!row) throw new Error(`stream target ${targetId} not found`);
-  const { url, streamKey } = openFields(row.rtmp_enc, TARGET_SEALED);
-  return { url, streamKey };
+  let fields: Record<(typeof TARGET_SEALED)[number], string>;
+  try {
+    fields = openFields(row.rtmp_enc, TARGET_SEALED);
+  } catch {
+    throw new TargetSecretUnreadableError(targetId, row.kind);
+  }
+  return { url: fields.url, streamKey: fields.streamKey };
+}
+
+/** B2 (B1 review): the destination row EXISTS and is this org's, but its envelope will not open — sealed under another
+ *  KEK, or a damaged byte. Typed so Go live can refuse it cleanly (422 TARGET_UNREADABLE) instead of a 500; a missing
+ *  row stays the plain "not found" above. Carries the target id and kind only — never the envelope, a key or a url. */
+export class TargetSecretUnreadableError extends Error {
+  constructor(public readonly targetId: string, public readonly kind: string) {
+    super(`stream target ${targetId}: the saved destination will not open`);
+    this.name = "TargetSecretUnreadableError";
+  }
 }
 
 /** §5.3 — each ACTIVE destination's key hint, opened here so the full key never leaves this module. An envelope that
@@ -276,6 +292,8 @@ export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, 
   try {
     url = openFields(row.rtmp_enc, TARGET_SEALED).url;
   } catch {
+    // N3 (B1 review): never silent — an unopenable envelope is how a KEK change shows itself. Target id and kind ONLY.
+    log.warn({ targetId, kind: row.kind }, "stream target: the saved destination will not open — Replace key re-seals a platform row on its preset; a legacy kind is refused");
     if (!isPlatform(row.kind)) return { ok: false, reason: "unreadable" };
     url = STREAM_PLATFORM_PRESETS[row.kind];
     recovering = true;

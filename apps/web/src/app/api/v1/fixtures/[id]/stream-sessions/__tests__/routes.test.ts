@@ -41,14 +41,14 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { baseUrl } from "@/lib/oauth";
-import { destinationRefusal } from "@/lib/stream-destinations";
+import { TARGET_UNREADABLE, destinationRefusal } from "@/lib/stream-destinations";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamSessionCreated, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { MAX_DURATION_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { StorageUsage } from "@/server/relay/ports";
-import { resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
@@ -351,6 +351,14 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(JSON.stringify(dest)).not.toContain("retired-provider");
     expect(await sessionsOn(stale.fixtureId)).toBe(0);
 
+    // 422 TARGET_UNREADABLE (B2, was an unmapped 500) — the saved key will not open; the organiser replaces it. No extra.
+    const sealedAway = await organiser();
+    const unreadable = await rigTarget(sealedAway.auth.orgId, "Unreadable", "youtube");
+    const unread = await refuse("TARGET_UNREADABLE", sealedAway.fixtureId, { mode: "passthrough", targetId: unreadable }, 422);
+    expect(unread).toMatchObject({ code: TARGET_UNREADABLE });
+    expect(Object.keys(unread).sort()).toEqual(["code", "message"]);
+    expect(await sessionsOn(sealedAway.fixtureId)).toBe(0);
+
     // Truthful envelopes: every extra key the wire carried is a documented property of that route × status.
     const doc = buildOpenApiDocument() as {
       paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties?: Record<string, unknown> } } } } } }> }>>;
@@ -372,7 +380,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
         }
       }
     }
-    expect(seen.map((s) => s.label)).toEqual(["no_credits", "plan_lacks_overlay", "storage_exhausted", "active_session", "target_in_use", "DESTINATION_NOT_ALLOWED"]);
+    expect(seen.map((s) => s.label)).toEqual(["no_credits", "plan_lacks_overlay", "storage_exhausted", "active_session", "target_in_use", "DESTINATION_NOT_ALLOWED", "TARGET_UNREADABLE"]);
     expect(extrasChecked, "anti-vacuity: the refusals above carry extras").toBeGreaterThanOrEqual(10);
   });
 

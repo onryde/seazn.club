@@ -37,7 +37,9 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
-import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination } from "@/lib/stream-destinations";
+import {
+  DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE, checkDestination,
+} from "@/lib/stream-destinations";
 import { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetKind } from "@/server/api-v1/schemas";
 import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
 import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
@@ -170,7 +172,7 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     let refused = 0;
     for (const blank of [" ", "\n", " \t\r\n "]) {
       await expect(createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "blank", streamKey: blank }), JSON.stringify(blank))
-        .rejects.toMatchObject({ status: 422, message: "The stream key is empty" });
+        .rejects.toMatchObject({ status: 422, code: STREAM_KEY_EMPTY, message: "The stream key is empty" });
       refused++;
     }
     expect(refused).toBe(3);
@@ -402,7 +404,7 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
     const t = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", streamKey: "aaaa-1111-bbbb-2222-cccc" });
     await patchStreamTarget(auth, auth.orgId, t.id, { streamKey: "  abcd-1234-efgh-5678-ijkl\n" });
     expect((await sql.begin((tx) => readTargetSecret(tx, auth.orgId, t.id))).streamKey).toBe("abcd-1234-efgh-5678-ijkl");
-    await expect(patchStreamTarget(auth, auth.orgId, t.id, { streamKey: "   " })).rejects.toMatchObject({ status: 422 });
+    await expect(patchStreamTarget(auth, auth.orgId, t.id, { streamKey: "   " })).rejects.toMatchObject({ status: 422, code: STREAM_KEY_EMPTY });
   });
 
   it("I2: replace key on a PLATFORM row whose envelope will not open (a KEK change) RECOVERS it in place — re-sealed on the platform's preset under the current KEK, a real keyHint, and the same destination a create of that key finds; every platform", async () => {
@@ -434,7 +436,7 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
       const { auth } = await seedOrg();
       const targetId = await rigTarget(auth.orgId, `Old ${kind}`, kind);
       const err = await patchStreamTarget(auth, auth.orgId, targetId, { streamKey: `k-${randomUUID()}` }).then(() => null, (e: unknown) => e);
-      expect(err, kind).toMatchObject({ status: 422 });
+      expect(err, kind).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
       expect((err as Error).message, kind).toMatch(/remove .*add it again/i);
       await expect(sql.begin((tx) => readTargetSecret(tx, auth.orgId, targetId)), `${kind}: still the unopenable envelope`).rejects.toThrow();
       expect((await listStreamTargets(auth, auth.orgId)).find((t) => t.id === targetId), kind).toMatchObject({ keyHint: null });
@@ -447,14 +449,14 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
     const { auth } = await seedOrg();
     const t = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Court 1", streamKey: `k-${randomUUID()}` });
     expect(await patchStreamTarget(auth, auth.orgId, t.id, { label: "  Court 9 (main)\n" })).toMatchObject({ id: t.id, label: "Court 9 (main)" });
-    await expect(patchStreamTarget(auth, auth.orgId, t.id, { label: " \t\n " })).rejects.toMatchObject({ status: 422 });
+    await expect(patchStreamTarget(auth, auth.orgId, t.id, { label: " \t\n " })).rejects.toMatchObject({ status: 422, code: DESTINATION_LABEL_EMPTY });
     expect((await listStreamTargets(auth, auth.orgId)).map((x) => x.label)).toEqual(["Court 9 (main)"]);
   });
 
   it("M5: create TRIMS the label; a whitespace-only label is 422 and writes nothing — and a RESTORE takes the trimmed label too", async () => {
     const { auth } = await seedOrg();
     const streamKey = `k-${randomUUID()}`;
-    await expect(createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "   ", streamKey })).rejects.toMatchObject({ status: 422 });
+    await expect(createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "   ", streamKey })).rejects.toMatchObject({ status: 422, code: DESTINATION_LABEL_EMPTY });
     expect(await listStreamTargets(auth, auth.orgId)).toEqual([]);
     const made = await createStreamTarget(auth, auth.orgId, { kind: "twitch", label: "\t Main court ", streamKey });
     expect(made.label).toBe("Main court");

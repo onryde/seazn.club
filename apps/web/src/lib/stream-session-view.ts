@@ -26,7 +26,7 @@
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, type DestinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, TARGET_UNREADABLE, type DestinationRefusal } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import type { StreamEndReason, StreamFailReason, StreamSessionCurrent } from "@/server/api-v1/schemas";
 
@@ -123,7 +123,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "storage_exhausted", "ingest_unavailable",
-  "target_in_use", "destination_not_allowed", "plan_lacks_relay", "unknown",
+  "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
 
@@ -136,6 +136,7 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
   target_in_use: "stream.error.target_in_use.unknown",
   destination_not_allowed: "stream.error.destination_not_allowed",
+  target_unreadable: "stream.error.target_unreadable",
   plan_lacks_relay: "stream.error.plan_lacks_relay",
   unknown: "stream.error.unknown",
 };
@@ -169,6 +170,7 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   if (!w) return "unknown";
   if (VERBATIM_CODES.includes(w.code as CreateErrorCode)) return w.code as CreateErrorCode;
   if (w.code === DESTINATION_NOT_ALLOWED) return "destination_not_allowed";
+  if (w.code === TARGET_UNREADABLE) return "target_unreadable";
   if (w.code === "PAYMENT_REQUIRED" && PLAN_GATE_FEATURES.includes(w.extra.feature_key as string)) return "plan_lacks_relay";
   return "unknown";
 }

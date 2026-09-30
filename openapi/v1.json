@@ -37886,7 +37886,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
-        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)",
+        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it and add it again; no row is written, no credit spent), 503 storage_exhausted (no row is written)",
         "tags": [
           "fixtures"
         ],
@@ -38345,7 +38345,8 @@
                       ],
                       "properties": {
                         "code": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it and add it again)"
                         },
                         "message": {
                           "type": "string"
@@ -53536,7 +53537,7 @@
         ]
       },
       "post": {
-        "summary": "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 409 when a concurrent save of the same destination won: try again",
+        "summary": "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination, or restores a removed one. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed. 409 when a concurrent save of the same destination won: try again",
         "tags": [
           "fixtures"
         ],
@@ -54018,7 +54019,8 @@
                       ],
                       "properties": {
                         "code": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed"
                         },
                         "message": {
                           "type": "string"
@@ -54064,7 +54066,7 @@
     },
     "/api/v1/orgs/{id}/stream-targets/{targetId}": {
       "patch": {
-        "summary": "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key)",
+        "summary": "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it and add it again). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist",
         "tags": [
           "fixtures"
         ],
@@ -54546,7 +54548,8 @@
                       ],
                       "properties": {
                         "code": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it and add it again)"
                         },
                         "message": {
                           "type": "string"

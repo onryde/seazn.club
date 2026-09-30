@@ -6206,6 +6206,7 @@ export type DictionaryKey =
   | "stream.error.stop"
   | "stream.error.storage_exhausted"
   | "stream.error.target_in_use.unknown"
+  | "stream.error.target_unreadable"
   | "stream.error.unknown"
   | "stream.fail.admission_timeout"
   | "stream.fail.machine_boot_timeout"

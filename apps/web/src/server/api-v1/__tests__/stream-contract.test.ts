@@ -14,7 +14,10 @@ import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
 import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
-import { DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
+import {
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_KEY_EMPTY, STREAM_PLATFORMS,
+  STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
+} from "@/lib/stream-destinations";
 
 /** The quoted members of `<column> text … check (<column> in ('a','b'))` inside ONE table of V410. */
 function checkList(table: string, column: string): string[] {
@@ -311,6 +314,36 @@ describe("the relay's routes are never key-reachable", () => {
       }
     }
     expect(others, "other routes with a 422 checked").toBeGreaterThan(0);
+  });
+
+  // N1/N2 (B1 review): every 422 these routes answer carries a machine code (lib/stream-destinations.ts), and the spec
+  // names each one — in the route's summary AND on its 422's `code`. Which route throws which is the usecases' own
+  // (stream-targets.ts create/patch, stream-sessions.ts createSession); DELETE has no 422 at all.
+  it("N1/N2: each stream route's coded 422s are named in its summary and on its 422 `code`; DELETE documents no 422", () => {
+    type Doc = {
+      paths: Record<string, Record<string, { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties: { code: { description?: string } } } } } } } }> }>>;
+    };
+    const doc = buildOpenApiDocument() as Doc;
+    const CODED_422: [string, string, string[]][] = [
+      ["/api/v1/orgs/{id}/stream-targets", "post", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY]],
+      ["/api/v1/orgs/{id}/stream-targets/{targetId}", "patch", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE]],
+      ["/api/v1/fixtures/{id}/stream-sessions", "post", [DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE]],
+    ];
+    let checked = 0;
+    for (const [path, method, codes] of CODED_422) {
+      const op = doc.paths[path]![method]!;
+      const codeDoc = op.responses["422"]!.content["application/json"].schema.properties.error.properties.code.description ?? "";
+      for (const code of codes) {
+        expect(op.summary, `${method} ${path} summary names ${code}`).toContain(code);
+        expect(codeDoc, `${method} ${path} 422 code names ${code}`).toContain(code);
+        checked++;
+      }
+    }
+    expect(checked).toBe(9);
+    expect(doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.delete!.responses["422"]).toBeUndefined();
+    // The negative twin: a code a route never answers is not named on it — Go live never refuses a blank key or name.
+    const goLive = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
+    for (const never of [STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY]) expect(goLive.summary, never).not.toContain(never);
   });
 
   // Task 11 follow-up (controller ruling): a start refused `target_in_use` names the fixture holding the destination —

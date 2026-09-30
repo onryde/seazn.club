@@ -8,7 +8,10 @@ import "server-only";
 // preset the allowlist stopped admitting refuses by rule, never silently.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { DESTINATION_NOT_ALLOWED, STREAM_PLATFORM_PRESETS, checkDestination, type DestinationRefusal } from "@/lib/stream-destinations";
+import {
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
+  checkDestination, type DestinationRefusal,
+} from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamTarget, PatchStreamTarget, StreamTarget } from "@/server/api-v1/schemas";
@@ -33,6 +36,29 @@ export class DestinationNotAllowedError extends HttpError {
     super(422, REFUSAL_MESSAGE[rule], DESTINATION_NOT_ALLOWED, { rule });
   }
 }
+
+/** N1 (B2): 422 TARGET_UNREADABLE — the destination's saved key will not open (sealed under another KEK, or a damaged
+ *  byte). The sentence names the remedy that WORKS for the row: a platform row is recovered in place by Replace key
+ *  (secret-columns.ts replaceTargetKey re-seals it on its preset); a legacy kind has no preset, so it is removed and
+ *  added again. Carries no key, url or hint, and no extra. */
+export class TargetUnreadableError extends HttpError {
+  constructor(public readonly remedy: "replace_key" | "re_add") {
+    super(
+      422,
+      remedy === "replace_key"
+        ? "This destination's saved stream key can no longer be read; replace the key, then go live again"
+        : "This destination's saved key can no longer be read and it is not a YouTube or Twitch destination; remove it and add it again",
+      TARGET_UNREADABLE,
+    );
+  }
+
+  /** The remedy by the row's kind — the ONE place that decides it, for Go live and Replace key alike. */
+  static forKind(kind: string): TargetUnreadableError {
+    return new TargetUnreadableError((STREAM_PLATFORMS as readonly string[]).includes(kind) ? "replace_key" : "re_add");
+  }
+}
+
+const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREAM_KEY_EMPTY);
 
 export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<StreamTarget[]> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
@@ -67,7 +93,7 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   const destination = checkDestination(STREAM_PLATFORM_PRESETS[body.kind]);
   if (!destination.ok) throw new DestinationNotAllowedError(destination.rule);
   // A whitespace-only key passes the schema's min(1) and is nothing once trimmed.
-  if (streamKey === "") throw new HttpError(422, "The stream key is empty");
+  if (streamKey === "") throw streamKeyEmpty();
   const label = labelOf(body.label);
   const watch = body.watchUrl === undefined ? null : streamUrlSchema.safeParse(body.watchUrl);
   if (watch && !watch.success) throw new HttpError(422, "invalid watch link");
@@ -101,7 +127,7 @@ const targetNotFound = () => new HttpError(404, "stream target not found");
  *  would render as a blank name — and nothing left is a 422. */
 function labelOf(raw: string): string {
   const label = raw.trim();
-  if (label === "") throw new HttpError(422, "The destination name is empty");
+  if (label === "") throw new HttpError(422, "The destination name is empty", DESTINATION_LABEL_EMPTY);
   return label;
 }
 
@@ -116,7 +142,7 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
   } else {
     // Review Focus 2: trimmed exactly as create trims, so a re-paste of the same key fingerprints the same.
     const streamKey = (body.streamKey ?? "").trim();
-    if (streamKey === "") throw new HttpError(422, "The stream key is empty");
+    if (streamKey === "") throw streamKeyEmpty();
     await sql.begin(async (tx) => {
       if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
       const [holder] = await holderRows(tx, { orgId, targetId });
@@ -126,9 +152,7 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
       if (r.reason === "not_found") throw targetNotFound();
       if (r.reason === "undialable") throw new DestinationNotAllowedError(r.rule);
       // I2: a legacy-kind row whose sealed key will not open has no platform preset to re-seal on.
-      if (r.reason === "unreadable") {
-        throw new HttpError(422, "This destination's saved key can no longer be read and it is not a YouTube or Twitch destination; remove it and add it again");
-      }
+      if (r.reason === "unreadable") throw new TargetUnreadableError("re_add");
       throw new HttpError(409, `that stream key is already saved as "${r.other.label}"`, "DESTINATION_DUPLICATE", { other: r.other });
     });
   }

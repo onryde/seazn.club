@@ -30,6 +30,16 @@
 /** The stable error code the POST stream-targets route answers 422 with. */
 export const DESTINATION_NOT_ALLOWED = "DESTINATION_NOT_ALLOWED";
 
+/** N1 (B2): the other stable 422 codes of the stream routes, uppercase like the Directory's own. Client-safe (this file
+ *  imports nothing), so the Phone tab can read them off the wire.
+ *  - TARGET_UNREADABLE: the destination's saved key will not open (sealed under another KEK, or a damaged byte). Go
+ *    live answers it (replace the key; a legacy kind: remove it and add it again), and so does Replace key on a legacy
+ *    kind, which has no platform preset to re-seal on.
+ *  - STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY: a key or name that is nothing once trimmed (create and edit). */
+export const TARGET_UNREADABLE = "TARGET_UNREADABLE";
+export const STREAM_KEY_EMPTY = "STREAM_KEY_EMPTY";
+export const DESTINATION_LABEL_EMPTY = "DESTINATION_LABEL_EMPTY";
+
 /** Which rule refused — the `rule` on the 422. Never the URL itself: an
  *  ingest URL can carry the stream key in its path. */
 export const DESTINATION_REFUSALS = ["scheme", "userinfo", "ip_literal", "host", "port", "path"] as const;

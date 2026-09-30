@@ -27,7 +27,7 @@ import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
 import { StreamEndReason, StreamFailReason, StreamIngest, StreamOutput, StreamSessionState } from "@/server/api-v1/schemas";
-import { DestinationNotAllowedError } from "@/server/usecases/stream-targets";
+import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, DESTINATION_REFUSAL_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
@@ -186,6 +186,9 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["target_in_use 409, the index race (holder null)", new HttpError(409, "in use", "target_in_use", { holder: null }), "target_in_use"],
     // m4 (Task 13 review): the server's OWN refusal class (stream-targets.ts), not an HttpError shaped like it.
     ["DESTINATION_NOT_ALLOWED 422", new DestinationNotAllowedError("host"), "destination_not_allowed"],
+    // B2: the saved key will not open — the server's own class, both remedies.
+    ["TARGET_UNREADABLE 422 (replace the key)", new TargetUnreadableError("replace_key"), "target_unreadable"],
+    ["TARGET_UNREADABLE 422 (remove and add again)", new TargetUnreadableError("re_add"), "target_unreadable"],
     ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError(RELAY_PLAN_GATES.relay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
