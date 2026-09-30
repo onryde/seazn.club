@@ -17,7 +17,7 @@
 //    Forfeit (:1294) or, once decided, Finalize (:1274).
 import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID } from "../../../../bench/lib/drivers/scorer.ts";
 import { DATA, TESTID } from "../selectors.ts";
-import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, selectorValue, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
+import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 
 export const ALL_FILTER = "all";
@@ -41,16 +41,31 @@ export function fixtureLinkSelector(org: string, comp: string, div: string, no: 
  *  whenever "all" is not already pressed (I-1, the hydration wait). */
 export const RUN_SHEET_FILTER_OPTIONS = `[data-testid="${TESTID.runSheetFilter.id}"] ${DATA.runSheetFilterOption.selector}`;
 
+/** The cases (keyed by their Evidence) whose run sheet has been pictured
+ *  showing every fixture. Once per case is the proof the walkthrough's screen
+ *  list owes (Task 8 review m3, Task 14 carry 2); a later visit widens the
+ *  filter again, unpictured. */
+const pictured = new WeakSet<object>();
+
 /** Presses the run sheet's "all" filter unless it is pressed already. A sheet
- *  that offers no filter (nothing to filter yet) is left as it is. */
+ *  that offers no filter (nothing to filter yet) is left as it is. The first
+ *  time in a case, the sheet is pictured once it shows every fixture — and,
+ *  when the filter had to be pressed, before as well, a pair that must differ. */
 export async function showAllFixtures(c: PageCtx): Promise<void> {
   const option = `[data-testid="${TESTID.runSheetFilter.id}"] ${attrEquals(DATA.runSheetFilterOption.selector, "run-sheet filter", ALL_FILTER)}`;
   const all = c.page.locator(option);
   if ((await all.count()) === 0) return;
-  if ((await all.getAttribute("aria-pressed", { timeout: actBudget(c, 1) })) === "true") return;
+  const first = !pictured.has(c.evidence);
+  pictured.add(c.evidence);
+  if ((await all.getAttribute("aria-pressed", { timeout: actBudget(c, 1) })) === "true") {
+    if (first) await shoot(c, "run-sheet-all");
+    return;
+  }
+  const before = first ? await shoot(c, "run-sheet-all-before") : undefined;
   await all.click({ timeout: actBudget(c, 1) });
   const t = navBudget(c);
   await awaitScreen(() => c.page.locator(`${option}[aria-pressed="true"]`).waitFor({ state: "attached", timeout: t }), "the run sheet showing every fixture", t);
+  if (before !== undefined) await shoot(c, "run-sheet-all", before);
 }
 
 /** Any control the console mounts for an organiser, whatever the match's state. */

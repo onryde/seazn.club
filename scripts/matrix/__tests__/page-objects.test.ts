@@ -27,7 +27,7 @@ import { ForfeitNeedsBothSides, eventsPath, forfeitBudgets, forfeitSteps, postFo
 import { START_UNACKNOWLEDGED, isUnacknowledgedStart } from "../lib/browser/pages/launch.ts";
 import { ORGANISER_TABS, PUBLIC_TABS, paths } from "../lib/browser/pages/paths.ts";
 import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelector } from "../lib/browser/pages/public-division.ts";
-import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector } from "../lib/browser/pages/run-sheet.ts";
+import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
 import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { DATA, NAME, TESTID, templateLabel } from "../lib/browser/selectors.ts";
@@ -980,5 +980,90 @@ describe("the console, the run sheet and the public page", () => {
     expect(tabs).toContain("aria-selected={i === active}");
     expect(publicTabSelector(PUBLIC_STANDINGS_TAB)).toBe(`[id="tab-${PUBLIC_STANDINGS_TAB}"][aria-selected="true"]`);
     expect(publicPanelSelector(PUBLIC_STANDINGS_TAB)).toBe(`[id="panel-${PUBLIC_STANDINGS_TAB}"]`);
+  });
+});
+
+// Task 8 review m3 / Task 14 carry 2: the walkthrough's screen list names "run
+// sheet (filter widened)", and no shot was taken there. showAllFixtures now
+// pictures the sheet once per case, after "all" is pressed — and, when it had
+// to press it, before as well, so the pair must differ.
+describe("the run sheet, pictured once it shows every fixture (Task 14 carry 2)", () => {
+  const OPTION = `[data-testid="${TESTID.runSheetFilter.id}"] ${attrEquals(DATA.runSheetFilterOption.selector, "run-sheet filter", ALL_FILTER)}`;
+  const PRESSED = `${OPTION}[aria-pressed="true"]`;
+  function sheetPage(o: { filter?: boolean; pressed?: boolean; inert?: boolean } = {}) {
+    const log: string[] = [];
+    let screen = 0;
+    let pressed = o.pressed ?? false;
+    const page = {
+      locator: (s: string) => ({
+        count: async () => (o.filter === false ? 0 : 1),
+        getAttribute: async (a: string) => { log.push(`read ${a}`); return String(pressed); },
+        click: async () => { log.push(`click ${s === OPTION ? "all" : s}`); pressed = true; if (!o.inert) screen++; },
+        waitFor: async () => { log.push(`wait ${s === PRESSED ? "pressed" : s}`); if (s !== PRESSED || !pressed) throw new Error("fake: 'all' never pressed"); },
+      }),
+      evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: "http://localhost:3999", orgSlug: "org", holdMs: 3000, evidence };
+    /** A fresh visit: the product opens the filter on its default again. */
+    const revisit = () => { pressed = o.pressed ?? false; log.length = 0; };
+    return { log, ctx, evidence, revisit };
+  }
+  const visual = (ev: Evidence) => ev.checks().find((c) => c.id === "visual-evidence")!;
+
+  it("the empty case: a sheet with no filter yet (nothing to filter) is neither pressed nor pictured", async () => {
+    const s = sheetPage({ filter: false });
+    await showAllFixtures(s.ctx);
+    expect(s.log).toEqual([]);
+    expect([visual(s.evidence).verdict, visual(s.evidence).checked]).toEqual(["fail", 0]);
+  });
+
+  it("a filter on another value is pictured, widened to 'all', and pictured again — and the pair must differ", async () => {
+    const s = sheetPage();
+    await showAllFixtures(s.ctx);
+    expect(s.log).toEqual(["read aria-pressed", "shot run-sheet-all-before", "click all", "wait pressed", "shot run-sheet-all"]);
+    expect(visual(s.evidence)).toMatchObject({ verdict: "pass", checked: 2, reason: "2 shot(s) written and non-empty; 1 must-differ pair(s) differ" });
+  });
+
+  it("the sequence: a second visit in the same case widens the filter again, unpictured", async () => {
+    const s = sheetPage();
+    await showAllFixtures(s.ctx);
+    s.revisit();
+    await showAllFixtures(s.ctx);
+    expect(s.log).toEqual(["read aria-pressed", "click all", "wait pressed"]);
+    expect(visual(s.evidence).checked).toBe(2);
+  });
+
+  it("a filter already on 'all' is pictured once, with nothing to press and nothing to differ from", async () => {
+    const s = sheetPage({ pressed: true });
+    await showAllFixtures(s.ctx);
+    expect(s.log).toEqual(["read aria-pressed", "shot run-sheet-all"]);
+    expect(visual(s.evidence)).toMatchObject({ verdict: "pass", checked: 1, reason: "1 shot(s) written and non-empty; 0 must-differ pair(s) differ" });
+    s.revisit();
+    await showAllFixtures(s.ctx);
+    expect(s.log).toEqual(["read aria-pressed"]);
+  });
+
+  it("each case pictures its own sheet: once per case, never once per run", async () => {
+    const a = sheetPage();
+    await showAllFixtures(a.ctx);
+    const b = sheetPage();
+    await showAllFixtures(b.ctx);
+    expect(b.log).toEqual(["read aria-pressed", "shot run-sheet-all-before", "click all", "wait pressed", "shot run-sheet-all"]);
+  });
+
+  it("a press that changes nothing on screen is refused by the visual gate, by name", async () => {
+    const s = sheetPage({ inert: true });
+    await showAllFixtures(s.ctx);
+    const v = visual(s.evidence);
+    expect([v.verdict, v.checked]).toEqual(["fail", 2]);
+    expect(v.evidence.map((e) => e.split(" (sha256")[0])).toEqual(["run-sheet-all: identical to run-sheet-all-before"]);
   });
 });
