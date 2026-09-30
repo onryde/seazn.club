@@ -16,6 +16,7 @@ import type { BrowserWidth } from "../widths.ts";
 import { holdMsFromEnv } from "./budget.ts";
 import { Evidence } from "./evidence.ts";
 import type { PageCtx } from "./pages/ctx.ts";
+import { assertHoldMatches, readServedHold, type ServedHold } from "./served-hold.ts";
 import { newCaseBrowser, openBrowser, type CaseBrowser } from "./session.ts";
 
 export interface CaseOptions {
@@ -36,6 +37,8 @@ export interface OpenBrowserRun { caseDriver(o: CaseOptions): Promise<CaseDriver
 
 /** The seams a browser run is built from; the unit suite fakes them. */
 export interface BrowserRunDeps {
+  /** The hold window the build at `base` was baked with (carry M-6). */
+  servedHold(base: string): Promise<ServedHold>;
   launch(): Promise<Pick<Browser, "close">>;
   newCase(browser: Pick<Browser, "close">, o: { base: string; cookies: Readonly<Record<string, string>>; width: BrowserWidth }): Promise<CaseBrowser>;
   /** Where the build's hold window is read from (holdMsFromEnv). */
@@ -50,6 +53,7 @@ export interface BrowserRunDeps {
 
 /** A real run's seams. Its pads are every registered adapter (W1c Task 7). */
 export const REAL_RUN_DEPS: Readonly<BrowserRunDeps> = Object.freeze<BrowserRunDeps>({
+  servedHold: readServedHold,
   launch: openBrowser,
   newCase: (browser, o) => newCaseBrowser(browser as Browser, o),
   env: process.env,
@@ -64,11 +68,16 @@ export class BrowserRunClosed extends Error {
   }
 }
 
-/** Launches the run's browser. Each case gets a fresh context on the SAME
- *  session jar as the runner (its org cookie included), its width, and a
+/** Launches the run's browser. First (carry M-6) it reads the hold window the
+ *  build at `base` was baked with, and refuses a shell whose own value
+ *  differs — HoldMismatch, before chromium launches or any case runs — since
+ *  every budget is priced in it. Each case then gets a fresh context on the
+ *  SAME session jar as the runner (its org cookie included), its width, and a
  *  BrowserDriver over a fresh HttpDriver on that session. A case whose
  *  driver cannot be built closes its context before the error leaves. */
-export async function openBrowserRun(deps: BrowserRunDeps = REAL_RUN_DEPS): Promise<OpenBrowserRun> {
+export async function openBrowserRun(base: string, deps: BrowserRunDeps = REAL_RUN_DEPS): Promise<OpenBrowserRun> {
+  const holdMs = holdMsFromEnv(deps.env);
+  assertHoldMatches({ served: (await deps.servedHold(base)).holdMs, shell: holdMs });
   const browser = await deps.launch();
   let closed = false;
   return {
@@ -76,7 +85,7 @@ export async function openBrowserRun(deps: BrowserRunDeps = REAL_RUN_DEPS): Prom
       if (closed) throw new BrowserRunClosed();
       const cb = await deps.newCase(browser, { base: o.base, cookies: o.session.cookies, width: o.width });
       try {
-        const ctx: PageCtx = { page: cb.page, base: o.base, orgSlug: o.orgSlug, holdMs: holdMsFromEnv(deps.env), evidence: new Evidence(o.reportDir, o.evidenceId) };
+        const ctx: PageCtx = { page: cb.page, base: o.base, orgSlug: o.orgSlug, holdMs, evidence: new Evidence(o.reportDir, o.evidenceId) };
         const http = new HttpDriver({ base: o.base, session: o.session, expectedOrgId: o.orgId, ...(deps.transport === undefined ? {} : { transport: deps.transport }) });
         const driver = new BrowserDriver({ http, ctx, spec: o.spec, padPolicy: o.padPolicy, pads: deps.pads, orgId: o.orgId, pages: deps.pages ?? REAL_PAGES });
         let done = false;

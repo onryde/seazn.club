@@ -107,6 +107,15 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1c Task 8 (carry M-6): the served-hold preflight browser-run.ts calls
+  // before any case — its own row below is its only load before a live run.
+  const W1C_T8 = ["lib/browser/served-hold.ts"];
+  it("W1c Task 8's modules are all in the walk", () => {
+    const missing = W1C_T8.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T8.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

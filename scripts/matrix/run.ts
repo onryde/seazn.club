@@ -50,7 +50,9 @@
 //   3  aborted after the start gates, reason on stderr: the harness commit,
 //      the DB, sign-in, a planning read, a planner that plans a deny it did
 //      not declare (UndeclaredDeny), no browser for a --driver browser run
-//      (openBrowserRun rejects: no chromium), a case whose browser cannot be
+//      (openBrowserRun rejects: no chromium; or the served build's hold window
+//      is not this shell's, HoldMismatch, or cannot be read, ServedHoldUnreadable
+//      — carry M-6, before any case), a case whose browser cannot be
 //      set up (BrowserCaseAborted), or writeResults refusing a secret
 //      (nothing written); or MATRIX.md failing to render (results.json kept,
 //      the PF4 summary already printed).
@@ -129,8 +131,9 @@ export interface RunDeps {
   planCases?: PlanCases;
   /** The run's browser, for `--driver browser` (W1c Task 6). realDeps loads
    *  lib/browser/browser-run.ts lazily here; a runner without one aborts a
-   *  browser run. */
-  openBrowserRun?(): Promise<BrowserRun>;
+   *  browser run. `base` is the run's own: the hold preflight reads the build
+   *  served there (carry M-6). */
+  openBrowserRun?(base: string): Promise<BrowserRun>;
 }
 
 /** What a case's browser driver is built from. `reportDir` is the run's own
@@ -552,7 +555,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // parseDriver sets a width exactly when the driver is browser.
     if (cli.width !== null) {
       if (deps.openBrowserRun === undefined) throw new Error("matrix: --driver browser, and this runner has no browser (RunDeps.openBrowserRun)");
-      browserRun = await deps.openBrowserRun();
+      browserRun = await deps.openBrowserRun(base);
       browser = { run: browserRun, width: cli.width };
     }
     for (const [i, spec] of specs.entries()) {
@@ -720,7 +723,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
     driverFor: (base, session, orgId) => new HttpDriver({ base, session, expectedOrgId: orgId }),
     // LAZY (ruling A): the browser layer is loaded only when a browser run
     // opens, so an L3 run never loads it (boundary.test.ts pins this edge).
-    openBrowserRun: async () => (await import("./lib/browser/browser-run.ts")).openBrowserRun(),
+    openBrowserRun: async (base) => (await import("./lib/browser/browser-run.ts")).openBrowserRun(base),
   };
 }
 

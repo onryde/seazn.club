@@ -1433,9 +1433,12 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
       caseDriver: async (o) => { const cd = await r.caseDriver(o); drivers.push(cd.driver); return cd; },
       close: () => r.close(),
     });
+    // Carry M-6: the served build's hold is read once, on the run's own base.
+    const preflights: string[] = [];
     // The page fakes above read `d` only when a case runs, after this line.
     const d = deps({
-      openBrowserRun: async () => wrap(await openBrowserRun({
+      openBrowserRun: async (b) => wrap(await openBrowserRun(b, {
+        servedHold: async (base) => { preflights.push(base); return { holdMs: resolveHoldMs("2500"), found: 1, scanned: 1 }; },
         launch: async () => ({ close: async () => undefined }),
         newCase: async () => ({ page: { setDefaultTimeout: () => undefined } as unknown as CaseBrowser["page"], close: async () => undefined }),
         env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: EMPTY_PADS, pages, transport,
@@ -1454,6 +1457,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     // the run's env, as the product itself resolves it (not the default).
     expect(resolveHoldMs("2500")).not.toBe(resolveHoldMs(undefined));
     expect(seen.map((s) => s.holdMs)).toEqual(cases.map(() => resolveHoldMs("2500")));
+    expect(preflights).toEqual(["http://localhost:3999"]);
     // The evidence id: each case's shot lands under its own case-<n>, and the case keeps it (M-2).
     let shots = 0;
     for (const [i, c] of cases.entries()) {
@@ -1477,21 +1481,34 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(wire.every((w) => w.session === d.session)).toBe(true);
   });
 
-  it("no browser (openBrowserRun rejects, or the runner has none): exit 3 aborted with the message, nothing recorded, the DB still closed", async () => {
-    for (const [name, over] of [
-      ["rejects", { openBrowserRun: async () => { throw new Error("browserType.launch: Executable doesn't exist"); } }],
-      ["absent", {}],
+  it("no browser (openBrowserRun rejects, the runner has none, or the served build's hold is not the shell's — M-6): exit 3 aborted with the message, nothing recorded, the DB still closed", async () => {
+    let launched = 0;
+    // Carry M-6, through the REAL openBrowserRun: a shell of 2500 against a
+    // build left at the default is refused by name before chromium launches.
+    const mismatched: Partial<RunDeps> = {
+      openBrowserRun: (b) => openBrowserRun(b, {
+        servedHold: async () => ({ holdMs: resolveHoldMs(undefined), found: 1, scanned: 1 }),
+        launch: async () => { launched++; return { close: async () => undefined }; },
+        newCase: async () => { throw new Error("no case may open"); },
+        env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: EMPTY_PADS,
+      }),
+    };
+    for (const [name, over, why] of [
+      ["rejects", { openBrowserRun: async () => { throw new Error("browserType.launch: Executable doesn't exist"); } }, /Executable doesn't exist/],
+      ["absent", {}, /no browser/],
+      ["hold mismatch", mismatched, /HoldMismatch: .*10000 ms.*2500 ms/],
     ] as const) {
       const io = capture();
       const dir = dirFor();
       const d = deps(over as Partial<RunDeps>);
       expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "390", "--run-id", "b3", "--report-dir", dir]), name).toBe(3);
       expect(io.err(), name).toMatch(/aborted/);
-      expect(io.err(), name).toMatch(name === "rejects" ? /Executable doesn't exist/ : /no browser/);
+      expect(io.err(), name).toMatch(why);
       expect(existsSync(join(dir, "b3", "results.json")), name).toBe(false);
       expect(d.order.at(-1), name).toBe("dispose");
       vi.restoreAllMocks();
     }
+    expect(launched).toBe(0);
   });
 
   it("the browser run is closed exactly once, including when a case's browser cannot be set up (the run aborts, exit 3) or the DB stops proving it is ours (exit 2)", async () => {
