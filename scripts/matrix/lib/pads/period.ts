@@ -19,7 +19,22 @@
 // silent wrong tap.
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import { periodLabels } from "../streams/period.ts";
+import { judgeKeys, judgeOneRow, type Stamp } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";
+
+/** What the advance tile stamps beside `to` (period-shared.ts:961, Step 0
+ *  2026-09-30: `{period: "Q1", elapsed: 0}`): the phase it leaves and the
+ *  seconds into it, nothing else. */
+const AT_STAMP: Stamp = {
+  shape: "{period: a label, elapsed: a whole number ≥ 0}",
+  is: (v) => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+    const a = v as Record<string, unknown>;
+    return Object.keys(a).sort().join(",") === "elapsed,period"
+      && typeof a.period === "string" && a.period !== ""
+      && Number.isInteger(a.elapsed) && (a.elapsed as number) >= 0;
+  },
+};
 
 /** period-shared.ts:952 (text-pinned in pad-adapters.test.ts). */
 export const PERIOD_ADVANCE_TILE = "advance";
@@ -73,8 +88,11 @@ export function makePeriodPad(sport: "hockey" | "icehockey"): MatrixPadAdapter {
     fallbacks: [
       {
         eventType: advance,
-        why: "period-shared.ts:961 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so the row is judged by fold",
+        writes: [advance],
+        why: "period-shared.ts:961 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
         rowsFor: () => 1,
+        // Fix round 1 (I-1): the label the pad wrote is the one the event names.
+        judge: (event, rows) => judgeOneRow(rows, "the advance tile", (row) => judgeKeys(event, row, { required: ["to"], stamped: { at: AT_STAMP } })),
       },
     ],
     stepsFor(event, ctx) {

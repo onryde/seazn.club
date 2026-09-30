@@ -30,7 +30,7 @@ import { FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, footballGoalTile,
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
 import { hockeyPad } from "../lib/pads/hockey.ts";
 import { icehockeyPad } from "../lib/pads/icehockey.ts";
-import { PAD_ADAPTERS } from "../lib/pads/index.ts";
+import { PAD_ADAPTERS, registerPads } from "../lib/pads/index.ts";
 import { TABLETENNIS_SET_SCORE_TILE, TABLETENNIS_SUMMARY, tabletennisPad } from "../lib/pads/tabletennis.ts";
 import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, tennisPad } from "../lib/pads/tennis.ts";
 import { PERIOD_ADVANCE_TILE, periodGoalTile } from "../lib/pads/period.ts";
@@ -119,6 +119,32 @@ describe("the pad adapter registry", () => {
     expect(Object.keys(PAD_OWNER)).toEqual([]);
     // A sport the catalogue gains later, with no adapter, still names a wave.
     expect(noPadReason("curling")).toBe("no pad adapter for curling yet → W1c (no task owns it)");
+  });
+
+  it("I-1: every registered fallback declares the row types it writes (its own type among them) and a judge", () => {
+    let checked = 0;
+    for (const [sport, a] of ADAPTERS) {
+      for (const f of a.fallbacks) {
+        expect(f.writes, `${sport} ${f.eventType}`).toContain(f.eventType);
+        expect(typeof f.judge, `${sport} ${f.eventType}`).toBe("function");
+        checked++;
+      }
+    }
+    console.info(`pad-adapters: ${checked} registered fallback(s) declare writes and a judge`);
+    expect(checked).toBe(4); // football goal, cricket innings, icehockey and hockey advances
+  });
+
+  it("I-1: registration refuses by name a fallback with no judge, or one that declares no row type it writes; its positive pair registers, frozen", () => {
+    const goal = footballPad.fallbacks[0]!;
+    const unjudged: MatrixPadAdapter = { ...footballPad, fallbacks: [{ eventType: goal.eventType, writes: goal.writes, why: goal.why, rowsFor: goal.rowsFor }] };
+    expect(() => registerPads({ football: unjudged })).toThrow("FallbackUnjudged: football's football.goal fallback declares no judge — a fallback is judged, never waved through");
+    const writesNothing: MatrixPadAdapter = { ...footballPad, fallbacks: [{ ...goal, writes: [] }] };
+    expect(() => registerPads({ football: writesNothing })).toThrow("FallbackWritesNothing: football's football.goal fallback declares no row type it writes");
+    const t = registerPads({ football: footballPad, carrom: carromPad });
+    expect(t.football).toBe(footballPad);
+    expect(Object.keys(t)).toEqual(["football", "carrom"]);
+    expect(Object.isFrozen(t)).toBe(true);
+    expect(Object.isFrozen(PAD_ADAPTERS)).toBe(true);
   });
 });
 
@@ -499,11 +525,11 @@ async function replayOnModel(
 /** football as Step 0 saw it (2026-09-30, 320, 11-a-side): Start writes
  *  core.start; a goal tile writes `{by}` alone; the period tile then a marker
  *  choice writes `{phase: <the choice's id>}`. Anything else writes nothing. */
-function footballModel(ctx: TapAdapterContext) {
+function footballModel(ctx: TapAdapterContext, goal: (side: "home" | "away") => unknown = (side) => ({ by: ctx.entrants[side] })) {
   return (taps: readonly string[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
     for (const side of ["home", "away"] as const) {
-      if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: "football.goal", payload: { by: ctx.entrants[side] } }];
+      if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: "football.goal", payload: goal(side) }];
     }
     const m = taps.length === 2 && taps[0] === TILE("period") ? CHOICE_ID.exec(taps[1]!) : null;
     return m === null ? [] : [{ type: "football.period", payload: { phase: m[1] } }];
@@ -514,7 +540,11 @@ function footballModel(ctx: TapAdapterContext) {
  *  advance tile writes `{to, at}`, where `to` is what the ENGINE says comes
  *  next (the summary's detail.nextAdvance, which the skin reads) and `at` the
  *  current play phase at elapsed 0 (whistleAt with no clock). */
-function periodModel(sport: "hockey" | "icehockey", ctx: TapAdapterContext) {
+function periodModel(
+  sport: "hockey" | "icehockey",
+  ctx: TapAdapterContext,
+  o: { to?: (next: string) => string; at?: (phase: string | undefined) => unknown } = {},
+) {
   const m = sport === "hockey" ? hockey : icehockey;
   return (taps: readonly string[], ledger: readonly LedgerRow[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
@@ -524,7 +554,10 @@ function periodModel(sport: "hockey" | "icehockey", ctx: TapAdapterContext) {
     if (taps.length !== 1 || taps[0] !== TILE("advance")) return [];
     const { state } = foldStream(m, ctx.cfg, ctx.entrants.home, ctx.entrants.away, ledger.map((r) => ({ type: r.type, payload: r.payload })));
     const d = (m.summary(state as never).detail ?? {}) as { nextAdvance?: string | null; phase?: string };
-    return d.nextAdvance == null ? [] : [{ type: `${sport}.period.advance`, payload: { to: d.nextAdvance, at: { period: d.phase, elapsed: 0 } } }];
+    if (d.nextAdvance == null) return [];
+    const to = o.to?.(d.nextAdvance) ?? d.nextAdvance;
+    const at = o.at === undefined ? { period: d.phase, elapsed: 0 } : o.at(d.phase);
+    return [{ type: `${sport}.period.advance`, payload: { to, at } }];
   };
 }
 
@@ -577,6 +610,41 @@ describe("football", () => {
     }
     expect(cases).toBe(3); // home win, away win, draw (11-a-side has no ET and no shootout)
     expect(fallbackRows).toBe(2);
+  });
+
+  it("I-1: the goal fallback is judged — the right rows are `fallback`; a goal credited to the other side, a generated key stored with another value, or a key the goal never carries is a `mismatch` naming it", async () => {
+    const cfg = resolveSportCfg("football", offlineBuilderDefault("football"));
+    const r = req("football", cfg, { kind: "win", winner: "home" });
+    const evs = generateStream(r);
+    const g = evs.find((e) => e.type === FOOTBALL_GOAL)!;
+    const gp = g.payload as { by: string; minute: number };
+    expect(typeof gp.minute).toBe("number"); // the key the pad never writes (FP-T10-1)
+    const i = evs.indexOf(g);
+    const ctx = ctxOf(r);
+    const other = gp.by === ctx.entrants.home ? ctx.entrants.away : ctx.entrants.home;
+    const cases: [string, (side: "home" | "away") => unknown, string | null][] = [
+      ["right", (side) => ({ by: ctx.entrants[side] }), null],
+      ["the other side", (side) => ({ by: ctx.entrants[side === "home" ? "away" : "home"] }), `by: stored ${JSON.stringify(other)}, generated ${JSON.stringify(gp.by)}`],
+      ["a stored minute", (side) => ({ by: ctx.entrants[side], minute: gp.minute + 1 }), `minute: stored ${gp.minute + 1}, generated ${gp.minute}`],
+      ["an ownGoal key", (side) => ({ by: ctx.entrants[side], ownGoal: false }), "untolerated key ownGoal=false"],
+    ];
+    for (const [label, goal, note] of cases) {
+      const { res } = await replayOnModel(footballPad, evs, ctx, footballModel(ctx, goal));
+      if (note === null) {
+        expect(res.rows[i], label).toMatchObject({ verdict: "fallback" });
+        expect(res.findings, label).toEqual([]);
+      } else {
+        expect(res.rows, label).toHaveLength(i + 1);
+        expect(res.rows[i], label).toMatchObject({ verdict: "mismatch", note: `FallbackMismatch — ${note}` });
+        expect(res.findings, label).toEqual([`stopped after event ${i + 1} of ${evs.length}: FallbackMismatch — ${note}`]);
+      }
+    }
+    // The judge reads exactly one row: the goal tile writes one.
+    const row = { id: "r2", seq: 2, type: FOOTBALL_GOAL, payload: { by: gp.by } };
+    const judge = footballPad.fallbacks[0]!.judge!;
+    expect(judge(g, [row])).toEqual({ ok: true, note: null });
+    expect(judge(g, [row, row])).toEqual({ ok: false, note: "2 rows, where the goal tile writes 1" });
+    expect(judge(g, [{ ...row, payload: {} }])).toEqual({ ok: false, note: `by: stored (absent), generated ${JSON.stringify(gp.by)}` });
   });
 
   it("routes: a goal is its side's tile; a marker is the period tile then the marker's choice, in every variant's marker list", () => {
@@ -670,6 +738,46 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     }
     // fih-outdoor: 2 wins + a draw, 4 advances each; iihf: 2 wins (no draws), 3 advances each.
     expect({ cases, advances }).toEqual(sport === "hockey" ? { cases: 3, advances: 12 } : { cases: 2, advances: 6 });
+  });
+
+  it("I-1: the advance fallback is judged — the right rows are `fallback`; an advance the pad writes to another label, or an `at` off {period, elapsed}, is a `mismatch` naming it", async () => {
+    const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
+    const r = req(sport, cfg, { kind: "win", winner: "home" });
+    const evs = generateStream(r);
+    const advs = evs.filter((e) => e.type === `${sport}.period.advance`);
+    const toOf = (e: StreamEvent) => (e.payload as { to: string }).to;
+    const [first, last] = [advs[0]!, advs.at(-1)!];
+    expect(toOf(first)).not.toBe(toOf(last)); // or the wrong label could not be witnessed
+    const i = evs.indexOf(first);
+    const ctx = ctxOf(r);
+    const cases: [string, Parameters<typeof periodModel>[2], string | null][] = [
+      ["right", {}, null],
+      ["another label", { to: () => toOf(last) }, `to: stored ${JSON.stringify(toOf(last))}, generated ${JSON.stringify(toOf(first))}`],
+      ["an at with no elapsed", { at: (phase) => ({ period: phase }) }, null],
+      ["an at of a number", { at: () => 0 }, null],
+    ];
+    for (const [label, knobs, note] of cases) {
+      const { res } = await replayOnModel(pad, evs, ctx, periodModel(sport, ctx, knobs));
+      if (label === "right") {
+        expect(res.rows[i], label).toMatchObject({ verdict: "fallback" });
+        expect(res.findings, label).toEqual([]);
+        continue;
+      }
+      expect(res.rows, label).toHaveLength(i + 1);
+      expect(res.rows[i], label).toMatchObject({ verdict: "mismatch" });
+      if (note !== null) expect(res.rows[i]!.note, label).toBe(`FallbackMismatch — ${note}`);
+      else expect(res.rows[i]!.note, label).toMatch(/^FallbackMismatch — stamped at=.* is not \{period: a label, elapsed: a whole number ≥ 0\}$/);
+      expect(res.findings, label).toHaveLength(1);
+    }
+    const judge = pad.fallbacks[0]!.judge!;
+    const row = (payload: unknown) => ({ id: "r3", seq: 3, type: first.type, payload });
+    const at = { period: "P", elapsed: 0 };
+    expect(judge(first, [row({ to: toOf(first), at })])).toEqual({ ok: true, note: null });
+    expect(judge(first, [row({ to: toOf(first) })])).toEqual({ ok: true, note: null }); // at is stamped, never required
+    expect(judge(first, [row({ to: toOf(first), at }), row({ to: toOf(first), at })])).toEqual({ ok: false, note: "2 rows, where the advance tile writes 1" });
+    expect(judge(first, [row({ to: toOf(first), at: { ...at, extra: 1 } })]).ok).toBe(false);
+    expect(judge(first, [row({ to: toOf(first), at: { period: "", elapsed: 0 } })]).ok).toBe(false);
+    expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: -1 } })]).ok).toBe(false);
   });
 
   it("the cursor walks the ENGINE's advance order in every variant, per fixture, and refuses a wrong-order, early or extra advance naming both labels", () => {
@@ -770,13 +878,14 @@ interface InningsLike { runs: number; wickets: number; legalBalls: number; close
  *  confirm. It writes ONE row per over: this over added onto the fold's open
  *  innings (0/0/0 when none is open), `partial: true`. Once the engine has an
  *  outcome the tile is gone, so an over sheet after it writes nothing. */
-function cricketModel(ctx: TapAdapterContext) {
+function cricketModel(ctx: TapAdapterContext, o: { wickets?: (typed: number) => number } = {}) {
   return (taps: readonly string[], ledger: readonly LedgerRow[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
     const out: RowIn[] = [];
     for (let i = 0; i + 7 <= taps.length; i += 7) {
       const c = taps.slice(i, i + 7);
-      const [r, w, b] = [numberOf(c[1]!), numberOf(c[3]!), numberOf(c[5]!)];
+      const [r, typedW, b] = [numberOf(c[1]!), numberOf(c[3]!), numberOf(c[5]!)];
+      const w = typedW === null ? null : (o.wickets?.(typedW) ?? typedW);
       if (c[0] !== TILE("overSummary") || c[2] !== CONFIRM_SEL || c[4] !== CONFIRM_SEL || c[6] !== CONFIRM_SEL || r === null || w === null || b === null) return out;
       const folded = foldStream(cricket, ctx.cfg, ctx.entrants.home, ctx.entrants.away, asEvents([...ledger, ...out]));
       if (folded.outcome !== null) return out;
@@ -857,6 +966,41 @@ describe("cricket", () => {
     }
     expect(cases).toBe(2);
     expect(rowsPer).toEqual([20, 20, 20, 10]); // t20: 120 balls = 20 overs; the away chase 60 balls = 10
+  });
+
+  it("I-1: the innings fallback is judged — its last over row, less `partial`, is the generated summary; a pad that drops every over's wickets (the review's probe) is a `mismatch` naming wickets", async () => {
+    const cfg = resolveSportCfg("cricket", offlineBuilderDefault("cricket"));
+    const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
+    let checked = 0;
+    for (const winner of ["home", "away"] as const) {
+      const r = req("cricket", cfg, { kind: "win", winner });
+      const evs = generateStream(r);
+      const first = evs.find((e) => e.type === CRICKET_SUMMARY)!;
+      const p = first.payload as { runs: number; wickets: number; legalBalls: number };
+      expect(p.wickets, winner).toBeGreaterThan(0); // or a dropped wicket could not be witnessed
+      const { res } = await replayOnModel(cricketPad, evs, ctxOf(r), cricketModel(ctxOf(r), { wickets: () => 0 }));
+      const overs = Math.ceil(p.legalBalls / bpo);
+      const note = `FallbackMismatch — the last of ${overs} over rows: wickets: stored 0, generated ${p.wickets}`;
+      expect(res.rows.map((x) => x.verdict), winner).toEqual(["equal", "mismatch"]);
+      expect(res.rows[1]!.note, winner).toBe(note);
+      expect(res.rows[1]!.stored, winner).toHaveLength(overs);
+      expect(res.findings, winner).toEqual([`stopped after event 2 of ${evs.length}: ${note}`]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The judge reads the LAST row only (each over row is cumulative), and `partial` may only be true.
+    const { sums } = summariesOf("cricket", CRICKET_SUMMARY, "home");
+    const s = sums[0]!;
+    const p = s.payload as { runs: number; wickets: number; legalBalls: number };
+    const row = (payload: unknown, seq = 9) => ({ id: `r${seq}`, seq, type: CRICKET_SUMMARY, payload });
+    const judge = cricketPad.fallbacks[0]!.judge!;
+    const early = row({ runs: 0, wickets: 0, legalBalls: bpo, partial: true }, 2);
+    expect(judge(s, [early, row({ ...p, partial: true })])).toEqual({ ok: true, note: null });
+    expect(judge(s, [row({ ...p, partial: true }), early])).toEqual({ ok: false, note: `the last of 2 over rows: runs: stored 0, generated ${p.runs}` });
+    expect(judge(s, [row({ ...p, partial: false })])).toEqual({ ok: false, note: "the last of 1 over rows: stamped partial=false is not true" });
+    expect(judge(s, [row({ ...p, legalBalls: p.legalBalls - 1, partial: true })])).toEqual({ ok: false, note: `the last of 1 over rows: legalBalls: stored ${p.legalBalls - 1}, generated ${p.legalBalls}` });
+    expect(judge(s, [row({ runs: p.runs, legalBalls: p.legalBalls, partial: true })])).toEqual({ ok: false, note: `the last of 1 over rows: wickets: stored (absent), generated ${p.wickets}` });
+    expect(judge(s, [])).toEqual({ ok: false, note: "no over row stored for the innings" });
   });
 
   it("an innings the engine would not close itself, a chase past its target before its last over, a third innings, or no core.start is refused by name", () => {

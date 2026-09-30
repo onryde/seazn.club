@@ -19,7 +19,8 @@ import { TAP_WAIT_TIMEOUT_MS, type PadPage, type TapAdapterContext, type TapStep
 import { TAP_PACE_MS, budgetMs } from "../browser/budget.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { executeStep } from "./execute.ts";
-import type { Fallback, MatrixPadAdapter } from "./types.ts";
+import { asRecord, deepEqual, show } from "./judge.ts";
+import type { Fallback, FallbackJudgement, MatrixPadAdapter } from "./types.ts";
 
 /** The ledger's poll spacing: the bench's LEDGER_POLL_INTERVAL_MS (scorer.ts:197). */
 export const POLL_MS = 200;
@@ -42,24 +43,6 @@ export interface ReplayRow { expected: StreamEvent; stored: readonly LedgerRow[]
 /** `stored`: every row the replay read, as the product holds it, in seq order —
  *  what the fold judges. `findings`: why the replay stopped early, if it did. */
 export interface ReplayResult { rows: ReplayRow[]; stored: LedgerRow[]; findings: string[] }
-
-function asRecord(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-}
-
-/** Structural equality; object keys in any order (the ledger's jsonb reorders them). */
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => deepEqual(v, b[i]));
-  if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
-    const ak = Object.keys(a);
-    const br = b as Record<string, unknown>;
-    return ak.length === Object.keys(br).length && ak.every((k) => Object.hasOwn(br, k) && deepEqual((a as Record<string, unknown>)[k], br[k]));
-  }
-  return false;
-}
-
-const show = (v: unknown): string => (v === undefined ? "(absent)" : JSON.stringify(v));
 
 /** The bench's rule for a tolerated key (scorer.ts isPlausibleTolerableValue):
  *  every tolerated key names a person id the pad stamps, so only a non-empty
@@ -99,6 +82,25 @@ function rowsWanted(fallback: Fallback | null, ev: StreamEvent, ctx: TapAdapterC
     return `a throw (${errorLine(e)})`;
   }
   return Number.isInteger(n) && n >= 1 ? n : String(n);
+}
+
+/** Fix round 1 (I-1): a fallback is JUDGED, never waved through. Its rows
+ *  must be of a type it declares it writes, and its judge must accept them
+ *  against the generated event. Answers null when they pass, or the note the
+ *  mismatch carries: a wrong type (the judge is not asked), no judge (an
+ *  adapter built off the registry, which registerPads would refuse), a judge
+ *  that throws, or a judge's refusal. */
+function judgeFallback(f: Fallback, ev: StreamEvent, rows: readonly LedgerRow[]): string | null {
+  const alien = [...new Set(rows.filter((r) => !f.writes.includes(r.type)).map((r) => r.type))];
+  if (alien.length > 0) return `FallbackRowType — stored ${alien.join(", ")}; the ${f.eventType} fallback writes ${f.writes.join(", ")}`;
+  if (f.judge === undefined) return `FallbackUnjudged — the ${f.eventType} fallback declares no judge; a fallback is judged, never waved through`;
+  let j: FallbackJudgement;
+  try {
+    j = f.judge(ev, rows);
+  } catch (e) {
+    return `FallbackMismatch — the ${f.eventType} judge threw (${errorLine(e)})`;
+  }
+  return j.ok ? null : `FallbackMismatch — ${j.note ?? "the judge refused the rows without a note"}`;
 }
 
 /** An error's name and first line — Playwright's messages carry a multi-line
@@ -191,8 +193,14 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
     tip = mine.at(-1)!.seq;
     out.stored.push(...mine);
     if (fallback !== null) {
-      out.rows.push({ expected: ev, stored: mine, verdict: "fallback", note: fallback.why });
-      continue;
+      const refused = judgeFallback(fallback, ev, mine);
+      if (refused === null) {
+        out.rows.push({ expected: ev, stored: mine, verdict: "fallback", note: fallback.why });
+        continue;
+      }
+      out.rows.push({ expected: ev, stored: mine, verdict: "mismatch", note: refused });
+      out.findings.push(`stopped after event ${i + 1} of ${events.length}: ${refused}`);
+      return out;
     }
     const c = compareRow(ev, mine[0], adapter);
     out.rows.push({ expected: ev, stored: mine, verdict: c.verdict, note: c.note });

@@ -112,10 +112,11 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     "lib/pads/volleyball.ts", "lib/pads/tabletennis.ts", "lib/pads/tennis.ts",
     "lib/pads/football.ts", "lib/pads/period.ts", "lib/pads/icehockey.ts", "lib/pads/hockey.ts",
     "lib/pads/cricket.ts", "lib/pads/boardgame.ts", "lib/pads/carrom.ts",
+    "lib/pads/judge.ts", // fix round 1 (I-1): every fallback's judge
   ];
   it("W1c Tasks 9–11's modules are all in the walk", () => {
     const missing = W1C_T9_11.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
-    expect(W1C_T9_11.length).toBe(10);
+    expect(W1C_T9_11.length).toBe(11);
     expect(missing).toEqual([]);
   });
 

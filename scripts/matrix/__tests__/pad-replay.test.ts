@@ -90,6 +90,9 @@ const sheetAdapter = stubAdapter({
   },
 });
 const ROW = (type: string, payload: unknown = {}): RowIn => ({ type, payload });
+/** A judge that accepts whatever rows it is shown — for the tests about row
+ *  counts, not about judging (fix round 1, I-1: every fallback is judged). */
+const ACCEPT = () => ({ ok: true, note: null });
 const HALF = (side: "home" | "away"): StreamEvent => ({ type: "stub.point", payload: { side } });
 const halfTapAdapter = stubAdapter({ stepsFor: (e) => [{ kind: "half", side: (e.payload as { side: "home" | "away" }).side }] });
 
@@ -170,7 +173,7 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
   });
 
   it("a fallback event collects exactly its declared row count and is judged `fallback`, not per payload", async () => {
-    const pad = stubAdapter({ fallbacks: [{ eventType: "cricket.innings.summary", why: "cricket.tsx:2579", rowsFor: () => 3 }] });
+    const pad = stubAdapter({ fallbacks: [{ eventType: "cricket.innings.summary", writes: ["cricket.innings.summary", "cricket.innings.close"], why: "cricket.tsx:2579", rowsFor: () => 3, judge: ACCEPT }] });
     const deps = fakeDeps([ROW("cricket.innings.summary"), ROW("cricket.innings.summary"), ROW("cricket.innings.close"), ROW("x")], { groups: [3, 1] });
     const r = await run(pad, [{ type: "cricket.innings.summary", payload: {} }, { type: "x", payload: {} }], deps);
     expect(r.rows[0]).toMatchObject({ verdict: "fallback", note: "cricket.tsx:2579" });
@@ -189,7 +192,7 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
       ["0", () => 0], ["NaN", () => Number.NaN], ["-1", () => -1], ["1.5", () => 1.5], ["Infinity", () => Number.POSITIVE_INFINITY],
       ["throws", () => { throw new Error("no count for this shape"); }],
     ] as const) {
-      const pad = stubAdapter({ fallbacks: [{ eventType: "f", why: "f.tsx:1", rowsFor }] });
+      const pad = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor, judge: ACCEPT }] });
       const deps = fakeDeps([ROW("ok"), ROW("f")]);
       const page = fakePage(deps);
       const r = await run(pad, [{ type: "ok", payload: {} }, { type: "f", payload: {} }], deps, page);
@@ -203,9 +206,67 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
     }
     expect(checked).toBe(6);
     // Its positive pair: a whole number ≥ 1 is accepted.
-    const pad = stubAdapter({ fallbacks: [{ eventType: "f", why: "f.tsx:1", rowsFor: () => 1 }] });
+    const pad = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor: () => 1, judge: ACCEPT }] });
     const deps = fakeDeps([ROW("f")]);
     expect((await run(pad, [{ type: "f", payload: {} }], deps)).rows.map((x) => x.verdict)).toEqual(["fallback"]);
+  });
+
+  // Fix round 1 (I-1, controller ruling): a fallback is JUDGED, never waved
+  // through. Its rows must be of a type it declares it writes, and its judge
+  // must accept them against the generated event; otherwise the event is a
+  // mismatch with a note, and the replay stops as it does for any mismatch.
+  const N = (n: number): StreamEvent => ({ type: "f", payload: { n } });
+  /** Accepts when the last row's n is the generated n; says why otherwise. */
+  const lastN = (seen: unknown[]) => (ev: StreamEvent, rows: readonly LedgerRow[]) => {
+    seen.push({ ev, rows: rows.map(({ type, payload }) => ({ type, payload })) });
+    const got = (rows.at(-1)!.payload as { n: number }).n;
+    const want = (ev.payload as { n: number }).n;
+    return got === want ? { ok: true, note: null } : { ok: false, note: `n: stored ${got}, generated ${want}` };
+  };
+
+  it("I-1: a fallback's rows go to its judge with the generated event — accepted is `fallback` noting the why; refused is a `mismatch` noting the judge's reason, the rows kept, and the replay stops", async () => {
+    const seen: unknown[] = [];
+    const pad = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f.part"], why: "f.tsx:1", rowsFor: () => 2, judge: lastN(seen) }] });
+    const right = await run(pad, [N(3)], fakeDeps([ROW("f.part", { n: 1 }), ROW("f.part", { n: 3 })], { groups: [2] }));
+    expect(right.rows.map((x) => [x.verdict, x.note])).toEqual([["fallback", "f.tsx:1"]]);
+    expect(right.findings).toEqual([]);
+    expect(seen).toEqual([{ ev: N(3), rows: [ROW("f.part", { n: 1 }), ROW("f.part", { n: 3 })] }]);
+
+    const deps = fakeDeps([ROW("f.part", { n: 1 }), ROW("f.part", { n: 2 }), ROW("x")], { groups: [2, 1] });
+    const page = fakePage(deps);
+    const wrong = await run(pad, [N(3), { type: "x", payload: {} }], deps, page);
+    expect(wrong.rows).toHaveLength(1);
+    expect(wrong.rows[0]).toMatchObject({ verdict: "mismatch", note: "FallbackMismatch — n: stored 2, generated 3" });
+    expect(wrong.rows[0]!.stored.map((s) => s.payload)).toEqual([{ n: 1 }, { n: 2 }]);
+    expect(wrong.stored.map((s) => s.payload)).toEqual([{ n: 1 }, { n: 2 }]);
+    expect(wrong.findings).toEqual(["stopped after event 1 of 2: FallbackMismatch — n: stored 2, generated 3"]);
+    // The next event was never tapped.
+    expect(page.taps).toHaveLength(1);
+  });
+
+  it("I-1: a fallback row of a type the fallback does not declare it writes is a `mismatch` naming it, before the judge is asked; declared, the same rows are judged", async () => {
+    const seen: unknown[] = [];
+    const rows = [ROW("f.part", { n: 1 }), ROW("f.close", { n: 3 })];
+    const undeclared = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f.part"], why: "f.tsx:1", rowsFor: () => 2, judge: lastN(seen) }] });
+    const r = await run(undeclared, [N(3)], fakeDeps(rows, { groups: [2] }));
+    expect(r.rows[0]).toMatchObject({ verdict: "mismatch", note: "FallbackRowType — stored f.close; the f fallback writes f.part" });
+    expect(r.findings).toEqual(["stopped after event 1 of 1: FallbackRowType — stored f.close; the f fallback writes f.part"]);
+    expect(seen).toEqual([]);
+    // Its positive pair: the same rows, the type declared → judged, and accepted.
+    const declared = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f.part", "f.close"], why: "f.tsx:1", rowsFor: () => 2, judge: lastN(seen) }] });
+    expect((await run(declared, [N(3)], fakeDeps(rows, { groups: [2] }))).rows.map((x) => x.verdict)).toEqual(["fallback"]);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("I-1: a judge that throws, or a fallback with no judge (an adapter off the registry), is a `mismatch` naming it — never a crash, never a pass", async () => {
+    const throws = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor: () => 1, judge: () => { throw new Error("no rule for this shape"); } }] });
+    const a = await run(throws, [N(1)], fakeDeps([ROW("f", { n: 1 })]));
+    expect(a.rows[0]).toMatchObject({ verdict: "mismatch", note: "FallbackMismatch — the f judge threw (Error: no rule for this shape)" });
+    expect(a.findings).toHaveLength(1);
+    const unjudged = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor: () => 1 }] });
+    const b = await run(unjudged, [N(1)], fakeDeps([ROW("f", { n: 1 })]));
+    expect(b.rows[0]).toMatchObject({ verdict: "mismatch", note: "FallbackUnjudged — the f fallback declares no judge; a fallback is judged, never waved through" });
+    expect(b.findings).toHaveLength(1);
   });
 
   it("carry (e): a tap that fails is a named finding on its event's row — the rows already written are kept, the replay stops, and it never throws", async () => {
@@ -257,7 +318,7 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
   });
 
   it("a fallback short of its rows is `missing`, naming how many of how many", async () => {
-    const pad = stubAdapter({ fallbacks: [{ eventType: "f", why: "f.tsx:1", rowsFor: () => 3 }] });
+    const pad = stubAdapter({ fallbacks: [{ eventType: "f", writes: ["f"], why: "f.tsx:1", rowsFor: () => 3, judge: ACCEPT }] });
     const r = await run(pad, [{ type: "f", payload: {} }], fakeDeps([ROW("f"), ROW("f")], { groups: [2], holdMs: 500 }));
     expect(r.rows[0]).toMatchObject({ verdict: "missing", note: expect.stringMatching(/^2 of 3 row\(s\)/) });
   });

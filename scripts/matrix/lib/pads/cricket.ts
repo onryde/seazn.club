@@ -22,10 +22,12 @@
 // one record per fixture (the entrant pair, reset by core.start): which innings
 // comes next, and the first innings' runs, which set the chase's target.
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { sportModule } from "../sport-cfg.ts";
 import { declaredAllOut } from "../streams/cricket.ts";
 import type { StreamEvent } from "../streams/types.ts";
-import type { MatrixPadAdapter } from "./types.ts";
+import { JUDGED_OK, asRecord, judgeKeys } from "./judge.ts";
+import type { FallbackJudgement, MatrixPadAdapter } from "./types.ts";
 
 /** The engine's cricket event type (cricket.eventSchemas; pinned). */
 export const CRICKET_SUMMARY = "cricket.innings.summary";
@@ -115,14 +117,28 @@ function summarySteps(event: StreamEvent, ctx: TapAdapterContext): readonly TapS
   ]);
 }
 
+/** Fix round 1 (I-1): each over row is the open innings' running total
+ *  (cricket.tsx:2585), so the innings' LAST row, less `partial`, is the
+ *  generated summary: every key it carries stored and equal, and `partial`
+ *  the only other key, as true. */
+function judgeInnings(event: StreamEvent, rows: readonly LedgerRow[]): FallbackJudgement {
+  const last = rows.at(-1);
+  if (last === undefined) return { ok: false, note: "no over row stored for the innings" };
+  const required = Object.keys(asRecord(event.payload));
+  const j = judgeKeys(event, last, { required, stamped: { partial: { shape: "true", is: (v) => v === true } } });
+  return j.ok ? JUDGED_OK : { ok: false, note: `the last of ${rows.length} over rows: ${j.note}` };
+}
+
 export const cricketPad: MatrixPadAdapter = {
   sport: "cricket",
   emits: ["core.start", CRICKET_SUMMARY],
   fallbacks: [
     {
       eventType: CRICKET_SUMMARY,
-      why: "cricket.tsx:2585 — the pad authors an innings only as cumulative over summaries (partial: true, one row per over; Step 0 2026-09-30), and the innings ends itself, so the rows are judged by fold",
+      writes: [CRICKET_SUMMARY],
+      why: "cricket.tsx:2585 — the pad authors an innings only as cumulative over summaries (partial: true, one row per over; Step 0 2026-09-30), and the innings ends itself, so its judge holds the innings' last over row, less `partial`, to the summary",
       rowsFor: (event, ctx) => Math.ceil(((event.payload ?? {}) as { legalBalls: number }).legalBalls / cfgOf(ctx.cfg).ballsPerOver),
+      judge: judgeInnings,
     },
   ],
   stepsFor(event, ctx) {
