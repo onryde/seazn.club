@@ -1687,9 +1687,25 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(checked).toBe(cases.length);
   });
 
-  it("--layer L1: 6 slice cells × LIFECYCLE at 1280 — the width defaults to 1280 and --width 1280 is accepted; caseIds suffixed @1280; results L1 over browser", async () => {
+  it("6 slice cells × 1 scenario at 1280 = 6 cases; any other --width with --layer L1 is a usage refusal", async () => {
+    // Every other declared browser width (BROWSER_WIDTHS, lib/widths.ts) is refused by name, before anything runs.
+    const others = BROWSER_WIDTHS.filter((w) => w !== 1280);
+    expect(others.length).toBeGreaterThan(0);
+    let refused = 0;
+    for (const w of others) {
+      const io = capture();
+      let opened = 0;
+      const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
+      expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--width", String(w), "--run-id", "l1w", "--report-dir", dirFor()]), String(w)).toBe(2);
+      expect(io.err(), String(w)).toMatch(new RegExp(`--layer L1 runs at 1280 only \\(ruling 39\\); got --width ${w}\\n.*usage: run\\.ts`));
+      expect({ order: d.order, opened }, String(w)).toEqual({ order: [], opened: 0 });
+      refused++;
+    }
+    expect(refused).toBe(others.length);
+    // 1280 — defaulted, or passed — runs: 6 cases, each suffixed @1280, results L1 over browser.
     capture();
     const want = SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}|${fakeDefault(s)}|LIFECYCLE@1280`));
+    expect(want).toHaveLength(6);
     expect(want).toHaveLength(SLICE_ROWS.length * SLICE_SPORTS.length);
     let ran = 0;
     for (const [id, extra] of [["l1a", []], ["l1b", ["--width", "1280"]]] as const) {
