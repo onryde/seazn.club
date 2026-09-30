@@ -51,6 +51,7 @@ import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STREAM_POLL_MS,
+  TARGET_REMOVED,
   qrText,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
@@ -2520,5 +2521,154 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onAgain();
     expect(bodyOf(island).view).toBeNull();
     expect(bodyOf(island).selectedTargetId).toBe("t1");
+  });
+
+  // ─── I1 (B4 review): the picker re-reads its list when the organiser comes back from Directory ──────────────────────
+  // "Manage destinations" opens Directory in a NEW tab (D1), so the round trip — add or remove there, come back here —
+  // never remounts this tab. `apps/web` vitest has no DOM: a minimal `document` / `window` (EventTargets, the only
+  // surface `useTabReturn` touches) is stubbed BEFORE the mount, so the listeners are the real ones the hook adds.
+  const stubPage = () => {
+    const doc = Object.assign(new EventTarget(), { visibilityState: "visible" as "visible" | "hidden" });
+    const win = new EventTarget();
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", win);
+    return { doc, win };
+  };
+  const LIST = "GET /api/v1/orgs/o-1/stream-targets";
+  const listReads = () => calls().filter((c) => c === LIST).length;
+
+  it("I1: coming back to the tab re-reads the list — the destination added in Directory is offered and Go live is enabled; ONE read per return (focus + visibilitychange), none on the hide, none while a session is up", async () => {
+    const { doc, win } = stubPage();
+    const s = serve({ current: null, targets: [] });
+    const island = track(await mount(s));
+    expect(listReads(), "the mount's read").toBe(1);
+    expect(listOf(bodyOf(island).targets)).toEqual([]);
+    expect(bodyOf(island).selectedTargetId, "the empty case: nothing to pick").toBeNull();
+
+    // Added in the Directory tab; the organiser comes back. A real return fires BOTH events — one read, not two.
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads(), "one read for one return — the second event lands while the first read is in flight").toBe(2);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    expect(bodyOf(island).selectedTargetId, "the new destination is picked, so Go live is enabled").toBe("t1");
+    expect(bodyOf(island).targets.status, "a quiet re-read never flashes loading").toBe("ok");
+
+    // A second return is a second read (the dedupe is per read in flight, never once per mount).
+    s.targets = [TARGETS[0]!, TARGETS[1]!];
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads()).toBe(3);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(bodyOf(island).selectedTargetId, "a selection still listed stays").toBe("t1");
+
+    // The HIDE fires visibilitychange too — leaving the tab is not a return.
+    doc.visibilityState = "hidden";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(listReads(), "no read on the hide").toBe(3);
+    doc.visibilityState = "visible";
+
+    // Removed in Directory: the return drops it, and the stale selection falls to the oldest remaining.
+    bodyOf(island).onSelectTarget("t2");
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(listReads()).toBe(4);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    expect(bodyOf(island).selectedTargetId, "the removed choice is cleared").toBe("t1");
+
+    // A return whose read FAILS keeps the picker the organiser already has — a quiet read never turns it into an error.
+    s.failTargets = true;
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads()).toBe(5);
+    expect(bodyOf(island).targets.status, "the list already shown stays").toBe("ok");
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    s.failTargets = false;
+
+    // With a session up there is no picker to refresh: a return reads nothing.
+    s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).view?.state).toBe("warming");
+    const before = listReads();
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads(), "no list read while a session is up").toBe(before);
+  });
+
+  it("I1: a Go live answered 404 re-reads the list — the chosen destination is GONE: 'removed' copy and the stale choice cleared; still listed (a 404 about something else): the generic copy, choice kept", async () => {
+    stubPage();
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t2");
+    // Removed in Directory while this tab stayed open — no return event, so only the 404 can tell.
+    s.targets = [TARGETS[0]!];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    const before = listReads();
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listReads(), "the 404 re-read the list").toBe(before + 1);
+    expect(bodyOf(island).createError).toEqual({ code: TARGET_REMOVED, holder: null });
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    expect(bodyOf(island).selectedTargetId, "the stale choice is cleared").toBe("t1");
+    expect(bodyOf(island).busy, "Go live is free again").toBe(false);
+
+    // The positive pair: a 404 whose chosen destination IS still listed is not "removed".
+    s.create = () => { throw new ApiV1Error("fixture not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listReads()).toBe(before + 2);
+    expect(bodyOf(island).createError).toEqual({ code: "unknown", holder: null });
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+
+    // Another refusal never re-reads the list.
+    s.create = () => { throw new ApiV1Error("busy", 409, "active_session", { sessionId: "s9" }); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listReads(), "a 409 reads no list").toBe(before + 2);
+  });
+
+  it("m2: an OLDER read that answers LATE never overwrites a newer one — neither its list nor its failure", async () => {
+    stubPage();
+    // The list route answers in the order the TEST releases, not the order asked.
+    const pending: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    const s = serve({ current: null, targets: [] });
+    const base = apiV1.getMockImplementation()!;
+    apiV1.mockImplementation((url, options) =>
+      `${options?.method ?? "GET"} ${url}` === LIST
+        ? new Promise((resolve, reject) => { pending.push({ resolve, reject }); })
+        : base(url, options),
+    );
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(pending.length, "the mount's read is in flight").toBe(1);
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(pending.length, "Retry asked again").toBe(2);
+    pending[1]!.resolve([TARGETS[1]!]);
+    await settle();
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t2"]);
+    pending[0]!.resolve([TARGETS[0]!]);
+    await settle();
+    expect(listOf(bodyOf(island).targets).map((t) => t.id), "the late answer of the older read is dropped").toEqual(["t2"]);
+    expect(bodyOf(island).selectedTargetId).toBe("t2");
+
+    // The same for a late FAILURE: a newer read's list stands.
+    bodyOf(island).onRetryTargets();
+    await settle();
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(pending.length).toBe(4);
+    pending[3]!.resolve(TARGETS);
+    await settle();
+    pending[2]!.reject(new TypeError("Failed to fetch"));
+    await settle();
+    expect(bodyOf(island).targets.status, "a late failure of an older read never replaces the newer list").toBe("ok");
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
+    void s;
   });
 });

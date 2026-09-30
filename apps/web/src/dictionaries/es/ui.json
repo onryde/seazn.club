@@ -5479,6 +5479,7 @@
   "stream.error.destination_not_allowed": "Este destino ya no se admite. Elige otro destino.",
   "stream.error.target_unreadable": "No se puede leer la clave de emisión guardada de este destino. Sustituye la clave y emite de nuevo; si no es un destino de YouTube o Twitch, elimínalo y elige otro.",
   "stream.error.plan_lacks_relay": "La transmisión desde el móvil no está incluida en tu plan.",
+  "stream.error.target_removed": "Ese destino se eliminó en Directorio. Elige otro.",
   "stream.target.refused.scheme": "La URL de ingesta debe empezar por rtmp:// o rtmps://.",
   "stream.target.refused.userinfo": "Quita el usuario y la contraseña de la URL de ingesta.",
   "stream.target.refused.ip_literal": "Usa la dirección del servicio de emisión, no una dirección IP.",

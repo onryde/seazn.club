@@ -5479,6 +5479,7 @@
   "stream.error.destination_not_allowed": "Cette destination n'est plus prise en charge. Choisissez-en une autre.",
   "stream.error.target_unreadable": "La clé de diffusion enregistrée pour cette destination est illisible. Remplacez la clé, puis passez en direct ; si ce n'est pas une destination YouTube ou Twitch, supprimez-la et choisissez-en une autre.",
   "stream.error.plan_lacks_relay": "La diffusion depuis le téléphone n'est pas incluse dans votre forfait.",
+  "stream.error.target_removed": "Cette destination a été supprimée dans le Répertoire. Choisissez-en une autre.",
   "stream.target.refused.scheme": "L'URL d'ingestion doit commencer par rtmp:// ou rtmps://.",
   "stream.target.refused.userinfo": "Retirez le nom d'utilisateur et le mot de passe de l'URL d'ingestion.",
   "stream.target.refused.ip_literal": "Utilisez l'adresse du service de diffusion, pas une adresse IP.",

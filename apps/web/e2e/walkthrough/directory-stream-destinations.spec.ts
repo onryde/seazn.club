@@ -864,3 +864,92 @@ for (const width of [320, 768, 1280] as const) {
     await tab.close();
   });
 }
+
+// ===========================================================================
+// I1 (B4 review) — the picker follows Directory WITHOUT a reload. "Manage destinations" opens Directory in a NEW tab
+// (D1), so the organiser's round trip — add or remove there, come back — never remounts the match's tab: the return
+// itself re-reads the list. Two pages in ONE context (the same signed-in organiser), the order an organiser takes.
+// ===========================================================================
+/** Back to the match's tab: brought to the front, then the return the browser announces. Headless Chromium keeps every
+ *  page "visible", so the `visibilitychange` a real tab switch fires is dispatched here — the listener is the page's own. */
+async function returnTo(page: Page): Promise<void> {
+  await page.bringToFront();
+  const visible = await page.evaluate(() => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    return document.visibilityState;
+  });
+  expect(visible, "premise: the page is visible, so its listener acts on the return").toBe("visible");
+}
+
+for (const width of [320, 1280] as const) {
+  test(`I1 @${width}: no destinations → add in the NEW Directory tab → back: offered, Go live enabled → remove there → back: gone → a choice removed while the tab stayed open: Go live says it was removed and drops it`, async ({ page }) => {
+    const NAVS = 3; // the rig's sign-in, the fixture page, the Directory tab
+    const SAVES = 5; // add, remove, add, the API remove, the refused Go live
+    test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVES * SAVE_MS + 3 * SAVE_MS /* three returns */);
+    const height = width < 768 ? 700 : 900;
+    await page.setViewportSize({ width, height });
+    const rig = await seedRig(page, { entrants: 2 });
+    const f = rig.fixtures[0]!;
+    const picker = (b: Locator) => b.getByTestId("stream-target");
+    const goLive = (b: Locator) => b.getByTestId("stream-go-live");
+
+    // 1. NO destinations: the empty copy, and Go live disabled.
+    const body = await openPhoneTab(page, rig, f.no);
+    await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
+    await expect(picker(body)).toHaveCount(0);
+    await expect(goLive(body)).toBeDisabled();
+
+    // 2. Manage destinations → Directory in a NEW tab → add one there.
+    const [dir] = await Promise.all([page.context().waitForEvent("page"), body.getByTestId("stream-manage-destinations").click()]);
+    await dir.setViewportSize({ width, height });
+    await dir.waitForLoadState();
+    await expect(dir.getByTestId("stream-destinations")).toBeVisible({ timeout: NAV_MS });
+    const first = `Court 1 ${rig.tag}`;
+    const addForm = await addViaForm(dir, { platform: "youtube", label: first, key: ytKey() }, "stream-dest-empty-add");
+    await expect(addForm).toHaveCount(0, { timeout: SAVE_MS });
+    const [added] = await listApi(page, rig.orgId);
+    expect(added?.label, "the API holds what the Directory tab saved").toBe(first);
+
+    // 3. Back to the match (no reload): the picker offers it, picked, and Go live is enabled.
+    await returnTo(page);
+    await expect(picker(body).locator("option"), "the return re-read the list").toHaveText([`${first} (${BRAND.youtube})`], { timeout: SAVE_MS });
+    await expect(picker(body)).toHaveValue(added!.id);
+    await expect(goLive(body)).toBeEnabled();
+    await expect(body.getByTestId("stream-dest-empty")).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await shot(page.locator('[data-role="fixture-stream-body"]'), `fix1-I1-${width}-picker-after-return.png`);
+
+    // 4. Remove it in Directory, come back: gone, and Go live disabled again.
+    await dir.bringToFront();
+    const row = rowOf(dir, added!.id);
+    await tapAction(row, "remove", width);
+    await confirmRemove(dir, first);
+    await expect(row).toHaveCount(0, { timeout: SAVE_MS });
+    await returnTo(page);
+    await expect(body.getByTestId("stream-dest-empty"), "the return dropped the removed destination").toBeVisible({ timeout: SAVE_MS });
+    await expect(picker(body)).toHaveCount(0);
+    await expect(goLive(body)).toBeDisabled();
+
+    // 5. A choice removed while this tab stayed OPEN (another organiser, no return to announce it): picked here, then
+    //    Go live answers 404 — the tab says it was removed, re-reads, and drops it. Nothing starts.
+    await dir.bringToFront();
+    const second = `Court 2 ${rig.tag}`;
+    await addViaForm(dir, { platform: "twitch", label: second, key: twitchKey() }, "stream-dest-empty-add");
+    await expect(dir.getByTestId("stream-dest-form")).toHaveCount(0, { timeout: SAVE_MS });
+    const [b] = await listApi(page, rig.orgId);
+    await returnTo(page);
+    await expect(picker(body)).toHaveValue(b!.id, { timeout: SAVE_MS });
+    const removed = await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${b!.id}`);
+    expect(removed.status(), "SETUP: removed elsewhere").toBe(200);
+    await expect(picker(body), "premise: nothing told this tab yet").toHaveValue(b!.id);
+    await goLive(body).click();
+    await expect(body.getByTestId("stream-create-error")).toHaveText(en("stream.error.target_removed"), { timeout: SAVE_MS });
+    await expect(body.getByTestId("stream-create-error")).not.toHaveText(en("stream.error.unknown"));
+    await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it").toBeVisible();
+    await expect(goLive(body)).toBeDisabled();
+    expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
+    await expectNoHorizontalScroll(page);
+    await shot(page.locator('[data-role="fixture-stream-body"]'), `fix1-I1-${width}-removed.png`);
+    await dir.close();
+  });
+}

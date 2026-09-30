@@ -5479,6 +5479,7 @@
   "stream.error.destination_not_allowed": "Deze bestemming wordt niet meer ondersteund. Kies een andere.",
   "stream.error.target_unreadable": "De opgeslagen streamsleutel van deze bestemming kan niet worden gelezen. Vervang de sleutel en ga dan live; is het geen YouTube- of Twitch-bestemming, verwijder deze dan en kies een andere.",
   "stream.error.plan_lacks_relay": "Streamen vanaf de telefoon zit niet in je abonnement.",
+  "stream.error.target_removed": "Deze bestemming is verwijderd in Directory. Kies een andere.",
   "stream.target.refused.scheme": "De ingest-URL moet beginnen met rtmp:// of rtmps://.",
   "stream.target.refused.userinfo": "Haal de gebruikersnaam en het wachtwoord uit de ingest-URL.",
   "stream.target.refused.ip_literal": "Gebruik het adres van de streamdienst, geen IP-adres.",

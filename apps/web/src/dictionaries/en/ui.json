@@ -5479,6 +5479,7 @@
   "stream.error.destination_not_allowed": "This destination is no longer supported. Pick another destination.",
   "stream.error.target_unreadable": "This destination's saved stream key can't be read. Replace the key, then go live — or, if it isn't a YouTube or Twitch destination, remove it and choose another.",
   "stream.error.plan_lacks_relay": "Phone streaming isn't on your plan.",
+  "stream.error.target_removed": "That destination was removed in Directory. Pick another one.",
   "stream.target.refused.scheme": "The ingest URL must start with rtmp:// or rtmps://.",
   "stream.target.refused.userinfo": "Remove the username and password from the ingest URL.",
   "stream.target.refused.ip_literal": "Use the streaming service's address, not an IP address.",

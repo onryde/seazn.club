@@ -31,7 +31,7 @@ import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usec
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, DESTINATION_REFUSAL_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  createErrorCode, createErrorHolder, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText, stepFor, targetRefusalRule,
+  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText, stepFor, targetRefusalRule,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -292,6 +292,43 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     expect(targetRefusalRule(await wire(new HttpError(422, "refused", DESTINATION_NOT_ALLOWED, { rule: "toString" })))).toBeNull();
     expect(targetRefusalRule(await wire(new HttpError(422, "bad key", "ERROR", { rule: "host" })))).toBeNull();
     expect(targetRefusalRule(new Error("boom"))).toBeNull();
+  });
+});
+
+describe("I1 (B4 review): a Go live whose destination was removed in Directory", () => {
+  it("createErrorIsNotFound reads the 404 off the REAL wire — the archived-target and the fixture 404 both (D2 keeps the existing not-found shape, so the tab re-reads the list to tell them apart); every other refusal and a network error are not", async () => {
+    const notFound: [string, Error][] = [
+      ["an archived or foreign target (admit's target_not_found)", new HttpError(404, "stream target not found")],
+      ["a fixture that is gone", new HttpError(404, "fixture not found")],
+    ];
+    let checked = 0;
+    for (const [name, err] of notFound) {
+      expect(createErrorIsNotFound(await wire(err)), name).toBe(true);
+      checked++;
+    }
+    const others: [string, Error][] = [
+      ["409 target_in_use", new HttpError(409, "in use", "target_in_use", { holder: null })],
+      ["422 TARGET_UNREADABLE", new TargetUnreadableError("replace_key")],
+      ["402 no_credits", new HttpError(402, "none", "no_credits")],
+      ["403 FORBIDDEN", new HttpError(403, "a signed-in organiser is required")],
+      ["500", new Error("boom")],
+    ];
+    for (const [name, err] of others) {
+      expect(createErrorIsNotFound(await wire(err)), name).toBe(false);
+      checked++;
+    }
+    expect(createErrorIsNotFound(new TypeError("Failed to fetch"))).toBe(false);
+    expect(createErrorIsNotFound(null)).toBe(false);
+    expect(createErrorIsNotFound({ status: "404" })).toBe(false);
+    expect(checked).toBe(notFound.length + others.length);
+  });
+
+  it("the 'removed' refusal reads its own sentence — never the retry copy — in all four locales, with no placeholder left", () => {
+    const text = createErrorText({ code: TARGET_REMOVED, holder: null }, msg);
+    expect(text).toBe(msg("stream.error.target_removed"));
+    expect(text).not.toBe(msg(CREATE_ERROR_KEYS.unknown));
+    expect(text).not.toMatch(/MISSING|[{}]/);
+    expect(inEveryLocale(["stream.error.target_removed"])).toBe(LOCALES.length);
   });
 });
 

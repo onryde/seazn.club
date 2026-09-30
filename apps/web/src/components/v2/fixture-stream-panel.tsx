@@ -44,6 +44,7 @@ import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { platformName } from "./stream-platform-mark";
+import { useTabReturn } from "./use-tab-return";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
@@ -58,15 +59,17 @@ import {
   STATE_PILL_KEYS,
   STEP_KEYS,
   STREAM_POLL_MS,
+  TARGET_REMOVED,
   createErrorCode,
   createErrorHolder,
+  createErrorIsNotFound,
   createErrorText,
   elapsedLabel,
   healthChips,
   phoneTabState,
   qrText,
   stepFor,
-  type CreateErrorCode,
+  type CreateFailureCode,
   type CreateErrorHolder,
   type PhoneTabState,
   type StreamSessionView,
@@ -702,7 +705,7 @@ const MODE_OPTIONS = [
 ] as const;
 const ARROW = /^Arrow(Up|Down|Left|Right)$/;
 
-type CreateError = { code: CreateErrorCode; holder: CreateErrorHolder | null };
+type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder | null };
 /** D13: which sentence a refused checkout gets — keyed on the route's STATUS (`CheckoutSecretResult` has no code). */
 type CheckoutError = "owner" | "unknown";
 
@@ -959,28 +962,51 @@ export function PhoneTab({
     });
   };
 
-  useEffect(() => {
-    let live = true;
-    // A retry shows the read in flight again, never the last answer.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTargets({ status: "loading" });
-    void (async () => {
+  // One read of the org's destinations. LOUD (the mount, Retry) shows the read in flight, never the last answer; QUIET
+  // (I1: the organiser came back from Directory, or a Go live found its destination gone) keeps the picker on screen
+  // until the answer, and a quiet read that fails keeps a list already shown. Each read takes a sequence number: only
+  // the NEWEST read's answer — list or failure — lands (m2), so a slow older read never overwrites a newer one.
+  // Resolves to the list it applied, or null (failed, or superseded).
+  const listSeq = useRef(0);
+  const listInFlight = useRef(false);
+  const readTargets = useCallback(
+    async (loud: boolean): Promise<StreamTarget[] | null> => {
+      const seq = ++listSeq.current;
+      listInFlight.current = true;
+      if (loud) setTargets({ status: "loading" });
       try {
         // created_at order (listStreamTargets), so the first is the org's oldest destination.
         const list = await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`);
-        if (!live) return;
+        if (seq !== listSeq.current) return null;
         setTargets({ status: "ok", list });
         // A selection that is still listed stays; one removed in Directory falls to the oldest remaining.
         setSelectedTargetId((cur) => (cur && list.some((t) => t.id === cur) ? cur : list[0]?.id ?? null));
+        return list;
       } catch {
+        if (seq !== listSeq.current) return null;
         // Spec §3.3: an unreadable list is an ERROR with Retry — never "none" (the silent catch this replaces).
-        if (live) setTargets({ status: "error" });
+        setTargets((cur) => (loud || cur.status !== "ok" ? { status: "error" } : cur));
+        return null;
+      } finally {
+        if (seq === listSeq.current) listInFlight.current = false;
       }
-    })();
-    return () => {
-      live = false;
-    };
-  }, [orgId, targetsTry]);
+    },
+    [orgId],
+  );
+  // The mount and each Retry: a loud read. No cleanup is owed — another org's read (a new `readTargets`) takes a newer
+  // sequence number, so the old answer is dropped by the rule above, and React ignores a set after unmount.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the loud read shows "loading" before it asks (as before I1)
+    void readTargets(true);
+  }, [readTargets, targetsTry]);
+  // I1: "Manage destinations" opens Directory in a NEW tab, so coming back never remounts this one — the return re-reads
+  // the list, while the picker is up. A real return fires focus AND visibilitychange: a read already in flight answers
+  // both.
+  const onTabReturn = useCallback(() => {
+    if (listInFlight.current) return;
+    void readTargets(false);
+  }, [readTargets]);
+  useTabReturn(onTabReturn, state === "idle");
 
   // The QR is rendered CLIENT-SIDE from the projection — never in page HTML. m10: keyed on the payload STRING, not the
   // object — every poll is a fresh object off the wire, and an object key re-encoded the same symbol on each. The ref
@@ -1016,15 +1042,19 @@ export function PhoneTab({
   const balance = view ? view.balance : noCredits ? 0 : streamBalance;
 
   const onGoLive = async () => {
-    if (!selectedTargetId) return;
+    const chosen = selectedTargetId;
+    if (!chosen) return;
     setBusy(true);
     setCreateError(null);
     try {
       await apiV1(`/api/v1/fixtures/${fixtureId}/stream-sessions`, {
         method: "POST",
-        json: { mode: "passthrough", targetId: selectedTargetId },
+        json: { mode: "passthrough", targetId: chosen },
       });
     } catch (err) {
+      // I1: a 404 may be the destination removed in Directory while this tab stayed open (D2 answers an archived target
+      // with the plain not-found shape). The list is read again: gone from it → say so, and the stale choice falls away
+      // with it; still listed → the 404 was about something else, and it is the generic refusal.
       const code = createErrorCode(err);
       // D12: "your plan, not your credits" is the upgrade surface, never a retry sentence.
       if (code === "plan_lacks_relay") {
@@ -1037,7 +1067,12 @@ export function PhoneTab({
         setNoCredits(true);
         setShowBuy(true);
       }
-      setCreateError({ code, holder: createErrorHolder(err) });
+      // I1: a 404 may be the destination removed in Directory while this tab stayed open (D2 answers an archived target
+      // with the plain not-found shape). The list is read again: gone from it → say so, and the stale choice falls away
+      // with it; still listed → the 404 was about something else, and it is the generic refusal.
+      const removed =
+        createErrorIsNotFound(err) && (await readTargets(false).then((list) => list !== null && !list.some((t) => t.id === chosen)));
+      setCreateError({ code: removed ? TARGET_REMOVED : code, holder: createErrorHolder(err) });
     }
     // Either way the server's state is the answer: the new session, or — after a refusal — whatever is there (an
     // `active_session` refusal's running session IS the explanation; a dismissed card stays dismissed).

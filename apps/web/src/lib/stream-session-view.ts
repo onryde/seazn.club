@@ -176,6 +176,19 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   return "unknown";
 }
 
+/** I1 (B4 review): a Go live answered 404 whose chosen destination a re-read of the list no longer holds — removed in
+ *  Directory while this tab stayed open. Never a wire code: D2 keeps the archived target on the EXISTING not-found shape
+ *  (a code-less 404, as a gone fixture is), so the Phone tab decides it after that re-read, not `createErrorCode`. */
+export const TARGET_REMOVED = "target_removed" as const;
+/** Every create refusal the Phone tab can show: the wire's (`CreateErrorCode`) plus the one it decides itself. */
+export type CreateFailureCode = CreateErrorCode | typeof TARGET_REMOVED;
+
+/** A create answered 404, read structurally off the `ApiV1Error` (`status`) — `false` for anything else, including an
+ *  error that never reached the server. */
+export function createErrorIsNotFound(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { status?: unknown }).status === 404;
+}
+
 export type CreateErrorHolder = {
   courtName: string | null; label: string; matchNo: number | null; href: string | null; state: "live" | "waiting";
 };
@@ -211,8 +224,9 @@ export function inUseText(msg: Msg, h: CreateErrorHolder): string {
 
 /** The refusal's sentence. `target_in_use` names the destination, the match and its court (`inUseText`); without a
  *  holder it says "another match" rather than render a hole. */
-export function createErrorText(error: { code: CreateErrorCode; holder: CreateErrorHolder | null }, msg: Msg): string {
+export function createErrorText(error: { code: CreateFailureCode; holder: CreateErrorHolder | null }, msg: Msg): string {
   if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
+  if (error.code === TARGET_REMOVED) return msg("stream.error.target_removed");
   return msg(CREATE_ERROR_KEYS[error.code]);
 }
 
