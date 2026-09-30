@@ -19,23 +19,23 @@
     "formula": "runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs",
     "value": 1731,
     "pairTargets": 2593,
-    "l3GapRuns": 1
+    "l3GapRuns": 0
   },
   "l3": {
     "formula": "Σ cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases",
     "lifecycle": 231,
-    "atomicApplicable": 15229,
-    "bound": 118,
-    "variantCasesScorable": 1001,
-    "variantCasesUnscorable": 64,
+    "atomicApplicable": 15246,
+    "bound": 121,
+    "variantCasesScorable": 1025,
+    "variantCasesUnscorable": 40,
     "denied": 7,
     "regressions": 5,
-    "value": 16473
+    "value": 16514
   },
   "drops": {
-    "total": 4868,
-    "harnessGap": 14,
-    "unscorableOnly": 3,
+    "total": 4851,
+    "harnessGap": 0,
+    "unscorableOnly": 0,
     "byScenario": {
       "LIFECYCLE": 0,
       "R1": 0,
@@ -64,7 +64,7 @@
       "M3": 0,
       "M4a": 0,
       "M4b": 210,
-      "M5": 152,
+      "M5": 135,
       "M6": 126,
       "M7a": 0,
       "M7b": 0,
@@ -142,8 +142,8 @@
       "hockey": 86
     },
     "cases": 1065,
-    "scorable": 1001,
-    "unscorable": 64,
+    "scorable": 1025,
+    "unscorable": 40,
     "engineUnscorable": {
       "count": 40,
       "routedTo": "W2",
@@ -192,35 +192,10 @@
       ]
     },
     "generatorUnsupported": {
-      "count": 24,
-      "routedTo": "W1-driving",
-      "why": "the stream generator does not build this cfg yet (GeneratorUnsupported: cricket's two-innings presets)",
-      "ids": [
-        "cricket#004",
-        "cricket#008",
-        "cricket#012",
-        "cricket#016",
-        "cricket#020",
-        "cricket#024",
-        "cricket#028",
-        "cricket#032",
-        "cricket#036",
-        "cricket#040",
-        "cricket#044",
-        "cricket#048",
-        "cricket#052",
-        "cricket#056",
-        "cricket#060",
-        "cricket#064",
-        "cricket#068",
-        "cricket#072",
-        "cricket#076",
-        "cricket#080",
-        "cricket#084",
-        "cricket#085",
-        "cricket#106",
-        "cricket#107"
-      ]
+      "count": 0,
+      "routedTo": "W2",
+      "why": "the stream generator does not build this cfg yet (GeneratorUnsupported): generator breadth, owed by W2",
+      "ids": []
     },
     "noOp": {
       "count": 35,

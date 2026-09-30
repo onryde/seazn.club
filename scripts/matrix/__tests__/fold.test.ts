@@ -132,13 +132,18 @@ describe("fold", () => {
 describe("generic streams + matchesRequest", () => {
   // Discovery guard: an emptied ALL_OUTCOMES would delete every it.each row
   // below and leave the file green having checked nothing (R25).
-  it("ALL_OUTCOMES is the six requested outcomes, labels distinct", () => {
+  it("ALL_OUTCOMES is the seven requested outcomes, labels distinct (ruling 44 adds the tie)", () => {
     const labels = ALL_OUTCOMES.map(outcomeLabel);
-    expect(labels).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon"]);
+    expect(labels).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
     expect(new Set(labels).size).toBe(labels.length);
   });
 
-  it.each(ALL_OUTCOMES.map((o) => [outcomeLabel(o), o] as const))("score variant, league: %s folds to what was asked", (_l, o) => {
+  it("a tie on generic is OutcomeUnreachable: its generator declares no level result (generic's engine never emits a tie)", () => {
+    expect(genericGenerator.tied).toBeUndefined();
+    expect(() => generateStream(req("score", { kind: "tie" }))).toThrow(OutcomeUnreachable);
+  });
+
+  it.each(ALL_OUTCOMES.filter((o) => o.kind !== "tie").map((o) => [outcomeLabel(o), o] as const))("score variant, league: %s folds to what was asked", (_l, o) => {
     const r = req("score", o);
     const folded = foldStream(sportModule("generic"), r.cfg, H, A, generateStream(r));
     expect(matchesRequest(r, folded.outcome)).toBe(o.kind === "abandon" ? "unasserted" : "match");

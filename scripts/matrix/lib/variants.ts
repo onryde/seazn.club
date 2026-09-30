@@ -256,8 +256,9 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
 
 /** The refusals a generate-then-fold may answer with: the engine's own, and the
  *  stream registry's declared generator gap. Anything else is a harness fault —
- *  including OutcomeUnreachable, the registry's DRAW guard: scorable asks only
- *  for wins, so it cannot be a reason here (final batch FB-13). */
+ *  including OutcomeUnreachable, the registry's level-result guard (a draw or
+ *  a tie the sport cannot reach): scorable asks only for wins, so it cannot be
+ *  a reason here (final batch FB-13). */
 const SCORABLE_REFUSALS = [EngineError, GeneratorUnsupported] as const;
 
 /** Can the harness score a fixture under this case? Win for each side, on the

@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   SPORT_RULES, buildRuleOverride, showsOnePointsField, visibleRuleFields, type RuleField,
 } from "../../../apps/web/src/lib/match-rules.ts";
-import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
@@ -422,20 +422,17 @@ describe("scorability (the generatability sweep)", () => {
     // single-sport: any schema-invalid override will do; cricket's playersPerSide is a declared integer.
     expect(scorable({ id: "x", sport: "cricket", row: "league", preset: "t20", classes: {}, values: {}, overrides: { playersPerSide: "eleven" }, scorable: null })).toMatch(/^cfg: /);
   });
-  it("a declared generator gap (KNOWN_UNSUPPORTED win entries) is a reason naming the gap, never null", () => {
-    // The committed gap list is the expected side: `${sport}:${variant}:${stageKind}:win-…`,
-    // reached through a row whose FIRST stage has that kind.
+  it("a declared generator gap is a reason naming the gap, never null (registry sweep; KNOWN_UNSUPPORTED is empty since ruling 44, so a stub carries it)", () => {
+    // The committed gap list no longer supplies a carrier: ruling 44 built the last gap (cricket two innings).
+    expect(KNOWN_UNSUPPORTED).toEqual([]);
     let judged = 0;
-    for (const entry of KNOWN_UNSUPPORTED) {
-      const [sport, preset, kind, outcome] = entry.split(":") as [string, string, string, string];
-      if (!outcome.startsWith("win-")) continue;
-      const row = ROW_KEYS.find((r) => stagesForRow(r)[0]!.kind === kind);
-      expect(row, `${entry}: no row opens with a ${kind} stage`).toBeDefined();
-      const reason = scorable({ id: "x", sport, row: row!, preset, classes: {}, values: {}, overrides: {}, scorable: null });
-      expect(reason, entry).toMatch(/^win-home: GeneratorUnsupported: /);
+    for (const s of SPORT_KEYS) {
+      const gap = () => { throw new GeneratorUnsupported(s, "win-home", "declared gap"); };
+      const vc = { id: "x", sport: s, row: "league" as const, preset: offlineBuilderDefault(s), classes: {}, values: {}, overrides: {}, scorable: null };
+      expect(scorable(vc, { generate: gap }), s).toMatch(/^win-home: GeneratorUnsupported: /);
       judged++;
     }
-    expect(judged).toBeGreaterThan(0);
+    expect(judged).toBe(SPORT_KEYS.length);
   });
   it("a stream whose fold is not the requested winner is a reason naming the side, never null (registry sweep)", () => {
     // The generator answers every request with the OTHER side's win: the fold then disagrees.
@@ -458,7 +455,7 @@ describe("scorability (the generatability sweep)", () => {
     // Positive pair: the same call shape with a refusal the engine declares is a reason.
     expect(scorable({ ...vc, overrides: { resultMode: "no-such-mode" } })).toMatch(/^cfg: CfgInvalid: /);
   });
-  it("final batch FB-13 (premise): scorable asks only for wins, across the registry — OutcomeUnreachable is the registry's DRAW guard, so on a win it can only be a harness fault", () => {
+  it("final batch FB-13 (premise): scorable asks only for wins, across the registry — OutcomeUnreachable is the registry's LEVEL-RESULT guard (draw, tie), so on a win it can only be a harness fault", () => {
     // Registry sweep: record what scorable actually requests, per sport.
     const asked: string[] = [];
     let judged = 0;
@@ -471,8 +468,13 @@ describe("scorability (the generatability sweep)", () => {
     expect(judged).toBe(SPORT_KEYS.length);
     expect(asked.length, "scorable asked for no stream at all").toBeGreaterThan(0);
     expect([...new Set(asked)], "the premise: only wins are ever requested").toEqual(["win"]);
-    // The engine's draw guard is where the registry throws it (the only throw site).
-    expect(src("scripts/matrix/lib/streams/index.ts").match(/throw new OutcomeUnreachable\(/g)?.length).toBe(1);
+    // The registry throws it at its two level-result guards only (ruling 44 added the tie's): each
+    // throw site sits under an `o.kind === "draw"` or `o.kind === "tie"` test, never under a win.
+    const lines = src("scripts/matrix/lib/streams/index.ts").split("\n");
+    const sites = lines.flatMap((l, i) => (/throw new OutcomeUnreachable\(/.test(l) ? [i] : []));
+    expect(sites.length).toBe(2);
+    const guards = sites.map((i) => lines.slice(Math.max(0, i - 2), i + 1).join(" ").match(/o\.kind === "(draw|tie)"/)?.[1] ?? null);
+    expect(guards.sort()).toEqual(["draw", "tie"]);
   });
   it("final batch FB-13: a stubbed OutcomeUnreachable on a win is rethrown, while the declared GeneratorUnsupported gap stays a reason", () => {
     // single-sport: the fault is the harness's; generic's default preset is the plainest carrier.
@@ -495,13 +497,11 @@ describe("scorability (the generatability sweep)", () => {
     expect(n).toBeGreaterThan(0);
     expect(reasons, "at least one case must carry a reason, or the wiring check cannot tell null from wired").toBeGreaterThan(0);
   });
-  it("every generated cricket `test`-preset case on a declared gap's stage kind carries that gap (KNOWN_UNSUPPORTED is the expected side)", () => {
-    const kinds = new Set(KNOWN_UNSUPPORTED.filter((k) => k.startsWith("cricket:test:") && k.endsWith(":win-home")).map((k) => k.split(":")[2]!));
-    expect(kinds.size).toBeGreaterThan(0);
+  it("every generated cricket `test`-preset case is scorable: the two-innings generator exists (ruling 44), so no case carries a generator gap", () => {
     let judged = 0;
     for (const c of ALL.find((v) => v.sport === "cricket")!.cases) {
-      if (c.preset !== "test" || !kinds.has(stagesForRow(c.row)[0]!.kind)) continue;
-      expect(c.scorable, c.id).toMatch(/^win-home: GeneratorUnsupported: /);
+      if (c.preset !== "test") continue;
+      expect(c.scorable, c.id).toBeNull();
       judged++;
     }
     expect(judged).toBeGreaterThan(0);

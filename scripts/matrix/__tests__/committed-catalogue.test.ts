@@ -316,7 +316,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     for (const id of L3_IDS) expect(c.drops.byScenario[id]! + floors.perScenarioL3[id]!, id).toBe(CELLS);
   });
 
-  it("variant cases split scorable / engine-unscorable (W2) / generator-unsupported (W1-driving) — every case re-classified by an independent generate-and-fold, counted (I-1)", () => {
+  it("variant cases split scorable / engine-unscorable (W2) / generator-unsupported (W2, generator breadth; none since ruling 44) — every case re-classified by an independent generate-and-fold, counted (I-1)", () => {
     const c = parsed<CountsFile>("counts.json");
     const v = parsed<VariantsFile>("variants.json");
     const got: Record<VariantClass, string[]> = { scorable: [], engine: [], generator: [] };
@@ -330,16 +330,18 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(c.variants.cases).toBe(total);
     expect(c.variants.scorable).toBe(got.scorable.length);
     expect(c.variants.engineUnscorable).toEqual({ count: got.engine.length, routedTo: "W2", why: expect.any(String), ids: got.engine });
-    expect(c.variants.generatorUnsupported).toEqual({ count: got.generator.length, routedTo: "W1-driving", why: expect.any(String), ids: got.generator });
+    expect(c.variants.generatorUnsupported).toEqual({ count: got.generator.length, routedTo: "W2", why: expect.any(String), ids: got.generator });
     expect(c.variants.unscorable).toBe(got.engine.length + got.generator.length);
     expect(c.variants.scorable + c.variants.unscorable).toBe(total);
     // The committed per-case field agrees with the independent fold.
     expect(v.sports.flatMap((s) => s.cases.filter((x) => x.scorable === null).map((x) => x.id))).toEqual(got.scorable);
-    // Anti-vacuity: both unscorable classes are live today (set-to-1 at
-    // win-by-2 refused by the engine, ruling 31; cricket `test` two-innings
-    // streams).
+    // Anti-vacuity: the engine class is live today (set-to-1 at win-by-2
+    // refused by the engine, ruling 31). The generator class is empty since
+    // ruling 44 built cricket's two-innings streams — the independent fold
+    // above still judges every case, so a new gap cannot hide in it.
     expect(got.engine.length).toBeGreaterThan(0);
-    expect(got.generator.length).toBeGreaterThan(0);
+    expect(got.generator).toEqual([]);
+    expect(got.scorable.length).toBeGreaterThan(0);
     console.info(`committed-catalogue: ${judged} variant cases folded — ${got.scorable.length} scorable, ${got.engine.length} engine-unscorable, ${got.generator.length} generator-unsupported`);
   });
 
@@ -401,13 +403,12 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
       if (g.kind === "unscorable-only") expect(g.reason, g.scenario).toMatch(/cannot be scored by the harness/);
     }
     expect(judged).toBe(d.total);
-    // Anti-vacuity: both non-default kinds are live today — M5 is a cricket tie
-    // in a bracket (harness gap), and M5 at americano/mexicano/ladder|cricket is
-    // enabled only by the unscorable two-innings variants. If W1-driving gives
-    // the generator a tie outcome or two-innings streams, drop the matching
-    // line (the recount above still judges every drop).
-    expect(d.harnessGap).toBeGreaterThan(0);
-    expect(d.unscorableOnly).toBeGreaterThan(0);
+    // Both non-default kinds reached zero with ruling 44 (the generator's tie
+    // outcome lifted M5's harness gap; its two-innings streams made the
+    // variants that enable M5 at americano/mexicano/ladder|cricket scorable).
+    // The recount above still judges every drop, so either kind returning is
+    // caught; applicability.test.ts drives both arms synthetically.
+    expect(judged).toBeGreaterThan(0);
     console.info(`committed-catalogue: ${judged} drops judged — ${d.inapplicable} inapplicable, ${d.harnessGap} harness gaps, ${d.unscorableOnly} unscorable-only, ${d.groups.length} groups`);
   });
 });

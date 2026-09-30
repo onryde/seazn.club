@@ -1,6 +1,7 @@
 // One registry, one entry point. Forfeit and abandon are UNIVERSAL core events
 // (core/forfeit-reason.test.ts pins forfeit for all 11 modules), so they are
-// composed here; a sport generator only builds a win or a draw.
+// composed here; a sport generator builds a win or a draw (decided) and, where
+// its engine can end level, a tie (tied).
 import type { MatchOutcome } from "@seazn/engine/core";
 import { drawsAllowed } from "../sport-cfg.ts";
 import { boardgameGenerator } from "./boardgame.ts";
@@ -54,6 +55,10 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   if (o.kind === "draw" && !drawsAllowed(req.sportKey, req.cfg, req.stageKind)) {
     throw new OutcomeUnreachable(req.sportKey, label, `supportsDraws(cfg, '${req.stageKind}') is false`);
   }
+  if (o.kind === "tie") {
+    if (gen.tied === undefined) throw new OutcomeUnreachable(req.sportKey, label, "the sport's generator declares no level result");
+    return gen.tied(req);
+  }
   return gen.decided(req as DecidedRequest);
 }
 
@@ -66,6 +71,7 @@ export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null)
   if (o.kind === "abandon") return "unasserted";
   if (outcome === null) return "mismatch";
   if (o.kind === "draw") return outcome.kind === "draw" ? "match" : "mismatch";
+  if (o.kind === "tie") return outcome.kind === "tie" ? "match" : "mismatch";
   if (o.kind === "win") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) ? "match" : "mismatch";
   const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
   return (outcome.kind === "award" || outcome.kind === "win") && outcome.winner === beneficiary ? "match" : "mismatch";

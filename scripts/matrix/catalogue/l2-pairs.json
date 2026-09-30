@@ -6936,7 +6936,7 @@
         "row",
         "sport"
       ],
-      "l3Gap": "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving"
+      "l3Gap": null
     },
     {
       "n": 515,

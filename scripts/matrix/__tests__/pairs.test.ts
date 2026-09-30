@@ -120,13 +120,12 @@ describe("L2 pair file", () => {
       expect({ preset: x.preset, bound: x.bound, l3Gap: x.l3Gap }, `${x.scenario} ${x.row}|${x.sport}`).toEqual({ preset: o.preset, bound: o.bound, l3Gap: o.gap });
       if (x.l3Gap !== null) gapRuns++;
     }
-    // Anti-vacuity: the gap arm is live in today's catalogue (M5, a cricket
-    // tie in a bracket — Rule.gap). If W1-driving gives the generator a tie
-    // outcome this legitimately reaches zero: then drop this line, the
-    // synthetic gap test below still drives the arm.
+    // The gap arm reached zero with ruling 44 (the generator's tie outcome
+    // lifted M5's Rule.gap); the synthetic gap test below still drives it.
     const gapOwed = L2_IDS.reduce((n, id) => n + [...TRUTH.get(id)!.values()].filter((o) => o.gap !== null).length, 0);
-    expect(gapOwed).toBeGreaterThan(0);
-    expect(gapRuns).toBeGreaterThan(0);
+    // A run can carry the mark only where a gap-only pair is owed (the loop pins each run's l3Gap to decide's).
+    if (gapOwed === 0) expect(gapRuns).toBe(0);
+    expect(plan.runs.length).toBeGreaterThan(0);
     console.info(`pairs: ${plan.runs.length} runs checked against decide, ${gapRuns} marked l3Gap (${gapOwed} gap-only pairs owed)`);
   });
 

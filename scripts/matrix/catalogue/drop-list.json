@@ -7,10 +7,10 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 4868,
+  "total": 4851,
   "inapplicable": 4851,
-  "harnessGap": 14,
-  "unscorableOnly": 3,
+  "harnessGap": 0,
+  "unscorableOnly": 0,
   "groups": [
     {
       "scenario": "R4b",
@@ -1737,56 +1737,6 @@
     },
     {
       "scenario": "M5",
-      "kind": "harness-gap",
-      "reason": "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving; it applies at 42: t20 (builder default), cricket#002, cricket#003, …; the other committed variants that enable it (24: cricket#004, cricket#008, cricket#012, …) cannot be scored by the harness",
-      "count": 14,
-      "cells": {
-        "league_ko": [
-          "cricket"
-        ],
-        "groups_ko": [
-          "cricket"
-        ],
-        "group_stepladder": [
-          "cricket"
-        ],
-        "group_playoffs": [
-          "cricket"
-        ],
-        "swiss_playoff": [
-          "cricket"
-        ],
-        "swiss_knockout": [
-          "cricket"
-        ],
-        "knockout": [
-          "cricket"
-        ],
-        "ko_plate": [
-          "cricket"
-        ],
-        "qualifying_main": [
-          "cricket"
-        ],
-        "double_elim": [
-          "cricket"
-        ],
-        "group_group_ko": [
-          "cricket"
-        ],
-        "knockout_third_place": [
-          "cricket"
-        ],
-        "page_playoff_only": [
-          "cricket"
-        ],
-        "stepladder_only": [
-          "cricket"
-        ]
-      }
-    },
-    {
-      "scenario": "M5",
       "kind": "inapplicable",
       "reason": "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing) — no committed variant enables it",
       "count": 135,
@@ -1967,23 +1917,6 @@
           "badminton",
           "tabletennis",
           "tennis"
-        ]
-      }
-    },
-    {
-      "scenario": "M5",
-      "kind": "unscorable-only",
-      "reason": "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing) — the committed variants that enable it (24: cricket#004, cricket#008, cricket#012, …) cannot be scored by the harness",
-      "count": 3,
-      "cells": {
-        "americano": [
-          "cricket"
-        ],
-        "mexicano": [
-          "cricket"
-        ],
-        "ladder": [
-          "cricket"
         ]
       }
     },

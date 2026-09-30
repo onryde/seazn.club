@@ -59,14 +59,24 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
 }
 const req = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "league", home: HOME, away: AWAY, outcome });
 
-/** Every request over every system variant of `sport`. The builder default
- *  (offlineBuilderDefault, pinned to division-builder.tsx by catalogue.test.ts)
- *  comes first, and it is what PADPROOF plays. */
+/** A cfg the sport's pad route refuses by name: cricket's over route covers
+ *  single-innings cricket only (pads/cricket.ts cfgOf). Until ruling 44 the
+ *  generator refused two innings too (GeneratorUnsupported, so streamOf gave
+ *  []); it builds them now, and the pad has no route for a declaration, a
+ *  follow-on or a time close. The sweeps keep the adapter's own scope, and
+ *  "every request left out of the pad sweeps…" below pins that each request
+ *  left out here is one the adapter itself refuses with that message. */
+const outOfPadRoute = (sport: string, cfg: unknown): boolean => sport === "cricket" && (cfg as { inningsPerSide?: unknown }).inningsPerSide !== 1;
+
+/** Every request over every system variant of `sport` inside its pad route.
+ *  The builder default (offlineBuilderDefault, pinned to division-builder.tsx
+ *  by catalogue.test.ts) comes first, and it is what PADPROOF plays. */
 function requestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
   return variants.flatMap((v) => {
     const cfg = resolveSportCfg(sport, v);
+    if (outOfPadRoute(sport, cfg)) return [];
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
 }
@@ -915,6 +925,7 @@ describe("cricket", () => {
     let innings = 0;
     for (const v of variantKeys("cricket")) {
       const cfg = resolveSportCfg("cricket", v);
+      if (outOfPadRoute("cricket", cfg)) continue; // pinned below: the adapter refuses it by name
       const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
       for (const winner of ["home", "away"] as const) {
         const r = req("cricket", cfg, { kind: "win", winner });
@@ -951,6 +962,25 @@ describe("cricket", () => {
     }
     console.info(`pad-adapters: cricket: ${innings} generated innings split into overs`);
     expect(innings).toBeGreaterThanOrEqual(4); // t20 alone: 2 innings × 2 outcomes
+  });
+
+  it("every request left out of the pad sweeps (two innings a side) is one the adapter refuses by name, and the generator does build it (ruling 44)", () => {
+    let left = 0;
+    for (const v of variantKeys("cricket")) {
+      const cfg = resolveSportCfg("cricket", v);
+      if (!outOfPadRoute("cricket", cfg)) continue;
+      for (const outcome of outcomesFor("cricket", cfg)) {
+        const r = req("cricket", cfg, outcome);
+        const evs = streamOf(r);
+        const first = evs.find((e) => e.type === CRICKET_SUMMARY);
+        if (outcome.kind === "forfeit") { expect(first, `${v} ${JSON.stringify(outcome)}`).toBeUndefined(); continue; }
+        expect(first, `${v} ${JSON.stringify(outcome)}: the generator builds it`).toBeDefined();
+        cricketPad.stepsFor(START, ctxOf(r));
+        expect(() => cricketPad.stepsFor(first!, ctxOf(r)), `${v} ${JSON.stringify(outcome)}`).toThrow(/the over route covers single-innings cricket only/);
+        left++;
+      }
+    }
+    expect(left).toBeGreaterThan(0);
   });
 
   it("replayed on the fake ledger: every innings a fallback of one row per over, no finding, and the stored rows fold to the requested outcome", async () => {

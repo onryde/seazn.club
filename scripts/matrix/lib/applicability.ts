@@ -13,7 +13,7 @@ import { foldStream } from "./fold.ts";
 import { routeTo, type Route } from "./routing.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "./scenario-catalogue.ts";
 import { drawsAllowed, entrantKindsFor, resolveSportCfg, sportModule } from "./sport-cfg.ts";
-import { ALL_OUTCOMES, START, type StreamEvent } from "./streams/types.ts";
+import { START, type StreamEvent } from "./streams/types.ts";
 import { buildVariant, offlineBuilderDefault, type SportVariants } from "./variants.ts";
 
 /** One progression source, resolved to the index of the stage it takes from. */
@@ -186,8 +186,6 @@ const canTie: Predicate = (f) => f.levelFold === "tie";
 /** M5, tie arm: a tie reaches a bracket stage, which has no tied result to
  *  place. A points table pays one (cricket points.tie, cricket.ts:3923-3928). */
 const tieInBracket = and(canTie, bracket);
-/** Whether the L3 generator can request a tie at all (streams/types.ts). */
-const GENERATES_TIE = (ALL_OUTCOMES.map((o) => o.kind) as readonly string[]).includes("tie");
 /** Scoreless: generic's win_loss mode records a winner only (match-rules.ts resultMode options). */
 const scoreless: Predicate = (f) => f.sport === "generic" && f.cfg.resultMode === "win_loss";
 /** The product's own condition for the Bo1 points editor (match-rules.ts showsOnePointsField). */
@@ -302,17 +300,11 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   // a guard in applicability.test.ts folds it for every sport.
   M4a: ALWAYS,
   M4b: rule(abandonWithResult, "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
-  M5: Object.freeze({
-    ...rule(
-      or(drawRefusedHere, tieInBracket),
-      "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
-      ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
-    ),
-    gap: Object.freeze({
-      when: and(not(drawRefusedHere), tieInBracket, () => !GENERATES_TIE),
-      route: routeTo("W1-driving", "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place"),
-    }),
-  }),
+  M5: rule(
+    or(drawRefusedHere, tieInBracket),
+    "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
+    ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
+  ),
   M6: rule(decider, `the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, ${KO_TIE_AT_FIXTURE.wave}), or none is switched on under this config`, "knockout|icehockey", "knockout|badminton", true),
   M7a: ALWAYS, M7b: ALWAYS,
   M8a: rule(not(scoreless), "generic win_loss records a winner only: there is no score to correct while keeping the winner", T, { cell: T, preset: "win_loss" }, true),

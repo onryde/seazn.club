@@ -1770,7 +1770,7 @@ sign-off:
 `scripts/matrix/lib/streams/` emits any of these:
 
 - any decider: extra time, shoot-out, overtime, GWS, super over, DLS;
-- a cricket tie;
+- ~~a cricket tie;~~ struck by ruling 44 (W1-driving builds it: `streams/cricket.ts` `tied`);
 - a deciding set, except at `bestOf: 1`;
 - a set cap;
 - a tie-break set;
@@ -1778,7 +1778,7 @@ sign-off:
 - a double walkover;
 - an abandon under `abandonPolicy: "award"`;
 - any sanction;
-- a two-innings cricket win or draw.
+- ~~a two-innings cricket win or draw.~~ struck by ruling 44 (W1-driving builds it: `streams/cricket.ts` two innings a side).
 
 Forfeit and abandon are only ever sent straight after `core.start`, at 0–0. A W2 truth run without that task proves
 only what the generators already reach, and every row above would read as untested, not as passing.
