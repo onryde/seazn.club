@@ -12,7 +12,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | --- | --- | --- |
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
-| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. The final whole-branch review (Task 14 Step 11, the controller's) is next. Review verdict: pending. PR: pending. Merge: pending.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌, one tap-wait timeout during a machine-load spike, environmental (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
+| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes. Fix round 1 landed (`62d91dd48`, and the docs commit that writes this line); re-review pending. The final whole-branch review (Task 14 Step 11, the controller's) follows. PR: pending. Merge: pending.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
 | W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | not started (ruling 28) |
 | W2 | Sport scoring fidelity | not started |
@@ -294,7 +294,7 @@ the per-adapter table below are the lasting record.
 | `w1c-l2` | L2 · browser · plan `--layer L2`: the committed `l2-pairs.json` filtered to the slice cells | 68 cases: 3 ✅ (swiss\|badminton R4a@375, M1@390, F1@375), 7 🚫, 58 ░ | `w1c-l2/` |
 | `w1c-api-only` | `--set api-only-browser` at 1280 | 5 🚫, each naming its wave (W4 ×3, W5 ×2); no browser launched | `w1c-api-only/` |
 | `w1c-sweep-ko-320` … `-834` (7 runs) | knockout\|badminton LIFECYCLE at each L2 width, 320 / 360 / 375 / 390 / 430 / 768 / 834 | 1/1 ✅ at every width; no-horizontal-scroll pass 26 at each | `w1c-sweep-ko/` |
-| `w1c-pp-1280-r1..r4`, `w1c-pp-320-r1..r3` | `--set pad-proof`: 11 sports, 3-entrant league at the builder default, 3 fixtures scored on the pad and finalized | 11/11 ✅ in six of the seven runs. In 1280 r3, 10 ✅ and cricket ❌: one tap-wait timeout during a machine-load spike (environmental; see below). r4 is a fresh-id rerun: 11/11 ✅ | `w1c-padproof/` |
+| `w1c-pp-1280-r1..r4`, `w1c-pp-320-r1..r3` | `--set pad-proof`: 11 sports, 3-entrant league at the builder default, 3 fixtures scored on the pad and finalized | 11/11 ✅ in six of the seven runs. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout, cause unexplained (see below). r4 is a fresh-id run: 11/11 ✅ | `w1c-padproof/` |
 
 **Parity** (`pnpm matrix:parity`, the HTTP slice against each browser run):
 
@@ -329,17 +329,29 @@ the per-adapter table below are the lasting record.
 | icehockey | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works |
 | hockey | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works |
 
-**The one red: 1280 r3, cricket.**
+**The one red: 1280 r3, cricket. Flake finding F-PP-1, UNEXPLAINED → W1d.** The cause is not established.
 
-- **What failed.** Tap 15 of 141 in fixture 1's second innings waited the harness's 15 s floor (`FLOOR_MS`, `lib/browser/budget.ts:16`) for a
-  tile and timed out. The run kept going.
-- **The same case recovered.** Its fixtures 2 and 3 scored cleanly.
-- **What the screen shows.** The screen taken after the timeout shows the awaited "End of over 3" tile rendered and enabled.
-- **The load.** The machine's load average rose from about 18 at the run's start to 232 (1 min) at 13:52Z. The load came from processes
-  outside this run.
-- **The rerun.** `w1c-pp-1280-r4` then passed all 11 sports, cricket with the same split as the other runs.
-- **Verdict: environmental, not a product or harness defect.** No harness change was made: the budget is derived and text-pinned, and
-  widening it on this evidence would weaken the gate. W1d note: if CI shows a tap-wait timeout, measure the runner's load first.
+- **The check that failed.** `pad-ledger-as-generated`, on fixture `dabf515d-99da-4a03-8e52-c3e052c611e3` (fixture 1 of
+  the case), at event 3 of 3 (its second `cricket.innings.summary`). Tap 15 of 141, a tile, threw
+  `TimeoutError: locator.waitFor: Timeout 15000ms exceeded`. 15 s is the harness's derived floor, `FLOOR_MS`
+  (`lib/browser/budget.ts:16`). Quoted from the committed `w1c-pp-1280-r3/results.json`.
+- **What followed.** The ledger check read 3 equal / 0 tolerated / 5 fallback / 1 missing rows, plus one "stopped
+  after event 3 of 3" finding: 10 evidence items, not 10 rows. The fixture stayed in play, so it also fails the
+  finalize, outcome, fold and I4 checks. Fixtures 2 and 3 of the same case scored cleanly.
+- **Timings seen** (results.json `durationMs`; shot file times). The case took 405 s, against 288 s (r1) and
+  295 s (r2). Fixture 1 took 187 s to the post-timeout shot, against 106 s for the whole fixture in r1; fixtures 2
+  and 3 took 86 s and 94 s, against 80 s each.
+- **What the screen shows.** The shot taken after the timeout shows the "End of over 3" tile present and enabled.
+  It was present by the time of that shot; when it arrived was not measured.
+- **Unknown.** Whether the awaited locator was ever attached, whether the pad's sync or poll stalled, and what the
+  machine was doing at the failing tap.
+- **Hypothesis (not established): machine load.** The one `uptime` sample (232 / 199 / 114) was taken at 13:52Z,
+  about 4 minutes after the failing tap. Fixture 2 ran at near-normal pace across that sample, which weakens it.
+- **Recurrence: not measured — no single-sport scope.** `--set pad-proof` refuses `--only` (`run.ts:468-469`,
+  `lib/pad-proof-set.ts:16`), so cricket cannot run alone without a code change. The fresh-id run
+  `w1c-pp-1280-r4` passed all 11 sports: one more pass, not an explanation.
+- **→ W1d:** capture tap timestamps or a trace on a tap-wait timeout before judging; give pad proof a single-sport
+  scope so recurrence can be measured. No harness change was made in W1c. Full record: `w1c-padproof/README.md`.
 
 **Per-screen verdicts (class 11).** Each verdict was read from contact sheets of every distinct screen.
 
@@ -355,11 +367,18 @@ Across all of them, every after-shot differs from its before-shot, except the na
 
 1. **Knockout and swiss score their first fixture on the pad.** Pad policy `first` passed `pad-ledger-as-generated`
    on all four knockout/swiss L1 cells in every run, with every row equal (`w1c-l1/README.md`).
-2. **Run-sheet shot after the filter widens.** `ea148cca0` (`showAllFixtures`). At 1280 the filter already reads
-   "All", so the shot is a single named baseline.
-3. **Committed-matrix `decideState` consistency.** It skips a planned 🚫/░ case with no checks. It counts what it
-   checked and what it skipped, and fails at zero checked. A version with no exceptions went red first on exactly the 70 planned
-   rows. Over the committed tree it re-decides 199 cases in 33 files and skips 71. Four mutants were killed. Commit `342d49cfc`.
+2. **Run-sheet shot after the filter widens.** `ea148cca0` (`showAllFixtures`). The filter read "All" at every
+   width in every run, so the shot is a single named baseline. **The press branch never ran live:** 0
+   `run-sheet-all-before` shots across all 91 live cases. The product defaults to "Today" only on a match day
+   (`stages-panel.tsx:555`), and no matrix run reaches one (false premise, "Found during W1c", Task 14). The
+   match-day default is never driven → **W1d**.
+3. **Committed-matrix `decideState` consistency.** First version `342d49cfc`: it skipped a planned 🚫/░ case by
+   state alone, under `skipped >= 70` and `checked >= 177` floors, so a DRIVEN case stored as planned with its checks
+   lost passed (review I-1). Fix round 1 (`62d91dd48`): each committed results.json is judged against the plan named
+   by its recorded `plan`, rebuilt by the runner's own planners. A planned row must be exactly the plan's; a driven
+   case must never be stored as planned; no case may be missing, stray or repeated. Exact over the committed tree:
+   33 files, 200 driven, 70 planned. RED first on a probe flipping w1c-l2's driven R4a@375 to not_run; 9 of 9
+   mutants killed.
 4. **`l3Gap` is never recorded.** The only run the catalogue marks is run 514, `groups_ko|cricket|t20|M5@375`. That
    run is outside the slice, and M5 is unscripted. The type is kept, and the final review decides
    (`w1c-l1/README.md`).
@@ -381,21 +400,17 @@ Across all of them, every after-shot differs from its before-shot, except the na
   its run directory.
 - `b7668c0ff`: carry 5.
 - `342d49cfc`: carry 3.
+- `62d91dd48` (fix round 1): carry 3 judged per run against its own plan (review I-1, m-2 to m-6).
 
-**Owner questions this task raises (recommendations, not rulings; class 17).**
+**Owner ruling 43 (2026-09-30) settles both questions this task raised.**
 
-- **The sweep cell.** Ruling 39's text names `league|badminton` for the width sweep. Task 14 ran it on
-  `knockout|badminton` instead, on the controller's recommendation. Knockout was otherwise never driven below 1280:
-  the L2 rotation drew only swiss\|badminton. The league sweep (`--set width-sweep`) was not run. Is knockout
-  acceptable, or is the league sweep owed as well?
-- **D7 as executed differs from D7 as accepted (ruling 40).** D7 said the API-only rows are created over HTTP, then
-  driven in the browser from Generate onward, each with a failing `organiser-ui-path` check (❌) naming its wave.
-  Task 12 followed the controller's dispatch ruling instead: the rows are planned 🚫 with `{wave, reason}` and no
-  browser opens. Either reading keeps the rows on their waves' backlogs. The difference is ❌ against 🚫, and
-  whether Generate is ever driven on these formats in W1c. The owner has not ruled on the change.
+- **The sweep cell.** The width sweep on `knockout|badminton` stands, in place of ruling 39's `league|badminton`.
+  Knockout was otherwise never driven below 1280: the L2 rotation drew only swiss\|badminton.
+- **D7 as executed.** The API-only set runs as planned 🚫 `no_path` `{wave, reason}` with no browser, not as ❌
+  `organiser-ui-path` from Generate onward.
 
-**Status.** Task 14 Step 11 (the whole-branch review) is the controller's: pending. PR: pending. Merge:
-pending.
+**Status.** Task 14+15 review: Needs fixes (2026-09-30); fix round 1 landed, re-review pending. Task 14 Step 11
+(the whole-branch review) is the controller's: pending. PR: pending. Merge: pending.
 
 ### Per-adapter status for W1d
 
@@ -411,7 +426,7 @@ run except 1280 r3's cricket, which is named in its row.
 | sport | builder default | route per emitted event type | rosters | pad proof 1280 r1–r4 | pad proof 320 r1–r3 | ledger rows (equal / tolerated / fallback) | what W1d may assume |
 |---|---|---|---|---|---|---|---|
 | football | 11-a-side | `core.start` one-for-one; `football.period` one-for-one (period tile → HT / FT choice); `football.goal` **fallback** — the goal tile writes `{by}` only, and the generated `minute` has no tap (`football.tsx:769`); judged on `by` | none — team entrants with 0 members (PADPROOF only) | ✅ ✅ ✅ ✅ | ✅ ✅ ✅ | 11 = 9/0/2 in all 7 clean runs | pad proven; L1/L2 cells ⏳ W1-driving (team rosters) until rosters are seeded |
-| cricket | t20 | `core.start` one-for-one; `cricket.innings.summary` **fallback** — the pad authors an innings only as cumulative per-over summaries (`partial: true`, one row per over, `cricket.tsx:2585`), and the innings closes itself; rows = ⌈legalBalls / 6⌉; judged on the last cumulative row | none — team entrants with 0 members (PADPROOF only); T11-O1: the rosterless pad shows "No bowler is eligible…" while scoring works | ✅ ✅ ❌ ✅ | ✅ ✅ ✅ | 9 = 3/0/6 in all 6 clean runs. 1280 r3 ❌: one tap timed out during a machine-load spike, ledger 10 = 4/0/5 + 1 missing (environmental; `w1c-padproof/README.md`) | pad proven on single-innings variants whose innings end themselves; an innings that would need an explicit close is refused by name; L1/L2 ⏳ W1-driving (team rosters) |
+| cricket | t20 | `core.start` one-for-one; `cricket.innings.summary` **fallback** — the pad authors an innings only as cumulative per-over summaries (`partial: true`, one row per over, `cricket.tsx:2585`), and the innings closes itself; rows = ⌈legalBalls / 6⌉; judged on the last cumulative row | none — team entrants with 0 members (PADPROOF only); T11-O1: the rosterless pad shows "No bowler is eligible…" while scoring works | ✅ ✅ ❌ ✅ | ✅ ✅ ✅ | 9 = 3/0/6 in all 6 clean runs. 1280 r3 ❌: flake finding F-PP-1, one tap-wait timeout, cause unexplained; 10 evidence items = 3/0/5 + 1 missing + 1 stop finding (→ W1d; `w1c-padproof/README.md`) | pad proven on single-innings variants whose innings end themselves; an innings that would need an explicit close is refused by name; L1/L2 ⏳ W1-driving (team rosters) |
 | boardgame | blitz | `core.start` one-for-one; `boardgame.result` one-for-one (half + `method:checkmate` chip; draw tile + `method:agreement` chip, the chip being required) | none (individual) | ✅ ✅ ✅ ✅ | ✅ ✅ ✅ | 6 = 6/0/0 in all 7 clean runs | pad proven; the L1 cell can run at the builder default |
 | carrom | club-29 | `core.start` one-for-one; `carrom.board.summary` one-for-one (board tile → winner → coins left); `queenTo: null` is read as absent | none (individual) | ✅ ✅ ✅ ✅ | ✅ ✅ ✅ | 27 = 27/0/0 in all 7 clean runs | pad proven; the L1 cell can run at the builder default |
 | generic | score | `core.start` one-for-one; `generic.result` one-for-one (bench `genericAdapter` score sheet; draw tile) | none (individual) | ✅ ✅ ✅ ✅ | ✅ ✅ ✅ | 6 = 6/0/0 in all 7 clean runs | pad proven; L1 cells run today (slice) |
@@ -707,6 +722,12 @@ a peer session as the other.
       - The same engine → rulebook → generator audit runs before each of W3–W7.
       - The specific rows in the checklist are the controller's audit. They are an input for recommendations, not an
         owner ruling on each row (class 17).
+43. **Task 14's two recommendations are accepted** (2026-09-30; relayed by the controller and recorded in the W1c
+    ledger, `.superpowers/sdd/2026-09-29-format-matrix-w1c/progress.md`, gitignored).
+    - (a) **The width sweep on the KNOCKOUT cell stands.** `knockout|badminton` at all seven widths, in place of
+      ruling 39's `league|badminton`. The league sweep (`--set width-sweep`) is not owed by W1c.
+    - (b) **The API-only set runs as planned 🚫 `no_path` with no browser,** each row naming its wave and reason, not
+      ❌ `organiser-ui-path` from Generate onward as D7 (ruling 40) said.
 
 ## Recommendations (mine — not rulings)
 
@@ -752,15 +773,14 @@ a peer session as the other.
   - **D7 (API-only rows): accepted, ruling 40.**
     - *Executed differently:* the rows are planned 🚫 `{wave, reason}` with no browser. D7 said browser from
       Generate onward, with ❌ `organiser-ui-path`.
-    - The change is the controller's (Task 12 dispatch). It is an owner question, recorded under "W1c session
-      status".
+    - The change came from the controller's Task 12 dispatch. **Owner ruling 43(b) (2026-09-30) accepts it.**
   - **D8 (no-horizontal-scroll is a check at every captured state): accepted, ruling 40.** It passed at every
     width in every run.
   - **D9 (results schema v3: layer, driver, width): accepted, ruling 40.** Task 14 added `plan` to the same
     schema (carry 6, `3c36ea1b3`).
 - **For W1c Task 14 (controller): run the width sweep on a knockout cell, and include 768/834.** Knockout was never
   driven below 1280: the L2 rotation drew only swiss\|badminton. The sweep ran on `knockout|badminton` at all seven
-  widths. The owner has been told, but has **not ruled**. Ruling 39's text names `league|badminton`.
+  widths. **Owner ruling 43(a) (2026-09-30) accepts it** in place of ruling 39's `league|badminton`.
 - **For W1d (from W1c Task 14):** read `layers.ts:218-229` before running parity on the API-only set. Its 🚫 cases
   are recorded under LIFECYCLE, so parity exits 1 there by construction. The final review decides which of these
   to pick:
@@ -826,11 +846,10 @@ because they are owner rulings: the batching (ruling 41) and the enumerate-every
   - I-1: a fallback is judged (`Fallback.judge`), never waved through.
   - D-T9-2: `rosterlessTeams` for PADPROOF only. LIFECYCLE and every other scenario keep deferring team rosters to
     W1-driving.
-- **Task 12 dispatch.** The API-only set is planned 🚫 `{wave, reason}` ("API-only abstain"). This departs from D7
-  as accepted; see "W1c session status".
+- **Task 12 dispatch.** The API-only set is planned 🚫 `{wave, reason}` ("API-only abstain"). This departed from D7
+  as accepted; owner ruling 43(b) (2026-09-30) accepts it.
 - **Task 12 carry.** `LayerCase.noPath` is `{wave, reason}`.
-- **Task 14 carry.** Run the width sweep on a knockout cell. This is a recommendation surfaced to the owner, and is
-  not ruled.
+- **Task 14 carry.** Run the width sweep on a knockout cell. Owner ruling 43(a) (2026-09-30) accepts it.
 
 ## Decision log
 
@@ -1293,6 +1312,9 @@ branch changed is the root `package.json`, cited without a line). The
   - **P-4 is not 320-only.** At 320–390 the entrants STATUS/ACTIONS columns reach the card edge (`w1c-sweep-ko`).
   - **O-1 is not league-only.** A knockout's Generate after Start is also "Nothing new to generate", because it builds
     every round at Start.
+  - **The run sheet does not default to "Today" off a match day** (plan Appendix A said it does). The product
+    defaults to "Today" only when the phase is `match_day`, else "All" (`stages-panel.tsx:555`). No matrix run
+    reaches a match day, so carry 2's press branch never ran live (0 `run-sheet-all-before` shots in 91 live cases).
 
 ## Findings routed (W1b)
 
@@ -1470,7 +1492,8 @@ product changes (D4).
   - Evidence: `w1c-l2/evidence/N-4-scroll-fade-stranded-375.png`.
   - → **W10** (sweep lane; shared CSS).
 - **N-2 (soft): "Generated 4 fixture(s) (0 already existed)."** The "(s)" pluralisation is in
-  `dictionaries/en/ui.json:1897` (`schedule.notice.generated`). Seen on swiss Generate (`w1c-l1` case-5). → **W3**.
+  `dictionaries/en/ui.json:1897` (`schedule.notice.generated`). Seen on swiss Generate (`w1c-l1` case-5). The key is
+  format-agnostic, so → **W10**, as for N-4.
 - **N-3 (soft; an owner question): the same scorerless goal reads two ways.** Hockey and ice hockey show "Goal ·
   PARTIAL"; football shows "Goal recorded" with no chip (`w1c-padproof` 1280 r1). → **W2**.
 - **N-5 (soft; an owner question): the Stage tools sheet stays open after Generate at phone widths.** It covers the
@@ -1488,7 +1511,8 @@ product changes (D4).
     ("kept canonical/English, like the format gallery"). The owner decides whether that exemption stands.
   - → the entrants surface's owner (W1c does not fix it, D4).
 - **Boardgame refuses a forfeit before start, while the console offers Forfeit on a scheduled fixture.** Tell owner.
-  - `boardgame.ts:616-617` answers WRONG_PHASE (Task 5, read and driven).
+  - `boardgame.ts:616-617` answers WRONG_PHASE (Task 5, read and driven). Evidence: the code line only; no
+    committed picture or run.
   - The harness starts the match first.
   - → **W2**.
 - **PF-1: at 320 the set/game score wraps mid-score.** Tell owner.
@@ -1509,7 +1533,8 @@ product changes (D4).
   - → routed at triage by surface: builder P-1/P-2/P-9; standings P-3/P-8; entrants P-4; desk P-5/P-6; pad P-7.
 - **T9-O1:** tennis's scorebug hint is truncated at 320. **T10-O1:** a decided draw shows no result sentence
   (football, hockey, boardgame). **T11-O1:** a rosterless cricket pad shows "No bowler is eligible to open the next
-  over." while scoring works. → **W2** (pad copy).
+  over." while scoring works. → **W2** (pad copy). Evidence for all three: screen-read, no committed picture (the
+  Task 9–11 shots were never committed and go with the worktree).
 - **Softer items, from the Task 8 screens:**
   - "Complete stage" is the primary control at 0/28 played.
   - "Void last entry" is greyed.
@@ -1551,8 +1576,18 @@ product changes (D4).
 - T12: the `NoLayerForWidth` exit class, and the vacuous L2 side of `run-cli.test.ts:1601` → the final review.
 - Parity on the API-only set exits 1 by construction (`layers.ts:218-229`) → the final review.
 - `l3Gap` is never recorded (carry 4). Keep or drop the type → the final review.
-- **Tap-wait timeout under machine load.** In pad proof 1280 r3, cricket reds on one tile wait past `FLOOR_MS` (15 s) during a load spike
-  of about 230. It passed in the other six runs. → **W1d** (note only): if CI shows it, measure the runner's load before touching the budget.
+- **F-PP-1, an UNEXPLAINED flake.** Pad proof 1280 r3, cricket: `pad-ledger-as-generated` ❌, tap 15 of 141 on
+  fixture `dabf515d-99da-4a03-8e52-c3e052c611e3` timed out at the 15 s `FLOOR_MS`. Clean in the other six runs.
+  Machine load is a hypothesis only. → **W1d**: capture tap timestamps or a trace on a tap-wait timeout before
+  judging.
+- **Pad proof has no single-sport scope** (`run.ts:468-469`, `lib/pad-proof-set.ts:16`), so F-PP-1's recurrence was
+  not measured → **W1d**.
+- **The match-day run sheet is never driven** (carry 2; "Today" hides the other fixtures) → **W1d**.
+- **The sweep's fold claims are picture-only** (review m-13). results.json does not record which `openFoldIfFolded`
+  branch ran. Record it as a check or note → **W1d**.
+- **Void is never driven in any browser run.** "Void last entry" is only noted as greyed → **W1d**.
+- **`committed-matrix` was missing from the wave's earlier review gates** (`c609f9cd4`..`0f3deface`), so its CI red
+  went unseen until Task 14. Run it explicitly → the final review.
 
 ## W2 checklist (binding; from the W1c coverage audit)
 
@@ -1646,3 +1681,10 @@ only what the generators already reach, and every row above would read as untest
 **5. The same audit before W3–W7.** Ruling 42 applies to every family wave. Before each of W3–W7 writes its plan,
 the same engine → rulebook → generator audit runs for its rows. Its ABSENT list becomes that wave's binding
 checklist.
+
+**6. Audit items outside the 14/9/19 count.** Ruling 42 still owes each one an owning wave:
+
+- **Goals boards (football, hockey, ice hockey).** `core.suspend` / `core.resume` has no row (`core/events.ts:76-98`;
+  the audit's cross-sport table). → **W2**: a verdict row, or a named gap with its wave.
+- **Football two-leg aggregate / away goals.** Format-level, not a match rule (audit, the football section).
+  → **W4** (recommended; the controller's audit, not an owner ruling).

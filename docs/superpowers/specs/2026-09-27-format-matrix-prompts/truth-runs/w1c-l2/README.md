@@ -45,7 +45,8 @@ cases outside the browser plan; 65 planned without a harness script (🚫/░)` 
   `case-4/06-withdrawn-before`, `06-withdrawn`).
 - **Forfeit (walkover)**: the HTTP slice's M1 on all six cells, and in the browser only here — swiss|badminton M1
   at 390 (the console's Forfeit… with reason "walkover"; shots `case-14/07-forfeit-before`, `07-forfeit`).
-- Gap: neither runs at 1280 (L1 is LIFECYCLE only, ruling 39), and in the browser neither runs on a league or a
+- Gap: neither runs at 1280 (L1 runs LIFECYCLE only, by `planL1` under plan D-ruling 40, and at 1280 only, by
+  ruling 39), and in the browser neither runs on a league or a
   knockout cell — the committed rotation drew only swiss|badminton. Owner wave: W1d.
 
 ## Per-screen verdicts

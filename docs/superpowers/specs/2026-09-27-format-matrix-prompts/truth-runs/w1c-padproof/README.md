@@ -28,77 +28,44 @@ every clean run: football 11 = 9/0/2, cricket 9 = 3/0/6, icehockey 15 = 6/0/9, h
 | icehockey | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works |
 | hockey | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works | ✅ works |
 
-**1280 r3, cricket ❌: environmental, not a product or harness defect.**
+**Flake finding F-PP-1 (UNEXPLAINED): 1280 r3, cricket ❌ on `pad-ledger-as-generated`.** The cause is not established. → **W1d**.
 
-- **What failed.** One tap failed in fixture 1's second innings: tap 15 of 141, a tile, threw `TimeoutError: locator.waitFor: Timeout
-  15000ms exceeded`. That is the harness's derived floor, `FLOOR_MS` (`lib/browser/budget.ts:16`).
-- **What followed from it.** The fixture was left in play. That one event reads missing (ledger 10 = 4/0/5 + 1 missing). The fixture then
-  fails `pad-finalized`, `pad-outcome-as-requested`, `life-fold-parity`, `life-loop-bounded` and I4.
-- **The same case recovered.** Fixtures 2 and 3 scored and finalized cleanly.
-- **What the screen shows.** `08-pad-scored`, taken after the timeout, reads 180/4 (20) against 14/0 (2), and its "End of over 3" tile
-  is rendered and enabled. The awaited tile came, but late.
-- **The load.** The machine's load average rose from about 18 at the run's start to 232 (1 min) / 199 (5 min) at 13:52Z, during the
-  failing case. The load came from processes outside this run. The same case took 405 s here, against 288 s and 295 s in r1 and r2.
-- **The rerun.** `w1c-pp-1280-r4` then ran at a falling load (71, down to 9), and cricket passed with the same 9 = 3/0/6 split as every
-  other run.
-- **No change made.** The harness budget is derived and text-pinned. A 15 s floor is five times a 3 s hold at normal load, so widening it on
-  this evidence would weaken the gate. The note goes to W1d: if CI shows a tap-wait timeout, measure the runner's load first.
-
-
-## Per-screen verdicts — run 1, three screens per sport × both widths
-
-The three screens are the first fixture's `08-pad-before` (the pad as the scorer finds it),
-`08-pad-scored` (after the generated taps, before Finalize) and `09-finalized` (the last state the
-case proves). "ok" = the screen shows the state its step claims, and the score on it is the one the
-generator drove.
-
-### 1280 (`w1c-pp-1280-r1`)
-
-| sport | 08-pad-before | 08-pad-scored | 09-finalized |
-|---|---|---|---|
-| football 11-a-side | ok — Scheduled, board 0–0 "Period before kick-off", lineup cards "Starting line-up still needs: Goalkeeper ×1" | ok — Decided 1–0, Activity 4 (started, goal, half-time, full-time), Ledger Verified | ok — Finalized 1–0, Activity 5 |
-| cricket t20 | ok — board 0/0 · 0.0, Toss | ok — Decided "180/4 (20) – 150/5 (20)", Player 1 won, target 181 shown, Activity 41 overs | ok — Finalized, Activity 42 |
-| boardgame blitz | ok — colours tracker, Pairing card | ok — Decided 1–0, "Result recorded — Home · Checkmate" | ok — Finalized, Activity 3 |
-| carrom club-29 | ok — Best of 3 · first to 29, 0 (0) – 0 (0), Toss | ok — Decided 2–0, eight "Board recorded — Home · 9 coins left" (4 boards × 9 ≥ 29 per game) | ok — Finalized, Activity 10 |
-| generic score | ok — running score board, Enter final score | ok — Decided 3–1, "Result recorded — 3 – 1" | ok — Finalized, Activity 3 |
-| volleyball beach | ok — Best of 3 · Set 1, 0–0 | ok — Decided "2 – 0 · 21-16, 21-16" | ok — Finalized, Activity 4 |
-| badminton bwf | ok — Best of 3 · Game 1, 0–0 | ok — Decided "2 – 0 · 21-16, 21-16" on one line | ok — Finalized, Activity 4 |
-| tabletennis bo5 | ok — Best of 5 · Game 1 | ok — Decided "3 – 0 · 11-6, 11-6, 11-6" | ok — Finalized, Activity 5 |
-| tennis tour | ok — Best of 3 · Set 1, "Serving Home" | ok — Decided "2 – 0 · 6-3 6-3", recorded by the chair umpire | ok — Finalized, Activity 4 |
-| icehockey iihf | ok — 3 × 20 min, "Period not started", Goaltender needed ×1 | ok — Decided 1–0; Activity "Goal" carries a **PARTIAL** chip (N-3, soft) | ok — Finalized, Activity 6 |
-| hockey fih-outdoor | ok — 4 × 15 min, "Period not started" | ok — Decided 1–0; "Goal PARTIAL" (N-3); Period ended Q2 / Q3 / Q4 / Full-time | ok — Finalized, Activity 7 |
-
-N-3 (soft, new): a goal recorded without a scorer reads "Goal · PARTIAL" in hockey and ice hockey,
-while football's equally scorerless goal reads "Goal recorded" with no chip — the same fact is told
-two ways. Whether an organiser is meant to see "PARTIAL" is an owner question, not a defect claim.
-
-### 320 (`w1c-pp-320-r1`)
-
-At 320 the lineup cards fold to "Lineup ▾" and the Activity card shows its newest row only, so the scorer
-chips of N-3 are not on these three screens.
-
-| sport | 08-pad-before | 08-pad-scored | 09-finalized |
-|---|---|---|---|
-| football 11-a-side | ok — Scheduled, 0–0 "Period before kick-off", Start match, Forfeit… / Abandon… | ok — Decided 1–0, Activity 4 (newest "Period marker recorded — Full-time"), Ledger Verified | ok — Finalized 1–0, Activity 5 "Match finalized" |
-| cricket t20 | ok — T20 · over 0.0, 0/0, Toss | ok — Decided "180/4 (20) – 150/5" / "(20)": the second innings' overs wrap to a new line (recorded by Task 11: wraps, does not clip); scorebug 150/5 · 20.0 · Target 181; Activity 41 | ok — Finalized, same two-line headline, Activity 42 |
-| boardgame blitz | ok — colours tracker, Pairing card | ok — Decided 1–0, "Result recorded — Home · Checkmate" | ok — Finalized, Activity 3 |
-| carrom club-29 | ok — Best of 3 · first to 29, 0 (0) – 0 (0), Toss | ok — Decided 2–0, Activity 9 (newest "Board recorded — Home · 9 coins left") | ok — Finalized, Activity 10 |
-| generic score | ok — running score, draws allowed, Enter final score | ok — Decided 3–1, "Result recorded — 3 – 1" | ok — Finalized, Activity 3 |
-| volleyball beach | ok — Best of 3 · Set 1, Sets 0–0 | ok for the state; the headline wraps mid-score "2 – 0 · 21-16, 21-" / "16" (**PF-1**, known) | ok for the state; PF-1 again on the Finalized headline |
-| badminton bwf | ok — Best of 3 · Game 1, Games 0–0 | ok for the state; **PF-1** "21-" / "16" | ok for the state; PF-1 again |
-| tabletennis bo5 | ok — Best of 5 · Game 1 | ok — "3 – 0 · 11-6, 11-6," / "11-6" wraps BETWEEN games at the comma (not PF-1, as Task 9 recorded) | ok — the same wrap, Activity 5 |
-| tennis tour | ok — Best of 3 · Set 1, Sets 0–0 · Games 0–0 · Serving Home | ok — headline "2 – 0 · 6-3 6-3" on one line; the Activity row reads "Set score recorded — 6–" / "3", the PF-1 wrap class inside an activity row | ok — Finalized, Activity 4 |
-| icehockey iihf | ok — "3 × 20 min · overtime · GWS", "Period not started" | ok — Decided 1–0, Activity 5 (newest "Period ended — Full-time") | ok — Finalized, Activity 6 |
-| hockey fih-outdoor | ok — "4 × 15 min", "Period not started" | ok — Decided 1–0, Activity 6 | ok — Finalized, Activity 7 |
-
-**Run 1 totals:** 66 verdicts (11 sports × 3 screens × 2 widths), every one ok for the state its step claims.
-Defects on screen: PF-1 on volleyball and badminton at 320 (known), and the same mid-score wrap in tennis's
-Activity row at 320 (the PF-1 class, newly seen in that place). Soft: N-3. Activity counts agree across the two
-widths for every sport.
+- **What failed.**
+  - The fixture is `dabf515d-99da-4a03-8e52-c3e052c611e3` (fixture 1 of the case).
+  - The event is event 3 of 3, its second `cricket.innings.summary`.
+  - Tap 15 of 141 (a tile) threw `TimeoutError: locator.waitFor: Timeout 15000ms exceeded`.
+  - 15 s is the harness's derived floor, `FLOOR_MS` (`lib/browser/budget.ts:16`).
+  - All of this is quoted from the committed `w1c-pp-1280-r3/results.json`, check `pad-ledger-as-generated`.
+- **What followed from it.** The ledger check read 3 equal, 0 tolerated, 5 fallback and 1 missing rows, plus one "stopped after event 3
+  of 3" finding. That makes 10 evidence items, not 10 rows. The fixture stayed in play, so the same fixture also fails `pad-finalized`,
+  `pad-outcome-as-requested`, `life-fold-parity`, `life-loop-bounded` and I4.
+- **The rest of the case.** Fixtures 2 and 3 scored cleanly, each with the fallback on both innings. Only two fixtures reached
+  Finalize, so this run holds 379 shots, not 381.
+- **Timings seen** (the case's `durationMs` in the committed results.json, and the shot file times in the untracked `shots/case-2/`):
+  - The case took 405 s, against 288 s in r1 and 295 s in r2.
+  - Fixture 1, from the sheet to the post-timeout shot: 187 s, against 106 s for the whole fixture in r1. Most of that time came
+    before the 15 s wait.
+  - Fixtures 2 and 3: 86 s and 94 s, against 80 s each in r1.
+- **What the screen shows.** `08-pad-scored` was taken after the timeout, about 3 minutes after that fixture's pad sheet opened. It
+  reads 180/4 (20) against 14/0 (2), and an "End of over 3" tile is present and enabled. The tile was present by the time of that
+  shot. When it arrived was not measured.
+- **Unknown.** Whether the awaited locator was ever attached and not matched, whether the pad's sync or poll stalled, and what the
+  machine was doing at the failing tap.
+- **Hypothesis (not established): machine load.** One `uptime` sample exists, recorded in the gitignored task
+  report. It read 232 / 199 / 114 (1, 5 and 15 minutes) at 13:52Z, about 4 minutes after the failing tap (about
+  13:48Z, going by the activity times in the post-timeout shot). Fixture 2 ran at near-normal pace across that
+  sample, which weakens the hypothesis. No sample exists at the failing tap.
+- **Recurrence: not measured, because there is no single-sport scope.** `--set pad-proof` takes no `--only` (`run.ts:468-469`,
+  `lib/pad-proof-set.ts:16`), so cricket cannot be run alone without a code change. The fresh-id rerun `w1c-pp-1280-r4` passed all 11
+  sports, cricket with the same 9 = 3/0/6 split as the other clean runs. That is one more pass, not an explanation.
+- **Routed to W1d:**
+  - On a tap-wait timeout, capture tap timestamps or a trace before judging.
+  - Give pad proof a single-sport scope, so recurrence can be measured.
+  - No harness change was made in W1c.
 
 ## Runs 2 to 4 (screens)
 
 Every run wrote 381 shots, except 1280 r3, which wrote 379: its red cricket fixture never reached Finalize. Between 326 and 333 of
 each run's shots are distinct. The spread comes from timestamps and sync state, which differ from run to run. Each run had the same
 steps as run 1, so run 1's verdicts stand for runs 2 to 4, and those shots were not read one by one again. The one screen that was
-re-read is 1280 r3's cricket `08-pad-scored`, described above.
+re-read is 1280 r3's cricket `08-pad-scored`, described under F-PP-1 above.

@@ -6,9 +6,9 @@ build, base `[local-base]`). A plain run at a phone width is labelled L2 by `lay
 MATRIX.md header reads `Layer L2 · driver browser · plan slice --only knockout|badminton --scenario LIFECYCLE`.
 
 Why knockout and not the committed `--set width-sweep`: that set is hard-wired to league|badminton
-(`lib/layers.ts`); running the sweep on a knockout slice cell, and including 768/834, is the controller's
-recommendation for Task 14 (not an owner ruling). The league sweep is the set's own definition and is
-not re-run here.
+(`lib/layers.ts`). Running the sweep on a knockout slice cell, including 768/834, was the controller's
+recommendation for Task 14; owner ruling 43(a) (2026-09-30, in `_INDEX.md`) accepts it in place of ruling
+39's `league|badminton`. The league sweep is the set's own definition and is not re-run here.
 
 | width | state | checks / items | pad ledger | no-horizontal-scroll | EXIT | secs |
 |---|---|---|---|---|---|---|

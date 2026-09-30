@@ -113,6 +113,13 @@ only what the generators already reach, and every row above would read as untest
 the same engine → rulebook → generator audit runs for its rows. Its ABSENT list becomes that wave's binding
 checklist.
 
+**6. Audit items outside the 14/9/19 count.** Ruling 42 still owes each one an owning wave:
+
+- **Goals boards (football, hockey, ice hockey).** `core.suspend` / `core.resume` has no row (`core/events.ts:76-98`;
+  the audit's cross-sport table). → **W2**: a verdict row, or a named gap with its wave.
+- **Football two-leg aggregate / away goals.** Format-level, not a match rule (audit, the football section).
+  → **W4** (recommended; the controller's audit, not an owner ruling).
+
 ## Prerequisites
 
 W1a–W1d merged and W1d's W2 backlog written (design §8 order, R1).

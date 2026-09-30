@@ -22,7 +22,9 @@ This run is the HTTP side of every W1c parity table:
 | `../w1c-l1/w1c-l1-r3` | compared 6 cases, 102 common checks, 0 differences; 18 HTTP cases outside the browser plan; 0 planned without a harness script (🚫/░) |
 | `../w1c-l2` | compared 3 cases, 46 common checks, 0 differences; 21 HTTP cases outside the browser plan; 65 planned without a harness script (🚫/░) |
 
-Parity is not run on the API-only set (controller ruling). That set plans no browser, and it has no HTTP twin.
+Parity is not run on the API-only set, which is planned 🚫 with no browser (owner ruling 43(b), 2026-09-30).
+Parity against it exits 1 by construction: its 🚫 cases are recorded under LIFECYCLE (the D7 map,
+`lib/layers.ts:218-229`).
 
 Forfeit and withdraw: M1 (walkover) and R4 (withdraw) run over HTTP on all six cells. The browser runs them only on
 swiss|badminton (see `../w1c-l2/README.md`, carry 8).
