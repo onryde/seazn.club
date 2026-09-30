@@ -14,7 +14,6 @@ import type * as TS from "typescript";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
-import { WAVE_ID } from "../lib/routing.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
@@ -552,6 +551,10 @@ describe("regression cases (R29)", () => {
 const DEFERRALS: Readonly<Record<string, number>> = { ScenarioUnsupported: 0, RowBuildDeferred: 1, NoOrganiserPath: 0, ModelUnsupported: 0 };
 /** The one routing call (lib/routing.ts): its argument 0 is the wave. */
 const ROUTE_CALL = "routeTo";
+/** A wave-id token inside any literal text (T1-R2). Wider than routing.ts WAVE_ID on
+ *  purpose: a wave-shaped token that names no programme wave (W11) is refused
+ *  too, never read as prose. */
+const WAVE_TOKEN = /\bW\d+[a-z]?\b|W1-driving/;
 interface RouteScan { sites: number; waves: string[]; unread: string[] }
 /** Every route in `src`, read from the TypeScript AST (so a comment is never a
  *  site). Two constructs name a wave: `routeTo(<wave>, …)` and a `new` of a
@@ -561,10 +564,12 @@ interface RouteScan { sites: number; waves: string[]; unread: string[] }
  *  nothing, and neither does routeTo's own declaration or a plain import. ANY
  *  other use — a subclass (its wave hides in `super(`), an `as` alias, a value
  *  alias, `Reflect.construct`, routeTo passed as a value — is unread.
- *  And a string, template or template span whose text IS a programme wave id,
- *  or contains "W1-driving", anywhere else is a stray wave literal (a map
- *  value, a const, a `routedTo:` field), unread by name: a new routing shape
- *  cannot hide from the guard. An unread use fails the guard. */
+ *  And a string, template or template span that carries a wave-id token
+ *  (WAVE_TOKEN: a whole id, or one inside prose such as "lands with W2's
+ *  rulebook") anywhere but a site's own wave argument is a stray wave literal
+ *  (a map value, a const, a `routedTo:` field, a message, a route's why),
+ *  unread by name: a new routing shape cannot hide from the guard (T1-R2).
+ *  An unread use fails the guard. */
 function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const out: RouteScan = { sites: 0, waves: [], unread: [] };
@@ -613,7 +618,7 @@ function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
       if (Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
       else if (n.text === ROUTE_CALL) classifyRoute(n);
     } else if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
-      if (WAVE_ID.test(n.text) || n.text.includes("W1-driving")) literals.push(n);
+      if (WAVE_TOKEN.test(n.text)) literals.push(n);
     }
     ts.forEachChild(n, visit);
   };
@@ -632,14 +637,17 @@ function statusRows(): Map<string, string> {
   return new Map([...status.matchAll(/^\| (W[\w-]+) \| [^|]* \| (.*) \|$/gm)].map((m) => [m[1]!, m[2]!]));
 }
 /** The guard's judgement, apart from the tree it reads: nothing unread, at
- *  least one route read (R25: zero read is a failure, never "no deferral
- *  sites" — false premise 8), and every wave a route names has an open Status
- *  row. `alsoNamed`: waves the catalogue's data names (knownNoPath /
- *  l2NoPath), judged too but not counted as routes read. */
+ *  least one route read BY THE MODULE SCAN (R25: zero read is a failure, never
+ *  "no deferral sites" — false premise 8; the scan's floor is its own, so the
+ *  JSON's routes can never stand in for a walk that read nothing, T1-R1), and
+ *  every wave a route names has an open Status row. `alsoNamed`: waves the
+ *  catalogue's data names (knownNoPath / l2NoPath), judged too but not counted
+ *  as routes read. */
 function judgeRoutes(scans: readonly RouteScan[], jsonRoutes: readonly string[], rows: ReadonlyMap<string, string>, alsoNamed: readonly string[] = []): { read: number; waves: string[] } {
   expect(scans.flatMap((s) => s.unread), "a route names its wave in a shape this guard cannot read, or a bare wave literal sits outside routeTo").toEqual([]);
-  const read = scans.reduce((n, s) => n + s.sites, 0) + jsonRoutes.length;
-  expect(read, "routes read across every construct").toBeGreaterThan(0);
+  const scanned = scans.reduce((n, s) => n + s.sites, 0);
+  expect(scanned, "routes read across every construct by the module scan").toBeGreaterThan(0);
+  const read = scanned + jsonRoutes.length;
   const waves = [...new Set([...scans.flatMap((s) => s.waves), ...jsonRoutes, ...alsoNamed])];
   for (const w of waves) {
     expect(rows.has(w), `${w} has no status row in _INDEX.md`).toBe(true);
@@ -675,7 +683,8 @@ describe("Q-A guard — the route reader", () => {
       `import { ScenarioUnsupported, RowBuildDeferred } from "./types.ts";`,
       `export class ScenarioUnsupported extends Error {}`,
       `// a comment: new ScenarioUnsupported("W1a", "x")`,
-      `const name = "new RowBuildDeferred(row, \\"W1a\\")";`,
+      // A string that spells a construction is not a site (one that names a wave is a stray: T1-R2).
+      `const name = "new RowBuildDeferred(row, wave)";`,
       `function f(e: ScenarioUnsupported | RowBuildDeferred) { return e instanceof ScenarioUnsupported; }`,
     ].join("\n");
     expect(scanRoutes(src)).toEqual({ sites: 0, waves: [], unread: [] });
@@ -698,7 +707,7 @@ describe("Q-A guard — the route reader", () => {
       expect(scan.waves, shape).not.toContain("W1a");
     }
   });
-  it("a stray wave literal is refused by name: a map value, a const, a template, a W1-driving substring", () => {
+  it("a stray wave literal is refused by name: a map value, a const, a template, a W1-driving substring, a wave inside prose", () => {
     const stray = {
       mapValue: `const M = { D1: "W9" };`,
       constant: `export const OVERRIDE = "W1-driving";`,
@@ -709,6 +718,12 @@ describe("Q-A guard — the route reader", () => {
       span: "const m = `model: ${sport} fields teams — rosters are W1-driving`;",
       // A routeTo's WHY that names the wave is a stray too: the wave is argument 0's alone.
       why: `const r = routeTo("W2", "owed to W1-driving");`,
+      // T1-R2: any wave inside prose, not only W1-driving — the shapes the tree carried at 00c2d8199.
+      prose: "const m = `the tieBoard:'draw' shape lands with W2's carrom rulebook`;",
+      closedOwner: `const o = "W1c (no task owns it)";`,
+      trailing: `const w = "the engine refuses the cfg: a rulebook question for W2";`,
+      // A wave-shaped token that is no programme wave is refused too, never read as prose.
+      notAWave: `const a = "W11";`,
     };
     let refused = 0;
     for (const [shape, src] of Object.entries(stray)) {
@@ -724,8 +739,13 @@ describe("Q-A guard — the route reader", () => {
     expect(scanRoutes(`routeTo();`).unread.length).toBeGreaterThan(0);
     expect(scanRoutes(`const r = routeTo; r(pick(), "x");`).unread.length).toBeGreaterThan(0);
   });
-  it("text that only looks like a wave is not a site: W11, a lowercase set name, a comment", () => {
-    expect(scanRoutes(`const a = "W11"; const b = "w1-driving"; // routeTo("W4", "x")`)).toEqual({ sites: 0, waves: [], unread: [] });
+  it("text that only looks like a wave is not a site: a lowercase set name, a W inside a word, a W with no digit, a comment", () => {
+    expect(scanRoutes(`const b = "w1-driving"; const c = "AW2"; const d = "W3C"; const e = "Wave"; // routeTo("W4", "x")`)).toEqual({ sites: 0, waves: [], unread: [] });
+  });
+  it("every programme wave id in the index is a wave token (the stray arm cannot miss a real wave)", () => {
+    const rows = [...statusRows().keys()].filter((w) => w !== "Wave");
+    expect(rows.length, "Status rows read").toBeGreaterThan(0);
+    for (const w of rows) expect(scanRoutes(`const x = "${w}";`).unread.some((u) => u.includes("stray wave literal")), w).toBe(true);
   });
   it("a Status state is open when it says not started / in progress / awaiting, with or without emphasis", () => {
     // W1b's and W1a's cells as written on 2026-09-28, then the plain forms.
@@ -745,6 +765,16 @@ describe("Q-A guard — the judgement, apart from the tree", () => {
     // A scan that read nothing is still zero, whatever the catalogue's data names.
     expect(() => judgeRoutes([{ sites: 0, waves: [], unread: [] }], [], rows, ["W2"])).toThrow(/routes read across every construct/);
   });
+  it("T1-R1: a walk over modules that reads 0 routes fails on its own floor, whatever counts.json routes", () => {
+    const rows = statusRows();
+    // Two modules that name no wave: the walk found files, and read nothing.
+    const walk = ["export const a = 1;", "export const b = 'x';"].map((src, i) => scanRoutes(src, `m${i}.ts`));
+    expect(walk.map((w) => w.sites)).toEqual([0, 0]);
+    expect(() => judgeRoutes(walk, ["W2", "W1-driving"], rows)).toThrow(/routes read across every construct by the module scan/);
+    expect(() => judgeRoutes([{ sites: 0, waves: [], unread: [] }], ["W2"], rows)).toThrow(/by the module scan/);
+    // The positive pair: one route read by the walk, and the same JSON routes pass.
+    expect(judgeRoutes([...walk, scanRoutes(`routeTo("W2", "why");`, "m2.ts")], ["W2", "W1-driving"], rows).read).toBe(3);
+  });
   it("a route to a wave whose Status row is closed fails naming the row; the same route to an open row passes", () => {
     // Synthetic rows: never the real W1-driving row, which Task 16 closes.
     const one: RouteScan[] = [{ sites: 1, waves: ["W1-driving"], unread: [] }];
@@ -752,7 +782,7 @@ describe("Q-A guard — the judgement, apart from the tree", () => {
     expect(() => judgeRoutes(one, [], new Map([["W1-driving", "**Tasks 1–16 done** — merged"]]))).toThrow(/W1-driving: .* is not open/);
     expect(judgeRoutes(one, [], new Map([["W1-driving", "**in progress** — plan"]]))).toEqual({ read: 1, waves: ["W1-driving"] });
     // A counts.json route and a catalogue-named wave are judged the same way.
-    expect(() => judgeRoutes([], ["W1-driving"], new Map([["W1-driving", "done"]]))).toThrow(/W1-driving: "done" is not open/);
+    expect(() => judgeRoutes([{ sites: 1, waves: [], unread: [] }], ["W1-driving"], new Map([["W1-driving", "done"]]))).toThrow(/W1-driving: "done" is not open/);
     expect(() => judgeRoutes(one, [], new Map([["W1-driving", "in progress"], ["W9", "done"]]), ["W9"])).toThrow(/W9: "done" is not open/);
     expect(() => judgeRoutes(one, [], new Map([["W1-driving", "in progress"]]), ["W9"])).toThrow(/W9 has no status row/);
   });

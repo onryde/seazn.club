@@ -89,7 +89,7 @@ export class Recorder {
 /** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
  *  americano / mexicano, multi-stage seeding, team rosters — is its own wave.
  *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
-export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth W1a deferred (ruling 28)");
+export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth deferred from the first slice (ruling 28)");
 /** The deferral sites' wave argument (the Q-A guard reads it by value); kept
  *  until W1-driving deletes the last of them. */
 export const DRIVING_WAVE = DRIVING_ROUTE.wave;

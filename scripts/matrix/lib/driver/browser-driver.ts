@@ -121,7 +121,7 @@ export const PUBLIC_DATA_REVALIDATE_S = 30;
  *  goes to W2, which owns the editor fixes under ruling 33. The
  *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a
  *  literal only, PF-3); browser-driver.test.ts pins the two together. */
-export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; W2 owns the editor fixes (rulings 33, 47)");
+export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; its wave owns the editor fixes (rulings 33, 47)");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */

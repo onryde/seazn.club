@@ -175,7 +175,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const cells: SliceCell[] = [];
   for (const cell of v.cell ?? [...SLICE_CELLS.keys()]) {
     const parts = SLICE_CELLS.get(cell);
-    if (parts === undefined) return { usage: `unknown cell '${cell}' (the model runs W1a's slice: ${[...SLICE_CELLS.keys()].join(", ")})` };
+    if (parts === undefined) return { usage: `unknown cell '${cell}' (the model runs the slice cells: ${[...SLICE_CELLS.keys()].join(", ")})` };
     cells.push({ cell, ...parts });
   }
   // fast-check seeds are 32-bit ints; a longer number is a typo, not a seed.

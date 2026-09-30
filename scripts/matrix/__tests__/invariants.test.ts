@@ -202,7 +202,7 @@ describe("I2 bracket-one-champion-ranks-permutation", () => {
   // correct bracket over its field, so without the guard it would PASS — judged
   // against the division's entrants instead of the ones seeded into it.
   it("a later-stage bracket (seq 2) with a division-wide field FAILS by name; seeded is judged; the root is still judged beside it", () => {
-    const carry1 = "stage seq 2: field is division-wide — per-stage entrants were not observed (W1a carry 1)";
+    const carry1 = "stage seq 2: field is division-wide — per-stage entrants were not observed";
     const later = (fieldSource: "division" | "seeded"): ObservedStage => ({ ...bracket(["a", "b", "c", "d"]), id: "s2", seq: 2, fieldSource });
     expect(evaluateInvariant(I2, run([later("division")]))).toMatchObject({ verdict: "fail", checked: 0, evidence: [carry1] });
     expect(evaluateInvariant(I2, run([later("seeded")]))).toMatchObject({ verdict: "pass", checked: 5 });
@@ -707,7 +707,7 @@ describe("I1 — a later stage's field must be observed per stage (W1a carry 1)"
     expect(evaluateInvariant(INVARIANTS[0]!, run([root]))).toMatchObject({ verdict: "pass", checked: 1 });
     const r = evaluateInvariant(INVARIANTS[0]!, run([root, stage({ id: "s2", seq: 2, fieldSource: "division", field: ["a", "b"], fixtures: [fx({ id: "r2", stageId: "s2", home: "a", away: "b" })] })]));
     expect(r).toMatchObject({ verdict: "fail", checked: 1 });
-    expect(r.evidence).toEqual(["stage seq 2: field is division-wide — per-stage entrants were not observed (W1a carry 1)"]);
+    expect(r.evidence).toEqual(["stage seq 2: field is division-wide — per-stage entrants were not observed"]);
   });
 });
 

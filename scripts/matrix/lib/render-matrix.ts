@@ -33,7 +33,8 @@ const cell = (text: string): string => text.replace(/\s*[\r\n]+\s*/g, " ").repla
  *  evidence renders exactly as it was committed. */
 const layerLine = (r: AnyRunResults): string[] => {
   if (r.schemaVersion !== 3) return [];
-  const plan = r.plan === undefined ? "plan not recorded (written before W1c Task 14)" : `plan \`${r.plan}\``;
+  // Results older than W1c Task 14 carry no plan; the text names no wave (T1-R2).
+  const plan = r.plan === undefined ? "plan not recorded (written before results carried a plan)" : `plan \`${r.plan}\``;
   return [`> Layer **${r.layer}** · driver **${r.driver}** · ${plan}.`, ""];
 };
 

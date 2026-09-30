@@ -180,7 +180,7 @@ describe("renderMatrix — v3 results, 🚫 and ░ (W1c Task 3)", () => {
     const v2md = renderMatrix({ ...run(v2cases, small), runId: "r3" });
     expect(v3md).toContain("schema v3");
     expect(v2md).toContain("schema v2");
-    const layerLine = "> Layer **L2** · driver **browser** · plan not recorded (written before W1c Task 14).\n\n";
+    const layerLine = "> Layer **L2** · driver **browser** · plan not recorded (written before results carried a plan).\n\n";
     expect(v3md).toContain(layerLine);
     expect(v3md.replace("schema v3", "schema v2").replace(layerLine, "")).toBe(v2md);
   });
@@ -206,7 +206,7 @@ describe("renderMatrix — the header names the layer, driver and plan (W1c Task
     expect(line(renderMatrix(v3({ layer: "L2", driver: "browser", plan: "--set width-sweep", cases: [{ ...k, layer: "L2", driver: "browser", width: 768 }] })))).toBe("> Layer **L2** · driver **browser** · plan `--set width-sweep`.");
   });
   it("a v3 run written before the plan was recorded says so, never a blank", () => {
-    expect(line(renderMatrix(v3({})))).toBe("> Layer **L3** · driver **http** · plan not recorded (written before W1c Task 14).");
+    expect(line(renderMatrix(v3({})))).toBe("> Layer **L3** · driver **http** · plan not recorded (written before results carried a plan).");
   });
   it("v2 evidence carries no layer line", () => {
     expect(line(renderMatrix(run([kase({})])))).toBeUndefined();

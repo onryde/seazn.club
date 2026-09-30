@@ -257,7 +257,8 @@ const MODEL_ROSTERS = routeTo("W1-driving", "the model fields no team rosters ye
  *  stage, built from the builder's own bodies (stagesForRow). */
 export async function newModelState(input: { driver: OrganiserDriver; row: RowKey; sport: string; variant: string; entrants: number; tag: string; competitionId?: string; knobs?: Knobs }): Promise<ModelState> {
   const bodies = stagesForRow(input.row, input.knobs);
-  if (bodies.length !== 1) throw new Error(`model: ${input.row} is multi-stage — the model drives single-stage rows (W1a's slice)`);
+  // W1a's slice is single-stage; the text names no wave (T1-R2).
+  if (bodies.length !== 1) throw new Error(`model: ${input.row} is multi-stage — the model drives single-stage rows`);
   const cfg = resolveSportCfg(input.sport, input.variant);
   const kind = entrantKindFor(input.sport, cfg);
   if (kind === "team") throw new Error(`model: ${input.sport} fields teams — rosters are ${MODEL_ROSTERS.wave}`);

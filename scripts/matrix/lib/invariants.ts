@@ -27,11 +27,12 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
 const result = (fails: string[], checked: number, notes: string[] = []): InvariantResult =>
   ({ verdict: fails.length > 0 ? "fail" : "pass", checked, evidence: [...fails, ...notes].slice(0, 12) });
 const ABSTAIN = (why: string): InvariantResult => ({ verdict: "abstain", checked: 0, evidence: [`abstain: ${why}`] });
-/** W1a carry 1: a later stage (seq > 1) whose `field` is the whole division's
+/** W1a carry 1 (named here, not in the evidence text: T1-R2 keeps wave ids out
+ *  of emitted literals): a later stage (seq > 1) whose `field` is the whole division's
  *  would be judged against the wrong entrants. Every spec that reads `s.field`
  *  (I1, I2) refuses it by name — fail closed, never a wrong pass. */
 const divisionWideLaterStage = (s: ObservedStage): string | null =>
-  s.seq > 1 && s.fieldSource !== "seeded" ? `stage seq ${s.seq}: field is division-wide — per-stage entrants were not observed (W1a carry 1)` : null;
+  s.seq > 1 && s.fieldSource !== "seeded" ? `stage seq ${s.seq}: field is division-wide — per-stage entrants were not observed` : null;
 
 const I1: InvariantSpec = {
   id: "I1-rr-pair-once-per-leg",

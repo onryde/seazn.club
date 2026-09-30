@@ -5,7 +5,7 @@
 //
 // Transitions: an empty wave or why (the empty case, first) → a wave outside
 // the programme → every programme wave → the same set read from the index.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -62,5 +62,41 @@ describe("routeTo", () => {
     const typed = ["W1a", "W1b", "W1c", "W1d", "W1-driving", ...Array.from({ length: 9 }, (_, i) => `W${i + 2}`)];
     expect(new Set(listed)).toEqual(new Set(typed));
     for (const w of listed) expect(() => routeTo(w, "why"), w).not.toThrow();
+  });
+});
+
+// T1-R3 (review m-5): the W1-driving row is open, cites the wave's rulings and
+// points at its plan and its prompt. The pointers are read from the row and
+// resolved on disk, so a moved file or a dropped pointer reds.
+describe("the W1-driving status row", () => {
+  const row = INDEX.split("\n").find((l) => l.startsWith("| W1-driving |"));
+  const state = row?.split(" | ")[2] ?? "";
+  it("is open: it starts 'in progress —'", () => {
+    expect(row, "no W1-driving Status row").toBeDefined();
+    expect(state.replace(/\*\*/g, "")).toMatch(/^in progress — /);
+  });
+  it("points at its plan and its prompt, and both exist", () => {
+    const plan = /plan `([^`]+\.md)`/.exec(state)?.[1];
+    const prompt = /prompt `([^`]+\.md)`/.exec(state)?.[1];
+    expect(plan, "no plan pointer").toBeDefined();
+    expect(prompt, "no prompt pointer").toBe("W1-driving.md");
+    expect(existsSync(resolve(REPO, plan!)), plan).toBe(true);
+    expect(existsSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts", prompt!)), prompt).toBe(true);
+  });
+  it("cites rulings 44–54, and each one is an owner ruling in the index", () => {
+    const m = /rulings (\d+)–(\d+)/.exec(state);
+    expect(m?.slice(1, 3), "the row cites no ruling range").toEqual(["44", "54"]);
+    // "## Owner rulings" numbers its entries "N." or, for a batch, "N–M.".
+    const start = INDEX.indexOf("\n## Owner rulings");
+    expect(start, "no Owner rulings section").toBeGreaterThan(0);
+    const section = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1));
+    const numbered = new Set<number>();
+    for (const [, lo, hi] of section.matchAll(/^(\d+)(?:–(\d+))?\. \*\*/gm)) {
+      for (let n = Number(lo); n <= Number(hi ?? lo); n++) numbered.add(n);
+    }
+    expect(numbered.size, "owner rulings read").toBeGreaterThan(0);
+    const cited = Array.from({ length: 54 - 44 + 1 }, (_, i) => 44 + i);
+    for (const n of cited) expect(numbered.has(n), `ruling ${n}`).toBe(true);
+    expect(cited.length).toBe(11);
   });
 });

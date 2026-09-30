@@ -20,7 +20,7 @@ import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/dr
 import { START_MATCH_TESTID, selectorForTapStep, type PadPage, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
-import { PAD_OWNER, PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
+import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-sports.ts";
 import { foldStream } from "../lib/fold.ts";
 import { BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
 import { CARROM_BOARD, CARROM_BOARD_TILE, carromPad } from "../lib/pads/carrom.ts";
@@ -93,15 +93,15 @@ describe("the pad adapter registry", () => {
     for (const [k, a] of ADAPTERS) expect(a.sport, k).toBe(k);
   });
 
-  it("the leaf run.ts plans from is the registry's key list; a sport outside it would name the W1c task that owes it — none is owed today (carry f), so the owner loop checks 0", () => {
+  it("the leaf run.ts plans from is the registry's key list; a sport outside it would name the route that owes it — none is owed today (carry f), so the owner loop checks 0", () => {
     expect([...PAD_SPORTS]).toEqual(Object.keys(PAD_ADAPTERS));
     const owned = Object.keys(PAD_OWNER);
     expect(owned.filter((s) => PAD_SPORTS.includes(s))).toEqual([]);
     expect([...owned, ...PAD_SPORTS].sort()).toEqual([...SPORT_KEYS].sort());
     for (const [s, owner] of Object.entries(PAD_OWNER)) {
-      expect(owner, s).toMatch(/^W1c Task (9|10|11)$/);
-      // The reason is what the mixed ledger's exemption rule and the ⏳ case read.
-      expect(noPadReason(s)).toBe(`no pad adapter for ${s} yet → ${owner}`);
+      // A route (lib/routing.ts), so the Q-A guard reads its wave; the reason names it.
+      expect(Object.isFrozen(owner), s).toBe(true);
+      expect(noPadReason(s)).toBe(`no pad adapter for ${s} yet → ${owner.wave} (${owner.why})`);
     }
     expect(owned.length).toBe(SPORT_KEYS.length - PAD_SPORTS.length);
   });
@@ -117,8 +117,16 @@ describe("the pad adapter registry", () => {
     expect(checked).toBe(11);
     expect(Object.keys(PAD_ADAPTERS)).toEqual([...SPORT_KEYS]);
     expect(Object.keys(PAD_OWNER)).toEqual([]);
-    // A sport the catalogue gains later, with no adapter, still names a wave.
-    expect(noPadReason("curling")).toBe("no pad adapter for curling yet → W1c (no task owns it)");
+    // A sport the catalogue gains later, with no adapter, still names a wave — an OPEN one
+    // (T1-R2: W1c is closed). Design §8: a gap no wave lists goes to the wave owning its
+    // sport, which is the one sport-family wave; read from the design, never typed.
+    const design = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/superpowers/specs/2026-09-27-format-matrix-design.md"), "utf8");
+    const waves = design.slice(design.indexOf("## 8. Waves"), design.indexOf("## 9."));
+    expect(waves).toMatch(/Gaps not listed go to the wave owning their\s+format\/sport/);
+    const sportFamily = [...waves.matchAll(/^\| \*\*(W\d+) — [^|]*a sport-family wave/gm)].map((m) => m[1]!);
+    expect(sportFamily).toHaveLength(1);
+    expect(PAD_UNOWNED.wave).toBe(sportFamily[0]);
+    expect(noPadReason("curling")).toBe(`no pad adapter for curling yet → ${sportFamily[0]} (${PAD_UNOWNED.why})`);
   });
 
   it("I-1: every registered fallback declares the row types it writes (its own type among them) and a judge", () => {

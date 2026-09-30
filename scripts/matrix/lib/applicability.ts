@@ -267,6 +267,10 @@ const LADDER = "ladder|generic";
 const NO_TEAM = "no team entrants in this sport's model";
 const NO_PAIR = "no pair entrants in this sport's model";
 const NO_TABLE = "no points-table stage in this row (brackets place by elimination; a ladder orders by position)";
+/** False premise 9: a boardgame KO tie resolves at the fixture layer, which the
+ *  knockout wave owns. M6's drop reason names it through this route (T1-R2),
+ *  in the same bytes drop-list.json commits. */
+const KO_TIE_AT_FIXTURE = routeTo("W4", "boardgame knockout ties resolve at the fixture layer (false premise 9)");
 
 export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   [LIFECYCLE_ID]: ALWAYS,
@@ -306,7 +310,7 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
       route: routeTo("W1-driving", "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place"),
     }),
   }),
-  M6: rule(decider, "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, W4), or none is switched on under this config", "knockout|icehockey", "knockout|badminton", true),
+  M6: rule(decider, `the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, ${KO_TIE_AT_FIXTURE.wave}), or none is switched on under this config`, "knockout|icehockey", "knockout|badminton", true),
   M7a: ALWAYS, M7b: ALWAYS,
   M8a: rule(not(scoreless), "generic win_loss records a winner only: there is no score to correct while keeping the winner", T, { cell: T, preset: "win_loss" }, true),
   M8b: ALWAYS, M9a: ALWAYS, M9b: ALWAYS, M10: ALWAYS, M11: ALWAYS,
