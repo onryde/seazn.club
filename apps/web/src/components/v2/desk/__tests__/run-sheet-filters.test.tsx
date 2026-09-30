@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+import { RunSheet, runSheetKeeps, type RunSheetFilter, type RunSheetKeepContext } from "@/components/v2/desk/run-sheet";
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { ACTIVE_STATES, holdStateOf, type HoldState } from "@/server/relay/domain/session";
 import { buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { resolveAttention, type PhaseInput } from "@/lib/division-phase";
 import { messages } from "@/lib/messages";
@@ -303,5 +305,79 @@ describe("byes are structural context, not work (R7a)", () => {
     expect(byeRowCount(html)).toBe(0);
     expect(renderedRows(html)).toEqual([]);
     expect(html).toContain('data-testid="run-sheet-empty"');
+  });
+});
+
+// B3 fix round 1, I-2 (owner decision, option a): on a match day the sheet MOUNTS on "Today", which keeps only a timed
+// fixture dated today. The run-sheet chip replaced the frozen page's always-visible probe stack as the division's path
+// to Stop, so a fixture with a stream UP must stay on the sheet under "Today" — untimed (a walk-up match) or dated
+// another day — or its chip, and Stop, is one hidden filter tap away. Every other row keeps the design's rule.
+describe("a stream that is up keeps its row under Today (I-2, owner option a)", () => {
+  /** Every hold state a session that is UP can read as — from the domain's declarations, never typed here. */
+  const UP: HoldState[] = [...new Set(ACTIVE_STATES.map((s) => holdStateOf(s)).filter((h): h is HoldState => h !== null))];
+  const today = dayKeyInTz(NOW_MS, TZ);
+  const untimedStreamed = fx(101);
+  const untimedPlain = fx(102);
+  const otherDayStreamed = fx(103, { scheduled_at: "2026-09-03T10:00:00.000Z" });
+  const otherDayPlain = fx(104, { scheduled_at: "2026-09-03T11:00:00.000Z" });
+  const timedToday = fx(105, { scheduled_at: "2026-09-05T20:00:00.000Z" });
+  const SET = [untimedStreamed, untimedPlain, otherDayStreamed, otherDayPlain, timedToday];
+  const ctx = (streamStates: Record<string, HoldState> | undefined): RunSheetKeepContext => ({
+    stageId: null, tz: TZ, today, nowMs: NOW_MS, matchMinutes: MATCH_MINUTES, streamStates,
+  });
+  const html = (filter: RunSheetFilter, streamStates: Record<string, HoldState> | undefined) =>
+    renderToStaticMarkup(
+      <RunSheet
+        blocks={buildRunSheet({ fixtures: SET, stages: STAGES, tz: TZ, nowMs: NOW_MS })}
+        stages={STAGES}
+        tz={TZ}
+        orgTz={TZ}
+        nowMs={NOW_MS}
+        matchMinutes={MATCH_MINUTES}
+        entrantNames={{ e1: "Alpha", e2: "Bravo" }}
+        canEdit={false}
+        hrefFor={(f) => `/f/${f.fixture_no}`}
+        filter={filter}
+        onFilter={() => {}}
+        stageId={null}
+        onStageFilter={() => {}}
+        streamStates={streamStates}
+      />,
+    );
+  const chipsIn = (markup: string): number[] =>
+    [...markup.matchAll(/<li data-fixture-no="(\d+)"[\s\S]*?<\/li>/g)]
+      .filter((m) => m[0].includes('data-testid="run-sheet-stream-chip"'))
+      .map((m) => Number(m[1]))
+      .sort((a, b) => a - b);
+
+  it("premises: the set really has untimed and other-day rows that Today hides without a stream, and one it keeps", () => {
+    expect(UP.length, "anti-vacuity: the domain declares hold states for an up session").toBeGreaterThan(0);
+    expect(dayKeyInTz(Date.parse(otherDayStreamed.scheduled_at!), TZ)).not.toBe(today);
+    expect(dayKeyInTz(Date.parse(timedToday.scheduled_at!), TZ)).toBe(today);
+    expect(renderedRows(html("today", undefined)), "no stream: the design's Today — the timed-today row only").toEqual([105]);
+  });
+
+  it("under Today, EVERY up state keeps its untimed and other-day rows, with their chips; the same rows without a stream stay hidden", () => {
+    let checked = 0;
+    for (const state of UP) {
+      const states = { [untimedStreamed.id]: state, [otherDayStreamed.id]: state };
+      const markup = html("today", states);
+      expect(renderedRows(markup), state).toEqual([101, 103, 105]);
+      expect(chipsIn(markup), `${state}: the kept rows carry their chip`).toEqual([101, 103]);
+      // The pure row test agrees with the render (the render is its only caller).
+      expect(runSheetKeeps(untimedStreamed, "today", ctx(states)), state).toBe(true);
+      expect(runSheetKeeps(untimedPlain, "today", ctx(states)), `${state}: the positive pair`).toBe(false);
+      expect(runSheetKeeps(otherDayPlain, "today", ctx(states)), `${state}: the positive pair`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(UP.length);
+  });
+
+  it("the keep is Today's only: the work filters, and a stage filter, still hide a streamed row they do not own", () => {
+    const states = { [untimedStreamed.id]: UP[0]!, [otherDayStreamed.id]: UP[0]! };
+    // A dated, not-overdue-by-rule row is not "unscheduled"; a streamed row of ANOTHER stage is outside the stage filter.
+    expect(runSheetKeeps(otherDayStreamed, "unscheduled", ctx(states))).toBe(false);
+    expect(runSheetKeeps(untimedStreamed, "today", { ...ctx(states), stageId: "s-other" })).toBe(false);
+    expect(runSheetKeeps(untimedStreamed, "today", { ...ctx(states), stageId: "s1" }), "positive pair: its own stage").toBe(true);
   });
 });

@@ -37,13 +37,15 @@ export type RunSheetFilter = "today" | "needs_result" | "unscheduled" | "all";
 export type RunSheetStageInfo = { id: string; kind: string; name: string };
 
 /** Everything one row test needs besides the filter: the stage filter (`null` = every stage), the venue zone,
- *  today's day key in it, the clock, and the division's `matchMinutes` (the "Needs result" grace). */
+ *  today's day key in it, the clock, the division's `matchMinutes` (the "Needs result" grace), and the fixtures with a
+ *  stream up (`openStreamStates`; absent for a viewer — the page reads it for organisers only). */
 export type RunSheetKeepContext = {
   stageId: string | null;
   tz: string;
   today: string;
   nowMs: number;
   matchMinutes: number;
+  streamStates?: Record<string, HoldState>;
 };
 
 // Filter semantics (spec): "Today" / "Needs result" / "Unscheduled" / "All".
@@ -70,9 +72,11 @@ export type RunSheetKeepContext = {
 // either, so this cannot reuse the `all`-wins-first ordering the TYPE
 // filter uses for byes — it runs before that ladder even starts.
 //
-// Module scope and exported (D2, stream-credits walkthrough, 2026-09-29). Its D2 caller (`initialRunSheetFilter`) was
-// removed with the checkout return's move to the fixture page (spec 2026-09-30 §2); it stays exported as the sheet's
-// one row test, read below and by its own tests.
+// "Today" also keeps a fixture with a stream UP (B3 fix round 1, I-2 — owner decision, option a): the row's chip is the
+// division's path to Stop, so an untimed walk-up match or one dated another day must not hide behind the default match-
+// day filter while it streams. Only "Today" — the work filters and the stage filter keep their own meaning.
+//
+// Module scope and exported: the sheet's one row test, read below and pinned directly by run-sheet-filters.test.tsx.
 export function runSheetKeeps(f: RunSheetFixture, filter: RunSheetFilter, ctx: RunSheetKeepContext): boolean {
   const { stageId, tz, today, nowMs, matchMinutes } = ctx;
   if (stageId !== null && f.stage_id !== stageId) return false;
@@ -81,7 +85,8 @@ export function runSheetKeeps(f: RunSheetFixture, filter: RunSheetFilter, ctx: R
   if (filter === "needs_result")
     return isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
   if (filter === "unscheduled") return isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
-  // "today": only a TIMED fixture landing on today's venue-zone day counts.
+  // "today": a fixture with a stream up, and otherwise only a TIMED fixture landing on today's venue-zone day.
+  if (ctx.streamStates?.[f.id] !== undefined) return true;
   return f.scheduled_at !== null && dayKeyInTz(Date.parse(f.scheduled_at), tz) === today;
 }
 
@@ -267,7 +272,8 @@ export function RunSheet({
     isResultMissing({ status: f.status, scheduledAt: f.scheduled_at, matchMinutes }, nowMs);
 
   // The row test lives at module scope (`runSheetKeeps`, above) — its filter semantics and ORDER are documented there.
-  const keep = (f: RunSheetFixture): boolean => runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes });
+  const keep = (f: RunSheetFixture): boolean =>
+    runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates });
 
   // Filter counts read over EVERY block's fixtures, unfiltered — a filter's
   // own count must not shrink just because it is the one currently selected.

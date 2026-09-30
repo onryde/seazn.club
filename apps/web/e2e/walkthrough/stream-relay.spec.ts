@@ -351,13 +351,13 @@ async function openFixture(page: Page, rig: RelayRig, f: RelayFixture, query = "
   await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(), `fixture ${f.no}'s console rendered`).toBeAttached({ timeout: 30_000 });
 }
 
-/** The division fixtures tab, filtered to every fixture (the sheet opens on "Today"; the rig schedules nothing) — where
- *  the run sheet's chip (T6) shows a session that is up. */
+/** The division fixtures tab on the filter it MOUNTS on — no filter tapped (B3 fix round 1, I-2): where the run sheet's
+ *  chip (T6) shows a session that is up. */
 async function openRunSheet(page: Page, rig: RelayRig): Promise<void> {
   await page.goto(`${rig.divPath}?tab=fixtures`);
   await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1, { timeout: 30_000 });
-  await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
 }
+const filterChip = (page: Page, value: string): Locator => page.locator(`[data-testid="run-sheet-filter"] [data-filter="${value}"]`);
 const rowOf = (page: Page, f: RelayFixture): Locator => page.locator(`li[data-fixture-no="${f.no}"]`);
 
 /** The width's own Stream control — the desktop button at ≥768, the strip icon below. Exactly one is visible. */
@@ -1001,16 +1001,22 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
 // page with the panel open, whose poll brings it LIVE → the chip reads LIVE → the chip again, Stop → the chip is gone
 // while the row stays. WAITING is observable because the server flips warming → live only on a read of `current` (the
 // Phone tab's poll) and nothing reads it while the organiser is on the division — its premise is read from the DB.
+// B3 fix round 1, I-2: the whole loop runs on the filter the sheet MOUNTS on (a match day's "Today"), on an UNTIMED
+// fixture — the row "Today" hides unless a stream is up — never by tapping "All" first.
 for (const width of [320, 1280] as const) {
-  test(`A12 @${width}: Go live on the fixture page → the run sheet's chip reads WAITING, then (after the chip opens the panel) LIVE → the chip leads to Stop → after Stop no chip, the row still there`, async ({
+  test(`A12 @${width}: on a MATCH DAY, under the sheet's default "Today", Go live on an UNTIMED fixture → its chip reads WAITING, then (after the chip opens the panel) LIVE → the chip leads to Stop → after Stop the untimed row leaves "Today" and shows under "All" with no chip`, async ({
     page,
   }) => {
     const NAVS = 6; // openPhoneTab, run sheet (waiting), chip → fixture page, run sheet (live), chip → fixture page, run sheet (gone)
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
-    const rig = await seedRelayRig(page);
+    const rig = await seedRelayRig(page, { entrants: 3 });
     await addTargetApi(page, rig.orgId, { label: `A12 destination ${width}` });
-    const f = rig.fixtures[0]!;
+    // The streamed fixture is UNTIMED — a walk-up match, the shape "Today" hides (I-2). A second fixture is timed NOW,
+    // which makes the division's phase match_day (the sheet then mounts on "Today") and is "Today"'s own positive row;
+    // the third stays untimed and unstreamed — the row "Today" must still hide.
+    const [f, timedToday, plain] = rig.fixtures as [RelayFixture, RelayFixture, RelayFixture];
+    await withDb((sql) => sql`update fixtures set scheduled_at = now() where id = ${timedToday.id}`);
     const fixturePath = `${rig.divPath}/f/${f.no}`;
 
     // 1. Go live — tapped on the fixture page — and leave as soon as the QR says the camera is warming.
@@ -1019,12 +1025,16 @@ for (const width of [320, 1280] as const) {
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
 
-    // 2. The division: WAITING. Premise first — the row itself is still warming (nothing has read `current` since).
+    // 2. The division, on the filter it mounts on: "Today" (premise). WAITING, with the premise read from the DB (nothing
+    //    has read `current` since the QR).
     await openRunSheet(page, rig);
+    await expect(filterChip(page, "today"), "premise: a match day mounts the sheet on Today").toHaveAttribute("aria-pressed", "true");
+    await expect(rowOf(page, timedToday), "premise: Today's own row is on the sheet").toHaveCount(1);
+    await expect(rowOf(page, plain), "the positive pair: an untimed row with no stream stays hidden under Today").toHaveCount(0);
     const chip = rowOf(page, f).getByTestId("run-sheet-stream-chip");
     const warming = await latestSession(f.id);
     expect(["requested", "provisioning", "warming"], `premise: the session is still waiting (${warming.state})`).toContain(warming.state);
-    await expect(chip).toHaveAttribute("data-state", "waiting");
+    await expect(chip, "the untimed streamed row is kept under Today, with its chip").toHaveAttribute("data-state", "waiting");
     await expect(chip).toHaveText(en("runsheet.stream.waiting"));
     await expect(chip).toHaveAttribute("href", `${fixturePath}?stream=open`);
     await expectNoHorizontalScroll(page);
@@ -1052,8 +1062,9 @@ for (const width of [320, 1280] as const) {
     await expect(opened, "the chip opened the Stream panel on its Phone tab").toBeVisible({ timeout: NAV_MS });
     await expect(opened.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
 
-    // 4. The division again: LIVE.
+    // 4. The division again, still on its default filter: LIVE.
     await openRunSheet(page, rig);
+    await expect(filterChip(page, "today")).toHaveAttribute("aria-pressed", "true");
     await expect(chip).toHaveAttribute("data-state", "live");
     await expect(chip).toHaveText(en("runsheet.stream.live"));
     await expectNoHorizontalScroll(page);
@@ -1070,9 +1081,14 @@ for (const width of [320, 1280] as const) {
       .poll(async () => (await latestSession(f.id)).state, { message: "the Stop ended the session", timeout: POLL_WAIT_MS })
       .toBe("completed");
 
-    // 6. After Stop: no chip — and the POSITIVE twin, the row itself, so an empty sheet cannot pass.
+    // 6. After Stop, on the default "Today": nothing is up, so the untimed row is hidden again (Today's own row is the
+    //    positive twin — the sheet did render); under "All" the row is there with no chip.
     await openRunSheet(page, rig);
-    await expect(rowOf(page, f), "the fixture's row is on the sheet").toHaveCount(1);
+    await expect(filterChip(page, "today")).toHaveAttribute("aria-pressed", "true");
+    await expect(rowOf(page, timedToday), "the sheet rendered: Today's own row").toHaveCount(1);
+    await expect(rowOf(page, f), "nothing up: the untimed row leaves Today").toHaveCount(0);
+    await filterChip(page, "all").click();
+    await expect(rowOf(page, f), "the fixture's row is on the sheet under All").toHaveCount(1);
     await expect(chip, "no session up, no chip").toHaveCount(0);
   });
 }
