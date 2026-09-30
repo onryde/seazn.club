@@ -8,57 +8,19 @@
 //    (the render drops per-check verdicts and evidence).
 //  - 24 distinct cases, no canary, a clean harness commit, no secret-shaped
 //    string anywhere (the repo is public; writeResults guarded only the write).
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findSecrets } from "../lib/redact.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { decideState, parseResults, stringsIn, type CaseResultV2 } from "../lib/results.ts";
 import { L2_WIDTHS } from "../lib/widths.ts";
-import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
-import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
-import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
-import { planCanaryCase, planSliceCases } from "../lib/slice.ts";
+import { LOCK_PATH, PLAN_BEFORE_CARRY_6, REPO, TRUTH_RUNS, committedRuns, freeze, judgeRun, noVariant, planFor, readLock, reDecide, sweepCommitted, thawed, trackedUnder } from "./committed-plans.ts";
 import { loopbackLiteralsIn } from "./loopback-literals.ts";
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs";
 /** Every committed slice: its wave and its directory under truth-runs. */
 const SLICES = [["W1a", "w1a-slice"], ["W1b", "w1b-slice"]] as const;
 
-/** How one committed case is judged. `checked`: re-decided from its checks
- *  (a refused case with its mandate, rebuilt from its reason). `errored`: an
- *  error red — decideState makes it from the error alone, whatever checks it
- *  kept (run.ts M-2 keeps a browser case's checks), so it is re-decided with
- *  that error, rebuilt from its `error: ` reason. `planned`: 🚫/░, and
- *  `deferred`: ⏳ — decideState makes both WITHOUT reading checks, and N-3
- *  gives such a row none, so a row that carries one is reported. Whether a
- *  planned/deferred case SHOULD be one is its plan's question (judgeRun). */
-type CaseKind = "checked" | "errored" | "planned" | "deferred";
-function judgeCase(c: CaseResultV2): { kind: CaseKind; wrong: string | null } {
-  const differs = (d: { state: string; reason: string }): string | null =>
-    d.state === c.state && d.reason === c.reason ? null : `${c.caseId}: stored ${c.state} "${c.reason}", checks decide ${d.state} "${d.reason}"`;
-  if (c.state === "no_path" || c.state === "not_run" || c.state === "later") {
-    const kind: CaseKind = c.state === "later" ? "deferred" : "planned";
-    return { kind, wrong: c.checks.length > 0 ? `${c.caseId}: ${c.state} carries ${c.checks.length} check(s) — a planned or deferred row carries none (N-3)` : null };
-  }
-  if (c.state === "red" && c.reason.startsWith("error: ")) {
-    return { kind: "errored", wrong: differs(decideState({ checks: c.checks, deferred: null, error: c.reason.slice("error: ".length) })) };
-  }
-  return { kind: "checked", wrong: differs(decideState({ checks: c.checks, deferred: null, error: null, mandated: c.state === "refused" ? c.reason : null })) };
-}
-/** W1c Task 14, carry 3: every case re-decided or skipped by kind, counted.
- *  The caller pins the counts: zero checked is a failure, not a pass. */
-function reDecide(cases: readonly CaseResultV2[]): { checked: number; skipped: number; wrong: string[] } {
-  const judged = cases.map(judgeCase);
-  return {
-    checked: judged.filter((j) => j.kind === "checked").length,
-    skipped: judged.filter((j) => j.kind !== "checked").length,
-    wrong: judged.flatMap((j) => (j.wrong === null ? [] : [j.wrong])),
-  };
-}
 
 describe.each(SLICES)("committed %s slice evidence", (_wave, slice) => {
   const DIR = resolve(REPO, TRUTH_RUNS, slice);
@@ -99,14 +61,6 @@ describe.each(SLICES)("committed %s slice evidence", (_wave, slice) => {
 // scrubber the writers use: judged by its own regex, the sweep shared its
 // blind spots ([::1], 0.0.0.0, 127.0.1.1).
 const CATALOGUE = "scripts/matrix/catalogue";
-/** Every file git tracks (index included, so a staged file counts) under a
- *  committed root, relative to the repo. W1c Task 14: this read the FILESYSTEM
- *  before, so a local sweep also read every untracked run left on the disk
- *  (~3800 shot PNGs from Tasks 7–11, which the Task 7 ruling keeps untracked)
- *  and timed out — committed evidence is what the repo holds. Stage new
- *  evidence before running this sweep over it. */
-const trackedUnder = (root: string): string[] =>
-  execFileSync("git", ["ls-files", "-z", "--", root], { cwd: REPO, encoding: "utf8" }).split("\0").filter((f) => f !== "");
 /** A committed screenshot: bytes, not text, so the text sweeps below cannot read it. */
 const isPicture = (f: string): boolean => f.endsWith(".png");
 /** The directories under truth-runs at W1c Task 14's close; each must still contribute a file. */
@@ -267,107 +221,8 @@ describe("every committed results.json is what decideState makes of its checks (
 // stored as ░/🚫 with its checks lost (class 6: absent = suppressed) is caught,
 // where a state-only skip and a `skipped >=` floor both waved it through.
 
-/** A plan's cases, keyed without the variant (the DB's builder default, which
- *  the planner reads live) and, for a plain run, without the run's one width. */
-interface ExpectedPlan {
-  readonly plan: string;
-  readonly layered: boolean;
-  readonly driven: ReadonlySet<string>;
-  readonly planned: ReadonlyMap<string, { readonly state: "no_path" | "not_run"; readonly reason: string }>;
-}
-const noVariant = (caseId: string): string => caseId.split("|").filter((_, i) => i !== 2).join("|");
-const noWidth = (caseId: string): string => caseId.replace(/@\d+$/, "");
-/** Variant-free keys: every planner is handed the sport as its own variant, and the key drops it. */
-const anyVariant = (sport: string): string => sport;
-
-function fromLayered(plan: string, cases: readonly LayerCase[]): ExpectedPlan {
-  const driven = new Set<string>();
-  const planned = new Map<string, { state: "no_path" | "not_run"; reason: string }>();
-  for (const c of cases) {
-    const key = noVariant(layerCaseId(c));
-    if (c.spec !== null) { driven.add(key); continue; }
-    // The stored reason is what decideState makes of the planner's own 🚫/░ (run.ts recordPlanned).
-    const d = decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun });
-    planned.set(key, { state: d.state as "no_path" | "not_run", reason: d.reason });
-  }
-  return { plan, layered: true, driven, planned };
-}
-const fromSpecs = (plan: string, ids: readonly string[]): ExpectedPlan =>
-  ({ plan, layered: false, driven: new Set(ids.map(noVariant)), planned: new Map() });
-
-/** The plan a recorded `plan` string names, built by the runner's own planners. */
-function expectedPlan(plan: string): ExpectedPlan {
-  const words = plan.split(" ");
-  const flag = (name: string): string | undefined => { const i = words.indexOf(name); return i < 0 ? undefined : words[i + 1]; };
-  const filters = { only: flag("--only"), scenario: flag("--scenario") };
-  if (words[0] === "--set") {
-    const set = words[1];
-    if (set === PAD_PROOF_SET) return fromSpecs(plan, padProofPlanner({}).plan(anyVariant).map((c) => c.caseId));
-    if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
-    if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
-    if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));
-  }
-  if (words[0] === "--canary" && words[1] !== undefined) return fromSpecs(plan, [planCanaryCase(anyVariant, words[1]).caseId]);
-  if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, l1Planner(filters).layered(anyVariant));
-  if (words[0] === "--layer" && words[1] === "L2") return fromLayered(plan, l2Planner(filters).layered(anyVariant));
-  if (words[0] === "slice") return fromSpecs(plan, planSliceCases(anyVariant, filters).map((c) => c.caseId));
-  throw new Error(`committed-matrix: no planner for the recorded plan "${plan}"`);
-}
-
-/** One run judged against its plan, case by case: a case the plan PLANS is
- *  stored as exactly the plan's 🚫/░ (state and reason) with no check; a case
- *  the plan DRIVES is never stored as planned (class 6); no case is missing,
- *  repeated or outside the plan; a plain run is one width. The counts are the
- *  plan's by construction: `driven` + `planned` = the run's cases. */
-function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { driven: number; planned: number; wrong: string[] } {
-  const keyOf = (id: string): string => (plan.layered ? noVariant(id) : noWidth(noVariant(id)));
-  const wrong: string[] = [];
-  const seen = new Set<string>();
-  let driven = 0;
-  let planned = 0;
-  for (const c of cases) {
-    const key = keyOf(c.caseId);
-    const j = judgeCase(c);
-    if (j.wrong !== null) wrong.push(j.wrong);
-    if (seen.has(key)) wrong.push(`${c.caseId}: repeated in the run`);
-    seen.add(key);
-    const p = plan.planned.get(key);
-    if (p !== undefined) {
-      planned++;
-      if (c.state !== p.state || c.reason !== p.reason) wrong.push(`${c.caseId}: the plan records ${p.state} "${p.reason}", stored ${c.state} "${c.reason}"`);
-    } else if (plan.driven.has(key)) {
-      driven++;
-      if (j.kind === "planned") wrong.push(`${c.caseId}: the plan DRIVES this case, stored ${c.state} with ${c.checks.length} check(s) — a driven result recorded as planned (class 6)`);
-    } else {
-      wrong.push(`${c.caseId}: not in its plan (${plan.plan})`);
-    }
-  }
-  for (const k of [...plan.driven, ...plan.planned.keys()]) if (!seen.has(k)) wrong.push(`${k}: planned by ${plan.plan}, missing from the run`);
-  if (!plan.layered && new Set(cases.map((c) => c.caseId.match(/@\d+$/)?.[0] ?? "")).size > 1) wrong.push(`${plan.plan}: a plain run holds more than one width`);
-  return { driven, planned, wrong };
-}
-
 /** The results.json files committed at W1c Task 14's close (fix round 1): a sweep that judges fewer lost some. */
 const RESULTS_FLOOR = 33;
-/** The committed runs written before results.json recorded its plan (carry 6,
- *  3c36ea1b3), each named with the plan its command line ran. Any other run
- *  with no recorded plan is refused, never skipped. */
-const PLAN_BEFORE_CARRY_6: Readonly<Record<string, string>> = Object.freeze({
-  "w1a-slice": "slice",
-  "w1b-slice": "slice",
-  "w1b-probe": `--set ${PROBE_SET}`,
-  // Task 8's walkthrough: one cell × LIFECYCLE per run, at 1280, 320 (×3) and over HTTP.
-  ...Object.fromEntries(["1280-f", "320a", "320b", "320c", "http-f"].flatMap((w) =>
-    ["generic", "badminton"].map((sport) => [`w1c-walkthrough-a/w1c-wa-${w}-${sport}`, `slice --only league|${sport} --scenario LIFECYCLE`]))),
-});
-
-/** The plan a committed run is judged against: the one it recorded, or the
- *  one it is named with from before carry 6 — never both, never neither. */
-function planFor(dir: string, recorded: string | undefined): string | { refused: string } {
-  const named = PLAN_BEFORE_CARRY_6[dir];
-  if (recorded !== undefined && named !== undefined) return { refused: `${dir}: records "${recorded}" AND is named "${named}" before carry 6` };
-  return recorded ?? named ?? { refused: `${dir}: no recorded plan, and not named as a run from before carry 6` };
-}
 
 describe("each committed run, judged against its own plan (W1c Task 14 fix round 1, review I-1)", () => {
   it("a run is judged against the plan it recorded or is named with — never both, never neither", () => {
@@ -379,7 +234,7 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
   const l2 = `${TRUTH_RUNS}/w1c-l2/results.json`;
   it("a driven case stored as planned, a planned row with another reason, a lost, a stray and a repeated case are each caught", () => {
     const cases = parseResults(JSON.parse(readFileSync(resolve(REPO, l2), "utf8"))).cases;
-    const plan = expectedPlan("--layer L2");
+    const plan = thawed(readLock().runs["w1c-l2"]!);
     // The honest committed run is clean, and it is the plan's split exactly.
     const honest = judgeRun(cases, plan);
     expect(honest.wrong).toEqual([]);
@@ -397,27 +252,58 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
     expect(judgeRun([...cases, { ...driven!, caseId: "ladder|badminton|bwf|R4a@375" }], plan).wrong.join("\n")).toContain("ladder|badminton|bwf|R4a@375: not in its plan");
     expect(judgeRun([...cases, driven!], plan).wrong.join("\n")).toContain("swiss|badminton|bwf|R4a@375: repeated in the run");
   });
-  it("every committed results.json is exactly its plan: each driven case re-decided, each planned row the plan's own", () => {
+  it("every committed run has its frozen plan (plans.lock.json), and every frozen plan names a committed run (final review I-1)", () => {
+    const lock = readLock();
+    const runs = committedRuns();
+    const frozen = Object.keys(lock.runs);
+    // A run the lock does not hold is refused with the entry its commit must add, built from today's planners.
+    const missing = runs.filter((r) => !(r.dir in lock.runs)).map((r) => `${r.dir}: no frozen plan in ${LOCK_PATH} — add ${typeof r.plan === "string" ? JSON.stringify({ [r.dir]: freeze(r.plan) }) : r.plan.refused}`);
+    expect(missing).toEqual([]);
+    expect(frozen.filter((d) => !runs.some((r) => r.dir === d)), "a frozen plan whose run is no longer committed").toEqual([]);
+    expect(runs.filter((r) => lock.runs[r.dir]!.plan !== r.plan).map((r) => `${r.dir}: ran ${JSON.stringify(r.plan)}, frozen as "${lock.runs[r.dir]!.plan}"`)).toEqual([]);
+    expect(frozen.length).toBe(runs.length);
+    expect(runs.length).toBeGreaterThanOrEqual(RESULTS_FLOOR);
+  });
+  it("every committed results.json is exactly its FROZEN plan: each driven case re-decided, each planned row the plan's own", () => {
     const files = trackedUnder(TRUTH_RUNS).filter((f) => f.endsWith("/results.json"));
-    const wrong: string[] = [];
-    let driven = 0;
-    let planned = 0;
-    for (const f of files) {
-      const dir = f.slice(TRUTH_RUNS.length + 1, -"/results.json".length);
-      const results = parseResults(JSON.parse(readFileSync(resolve(REPO, f), "utf8")));
-      const plan = planFor(dir, "plan" in results && typeof results.plan === "string" ? results.plan : undefined);
-      if (typeof plan !== "string") { wrong.push(plan.refused); continue; }
-      const r = judgeRun(results.cases, expectedPlan(plan));
-      wrong.push(...r.wrong.map((w) => `${dir}: ${w}`));
-      driven += r.driven;
-      planned += r.planned;
-    }
-    console.info(`committed-matrix: ${files.length} results.json judged against their plans — ${driven} driven case(s), ${planned} planned 🚫/░ row(s)`);
+    const { runs, driven, planned, wrong } = sweepCommitted();
+    console.info(`committed-matrix: ${runs} results.json judged against their frozen plans — ${driven} driven case(s), ${planned} planned 🚫/░ row(s)`);
     expect(wrong).toEqual([]);
-    // Anti-vacuity: no run lost, and both kinds were judged.
+    // Anti-vacuity: no run lost, and every case the lock freezes was judged — the counts are the lock's, not the results'.
+    const lock = Object.values(readLock().runs);
+    expect(runs).toBe(files.length);
     expect(files.length).toBeGreaterThanOrEqual(RESULTS_FLOOR);
     expect(Object.keys(PLAN_BEFORE_CARRY_6).every((d) => files.includes(`${TRUTH_RUNS}/${d}/results.json`)), "a run named before carry 6 is no longer committed").toBe(true);
+    expect(driven).toBe(lock.reduce((n, e) => n + e.driven.length, 0));
+    expect(planned).toBe(lock.reduce((n, e) => n + Object.keys(e.planned).length, 0));
     expect(driven).toBeGreaterThan(0);
     expect(planned).toBeGreaterThan(0);
+  });
+  it("a driven case stored ⏳/🚫 in recordPlanned's shape reds; a real runtime ⏳/🚫 on a driven case does not (final review I-2)", () => {
+    const dir = "w1c-l1/w1c-l1-r1";
+    const cases = parseResults(JSON.parse(readFileSync(resolve(REPO, TRUTH_RUNS, dir, "results.json"), "utf8"))).cases;
+    const plan = thawed(readLock().runs[dir]!);
+    expect(judgeRun(cases, plan).wrong).toEqual([]);
+    const target = cases[0]!;
+    expect(plan.driven.has(noVariant(target.caseId)), "the probe's case is one the plan drives").toBe(true);
+    expect(target.durationMs, "the committed case really ran").toBeGreaterThan(0);
+    const unrun = { checks: [], durationMs: 0, counts: { calls: 0, fixtures: 0, events: 0 }, notes: [] };
+    const ran = { checks: [], durationMs: target.durationMs, counts: { ...target.counts, calls: Math.max(1, target.counts.calls) } };
+    const deferred = decideState({ checks: [], deferred: { wave: "W1d", reason: "no pad adapter" }, error: null });
+    const noPath = decideState({ checks: [], deferred: null, error: null, noPath: { wave: "W1d", reason: "no organiser control" } });
+    const notRun = decideState({ checks: [], deferred: null, error: null, notRun: "no scenario script yet (atom LIFECYCLE)" });
+    const judged = (patch: Partial<CaseResultV2>) => judgeRun(cases.map((c) => (c === target ? { ...c, ...patch } : c)), plan).wrong;
+    const CLASS_6 = "a driven result recorded as planned (class 6)";
+    // Only recordPlanned writes a case with no time spent and nothing counted: on a driven case that shape is a lost result.
+    expect(judged({ ...unrun, state: "later", reason: deferred.reason }).join("\n")).toContain(CLASS_6);
+    expect(judged({ ...unrun, state: "no_path", reason: noPath.reason }).join("\n")).toContain(CLASS_6);
+    // not_run is written by recordPlanned alone, whatever the counts say.
+    expect(judged({ ...ran, state: "not_run", reason: notRun.reason }).join("\n")).toContain(CLASS_6);
+    // A driven case that spent time and ended ⏳ or 🚫 at runtime (run.ts: ScenarioUnsupported, NoOrganiserPath) is honest.
+    expect(judged({ ...ran, state: "later", reason: deferred.reason })).toEqual([]);
+    expect(judged({ ...ran, state: "no_path", reason: noPath.reason })).toEqual([]);
+    // A browser case can reach its 🚫 before the driver counts a call (NoOrganiserPath at the first control): the time it spent is the tell.
+    expect(judged({ ...unrun, durationMs: target.durationMs, state: "no_path", reason: noPath.reason })).toEqual([]);
+    expect([deferred.state, noPath.state, notRun.state]).toEqual(["later", "no_path", "not_run"]);
   });
 });
