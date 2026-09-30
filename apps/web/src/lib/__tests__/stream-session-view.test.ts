@@ -22,7 +22,7 @@ import { join, resolve } from "node:path";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { parseCaptureQr } from "@/lib/capture-qr";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_PLATFORMS } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
@@ -145,6 +145,23 @@ describe("stream-session-view — the copy maps", () => {
     }
     expect(named).toBe(LOCALES.length * providers.length);
   });
+
+  it("M4: the unreadable-key copy offers the two remedies that WORK — replace the key, or (not a YouTube / Twitch destination) remove it — and names the creatable platforms in every locale; English never says to add it again", () => {
+    const key = CREATE_ERROR_KEYS.target_unreadable;
+    let named = 0;
+    for (const l of LOCALES) {
+      const text = dict(l)[key]!.toLowerCase();
+      // Brand names are proper nouns, the same in every locale — derived from what create admits (D6).
+      for (const p of STREAM_PLATFORMS) {
+        expect(text, `${l}: names ${p}, the kinds that can be added`).toContain(p);
+        named++;
+      }
+    }
+    expect(named).toBe(LOCALES.length * STREAM_PLATFORMS.length);
+    expect(dict("en")[key], "a legacy kind cannot be added again").not.toMatch(/add (it|the destination) again/i);
+    expect(dict("en")[key]).toMatch(/replace the key/i);
+    expect(dict("en")[key]).toMatch(/remove it/i);
+  });
 });
 
 describe("stream-session-view — state, step and pill", () => {
@@ -188,7 +205,7 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["DESTINATION_NOT_ALLOWED 422", new DestinationNotAllowedError("host"), "destination_not_allowed"],
     // B2: the saved key will not open — the server's own class, both remedies.
     ["TARGET_UNREADABLE 422 (replace the key)", new TargetUnreadableError("replace_key"), "target_unreadable"],
-    ["TARGET_UNREADABLE 422 (remove and add again)", new TargetUnreadableError("re_add"), "target_unreadable"],
+    ["TARGET_UNREADABLE 422 (remove it)", new TargetUnreadableError("remove"), "target_unreadable"],
     ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError(RELAY_PLAN_GATES.relay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
@@ -396,42 +413,57 @@ describe("stream-session-view — health, elapsed, the paste code", () => {
 });
 
 describe("D3 — the destination warning (spec §5.6)", () => {
-  const view = (state: string, output: { state: string; since: string } | null) => ({ state, output }) as never;
+  type Out = { state: string; since: string; elapsedMs: number } | null;
+  const view = (state: string, output: Out) => ({ state, output }) as never;
   const since = new Date("2026-09-30T12:00:00Z");
-  const at = (ms: number) => new Date(since.getTime() + ms);
+  /** The output as the SERVER answers it: `since` and the elapsed it measured on ITS clock (B2 fix round M6). */
+  const out = (state: string, elapsedMs: number) => ({ state, since: since.toISOString(), elapsedMs });
   // The non-ok words come from the wire schema's own enum, so a new output state cannot ship without this sweep seeing it.
   const NON_OK = StreamOutput.shape.state.options.filter((s) => s !== "ok");
+  afterEach(() => { vi.useRealTimers(); });
   it("the owner's number: 30 s", () => {
     expect(OUTPUT_WARNING_AFTER_MS).toBe(30_000);
   });
-  it("fires at exactly OUTPUT_WARNING_AFTER_MS, not one millisecond before, for every non-ok state", () => {
+  it("fires at exactly OUTPUT_WARNING_AFTER_MS of server-measured elapsed, not one millisecond before, for every non-ok state", () => {
     let checked = 0;
     for (const s of NON_OK) {
-      const v = view("live", { state: s, since: since.toISOString() });
-      expect(destinationWarning(v, at(OUTPUT_WARNING_AFTER_MS - 1)), s).toBe(false);
-      expect(destinationWarning(v, at(OUTPUT_WARNING_AFTER_MS)), s).toBe(true);
+      expect(destinationWarning(view("live", out(s, OUTPUT_WARNING_AFTER_MS - 1))), s).toBe(false);
+      expect(destinationWarning(view("live", out(s, OUTPUT_WARNING_AFTER_MS))), s).toBe(true);
       checked++;
     }
     expect(checked).toBe(3);
   });
   it("never while output is ok, never outside live, never without output", () => {
-    const late = at(OUTPUT_WARNING_AFTER_MS * 10);
-    expect(destinationWarning(view("live", { state: "ok", since: since.toISOString() }), late)).toBe(false);
+    const late = OUTPUT_WARNING_AFTER_MS * 10;
+    expect(destinationWarning(view("live", out("ok", late)))).toBe(false);
     let checked = 0;
     for (const st of StreamSessionState.options.filter((x) => x !== "live")) {
-      expect(destinationWarning(view(st, { state: "connecting", since: since.toISOString() }), late), st).toBe(false);
+      expect(destinationWarning(view(st, out("connecting", late))), st).toBe(false);
       checked++;
     }
     expect(checked, "every state but live").toBe(StreamSessionState.options.length - 1);
-    expect(destinationWarning(view("live", null), late)).toBe(false);
+    expect(destinationWarning(view("live", null))).toBe(false);
     // The positive pair of the loop above, on the same inputs: live itself does warn.
-    expect(destinationWarning(view("live", { state: "connecting", since: since.toISOString() }), late)).toBe(true);
+    expect(destinationWarning(view("live", out("connecting", late)))).toBe(true);
   });
-  it("Review Focus 5: a since in the browser's FUTURE (clock skew) gives no warning and an elapsed of 0, never negative", () => {
-    const v = view("live", { state: "connecting", since: at(5_000).toISOString() });
-    expect(outputElapsedMs(v, since)).toBe(0);
-    expect(destinationWarning(v, since)).toBe(false);
-    expect(outputElapsedMs(view("live", null), since), "no output, nothing to time").toBeNull();
-    expect(outputElapsedMs(view("live", { state: "connecting", since: since.toISOString() }), at(1234))).toBe(1234);
+  it("outputElapsedMs is the server's number, verbatim; null when there is no output to time", () => {
+    expect(outputElapsedMs(view("live", out("connecting", 1234)))).toBe(1234);
+    expect(outputElapsedMs(view("live", null)), "no output, nothing to time").toBeNull();
+  });
+  it("M6: the BROWSER clock is never consulted — ten minutes ahead of the server it does not warn early, ten minutes behind it does not warn late", () => {
+    const skew = 10 * 60_000;
+    let checked = 0;
+    for (const browserOffset of [skew, -skew]) {
+      // The server measured `elapsed` at `since + elapsed`; the browser's clock reads that instant plus its own skew.
+      for (const [elapsed, warns] of [[0, false], [OUTPUT_WARNING_AFTER_MS - 1, false], [OUTPUT_WARNING_AFTER_MS, true]] as const) {
+        vi.useFakeTimers({ now: since.getTime() + elapsed + browserOffset });
+        expect(destinationWarning(view("live", out("connecting", elapsed))), `browser ${browserOffset > 0 ? "ahead" : "behind"}, server elapsed ${elapsed}`).toBe(warns);
+        expect(outputElapsedMs(view("live", out("connecting", elapsed)))).toBe(elapsed);
+        vi.useRealTimers();
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
   });
 });
+

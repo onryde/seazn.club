@@ -176,15 +176,20 @@ describe("relay request schemas refuse what they must", () => {
       restartFree: false,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
-    // T4 D3: output is REQUIRED (null, or {state, since}) — an absent field would read as "nothing to warn about".
+    // T4 D3: output is REQUIRED (null, or {state, since, elapsedMs}) — an absent field would read as "nothing to warn about".
     const withoutOutput: Record<string, unknown> = { ...current };
     delete withoutOutput.output;
     expect(S.StreamSessionCurrent.safeParse(withoutOutput).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, output: {} }).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "healthy", since: "2026-09-30T12:00:00Z" } }).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "healthy", since: "2026-09-30T12:00:00Z", elapsedMs: 0 } }).success).toBe(false);
+    // B2 fix round M6: the server's elapsed is REQUIRED — the client judges D3 on it, never on its own clock — and it is a
+    // whole, non-negative number of milliseconds.
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "connecting", since: "2026-09-30T12:00:00Z" } }).success, "no elapsedMs").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "connecting", since: "2026-09-30T12:00:00Z", elapsedMs: -1 } }).success, "negative").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "connecting", since: "2026-09-30T12:00:00Z", elapsedMs: 1.5 } }).success, "fractional").toBe(false);
     let outputStates = 0;
     for (const state of ["ok", "connecting", "rejected", "unknown"] as const) {   // ports.ts OutputState, the wire's source
-      expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state, since: "2026-09-30T12:00:00Z" } }).success, state).toBe(true);
+      expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state, since: "2026-09-30T12:00:00Z", elapsedMs: 0 } }).success, state).toBe(true);
       outputStates++;
     }
     expect(outputStates).toBe(S.StreamOutput.shape.state.options.length);

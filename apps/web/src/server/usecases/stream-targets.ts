@@ -9,8 +9,8 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
-  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
-  checkDestination, type DestinationRefusal,
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
+  checkDestination, isStreamPlatform, type DestinationRefusal,
 } from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -39,22 +39,22 @@ export class DestinationNotAllowedError extends HttpError {
 
 /** N1 (B2): 422 TARGET_UNREADABLE — the destination's saved key will not open (sealed under another KEK, or a damaged
  *  byte). The sentence names the remedy that WORKS for the row: a platform row is recovered in place by Replace key
- *  (secret-columns.ts replaceTargetKey re-seals it on its preset); a legacy kind has no preset, so it is removed and
- *  added again. Carries no key, url or hint, and no extra. */
+ *  (secret-columns.ts replaceTargetKey re-seals it on its preset); a legacy kind has no preset and cannot be added again
+ *  (D6: create admits only the platforms), so it is removed (M4, B2 review). Carries no key, url or hint, and no extra. */
 export class TargetUnreadableError extends HttpError {
-  constructor(public readonly remedy: "replace_key" | "re_add") {
+  constructor(public readonly remedy: "replace_key" | "remove") {
     super(
       422,
       remedy === "replace_key"
         ? "This destination's saved stream key can no longer be read; replace the key, then go live again"
-        : "This destination's saved key can no longer be read and it is not a YouTube or Twitch destination; remove it and add it again",
+        : "This destination's saved key can no longer be read and it is not a YouTube or Twitch destination, so it cannot be repaired; remove it and choose a YouTube or Twitch destination instead",
       TARGET_UNREADABLE,
     );
   }
 
   /** The remedy by the row's kind — the ONE place that decides it, for Go live and Replace key alike. */
   static forKind(kind: string): TargetUnreadableError {
-    return new TargetUnreadableError((STREAM_PLATFORMS as readonly string[]).includes(kind) ? "replace_key" : "re_add");
+    return new TargetUnreadableError(isStreamPlatform(kind) ? "replace_key" : "remove");
   }
 }
 
@@ -152,7 +152,7 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
       if (r.reason === "not_found") throw targetNotFound();
       if (r.reason === "undialable") throw new DestinationNotAllowedError(r.rule);
       // I2: a legacy-kind row whose sealed key will not open has no platform preset to re-seal on.
-      if (r.reason === "unreadable") throw new TargetUnreadableError("re_add");
+      if (r.reason === "unreadable") throw new TargetUnreadableError("remove");
       throw new HttpError(409, `that stream key is already saved as "${r.other.label}"`, "DESTINATION_DUPLICATE", { other: r.other });
     });
   }

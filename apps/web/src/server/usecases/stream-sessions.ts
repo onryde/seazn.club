@@ -1010,6 +1010,24 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
   }
 }
 
+/** B2: a saved key that will not open (a KEK change, a damaged byte) is the organiser's to fix — a typed 422 naming the
+ *  remedy, logged with the fixture, target and kind only. Any other error (a missing RELAY_KEK is one: secret-columns
+ *  rethrows it, M3) is returned unchanged for the caller to throw. */
+function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): unknown {
+  if (!(err instanceof TargetSecretUnreadableError)) return err;
+  log.warn({ fixtureId, targetId, kind: err.kind }, "stream session: the saved destination will not open — start refused; the organiser replaces the key");
+  return TargetUnreadableError.forKind(err.kind);
+}
+
+/** M1: the early probe `createSession` runs before its first provider call. Under the same row lock admission takes, and
+ *  only for this org's ACTIVE row — anything else is left for `admit` to answer 404, exactly as before. */
+async function refuseUnreadableTarget(orgId: string, fixtureId: string, targetId: string): Promise<void> {
+  await sql.begin(async (tx) => {
+    if (!(await lockStreamTarget(tx, orgId, targetId))) return;
+    await readTargetSecret(tx, orgId, targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, targetId); });
+  });
+}
+
 export async function createSession(
   auth: AuthCtx, fixtureId: string, body: CreateStreamSession, deps: SessionDeps,
 ): Promise<{ sessionId: string }> {
@@ -1069,6 +1087,12 @@ export async function createSession(
     captureError(err, { orgId, route: "relay.session.monthly_grant" });
   }
 
+  // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
+  // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
+  // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), and the read inside
+  // the admission transaction stays the authority for everything that row lock protects.
+  await refuseUnreadableTarget(orgId, fixtureId, body.targetId);
+
   const [overlay, relay, balance, restartWithinReuseWindow, usage, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
@@ -1108,12 +1132,9 @@ export async function createSession(
     // the same typed 422 the save would have given, and like it never carries the url (its path can hold the key).
     // B2 (B1 review): a saved key that will not open (a KEK change, a damaged byte) was an unmapped 500 here. It is the
     // organiser's to fix, so it is a typed 422 naming the remedy — thrown inside this transaction, so no row is written
-    // and nothing is spent (the credit is consumed only at live).
-    const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => {
-      if (!(err instanceof TargetSecretUnreadableError)) throw err;
-      log.warn({ fixtureId, targetId: body.targetId, kind: err.kind }, "stream session: the saved destination will not open — start refused; the organiser replaces the key");
-      throw TargetUnreadableError.forKind(err.kind);
-    });
+    // and nothing is spent (the credit is consumed only at live). M1: `refuseUnreadableTarget` already asked this before
+    // the storage read; this read, under the row lock, stays the authority (a Replace key cannot interleave with it).
+    const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, body.targetId); });
     const destination = checkDestination(saved.url);
     if (!destination.ok) {
       log.warn({ fixtureId, targetId: body.targetId, rule: destination.rule }, "stream session: a saved destination the allowlist no longer admits — start refused");
@@ -1365,8 +1386,10 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   const [spend] = await sql<{ net: number }[]>`
     select coalesce(sum(delta), 0)::int as net from org_stream_credits
      where org_id = ${row.org_id} and session_id = ${row.id} and reason in ('consume', 'refund')`;
-  // D3: `since` is the start of the trailing run of ingest_status events whose outputState equals the current one —
-  // the events the poll above already records on every change (Ruling 13) — CLAMPED to the session's `live_at`. The
+  // D3: `since` is when the destination last received (I1, B2 review): for a non-ok word, the first ingest_status event
+  // after the last one that read `ok` — so a flip BETWEEN two non-ok words (unknown → connecting) is inside the same
+  // not-receiving period and never restarts the 30 s clock; for `ok`, the first event after the last non-ok one. These
+  // are the events the poll above already records on every change (Ruling 13). CLAMPED to the session's `live_at`. The
   // destination is not tried before the phone is live, and Cloudflare reads `unknown` (non-ok) all through warming,
   // so an unclamped run would start the 30 s clock during warming and warn on the first live render (review #9). While
   // live, `since` is therefore "non-ok while live". `greatest` ignores a null `live_at` (not live yet). Null for
@@ -1379,11 +1402,13 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
           where session_id = ${row.id} and type = 'ingest_status'
             and seq > coalesce((select max(seq) from fixture_stream_events
                                  where session_id = ${row.id} and type = 'ingest_status'
-                                   and payload->>'outputState' is distinct from ${outputObserved}), 0)
+                                   and (coalesce(payload->>'outputState', '') = 'ok') <> ${outputObserved === "ok"}), 0)
           order by seq asc limit 1),
         (select live_at from fixture_stream_sessions where id = ${row.id})
       ) as since`;
-    output = { state: outputObserved, since: new Date(first?.since ?? deps.now()).toISOString() };
+    const since = new Date(first?.since ?? deps.now());
+    // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.
+    output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
   }
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,

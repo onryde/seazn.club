@@ -20,7 +20,7 @@ import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__
 import { log } from "@/server/logger";
 import { fingerprintDestination, seal } from "../crypto";
 import {
-  KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, archiveStreamTarget, insertStreamTarget, keyHintOf,
+  KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, TargetSecretUnreadableError, archiveStreamTarget, insertStreamTarget, keyHintOf,
   lockStreamTarget, readFirstInput, readInputBySlot, readKeyHints, readTargetSecret, replaceTargetKey, storeInputCredentials,
 } from "../secret-columns";
 
@@ -544,6 +544,69 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     } finally {
       spy.mockRestore();
     }
+  });
+
+  // M3 (B2 review): an envelope that will not open under a VALID KEK is the organiser's to fix (a KEK rotation, a damaged
+  // byte: TargetSecretUnreadableError → 422 Replace key). A MISSING or MALFORMED RELAY_KEK is the deployment's fault: it
+  // must stay the loud config error it was (a 500 that reaches Sentry), never a warn-level 422 telling every organiser to
+  // replace a key that is fine. Both branches, and the same guard on Replace key's recovery.
+  describe("M3: a missing or malformed RELAY_KEK is never filed as an unreadable destination", () => {
+    const withKek = async <T,>(value: string | undefined, body: () => Promise<T>): Promise<T> => {
+      const saved = process.env.RELAY_KEK;
+      if (value === undefined) delete process.env.RELAY_KEK;
+      else process.env.RELAY_KEK = value;
+      try {
+        return await body();
+      } finally {
+        process.env.RELAY_KEK = saved;
+      }
+    };
+    const KEK_FAULTS = [{ name: "unset", value: undefined, says: /RELAY_KEK is not set/ }, { name: "malformed", value: "zz".repeat(32), says: /RELAY_KEK must be exactly 64 hex/ }] as const;
+
+    it("readTargetSecret: an unset or malformed KEK rethrows the KEK's own error — not TargetSecretUnreadableError; a valid KEK on an unopenable envelope IS TargetSecretUnreadableError", async () => {
+      const r = await rig();
+      let checked = 0;
+      for (const f of KEK_FAULTS) {
+        const err = await withKek(f.value, () => sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId)).then(() => null, (e: unknown) => e));
+        expect(err, f.name).toBeInstanceOf(Error);
+        expect(err, f.name).not.toBeInstanceOf(TargetSecretUnreadableError);
+        expect((err as Error).message, f.name).toMatch(f.says);
+        checked++;
+      }
+      expect(checked).toBe(KEK_FAULTS.length);
+      // The other branch, under the valid KEK: an envelope sealed elsewhere is the typed organiser-side error.
+      const [row] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      const err = await sql.begin((tx) => readTargetSecret(tx, r.orgId, row!.id)).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(TargetSecretUnreadableError);
+      expect(err).toMatchObject({ targetId: row!.id, kind: "youtube" });
+      // …and the readable row still opens: the KEK was restored.
+      expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);
+    });
+
+    it("replaceTargetKey: an unset or malformed KEK rethrows before the recovery — no 'unopenable envelope' warn, and the row is untouched", async () => {
+      const r = await rig();
+      const warns: unknown[][] = [];
+      const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
+      try {
+        const [before] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null }[]>`
+          select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${r.targetId}`;
+        let checked = 0;
+        for (const f of KEK_FAULTS) {
+          const err = await withKek(f.value, () => sql.begin((tx) => replaceTargetKey(tx, r.orgId, r.targetId, secret65())).then(() => null, (e: unknown) => e));
+          expect((err as Error | null)?.message, f.name).toMatch(f.says);
+          checked++;
+        }
+        expect(checked).toBe(KEK_FAULTS.length);
+        expect(warns.filter(([o]) => (o as { targetId?: string }).targetId === r.targetId), "no recovery warn for a KEK fault").toEqual([]);
+        const [after] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null }[]>`
+          select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${r.targetId}`;
+        expect(Buffer.from(after!.rtmp_enc).equals(Buffer.from(before!.rtmp_enc))).toBe(true);
+        expect(after!.dest_fingerprint).toBe(before!.dest_fingerprint);
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 
   it("I2: a DAMAGED envelope whose fingerprint still matches (same KEK, same key) is re-sealed by replacing the SAME key — not the no-op an openable row gets (mutant: short-circuit on the fingerprint alone)", async () => {

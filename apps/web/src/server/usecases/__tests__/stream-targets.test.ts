@@ -428,7 +428,7 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
     expect(checked).toBe(STREAM_PLATFORMS.length);
   });
 
-  it("I2: replace key on a LEGACY-kind row whose envelope will not open is a 422 telling the organiser to remove it and add it again — never a 500 — and nothing is re-sealed; every legacy kind", async () => {
+  it("I2: replace key on a LEGACY-kind row whose envelope will not open is a 422 telling the organiser to remove it (M4: never to add it again) — never a 500 — and nothing is re-sealed; every legacy kind", async () => {
     const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
     expect(legacy.length).toBeGreaterThan(0);
     let checked = 0;
@@ -437,7 +437,8 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
       const targetId = await rigTarget(auth.orgId, `Old ${kind}`, kind);
       const err = await patchStreamTarget(auth, auth.orgId, targetId, { streamKey: `k-${randomUUID()}` }).then(() => null, (e: unknown) => e);
       expect(err, kind).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
-      expect((err as Error).message, kind).toMatch(/remove .*add it again/i);
+      expect((err as Error).message, kind).toMatch(/remove it/i);
+      expect((err as Error).message, `${kind}: M4 — create admits only YouTube and Twitch`).not.toMatch(/add it again|re-?add/i);
       await expect(sql.begin((tx) => readTargetSecret(tx, auth.orgId, targetId)), `${kind}: still the unopenable envelope`).rejects.toThrow();
       expect((await listStreamTargets(auth, auth.orgId)).find((t) => t.id === targetId), kind).toMatchObject({ keyHint: null });
       checked++;

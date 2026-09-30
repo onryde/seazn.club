@@ -3493,34 +3493,35 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
   const flush = () => new Promise((res) => setImmediate(res));
   const iso = (d: Date) => d.toISOString();
 
-  it("output.since is when the CURRENT output state began — the first ingest_status event of the trailing run of that state, not the latest poll and not the latest event", async () => {
+  it("output.since is when the destination's CURRENT receiving / not-receiving period began — the first ingest_status event after the last one on the other side of ok, not the latest poll and not the latest event — and elapsedMs is measured to the server's now", async () => {
     const r = await rig({ credits: 1, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomUUID()}` });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     await goLive(r);
     const tLive = r.deps.now();
     const first = (await currentSession(r.auth, r.fixtureId, r.deps))!;
-    expect(first.output).toEqual({ state: "connecting", since: iso(tLive) });   // the real fake: a destination that never accepts
+    expect(first.output).toEqual({ state: "connecting", since: iso(tLive), elapsedMs: 0 });   // the real fake: a destination that never accepts
     r.tick(10_000);
     const second = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(second.output!.since, "unchanged state: since does not move with the poll").toBe(first.output!.since);
+    expect(second.output!.elapsedMs, "…and the elapsed does, on the server's clock").toBe(10_000);
     // The state MOVES while live, so the trailing run starts after live_at and the clamp cannot answer for it.
     let out: OutputState = "ok";
     const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
     try {
       r.tick(5_000);
       const tOk = r.deps.now();
-      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output).toEqual({ state: "ok", since: iso(tOk) });
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output).toEqual({ state: "ok", since: iso(tOk), elapsedMs: 0 });
       out = "connecting";
       r.tick(5_000);
       const tBack = r.deps.now();
-      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "a second run of connecting starts at ITS first event").toEqual({ state: "connecting", since: iso(tBack) });
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "a second run of connecting starts at ITS first event").toEqual({ state: "connecting", since: iso(tBack), elapsedMs: 0 });
       // An ingest_status event whose INGEST word changes but whose output word does not is inside the same run.
       const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId}`;
       r.ingest.setState(inp!.ingest_input_id, "disconnected");
       r.tick(5_000);
-      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest event").toEqual({ state: "connecting", since: iso(tBack) });
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest event").toEqual({ state: "connecting", since: iso(tBack), elapsedMs: 5_000 });
       r.tick(5_000);
-      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest poll").toEqual({ state: "connecting", since: iso(tBack) });
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest poll").toEqual({ state: "connecting", since: iso(tBack), elapsedMs: 10_000 });
       const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
       expect(n, "connected+connecting, ok, connecting, disconnected — four events, so the run really had a boundary and an inside").toBe(4);
     } finally {
@@ -3548,14 +3549,14 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
         expect(polls).toBe(WARM_MS / POLL_MS);
         const live = await currentSession(r.auth, r.fixtureId, r.deps);
         expect(live!.state, nonOk).toBe("live");
-        expect(live!.output, nonOk).toEqual({ state: nonOk, since: iso(r.deps.now()) });   // clamped to live_at
-        expect(destinationWarning(live!, r.deps.now()), `${nonOk} live+0`).toBe(false);
+        expect(live!.output, nonOk).toEqual({ state: nonOk, since: iso(r.deps.now()), elapsedMs: 0 });   // clamped to live_at
+        expect(destinationWarning(live!), `${nonOk} live+0`).toBe(false);
         r.tick(OUTPUT_WARNING_AFTER_MS - 1);
         const early = await currentSession(r.auth, r.fixtureId, r.deps);
-        expect(destinationWarning(early!, r.deps.now()), `${nonOk} live+29.999`).toBe(false);
+        expect(destinationWarning(early!), `${nonOk} live+29.999`).toBe(false);
         r.tick(1);
         const due = await currentSession(r.auth, r.fixtureId, r.deps);
-        expect(destinationWarning(due!, r.deps.now()), `${nonOk} live+30`).toBe(true);
+        expect(destinationWarning(due!), `${nonOk} live+30`).toBe(true);
         expect(due!.state, "D3 warns; it never ends the stream").toBe("live");
       } finally {
         outSpy.mockRestore();
@@ -3563,6 +3564,72 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  // I1 (B2 review): D3 is "the destination has not RECEIVED for 30 s" (spec §0 D3; §3.2 "output not ok ≥ 30 s") — a
+  // judgment of ok versus not-ok, never of the word. Every expected instant below is live + a spec offset, derived from
+  // OUTPUT_WARNING_AFTER_MS; the word-run boundary this replaced put the first warning at live+50 s here, and never
+  // raised it at all for a destination flapping between two non-ok words.
+  /** Poll at `ms` after `tLive` with the destination reading `word` — the organiser's poll IS the observation. */
+  const pollAt = async (r: Rig, tLive: number, ms: number, word: OutputState, set: (w: OutputState) => void) => {
+    r.tick(tLive + ms - r.deps.now().getTime());
+    set(word);
+    return (await currentSession(r.auth, r.fixtureId, r.deps))!;
+  };
+
+  it("I1 SEQUENCE: live reading connecting, unknown at +5 s, connecting at +20 s — a flip between two NON-ok words is still not receiving, so the warning is due at live+30 s (not 30 s after the flip), and a destination flapping between them stays warned", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      expect(destinationWarning(await pollAt(r, tLive, 5_000, "unknown", set)), "live+5 s").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, 20_000, "connecting", set)), "live+20 s").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, OUTPUT_WARNING_AFTER_MS - 1, "connecting", set)), "live+29.999 s").toBe(false);
+      const due = await pollAt(r, tLive, OUTPUT_WARNING_AFTER_MS, "connecting", set);
+      expect(due.output, "since the destination last received — it never has, so since live").toEqual({ state: "connecting", since: iso(new Date(tLive)), elapsedMs: OUTPUT_WARNING_AFTER_MS });
+      expect(destinationWarning(due), "live+30 s").toBe(true);
+      // Flapping every poll between the two non-ok words: every poll past 30 s warns.
+      let flaps = 0;
+      for (let ms = OUTPUT_WARNING_AFTER_MS + 5_000; ms <= 2 * OUTPUT_WARNING_AFTER_MS; ms += 5_000) {
+        const v = await pollAt(r, tLive, ms, flaps % 2 === 0 ? "unknown" : "connecting", set);
+        expect(destinationWarning(v), `flapping, live+${ms / 1000} s`).toBe(true);
+        flaps++;
+      }
+      expect(flaps, "the flapping leg ran").toBe(OUTPUT_WARNING_AFTER_MS / 5_000);
+      // The flips were really recorded (Ruling 13), so the boundary had words to mis-read: live, +5, +20, then every flap.
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect(n).toBe(3 + flaps);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("I1 pair: an ok DOES reset the clock — live connecting, ok at +10 s, unknown at +15 s, connecting at +20 s: no warning at live+30 s; due 30 s after the destination stopped receiving (+15 s)", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    try {
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const STOPPED = 15_000;
+      expect(destinationWarning(await pollAt(r, tLive, 10_000, "ok", set)), "receiving").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, STOPPED, "unknown", set)), "live+15 s").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, 20_000, "connecting", set)), "live+20 s").toBe(false);
+      const at30 = await pollAt(r, tLive, OUTPUT_WARNING_AFTER_MS, "connecting", set);
+      expect(destinationWarning(at30), "live+30 s: it received at +10 s, so not yet").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, STOPPED + OUTPUT_WARNING_AFTER_MS - 1, "connecting", set)), "stopped+29.999 s").toBe(false);
+      const due = await pollAt(r, tLive, STOPPED + OUTPUT_WARNING_AFTER_MS, "connecting", set);
+      expect(due.output).toEqual({ state: "connecting", since: iso(new Date(tLive + STOPPED)), elapsedMs: OUTPUT_WARNING_AFTER_MS });
+      expect(destinationWarning(due), "stopped+30 s").toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("output is null for a composed session (warming and live), and for a passthrough session once it has ended", async () => {
@@ -3578,7 +3645,7 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     const ended = await rig({ credits: 1 });
     const e = await createSession(ended.auth, ended.fixtureId, body(ended.target.id), ended.deps);
     await goLive(ended);
-    expect((await currentSession(ended.auth, ended.fixtureId, ended.deps))!.output, "the positive twin").toEqual({ state: "ok", since: expect.any(String) });
+    expect((await currentSession(ended.auth, ended.fixtureId, ended.deps))!.output, "the positive twin").toEqual({ state: "ok", since: expect.any(String), elapsedMs: 0 });
     const stopped = await stopSession(ended.auth, ended.fixtureId, e.sessionId, ended.deps);
     expect(stopped.state).toBe("completed");
     expect(stopped.output, "the Stop route's projection").toBeNull();
@@ -3627,27 +3694,40 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
 // unmapped 500 out of the admission transaction. It is a clean refusal the organiser can act on — and, being inside that
 // transaction, it spends nothing and leaves no row.
 describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
-  it("is 422 TARGET_UNREADABLE telling the organiser to replace the key — no session row, no credit spent, no provider asked to create anything; Replace key then recovers it and Go live starts (sequence)", async () => {
+  it("is 422 TARGET_UNREADABLE telling the organiser to replace the key — no session row, ZERO provider calls of any kind (M1), and the money unmoved even after the clock runs past go-live (M2); Replace key then recovers it and Go live starts (sequence)", async () => {
     const rec = new FakeRecorder();
     const r = await rig({ credits: 1, recorder: rec });
     const targetId = await rigTarget(r.auth.orgId, "Unreadable", "youtube");   // the boundary's own rig: an envelope that will not open
-    const balance = await creditBalance(sql, r.auth.orgId);
+    const money = async () => ({
+      balance: await creditBalance(sql, r.auth.orgId),
+      ledger: (await sql<{ n: number; net: number }[]>`
+        select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0],
+    });
+    const before = await money();
+    expect(before.balance, "the rig's credit is there to be spent — or 'unmoved' could not fail").toBe(1);
+    // Both drivers report into ONE recorder for the refused attempt, so "zero provider calls" covers Cloudflare AND Fly.
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
     const warns: unknown[][] = [];
     const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
     let err: unknown;
     try {
-      err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+      err = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
     } finally {
       spy.mockRestore();
     }
+    // M2: run the clock past the fake's connect (3 s) and poll, THEN read the money. A refusal placed anywhere that let the
+    // start through would have gone live and consumed by now — this is the assertion that can fail.
+    r.tick(3000);
+    const projected = await currentSession(r.auth, r.fixtureId, refusedDeps);
+    expect(await money(), "no credit spent and no ledger row, past the moment a start would have gone live").toEqual(before);
+    expect(projected, "nothing to project").toBeNull();
     expect(err).toBeInstanceOf(HttpError);
     expect(err).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
     expect((err as Error).message).toMatch(/replace the key/i);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
     expect(n, "no session row, in any state").toBe(0);
-    expect(await creditBalance(sql, r.auth.orgId), "no credit spent").toBe(balance);
     await new Promise((res) => setImmediate(res));
-    expect(rec.calls.filter((c) => c.operation === "createLiveInput" || c.operation === "addOutput"), "nothing was provisioned").toEqual([]);
+    expect(rec.calls.map((c) => c.operation), "M1: no provider call of any kind — not even the read-only storage read").toEqual([]);
     expect(r.runner.created).toEqual([]);
     // The operator's side: one warn naming the fixture and target, never a key.
     expect(warns.filter(([o]) => (o as { targetId?: string }).targetId === targetId).map(([o]) => o)).toEqual([{ fixtureId: r.fixtureId, targetId, kind: "youtube" }]);
@@ -3655,14 +3735,60 @@ describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
     await patchStreamTarget(r.auth, r.auth.orgId, targetId, { streamKey: `k-${randomUUID()}` });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(targetId), r.deps);
     expect((await r.row(sessionId)).state).toBe("warming");
+    // The positive pair of M1's zero: a start that IS admitted reads the storage pool (so the zero above was not a
+    // recorder that sees nothing).
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation)).toContain("storageUsage");
   });
 
-  it("a LEGACY-kind row (no platform preset to re-seal on) says remove it and add it again — the same code, the remedy that works for it", async () => {
+  it("M1 guard: the early probe answers only for this org's ACTIVE row — an archived unreadable destination is still 404 target_not_found, another org's is 404 too, and neither is read", async () => {
+    const r = await rig({ credits: 1 });
+    const archived = await rigTarget(r.auth.orgId, "Gone", "youtube");
+    await sql.begin((tx) => archiveStreamTarget(tx, r.auth.orgId, archived));
+    const other = await rig({ credits: 1 });
+    const foreign = await rigTarget(other.auth.orgId, "Theirs", "youtube");
+    let checked = 0;
+    for (const targetId of [archived, foreign]) {
+      const err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+      expect(err, targetId === archived ? "archived" : "another org's").toMatchObject({ status: 404 });
+      expect((err as HttpError).code, "never the unreadable refusal: that would confirm the row exists").not.toBe(TARGET_UNREADABLE);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("M3: a MISSING or MALFORMED RELAY_KEK is the deployment's fault, never the organiser's — Go live is a 500 (not an HttpError), never 422 TARGET_UNREADABLE, and writes nothing", async () => {
+    const r = await rig({ credits: 1 });
+    const saved = process.env.RELAY_KEK;
+    let checked = 0;
+    try {
+      for (const kek of [undefined, "not-hex"] as const) {
+        if (kek === undefined) delete process.env.RELAY_KEK;
+        else process.env.RELAY_KEK = kek;
+        const err = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).then(() => null, (e: unknown) => e);
+        expect(err, `KEK ${kek ?? "unset"}`).toBeInstanceOf(Error);
+        expect(err, `KEK ${kek ?? "unset"}: an HttpError would be answered as the organiser's fault`).not.toBeInstanceOf(HttpError);
+        expect((err as Error).message).toMatch(/RELAY_KEK/);
+        checked++;
+      }
+    } finally {
+      process.env.RELAY_KEK = saved;
+    }
+    expect(checked).toBe(2);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n).toBe(0);
+    // The positive pair: with the KEK back, the same readable target starts.
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");
+  });
+
+  it("a LEGACY-kind row (no platform preset to re-seal on) says REMOVE it — never 'add it again', which create no longer allows for its kind (M4) — the same code", async () => {
     const r = await rig({ credits: 1 });
     const targetId = await rigTarget(r.auth.orgId, "Old", "custom_rtmp");
     const err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
     expect(err).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
-    expect((err as Error).message).toMatch(/remove .*add it again/i);
+    expect((err as Error).message).toMatch(/remove it/i);
+    expect((err as Error).message, "M4: a legacy kind cannot be added again").not.toMatch(/add it again|re-?add/i);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
     expect(n).toBe(0);
   });

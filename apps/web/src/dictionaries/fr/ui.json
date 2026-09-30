@@ -5430,7 +5430,7 @@
   "stream.inUse.matchCourt": "{match} · {court}",
   "stream.inUse.open": "Ouvrir {match}",
   "stream.error.destination_not_allowed": "Cette destination n'est plus prise en charge. Ajoutez-la à nouveau ou choisissez-en une autre.",
-  "stream.error.target_unreadable": "La clé de diffusion enregistrée pour cette destination est illisible. Remplacez la clé (ou supprimez la destination et ajoutez-la à nouveau), puis passez en direct.",
+  "stream.error.target_unreadable": "La clé de diffusion enregistrée pour cette destination est illisible. Remplacez la clé, puis passez en direct ; si ce n'est pas une destination YouTube ou Twitch, supprimez-la et choisissez-en une autre.",
   "stream.error.plan_lacks_relay": "La diffusion depuis le téléphone n'est pas incluse dans votre forfait.",
   "stream.target.refused.scheme": "L'URL d'ingestion doit commencer par rtmp:// ou rtmps://.",
   "stream.target.refused.userinfo": "Retirez le nom d'utilisateur et le mot de passe de l'URL d'ingestion.",

@@ -1328,11 +1328,15 @@ export const StreamIngest = z.object({
   protocol: z.enum(["srt", "rtmps"]).nullable(),
 });
 export type StreamIngest = z.infer<typeof StreamIngest>;
-/** D3 (spec §5.6) — the destination's side of a passthrough broadcast: `since` is when the CURRENT state began, clamped
- *  to go-live (the destination is not tried before it). `connecting` is still dialling, never ok. */
+/** D3 (spec §5.6) — the destination's side of a passthrough broadcast. For a non-ok `state`, `since` is when the
+ *  destination last received — the start of the current not-ok period, however its word changed inside it (I1, B2
+ *  review); for `ok`, when it began receiving. Clamped to go-live (the destination is not tried before it). `connecting`
+ *  is still dialling, never ok. `elapsedMs` is `now - since` on the SERVER's clock at this response (M6): the client
+ *  judges the 30 s warning on it, never on its own clock, so a browser running ahead cannot warn early. */
 export const StreamOutput = z.object({
   state: z.enum(["ok", "connecting", "rejected", "unknown"]),
   since: z.string(),
+  elapsedMs: z.number().int().nonnegative(),
 });
 export type StreamOutput = z.infer<typeof StreamOutput>;
 

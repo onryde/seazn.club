@@ -33,8 +33,8 @@ export const DESTINATION_NOT_ALLOWED = "DESTINATION_NOT_ALLOWED";
 /** N1 (B2): the other stable 422 codes of the stream routes, uppercase like the Directory's own. Client-safe (this file
  *  imports nothing), so the Phone tab can read them off the wire.
  *  - TARGET_UNREADABLE: the destination's saved key will not open (sealed under another KEK, or a damaged byte). Go
- *    live answers it (replace the key; a legacy kind: remove it and add it again), and so does Replace key on a legacy
- *    kind, which has no platform preset to re-seal on.
+ *    live answers it (replace the key; a legacy kind: remove it — it cannot be added again, D6), and so does Replace
+ *    key on a legacy kind, which has no platform preset to re-seal on.
  *  - STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY: a key or name that is nothing once trimmed (create and edit). */
 export const TARGET_UNREADABLE = "TARGET_UNREADABLE";
 export const STREAM_KEY_EMPTY = "STREAM_KEY_EMPTY";
@@ -118,6 +118,8 @@ export const STREAM_DESTINATION_HOSTS: readonly DestinationHost[] = [
  *  is loaded under bare strip-types by openapi-gen. */
 export const STREAM_PLATFORMS = ["youtube", "twitch"] as const;
 export type StreamPlatform = (typeof STREAM_PLATFORMS)[number];
+/** Whether a stored kind is one of the platforms — the ONE membership test (Replace key's recovery, the unreadable remedy). */
+export const isStreamPlatform = (kind: string): kind is StreamPlatform => (STREAM_PLATFORMS as readonly string[]).includes(kind);
 
 /** The ingest address the SERVER fills per platform — the organiser never types one (spec §4 "No server field").
  *  YouTube: rtmp://a.rtmp.youtube.com/live2 — delivered to YouTube on staging 2026-09-30 (spec §5.4); also OBS

@@ -82,12 +82,14 @@ async function organiser() {
   return { auth, fixtureId, target };
 }
 
-type Op = { responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties?: Record<string, { properties?: Record<string, unknown> }> } } } } } }> };
+type Op = { responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties?: Record<string, { properties?: Record<string, unknown>; required?: readonly string[] }> } } } } } }> };
 const opOf = (method: "patch" | "delete"): Op =>
   (buildOpenApiDocument() as { paths: Record<string, Record<string, Op>> }).paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]![method]!;
 
 /** Every extra key a refusal carried on the wire — and one level down for an object extra — is a documented property of
- *  that route × status (routes.test.ts's wire ⊆ spec rule). Returns how many keys it checked. */
+ *  that route × status (routes.test.ts's wire ⊆ spec rule). One level down it is also REQUIRED (B2 review nit): the
+ *  server always sends every key of these objects (null when empty), so a generated client must not see them as optional.
+ *  Returns how many keys it checked. */
 function documented(method: "patch" | "delete", status: number, error: Record<string, unknown>, label: string): number {
   const props = opOf(method).responses[String(status)]?.content["application/json"].schema.properties.error.properties ?? {};
   let checked = 0;
@@ -98,6 +100,7 @@ function documented(method: "patch" | "delete", status: number, error: Record<st
     if (v !== null && typeof v === "object" && !Array.isArray(v)) {
       for (const inner of Object.keys(v)) {
         expect(props[k]!.properties ?? {}, `${label}: \`${k}.${inner}\` is on the wire; the spec must document it`).toHaveProperty(inner);
+        expect(props[k]!.required ?? [], `${label}: \`${k}.${inner}\` is always on the wire; the spec must mark it required`).toContain(inner);
         checked++;
       }
     }
@@ -179,7 +182,7 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets/{targetId} — the ro
 
   // I2 (B1 review): a destination whose sealed envelope will not open (a KEK change) lists with keyHint null, and Replace
   // key is its in-place recovery — never a 500. A platform row is re-sealed on its preset; a legacy kind has no preset to
-  // fall back on and is a 422 telling the organiser to remove it and add it again.
+  // fall back on and is a 422 telling the organiser to remove it (M4: never to add it again — create admits only YouTube and Twitch).
   it("I2: PATCH {streamKey} on a row whose envelope will not open — 200 with a real keyHint for every platform; 422 (never 500) for a legacy kind, with no undocumented extra", async () => {
     let platforms = 0;
     for (const kind of STREAM_PLATFORMS) {
@@ -205,7 +208,8 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets/{targetId} — the ro
       const res = await patch(auth.orgId, targetId, { streamKey: key() });
       expect(res.status, kind).toBe(422);
       const error = ((await res.json()) as Envelope).error!;
-      expect(error.message, kind).toMatch(/remove .*add it again/i);
+      expect(error.message, kind).toMatch(/remove it/i);
+      expect(error.message, `${kind}: M4 — a legacy kind cannot be added again`).not.toMatch(/add it again|re-?add/i);
       expect(error.code, `${kind}: N1 — a machine code, not the generic ERROR`).toBe(TARGET_UNREADABLE);
       expect(documented("patch", 422, error, `patch ${kind} unreadable`), kind).toBe(0);
       legacies++;

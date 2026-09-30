@@ -366,7 +366,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const op = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
     let extrasChecked = 0;
     for (const s of seen) {
-      const documented = (op.responses[String(s.status)]?.content["application/json"].schema.properties.error.properties ?? {}) as Record<string, { properties?: Record<string, unknown> }>;
+      const documented = (op.responses[String(s.status)]?.content["application/json"].schema.properties.error.properties ?? {}) as Record<string, { properties?: Record<string, unknown>; required?: readonly string[] }>;
       for (const [key, value] of Object.entries(s.error)) {
         if (key === "code" || key === "message") continue;
         expect(documented, `${s.label} (${s.status}) carries \`${key}\` on the wire; the spec must document it`).toHaveProperty(key);
@@ -375,6 +375,8 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
         if (value !== null && typeof value === "object" && !Array.isArray(value)) {
           for (const inner of Object.keys(value)) {
             expect(documented[key]!.properties ?? {}, `${s.label}: \`${key}.${inner}\` is on the wire; the spec must document it`).toHaveProperty(inner);
+            // B2 review nit: wireHolder always sends every key (null when empty) — so the spec marks each one required.
+            expect(documented[key]!.required ?? [], `${s.label}: \`${key}.${inner}\` is always on the wire; the spec must mark it required`).toContain(inner);
             extrasChecked += 1;
           }
         }

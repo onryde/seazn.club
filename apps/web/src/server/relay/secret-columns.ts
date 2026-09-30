@@ -3,8 +3,8 @@
 // way in and opened on the way out; nothing decrypted is ever written back.
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination, type DestinationRefusal, type StreamPlatform } from "@/lib/stream-destinations";
-import { fingerprintDestination, open, seal } from "./crypto";
+import { STREAM_PLATFORM_PRESETS, checkDestination, isStreamPlatform, type DestinationRefusal } from "@/lib/stream-destinations";
+import { fingerprintDestination, hasValidKek, open, seal } from "./crypto";
 import { log } from "@/server/logger";
 
 export interface InputCredentials {
@@ -215,7 +215,11 @@ export async function readTargetSecret(tx: Tx, orgId: string, targetId: string):
   let fields: Record<(typeof TARGET_SEALED)[number], string>;
   try {
     fields = openFields(row.rtmp_enc, TARGET_SEALED);
-  } catch {
+  } catch (err) {
+    // M3 (B2 review): a missing or malformed RELAY_KEK is the DEPLOYMENT's fault — it stays the loud config error (a 500
+    // that reaches Sentry), never an organiser-facing "replace your key". Only an envelope that will not open under a
+    // valid KEK is this row's problem.
+    if (!hasValidKek("RELAY_KEK")) throw err;
     throw new TargetSecretUnreadableError(targetId, row.kind);
   }
   return { url: fields.url, streamKey: fields.streamKey };
@@ -274,14 +278,12 @@ export type ReplaceKeyResult =
   | { ok: false; reason: "duplicate"; other: { id: string; label: string } }
   | { ok: false; reason: "unreadable" };
 
-const isPlatform = (kind: string): kind is StreamPlatform => (STREAM_PLATFORMS as readonly string[]).includes(kind);
-
 /** §5.2 Replace key — the SAME url (it was server-filled per platform), a new key: re-sealed and re-fingerprinted. An
  *  ACTIVE row of this org already holding the new fingerprint refuses with its name; an archived one never blocks.
  *  I2 (B1 review): an envelope that will not open (sealed under another KEK — the row the list shows with keyHint null)
  *  is exactly the row Replace key must RECOVER in place, since the old url is gone with it. A platform row's url is its
  *  preset (D6: server-filled), so it is re-sealed there; a legacy kind has no preset to fall back on and is `unreadable`
- *  (the caller's 422: remove it and add it again). The old envelope is never needed to write the new one. */
+ *  (the caller's 422: remove it — a legacy kind cannot be added again, D6). The old envelope is never needed to write the new one. */
 export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, streamKey: string): Promise<ReplaceKeyResult> {
   const [row] = await tx<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null; kind: string }[]>`
     select rtmp_enc, dest_fingerprint, kind from org_stream_targets
@@ -291,10 +293,11 @@ export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, 
   let recovering = false;
   try {
     url = openFields(row.rtmp_enc, TARGET_SEALED).url;
-  } catch {
+  } catch (err) {
+    if (!hasValidKek("RELAY_KEK")) throw err;   // M3: a KEK fault is not an unopenable envelope — no recovery, no warn
     // N3 (B1 review): never silent — an unopenable envelope is how a KEK change shows itself. Target id and kind ONLY.
     log.warn({ targetId, kind: row.kind }, "stream target: the saved destination will not open — Replace key re-seals a platform row on its preset; a legacy kind is refused");
-    if (!isPlatform(row.kind)) return { ok: false, reason: "unreadable" };
+    if (!isStreamPlatform(row.kind)) return { ok: false, reason: "unreadable" };
     url = STREAM_PLATFORM_PRESETS[row.kind];
     recovering = true;
   }

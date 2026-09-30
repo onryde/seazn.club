@@ -37886,7 +37886,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions": {
       "post": {
-        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it and add it again; no row is written, no credit spent), 503 storage_exhausted (no row is written)",
+        "summary": "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 storage_exhausted (no row is written)",
         "tags": [
           "fixtures"
         ],
@@ -38267,6 +38267,14 @@
                             "null"
                           ],
                           "description": "On target_in_use (409): the match (always this organisation's) whose stream holds the destination — its number, organiser page, court and whether a phone is live or awaited; null when a concurrent start won the race and there is no holder to name",
+                          "required": [
+                            "fixtureId",
+                            "href",
+                            "matchNo",
+                            "courtName",
+                            "label",
+                            "state"
+                          ],
                           "properties": {
                             "fixtureId": {
                               "type": [
@@ -38306,7 +38314,7 @@
                                 "live",
                                 "waiting"
                               ],
-                              "description": "live = a phone is sending (live or ending); waiting = requested, provisioning or warming"
+                              "description": "live = a phone is sending (live or ending), or — on Go live only — an ENDED session whose Machine or destination output is still up and could not be released; waiting = requested, provisioning or warming"
                             }
                           }
                         }
@@ -38346,7 +38354,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it and add it again)"
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added)"
                         },
                         "message": {
                           "type": "string"
@@ -38647,11 +38655,17 @@
                                     },
                                     "since": {
                                       "type": "string"
+                                    },
+                                    "elapsedMs": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
                                     }
                                   },
                                   "required": [
                                     "state",
-                                    "since"
+                                    "since",
+                                    "elapsedMs"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -38904,7 +38918,8 @@
                     },
                     "output": {
                       "state": "ok",
-                      "since": "example"
+                      "since": "example",
+                      "elapsedMs": 0
                     },
                     "qr": {
                       "v": 1,
@@ -39335,11 +39350,17 @@
                                 },
                                 "since": {
                                   "type": "string"
+                                },
+                                "elapsedMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
                                 "state",
-                                "since"
+                                "since",
+                                "elapsedMs"
                               ],
                               "additionalProperties": false
                             },
@@ -39587,7 +39608,8 @@
                     },
                     "output": {
                       "state": "ok",
-                      "since": "example"
+                      "since": "example",
+                      "elapsedMs": 0
                     },
                     "qr": {
                       "v": 1,
@@ -54066,7 +54088,7 @@
     },
     "/api/v1/orgs/{id}/stream-targets/{targetId}": {
       "patch": {
-        "summary": "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it and add it again). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist",
+        "summary": "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it; only YouTube and Twitch can be added). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist",
         "tags": [
           "fixtures"
         ],
@@ -54457,6 +54479,14 @@
                         "holder": {
                           "type": "object",
                           "description": "On TARGET_IN_USE (409): the match whose stream holds the destination (always this organisation's)",
+                          "required": [
+                            "fixtureId",
+                            "href",
+                            "matchNo",
+                            "courtName",
+                            "label",
+                            "state"
+                          ],
                           "properties": {
                             "fixtureId": {
                               "type": [
@@ -54496,13 +54526,17 @@
                                 "live",
                                 "waiting"
                               ],
-                              "description": "live = a phone is sending (live or ending); waiting = requested, provisioning or warming"
+                              "description": "live = a phone is sending (live or ending), or — on Go live only — an ENDED session whose Machine or destination output is still up and could not be released; waiting = requested, provisioning or warming"
                             }
                           }
                         },
                         "other": {
                           "type": "object",
                           "description": "On DESTINATION_DUPLICATE (409): the active destination that already holds this stream key",
+                          "required": [
+                            "id",
+                            "label"
+                          ],
                           "properties": {
                             "id": {
                               "type": "string",
@@ -54549,7 +54583,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it and add it again)"
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added)"
                         },
                         "message": {
                           "type": "string"
@@ -54830,6 +54864,14 @@
                         "holder": {
                           "type": "object",
                           "description": "On TARGET_IN_USE (409): the match whose stream holds the destination (always this organisation's)",
+                          "required": [
+                            "fixtureId",
+                            "href",
+                            "matchNo",
+                            "courtName",
+                            "label",
+                            "state"
+                          ],
                           "properties": {
                             "fixtureId": {
                               "type": [
@@ -54869,7 +54911,7 @@
                                 "live",
                                 "waiting"
                               ],
-                              "description": "live = a phone is sending (live or ending); waiting = requested, provisioning or warming"
+                              "description": "live = a phone is sending (live or ending), or — on Go live only — an ENDED session whose Machine or destination output is still up and could not be released; waiting = requested, provisioning or warming"
                             }
                           }
                         }

@@ -5430,7 +5430,7 @@
   "stream.inUse.matchCourt": "{match} · {court}",
   "stream.inUse.open": "{match} openen",
   "stream.error.destination_not_allowed": "Deze bestemming wordt niet meer ondersteund. Voeg deze opnieuw toe of kies een andere.",
-  "stream.error.target_unreadable": "De opgeslagen streamsleutel van deze bestemming kan niet worden gelezen. Vervang de sleutel (of verwijder de bestemming en voeg deze opnieuw toe) en ga dan live.",
+  "stream.error.target_unreadable": "De opgeslagen streamsleutel van deze bestemming kan niet worden gelezen. Vervang de sleutel en ga dan live; is het geen YouTube- of Twitch-bestemming, verwijder deze dan en kies een andere.",
   "stream.error.plan_lacks_relay": "Streamen vanaf de telefoon zit niet in je abonnement.",
   "stream.target.refused.scheme": "De ingest-URL moet beginnen met rtmp:// of rtmps://.",
   "stream.target.refused.userinfo": "Haal de gebruikersnaam en het wachtwoord uit de ingest-URL.",

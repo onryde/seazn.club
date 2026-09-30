@@ -20,8 +20,10 @@ import {
   checkDestination,
   destinationIdentity,
   destinationRefusal,
+  isStreamPlatform,
   type DestinationRefusal,
 } from "../stream-destinations";
+import { StreamTargetKind } from "@/server/api-v1/schemas";
 
 /** U+212A KELVIN SIGN — the one non-ASCII code point whose toLowerCase() is ASCII ("k"). Built, not typed. */
 const KELVIN = String.fromCharCode(0x212a);
@@ -399,6 +401,22 @@ describe("platform presets (D6)", () => {
     }
     expect(checked).toBe(STREAM_PLATFORMS.length);
     expect(Object.keys(STREAM_PLATFORM_PRESETS).sort()).toEqual([...STREAM_PLATFORMS].sort());
+  });
+
+  it("isStreamPlatform (B2 review nit — the ONE platform-kind test, for Replace key's recovery and the unreadable remedy): true for every platform; false for every stored legacy kind, a wrong case, and prototype keys", () => {
+    let checked = 0;
+    for (const p of STREAM_PLATFORMS) {
+      expect(isStreamPlatform(p), p).toBe(true);
+      checked++;
+    }
+    // The legacy kinds are the wire enum's own, less the platforms (D6) — a kind added to either moves this sweep.
+    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    expect(legacy.length, "no legacy kind to refuse").toBeGreaterThan(0);
+    for (const k of [...legacy, "", "YouTube", "constructor", "toString"]) {
+      expect(isStreamPlatform(k), JSON.stringify(k)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length + legacy.length + 4);
   });
 
   // Moved here in T2a from stream-targets.test.ts, whose A18 cases drove these URLs through createStreamTarget's

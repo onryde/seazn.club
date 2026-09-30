@@ -5430,7 +5430,7 @@
   "stream.inUse.matchCourt": "{match} · {court}",
   "stream.inUse.open": "Abrir {match}",
   "stream.error.destination_not_allowed": "Este destino ya no se admite. Vuelve a añadirlo o elige otro.",
-  "stream.error.target_unreadable": "No se puede leer la clave de emisión guardada de este destino. Sustituye la clave (o elimina el destino y vuelve a añadirlo) y emite de nuevo.",
+  "stream.error.target_unreadable": "No se puede leer la clave de emisión guardada de este destino. Sustituye la clave y emite de nuevo; si no es un destino de YouTube o Twitch, elimínalo y elige otro.",
   "stream.error.plan_lacks_relay": "La transmisión desde el móvil no está incluida en tu plan.",
   "stream.target.refused.scheme": "La URL de ingesta debe empezar por rtmp:// o rtmps://.",
   "stream.target.refused.userinfo": "Quita el usuario y la contraseña de la URL de ingesta.",
