@@ -19,7 +19,7 @@ import { TAP_WAIT_TIMEOUT_MS, type PadPage, type TapAdapterContext, type TapStep
 import { TAP_PACE_MS, budgetMs } from "../browser/budget.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { executeStep } from "./execute.ts";
-import type { MatrixPadAdapter } from "./types.ts";
+import type { Fallback, MatrixPadAdapter } from "./types.ts";
 
 /** The ledger's poll spacing: the bench's LEDGER_POLL_INTERVAL_MS (scorer.ts:197). */
 export const POLL_MS = 200;
@@ -87,6 +87,27 @@ export function compareRow(expected: StreamEvent, row: LedgerRow, adapter: Matri
   return extra.length > 0 ? { verdict: "tolerated", note: `tolerated ${extra.map((k) => `${k}=${JSON.stringify(got[k])}`).join(", ")}` } : { verdict: "equal", note: null };
 }
 
+/** The rows an event's taps write: 1, or a declared fallback's rowsFor — which
+ *  must be a whole number ≥ 1. Anything else (or a throw) is answered as the
+ *  text the finding quotes. */
+function rowsWanted(fallback: Fallback | null, ev: StreamEvent, ctx: TapAdapterContext): number | string {
+  if (fallback === null) return 1;
+  let n: number;
+  try {
+    n = fallback.rowsFor(ev, ctx);
+  } catch (e) {
+    return `a throw (${errorLine(e)})`;
+  }
+  return Number.isInteger(n) && n >= 1 ? n : String(n);
+}
+
+/** An error's name and first line — Playwright's messages carry a multi-line
+ *  call log after it. A non-Error throw is quoted as it is. */
+function errorLine(e: unknown): string {
+  if (!(e instanceof Error)) return String(e).split("\n")[0];
+  return `${e.name}: ${e.message.split("\n")[0]}`;
+}
+
 /** Taps `events` in order and reads back the rows each one wrote. Stops at the
  *  first event that has no route, a row that differs, or rows that never came:
  *  every later tap would build on a state the stream never meant. */
@@ -111,14 +132,38 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
       out.findings.push(`${at}: no tap route — the adapter answered no steps`);
       break;
     }
-    for (const step of steps) {
+    // Carry (d): how many rows the taps write is known before the first tap. A
+    // fallback writes at least one; 0, NaN or a fraction would crash the tip
+    // read below or pass whatever rows came, so it is refused by name, untapped.
+    const want = rowsWanted(fallback, ev, ctx);
+    if (typeof want === "string") {
+      out.findings.push(`${at}: FallbackRowsInvalid — rowsFor answered ${want}; a fallback writes a whole number ≥ 1 of rows`);
+      break;
+    }
+    // Carry (e): a tap that fails is this event's finding, never a raw throw
+    // that takes the case's other checks with it. The rows the product wrote
+    // before it failed are still read, so the fold judges what it holds.
+    const all: readonly TapStep[] = [...steps, { kind: "releaseHold" }];
+    let failed: string | null = null;
+    for (const [k, step] of all.entries()) {
+      const release = k === steps.length;
       if (tapped && step.kind !== "releaseHold") await deps.sleep(TAP_PACE_MS);
       tapped = true;
-      await executeStep(page, step, waitMs);
-      await deps.onTap?.(i, step);
+      try {
+        await executeStep(page, step, waitMs);
+      } catch (e) {
+        failed = `tap ${k + 1} of ${all.length} (${step.kind}) failed: ${errorLine(e)}`;
+        break;
+      }
+      if (!release) await deps.onTap?.(i, step);
     }
-    await executeStep(page, { kind: "releaseHold" }, waitMs);
-    const want = fallback?.rowsFor(ev, ctx) ?? 1;
+    if (failed !== null) {
+      const rows = await deps.ledger(tip);
+      out.rows.push({ expected: ev, stored: rows, verdict: "missing", note: failed });
+      out.stored.push(...rows);
+      out.findings.push(`stopped after event ${i + 1} of ${events.length}: ${failed}`);
+      break;
+    }
     const deadline = budgetMs({ taps: steps.length, holds: 1, holdMs: deps.holdMs });
     // Read at once, then every POLL_MS until the rows are there or the whole
     // deadline has been waited — never a poll short of it.

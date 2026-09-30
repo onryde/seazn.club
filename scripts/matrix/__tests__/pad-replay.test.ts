@@ -181,6 +181,81 @@ describe("replayEvents — one event, its taps, the rows they wrote", () => {
     expect(r.stored.map((s) => s.type)).toEqual(["cricket.innings.summary", "cricket.innings.summary", "cricket.innings.close", "x"]);
   });
 
+  it("carry (d): a fallback whose rowsFor is not a whole number ≥ 1 (or throws) is refused by name BEFORE any tap — never a crash, never a pass on whatever rows came", async () => {
+    // 0 and NaN used to crash at `mine.at(-1)!` (0 rows) or pass any rows (NaN
+    // compares false both ways); a fallback writes at least one row by definition.
+    let checked = 0;
+    for (const [label, rowsFor] of [
+      ["0", () => 0], ["NaN", () => Number.NaN], ["-1", () => -1], ["1.5", () => 1.5], ["Infinity", () => Number.POSITIVE_INFINITY],
+      ["throws", () => { throw new Error("no count for this shape"); }],
+    ] as const) {
+      const pad = stubAdapter({ fallbacks: [{ eventType: "f", why: "f.tsx:1", rowsFor }] });
+      const deps = fakeDeps([ROW("ok"), ROW("f")]);
+      const page = fakePage(deps);
+      const r = await run(pad, [{ type: "ok", payload: {} }, { type: "f", payload: {} }], deps, page);
+      // The event before it replays normally; the fallback event taps nothing.
+      expect(r.rows.map((x) => x.verdict), label).toEqual(["equal"]);
+      expect(page.taps, label).toHaveLength(1);
+      expect(r.findings, label).toHaveLength(1);
+      expect(r.findings[0], label).toMatch(/^event 2 of 2 \(f\): FallbackRowsInvalid — rowsFor answered /);
+      expect(r.findings[0], label).toContain(label === "throws" ? "no count for this shape" : `answered ${label}`);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    // Its positive pair: a whole number ≥ 1 is accepted.
+    const pad = stubAdapter({ fallbacks: [{ eventType: "f", why: "f.tsx:1", rowsFor: () => 1 }] });
+    const deps = fakeDeps([ROW("f")]);
+    expect((await run(pad, [{ type: "f", payload: {} }], deps)).rows.map((x) => x.verdict)).toEqual(["fallback"]);
+  });
+
+  it("carry (e): a tap that fails is a named finding on its event's row — the rows already written are kept, the replay stops, and it never throws", async () => {
+    const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 })]);
+    const page = fakePage(deps);
+    // Event 2's away number step never attaches: Playwright's own error shape (name + multi-line call log).
+    const locator = page.locator.bind(page);
+    let numberFills = 0;
+    page.locator = (selector: string) => {
+      const l = locator(selector);
+      if (selector !== selectorForTapStep({ kind: "number", value: 0 })) return l;
+      return {
+        ...l,
+        waitFor: async () => {
+          if (++numberFills === 4) {
+            const e = new Error("locator.waitFor: Timeout 8000ms exceeded.\nCall log:\n  - waiting for locator('[data-testid=\"pad-sheet-number\"]')");
+            e.name = "TimeoutError";
+            throw e;
+          }
+        },
+      };
+    };
+    const r = await run(sheetAdapter, [SUMMARY(21, 13), SUMMARY(21, 16), SUMMARY(21, 18)], deps, page);
+    expect(r.rows.map((x) => x.verdict)).toEqual(["equal", "missing"]);
+    expect(r.rows[1]!.note).toBe("tap 4 of 6 (number) failed: TimeoutError: locator.waitFor: Timeout 8000ms exceeded.");
+    expect(r.rows[1]!.stored).toEqual([]);
+    expect(r.findings).toEqual(["stopped after event 2 of 3: tap 4 of 6 (number) failed: TimeoutError: locator.waitFor: Timeout 8000ms exceeded."]);
+    // What the product holds is still answered (the first event's row), and the third event was never tapped.
+    expect(r.stored.map((s) => s.seq)).toEqual([2]);
+    expect(page.taps.filter((t) => t.startsWith("click [data-tile-id"))).toHaveLength(2);
+  });
+
+  it("carry (e): a failed tap after the product wrote rows keeps those rows for the fold, and a non-Error throw is still named", async () => {
+    // The hold release (the last act of an event) throws after the row landed.
+    const deps = fakeDeps([ROW(SUMMARY_TYPE, { home: 21, away: 13 })]);
+    const page = fakePage(deps);
+    const locator = page.locator.bind(page);
+    page.locator = (selector: string) => {
+      const l = locator(selector);
+      if (selector !== SEND_NOW) return l;
+      return { ...l, count: async () => { await l.count(); return 1; }, click: async () => { throw "dock gone"; }, waitFor: async () => undefined };
+    };
+    const r = await run(sheetAdapter, [SUMMARY(21, 13)], deps, page);
+    expect(r.rows.map((x) => x.verdict)).toEqual(["missing"]);
+    expect(r.rows[0]!.note).toBe("tap 6 of 6 (releaseHold) failed: dock gone");
+    expect(r.rows[0]!.stored.map((s) => s.seq)).toEqual([2]);
+    expect(r.stored.map((s) => s.seq)).toEqual([2]);
+    expect(r.findings).toEqual(["stopped after event 1 of 1: tap 6 of 6 (releaseHold) failed: dock gone"]);
+  });
+
   it("a fallback short of its rows is `missing`, naming how many of how many", async () => {
     const pad = stubAdapter({ fallbacks: [{ eventType: "f", why: "f.tsx:1", rowsFor: () => 3 }] });
     const r = await run(pad, [{ type: "f", payload: {} }], fakeDeps([ROW("f"), ROW("f")], { groups: [2], holdMs: 500 }));
