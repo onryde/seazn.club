@@ -1301,16 +1301,32 @@ export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayC
  *  still names the newest should that ever not hold. */
 export async function openStreamStates(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Record<string, HoldState>> {
   if (fixtureIds.length === 0) return {};
-  const rows = await sql<{ fixture_id: string; state: SessionState }[]>`
-    select distinct on (fixture_id) fixture_id, state from fixture_stream_sessions
+  const rows = await sql<OpenSessionRow[]>`
+    select distinct on (fixture_id) id, fixture_id, state from fixture_stream_sessions
      where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}
      order by fixture_id, created_at desc`;
+  return holdStatesOf(rows);
+}
+
+/** One row of `openStreamStates`' read. */
+export type OpenSessionRow = { id: string; fixture_id: string; state: SessionState };
+
+/** The fold after `openStreamStates`' SQL filter, DB-free. ONE guard decides "active": that filter. A row the domain does
+ *  not read as live/waiting (a terminal state, or a state this build does not know) means the filter and the domain
+ *  disagree — an assumption that broke. B3 fix round 1, I-1 (controller ruling): that must NEVER block the organiser's
+ *  page or its Stop, so the row is REPORTED to Sentry (session id and state only — no key, URL or secret) and skipped. */
+export function holdStatesOf(rows: readonly OpenSessionRow[]): Record<string, HoldState> {
   const out: Record<string, HoldState> = {};
   for (const r of rows) {
-    // ONE guard decides "active": the SQL filter above. This line is the assumption made loud (TEST-STRATEGY:
-    // assumptions are guards), not a second filter that would cover for the first and leave both untested.
     const s = holdStateOf(r.state);
-    if (s === null) throw new Error(`openStreamStates: a terminal session (${r.state}) passed the ACTIVE_STATES filter`);
+    // `undefined` too: a state added to the DB but not to `holdStateOf`'s switch falls through it.
+    if (s === null || s === undefined) {
+      captureError(new Error("openStreamStates: a session the domain does not read as up passed the ACTIVE_STATES filter"), {
+        route: "relay.open_stream_states",
+        extra: { sessionId: r.id, state: r.state },
+      });
+      continue;
+    }
     out[r.fixture_id] = s;
   }
   return out;

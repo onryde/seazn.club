@@ -59,7 +59,7 @@ import { scoreEvent } from "../scoring";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
   type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
-  openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  holdStatesOf, openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -2501,8 +2501,48 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   });
 
   // Spec 2026-09-30 §2 (T6): `openStreamStates` feeds the run sheet's chip (the division's path to Stop) and the fixture
-  // page's Stop-only mount. ONE guard decides "active" — the SQL `state in ACTIVE_STATES` filter; the loop throws on a
-  // terminal row that got past it (an assumption made loud, not a second filter covering for the first).
+  // page's Stop-only mount. ONE guard decides "active" — the SQL `state in ACTIVE_STATES` filter. The fold after it
+  // (`holdStatesOf`) REPORTS a row that got past it and skips it — B3 fix round 1, I-1 (controller ruling): the guard
+  // must never block the organiser's page or its Stop, so it reports to Sentry instead of throwing.
+  describe("holdStatesOf — the fold after the SQL filter (I-1: report and skip, never throw)", () => {
+    const row = (id: string, fixtureId: string, state: string) => ({ id, fixture_id: fixtureId, state: state as SessionState });
+    const reports = () =>
+      sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.open_stream_states");
+
+    it("every ACTIVE row maps to the hold state the domain declares; none is reported", () => {
+      sentry.captureError.mockClear();
+      let checked = 0;
+      for (const state of ACTIVE_STATES) {
+        expect(holdStatesOf([row(`s-${state}`, "fx", state)]), state).toEqual({ fx: holdStateOf(state) });
+        checked++;
+      }
+      expect(checked).toBe(ACTIVE_STATES.length);
+      expect(checked, "anti-vacuity: the declared ACTIVE set is not empty").toBeGreaterThan(0);
+      expect(reports(), "an active row is never an alarm").toEqual([]);
+      expect(holdStatesOf([]), "the empty case").toEqual({});
+    });
+
+    it("a TERMINAL or UNKNOWN row is skipped AND reported — session id and state only — and the page still gets every other row", () => {
+      const strays = [...TERMINAL_STATES, "archived_by_a_future_migration"];
+      let checked = 0;
+      for (const state of strays) {
+        sentry.captureError.mockClear();
+        const out = holdStatesOf([row("s-ok", "fx-ok", "live"), row(`s-${state}`, "fx-stray", state)]);
+        expect(out, `${state}: skipped, and the good row still maps`).toEqual({ "fx-ok": "live" });
+        expect(Object.prototype.hasOwnProperty.call(out, "fx-stray"), `${state}: no key at all (not a null value)`).toBe(false);
+        const sent = reports();
+        expect(sent, `${state}: reported once`).toHaveLength(1);
+        const [err, ctx] = sent[0]! as [Error, { orgId?: string; route: string; extra: Record<string, unknown> }];
+        expect(err).toBeInstanceOf(Error);
+        expect(ctx.extra, `${state}: the session id and state, nothing else`).toEqual({ sessionId: `s-${state}`, state });
+        expect(Object.keys(ctx).sort(), `${state}: no other context`).toEqual(["extra", "route"]);
+        checked++;
+      }
+      expect(checked).toBe(strays.length);
+      expect(TERMINAL_STATES.length, "anti-vacuity: the declared TERMINAL set is not empty").toBeGreaterThan(0);
+    });
+  });
+
   /** SETUP: a session row in `state` on `fixtureId`, created `ageSec` seconds ago (so a case controls which is newest). Two
    *  ACTIVE rows at once need two destinations (V421: one active session per target). */
   const seedSessionRow = async (r: Awaited<ReturnType<typeof rig>>, fixtureId: string, state: SessionState, ageSec: number, targetId = r.target.id): Promise<string> => {
