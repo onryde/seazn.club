@@ -741,6 +741,51 @@ a peer session as the other.
       review m-1). The set itself has never been run live.
     - (b) **The API-only set runs as planned 🚫 `no_path` with no browser,** each row naming its wave and reason, not
       ❌ `organiser-ui-path` from Generate onward as D7 (ruling 40) said.
+44–49. **W1-driving scope** (2026-09-30). The controller put six scope recommendations for W1-driving planning, and
+    the owner answered "all rec". They are recorded here as the owner's rulings on those recommendations (class 17).
+    Inputs: three read-only scouts at `ebf7ec040`, which found 13 items routed to W1-driving (the status row names 5)
+    and 177 of 231 LIFECYCLE cells ⏳ W1-driving (33 ladder-family, 99 multi-stage, 45 team-roster).
+    - **44. The cricket two-innings (`test`) generator and the cricket tie outcome belong to W1-driving.** Both are
+      struck from W2's generator-breadth checklist. Ruling 31 had already routed the 24 `test` cases here. The W2
+      checklist also claimed both, which left two owners.
+    - **45. I2 on double elim, stepladder and page playoff is STRUCTURAL only.**
+      - What W1-driving asserts:
+        - the champion is the winner of the terminal final fixture: `pp-final`, the last stepladder game, or
+          GF / gf-reset;
+        - that winner is `finalRanks[0]`;
+        - `finalRanks` is a permutation of the field.
+      - "Exactly one unbeaten entrant" stays knockout-only. A DE or page-playoff champion may have lost once.
+      - Rulebook semantics, including the bracket-reset rules, stay with W4 and W6 (R8/R9).
+    - **46. Parallel workers are in-process and belong to W1-driving.**
+      - N workers run against ONE server and DB.
+      - Each worker has its own sign-in, session and cookie jar.
+      - Results are written in plan order.
+      - W1d owns the CI shards (one DB each), and runs these workers inside each shard.
+    - **47. Browser scope.**
+      - Roster and lineup seeding, seed-proposal → confirm and ladder challenges are HTTP setup filler.
+        `BrowserDriver` uses the same filler, so L1 on those cells stops being ⏳.
+      - Live L1 proof at 1280 covers one cell per new capability. The full L1 grid stays W1d's.
+      - Rule-override driving in the browser (`OVERRIDE_WAVE`, which no wave owned) goes to **W2**. W2 owns the
+        editor fixes under ruling 33.
+      - The two template-only cells (`group_only|badminton`, `group_group_ko|cricket`) are driven by W1-driving.
+    - **48. Done-when.**
+      - The evidence is an HTTP run of the four scripted scenarios (LIFECYCLE, M1, R4a, F1) over all 231 cells
+        (924 cases, on workers), plus the 24 cricket `test` variant cases.
+      - The wave is done when no ⏳ names W1-driving and no ❌ has a harness cause.
+      - Product reds are recorded and routed, never fixed in this wave (ruling 19).
+    - **49. Reference model.**
+      - The model gets team rosters, so team cells can run in it.
+      - Swiss gets a command generator biased toward Start → Generate → Score, instead of relying on 40 runs.
+      - Multi-stage and the ladder family in the model go to the family waves (W4, W5, W7), where their rulebooks
+        live.
+    - *Folded in by the controller without a separate ruling* (the owner was told and did not object):
+      - Field size is per format: a page playoff seeds 4. F1 on `page_playoff_only` is dropped as unfit, because
+        an odd field is impossible there (ruling 6, case by case).
+      - Rosters are always the full declared size. Lineups are PUT before each fixture's first event.
+      - Americano and mexicano individual entrants get linked persons.
+      - The Q-A guard is widened to read the six blind-spot routes. The W1-driving status row reads "in progress"
+        while deferrals remain.
+      - A `W1-driving.md` prompt file is written, and R1's sequence gains W1-driving.
 
 ## Recommendations (mine — not rulings)
 
