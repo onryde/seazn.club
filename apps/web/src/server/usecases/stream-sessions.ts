@@ -1020,10 +1020,18 @@ function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): u
 }
 
 /** M1: the early probe `createSession` runs before its first provider call. Under the same row lock admission takes, and
- *  only for this org's ACTIVE row — anything else is left for `admit` to answer 404, exactly as before. */
-async function refuseUnreadableTarget(orgId: string, fixtureId: string, targetId: string): Promise<void> {
+ *  only for this org's ACTIVE row — anything else is left for `admit` to answer 404, exactly as before. And only when
+ *  `admit` would pass on everything it can weigh WITHOUT the storage read (`admitsBarStorage`, asked with this fixture's
+ *  active session read on the same transaction): F-A5 (owner, 2026-09-29) puts "already running" — and the plan, the
+ *  credit and the target's existence — before any destination question, and an unreadable key is one. Every such
+ *  refusal is left for the admission below, which answers it as before, measurement included (ruling 13). Found by the
+ *  destination model's DEST_REGRESSION_FA5_UNREADABLE (stream-sessions.test.ts). */
+async function refuseUnreadableTarget(
+  orgId: string, fixtureId: string, targetId: string, admitsBarStorage: (activeSessionId: string | null) => boolean,
+): Promise<void> {
   await sql.begin(async (tx) => {
     if (!(await lockStreamTarget(tx, orgId, targetId))) return;
+    if (!admitsBarStorage(await activeSessionIdFor(fixtureId, tx))) return;
     await readTargetSecret(tx, orgId, targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, targetId); });
   });
 }
@@ -1087,26 +1095,30 @@ export async function createSession(
     captureError(err, { orgId, route: "relay.session.monthly_grant" });
   }
 
-  // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
-  // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
-  // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), and the read inside
-  // the admission transaction stays the authority for everything that row lock protects.
-  await refuseUnreadableTarget(orgId, fixtureId, body.targetId);
-
-  const [overlay, relay, balance, restartWithinReuseWindow, usage, relayOverride] = await Promise.all([
+  const [overlay, relay, balance, restartWithinReuseWindow, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
     creditBalance(sql, orgId),
     // I2 (§5.2): a restart of THIS fixture inside the reuse window costs nothing, so `admit` waives the balance gate for
     // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
     reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
-    deps.drivers.ingest.storageUsage().then(storageUsageForColumns),   // outside the transaction; G7: fitted to the integer columns
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
     // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
     // plan grants the relay, so the FALSE branch (plan-granted) is the common one; stream-sessions.test.ts
     // drives it through createSession on an org with no override row.
     overrideRow(orgId, "streaming.relay"),
   ]);
+  // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
+  // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
+  // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
+  // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
+  // authority for everything that row lock protects.
+  await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true,
+    headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
+    activeSessionId: activeSessionId ?? priorMachineSessionId,
+  }).ok);
+  const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns);   // outside the transaction; G7: fitted to the integer columns
   const viaOverride = relayOverride?.bool_value === true;
 
   const sessionId = await (sql.begin(async (tx) => {
