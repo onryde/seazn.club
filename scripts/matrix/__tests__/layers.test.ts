@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, cellId, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import {
-  API_ONLY_BROWSER_SET, L1_WIDTH, L2BoundRun, L2TakesNoScenario, UnknownL2Atom, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, identityOf, l1Planner, l2Planner,
-  layerCaseId, planL1, planL2, widthSweepPlanner, type LayerCase,
+  API_ONLY_BROWSER_SET, L1_WIDTH, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, UnknownL2Atom, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, identityOf, l1Planner, l2Planner,
+  layerCaseId, layerOfWidth, planL1, planL2, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
 import { NotApiOnlyRow, apiOnlyUiPath } from "../lib/api-only-ui.ts";
 import { loadL2Pairs, parseL2Pairs, type L2Run } from "../lib/pairs.ts";
@@ -19,7 +19,7 @@ import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, UnknownFilter } from "../lib/slice.ts";
-import { L2_WIDTHS } from "../lib/widths.ts";
+import { BROWSER_WIDTHS, L2_WIDTHS, type BrowserWidth } from "../lib/widths.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** The committed file, read as plain JSON: never through layers.ts or pairs.ts. */
@@ -147,6 +147,28 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(exec.length + noPath.length + notRun.length).toBe(cases.length);
   });
 
+  // Review I-1: the slice holds knownNoPath atoms only, so the classifier's
+  // `?? atom.l2NoPath` arm and its reason are reached from the cells outside it.
+  it("the l2NoPath arm: every committed run whose atom has l2NoPath (and no knownNoPath) is planned 🚫 naming that wave, with the route-exists reason", () => {
+    const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && a.l2NoPath !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario); };
+    const gapRuns = RAW.runs.filter(isL2Gap);
+    const cells = new Set(gapRuns.map((r) => cellId(r.row, r.sport)));
+    expect(gapRuns.length).toBeGreaterThan(0);
+    const byN = new Map(planL2(committed, cells).map((c) => [c.run!.n, c]));
+    let checked = 0;
+    for (const r of gapRuns) {
+      const atom = ATOM.get(r.scenario)!;
+      const c = byN.get(r.n);
+      expect(c, `n ${r.n} ${r.scenario} planned`).toBeDefined();
+      expect({ spec: c!.spec, notRun: c!.notRun, width: c!.width }, `n ${r.n}`).toEqual({ spec: null, notRun: null, width: r.width });
+      expect(c!.noPath, `n ${r.n} ${r.scenario}`).toEqual({ wave: atom.l2NoPath, reason: `the HTTP route exists and no screen sends it (design §4, ruling 30): ${atom.title}` });
+      expect(decideState({ checks: [], deferred: null, error: null, noPath: c!.noPath, notRun: c!.notRun }).state).toBe("no_path");
+      checked++;
+    }
+    console.info(`layers: l2NoPath arm — ${checked} runs over ${cells.size} cells (waves ${[...new Set(gapRuns.map((r) => ATOM.get(r.scenario)!.l2NoPath))].join(", ")})`);
+    expect(checked).toBe(gapRuns.length);
+  });
+
   it("🚫 and ░ both set is impossible: planL2 never produces both, and decideState throws if handed both (T3's guard, reached from a real planner output)", () => {
     const cases = planL2(committed, SLICE_CELLS);
     let checked = 0;
@@ -223,6 +245,23 @@ describe("planL1 — ruling 39: L1 runs at 1280 only", () => {
     const p = l1Planner({});
     expect({ layer: p.layer, acceptsWidth: p.acceptsWidth, sports: p.sports }).toEqual({ layer: "L1", acceptsWidth: 1280, sports: [...SLICE_SPORTS] });
     expect(p.layered(v)).toEqual(cases);
+  });
+
+  // Review fix round 1 (minor): a plain `--driver browser --width W` run is
+  // labelled by its width — the schema's layers are L1/L2/L3 only, ruling 39
+  // makes L1 the 1280 layer, and L2 is the phone widths (L2_WIDTHS).
+  it("a plain browser run's layer is its width's: 1280 → L1, every L2_WIDTHS width → L2; a width on neither list is refused by name", () => {
+    // From the declarations: BROWSER_WIDTHS is ruling 39's 1280 plus L2_WIDTHS.
+    expect(BROWSER_WIDTHS.filter((w) => !(L2_WIDTHS as readonly number[]).includes(w))).toEqual([1280]);
+    let checked = 0;
+    for (const w of BROWSER_WIDTHS) {
+      expect(layerOfWidth(w), String(w)).toBe((L2_WIDTHS as readonly number[]).includes(w) ? "L2" : "L1");
+      checked++;
+    }
+    console.info(`layers: layerOfWidth over ${checked} declared widths`);
+    expect(checked).toBe(BROWSER_WIDTHS.length);
+    expect(checked).toBeGreaterThan(0);
+    for (const w of [1024, 0, Number.NaN]) expect(() => layerOfWidth(w as BrowserWidth), String(w)).toThrow(NoLayerForWidth);
   });
 });
 

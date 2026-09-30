@@ -1322,7 +1322,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(BROWSER_WIDTHS.length).toBeGreaterThan(0);
   });
 
-  it("every case gets its own case driver on its own org, closed after it; its checks carry the driver's; results read L1 over browser at the width asked, caseIds suffixed @<width>", async () => {
+  it("every case gets its own case driver on its own org, closed after it; its checks carry the driver's; results read the width's layer over browser (320 is L2: ruling 39 keeps L1 at 1280), caseIds suffixed @<width>", async () => {
     capture();
     const dir = dirFor();
     const fb = fakeBrowserRun();
@@ -1331,11 +1331,13 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", "b1", "--report-dir", dir])).toBe(0);
     expect(opened).toBe(1);
     const raw = JSON.parse(readFileSync(join(dir, "b1", "results.json"), "utf8")) as { layer: unknown; driver: unknown; cases: CaseResult[] };
-    expect({ layer: raw.layer, driver: raw.driver }).toEqual({ layer: "L1", driver: "browser" });
+    // 320 is an L2 width (lib/widths.ts), never L1 (review fix round 1: it read L1 here before).
+    expect(L2_WIDTHS).toContain(320);
+    expect({ layer: raw.layer, driver: raw.driver }).toEqual({ layer: "L2", driver: "browser" });
     expect(raw.cases).toHaveLength(SCENARIO_KEYS.length);
     let probed = 0;
     for (const [i, c] of raw.cases.entries()) {
-      expect({ layer: c.layer, driver: c.driver, width: c.width }, c.caseId).toEqual({ layer: "L1", driver: "browser", width: 320 });
+      expect({ layer: c.layer, driver: c.driver, width: c.width }, c.caseId).toEqual({ layer: "L2", driver: "browser", width: 320 });
       expect(c.caseId).toMatch(/^league\|generic\|[^@]+@320$/);
       if (!c.reason.startsWith("error:")) {
         expect(c.checks.map((k) => k.id), c.caseId).toContain("browser-probe");
@@ -1584,6 +1586,24 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     });
     expect(await runSlice(d2, ["--only", "league|generic", "--driver", "browser", "--width", "768", "--run-id", "b5", "--report-dir", dirFor()])).toBe(2);
     expect(lost.log).toEqual(["open case-1", "close case-1", "run closed"]);
+  });
+
+  it("a plain browser run records its width's layer, run and case alike: 1280 is L1 (ruling 39), every L2 width is L2 (review fix round 1)", async () => {
+    let checked = 0;
+    for (const w of BROWSER_WIDTHS) {
+      capture();
+      const dir = dirFor();
+      const id = `pw-${w}`;
+      expect(await runSlice(deps({ openBrowserRun: async () => fakeBrowserRun().run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", String(w), "--run-id", id, "--report-dir", dir]), String(w)).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, id, "results.json"), "utf8")) as RunResults;
+      // From the declarations: L2 is lib/widths.ts's L2_WIDTHS; the one other declared width is ruling 39's 1280.
+      const want = (L2_WIDTHS as readonly number[]).includes(w) ? "L2" : "L1";
+      expect(want === "L1" ? w : "L2", String(w)).toBe(want === "L1" ? 1280 : "L2");
+      expect({ run: raw.layer, cases: raw.cases.map((c) => [c.layer, c.width]) }, String(w)).toEqual({ run: want, cases: [[want, w]] });
+      checked++;
+    }
+    expect(checked).toBe(BROWSER_WIDTHS.length);
+    expect(checked).toBeGreaterThan(1);
   });
 
   it("an http run never opens a browser, and its results stay L3 over http", async () => {

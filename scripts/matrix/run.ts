@@ -1,8 +1,9 @@
 // The runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
 // plan seeding, the scenario over its driver, the invariants → one redacted
 // results.json → MATRIX.md. L3 drives HttpDriver; `--driver browser --width W`
-// (L1, W1c Task 6) drives each case through the organiser UI in one chromium
-// per run and one context per case (BrowserDriver), at width W.
+// (W1c Task 6) drives each case through the organiser UI in one chromium
+// per run and one context per case (BrowserDriver), at width W — recorded as
+// W's layer: L1 at 1280, L2 at a phone width (layerOfWidth; T12 fix round 1).
 // `--driver browser --layer L1|L2` (W1c Task 12, ruling 39) runs a LAYERED
 // plan (lib/layers.ts): L1 is the slice at 1280 only; L2 is the committed
 // l2-pairs.json runs, each at its own width — the scripted ones driven, the
@@ -95,7 +96,7 @@ import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
 import {
-  API_ONLY_BROWSER_SET, LAYER_PLANNERS, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, widthSweepPlanner,
+  API_ONLY_BROWSER_SET, LAYER_PLANNERS, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, widthSweepPlanner,
   type LayerCase, type PlannedLayerCase,
 } from "./lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
@@ -639,7 +640,7 @@ type RunItem =
 /** A plain plan's specs all run at the CLI's width (null over HTTP; D9); a
  *  layered plan places each of its cases itself. */
 function runItems(planner: CasePlanner | LayeredPlanner, variantFor: (sport: string) => string, width: BrowserWidth | null): RunItem[] {
-  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : "L1", width }));
+  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : layerOfWidth(width), width }));
   const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, width: c.width } : { kind: "planned", case: c }));
   if (items.length === 0) throw new NothingPlanned(planner.label);
   const seen = new Set<string>();
@@ -745,8 +746,9 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // FB-1); MATRIX.md renders what it wrote, so the two files agree.
   const results: RunResults = {
     schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid,
-    // A layered plan names its layer; a plain one is L1 in a browser, L3 over HTTP.
-    layer: isLayered(planner) ? planner.layer : cli.driver === "browser" ? "L1" : "L3", driver: cli.driver, cases,
+    // A layered plan names its layer; a plain one is its width's (layerOfWidth:
+    // 1280 L1, a phone width L2), L3 over HTTP.
+    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, cases,
   };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);

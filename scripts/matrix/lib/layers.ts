@@ -39,6 +39,27 @@ import type { PlanLayers, PlannerCli } from "../run.ts";
 /** Ruling 39: L1 runs at the organiser's desk width only. */
 export const L1_WIDTH = 1280 satisfies BrowserWidth;
 
+/** A width that is neither ruling 39's L1 width nor one of L2_WIDTHS: no layer runs there. */
+export class NoLayerForWidth extends Error {
+  readonly width: number;
+  constructor(width: number) {
+    super(`layers: width ${width} is neither L1's ${L1_WIDTH} (ruling 39) nor one of L2_WIDTHS (${L2_WIDTHS.join(", ")}), so no layer runs there`);
+    this.name = "NoLayerForWidth";
+    this.width = width;
+  }
+}
+
+/** A PLAIN (unlayered) browser run's layer (Task 12 review fix round 1: it
+ *  read L1 at every width). The results schema's layers are L1/L2/L3 only,
+ *  none of them "unlayered"; ruling 39 makes L1 the 1280 layer and L2 runs at
+ *  the phone widths, so a plain run is labelled by its width — what `--layer
+ *  L1` and the width sweep record at that same width. */
+export function layerOfWidth(width: BrowserWidth): "L1" | "L2" {
+  if (width === L1_WIDTH) return "L1";
+  if ((L2_WIDTHS as readonly number[]).includes(width)) return "L2";
+  throw new NoLayerForWidth(width);
+}
+
 /** 🚫: the wave that owes the path, and why there is none in this layer
  *  (decideState's DecideInput shape — its reason reads `<wave>: <reason>`). */
 export interface NoPath { readonly wave: string; readonly reason: string }
