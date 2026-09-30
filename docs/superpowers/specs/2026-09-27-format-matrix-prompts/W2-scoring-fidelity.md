@@ -120,6 +120,17 @@ checklist.
 - **Football two-leg aggregate / away goals.** Format-level, not a match rule (audit, the football section).
   → **W4** (recommended; the controller's audit, not an owner ruling).
 
+**7. From the W1c final review (2026-09-30).** Each is routed to W2 by name:
+
+- **`outcomesFor` omits `abandon`** (`pad-adapters.test.ts`, T7 minor 4; final review m-14). W2's generator-breadth
+  task adds a non-0–0 abandon, and the pad must then treat `core.abandon` as organiser-only, as it does forfeit.
+- **Two value-constant mutants survive the pad unit suite** (T9–11 M-1; final review m-15): `pads/carrom.ts`
+  `value: coins` → `9`, and `pads/boardgame.ts`'s method chip → a constant. The generators emit only 9 coins and
+  only checkmate/agreement, so add one route case per adapter with a value the generator does not emit.
+- **The tennis tie-break guard reads the cfg only** (`pads/tennis.ts:23-25`, T9–11 M-7; final review m-15). The
+  product's `isTbShape` also refuses under `mtbTo !== null` and reads per-set rules, so the adapter would over-refuse
+  a 7-6 set in an mtb or final-set-rule variant, by name.
+
 ## Prerequisites
 
 W1a–W1d merged and W1d's W2 backlog written (design §8 order, R1).

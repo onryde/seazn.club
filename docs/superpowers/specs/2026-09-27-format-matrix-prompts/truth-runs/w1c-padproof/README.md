@@ -52,9 +52,10 @@ every clean run: football 11 = 9/0/2, cricket 9 = 3/0/6, icehockey 15 = 6/0/9, h
 - **Unknown.** Whether the awaited locator was ever attached and not matched, whether the pad's sync or poll stalled, and what the
   machine was doing at the failing tap.
 - **Hypothesis (not established): machine load.** One `uptime` sample exists, recorded in the gitignored task
-  report. It read 232 / 199 / 114 (1, 5 and 15 minutes) at 13:52Z, about 4 minutes after the failing tap (about
-  13:48Z, going by the activity times in the post-timeout shot). Fixture 2 ran at near-normal pace across that
-  sample, which weakens the hypothesis. No sample exists at the failing tap.
+  report. It read 232 / 199 / 114 (1, 5 and 15 minutes) at 13:52Z. The failing tap's 15 s wait began about
+  13:50:34Z: `08-pad-scored` is taken right after the timeout, and its file time is 14:50:49 local (UTC+1), so
+  13:50:49Z. The sample therefore came about 1.5 minutes after the tap. Fixture 2 ran at near-normal pace across
+  that sample, which weakens the hypothesis. No sample exists at the failing tap.
 - **Recurrence: not measured, because there is no single-sport scope.** `--set pad-proof` takes no `--only` (`run.ts:468-469`,
   `lib/pad-proof-set.ts:16`), so cricket cannot be run alone without a code change. The fresh-id rerun `w1c-pp-1280-r4` passed all 11
   sports, cricket with the same 9 = 3/0/6 split as the other clean runs. That is one more pass, not an explanation.
