@@ -1,7 +1,7 @@
 // Streaming R1, lane D — the stream CREDITS walkthrough (File B; case list owner-approved 2026-09-29:
 // `.superpowers/sdd/2026-09-13-streaming-r1/walkthrough-inventory.md`, cases B1-B6).
 //
-// A club's match credits, read through the one page that shows them — the division fixtures tab's Phone tab — and
+// A club's match credits, read through the one page that shows them — the fixture page's Phone tab — and
 // through the ledger behind it. Every case asserts BOTH: the chip/split/card the organiser reads, and the
 // `org_stream_credits` rows by bucket. A number on the screen that the ledger does not hold (or the reverse) is exactly
 // the defect class these cases exist for.
@@ -58,7 +58,7 @@ const PASS_LOOKUP_KEYS: Record<string, string | undefined> = Object.fromEntries(
 // Budget — derived, never a flat literal (AGENTS.md class 20). Each test states its own counts as its FIRST act.
 // ---------------------------------------------------------------------------------------------------------------------
 
-/** One load of the division fixtures tab under contention (the walkthrough README's `navs × 20_000`). */
+/** One load of the fixture page under contention (the walkthrough README's `navs × 20_000`). */
 const NAV_MS = 20_000;
 /** One tap or one assertion round (the README's `acts × 5_000`). */
 const ACT_MS = 5_000;
@@ -311,20 +311,28 @@ async function planRig(page: Page, plan: string): Promise<{ rig: OverlayRig; rat
 // The page
 // ---------------------------------------------------------------------------------------------------------------------
 
-const divisionPath = (rig: OverlayRig): string => `/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}?tab=fixtures`;
+/** The fixture's organiser page — where the stream panel lives (spec 2026-09-30 §2). Its path names the fixture
+ *  NUMBER, which the overlay rig does not carry, so it is read from the row. */
+async function fixturePath(rig: OverlayRig): Promise<string> {
+  const [{ fixture_no: no }] = await withDb(
+    (sql) => sql<{ fixture_no: number }[]>`select fixture_no from fixtures where id = ${rig.fixtureId}`,
+  );
+  return `/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}/f/${no}`;
+}
 
-/** Load the division fixtures tab (THE grant under test — the page's read rolls the month) and open the row's panel
- *  on its Phone tab: stream-overlay.spec.ts's open-the-tab pattern. */
+/** The width's own Stream control — the desktop button at ≥768, the strip icon below. Exactly one is visible. */
+const streamControl = (page: Page): Locator =>
+  page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
+
+/** Load the fixture page (THE grant under test — the page's read rolls the month) and open its Stream panel on the
+ *  Phone tab: the organiser's own way in. */
 async function openPhoneTab(page: Page, rig: OverlayRig): Promise<void> {
-  await page.goto(divisionPath(rig));
-  await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1, {
+  await page.goto(await fixturePath(rig));
+  const control = streamControl(page);
+  await expect(control, "every plan holds streaming.overlay (V426), so the fixture page offers Stream").toHaveCount(1, {
     timeout: NAV_MS,
   });
-  // The sheet opens on "Today" on a match day and the seed schedules nothing for today.
-  await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
-  const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
-  await expect(toggle, "every plan holds streaming.overlay (V426), so the row offers the panel").toHaveCount(1);
-  await toggle.click();
+  await control.click();
   await page.locator('[data-testid="stream-tab-phone"]').click();
   await expect(page.locator('[data-testid="stream-phone-gate"] [data-phone-body]'), "the Phone tab body").toHaveCount(1, {
     timeout: NAV_MS,
@@ -407,6 +415,10 @@ const D1_SLACK_PX = 4;
  * ONLY when every uncontained box past the viewport sits inside that strip AND the amount is D1's own (AGENTS.md class
  * 23: an exemption nobody checks hides the next overflow). The day D1 is fixed, the exemption simply stops being used;
  * its use is annotated on the test so a run says when it leaned on it.
+ *
+ * Amended 2026-09-30 (spec §2): the Phone tab now lives on the FIXTURE page, which carries no Now-playing strip, so the
+ * exemption is not expected to be used here — it stays, still capped and still checked, rather than being deleted
+ * under a move that did not fix D1.
  */
 async function expectNoPageScroll(page: Page): Promise<void> {
   const seen = await page.evaluate((nowPlaying) => {
@@ -762,9 +774,9 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
 
   const { rig, rate } = await planRig(page, "community");
   expect(rate).toBeGreaterThanOrEqual(1);
-  // The seed's fixture is LIVE (in play) and UNTIMED, as a walk-up match is: the division is on its match day, and the
-  // run sheet mounts on "Today" — which keeps only a TIMED fixture. That is D2's shape (walkthrough-report-B.md, fixed
-  // 2026-09-29): the return below must still land on this row. Left untimed deliberately — do not schedule it.
+  // The seed's fixture is LIVE (in play) and UNTIMED, as a walk-up match is. D2 (walkthrough-report-B.md: the run
+  // sheet's "Today" filter hid such a row from the return) cannot arise any more — the return lands on the fixture's
+  // OWN page (spec 2026-09-30 §2) — so the positive pair below is the ordinary visit's CLOSED panel instead.
 
   // Reach "no credits left": the page's first read grants the month, and the month is then spent.
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -842,7 +854,7 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
     pack: String(pack.size),
     credits: String(pack.credits),
   });
-  expect(session.return_url, "Stripe returns the buyer to this row's Phone tab").toBeTruthy();
+  expect(session.return_url, "Stripe returns the buyer to this fixture's Phone tab").toBeTruthy();
 
   // Stripe COMPLETES it (the card entry inside the frame is the stated gap): its `checkout.session.completed`,
   // built from the session exactly as Stripe returned it, settled, and signed.
@@ -864,32 +876,42 @@ test("B4 · a pack bought from the forced chooser: no Stripe request until the t
   expect((await purchases()).length, "a redelivered session credited the pack twice").toBe(1);
   expect(await buckets(rig.orgId)).toEqual({ monthly: 0, pack: pack.credits, total: pack.credits });
 
-  // D2's premise, witnessed rather than assumed: an ORDINARY visit mounts this match day's sheet on "Today", and this
-  // live, untimed row is not on it. Without this, the return's row below could be on the page for any reason at all.
-  const [{ fixture_no: fixtureNo }] = await withDb(
-    (sql) => sql<{ fixture_no: number }[]>`select fixture_no from fixtures where id = ${rig.fixtureId}`,
-  );
-  const row = page.locator(`[data-testid="run-sheet"] li[data-fixture-no="${fixtureNo}"]`);
-  await page.goto(divisionPath(rig));
-  await expect(page.locator('[data-testid="run-sheet"]')).toHaveCount(1, { timeout: NAV_MS });
-  await expect(page.locator('[data-testid="run-sheet-filter"] [data-filter="today"]')).toHaveAttribute("aria-pressed", "true");
-  await expect(row, "an ordinary visit shows the untimed row, so D2 has nothing to prove here").toHaveCount(0);
+  // The positive pair for the return below, witnessed rather than assumed: an ORDINARY visit to the fixture page opens
+  // NOTHING — Stream is offered and closed. Without this, the return's open panel could be the page's default.
+  const path = await fixturePath(rig);
+  await page.goto(path);
+  await expect(streamControl(page), "an ordinary visit offers the Stream control").toHaveCount(1, { timeout: NAV_MS });
+  await expect(streamControl(page), "…closed").toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator('[data-role="fixture-stream-body"]'), "an ordinary visit opens no Stream panel").toHaveCount(0);
 
   // THE RETURN, as Stripe sends the buyer back: the session's own return_url with its id filled in.
   const back = session.return_url!.replace("{CHECKOUT_SESSION_ID}", sessionId);
-  expect(new URL(back).searchParams.get("session_id")).toBe(sessionId);
-  expect(new URL(back).searchParams.get("fixture"), "the return names THIS row").toBe(rig.fixtureId);
+  const backUrl = new URL(back);
+  expect(backUrl.searchParams.get("session_id")).toBe(sessionId);
+  expect(backUrl.pathname, "the return lands on THIS fixture's own page").toBe(path);
+  expect(backUrl.searchParams.get("stream"), "…asking for its Stream panel").toBe("open");
+  expect(backUrl.searchParams.has("tab"), "…not the division's fixtures tab").toBe(false);
+  expect(backUrl.searchParams.has("fixture"), "the page IS the fixture: no `fixture` param").toBe(false);
   // At each width (the tap was at 320): a fresh landing each time, since the panel strips the return's params (G5).
   let returnsChecked = 0;
   for (const width of [320, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(back);
-    // D2: the return renders its fixture's row though "Today" would hide it, and THAT row's panel opens by itself on
-    // the Phone tab — nothing is tapped to get there.
-    await expect(row, `${width}: the return renders its fixture's row (D2)`).toBeVisible({ timeout: NAV_MS });
-    await expect(row.locator('[data-testid="stream-phone-gate"] [data-phone-body]'), `${width}: the return reopens THIS row's Phone tab`).toHaveCount(1, {
+    // The panel opens by itself on the Phone tab — nothing is tapped to get there.
+    await expect(page.locator('[data-role="fixture-stream-body"] [data-testid="stream-phone-gate"] [data-phone-body]'), `${width}: the return opens the Phone tab`).toHaveCount(1, {
       timeout: NAV_MS,
     });
+    await expect(page.locator('[data-testid="stream-tab-phone"]'), `${width}: the Phone tab is the selected one`).toHaveAttribute("aria-selected", "true");
+    // G5: `stream`, `checkout` and `session_id` are stripped once consumed — a reload must not reopen or re-reconcile.
+    await expect
+      .poll(
+        () => {
+          const u = new URL(page.url());
+          return [u.pathname, ...["stream", "checkout", "session_id"].filter((k) => u.searchParams.has(k))];
+        },
+        { message: `${width}: the return's params are stripped`, timeout: NAV_MS },
+      )
+      .toEqual([path]);
     await expectBalance(page, pack.credits);
     await expectSplit(page, { monthly: 0, pack: pack.credits });
     await expect(page.locator('[data-testid="stream-go-live"]'), "credits in hand: the tab offers Go live").toBeVisible();

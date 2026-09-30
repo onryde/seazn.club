@@ -6178,6 +6178,7 @@ export type DictionaryKey =
   | "status.waitlisted.title"
   | "status.withdrawn.body"
   | "status.withdrawn.title"
+  | "stream.button"
   | "stream.copied"
   | "stream.copy"
   | "stream.credits.close"

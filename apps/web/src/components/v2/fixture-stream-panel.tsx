@@ -284,6 +284,7 @@ export function FixtureStreamPanel({
   entrantNames,
   tz,
   stream,
+  openedByReturn,
 }: {
   fixture: StreamPanelFixture;
   entrantNames: Record<string, string>;
@@ -291,6 +292,9 @@ export function FixtureStreamPanel({
    *  and what the seeded payload carries as `venueTz`. Never the org zone. */
   tz: string;
   stream: StreamPanelContext;
+  /** Spec 2026-09-30 §2: the fixture page's `?stream=open` (server-read). The run-sheet mount still passes nothing and
+   *  reads `checkoutReturnFor` until T6 removes it. */
+  openedByReturn?: boolean;
 }) {
   const msg = useMsg();
   const dict = useDict() as Record<string, unknown>;
@@ -300,7 +304,7 @@ export function FixtureStreamPanel({
   // The TAB half of the checkout return: a lazy initialiser, so the URL picks the opening tab and never overrides the
   // organiser's own choice afterwards. Read ONCE into state: G5 below strips the params, and the answer must survive it.
   const searchParams = useSearchParams();
-  const [returnedHere] = useState(() => checkoutReturnFor(searchParams, fixture.id));
+  const [returnedHere] = useState(() => !!openedByReturn || checkoutReturnFor(searchParams, fixture.id));
   const [tab, setTab] = useState<"obs" | "phone">(() => (returnedHere ? "phone" : "obs"));
 
   // G5: the return has done its job once this row is open on the Phone tab, so its params come off the URL — a reload

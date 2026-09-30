@@ -25,10 +25,16 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
 import { FixtureConsole } from "@/components/v2/fixture-console";
-import type { EventIn, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
+import type { EventIn, FixtureStreamMount, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+}));
+// The stop-only stream mount renders `PhoneStopProbe`, whose session hook asks for the page's confirm dialog. Its reads
+// run in effects, so they are inert under `renderToStaticMarkup`; the dialog itself is doubled (the page provides it).
+vi.mock("@/components/ui/confirm-provider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/confirm-provider")>()),
+  useConfirm: () => async () => true,
 }));
 
 const football = builtinModules.find((m) => m.key === "football")!;
@@ -81,6 +87,11 @@ function consoleHtml(
     // with the panel it opens, rather than always defaulting both sides in.
     home?: SideInfo | null;
     away?: SideInfo | null;
+    /** The console's OWN canEdit (`canScore && !frozen`) — false is the read-only (frozen) shape. */
+    canEdit?: boolean;
+    /** Spec 2026-09-30 §2 — the page's stream mount and its `?stream=open`. */
+    stream?: FixtureStreamMount;
+    streamReturn?: boolean;
   } = {},
 ): string {
   const status = over.status ?? "in_play";
@@ -106,8 +117,10 @@ function consoleHtml(
       away={over.away !== undefined ? over.away : side("e-away", "Summit Athletic")}
       initialState={live}
       initialEvents={status === "scheduled" ? [] : EVENTS}
-      canEdit
+      canEdit={over.canEdit ?? true}
       deviceHandover={over.deviceHandover ?? true}
+      stream={over.stream}
+      streamReturn={over.streamReturn}
       recorderNames={{ "user-1": "Dana Okafor" }}
       scorePadV2={{
         moduleVersion: football.version,
@@ -254,13 +267,87 @@ describe("phone composition — the match strip (spec §3.1)", () => {
   // "max-md:hidden". Every assertion below that has to tell the two classes
   // apart now requires a real class-boundary (a space, not a hyphen) before
   // "md:hidden", which "max-md:hidden" can never supply.
-  it("offers Hand over device twice: the desktop button hides on phones, the phone icon hides on desktop, and both share one accessible name", () => {
+  it("offers Remote scoring twice (D4): the desktop button hides on phones, the phone icon hides on desktop, and both share one accessible name", () => {
     const html = consoleHtml({ deviceHandover: true });
     expect(html).toMatch(/data-role="device-handover"[^>]*class="[^"]*\smax-md:hidden"/);
-    expect(html).toMatch(/data-role="device-handover"[^>]*>Hand over device</);
+    expect(html).toMatch(/data-role="device-handover"[^>]*>Remote scoring</);
     expect(html).toMatch(/<button[^>]*data-role="device-handover-phone"[^>]*>/);
     expect(html).toMatch(/data-role="device-handover-phone"[^>]*class="[^"]*\smd:hidden"/);
-    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="Hand over device"/);
+    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="Remote scoring"/);
+  });
+
+  // Spec 2026-09-30 §2 (P1): Stream is the SECOND control that exists twice, beside Remote scoring.
+  it("offers Stream twice when mounted: desktop btn-ghost min-h-11 max-md:hidden, phone 44px md:hidden, one accessible name — and BEFORE the hand-over control in both places", () => {
+    const html = consoleHtml({ deviceHandover: true, stream: { mode: "stop-only" } });
+    expect(html).toMatch(/data-role="fixture-stream"[^>]*class="btn btn-ghost min-h-11\smax-md:hidden"/);
+    expect(html).toMatch(/data-role="fixture-stream"[^>]*>Stream</);
+    expect(html).toMatch(/data-role="fixture-stream-phone"[^>]*class="[^"]*\sh-11 w-11\s[^"]*\smd:hidden"/);
+    expect(html).toMatch(/data-role="fixture-stream-phone"[^>]*aria-label="Stream"/);
+    expect(html.indexOf('data-role="fixture-stream-phone"')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-role="fixture-stream-phone"')).toBeLessThan(html.indexOf('data-role="device-handover-phone"'));
+    expect(html.indexOf('data-role="fixture-stream"')).toBeLessThan(html.indexOf('data-role="device-handover"'));
+  });
+
+  it("renders neither Stream control without a mount — the positive pair's other half", () => {
+    const html = consoleHtml({ deviceHandover: true });
+    expect(html).not.toMatch(/data-role="fixture-stream"/);
+    expect(html).not.toMatch(/data-role="fixture-stream-phone"/);
+    expect(html).not.toMatch(/data-role="console-stream"/);
+  });
+
+  it("Review Focus 4: Stream stays reachable when the Scoring section does not render — finalized, cancelled, read-only (frozen) and TBD-sided", () => {
+    const shapes: { name: string; props: Parameters<typeof consoleHtml>[0] }[] = [
+      { name: "finalized", props: { status: "finalized" } },
+      { name: "cancelled", props: { status: "cancelled" } },
+      { name: "read-only", props: { canEdit: false } },
+      { name: "TBD side", props: { away: null } },
+    ];
+    let checked = 0;
+    for (const s of shapes) {
+      const html = consoleHtml({ ...s.props, stream: { mode: "stop-only" } });
+      expect(html, s.name).not.toMatch(/data-role="console-scoring"/);
+      expect(html, s.name).toMatch(/data-role="console-stream"/);
+      expect(html, s.name).toMatch(/data-role="fixture-stream"/);
+      expect(html, s.name).toMatch(/data-role="fixture-stream-phone"/);
+      // Closed, the card is an empty box on a phone — it hides there until the strip icon opens it.
+      expect(html, s.name).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
+      // …and it holds the ONE desktop Stream button.
+      expect(html.match(/data-role="fixture-stream"/g), s.name).toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the fallback card is absent whenever the Scoring section renders (no second Stream button)", () => {
+    const html = consoleHtml({ stream: { mode: "stop-only" } });
+    expect(html).toMatch(/data-role="console-scoring"/);
+    expect(html).not.toMatch(/data-role="console-stream"/);
+    expect(html.match(/data-role="fixture-stream"/g)).toHaveLength(1);
+  });
+
+  it("?stream=open opens the stream panel on first render (streamReturn), and only then", () => {
+    const opened = consoleHtml({ stream: { mode: "stop-only" }, streamReturn: true });
+    expect(opened).toMatch(/data-role="fixture-stream"[^>]*aria-expanded="true"/);
+    expect(opened).toMatch(/data-role="fixture-stream-phone"[^>]*aria-expanded="true"/);
+    expect(opened).toMatch(/data-role="fixture-stream-body"/);
+    // One panel at a time: the hand-over panel is closed while Stream is open.
+    expect(opened).toMatch(/data-role="device-handover"[^>]*aria-expanded="false"/);
+    const closed = consoleHtml({ stream: { mode: "stop-only" } });
+    expect(closed).toMatch(/data-role="fixture-stream"[^>]*aria-expanded="false"/);
+    expect(closed).not.toMatch(/data-role="fixture-stream-body"/);
+    // A return param with no mount opens nothing (there is nothing to open).
+    expect(consoleHtml({ streamReturn: true })).not.toMatch(/data-role="fixture-stream-body"/);
+  });
+
+  it("an OPEN stream panel keeps a started, pad-less Scoring section on phones — exactly as an open hand-over panel does", () => {
+    // Decided football: the pad unmounts (no post-phase panel), so the section would hide on a phone…
+    const decided = { outcome: { kind: "win", winner: "e-home" } };
+    const scoringClass = (html: string) => /<section class="([^"]*)" data-role="console-scoring">/.exec(html)?.[1];
+    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" } })), "closed: nothing to show on a phone").toBe(
+      "card p-5 max-md:p-3 max-md:hidden",
+    );
+    // …unless the stream panel is open inside it.
+    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" }, streamReturn: true }))).toBe("card p-5 max-md:p-3");
   });
 
   it("renders neither hand-over control when the page says this fixture may not be handed over", () => {

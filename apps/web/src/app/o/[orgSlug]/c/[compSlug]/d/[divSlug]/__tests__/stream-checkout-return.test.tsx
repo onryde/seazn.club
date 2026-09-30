@@ -1,13 +1,11 @@
-// Task 14 fix round 1 — G1: the match-credit checkout returns to THIS page
-// (`?tab=fixtures&fixture=…&stream=open&checkout=success&session_id=…`, see
-// app/api/billing/relay-checkout/route.ts), and the return render can beat
-// Stripe's webhook. The page reconciles the session BEFORE it reads the balance
-// it hands the Phone tab, or the club that has just paid is shown the buy card
-// again. Same harness as roster-drift-stage-wiring.test.tsx beside it (the async
-// server component called directly, its element tree walked — no jsdom here),
-// so what is pinned is the page's REAL wiring: which usecase it calls, with
-// what, in which order, and what the Phone tab is handed as a result.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// The division page's stream wiring. Same harness as roster-drift-stage-wiring.test.tsx beside it (the async server
+// component called directly, its element tree walked — no jsdom here), so what is pinned is the page's REAL wiring.
+//
+// Spec 2026-09-30 §2 (T5): the context-level cases (G1 reconcile-before-balance, Task 14b split, I2/N1 relay
+// availability, P1 currency, M4 concurrency, RT overlay keys) MOVED to server/__tests__/stream-panel-context.test.ts,
+// with the reads themselves: the page now calls THE loader, and this file keeps the case proving it does — with what
+// gate, competition and fixture order — beside the division-only cases (F1's frozen probes, D2's hand-over).
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -115,13 +113,23 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
   openStreamFixtureIds: (auth: unknown, fixtureIds: readonly string[]) => relay.open(auth, fixtureIds),
 }));
 
+// The loader is the REAL one, wrapped in a spy: the F1 cases below still run the page through its real reads, and the
+// loader case reads what the page CALLED it with.
+const loader = vi.hoisted(() => ({ calls: [] as unknown[] }));
+vi.mock("@/server/stream-panel-context", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/stream-panel-context")>();
+  return {
+    loadStreamPanelContext: (a: Parameters<typeof real.loadStreamPanelContext>[0]) => {
+      loader.calls.push(a);
+      return real.loadStreamPanelContext(a);
+    },
+  };
+});
+
 import DivisionPage from "../page";
 import { hasFeature } from "@/lib/entitlements";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { PhoneStopProbe } from "@/components/v2/fixture-stream-panel";
-import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
-import { verifyOverlayKey } from "@/server/overlay/overlay-key";
-import { SUPPORTED_CURRENCIES } from "@/lib/currency";
 
 function find(node: ReactNode, type: unknown): ReactElement | null {
   if (Array.isArray(node)) {
@@ -160,139 +168,58 @@ const render = (sp: Record<string, string | string[]>) =>
     searchParams: Promise.resolve(sp),
   });
 
-const streamBalanceOf = async (sp: Record<string, string>): Promise<unknown> => {
-  const panel = find(await render(sp), StagesPanel);
-  expect(panel, "no StagesPanel on the fixtures tab").not.toBeNull();
-  return (panel!.props as { stream?: { streamBalance?: unknown } }).stream?.streamBalance;
-};
-
-describe("the checkout return reconciles the session BEFORE the Phone tab's balance is read (G1)", () => {
+describe("the page hands its stream context to the run sheet through THE loader (spec 2026-09-30 §2)", () => {
+  const fx = (id: string, no: number) => ({
+    id, stage_id: "st-1", pool_id: null, round_no: 1, seq_in_round: no, fixture_no: no,
+    home_entrant_id: null, away_entrant_id: null, home_slot_label: null, away_slot_label: null,
+    scheduled_at: null, status: "scheduled", outcome: null,
+  });
   beforeEach(() => {
     pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
     stagesSpies.listStages.mockReset().mockResolvedValue([]);
     relay.reconcile.mockClear();
-    relay.balance.mockReset();
+    relay.balance.mockReset().mockResolvedValue(6);
     relay.open.mockReset().mockResolvedValue([]);
+    loader.calls.length = 0;
     scene.frozen = false;
-    scene.fixtures = [];
+    scene.fixtures = [fx("fx-2", 2), fx("fx-1", 1), fx("fx-3", 3)];
     scene.entrants = [];
   });
 
-  it("?checkout=success&session_id=… reconciles THAT session for THIS page's org, then reads the balance — and hands the tab the post-reconcile number", async () => {
-    // The balance double answers 0 until the reconcile has run and the purchase's credits after — so the number the tab
-    // receives can only be the fresh one if the ORDER is right (an order-blind test would pass on either).
-    let reconciled = false;
-    relay.reconcile.mockImplementation(async () => { reconciled = true; return true; });
-    relay.balance.mockImplementation(async () => (reconciled ? 5 : 0));
-    const balance = await streamBalanceOf({
-      tab: "fixtures", fixture: "fx-1", stream: "open", checkout: "success", session_id: "cs_test_return_1",
+  it("calls the loader ONCE with offered = the fixtures tab AND editable, its competition, the fixture ids in page order and the checkout params — and hands StagesPanel what it answered", async () => {
+    const tree = await render({ tab: "fixtures", checkout: "success", session_id: "cs_div_1" });
+    expect(loader.calls).toHaveLength(1);
+    expect(loader.calls[0]).toMatchObject({
+      auth: PAGE.auth,
+      competitionId: "comp-1",
+      sportKey: "generic",
+      fixtureIds: ["fx-2", "fx-1", "fx-3"],
+      offered: true,
+      checkout: { status: "success", sessionId: "cs_div_1" },
     });
-    expect(relay.reconcile).toHaveBeenCalledTimes(1);
-    expect(relay.reconcile).toHaveBeenCalledWith(PAGE.auth.orgId, "cs_test_return_1");
-    expect(relay.reconcile.mock.invocationCallOrder[0]!).toBeLessThan(relay.balance.mock.invocationCallOrder[0]!);
-    expect(balance, "the tab was handed the pre-reconcile balance").toBe(5);
+    // What the loader answered IS what the run sheet gets — the balance is the (mocked) relay read, through the loader.
+    expect((find(tree, StagesPanel)!.props as { stream?: { streamBalance?: unknown } }).stream?.streamBalance).toBe(6);
   });
 
-  it("an ordinary visit — no checkout, a cancelled checkout, a success without its session id — makes NO Stripe reconcile", async () => {
-    relay.balance.mockResolvedValue(2);
+  it("offered is false — and nothing is read — off the fixtures tab, for a viewer who cannot edit, and on a frozen page", async () => {
     let checked = 0;
-    for (const sp of [
-      { tab: "fixtures" } as Record<string, string>,
-      { tab: "fixtures", checkout: "cancel", session_id: "cs_test_x" },
-      { tab: "fixtures", checkout: "success" },
-    ]) {
-      // The positive half of the pair: the page still hands the tab the balance it read (G4's seam, witnessed here).
-      expect(await streamBalanceOf(sp), JSON.stringify(sp)).toBe(2);
+    for (const [name, setup, sp] of [
+      ["standings tab", () => {}, { tab: "standings" }],
+      ["cannot edit", () => { pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false }); }, { tab: "fixtures" }],
+      ["frozen", () => { scene.frozen = true; }, { tab: "fixtures" }],
+    ] as const) {
+      loader.calls.length = 0;
+      relay.balance.mockClear();
+      pageAuth.requireDivisionPage.mockResolvedValue(PAGE);
+      scene.frozen = false;
+      setup();
+      await render(sp as Record<string, string>);
+      expect(loader.calls, name).toHaveLength(1);
+      expect((loader.calls[0] as { offered: boolean }).offered, name).toBe(false);
+      expect(relay.balance, `${name}: no credits read`).not.toHaveBeenCalled();
       checked++;
     }
     expect(checked).toBe(3);
-    expect(relay.reconcile).not.toHaveBeenCalled();
-  });
-});
-
-// Task 14b (R3b/R4): the page reads the balance through `relayCredits` — which grants this month's free credits first —
-// and hands the Phone tab the chip's total, the split behind it and the plan's monthly allowance, from that ONE read.
-describe("Task 14b: the Phone tab is handed the split and the monthly allowance from the page's one credits read", () => {
-  beforeEach(() => {
-    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
-    stagesSpies.listStages.mockReset().mockResolvedValue([]);
-    relay.balance.mockReset();
-    relay.split.mockReset();
-    scene.frozen = false;
-    scene.fixtures = [];
-    scene.entrants = [];
-  });
-
-  it("passes the total as the chip, the split behind it and the allowance — each a value no default could produce", async () => {
-    relay.balance.mockResolvedValue(7);
-    relay.split.mockReturnValue({ monthly: 2, pack: 5, monthlyAllowance: 20 });
-    const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as {
-      stream?: { streamBalance?: unknown; streamSplit?: unknown; monthlyAllowance?: unknown };
-    }).stream;
-    expect(relay.balance).toHaveBeenCalledTimes(1);
-    expect(relay.balance.mock.calls[0]![1]).toBe(PAGE.auth.orgId);
-    expect(stream?.streamBalance).toBe(7);
-    expect(stream?.streamSplit).toEqual({ monthly: 2, pack: 5, total: 7 });
-    expect(stream?.monthlyAllowance).toBe(20);
-  });
-
-  it("I2: a deployment with NO relay (R5's disabled drivers) tells the tab so, and reads no credits — that read GRANTS; the relay back on reads them again", async () => {
-    relay.balance.mockResolvedValue(3);
-    relay.split.mockReturnValue({ monthly: 1, pack: 2, monthlyAllowance: 1 });
-    type Stream = { relayEntitled?: unknown; relayDisabled?: unknown; streamBalance?: unknown; streamSplit?: unknown };
-    const streamOf = async () => (find(await render({ tab: "fixtures" }), StagesPanel)!.props as { stream?: Stream }).stream;
-    setRelayDriversForTest(disabledRelayDrivers());
-    try {
-      const off = await streamOf();
-      expect(off).toMatchObject({ relayEntitled: true, relayDisabled: true, streamBalance: 0, streamSplit: null });
-      expect(relay.balance, "no grant-and-read on a relay-less deployment").not.toHaveBeenCalled();
-    } finally {
-      setRelayDriversForTest(null);
-    }
-    // The positive pair: the default (fake) drivers — the tab is live and the credits are read.
-    expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 3 });
-    expect(relay.balance).toHaveBeenCalledTimes(1);
-  });
-
-  it("N1 + m1: a LIVE deployment missing a Cloudflare secret renders the fixtures tab AND tells the Phone tab the relay is unavailable — no credits read; with both secrets it is live", async () => {
-    // N1: the fixtures tab asks "can this deployment stream?" on every render; answered by constructing the drivers, a
-    // live deploy without CLOUDFLARE_* threw here for every org. m1: answered "yes" there, the tab offered Go live and
-    // buy tiles on a deployment where every start fails.
-    relay.balance.mockResolvedValue(4);
-    type Stream = { relayEntitled?: unknown; relayDisabled?: unknown; streamBalance?: unknown };
-    const streamOf = async () => (find(await render({ tab: "fixtures" }), StagesPanel)!.props as { stream?: Stream }).stream;
-    try {
-      vi.stubEnv("RELAY_DRIVERS", "live");
-      vi.stubEnv("ENV_NAME", "prod");
-      vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-      vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "tok");
-      setRelayDriversForTest(null);
-      expect(() => relayDrivers(), "premise: constructing the drivers here throws").toThrow(/CLOUDFLARE_ACCOUNT_ID/);
-      setRelayDriversForTest(null);
-      expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: true, streamBalance: 0 });
-      expect(relay.balance, "no grant-and-read on a deployment that cannot stream").not.toHaveBeenCalled();
-      // The positive pair: the missing secret supplied — the tab is live and the credits are read.
-      vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct");
-      setRelayDriversForTest(null);
-      expect(await streamOf()).toMatchObject({ relayEntitled: true, relayDisabled: false, streamBalance: 4 });
-      expect(relay.balance).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.unstubAllEnvs();
-      setRelayDriversForTest(null);
-    }
-  });
-
-  it("without the relay: no credits read, and the tab gets no split and no allowance — the empty case", async () => {
-    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
-    try {
-      const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as {
-        stream?: { streamBalance?: unknown; streamSplit?: unknown; monthlyAllowance?: unknown };
-      }).stream;
-      expect(relay.balance).not.toHaveBeenCalled();
-      expect(stream).toMatchObject({ streamBalance: 0, streamSplit: null, monthlyAllowance: 0 });
-    } finally {
-      vi.mocked(hasFeature).mockImplementation(async () => true);
-    }
   });
 });
 
@@ -388,131 +315,6 @@ describe("F1: a billing-frozen competition still offers Stop for every stream on
     } finally {
       vi.mocked(hasFeature).mockImplementation(async () => true);
     }
-  });
-});
-
-// P1 (Task 14 fix round 2): the tiles quoted GBP while `/api/billing/relay-checkout` charged `preferredCurrency(orgId,
-// req)` — capture pass 2 saw a £25 tile open a $33.25 checkout. The page now resolves the same function for the same org
-// and hands the Phone tab the result, so the tiles quote in the currency the checkout will charge.
-describe("P1: the Phone tab is handed the currency the checkout will charge", () => {
-  beforeEach(() => {
-    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
-    stagesSpies.listStages.mockReset().mockResolvedValue([]);
-    relay.balance.mockReset().mockResolvedValue(3);
-    money.preferredCurrency.mockReset();
-    scene.frozen = false;
-    scene.fixtures = [];
-    scene.entrants = [];
-  });
-
-  it("resolves preferredCurrency for THIS org and passes it through — every non-GBP currency, not just one", async () => {
-    // m10: the house list, not a typed copy — a currency added to SUPPORTED_CURRENCIES is swept here without an edit.
-    // GBP is left out because it is the tiles' old default: a GBP case passes whether or not the page passes anything.
-    const nonGbp = SUPPORTED_CURRENCIES.filter((c) => c !== "gbp");
-    expect(nonGbp.length, "premise: the house sells in more than GBP").toBeGreaterThan(0);
-    let checked = 0;
-    for (const currency of nonGbp) {
-      money.preferredCurrency.mockClear().mockResolvedValue(currency);
-      const panel = find(await render({ tab: "fixtures" }), StagesPanel);
-      expect((panel!.props as { stream?: { currency?: unknown } }).stream?.currency, currency).toBe(currency);
-      expect(money.preferredCurrency).toHaveBeenCalledTimes(1);
-      expect(money.preferredCurrency.mock.calls[0]![0]).toBe(PAGE.auth.orgId);
-      checked++;
-    }
-    expect(checked).toBe(nonGbp.length);
-  });
-
-  // M4 (fix round 4): the balance and the currency were awaited one after the other inside the object literal — one extra
-  // round trip on every relay-entitled fixtures-tab render. Neither depends on the other, so neither may wait for it.
-  it("M4: the balance and the currency are read CONCURRENTLY — the second is asked before the first has answered", async () => {
-    let checked = 0;
-    for (const slow of ["balance", "currency"] as const) {
-      let release: () => void = () => {};
-      const gate = new Promise<void>((r) => { release = r; });
-      relay.balance.mockReset().mockImplementation(async () => { if (slow === "balance") await gate; return 4; });
-      money.preferredCurrency.mockReset().mockImplementation(async () => { if (slow === "currency") await gate; return "usd"; });
-      const page = render({ tab: "fixtures" });
-      await vi.waitFor(() => expect(slow === "balance" ? relay.balance : money.preferredCurrency).toHaveBeenCalledTimes(1));
-      // The slow one is still pending: the other must already have been asked.
-      expect(slow === "balance" ? money.preferredCurrency : relay.balance, `${slow} held the other back`).toHaveBeenCalledTimes(1);
-      release();
-      const stream = (find(await page, StagesPanel)!.props as { stream?: { streamBalance?: unknown; currency?: unknown } }).stream;
-      expect(stream?.streamBalance, slow).toBe(4);
-      expect(stream?.currency, slow).toBe("usd");
-      checked++;
-    }
-    expect(checked).toBe(2);
-  });
-
-  it("M4: without the relay neither is read — the tab gets 0 and gbp, and the page keeps its query budget", async () => {
-    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.relay");
-    try {
-      money.preferredCurrency.mockReset().mockResolvedValue("usd");
-      const stream = (find(await render({ tab: "fixtures" }), StagesPanel)!.props as { stream?: { relayEntitled?: unknown; streamBalance?: unknown; currency?: unknown } }).stream;
-      expect(stream?.relayEntitled, "premise: overlay yes, relay no").toBe(false);
-      expect(stream?.streamBalance).toBe(0);
-      expect(stream?.currency).toBe("gbp");
-      expect(relay.balance).not.toHaveBeenCalled();
-      expect(money.preferredCurrency).not.toHaveBeenCalled();
-    } finally {
-      vi.mocked(hasFeature).mockImplementation(async () => true);
-    }
-  });
-});
-
-// RT (lane-close fix, ruled 2026-09-29): the page mints each row's signed overlay key for the OBS URL its panel copies —
-// the grant a community org's overlay presents at the realtime-token route. Folded through the REAL key module on both
-// ends: what the page hands the panel must be what the route's `verifyOverlayKey` accepts, for THAT fixture only.
-describe("RT: the page hands the panel one signed overlay key per fixture — and only with the panel", () => {
-  const fx = (id: string) => ({
-    id, stage_id: "st-1", pool_id: null, round_no: 1, seq_in_round: 1, fixture_no: 1,
-    home_entrant_id: null, away_entrant_id: null, home_slot_label: null, away_slot_label: null,
-    scheduled_at: null, status: "scheduled", outcome: null,
-  });
-  const IDS = ["0b6c3a55-0000-4000-8000-000000000001", "0b6c3a55-0000-4000-8000-000000000002", "0b6c3a55-0000-4000-8000-000000000003"];
-  const keysOf = async (sp: Record<string, string>) =>
-    (find(await render(sp), StagesPanel)!.props as { stream?: { overlayKeys?: Record<string, string> } }).stream?.overlayKeys;
-  beforeEach(() => {
-    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
-    stagesSpies.listStages.mockReset().mockResolvedValue([]);
-    relay.balance.mockReset().mockResolvedValue(1);
-    relay.open.mockReset().mockResolvedValue([]);
-    scene.frozen = false;
-    scene.fixtures = IDS.map(fx);
-    scene.entrants = [];
-    vi.stubEnv("AUTH_SECRET", "rt-page-unit-secret-0123456789abcdef");
-  });
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it("every listed fixture gets a key the route verifies for IT and for no other listed fixture", async () => {
-    const keys = await keysOf({ tab: "fixtures" });
-    expect(Object.keys(keys ?? {}).sort(), "one key per fixture, none missing").toEqual([...IDS].sort());
-    let own = 0;
-    let crossed = 0;
-    for (const a of IDS) {
-      for (const b of IDS) {
-        expect(verifyOverlayKey(b, keys![a]), `${a}'s key on ${b}`).toBe(a === b);
-        if (a === b) own++; else crossed++;
-      }
-    }
-    expect(own).toBe(IDS.length);
-    expect(crossed).toBe(IDS.length * (IDS.length - 1));
-  });
-
-  it("no panel (overlay switched off) → no keys on the flight; no signing secret → no keys, and the page still renders", async () => {
-    vi.mocked(hasFeature).mockImplementation(async (_org, key) => key !== "streaming.overlay");
-    try {
-      expect(await keysOf({ tab: "fixtures" }), "switched off").toEqual({});
-    } finally {
-      vi.mocked(hasFeature).mockImplementation(async () => true);
-    }
-    vi.stubEnv("AUTH_SECRET", "");
-    expect(await keysOf({ tab: "fixtures" }), "no AUTH_SECRET").toEqual({});
-    // The positive pair, the secret back: the keys are back.
-    vi.stubEnv("AUTH_SECRET", "rt-page-unit-secret-0123456789abcdef");
-    expect(Object.keys((await keysOf({ tab: "fixtures" })) ?? {})).toHaveLength(IDS.length);
   });
 });
 

@@ -21,6 +21,14 @@ import {
 } from "@/components/v2/lineup-editor";
 import { ScoringErrorBoundary } from "@/components/v2/scoring-error-boundary";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
+import { Video } from "lucide-react";
+import {
+  FixtureStreamPanel,
+  PhoneStopProbe,
+  type StreamPanelContext,
+  type StreamPanelFixture,
+} from "@/components/v2/fixture-stream-panel";
+import { nextOpenPanel, type OpenPanel } from "@/lib/fixture-stream-mount";
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
@@ -61,6 +69,13 @@ import { cricketHasNoInnings } from "@/components/v2/scorepad/v3/skins/cricket";
 import { genericHasNoResult } from "@/components/v2/scorepad/v3/skins/generic";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+/** Spec 2026-09-30 §2 — what the fixture page mounts behind Stream: the whole panel (entitled, not frozen) or Stop only
+ *  (a session still up on a frozen, switched-off or finalized fixture). Absent ⇒ no Stream control at all. The gate is
+ *  the PAGE's (`fixtureStreamMode`, lib/fixture-stream-mount.ts), never this console's own `canEdit`. */
+export type FixtureStreamMount =
+  | { mode: "panel"; context: StreamPanelContext; fixture: StreamPanelFixture; entrantNames: Record<string, string>; tz: string }
+  | { mode: "stop-only" };
 
 /** Focus-trapped, Esc-to-close single-field text prompt — replaces the native
  *  browser prompt dialog for the abandon/forfeit reason inputs below (same
@@ -281,6 +296,11 @@ interface Props {
    * own heading row.
    */
   deviceHandover?: boolean;
+  /** Spec 2026-09-30 §2 (P1) — the stream panel's mount on this page, decided by the page (organisers only). Absent ⇒ no
+   *  Stream control. */
+  stream?: FixtureStreamMount;
+  /** `?stream=open` on the URL: open the stream panel on first render (checkout return, run-sheet chip). */
+  streamReturn?: boolean;
   viewerPlan: ViewerPlan;
 }
 
@@ -419,6 +439,8 @@ export function FixtureConsole({
   scorePadV2 = null,
   audit = null,
   deviceHandover = false,
+  stream,
+  streamReturn = false,
   viewerPlan,
 }: Props) {
   const msg = useMsg();
@@ -441,7 +463,11 @@ export function FixtureConsole({
   const [abandonPrompt, setAbandonPrompt] = useState(false);
   /** The row whose Void is in flight — the panel dims exactly that button. */
   const [voidingId, setVoidingId] = useState<string | null>(null);
-  const [handoverOpen, setHandoverOpen] = useState(false);
+  // Spec 2026-09-30 §2: ONE panel open at a time — Remote scoring or Stream (`nextOpenPanel`). `detailsOpen` and the
+  // PhoneDisclosures stay independent. `?stream=open` (streamReturn) opens Stream on the first render only.
+  const [openPanel, setOpenPanel] = useState<OpenPanel>(() => (stream && streamReturn ? "stream" : null));
+  const handoverOpen = openPanel === "handover";
+  const streamOpen = openPanel === "stream";
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   /** Re-read `/state` and the full ledger. `timeoutMs` bounds the pair — see
@@ -742,7 +768,39 @@ export function FixtureConsole({
   // scorer just asked to see. `mountPad`, not the raw `!decided`, so a
   // decided cricket fixture whose pad now renders its post-phase Scorecard
   // panel keeps this section's phone chrome too.
-  const consoleScoringEmptyOnPhone = started && !(scorePadV2 && mountPad) && !(canHandOver && handoverOpen);
+  // Spec 2026-09-30 §2: an open stream panel is content too, exactly as an open hand-over panel is.
+  const consoleScoringEmptyOnPhone =
+    started && !(scorePadV2 && mountPad) && !(canHandOver && handoverOpen) && !(stream && streamOpen);
+  // The Scoring section's own gate (below). Where it does not render — finalized, cancelled, read-only (frozen) or a
+  // TBD side — Stream gets its own card, so Stop stays reachable (spec 2026-09-30 §2, Review Focus 4).
+  const scoringSection = scoring && !!home && !!away;
+  const streamBody =
+    stream && streamOpen ? (
+      <div className="mb-4 min-w-0" data-role="fixture-stream-body">
+        {stream.mode === "panel" ? (
+          <FixtureStreamPanel
+            fixture={stream.fixture}
+            entrantNames={stream.entrantNames}
+            tz={stream.tz}
+            stream={stream.context}
+            openedByReturn={streamReturn}
+          />
+        ) : (
+          <PhoneStopProbe fixtureId={fixture.id} />
+        )}
+      </div>
+    ) : null;
+  const streamButton = stream ? (
+    <button
+      type="button"
+      data-role="fixture-stream"
+      aria-expanded={streamOpen}
+      onClick={() => setOpenPanel((p) => nextOpenPanel(p, "stream"))}
+      className="btn btn-ghost min-h-11 max-md:hidden"
+    >
+      {msg("stream.button")}
+    </button>
+  ) : null;
 
   const sides = { home, away };
   // R7/C5 (D-6) — what to CALL each side, resolved ONCE here and read by the
@@ -881,13 +939,26 @@ export function FixtureConsole({
           <span className={`badge ${STATUS_STYLE[live.status] ?? ""}`}>
             {scoreStatusLabel(msg, live.status)}
           </span>
+          {/* Spec 2026-09-30 §2 — Stream's phone twin, BEFORE ⇄. Same classes as the hand-over icon. */}
+          {stream && (
+            <button
+              type="button"
+              data-role="fixture-stream-phone"
+              aria-label={msg("stream.button")}
+              aria-expanded={streamOpen}
+              onClick={() => setOpenPanel((p) => nextOpenPanel(p, "stream"))}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
+            >
+              <Video aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
+            </button>
+          )}
           {canHandOver && (
             <button
               type="button"
               data-role="device-handover-phone"
               aria-label={msg("score.handOverDevice")}
               aria-expanded={handoverOpen}
-              onClick={() => setHandoverOpen((v) => !v)}
+              onClick={() => setOpenPanel((p) => nextOpenPanel(p, "handover"))}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
             >
               <svg
@@ -996,7 +1067,7 @@ export function FixtureConsole({
       {/* SCORING (R7/C2 + C3). The pad, and beside its heading the two
           controls that belong to scoring rather than to authority: `Start
           match`, the one thing to press before kick-off and the only filled
-          button on this page, and `Hand over device` — which used to be the
+          button on this page, and `Remote scoring` (D4; formerly `Hand over device`) — which used to be the
           LAST card on the page, below the audit strip, ~1900px past the pad
           at 375. It takes the slot the bare authority row vacates.
 
@@ -1012,12 +1083,13 @@ export function FixtureConsole({
           <div className={`mb-3 flex flex-wrap items-center justify-between gap-2${started ? " max-md:hidden" : ""}`}>
             <h2 className="text-sm font-semibold text-slate-700 max-md:hidden">{msg("score.scoring")}</h2>
             <div className="flex flex-wrap items-center gap-2">
+              {streamButton}
               {canHandOver && (
                 <button
                   type="button"
                   data-role="device-handover"
                   aria-expanded={handoverOpen}
-                  onClick={() => setHandoverOpen((v) => !v)}
+                  onClick={() => setOpenPanel((p) => nextOpenPanel(p, "handover"))}
                   className="btn btn-ghost min-h-11 max-md:hidden"
                 >
                   {msg("score.handOverDevice")}
@@ -1047,6 +1119,7 @@ export function FixtureConsole({
               />
             </div>
           )}
+          {streamBody}
 
           {/* Sport pad — S13/#422: the v2 registry, unconditionally (the flag
               and the eight v1 pads it used to choose between are gone).
@@ -1083,6 +1156,20 @@ export function FixtureConsole({
               </ScoringErrorBoundary>
             </div>
           )}
+        </section>
+      )}
+
+      {/* Spec 2026-09-30 §2 + Review Focus 4: the Scoring section renders only while this fixture can be scored with both
+          sides known. A finalized, cancelled, read-only (frozen) or TBD-sided fixture can still have a stream on air, and
+          Stop must stay reachable there — so Stream gets its own card whenever the Scoring section is absent. On a phone
+          the card is empty until the strip icon opens the body, so it hides there while closed. */}
+      {stream && !scoringSection && (
+        <section className={`card p-5 max-md:p-3${streamOpen ? "" : " max-md:hidden"}`} data-role="console-stream">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 max-md:hidden">
+            <h2 className="text-sm font-semibold text-slate-700">{msg("stream.title")}</h2>
+            {streamButton}
+          </div>
+          {streamBody}
         </section>
       )}
 

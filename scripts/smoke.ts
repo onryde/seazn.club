@@ -17009,6 +17009,12 @@ async function v1Suite(admin: Session, orgId: string, orgSlug: string): Promise<
     "fixture console: phone hand-over icon ships beside the desktop button (both present, or both absent)",
     deviceHandoverDesktop === deviceHandoverPhone,
   );
+  // Spec 2026-09-30 §2: Stream now has a desktop button and a phone strip icon, driven by ONE mount — equal presence.
+  // The smoke admin is an owner on an entitled org (V426: every plan grants streaming.overlay), so both must be HERE:
+  // equality alone would pass on a page that dropped both.
+  const streamDesktop = fixturePage.body.includes('data-role="fixture-stream"');
+  const streamPhone = fixturePage.body.includes('data-role="fixture-stream-phone"');
+  check("fixture console: the Stream button and its phone icon both ship on an organiser's fixture page", streamDesktop && streamPhone);
 
   // Scheduling console (doc 12, PROMPT-17): scoring is closed until the
   // explicit start; auto pass proposes without persisting; start opens scoring.

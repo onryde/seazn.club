@@ -923,6 +923,24 @@ describe("the checkout return opens THIS row's panel on the Phone tab", () => {
     const cls = String(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!, "className")).split(/\s+/);
     expect(cls.some((c) => /^scroll-mt-/.test(c)), "no scroll margin").toBe(true);
   });
+
+  // Spec 2026-09-30 §2: the fixture page reads `?stream=open` on the SERVER and says so with `openedByReturn` — its URL
+  // names no `fixture` (the page IS the fixture), so `checkoutReturnFor` alone would answer no there.
+  it("T5: `openedByReturn` opens on the PHONE tab with no `fixture` param, and strips the return; without it, OBS (the positive pair)", () => {
+    const panel = (openedByReturn?: boolean) =>
+      renderIsland(FixtureStreamPanel, { fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }), openedByReturn });
+    searchParamsMock.set(new URLSearchParams("stream=open&checkout=success&session_id=cs_test_1"));
+    const here = panel(true).tree();
+    expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected"), "the fixture page's return lands on Phone").toBe(true);
+    expect(byTestId(here, "stream-phone-gate"), "the Phone tab body").toBeDefined();
+    expect(router.replace, "the return's params are stripped on the fixture page too (G5)").toHaveBeenCalledWith(PATHNAME, { scroll: false });
+    router.replace.mockReset();
+    // The same URL without the server's word: nothing in it names this fixture, so it is an ordinary open.
+    const ordinary = panel(false).tree();
+    expect(attr(byTestId(ordinary, "stream-tab-obs")!, "aria-selected"), "no openedByReturn, no Phone tab").toBe(true);
+    expect(byTestId(ordinary, "stream-phone-gate")).toBeUndefined();
+    expect(router.replace, "an ordinary open strips nothing").not.toHaveBeenCalled();
+  });
 });
 
 // ─── PhoneTabBody: every §8a / §8b state from the projection alone ──────────────────────────────────────────────────

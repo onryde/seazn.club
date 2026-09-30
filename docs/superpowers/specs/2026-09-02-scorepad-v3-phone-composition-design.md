@@ -31,6 +31,7 @@ only the composition below 768px changes.
 - Breakpoint: Tailwind v4 `md` (768px). Phone = `max-md:*` variants. Tablets (768/834) and desktop keep today's composition.
 - **Desktop class strings are not edited.** Phone behaviour is added as `max-md:` classes beside them, or as phone-only elements carrying `md:hidden`. This makes "≥ 768 unchanged" a pixel-diffable claim (§6.4).
 - **Single DOM everywhere except one control.** *Hand over device* is the only control that exists twice: the desktop button (existing `data-testid="device-handover"`) gets `max-md:hidden`; a phone icon button in the strip (`data-testid="device-handover-phone"`, `md:hidden`, same handler, same accessible name) is added. `getByRole('button', { name })` therefore resolves to exactly one visible element at any width; test-id locators must pick the width-appropriate id.
+  > **Amended 2026-09-30** (`2026-09-30-fixture-page-stream-design.md` §2, owner ruling P1): TWO controls now exist twice — *Remote scoring* (formerly *Hand over device*, `device-handover` / `device-handover-phone`) and *Stream* (`fixture-stream` / `fixture-stream-phone`). Each desktop twin carries `max-md:hidden`, each phone twin `md:hidden`; the phone Stream icon sits before ⇄ in the strip.
 - No JS media queries, no `useMediaQuery`, no SSR/hydration branching. The two disclosure states (§3.6, §3.7) are plain `useState` toggled by phone-only buttons; at ≥ 768 the toggles are `md:hidden` and the bodies have no `max-md:hidden`, so state is inert on desktop.
 - Reorder inside the pad uses flex `order`: `pad-host` root `space-y-3` → `flex flex-col gap-3` so a child can carry `max-md:order-*`. This is the **one deliberate edit to a desktop class string** in the whole change (margin-top 12px between block siblings vs a 12px column gap — same geometry); the 768/1280 pixel diff in §6.4 is what proves it, not this sentence.
 
@@ -47,6 +48,7 @@ In play · Game 1 · Round 1        0 – 0    [⇄]      ← pill+meta | mono s
 - h1: `max-md:text-[13px] max-md:truncate` on a `min-w-0` container; "vs" keeps its accent.
 - Row 2 is the pill, the round/meta line and the mono score placed in one `max-md:flex` row; the mono score `max-md:text-xl`. Nothing here is new text — the same nodes, re-laid.
 - Phone-only: `[⇄]` hand-over icon button, 44×44, `md:hidden` (§2). A phone-only expand toggle (`md:hidden`, accessible name "Show match details" / "Hide match details") lifts the truncation and reveals the venue/time line for scorers who need the full names.
+- Phone-only (amended 2026-09-30): [●] Stream icon, 44×44, md:hidden, before ⇄ — see the amendment in §2.
 - The "Scoring" `h2` + desktop *Hand over device* row (`data-role="console-scoring"` header) gets `max-md:hidden`. The section card itself stays (it wraps the pad).
 - The pad's queue status (`v3-queue-status`, "ALL SYNCED") stays where it is; it is ~20px and reads the queue state the strip cannot see.
 - Target: strip ≤ 64px; scorebug top edge at **y ≤ 200** on 320×568 with the app nav and breadcrumb present.
@@ -96,6 +98,7 @@ A small `PhoneDisclosure` wrapper in `fixture-console.tsx` around each `LineupEd
 | Desktop (1280), in order | Phone (320), in order |
 |---|---|
 | Hand over device | Show match details *(new)* |
+| Stream *(2026-09-30)* | **Stream** *(strip icon, before ⇄)* |
 | Scorebug home half · away half | **Hand over device** *(moved into strip, icon)* |
 | Take back | Scorebug home half · away half |
 | Every detail | Sanction Home · Sanction Away · More |
@@ -127,7 +130,7 @@ New strings, all four dictionaries (`apps/web/src/dictionaries/{en,es,fr,nl}/ui.
    - Activity: one row visible collapsed; toggle → N rows; *Void last entry* visible in both states.
    - existing no-horizontal-scroll gate stays.
    Budget any per-tap wait as `Math.max(FLOOR, base + taps * (HOLD_MS + slack))`, never a flat number.
-3. **Smoke** (`scripts/smoke.ts` pattern, PR CI): fetch the fixture page and assert the phone strip control is in the HTML, anchored `data-testid="device-handover-phone"` (with `="`, not a bare probe).
+3. **Smoke** (`scripts/smoke.ts` pattern, PR CI): fetch the fixture page and assert the phone strip control is in the HTML, anchored `data-testid="device-handover-phone"` (with `="`, not a bare probe). (2026-09-30: and data-role="fixture-stream-phone" beside its desktop twin.)
 4. **Regression — "≥ 768 unchanged", proven three ways (Task 8 correction)**: byte-identical 768/1280 PNGs across two gallery runs is impossible — the harness seeds random-tagged fixtures per run (different names, ids, timestamps), so base and after screenshots of "the same screen" are never byte-comparable even with zero code change; `cmp` was never a viable gate here. Replaced by:
    - **The class audit** — `git diff main -- apps/web/src | grep '^\+' | grep -oE '(className|class)=...'` over every added line; every surviving token (stripped of `max-md:`/`md:` variants) must be on a NEW element or the one whitelisted root change (`pad-host.tsx`'s `space-y-3` → `flex flex-col gap-3`, §2).
    - **A live DOM-structure diff at 1280** between the current build and the pre-change baseline, on the same seeded fixture (same DB) — tag, `data-role`/`data-testid`, class, depth-first. Catches what the class audit cannot: a new wrapper element changing an EXISTING element's parent/box (this plan's own `PhoneDisclosure` risk, §3.10).

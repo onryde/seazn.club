@@ -31,6 +31,7 @@ import {
   createStageAndGenerate,
   expectNoHorizontalScroll,
   invalidateOrgEntitlements,
+  scoreFixture,
   seedVenueWithCourts,
   setBoolEntitlementOverrideSql,
   setEntitlementOverrideSql,
@@ -82,6 +83,9 @@ const POLL_WAIT_MS = STREAM_POLL_MS + 5_000;
 const SEED_MS = 60_000;
 /** A whole go-live → stop cycle in the browser. */
 const CYCLE_MS = LIVE_WAIT_MS + 3 * POLL_WAIT_MS;
+/** One fixture-page load, the budget openFixture waits for (spec 2026-09-30 §2: every open is now a full page load where
+ *  a run-sheet row's toggle was not). Each case adds `NAVS * NAV_MS`, NAVS counted by reading the case. */
+const NAV_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // The deployment's stream capacity. Admission refuses a start once the ingest's storage headroom, after every ACTIVE
@@ -199,7 +203,7 @@ interface RelayRig {
 
 /**
  * A fresh org on `plan` with ONE generic division of `entrants` entrants and its generated league fixtures, the owner
- * signed in on `page`. NOTHING here reads the division page: the monthly grant happens on the page's first read (R3b),
+ * signed in on `page`. NOTHING here reads a fixture page: the monthly grant happens on its first read (R3b),
  * so a case decides when. Seeded on pro (pro's limits build the competition), then moved to `plan` (setRigPlan).
  */
 async function seedRelayRig(page: Page, opts: { plan?: string; entrants?: number } = {}): Promise<RelayRig> {
@@ -339,26 +343,32 @@ async function goLiveApi(page: Page, fixtureId: string, targetId: string): Promi
   return { id: seen!.id };
 }
 
-/** The division fixtures tab, filtered to every fixture (the sheet opens on "Today"; the rig schedules nothing). */
-async function openFixturesTab(page: Page, rig: RelayRig): Promise<void> {
-  await page.goto(`${rig.divPath}?tab=fixtures`);
-  await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1, { timeout: 30_000 });
-  await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
+/** The fixture's organiser page — where the stream panel lives (spec 2026-09-30 §2). Its loader read GRANTS the month
+ *  (R3b), exactly as the division page's did before the move. */
+async function openFixture(page: Page, rig: RelayRig, f: RelayFixture, query = ""): Promise<void> {
+  await page.goto(`${rig.divPath}/f/${f.no}${query}`);
+  await expect(page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(), `fixture ${f.no}'s console rendered`).toBeAttached({ timeout: 30_000 });
 }
-const rowOf = (page: Page, f: RelayFixture): Locator => page.locator(`li[data-fixture-no="${f.no}"]`);
 
-/** Tap the row's stream toggle and the Phone tab — the organiser's own way in. Returns the row. */
+/** The width's own Stream control — the desktop button at ≥768, the strip icon below. Exactly one is visible. */
+const streamControl = (page: Page): Locator =>
+  page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
+
+/** Open Stream and the Phone tab — the organiser's own way in. Returns the panel's scope (was: the run-sheet row). */
 async function openPhoneTab(page: Page, rig: RelayRig, f: RelayFixture): Promise<Locator> {
-  await openFixturesTab(page, rig);
-  const row = rowOf(page, f);
-  const toggle = row.getByTestId("fixture-stream-toggle");
-  await expect(toggle, `fixture ${f.no} offers the stream toggle`).toHaveCount(1, { timeout: 30_000 });
-  await toggle.click();
-  await row.getByTestId("stream-tab-phone").click();
+  await openFixture(page, rig, f);
+  const control = streamControl(page);
+  await expect(control, `fixture ${f.no} offers exactly one visible Stream control`).toHaveCount(1, { timeout: 30_000 });
+  await control.click();
+  const scope = page.locator('[data-role="fixture-stream-body"]');
+  // The body renders with its tabs in the same commit, so once it is attached a zero count means the stop-only mount.
+  await expect(scope, `fixture ${f.no}'s Stream control opened its body`).toBeAttached({ timeout: 30_000 });
+  const phoneTab = scope.getByTestId("stream-tab-phone");
+  if (await phoneTab.count()) await phoneTab.click(); // the stop-only mount has no tabs
   await expect(
-    row.locator('[data-phone-body], [data-testid="stream-stop-probe"], [data-testid="stream-switched-off"]').first(),
+    scope.locator('[data-phone-body], [data-testid="stream-stop-probe"], [data-testid="stream-switched-off"]').first(),
   ).toBeAttached({ timeout: 30_000 });
-  return row;
+  return scope;
 }
 
 /** The Stop dialog: confirm it with its own label (the page's locale) once it is armed. */
@@ -441,7 +451,8 @@ for (const width of WIDTHS) {
   test(`A1 @${width}: add a destination → Go live → QR while the camera warms → LIVE (pill, REC, a ticking clock) → Stop → ENDED with its duration and "1 credit used"; the ledger holds one monthly consume`, async ({
     page,
   }) => {
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000);
+    const NAVS = 1; // openPhoneTab
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
     const rig = await seedRelayRig(page);
     const rate = rig.monthlyRate;
@@ -541,7 +552,8 @@ for (const width of WIDTHS) {
 test("A2: monthly + 2 bought → Go live draws the MONTHLY credit (monthly − 1, pack still 2) — on the chip, on the split after a reload, and in the ledger", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
+  const NAVS = 2; // openPhoneTab twice (the reload is the second)
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page, { plan: "community" });
   const rate = rig.monthlyRate;
@@ -599,12 +611,13 @@ for (const v of A3_BALANCES) {
   test(`A3 (${v.id}): a stopped match restarts FREE inside the reuse window — the restart line shows and Go live stays (no forced chooser), it goes live again, the balance chip does not move, and the ledger still holds ONE consume`, async ({
     page,
   }) => {
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + 2 * CYCLE_MS + 30_000);
+    const NAVS = 2; // openFixture (the grant) + openPhoneTab
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + 2 * CYCLE_MS + 30_000 + NAVS * NAV_MS);
     await page.setViewportSize({ width: 1280, height: 900 });
     const rig = await seedRelayRig(page, { plan: v.plan });
     const target = await addTargetApi(page, rig.orgId, { label: "A3 destination" });
     const f = rig.fixtures[0]!;
-    await openFixturesTab(page, rig); // the page read grants the month
+    await openFixture(page, rig, f); // the fixture page's read grants the month
     if (v.drainTo !== null) await drainMonthlyTo(rig.orgId, v.drainTo);
     const start = v.drainTo ?? rig.monthlyRate;
     const left = start - 1; // after the first run's one consume
@@ -670,12 +683,13 @@ for (const v of A3_BALANCES) {
 test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser and no Go live; the same org's fixture that just streamed (window open) still offers Go live", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + POLL_WAIT_MS + 30_000);
+  const NAVS = 4; // openFixture (the grant) + three openPhoneTab
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + POLL_WAIT_MS + 30_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page, { plan: "community", entrants: 3 });
   const target = await addTargetApi(page, rig.orgId, { label: "A4 destination" });
   const [played, fresh] = rig.fixtures as [RelayFixture, RelayFixture];
-  await openFixturesTab(page, rig); // grants the month
+  await openFixture(page, rig, played); // the fixture page's read grants the month
   await drainMonthlyTo(rig.orgId, 1);
   // SETUP: spend the last credit on `played` and stop it.
   const live = await goLiveApi(page, played.id, target.id);
@@ -735,7 +749,8 @@ test("A4: balance 0 with the reuse window CLOSED → the forced credits chooser 
 test("A5: a SECOND TAB taps Go live — on the same match it is refused active_session and shows the running stream; on another match with the same destination it is refused target_in_use naming the match and its court; ONE session row either way", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000);
+  const NAVS = 3; // openPhoneTab on each tab, then tab 2's second match
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page, { entrants: 3 });
   const target = await addTargetApi(page, rig.orgId, { label: "A5 destination" });
@@ -807,7 +822,8 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
 test("A6: a destination that refuses the stream key → FAILED with the target_rejected reason and Try again; no credit spent; Try again returns to a startable tab", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
+  const NAVS = 1; // openPhoneTab
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   // A stream KEY the FAKE ingest reports as rejecting the output — its scripted refusal (server/relay/fakes.ts
@@ -852,7 +868,7 @@ const A7_SWITCHES = [
     id: "a",
     name: "the relay switched off by override",
     apply: (orgId: string) => setBoolEntitlementOverrideSql(orgId, "streaming.relay", false),
-    // The row keeps its panel (the overlay is still granted); its Phone tab holds the probe beside the switched-off line.
+    // The fixture keeps its panel (the overlay is still granted); its Phone tab holds the probe beside the switched-off line.
     inPanel: true,
   },
   {
@@ -871,12 +887,13 @@ const A7_SWITCHES = [
 
 for (const sw of A7_SWITCHES) {
   test(`A7(${sw.id}): a LIVE stream, then ${sw.name} → the stop probe still shows it live, and fits and is tappable at 1280 and 320 → Stop (at 320) → ended`, async ({ page }) => {
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
+    const NAVS = 2; // openFixture (the grant) + openPhoneTab
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
     await page.setViewportSize({ width: 1280, height: 900 });
     const rig = await seedRelayRig(page);
     const target = await addTargetApi(page, rig.orgId, { label: `A7${sw.id} destination` });
     const f = rig.fixtures[0]!;
-    await openFixturesTab(page, rig);
+    await openFixture(page, rig, f); // the fixture page's read grants the month
     const live = await goLiveApi(page, f.id, target.id);
 
     await sw.apply(rig.orgId);
@@ -889,13 +906,16 @@ for (const sw of A7_SWITCHES) {
       await expect(row.locator("[data-phone-body]"), "no Phone tab body behind the switch").toHaveCount(0);
       probe = row.getByTestId("stream-stop-probe");
     } else {
-      await openFixturesTab(page, rig);
-      await expect(rowOf(page, f), "the match's row is still on the run sheet").toHaveCount(1);
-      await expect(rowOf(page, f).getByTestId("fixture-stream-toggle"), "the panel is gone").toHaveCount(0);
-      probe = page.getByTestId("frozen-stream-probes").getByTestId("stream-stop-probe");
-      const probeLabel = probe.getByTestId("stream-stop-probe-label");
-      await expect(probeLabel, "a page-level probe names its fixture").toContainText(`Side A ${rig.tag}`);
-      await expect(probeLabel).toContainText(`Side B ${rig.tag}`);
+      // Spec 2026-09-30 §2 (F1): the panel is gone, and the fixture page's Stop-only mount replaces the division page's
+      // probe stack — one tap on the width's Stream control, then the probe alone (no tabs, no Phone tab body).
+      const scope = await openPhoneTab(page, rig, f);
+      await expect(scope.getByTestId("stream-panel"), "the panel is gone").toHaveCount(0);
+      await expect(scope.getByTestId("stream-tab-phone"), "the Stop-only mount has no tabs").toHaveCount(0);
+      probe = scope.getByTestId("stream-stop-probe");
+      // The page it sits on names the fixture (the probe itself needs no label here: the page IS the fixture).
+      const header = page.locator("header h1");
+      await expect(header, "the fixture page names its match").toContainText(`Side A ${rig.tag}`);
+      await expect(header).toContainText(`Side B ${rig.tag}`);
     }
     await expect(probe).toHaveCount(1, { timeout: POLL_WAIT_MS });
     await expect(probe.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
@@ -917,6 +937,50 @@ for (const sw of A7_SWITCHES) {
 }
 
 // ===========================================================================
+// A7(d) — Review Focus 4: a FINALIZED match has no Scoring section, so Stream lives in the fallback card
+// ===========================================================================
+// The Scoring section (and the Stream button beside its heading) renders only while the match can still be scored. A
+// stream outlives the whistle — the organiser finalizes, and the camera is still on air — so the console carries Stream
+// in its own card then (`console-stream`), and Stop must still be one tap away there, at 1280 and on the phone.
+test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring section; the fallback Stream card opens the panel on its Phone tab showing LIVE, fits at 1280 and 320 → Stop (at 320) → ended", async ({
+  page,
+}) => {
+  const NAVS = 2; // openFixture (the grant) + openPhoneTab
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const rig = await seedRelayRig(page);
+  const target = await addTargetApi(page, rig.orgId, { label: "A7d destination" });
+  const f = rig.fixtures[0]!;
+  await openFixture(page, rig, f); // the fixture page's read grants the month
+  const live = await goLiveApi(page, f.id, target.id);
+  // SETUP: the result, then the finalize — through the API, the requests the console itself sends.
+  await scoreFixture(page.request, f.id, 2, 1);
+  const state = await apiJson<{ last_seq: number; status: string }>(page.request, `/api/v1/fixtures/${f.id}/state`);
+  const fin = await apiJson(page.request, `/api/v1/fixtures/${f.id}/finalize`, "POST", { expected_seq: state.data!.last_seq });
+  expect(fin.status, `setup finalize from ${state.data!.status}: ${JSON.stringify(fin.error)}`).toBe(200);
+
+  const scope = await openPhoneTab(page, rig, f);
+  const card = page.locator('[data-role="console-stream"]');
+  await expect(page.locator('[data-role="console-scoring"]'), "premise: a finalized match has no Scoring section").toHaveCount(0);
+  await expect(card, "the fallback card holds Stream").toHaveCount(1);
+  await expect(card.locator('[data-role="fixture-stream-body"]'), "the panel opened INSIDE the fallback card").toHaveCount(1);
+  const body = scope.locator("[data-phone-body]");
+  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: POLL_WAIT_MS });
+  await expectNoHorizontalScroll(page);
+  await shot(card, "A7d-fallback.png");
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect(body.getByTestId("stream-stop")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  expect(await expectTapTargets(body), "live controls hit-tested at 320, in the fallback card").toBeGreaterThan(0);
+  await shot(card, "A7d-fallback-320.png");
+  await body.getByTestId("stream-stop").click();
+  await confirmStop(page);
+  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+  const row = (await sessionsOf({ fixtureId: f.id })).find((s) => s.id === live.id)!;
+  expect(row, "the tap ended the stream").toMatchObject({ state: "completed", end_reason: "stopped" });
+});
+
+// ===========================================================================
 // A8 — the destination form: exactly the platforms a destination can be created on
 // ===========================================================================
 // D6: a destination is YouTube or Twitch, and the server fills the ingest url from the platform's preset. The off-list
@@ -929,7 +993,8 @@ test("A8: the platform list is exactly YouTube and Twitch — no LinkedIn, no Ot
   // The platforms are the one list's own (lib/stream-destinations.ts STREAM_PLATFORMS), never a list typed here.
   const platforms: readonly string[] = STREAM_PLATFORMS;
   // The budget is the saves': one form round trip per platform, on top of the seed.
-  test.setTimeout(SEED_MS + platforms.length * POLL_WAIT_MS + 60_000);
+  const NAVS = 1; // openPhoneTab
+  test.setTimeout(SEED_MS + platforms.length * POLL_WAIT_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
@@ -976,7 +1041,8 @@ test("A8: the platform list is exactly YouTube and Twitch — no LinkedIn, no Ot
 // A9 — one control set, whatever the width
 // ===========================================================================
 test("A9: the Phone tab offers the SAME controls — membership, order and repeats — at 320 as at 1280, idle and live", async ({ page }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000);
+  const NAVS = 1; // openPhoneTab
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   await addTargetApi(page, rig.orgId, { label: "A9 destination" });
@@ -1011,7 +1077,8 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
 test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live → ended — no English string from the stream dictionary leaks", async ({
   page,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + POLL_WAIT_MS + 30_000);
+  const NAVS = 2; // openPhoneTab in English, then in Spanish
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + POLL_WAIT_MS + 30_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRelayRig(page);
   await addTargetApi(page, rig.orgId, { label: "Destino A10" });
@@ -1067,7 +1134,8 @@ test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live →
 test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per CSS px) the QR and its paste code fit their box and the page", async ({
   browser,
 }) => {
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS);
+  const NAVS = 1; // openPhoneTab
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS);
   // Browser zoom at 125% on a 320-px screen IS a 256-CSS-px layout viewport at 1.25 device pixels per CSS px.
   const ctx = await browser.newContext({
     storageState: test.info().project.use.storageState as string,

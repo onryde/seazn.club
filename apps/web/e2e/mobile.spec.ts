@@ -101,6 +101,15 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
   const deskHandover = page.locator('[data-role="device-handover"]');
   const phoneHandover = page.locator('[data-role="device-handover-phone"]');
   const handoverOffered = (await deskHandover.count()) > 0;
+  // Spec 2026-09-30 §2: Stream is the second twinned control — a desktop button and a phone strip icon, one mount.
+  const deskStream = page.locator('[data-role="fixture-stream"]');
+  const phoneStream = page.locator('[data-role="fixture-stream-phone"]');
+  const streamOffered = (await deskStream.count()) > 0;
+  // Twins are EQUAL in presence (one mount drives both) — never one without the other.
+  expect(await phoneStream.count(), "the stream twins are present together or not at all").toBe(await deskStream.count());
+  // Anti-vacuity: both callers are an organiser's fixture page on the shared Pro org (AUTH_STATE), where streaming is
+  // entitled since V426 — so the twin checks below must have something to check.
+  expect(streamOffered, "an organiser's fixture page on an entitled org offers Stream").toBe(true);
   const detailsToggle = page.locator('[data-role="match-details-toggle"]');
   const scoringHeading = page.locator('[data-role="console-scoring"] h2');
   const activityToggle = page.locator('[data-role="v3-activity-toggle"]');
@@ -111,6 +120,10 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
     if (handoverOffered) {
       await expect(phoneHandover).toBeVisible();
       await expect(deskHandover).toBeHidden();
+    }
+    if (streamOffered) {
+      await expect(phoneStream).toBeVisible();
+      await expect(deskStream).toBeHidden();
     }
     await expect(detailsToggle).toBeVisible();
     await expect(scoringHeading).toBeHidden();
@@ -215,6 +228,10 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
     if (handoverOffered) {
       await expect(deskHandover).toBeVisible();
       await expect(phoneHandover).toBeHidden();
+    }
+    if (streamOffered) {
+      await expect(deskStream).toBeVisible();
+      await expect(phoneStream).toBeHidden();
     }
     await expect(detailsToggle).toBeHidden();
     await expect(scoringHeading).toBeVisible();

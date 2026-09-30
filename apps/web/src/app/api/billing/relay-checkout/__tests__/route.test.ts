@@ -17,8 +17,8 @@
 //                           → "a fixture that is not this org's is 404, even unentitled"
 //   RT4 org from the RESOLVER, never the body: `orgId: body.orgId` in the
 //       createRelayCheckout call → "the checkout is opened for the RESOLVED org"
-//   RT5 return_url shape    drop the `"fixtures"` tab argument / the stream=open pair
-//                           → "the return_url reopens the Phone tab on that fixture"
+//   RT5 return_url shape    `fx.fixture_no` → `1`, or the stream=open pair dropped (spec 2026-09-30 §2: the FIXTURE page)
+//                           → "…with a return_url that reopens the Phone tab on that fixture's own page…"
 //   RT7 disabled drivers    the `relayDrivers().disabled` gate deleted (Task 14b review I2)
 //                           → "I2: refuses with 503 ingest_unavailable while the relay drivers are DISABLED"
 //   RT8 the gate constructs  `relayUnavailable()` → `relayDrivers().disabled` (Task 14b re-review N1)
@@ -75,6 +75,7 @@ vi.mock("@/lib/sentry", () => ({ captureError: (...args: unknown[]) => captureEr
 
 import { POST } from "../route";
 import { HttpError } from "@/lib/errors";
+import { routes } from "@/lib/routes";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -117,20 +118,29 @@ async function deny(orgId: string): Promise<void> {
 }
 
 describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
-  it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture — for a community org entitled by its PLAN alone (V426: no override row)", async () => {
+  it("opens an embedded checkout for the RESOLVED org and returns its client_secret, with a return_url that reopens the Phone tab on that fixture's own page — for a community org entitled by its PLAN alone (V426: no override row)", async () => {
     const rig = await streamRig();
     // No `entitle`: V426 grants streaming.relay on every plan, and the rig's org has no subscription (community).
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_entitlement_overrides where org_id = ${rig.orgId}`;
     expect(n, "premise: no override row — the plan is what admits this org").toBe(0);
     await callerFor(rig.orgId);
     const fixtureId = rig.fixtureIds[0]!;
+    // Spec 2026-09-30 §2: the return lands on the fixture page, addressed by its per-division ordinal. A number other
+    // than 1, so a hard-coded `/f/1` cannot pass.
+    await sql`update fixtures set fixture_no = 14 where id = ${fixtureId}`;
 
     const res = await post({ orgId: rig.orgId, fixtureId, pack: 5 });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, data: { client_secret: "cs_rly_secret_1" } });
 
-    const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`
-      select slug from organizations where id = ${rig.orgId}`;
+    const [scene] = await sql<{ orgSlug: string; compSlug: string; divSlug: string; fixtureNo: number }[]>`
+      select o.slug as "orgSlug", c.slug as "compSlug", d.slug as "divSlug", f.fixture_no as "fixtureNo"
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        join competitions c on c.id = d.competition_id
+        join organizations o on o.id = c.org_id
+       where f.id = ${fixtureId}`;
+    expect(scene!.fixtureNo, "premise: the fixture's ordinal is not 1").toBe(14);
     const args = createRelayCheckoutMock.mock.calls[0]![0] as {
       orgId: string;
       fixtureId: string;
@@ -154,14 +164,15 @@ describe.skipIf(!HAS_DB)("POST /api/billing/relay-checkout", () => {
     // No subscriptions row exists for this doubled id, so a first-ever buyer
     // has no Stripe customer yet — the email branch, not the customer branch.
     expect(args.customerId ?? null).toBeNull();
-    // RT5: the whole shape, in order — the division page, the fixtures TAB, the
-    // fixture, the panel open, and Stripe's own session-id placeholder (the e2e
-    // reads that back). Anchored end-to-end so a dropped pair cannot hide.
-    expect(args.returnUrl).toMatch(
-      new RegExp(
-        `^https?://[^/]+/o/${orgSlug}/c/[^/]+/d/[^/?]+\\?tab=fixtures&fixture=${fixtureId}&stream=open&checkout=success&session_id=\\{CHECKOUT_SESSION_ID\\}$`,
-      ),
+    // RT5: the whole shape, in order — the organiser FIXTURE page (spec 2026-09-30 §2, the panel's new home), the panel
+    // open, and Stripe's own session-id placeholder (the e2e reads that back). Built from `routes.fixture` and the rows'
+    // own slugs, and anchored end-to-end so a dropped pair cannot hide.
+    const base = new URL(args.returnUrl).origin;
+    expect(args.returnUrl).toBe(
+      `${base}${routes.fixture(scene!.orgSlug, scene!.compSlug, scene!.divSlug, scene!.fixtureNo)}?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
     );
+    expect(args.returnUrl, "no longer the division's fixtures tab").not.toContain("tab=fixtures");
+    expect(args.returnUrl, "the page IS the fixture — no fixture param").not.toContain("fixture=");
   });
 
   it("refuses an org whose streaming.relay is switched OFF by an override with 402 plan_lacks_relay, and never calls Stripe (V426: the only way the gate is reachable)", async () => {
