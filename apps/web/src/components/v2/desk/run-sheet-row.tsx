@@ -436,7 +436,7 @@ export function RunSheetRow({
           stack (`hidden md:block` on the meta and sub-line paragraphs);
           `max-md` below shows only the `md:hidden` combined line instead. */}
       <div className="flex min-w-0 flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
-        <div className="flex min-w-0 items-center gap-3 md:contents">
+        <div data-row-line="1" className="flex min-w-0 items-center gap-3 md:contents">
           {/* Time spine cell — mono/tabular so the column lines up; an
               em-dash for a row with no time at all (the unscheduled group).
               Fix round 5 (owner ruling): when the time is EDITABLE the cell
@@ -464,31 +464,17 @@ export function RunSheetRow({
               title={msg("schedule.editTime")}
               aria-expanded={editing}
               onClick={toggleEditor}
-              className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500"
+              className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500 md:order-first"
             >
               <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" />
             </button>
           ) : (
-            <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600">
+            <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600 md:order-first">
               {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" /> : "—"}
               {fixture.status === "in_play" && (
                 <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
               )}
             </span>
-          )}
-          {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
-              chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
-              status: a stream outlives the whistle. 44 px tall on phones (the tap floor). */}
-          {streamState && (
-            <Link
-              href={`${href}?stream=open`}
-              data-testid="run-sheet-stream-chip"
-              data-state={streamState}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 max-md:min-h-11"
-            >
-              <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${streamState === "live" ? "bg-red-600" : "bg-amber-500"}`} />
-              {msg(streamState === "live" ? "runsheet.stream.live" : "runsheet.stream.waiting")}
-            </Link>
           )}
           <div className="min-w-0 flex-1">
             {/* Task 9: desktop-only now — `phoneLineTwo` below carries this
@@ -535,8 +521,26 @@ export function RunSheetRow({
             `md:hidden` paragraph below simply renders `display:none` there
             and takes no space. `min-w-0` down to the truncated paragraph,
             same discipline the entrant column above already carries. */}
-        <div className="flex min-w-0 items-center justify-between gap-2 md:contents">
+        <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 md:contents">
           <p className="min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden">{phoneLineTwo}</p>
+          {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
+              chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
+              status: a stream outlives the whistle. 44 px tall on phones (the tap floor).
+              B3 fix round 1 (owner decision, option a): on phones it sits on THIS line, beside the row action, so
+              line 1 carries the entrant names in full. One DOM, no twin — at ≥768 both line wrappers are
+              `md:contents`, and `md:order-first` here and on the time cell puts it back between the time and the
+              names, the desktop row exactly as it was. */}
+          {streamState && (
+            <Link
+              href={`${href}?stream=open`}
+              data-testid="run-sheet-stream-chip"
+              data-state={streamState}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 max-md:min-h-11 md:order-first"
+            >
+              <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${streamState === "live" ? "bg-red-600" : "bg-amber-500"}`} />
+              {msg(streamState === "live" ? "runsheet.stream.live" : "runsheet.stream.waiting")}
+            </Link>
+          )}
           {/* The ONE action — a plain link for every kind except `set_time`,
               which toggles the inline editor below (≥44px either way). */}
           <div className="flex flex-wrap items-center gap-2 md:contents">

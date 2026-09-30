@@ -8,7 +8,7 @@
 // Driven with `renderIsland` (no DOM here): the chip's props are read off the row's own element tree.
 import { describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { renderIsland, propsOf, textOf } from "@/components/__tests__/_hook-harness";
+import { renderIsland, propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { RunSheetRow } from "@/components/v2/desk/run-sheet-row";
 import { messages } from "@/lib/messages";
 import type { RunSheetFixture } from "@/lib/run-sheet-groups";
@@ -127,6 +127,53 @@ describe("the run sheet's stream chip (spec 2026-09-30 §2) — the path to Stop
       checked++;
     }
     expect(checked).toBe(HOLD_STATES.length);
+  });
+
+  // B3 fix round 1, item 3 (owner decision, option a; mockup of record claude.ai/artifact/T1qGaW9RSCVW3Sj7R2R6CC): on
+  // phones the chip moves to LINE 2, beside the row action, so line 1 carries the entrant names in full. One DOM, no twin:
+  // the chip's element lives in line 2's wrapper, and at ≥768 (where both wrappers are `md:contents`) `md:order-first` on
+  // the chip and on the time cell puts it back between the time and the names — the desktop row unchanged.
+  it("phone line 2: the chip lives in line 2's wrapper, after the phone meta line and before the row action — never in line 1", () => {
+    let checked = 0;
+    for (const state of HOLD_STATES) {
+      const tree = row({ streamState: state });
+      const line = (n: string) => tree.find((el) => propsOf(el)["data-row-line"] === n);
+      expect(line("1"), "line 1's wrapper").toBeDefined();
+      expect(line("2"), "line 2's wrapper").toBeDefined();
+      const inLine = (n: string) => walk(line(n)!).some((el) => propsOf(el)["data-testid"] === "run-sheet-stream-chip");
+      expect(inLine("2"), `${state}: the chip is on line 2`).toBe(true);
+      expect(inLine("1"), `${state}: and not on line 1`).toBe(false);
+      // Line 2's own order, as a phone renders it (flex, no order classes below md): meta text, chip, action.
+      const two = walk(line("2")!);
+      const at = (pred: (el: ReactElement) => boolean) => two.findIndex(pred);
+      const meta = at((el) => el.type === "p");
+      const chip = at((el) => propsOf(el)["data-testid"] === "run-sheet-stream-chip");
+      const action = at((el) => propsOf(el)["data-row-action"] !== undefined);
+      expect([meta, chip, action].every((i) => i >= 0), `${state}: meta ${meta}, chip ${chip}, action ${action}`).toBe(true);
+      expect(meta < chip && chip < action, `${state}: meta < chip < action`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(HOLD_STATES.length);
+  });
+
+  it("≥768 unchanged: the chip and the time cell carry `md:order-first` (time, chip, then names and the action); nothing else in the row does", () => {
+    const tokens = (el: ReactElement | undefined) => String(propsOf(el!).className ?? "").split(/\s+/);
+    let checked = 0;
+    for (const canEdit of [true, false]) {
+      // canEdit on a scheduled TIMED fixture renders the EDITABLE time button (canEditFixtureTime); off, the plain span.
+      const tree = row({ canEdit, streamState: "live", fixture: fx({ status: "scheduled" }) });
+      const chip = chipOf(tree);
+      const time = canEdit
+        ? tree.find((el) => propsOf(el)["data-testid"] === "run-sheet-edit-time")
+        : tree.find((el) => el.type === "span" && tokens(el).includes("w-14"));
+      expect(time, `canEdit ${canEdit}: the time cell`).toBeDefined();
+      expect(tokens(chip), "the chip leads with the time at ≥768").toContain("md:order-first");
+      expect(tokens(time), `canEdit ${canEdit}: the time cell leads at ≥768`).toContain("md:order-first");
+      const ordered = tree.filter((el) => tokens(el).includes("md:order-first"));
+      expect(ordered.length, `canEdit ${canEdit}: exactly the time cell and the chip`).toBe(2);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("every fixture status carries the chip while its session is up — a stream outlives the whistle", () => {

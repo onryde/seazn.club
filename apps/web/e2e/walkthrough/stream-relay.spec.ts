@@ -207,7 +207,7 @@ interface RelayRig {
  * signed in on `page`. NOTHING here reads a fixture page: the monthly grant happens on its first read (R3b),
  * so a case decides when. Seeded on pro (pro's limits build the competition), then moved to `plan` (setRigPlan).
  */
-async function seedRelayRig(page: Page, opts: { plan?: string; entrants?: number } = {}): Promise<RelayRig> {
+async function seedRelayRig(page: Page, opts: { plan?: string; entrants?: number; names?: string[] } = {}): Promise<RelayRig> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
   const ownerEmail = `delivered+rly-${tag}@resend.dev`;
   const orgSlug = `rly-org-${tag}`;
@@ -243,7 +243,7 @@ async function seedRelayRig(page: Page, opts: { plan?: string; entrants?: number
   });
   if (div.status >= 300 || !div.data) throw new Error(`relay rig: POST division -> ${div.status} ${JSON.stringify(div.error)}`);
   const n = opts.entrants ?? 2;
-  const ents = await addEntrantsViaApi(request, div.data.id, Array.from({ length: n }, (_, i) => `Side ${String.fromCharCode(65 + i)} ${tag}`));
+  const ents = await addEntrantsViaApi(request, div.data.id, Array.from({ length: n }, (_, i) => opts.names?.[i] ?? `Side ${String.fromCharCode(65 + i)} ${tag}`));
   if (ents.status >= 300 || ents.ids.length !== n) throw new Error(`relay rig: entrants -> ${ents.status} (${ents.ids.length}/${n})`);
   const { fixtureIds } = await createStageAndGenerate(request, div.data.id);
   // A league of n plays n(n-1)/2 — the rig's own premise, so a generator change cannot hand a case fewer rows than
@@ -359,6 +359,40 @@ async function openRunSheet(page: Page, rig: RelayRig): Promise<void> {
 }
 const filterChip = (page: Page, value: string): Locator => page.locator(`[data-testid="run-sheet-filter"] [data-filter="${value}"]`);
 const rowOf = (page: Page, f: RelayFixture): Locator => page.locator(`li[data-fixture-no="${f.no}"]`);
+
+/** Where a streamed row's chip sits (B3 fix round 1, owner option a) — the time cell, the entrant-names link, the chip and
+ *  the row action, read from the live DOM. Below 768 the chip is on LINE 2 beside the action, and line 1 is the time and
+ *  the names alone; at ≥768 the row is the one-line desktop row as it was: time, chip, names, action. */
+async function expectChipPlacement(row: Locator, width: number): Promise<void> {
+  const g = await row.evaluate((li) => {
+    const box = (el: Element | null) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { l: r.left, r: r.right, t: r.top, b: r.bottom };
+    };
+    const line1 = li.querySelector('[data-row-line="1"]');
+    return {
+      line1: box(line1),
+      time: box(line1?.firstElementChild ?? null),
+      names: box(li.querySelector('[data-row-line="1"] a')),
+      chip: box(li.querySelector('[data-testid="run-sheet-stream-chip"]')),
+      action: box(li.querySelector("[data-row-action]")),
+    };
+  });
+  expect(g.time && g.names && g.chip && g.action && g.line1, `@${width}: every part of the row was found`).toBeTruthy();
+  const { time, names, chip, action, line1 } = g as { [k in keyof typeof g]: NonNullable<(typeof g)[k]> };
+  const mid = (b: { t: number; b: number }) => (b.t + b.b) / 2;
+  if (width < 768) {
+    expect(chip.t, `@${width}: the chip is below line 1 (the names)`).toBeGreaterThanOrEqual(names.b - 1);
+    expect(mid(chip) >= action.t && mid(chip) <= action.b, `@${width}: the chip sits on the action's line`).toBe(true);
+    expect(chip.r, `@${width}: the chip is left of the action`).toBeLessThanOrEqual(action.l + 1);
+    expect(names.r, `@${width}: the names run to the end of line 1 — nothing else shares it`).toBeGreaterThanOrEqual(line1.r - 2);
+  } else {
+    const oneLine = [chip, names, action].every((b) => mid(b) >= time.t - 8 && mid(b) <= time.b + 8);
+    expect(oneLine, `@${width}: one desktop line`).toBe(true);
+    expect(time.r <= chip.l + 1 && chip.r <= names.l + 1 && names.r <= action.l + 1, `@${width}: time, chip, names, action`).toBe(true);
+  }
+}
 
 /** The width's own Stream control — the desktop button at ≥768, the strip icon below. Exactly one is visible. */
 const streamControl = (page: Page): Locator =>
@@ -1003,6 +1037,7 @@ test("A7(d): a LIVE stream on a match that is then FINALIZED → no Scoring sect
 // Phone tab's poll) and nothing reads it while the organiser is on the division — its premise is read from the DB.
 // B3 fix round 1, I-2: the whole loop runs on the filter the sheet MOUNTS on (a match day's "Today"), on an UNTIMED
 // fixture — the row "Today" hides unless a stream is up — never by tapping "All" first.
+const A12_NAMES = ["Riverside Rackets Badminton Club Seniors", "Northgate Shuttlers Academy Development", "Canal Street Drop Shots Social Section"];
 for (const width of [320, 1280] as const) {
   test(`A12 @${width}: on a MATCH DAY, under the sheet's default "Today", Go live on an UNTIMED fixture → its chip reads WAITING, then (after the chip opens the panel) LIVE → the chip leads to Stop → after Stop the untimed row leaves "Today" and shows under "All" with no chip`, async ({
     page,
@@ -1010,7 +1045,8 @@ for (const width of [320, 1280] as const) {
     const NAVS = 6; // openPhoneTab, run sheet (waiting), chip → fixture page, run sheet (live), chip → fixture page, run sheet (gone)
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
-    const rig = await seedRelayRig(page, { entrants: 3 });
+    // Realistic ~40-character club names (AGENTS.md: a truncation defect shows only with a realistic name).
+    const rig = await seedRelayRig(page, { entrants: 3, names: A12_NAMES });
     await addTargetApi(page, rig.orgId, { label: `A12 destination ${width}` });
     // The streamed fixture is UNTIMED — a walk-up match, the shape "Today" hides (I-2). A second fixture is timed NOW,
     // which makes the division's phase match_day (the sheet then mounts on "Today") and is "Today"'s own positive row;
@@ -1038,6 +1074,7 @@ for (const width of [320, 1280] as const) {
     await expect(chip).toHaveText(en("runsheet.stream.waiting"));
     await expect(chip).toHaveAttribute("href", `${fixturePath}?stream=open`);
     await expectNoHorizontalScroll(page);
+    await expectChipPlacement(rowOf(page, f), width);
     if (width === 320) {
       // The phone floor, hit-tested on the chip itself (expectTapTargets scans descendants; the chip has none).
       await chip.scrollIntoViewIfNeeded();
@@ -1068,6 +1105,21 @@ for (const width of [320, 1280] as const) {
     await expect(chip).toHaveAttribute("data-state", "live");
     await expect(chip).toHaveText(en("runsheet.stream.live"));
     await expectNoHorizontalScroll(page);
+    await expectChipPlacement(rowOf(page, f), width);
+    if (width === 320) {
+      // AGENTS.md "phone composition": the phone row offers the SAME controls as the desktop row — membership, order and
+      // repeats, from the live DOM — only placed differently. One DOM: the diff proves nothing was twinned or dropped.
+      const phone = await controlSet(rowOf(page, f));
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await expectChipPlacement(rowOf(page, f), 1280);
+      const desk = await controlSet(rowOf(page, f));
+      expect(phone, "the row's control set at 320 equals 1280's").toEqual(desk);
+      expect(phone, "anti-vacuity: the set carries the chip, the names and the action").toEqual(
+        expect.arrayContaining(["run-sheet-stream-chip"]),
+      );
+      expect(phone.length, "anti-vacuity: time, names, chip, action").toBeGreaterThanOrEqual(4);
+      await page.setViewportSize({ width, height: 900 });
+    }
     await shot(rowOf(page, f), `A12-chip-live-${width}.png`);
 
     // 5. The chip is the path to Stop.
