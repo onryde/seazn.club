@@ -35,7 +35,7 @@ import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { routes } from "@/lib/routes";
 import { holdStateOf, type SessionState } from "@/server/relay/domain/session";
 import { inputEnvelopesHex, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
+import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -53,10 +53,12 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
   creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
 } from "../stream-credits";
-import { createStreamTarget, patchStreamTarget, removeStreamTarget } from "../stream-targets";
+import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
+import { getFixtureState } from "../fixtures";
+import { scoreEvent } from "../scoring";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
-  type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
+  type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
   openStreamFixtureIds, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
@@ -3792,4 +3794,396 @@ describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
     expect(n).toBe(0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// The DESTINATION lifecycle as a SEQUENCE (TEST-STRATEGY rules 1, 2, 10; owner-raised on B2 fix round 1). B1 and B2 drove
+// add / Replace key / Remove / Go live / Stop one ordering at a time. Here fast-check draws the orderings — across TWO orgs
+// (each with two fixtures), both platforms, a target whose saved key will not open, a waiting session left past its
+// deadline, and a voided holder fixture — and a plain MODEL predicts every outcome. Expected values come from the model
+// and the spec (§5.2 create order / Replace key / Remove / "held means", §5.3 list shape, D2, D6 via the platform
+// presets), never from the code under test: the system is only ever asked to AGREE. Invariants after EVERY step:
+//   - at most one ACTIVE session holds a target, and every session holds a target of its own org;
+//   - each org's list is exactly its model's un-archived targets (label, key hint, and the holding match), so an
+//     archived target never appears and the other org never sees one;
+//   - archived flags and owners in the table match the model;
+//   - every refusal spends no credit and makes no provider call (beyond the lazy expiry of a session the door ended).
+// Remove and Replace key are refused IFF a live or waiting match holds the target, naming its matchNo; re-adding a
+// removed key restores the SAME id; Go live can never take an archived or foreign target.
+// Sport-agnostic (rule 6): nothing here reads the sport. Rule 6's analogue is the PLATFORM — both are drawn.
+// ---------------------------------------------------------------------------
+type DestOrg = 0 | 1;
+type DestPlatform = "youtube" | "twitch";
+type DestCmd =
+  | { kind: "add"; org: DestOrg; platform: DestPlatform; key: number; label: number }
+  | { kind: "replace"; org: DestOrg; slot: number; key: number }
+  | { kind: "remove"; org: DestOrg; slot: number }
+  | { kind: "goLive"; org: DestOrg; fixture: 0 | 1; slot: number }
+  | { kind: "connect"; org: DestOrg; fixture: 0 | 1 }
+  | { kind: "age"; org: DestOrg; fixture: 0 | 1 }
+  | { kind: "stop"; org: DestOrg; fixture: 0 | 1 }
+  | { kind: "void"; org: DestOrg; fixture: 0 | 1 };
+
+/** The key pool. "yt-key" is the rig's own saved key (both orgs'), and it is shorter than a hint needs; the other two are
+ *  long enough to show one. The same key on the OTHER platform is a different destination (D6: the url is per platform). */
+const DEST_KEYS = ["yt-key", "stream-key-aaaa-1", "stream-key-bbbb-2"] as const;
+const DEST_LABELS = ["Court 1", "Court 2"] as const;
+/** Drawn sequences per run (the pinned examples count inside it). Each run seeds two orgs, four fixtures, three targets. */
+const DEST_MODEL_RUNS = 100;
+/** A fixed seed: the scoped run is reproducible, and a red names a sequence anyone can replay. */
+const DEST_MODEL_SEED = 20260930;
+
+const destOrgArb = fc.oneof({ weight: 3, arbitrary: fc.constant<DestOrg>(0) }, { weight: 1, arbitrary: fc.constant<DestOrg>(1) });
+const destFixtureArb = fc.constantFrom<0 | 1>(0, 1);
+const destSlotArb = fc.nat({ max: 7 });
+const destKeyArb = fc.nat({ max: DEST_KEYS.length - 1 });
+const destCmdArb: fc.Arbitrary<DestCmd> = fc.oneof(
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("add" as const), org: destOrgArb, platform: fc.constantFrom<DestPlatform>("youtube", "twitch"), key: destKeyArb, label: fc.nat({ max: DEST_LABELS.length - 1 }) }) },
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("replace" as const), org: destOrgArb, slot: destSlotArb, key: destKeyArb }) },
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("remove" as const), org: destOrgArb, slot: destSlotArb }) },
+  { weight: 3, arbitrary: fc.record({ kind: fc.constant("goLive" as const), org: destOrgArb, fixture: destFixtureArb, slot: destSlotArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("connect" as const), org: destOrgArb, fixture: destFixtureArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("age" as const), org: destOrgArb, fixture: destFixtureArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("stop" as const), org: destOrgArb, fixture: destFixtureArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("void" as const), org: destOrgArb, fixture: destFixtureArb }) },
+);
+
+/** Two orderings every run reaches whatever the seed draws (anti-vacuity: each invariant below is otherwise satisfiable by
+ *  a sequence that never holds, restores, voids or crosses an org). Slots: 0 = org 0's rig target ("Club", youtube,
+ *  yt-key), 1 = org 0's UNREADABLE youtube target, 2 = org 1's rig target (the same key, another org); later adds append. */
+const DEST_PINNED: DestCmd[][] = [
+  [
+    { kind: "goLive", org: 0, fixture: 0, slot: 0 },
+    { kind: "remove", org: 0, slot: 0 },                  // held WAITING → 409 naming match 0's number
+    { kind: "connect", org: 0, fixture: 0 },
+    { kind: "replace", org: 0, slot: 0, key: 1 },         // held LIVE → 409
+    { kind: "void", org: 0, fixture: 0 },
+    { kind: "remove", org: 0, slot: 0 },                  // a void does not release the destination: still 409
+    { kind: "stop", org: 0, fixture: 0 },
+    { kind: "remove", org: 0, slot: 0 },                  // released → archived
+    { kind: "goLive", org: 0, fixture: 1, slot: 0 },      // an archived target cannot be taken → 404
+    { kind: "add", org: 0, platform: "youtube", key: 0, label: 1 },   // the same key again → the SAME id, restored
+    { kind: "goLive", org: 1, fixture: 0, slot: 0 },      // the other org → 404
+    { kind: "remove", org: 1, slot: 0 },                  // the other org → 404
+  ],
+  [
+    { kind: "goLive", org: 0, fixture: 0, slot: 1 },      // unreadable → 422 TARGET_UNREADABLE
+    { kind: "replace", org: 0, slot: 1, key: 1 },         // Replace key recovers it in place
+    { kind: "add", org: 0, platform: "twitch", key: 1, label: 0 },    // the same key on the other platform → a NEW target
+    { kind: "add", org: 0, platform: "youtube", key: 1, label: 0 },   // → the recovered row, unchanged
+    { kind: "replace", org: 0, slot: 0, key: 1 },         // another active row holds it → 409 DESTINATION_DUPLICATE
+    { kind: "goLive", org: 0, fixture: 0, slot: 1 },
+    { kind: "age", org: 0, fixture: 0 },                  // waiting, past its deadline
+    { kind: "goLive", org: 0, fixture: 1, slot: 1 },      // the start IS the tick: the stale holder expires, this one starts
+    { kind: "replace", org: 1, slot: 1, key: 2 },         // the other org → 404
+    { kind: "add", org: 1, platform: "youtube", key: 1, label: 0 },   // the other org's own row, never ours
+    { kind: "goLive", org: 0, fixture: 0, slot: 1 },      // held by fixture 1, WAITING → 409 target_in_use naming it
+  ],
+];
+
+/** Named regression cases (rule 10): each is the SHRUNK counterexample a seeded run found, committed before its fix. */
+/** Seed 20260930, path "0:1:0:0:0": the other org's Go live on this org's destination is 404 — and took the admission's
+ *  storage read. NOT a system defect: ruling 13 pins that measurement on every refused admission. The invariant was
+ *  worded too wide ("no provider call" → "none but the admission's own measurement"); this sequence keeps it honest. */
+const DEST_REGRESSION_ADMISSION_READ: DestCmd[] = [{ kind: "goLive", org: 1, fixture: 0, slot: 0 }, { kind: "remove", org: 1, slot: 0 }];
+/** Seed 20260930, path "73:1:0:2:6:5:5" (DEST_MODEL_RUNS = 100): a match already streaming, then Go live on an UNREADABLE
+ *  destination, answered 422 TARGET_UNREADABLE — B2 fix round 1's M1 probe ran before `admit`. F-A5 (owner, 2026-09-29):
+ *  "a match already streaming answers a second start before credits, destination or storage are weighed" — 409
+ *  active_session. A SYSTEM defect, introduced by M1. */
+const DEST_REGRESSION_FA5_UNREADABLE: DestCmd[] = [
+  { kind: "goLive", org: 0, fixture: 1, slot: 0 },
+  { kind: "goLive", org: 0, fixture: 1, slot: 1 },
+  { kind: "add", org: 1, platform: "youtube", key: 0, label: 0 },
+];
+
+describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, both platforms, an unreadable key; a model predicts every step (rule 10)", () => {
+  it("no drawn ordering of add, Replace key, Remove, Go live, connect, ageing, Stop and a void breaks: one holder per target, lists = the model, same-id restore, refused iff held (naming the match), no archived or foreign take, and refusals that spend nothing and call no provider", async () => {
+    const tally = {
+      runs: 0, steps: 0, skipped: 0, checks: 0, refusals: 0,
+      targetHoldChecks: 0, listRowsChecked: 0, archivedAbsent: 0, sessionRowsChecked: 0, tableRowsChecked: 0, refusalMoneyChecks: 0, refusalCallChecks: 0,
+      heldRemoveRefusals: 0, heldReplaceRefusals: 0, sameIdRestores: 0, crossOrgRefusals: 0, archivedTakeRefusals: 0, unreadableRefusals: 0,
+      duplicateRefusals: 0, staleExpired: 0, heldAfterVoid: 0, otherPlatformNew: 0,
+    };
+    const seen = new Set<DestCmd["kind"]>();
+    await fc.assert(
+      fc.asyncProperty(fc.array(destCmdArb, { minLength: 1, maxLength: 12 }), async (cmds) => {
+        tally.runs++;
+        const rec = new FakeRecorder();
+        // No clock connect: a phone connects only when a `connect` step says so (the fake's scripted state).
+        const NEVER_MS = 10 * 86_400_000;
+        const rigs = [await rig({ credits: 5, fixtures: 2, recorder: rec, connectAfterMs: NEVER_MS }), await rig({ credits: 5, fixtures: 2, recorder: rec, connectAfterMs: NEVER_MS })] as const;
+        const deps = rigs.map((r) => ({ ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } }) as SessionDeps);
+        const orgIds = rigs.map((r) => r.auth.orgId);
+
+        // ---- the model ----------------------------------------------------------------------------------------------
+        type MTarget = { id: string; org: DestOrg; platform: DestPlatform; key: string | null; label: string; archived: boolean; archivedAt: number };
+        type MSession = { id: string; target: string; status: "waiting" | "live" | "stale" };
+        type MFixture = { id: string; no: number; voided: boolean; session: MSession | null };
+        const fixtures: MFixture[][] = [];
+        for (const r of rigs) {
+          const rows = await sql<{ id: string; fixture_no: number }[]>`select id, fixture_no from fixtures where id in ${sql(r.fixtureIds as string[])}`;
+          fixtures.push((r.fixtureIds as string[]).map((id) => ({ id, no: rows.find((x) => x.id === id)!.fixture_no, voided: false, session: null })));
+        }
+        const targets: MTarget[] = [
+          { id: rigs[0].target.id, org: 0, platform: "youtube", key: "yt-key", label: "Club", archived: false, archivedAt: 0 },
+          { id: await rigTarget(orgIds[0]!, "Unreadable", "youtube"), org: 0, platform: "youtube", key: null, label: "Unreadable", archived: false, archivedAt: 0 },
+          { id: rigs[1].target.id, org: 1, platform: "youtube", key: "yt-key", label: "Club", archived: false, archivedAt: 0 },
+        ];
+        let archiveClock = 0;
+        const holderOf = (t: MTarget): MFixture | null => fixtures.flat().find((f) => f.session?.target === t.id) ?? null;
+        const holdWord = (s: MSession) => (s.status === "live" ? "live" : "waiting");
+        const hintOf = (key: string | null) => (key === null || key.length < KEY_HINT_MIN_LENGTH ? null : key.slice(-KEY_HINT_CHARS));
+
+        // ---- one step: model prediction, the system's answer, agreement ---------------------------------------------
+        type Refusal = { status: number; code: string | null; holderNo?: number | null; holderState?: string; otherId?: string };
+        const refusalOf = (err: unknown, label: string): Refusal => {
+          if (!(err instanceof HttpError) || err.status >= 500) throw new Error(`${label}: escaped with a non-refusal: ${String(err)}`);
+          const extra = err.extra as { holder?: { matchNo: number | null; state: string } | null; other?: { id: string } } | undefined;
+          return {
+            status: err.status, code: err.code ?? null,
+            ...(extra?.holder ? { holderNo: extra.holder.matchNo, holderState: extra.holder.state } : {}),
+            ...(extra?.other ? { otherId: extra.other.id } : {}),
+          };
+        };
+        const money = async () => Promise.all(orgIds.map(async (o) => (await sql<{ n: number; net: number }[]>`
+          select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${o}`)[0]));
+        const flush = () => new Promise((res) => setImmediate(res));
+
+        const step = async (c: DestCmd, label: string): Promise<void> => {
+          const o = c.org;
+          const auth = rigs[o].auth;
+          const orgId = orgIds[o]!;
+          const expired = new Set<string>();          // sessions a door ends lazily this step (their provider calls are theirs)
+          const expire = (f: MFixture) => { expired.add(f.session!.id); f.session = null; tally.staleExpired++; };
+          const t = "slot" in c ? targets[c.slot % targets.length]! : null;
+          const fx = "fixture" in c ? fixtures[o]![c.fixture]! : null;
+          let expected: Refusal | "ok" = "ok";
+          let run: () => Promise<unknown>;
+          let onOk: (value: unknown) => void = () => undefined;
+
+          switch (c.kind) {
+            case "add": {
+              const key = DEST_KEYS[c.key]!;
+              const lbl = DEST_LABELS[c.label]!;
+              const same = (x: MTarget) => x.org === o && x.platform === c.platform && x.key === key;
+              const active = targets.find((x) => same(x) && !x.archived);
+              const archived = targets.filter((x) => same(x) && x.archived).sort((a, b) => b.archivedAt - a.archivedAt)[0];
+              run = () => createStreamTarget(auth, orgId, { kind: c.platform, label: lbl, streamKey: key });
+              onOk = (v) => {
+                const got = (v as { id: string }).id;
+                if (active) {
+                  expect(got, `${label}: §5.2 create order 1 — the ACTIVE row with this destination`).toBe(active.id);
+                } else if (archived) {
+                  expect(got, `${label}: D2 — re-adding a removed key restores the SAME id`).toBe(archived.id);
+                  archived.archived = false;
+                  archived.label = lbl;
+                  tally.sameIdRestores++;
+                } else {
+                  expect(targets.map((x) => x.id), `${label}: §5.2 create order 3 — a NEW row`).not.toContain(got);
+                  if (targets.some((x) => x.org === o && x.key === key && x.platform !== c.platform && !x.archived)) tally.otherPlatformNew++;
+                  targets.push({ id: got, org: o, platform: c.platform, key, label: lbl, archived: false, archivedAt: 0 });
+                }
+              };
+              break;
+            }
+            case "replace":
+            case "remove": {
+              const target = t!;
+              // The route's door (stream-targets/[targetId]/route.ts): this org's holders of the target get their lazy expiry first.
+              const holder0 = target.org === o ? holderOf(target) : null;
+              if (holder0?.session?.status === "stale") expire(holder0);
+              const holder = target.org === o ? holderOf(target) : null;
+              const newKey = c.kind === "replace" ? DEST_KEYS[c.key]! : null;
+              if (target.org !== o || target.archived) expected = { status: 404, code: null };
+              else if (holder) expected = { status: 409, code: "TARGET_IN_USE", holderNo: holder.no, holderState: holdWord(holder.session!) };
+              else if (c.kind === "replace" && !(target.key !== null && target.key === newKey)) {
+                const other = targets.find((x) => x !== target && x.org === o && !x.archived && x.platform === target.platform && x.key === newKey);
+                if (other) expected = { status: 409, code: "DESTINATION_DUPLICATE", otherId: other.id };
+              }
+              run = async () => {
+                await expireTargetHolders(orgId, target.id, deps[o]!);
+                return c.kind === "remove"
+                  ? removeStreamTarget(auth, orgId, target.id)
+                  : patchStreamTarget(auth, orgId, target.id, { streamKey: newKey! });
+              };
+              onOk = () => {
+                if (c.kind === "remove") { target.archived = true; target.archivedAt = ++archiveClock; }
+                else target.key = newKey;
+              };
+              if (expected !== "ok" && expected.code === "TARGET_IN_USE") {
+                if (c.kind === "remove") tally.heldRemoveRefusals++;
+                else tally.heldReplaceRefusals++;
+                if (holder!.voided) tally.heldAfterVoid++;
+              }
+              if (expected !== "ok" && expected.status === 404 && target.org !== o) tally.crossOrgRefusals++;
+              if (expected !== "ok" && expected.code === "DESTINATION_DUPLICATE") tally.duplicateRefusals++;
+              break;
+            }
+            case "goLive": {
+              if (fx!.voided) { tally.skipped++; return; }   // the spec says nothing of starting a voided match; not drawn
+              const target = t!;
+              if (fx!.session?.status === "stale") expire(fx!);            // the fixture's own lazy expiry comes first
+              if (target.org === o) {
+                for (const g of fixtures[o]!) if (g !== fx && g.session?.target === target.id && g.session.status === "stale") expire(g);
+              }
+              // Precedence, from the declarations: the destination-HOLDER guard runs before admission (createSession's gap-4
+              // placement — a documented exception, see the report); then `admit`'s own order (session.ts, §6.3 and F-A5:
+              // "a match already streaming answers a second start before credits, destination or storage are weighed"), so
+              // active_session, then the target's existence; and only then the saved key's readability (a destination
+              // question, so after active_session by F-A5). The rigs never lack the plan or the credit.
+              const other = target.org === o ? fixtures[o]!.find((g) => g !== fx && g.session?.target === target.id) : undefined;
+              if (other) expected = { status: 409, code: "target_in_use", holderNo: other.no, holderState: holdWord(other.session!) };
+              else if (fx!.session) expected = { status: 409, code: "active_session" };
+              else if (target.org !== o || target.archived) expected = { status: 404, code: null };
+              else if (target.key === null) expected = { status: 422, code: TARGET_UNREADABLE };
+              run = () => createSession(auth, fx!.id, body(target.id), deps[o]!);
+              onOk = (v) => { fx!.session = { id: (v as { sessionId: string }).sessionId, target: target.id, status: "waiting" }; };
+              if (expected !== "ok") {
+                if (expected.status === 404 && target.org !== o) tally.crossOrgRefusals++;
+                if (expected.status === 404 && target.org === o) tally.archivedTakeRefusals++;
+                if (expected.code === TARGET_UNREADABLE) tally.unreadableRefusals++;
+              }
+              break;
+            }
+            case "connect": {
+              const sess = fx!.session;
+              run = async () => {
+                if (sess && sess.status !== "live") {
+                  const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sess.id}`;
+                  rigs[o].ingest.setState(inp!.ingest_input_id, "connected");
+                }
+                return currentSession(auth, fx!.id, deps[o]!);
+              };
+              // A stale waiting session whose phone connects goes LIVE: the expiry's pre-read sees the ingest first (N1).
+              onOk = () => { if (sess) sess.status = "live"; };
+              break;
+            }
+            case "age": {
+              const sess = fx!.session;
+              if (sess?.status !== "waiting") { tally.skipped++; return; }
+              run = () => sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 5}) where id = ${sess.id}`;
+              onOk = () => { sess.status = "stale"; };
+              break;
+            }
+            case "stop": {
+              const sess = fx!.session;
+              if (!sess) { tally.skipped++; return; }
+              run = () => stopSession(auth, fx!.id, sess.id, deps[o]!);
+              onOk = () => { fx!.session = null; };
+              break;
+            }
+            case "void": {
+              if (fx!.voided) { tally.skipped++; return; }
+              run = async () => {
+                for (const [type, payload] of [["core.start", {}], ["core.abandon", { reason: "model: void" }]] as const) {
+                  await scoreEvent(auth, fx!.id, { expected_seq: (await getFixtureState(auth, fx!.id)).last_seq, type, payload });
+                }
+              };
+              onOk = () => { fx!.voided = true; };
+              break;
+            }
+          }
+
+          const moneyBefore = await money();
+          const callsBefore = rec.calls.length;
+          let value: unknown = null;
+          let err: unknown = null;
+          try {
+            value = await run!();
+          } catch (e) {
+            err = e;
+          }
+          await flush();
+          if (expected === "ok") {
+            if (err !== null) throw new Error(`${label}: the model expected success; the system refused: ${JSON.stringify(refusalOf(err, label))}`);
+            onOk(value);
+            return;
+          }
+          if (err === null) throw new Error(`${label}: the model expected ${JSON.stringify(expected)}; the system succeeded`);
+          expect(refusalOf(err, label), `${label}: the refusal`).toEqual(expected);
+          tally.refusals++;
+          // Every refusal spends nothing (both orgs' ledgers unmoved) and calls no provider — except for a session the
+          // door itself ended lazily this step, whose calls carry that session's id or its input's.
+          expect(await money(), `${label}: a refusal moved money`).toEqual(moneyBefore);
+          tally.refusalMoneyChecks++;
+          const inputs = expired.size === 0 ? [] : (await sql<{ ingest_input_id: string }[]>`
+            select ingest_input_id from fixture_stream_inputs where session_id in ${sql([...expired])}`).map((x) => x.ingest_input_id);
+          const stray = rec.calls.slice(callsBefore).filter((call) => !(call.sessionId != null && expired.has(call.sessionId)) && !(call.subjectId != null && inputs.includes(call.subjectId)));
+          // Ruling 13 (DEST_REGRESSION_ADMISSION_READ below): a refusal FROM `admit` still takes the admission's storage
+          // measurement — one read-only storageUsage, no session — and records it; stream-sessions.test.ts ("the refused
+          // one") and routes.test.ts A21 pin that snapshot. Every other refusal — the holder guard, an unreadable key, and
+          // every Directory refusal — asks the provider nothing.
+          const fromAdmit = c.kind === "goLive" && (expected.code === "active_session" || expected.status === 404);
+          expect(stray.map((call) => `${call.operation}:${call.sessionId ?? "-"}`), `${label}: a refusal called a provider`).toEqual(fromAdmit ? ["storageUsage:-"] : []);
+          tally.refusalCallChecks++;
+        };
+
+        // ---- invariants after every step ----------------------------------------------------------------------------
+        const check = async (after: string) => {
+          const active = await sql<{ id: string; org_id: string; fixture_id: string; target_id: string; state: string; target_org: string }[]>`
+            select s.id, s.org_id, s.fixture_id, s.target_id, s.state, t.org_id as target_org
+              from fixture_stream_sessions s join org_stream_targets t on t.id = s.target_id
+             where s.org_id in ${sql(orgIds)} and s.state in ${sql([...ACTIVE_STATES])}`;
+          const perTarget = new Map<string, number>();
+          for (const x of active) perTarget.set(x.target_id, (perTarget.get(x.target_id) ?? 0) + 1);
+          for (const tg of targets) {
+            expect(perTarget.get(tg.id) ?? 0, `${after}: more than one ACTIVE session holds ${tg.id}`).toBeLessThanOrEqual(1);
+            tally.targetHoldChecks++;
+          }
+          // §5.3: waiting = requested / provisioning / warming; live = live / ending — the spec's words, not holdStateOf.
+          const WAITING_STATES = ["requested", "provisioning", "warming"];
+          const want = fixtures.flatMap((fs, oi) => fs.filter((f) => f.session).map((f) => ({ id: f.session!.id, org: orgIds[oi], fixture: f.id, target: f.session!.target, hold: holdWord(f.session!) })));
+          const got = active.map((x) => ({ id: x.id, org: x.org_id, fixture: x.fixture_id, target: x.target_id, hold: WAITING_STATES.includes(x.state) ? "waiting" : "live" }));
+          const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
+          expect(got.sort(byId), `${after}: the ACTIVE sessions are the model's`).toEqual(want.sort(byId));
+          for (const x of active) {
+            expect(x.target_org, `${after}: session ${x.id} holds another org's destination`).toBe(x.org_id);
+            tally.sessionRowsChecked++;
+          }
+          for (const oi of [0, 1] as const) {
+            const list = await listStreamTargets(rigs[oi].auth, orgIds[oi]!);
+            const expectRows = targets.filter((tg) => tg.org === oi && !tg.archived).map((tg) => {
+              const h = holderOf(tg);
+              return { id: tg.id, label: tg.label, keyHint: hintOf(tg.key), inUse: h ? { sessionId: h.session!.id, matchNo: h.no, state: holdWord(h.session!) } : null };
+            });
+            const gotRows = list.map((row) => ({ id: row.id, label: row.label, keyHint: row.keyHint, inUse: row.inUse ? { sessionId: row.inUse.sessionId, matchNo: row.inUse.matchNo, state: row.inUse.state } : null }));
+            expect(gotRows.sort(byId), `${after}: org ${oi}'s list is its model's un-archived targets`).toEqual(expectRows.sort(byId));
+            tally.listRowsChecked += gotRows.length;
+            const listed = new Set(list.map((row) => row.id));
+            for (const tg of targets) {
+              if (tg.org === oi && !tg.archived) continue;
+              expect(listed.has(tg.id), `${after}: org ${oi}'s list shows ${tg.archived ? "an archived" : "the other org's"} target ${tg.id}`).toBe(false);
+              tally.archivedAbsent++;
+            }
+          }
+          const table = await sql<{ id: string; org_id: string; archived: boolean }[]>`
+            select id, org_id, archived_at is not null as archived from org_stream_targets where org_id in ${sql(orgIds)}`;
+          expect(table.map((x) => ({ id: x.id, org: x.org_id, archived: x.archived })).sort(byId), `${after}: the table's owners and archived flags`)
+            .toEqual(targets.map((tg) => ({ id: tg.id, org: orgIds[tg.org], archived: tg.archived })).sort(byId));
+          tally.tableRowsChecked += table.length;
+          tally.checks++;
+        };
+
+        await check("rig");
+        for (const [i, c] of cmds.entries()) {
+          seen.add(c.kind);
+          const label = `step ${i} ${JSON.stringify(c)}`;
+          await step(c, label);
+          tally.steps++;
+          await check(label);
+        }
+      }),
+      { numRuns: DEST_MODEL_RUNS, seed: DEST_MODEL_SEED, examples: [DEST_REGRESSION_FA5_UNREADABLE, DEST_REGRESSION_ADMISSION_READ, ...DEST_PINNED].map((seq) => [seq]) },
+    );
+    console.info(`destination model: ${JSON.stringify(tally)}`);
+    // Anti-vacuity (rule 2): the property ran every run, checked after every step, and reached every behaviour it claims.
+    expect(tally.runs, "fast-check counts the pinned examples INSIDE numRuns").toBe(DEST_MODEL_RUNS);
+    expect(tally.checks, "one invariant pass per step plus one per rig").toBe(tally.steps + tally.runs);
+    expect([...seen].sort()).toEqual(["add", "age", "connect", "goLive", "remove", "replace", "stop", "void"]);
+    for (const k of ["targetHoldChecks", "listRowsChecked", "archivedAbsent", "sessionRowsChecked", "tableRowsChecked", "refusalMoneyChecks", "refusalCallChecks",
+      "heldRemoveRefusals", "heldReplaceRefusals", "sameIdRestores", "crossOrgRefusals", "archivedTakeRefusals", "unreadableRefusals", "duplicateRefusals",
+      "staleExpired", "heldAfterVoid", "otherPlatformNew"] as const) {
+      expect(tally[k], `${k}: zero checked is a failure`).toBeGreaterThan(0);
+    }
+  }, 240_000);
 });
