@@ -78,6 +78,7 @@ import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
+import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
@@ -174,6 +175,9 @@ export interface PlannerCli { only?: string; scenario?: string; canary?: string;
 export interface CasePlanner {
   readonly sports: readonly string[];
   readonly deniesFeatures: boolean;
+  /** W1c Task 7: the set scores on the pad, so it runs under --driver browser
+   *  only; runSlice refuses it over HTTP before the DB. Default false. */
+  readonly needsBrowser?: boolean;
   plan(variantFor: (sport: string) => string): CaseSpec[];
 }
 export type PlanCases = (cli: PlannerCli) => CasePlanner;
@@ -199,7 +203,7 @@ export const slicePlanner: PlanCases = (cli) => ({
 });
 
 /** The named sets `--set` chooses from. */
-export const SETS: Readonly<Record<string, PlanCases>> = Object.freeze({ [PROBE_SET]: probePlanner });
+export const SETS: Readonly<Record<string, PlanCases>> = Object.freeze({ [PROBE_SET]: probePlanner, [PAD_PROOF_SET]: padProofPlanner });
 
 export class UnknownSet extends Error {
   constructor(v: string) {
@@ -410,16 +414,16 @@ async function runCase(deps: RunDeps, run: RunCtx, spec: CaseSpec, i: number): P
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
       { name: `Matrix ${run.runId} ${i + 1}`, slug: caseOrgSlug(run.runId, i + 1), deny: spec.deny },
     );
+    const scenario = SCENARIOS[spec.scenario];
     if (run.browser === null) {
       driver = deps.driverFor(run.base, run.session, org.orgId);
     } else {
       // After the org switch, so the context carries the case org's cookie.
-      // The scenario's padPolicy lands with Task 7; until then, "first".
-      const o: CaseDriverOptions = { base: run.base, session: run.session, orgId: org.orgId, orgSlug: org.orgSlug, spec, width: run.browser.width, padPolicy: "first", reportDir: run.reportDir, evidenceId: `case-${i + 1}` };
+      // The scenario says which scores go to the pad (W1c Task 7; default "first").
+      const o: CaseDriverOptions = { base: run.base, session: run.session, orgId: org.orgId, orgSlug: org.orgSlug, spec, width: run.browser.width, padPolicy: scenario.padPolicy ?? "first", reportDir: run.reportDir, evidenceId: `case-${i + 1}` };
       try { caseBrowser = await run.browser.run.caseDriver(o); } catch (e) { throw new BrowserCaseAborted(spec.caseId, e); }
       driver = caseBrowser.driver;
     }
-    const scenario = SCENARIOS[spec.scenario];
     // W1b Task 10: a variant case scores under preset + its override, as the
     // division it creates stores it (setUpDivision posts the override).
     const cfg = resolveSportCfg(spec.sport, spec.variant, { ...(spec.overrides ?? {}) });
@@ -614,6 +618,8 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;
   }
+  // W1c Task 7: a set that proves the pad has nothing to prove over HTTP.
+  if (planner.needsBrowser === true && cli.driver !== "browser") { warn(`matrix: --set ${cli.set ?? "(injected)"} scores every fixture on the pad; it runs with --driver browser only`); return EXIT.REFUSED; }
   if (planner.deniesFeatures && (deps.env.REDIS_URL ?? "").trim() !== "") { warn(errText(new RedisHidesDeny())); return EXIT.REFUSED; }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("matrix: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }

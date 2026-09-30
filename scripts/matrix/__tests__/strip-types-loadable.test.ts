@@ -94,6 +94,19 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1c Task 7's modules, named for the same reason. The adapters import the
+  // bench's generic adapter and tap vocabulary (ruling 38), so their load
+  // proves those resolve under strip-only mode too.
+  const W1C_T7 = [
+    "lib/pads/types.ts", "lib/pads/replay.ts", "lib/pads/generic.ts", "lib/pads/badminton.ts", "lib/pads/index.ts",
+    "lib/pads/padpage-assignability.ts", "lib/pad-sports.ts", "lib/pad-proof-set.ts", "lib/scenarios/pad-proof.ts",
+  ];
+  it("W1c Task 7's modules are all in the walk", () => {
+    const missing = W1C_T7.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1C_T7.length).toBe(9);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

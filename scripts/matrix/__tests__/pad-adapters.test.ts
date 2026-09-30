@@ -7,6 +7,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { badminton } from "@seazn/engine/sports/setbased";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
 import { START_MATCH_TESTID, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
@@ -216,7 +217,8 @@ describe("badminton", () => {
     const m = /export const SET_SCORE_TILE_ID = "([^"]+)";/.exec(skin);
     expect(m, "badminton.tsx no longer exports SET_SCORE_TILE_ID as a string literal").not.toBeNull();
     expect(BADMINTON_SET_SCORE_TILE).toBe(m![1]);
-    expect(BADMINTON_SUMMARY).toBe(`badminton.${sportModule("badminton").coarseEventType}`);
+    expect(sportModule("badminton")).toBe(badminton);
+    expect(BADMINTON_SUMMARY).toBe(`badminton.${badminton.coarseEventType}`);
     // The skin's own SUMMARY_TYPE is built the same way, and the setScore sheet posts it.
     expect(skin).toMatch(/export const SUMMARY_TYPE = `\$\{SPORT\}\.\$\{badmintonModule\.coarseEventType\}`;/);
     expect(skin).toMatch(/\[SET_SCORE_TILE_ID\]: setScoreSheet\(/);

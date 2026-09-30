@@ -16,6 +16,9 @@ import type { Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
+import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
+import { PAD_SPORTS } from "../lib/pad-sports.ts";
+import { HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
@@ -208,7 +211,21 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET})`);
+  });
+  // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
+  it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
+    let checked = 0;
+    for (const extra of [[], ["--driver", "http"]]) {
+      const d = deps();
+      const io = capture();
+      expect(await runSlice(d, ["--set", PAD_PROOF_SET, ...extra, "--report-dir", dirFor()]), extra.join(" ")).toBe(2);
+      expect(d.order, extra.join(" ")).toEqual([]);
+      expect(io.err()).toContain(`matrix: --set ${PAD_PROOF_SET} scores every fixture on the pad; it runs with --driver browser only`);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
   it("--set with --only/--scenario/--canary is a usage refusal", async () => {
     for (const extra of [["--only", "league|generic"], ["--scenario", "M1"], ["--canary", "M1"]]) {
@@ -1291,6 +1308,20 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(readFileSync(join(dir, "b1", "MATRIX.md"), "utf8")).toContain("| league |");
   });
 
+  it("--set pad-proof --driver browser: one league PADPROOF case per pad sport, each case driver built with the scenario's padPolicy (all), its own org and case-<n>", async () => {
+    capture();
+    const dir = dirFor();
+    const fb = fakeBrowserRun();
+    const d = deps({ openBrowserRun: async () => fb.run });
+    expect(await runSlice(d, ["--set", PAD_PROOF_SET, "--driver", "browser", "--width", "320", "--run-id", "pp1", "--report-dir", dir])).toBe(0);
+    const raw = resultsIn(dir, "pp1");
+    expect(raw.cases.map((c) => [c.sport, c.scenario])).toEqual(PAD_SPORTS.map((s) => [s, "PADPROOF"]));
+    expect(fb.opts).toHaveLength(PAD_SPORTS.length);
+    expect(fb.opts.map((o) => o.padPolicy)).toEqual(PAD_SPORTS.map(() => "all"));
+    expect(fb.opts.map((o) => o.evidenceId)).toEqual(PAD_SPORTS.map((_s, i) => `case-${i + 1}`));
+    expect(fb.opts.map((o) => o.orgId)).toEqual(d.orgs.map((org) => `org-${org.slug}`));
+  });
+
   it("a case whose scenario throws is red, and its case driver is still closed (finally)", async () => {
     capture();
     vi.spyOn(SCENARIOS.LIFECYCLE, "run").mockImplementation(async () => { throw new Error("scenario boom"); });
@@ -1372,7 +1403,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     capture();
     const dir = dirFor();
     const runId = "i3";
-    const seen: { n: number; orgSlug: string; base: string }[] = [];
+    const seen: { n: number; orgSlug: string; base: string; holdMs: number }[] = [];
     const wire: { base: string; path: string; method: string | undefined; session: Session }[] = [];
     let current = "";
     const unexpected = async () => { throw new Error("an unexpected page call"); };
@@ -1380,7 +1411,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
       ...Object.fromEntries(Object.keys(REAL_PAGES).map((k) => [k, unexpected])),
       createCompetitionUi: async (ctx: PageCtx, input: { name: string }) => {
         const n = d.orgs.length; // prepareCaseOrg ran for this case first
-        seen.push({ n, orgSlug: ctx.orgSlug, base: ctx.base });
+        seen.push({ n, orgSlug: ctx.orgSlug, base: ctx.base, holdMs: ctx.holdMs });
         const shotPage = { evaluate: async () => ({ scrollWidth: 320, clientWidth: 320 }), screenshot: async () => new Uint8Array([137, 80, 78, 71]) };
         await ctx.evidence.shot(shotPage as unknown as Parameters<PageCtx["evidence"]["shot"]>[0], "01-competition");
         // The case org as the runner planned it — never read back from ctx.
@@ -1407,7 +1438,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
       openBrowserRun: async () => wrap(await openBrowserRun({
         launch: async () => ({ close: async () => undefined }),
         newCase: async () => ({ page: { setDefaultTimeout: () => undefined } as unknown as CaseBrowser["page"], close: async () => undefined }),
-        env: {}, pads: EMPTY_PADS, pages, transport,
+        env: { [HOLD_MS_ENV_VAR]: "2500" }, pads: EMPTY_PADS, pages, transport,
       })),
     });
     expect(await runSlice(d, ["--only", "league|generic", "--driver", "browser", "--width", "320", "--run-id", runId, "--report-dir", dir])).toBe(0);
@@ -1419,6 +1450,10 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(seen.map((s) => s.n)).toEqual(cases.map((_c, i) => i + 1));
     expect(seen.map((s) => s.orgSlug)).toEqual(d.orgs.map((o) => o.slug));
     expect(seen.every((s) => s.base === "http://localhost:3999")).toBe(true);
+    // Carry N-2: the build's hold window reaches every case's page context from
+    // the run's env, as the product itself resolves it (not the default).
+    expect(resolveHoldMs("2500")).not.toBe(resolveHoldMs(undefined));
+    expect(seen.map((s) => s.holdMs)).toEqual(cases.map(() => resolveHoldMs("2500")));
     // The evidence id: each case's shot lands under its own case-<n>, and the case keeps it (M-2).
     let shots = 0;
     for (const [i, c] of cases.entries()) {
@@ -1432,6 +1467,9 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     expect(drivers).toHaveLength(cases.length);
     for (const [i, drv] of drivers.entries()) {
       expect(drv.padPolicy, `case ${i + 1}`).toBe("first");
+      // Carry N-2: each driver scores the case it was built for.
+      const c = cases[i]!;
+      expect({ ...drv.spec }, `case ${i + 1}`).toEqual({ caseId: c.caseId.replace(/@320$/, ""), row: c.row, sport: c.sport, variant: c.variant, scenario: c.scenario, canary: c.canary });
       current = `org-${d.orgs[i]!.slug}`;
       await expect(drv.createCompetition({ name: "again", slug: `again-${i + 1}` }), `case ${i + 1}`).resolves.toMatchObject({ orgId: current });
     }

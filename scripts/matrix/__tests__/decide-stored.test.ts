@@ -3,6 +3,7 @@
 // The pad fake (fake-pad-driver.ts) answers every event with `stored`; its
 // storedAs seam makes the pad write something else, which is the only case
 // where the two folds differ and so the only one that can witness the rule.
+import { badminton } from "@seazn/engine/sports/setbased";
 import { describe, expect, it } from "vitest";
 import { foldStream } from "../lib/fold.ts";
 import { toObservedOutcome } from "../lib/observed.ts";
@@ -30,7 +31,7 @@ async function decideOne(driver: FakeLeagueDriver) {
   const ctx = ctxOf(driver);
   const rec = new Recorder();
   const setup = await setUpDivision(ctx, rec, 3);
-  const f = (await driver.listFixtures(setup.division.id)).sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))[0]!;
+  const f = (await ctx.driver.listFixtures(setup.division.id)).sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))[0]!;
   const meant = generateStream({ sportKey: SPORT, cfg: CFG, stageKind: "league", home: f.home_entrant_id!, away: f.away_entrant_id!, outcome: { kind: "win", winner: "home" } });
   await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
   return { rec, f, meant };
@@ -38,7 +39,7 @@ async function decideOne(driver: FakeLeagueDriver) {
 
 /** A pad that writes every set summary with the sides swapped. */
 const swapped = (evs: readonly StreamEvent[]) => evs.map((e) => {
-  if (e.type !== `${SPORT}.${sportModule(SPORT).coarseEventType}`) return e;
+  if (e.type !== `${SPORT}.${badminton.coarseEventType}`) return e;
   const p = e.payload as { home: number; away: number };
   return { type: e.type, payload: { home: p.away, away: p.home } };
 });
