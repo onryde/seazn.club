@@ -255,8 +255,9 @@ export function renderParity(r: ParityReport, runs: { http: string; browser: str
     if (rows.length === 0) out.push("None.");
     else out.push(line(s.head), line(s.head.map(() => "---")), ...rows.map((d) => line(s.row(d))));
   }
-  // Listed, never compared: each id, because results.json names no plan and
-  // the list is the only way to see a mis-paired HTTP run.
+  // Listed, never compared: each id. A run's recorded `plan` (carry 6) says
+  // what it ran, not which HTTP run it pairs with, so the list is the only way
+  // to see a mis-paired HTTP run.
   const listed: readonly [string, readonly string[]][] = [
     ["Outside the browser plan", r.outsidePlan.map((id) => `- \`${id}\``)],
     ["Planned, not driven (🚫/░)", r.notDriven.map((c) => `- \`${c.caseId}\` — ${c.state}`)],

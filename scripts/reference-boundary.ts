@@ -266,7 +266,9 @@ function judgeFile(file: string, root: string, rel: string): Violation[] {
       else if (owner !== undefined && TOKENS.has(owner) && member === undefined) add(node.getStart(sf), `${owner}[<computed>]`, R.tokenComputed);
       // `globalThis.performance` IS `performance` (globalNamed): outside a member
       // read it is an alias, exactly as the bare name is below (W1b carry a). No
-      // type-position guard: a type spells this as a QualifiedName, never an access.
+      // type-position guard: a type usually spells this as a QualifiedName, never
+      // an access — but a computed key in a type literal (`{ [globalThis.x]: T }`)
+      // parses as an access, and the gate refuses it: it fails closed there.
       else if (member !== undefined && TOKENS.has(member) && isGlobalObject(node.expression) && !ownsMemberRead(node) && !handled.has(node)) add(node.getStart(sf), member, R.tokenAlias);
       // FB-9 (RR-2): `(() => {}).constructor` is Function, never named.
       else if (member === "constructor") add(node.getStart(sf), member, R.constructorRef);

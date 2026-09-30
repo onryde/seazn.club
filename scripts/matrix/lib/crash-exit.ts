@@ -1,6 +1,7 @@
-// Preloaded (node --import) by every W1b CLI's package script — matrix:l3,
-// matrix:render, matrix:catalogue, matrix:single-sport, matrix:model and
-// reference:boundary (final batch F-6). Each CLI promises "3 = crash, never
+// Preloaded (node --import) by every matrix CLI's package script — matrix:l3,
+// matrix:browser, matrix:render, matrix:catalogue, matrix:single-sport,
+// matrix:model, matrix:parity and reference:boundary (W1b final batch F-6;
+// W1c added browser and parity, pinned by crash-exit.test.ts). Each CLI promises "3 = crash, never
 // 1", because 1 reads as a verdict (drift, a ratchet violation, a NEW
 // failure). Its main keeps that promise; but a failure to LOAD the CLI — a
 // parse error under strip-types, a missing export, a module that throws while

@@ -10,8 +10,8 @@
 //  - goal-home HOLD (pad-send-now at ~150 ms; chips ownGoal, penalty) and
 //    write one `football.goal {by}` row, keys [by] only. The generated goal
 //    carries `minute: 10`, which no tap writes, so the goal is a fallback:
-//    one row, judged by fold (the side decides the result; the minute does
-//    not).
+//    one row, judged by its fallback's own judge (`by` to the side credited;
+//    the minute has no tap; replay.ts judgeFallback, since e3ebd230c).
 //  - period → HT, then period → FT, each write one `football.period {phase}`
 //    row at once; FT decided the fixture. No lineup was demanded.
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";

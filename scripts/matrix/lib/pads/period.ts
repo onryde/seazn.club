@@ -9,7 +9,9 @@
 // Step 0 (2026-09-30, 320, fih-outdoor and iihf, rosterless team entrants)
 // saw a goal tile HOLD and write `{by}` alone (equal), and each advance tap
 // write `{to, at: {period, elapsed: 0}}` at once. An object is no tolerable
-// id, so the advance is a fallback: one row, judged by fold.
+// id, so the advance is a fallback: one row, judged by its fallback's own
+// judge (`to` to the event, `at` to the shape the tile stamps; replay.ts
+// judgeFallback, since e3ebd230c).
 //
 // The advance tile carries no label choice, so the adapter checks that the
 // label the pad is about to write is the one the event names. It keeps a

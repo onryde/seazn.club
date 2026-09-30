@@ -13,7 +13,9 @@
 // decided the match on the over that passed its target (no close row).
 //
 // So one generated innings is ⌈legalBalls / ballsPerOver⌉ over sheets and as
-// many rows, judged by fold. The runs are spread as evenly as whole numbers
+// many rows, judged by its fallback's own judge (judgeInnings: the innings'
+// last over row, less `partial`, against the summary; replay.ts judgeFallback,
+// since e3ebd230c). The runs are spread as evenly as whole numbers
 // allow (the remainder on the last over), the wickets all fall in the last
 // over, and every over but the last is full. Every generated innings ends
 // itself — balls out, all out, or a chase past its target — so the route never

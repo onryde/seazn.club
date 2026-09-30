@@ -75,8 +75,10 @@ export interface FirstAct { readonly control: HydrationTarget; readonly what: st
 export const READS_ONLY = "reads only";
 
 /** React replaces a server-rendered subtree when a hydration mismatch makes it
- *  client-render it — once. A control replaced more often than this is being
- *  re-rendered, and that is no hydration signal. */
+ *  client-render it. awaitHydrated finds a replaced control again at most this
+ *  many times (three waits in all); a control replaced more often is being
+ *  re-rendered, and that is no hydration signal. The cap decides only when the
+ *  refusal fires: every other exit still needs every matched element hydrated. */
 export const REPLACEMENTS_MAX = 2;
 
 export class NeverHydrated extends Error {
