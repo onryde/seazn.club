@@ -468,6 +468,7 @@ traps.
 - [W1a — L3 core](W1a-l3-core.md)
 - [W1b — catalogues + reference skeleton](W1b-catalogues-reference.md)
 - [W1c — browser layers](W1c-browser-layers.md)
+- [W1-driving — L3 driving breadth](W1-driving.md) (runs before W1d, ruling 28)
 - [W1d — CI + first truth run](W1d-ci-truth-run.md)
 - [W2 — sport scoring fidelity](W2-scoring-fidelity.md)
   - [W2 coverage audit](w2-coverage-audit.md): the controller's engine → rulebook → generator audit (2026-09-30) behind the W2 checklist
