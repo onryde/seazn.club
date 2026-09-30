@@ -22,16 +22,16 @@ import { join, resolve } from "node:path";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { parseCaptureQr } from "@/lib/capture-qr";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_PLATFORMS } from "@/lib/stream-destinations";
+import { STREAM_PLATFORMS } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
 import { StreamEndReason, StreamFailReason, StreamIngest, StreamOutput, StreamSessionState } from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
-  BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, DESTINATION_REFUSAL_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
+  BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText, stepFor, targetRefusalRule,
+  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText, stepFor,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -126,24 +126,16 @@ describe("stream-session-view — the copy maps", () => {
     expect(health, "the stream.health.* sweep read nothing").toBeGreaterThanOrEqual(LOCALES.length * Object.keys(INGEST_STATE_KEYS).length);
   });
 
-  it("D2: the destination-refusal map is total over the validator's own DESTINATION_REFUSALS, in all four locales; the host copy names every allowlisted provider, and no copy anywhere names LinkedIn", () => {
-    expect(Object.keys(DESTINATION_REFUSAL_KEYS).sort()).toEqual([...DESTINATION_REFUSALS].sort());
-    for (const r of DESTINATION_REFUSALS) expect(DESTINATION_REFUSAL_KEYS[r], r).toBe(`stream.target.refused.${r}`);
-    expect(inEveryLocale(Object.values(DESTINATION_REFUSAL_KEYS))).toBe(LOCALES.length * DESTINATION_REFUSALS.length);
-    // Brand names are proper nouns — the same in every locale. Derived from the allowlist, so a provider added there
-    // without naming it here reds (lib/stream-destinations.ts: "the entry, its source, and the pinned count … move together").
-    const providers = [...new Set(STREAM_DESTINATION_HOSTS.map((h) => h.provider.replace(/_/g, " ")))];
-    expect(providers.length, "the allowlist names no providers").toBeGreaterThan(0);
-    let named = 0;
+  it("no stream.* copy in any locale names LinkedIn (not an allowed destination)", () => {
+    let checked = 0;
     for (const l of LOCALES) {
-      const host = dict(l)[DESTINATION_REFUSAL_KEYS.host]!.toLowerCase();
-      for (const p of providers) {
-        expect(host, `${l}: the host refusal does not name ${p}`).toContain(p);
-        named++;
+      for (const [k, v] of Object.entries(dict(l))) {
+        if (!k.startsWith("stream.")) continue;
+        expect(v, `${l} ${k}`).not.toMatch(/linkedin/i);
+        checked++;
       }
-      for (const [k, v] of Object.entries(dict(l))) if (k.startsWith("stream.")) expect(v, `${l} ${k}`).not.toMatch(/linkedin/i);
     }
-    expect(named).toBe(LOCALES.length * providers.length);
+    expect(checked, "the stream.* sweep read nothing").toBeGreaterThan(LOCALES.length * 100);
   });
 
   it("M4: the unreadable-key copy offers the two remedies that WORK — replace the key, or (not a YouTube / Twitch destination) remove it — and names the creatable platforms in every locale; English never says to add it again", () => {
@@ -248,7 +240,6 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     // Both rows reach `wireError`'s `extra` guard: without it `w.extra` is undefined and the property read throws.
     expect(createErrorCode(Object.assign(new Error("x"), { code: "PAYMENT_REQUIRED" }))).toBe("unknown");
     expect(createErrorHolder({ code: "target_in_use" })).toBeNull();
-    expect(targetRefusalRule({ code: DESTINATION_NOT_ALLOWED })).toBeNull();
   });
 
   it("createErrorHolder reads extra.holder: the court and label when present; courtName null kept; a pre-T3 holder (no matchNo/href/state) reads live with no match; null for the index race, another code, or a malformed holder", async () => {
@@ -281,18 +272,6 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     expect(checked).toBe(CREATE_ERROR_CODES.length - 1);
   });
 
-  it("D2: targetRefusalRule reads extra.rule off a DESTINATION_NOT_ALLOWED, for every rule the validator declares; an unknown rule, another code, or a non-server error is null", async () => {
-    let checked = 0;
-    for (const rule of DESTINATION_REFUSALS) {
-      expect(targetRefusalRule(await wire(new HttpError(422, "refused", DESTINATION_NOT_ALLOWED, { rule }))), rule).toBe(rule);
-      checked++;
-    }
-    expect(checked).toBe(DESTINATION_REFUSALS.length);
-    expect(targetRefusalRule(await wire(new HttpError(422, "refused", DESTINATION_NOT_ALLOWED, { rule: "banana" })))).toBeNull();
-    expect(targetRefusalRule(await wire(new HttpError(422, "refused", DESTINATION_NOT_ALLOWED, { rule: "toString" })))).toBeNull();
-    expect(targetRefusalRule(await wire(new HttpError(422, "bad key", "ERROR", { rule: "host" })))).toBeNull();
-    expect(targetRefusalRule(new Error("boom"))).toBeNull();
-  });
 });
 
 describe("I1 (B4 review): a Go live whose destination was removed in Directory", () => {

@@ -21,12 +21,10 @@
 //                       unknown. E5: storage lives ONLY here; no_credits lives
 //                       in BOTH (a balance can pass create and be gone at live),
 //                       and that asymmetry is the design, not an oversight.
-//   DESTINATION_REFUSAL_KEYS — which allowlist rule refused an ingest URL
-//                       (D2), total over the validator's own DESTINATION_REFUSALS.
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, TARGET_UNREADABLE, type DestinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import type { StreamEndReason, StreamFailReason, StreamSessionCurrent } from "@/server/api-v1/schemas";
 
@@ -228,26 +226,6 @@ export function createErrorText(error: { code: CreateFailureCode; holder: Create
   if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
   if (error.code === TARGET_REMOVED) return msg("stream.error.target_removed");
   return msg(CREATE_ERROR_KEYS[error.code]);
-}
-
-/** D2: which allowlist rule refused an ingest URL — the client-side check (`destinationRefusal`) and the server's 422
- *  `DESTINATION_NOT_ALLOWED { rule }` share this one map. */
-export const DESTINATION_REFUSAL_KEYS: Record<DestinationRefusal, MessageKey> = {
-  scheme: "stream.target.refused.scheme",
-  userinfo: "stream.target.refused.userinfo",
-  ip_literal: "stream.target.refused.ip_literal",
-  host: "stream.target.refused.host",
-  port: "stream.target.refused.port",
-  path: "stream.target.refused.path",
-};
-
-/** The rule off a 422 `DESTINATION_NOT_ALLOWED`, validated against the validator's own list — `null` for an unknown
- *  rule, another code, or an error that never reached the server. */
-export function targetRefusalRule(err: unknown): DestinationRefusal | null {
-  const w = wireError(err);
-  if (!w || w.code !== DESTINATION_NOT_ALLOWED) return null;
-  const rule = w.extra.rule;
-  return (DESTINATION_REFUSALS as readonly unknown[]).includes(rule) ? (rule as DestinationRefusal) : null;
 }
 
 export const INGEST_STATE_KEYS: Record<"connected" | "disconnected" | "unknown", MessageKey> = {
