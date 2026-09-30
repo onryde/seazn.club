@@ -7,8 +7,8 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 4857,
-  "inapplicable": 4840,
+  "total": 4868,
+  "inapplicable": 4851,
   "harnessGap": 14,
   "unscorableOnly": 3,
   "groups": [
@@ -2721,6 +2721,27 @@
         ],
         "stepladder_only": [
           "football",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "F1",
+      "kind": "inapplicable",
+      "reason": "an odd field cannot enter a fixed 4-seat page playoff (engine generatePagePlayoff: exactly 4) — unfit (ruling 6, case by case)",
+      "count": 11,
+      "cells": {
+        "page_playoff_only": [
+          "football",
+          "cricket",
           "boardgame",
           "carrom",
           "generic",

@@ -156,6 +156,14 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1-driving Task 2: the per-format field size every scripted scenario asks.
+  const W1DRV_T2 = ["lib/field-size.ts"];
+  it("W1-driving Task 2's modules are all in the walk", () => {
+    const missing = W1DRV_T2.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T2.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

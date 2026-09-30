@@ -2,9 +2,12 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { describe, expect, it } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
+import { RULES, decide } from "../lib/applicability.ts";
 import { SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { NoFieldSize } from "../lib/field-size.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
@@ -1391,5 +1394,78 @@ describe("skippedItem (m-5) — the locked fixtures withdrawal.ts reports it ski
   it("walkover plans pending fixtures only, and a pending fixture is never locked — it skips none", () => {
     expect(skippedItem("walkover", before, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
     expect(skippedItem("walkover", before, 2).ok).toBe(false);
+  });
+});
+
+describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-driving Task 2)", () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+  /** The one field size the ENGINE's page playoff accepts (generatePagePlayoff), never typed here. */
+  const ppField = ((): number => {
+    const ok = ids(16).map((_, i) => i + 1).filter((n) => n >= 2).filter((n) => { try { generatePagePlayoff({ entrants: ids(n) }); return true; } catch { return false; } });
+    if (ok.length !== 1) throw new Error(`the engine's page playoff accepts ${ok.length} sizes, expected exactly one`);
+    return ok[0]!;
+  })();
+  const ppRow = { row: "page_playoff_only" as const };
+
+  it("text pin: page_playoff is NOT a bracket-walkover kind, so a withdrawal takes the open-format branch (voids pending, forfeits nothing)", () => {
+    const stages = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+    const set = /export const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\)/.exec(stages)?.[1];
+    expect(set, "BRACKET_WALKOVER_KINDS literal not found").toBeDefined();
+    const kinds = [...set!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(kinds).toContain("knockout"); // the positive pair: the literal was read
+    expect(kinds).not.toContain("page_playoff");
+    const withdrawal = readFileSync(resolve(REPO, "apps/web/src/server/usecases/withdrawal.ts"), "utf8");
+    expect(withdrawal).toContain('if (PENDING.has(f.status)) plan.push({ update: { fixtureId: f.id, status: "void" }, fixture: f });');
+    expect(withdrawal).toContain('if (out.policy === "none" && plan.length > 0) out.policy = "walkover";');
+  });
+  it("empty case first: the old fixed 8 is refused by the engine's page playoff at Start — the harness red this task removes", async () => {
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    await expect(setUpDivision(ctxFor(driver, "LIFECYCLE", ppRow), new Recorder(), 8)).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(driver.fixtures).toEqual([]);
+  });
+  it("page_playoff_only LIFECYCLE adds exactly 4 entrants (the engine's page-playoff field), in one add, and the fake builds the engine's pp-* shape on them", async () => {
+    expect(ppField).toBe(4);
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    const r = await runOn(driver, "LIFECYCLE", ppRow);
+    expect(driver.calls.filter((c) => c === "addEntrants")).toHaveLength(1);
+    expect(driver.entrants.length).toBe(ppField);
+    expect(r.out.observed.stages[0]!.field).toHaveLength(ppField);
+    expect([...driver.extIds.keys()]).toEqual(generatePagePlayoff({ entrants: ids(ppField) }).fixtures.map((f) => f.id));
+    // A second, different row on the same scenario keeps the default 8 (the differing case).
+    const league = await runOn(new FakeLeagueDriver(), "LIFECYCLE");
+    expect(league.driver.entrants.length).toBe(8);
+  });
+  it("M1 and R4 seed the same 4 there", async () => {
+    for (const k of ["M1", "R4"] as const) {
+      const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+      await runOn(driver, k, ppRow);
+      expect(driver.entrants.length, k).toBe(ppField);
+    }
+  });
+  it("F1 on page_playoff_only is never planned: its applicability decision is a drop with the unfit reason; asked anyway, the scenario refuses by name before any driver call", async () => {
+    const d = decide(RULES.F1!, "page_playoff_only", "generic", []);
+    expect(d.applies).toBe(false);
+    expect(RULES.F1!.reason).toMatch(/odd field cannot enter a fixed 4-seat page playoff/);
+    expect(decide(RULES.F1!, "league", "generic", []).applies).toBe(true); // the positive pair
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    await expect(runOn(driver, "F1", ppRow)).rejects.toThrow(NoFieldSize);
+    expect(driver.calls).toEqual([]);
+  });
+  it("R4 once it seeds 4 (plan review 1 m-5, review 2 I-1): seed 3 wins pp-elim, withdraws, pp-q2 is ABANDONED, nothing forfeited, pp-final never seated, /complete asked once", async () => {
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    const r = await runOn(driver, "R4", ppRow);
+    const seed = (n: number) => driver.entrants.find((e) => e.seed === n)!.id;
+    const fx = (ext: string) => r.out.observed.stages[0]!.fixtures.find((f) => f.id === driver.extIds.get(ext))!;
+    // Seed 3 plays pp-elim in round 1 against seed 4 and, as the better seed, wins it.
+    expect(fx("pp-elim")).toMatchObject({ roundNo: 1, home: seed(3), away: seed(4), status: "decided", outcome: { kind: "win", winner: seed(3) } });
+    // So it is seated in pp-q2 (away: winnerOf pp-elim) against the loser of pp-q1 when it withdraws.
+    expect(fx("pp-q2")).toMatchObject({ home: seed(2), away: seed(3), status: "abandoned" });
+    const w = r.out.observed.withdrawal!;
+    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 0, voided: 1, skippedFinalized: 0 });
+    expect(r.out.observed.stages[0]!.fixtures.filter((f) => f.status === "forfeited")).toEqual([]);
+    // pp-final's away seat is winnerOf("pp-q2"), which never comes.
+    expect(fx("pp-final")).toMatchObject({ home: seed(1), away: null, status: "scheduled" });
+    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+    expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 200, code: null, completed: false });
   });
 });

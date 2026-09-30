@@ -2,11 +2,14 @@
 // CONSISTENT with the policy the engine reported; which policy SHOULD apply is
 // the rulebook's call (W2+). Canary: also judge the cascade against the
 // opposite policy.
+import { fieldSizeFor } from "../field-size.ts";
 import { isTerminal, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
 import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
+/** The scenario's default field. The call site asks fieldSizeFor, which
+ *  answers the FORMAT's field (a page playoff seeds 4; W1-driving Task 2). */
 const ENTRANTS = 8;
 /** withdrawal.ts applyUpdate: these are reported as skipped, never touched. */
 const LOCKED = new Set(["finalized", "cancelled"]);
@@ -67,7 +70,7 @@ export const r4Withdrawal: Scenario = {
   canaryCheck: "r4-cascade-consistent",
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, ENTRANTS);
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "R4"));
     const seed3 = setup.idOfSeed(3);
     let withdrawal: WithdrawalObs | null = null;
     await playStage(ctx, rec, setup, {

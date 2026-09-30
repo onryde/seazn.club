@@ -10,6 +10,7 @@
 // FakeKnockoutDriver does the same for a bracket (M1's progression, F1's
 // first-round-only rule).
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
+import { generatePagePlayoff, type GeneratedBracket } from "@seazn/engine/scheduling";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
@@ -395,20 +396,61 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  (stages.ts:2614+). Deciding a fixture fills its winner into the next
  *  round's slot (scoring.ts:729 → fillSlot, stages.ts:3567). Complete emits
  *  stage_completed with finalRanks: the champion, then losers by the round
- *  they went out in, later first, seed order within a round. Standings and
- *  withdraw are the table fake's — no test drives LIFECYCLE or R4 here. */
+ *  they went out in, later first, seed order within a round. Standings are
+ *  the table fake's, and so is a knockout's withdraw.
+ *
+ *  `pagePlayoff: true` (W1-driving Task 2) makes it a single page_playoff
+ *  stage instead: Start builds the ENGINE's own generatePagePlayoff shape
+ *  (pp-q1, pp-elim, pp-q2, pp-final; its round r is round_no r + 1), and
+ *  refuses any field but the engine's as the product's Start does (an
+ *  EngineError → its status). A pp-q1 LOSER feeds pp-q2 as well as its
+ *  winner feeding the final. page_playoff is not a bracket-walkover kind
+ *  (stages.ts BRACKET_WALKOVER_KINDS), so withdraw takes the product's
+ *  open-format branch (withdrawal.ts:213-217): every pending fixture of the
+ *  withdrawn entrant is voided (abandoned), nothing is forfeited, and the
+ *  policy reads "walkover" once anything was voided, "none" otherwise. */
+export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean }
+type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** fixture id → the next round's fixture and slot its winner fills. */
-  readonly feeds = new Map<string, { to: string; slot: "home_entrant_id" | "away_entrant_id" }>();
-  override acceptsStage(kind: string): boolean { return kind === "knockout"; }
-  override refuseStages(): never { throw new Error("fake: knockout only"); }
+  readonly feeds = new Map<string, { to: string; slot: Slot }>();
+  /** fixture id → the fixture and slot its LOSER fills (a page playoff's pp-q1 → pp-q2). */
+  readonly loserFeeds = new Map<string, { to: string; slot: Slot }>();
+  readonly pagePlayoff: boolean;
+  /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
+  readonly extIds = new Map<string, string>();
+  constructor(opts: FakeKnockoutOptions = {}, orgId = "org-fake") {
+    super(orgId);
+    this.pagePlayoff = opts.pagePlayoff === true;
+  }
+  override acceptsStage(kind: string): boolean { return kind === (this.pagePlayoff ? "page_playoff" : "knockout"); }
+  override refuseStages(): never { throw new Error(this.pagePlayoff ? "fake: page playoff only" : "fake: knockout only"); }
   override expungesEarly(): boolean { return false; }
   /** Whether a finished fixture's winner goes on — a test seam for a product
    *  that drops one. */
   carriesForward(_f: FakeFixture): boolean { return true; }
+  startPagePlayoff(): StartOut {
+    let bracket: GeneratedBracket;
+    try {
+      bracket = generatePagePlayoff({ entrants: this.entrants.map((e) => e.id), seeds: new Map(this.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER])) });
+    } catch (e) {
+      if (!EngineError.is(e)) throw e;
+      throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
+    }
+    for (const g of bracket.fixtures) this.extIds.set(g.id, this.seat(g.round + 1, g.home ?? null, g.away ?? null).id);
+    for (const g of bracket.fixtures) {
+      for (const [ref, slot] of [[g.homeFrom, "home_entrant_id"], [g.awayFrom, "away_entrant_id"]] as const) {
+        if (ref === undefined) continue;
+        (ref.side === "winner" ? this.feeds : this.loserFeeds).set(this.extIds.get(ref.fixtureId)!, { to: this.extIds.get(g.id)!, slot });
+      }
+    }
+    this.stage!.status = "active";
+    return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+  }
   override start(): Promise<StartOut> {
     return settle(() => {
       this.log("start");
+      if (this.pagePlayoff) return this.startPagePlayoff();
       const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
       let order = [1, 2];
       while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
@@ -429,8 +471,22 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   feed(f: FakeFixture): void {
     const w = (f.outcome as { winner?: unknown } | null)?.winner;
     const to = this.feeds.get(f.id);
-    if (typeof w !== "string" || to === undefined || !this.carriesForward(f)) return;
-    Object.assign(this.fixtures.find((x) => x.id === to.to)!, { [to.slot]: w });
+    const lo = this.loserFeeds.get(f.id);
+    if (typeof w !== "string" || (to === undefined && lo === undefined) || !this.carriesForward(f)) return;
+    if (to !== undefined) Object.assign(this.fixtures.find((x) => x.id === to.to)!, { [to.slot]: w });
+    const loser = w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id;
+    if (lo !== undefined && loser !== null) Object.assign(this.fixtures.find((x) => x.id === lo.to)!, { [lo.slot]: loser });
+  }
+  override async withdraw(entrantId: string): Promise<WithdrawOut> {
+    if (!this.pagePlayoff) return super.withdraw(entrantId);
+    this.log("withdraw");
+    let voided = 0;
+    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+      await this.abandonFixture(f);
+      voided++;
+    }
+    this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
+    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const out = await super.postStream(id, events, prefix);
@@ -448,7 +504,8 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       for (const f of this.fixtures) {
         const w = (f.outcome as { winner?: unknown } | null)?.winner;
         if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
-        out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
+        // A loser that plays on (a page playoff's pp-q1) is not out yet.
+        if (!this.loserFeeds.has(f.id)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
         if (!this.feeds.has(f.id)) champion = w;
       }
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));

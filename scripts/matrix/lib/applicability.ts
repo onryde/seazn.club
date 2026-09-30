@@ -149,6 +149,9 @@ const or = (...ps: Predicate[]): Predicate => (f) => ps.some((p) => p(f));
 const not = (p: Predicate): Predicate => (f) => !p(f);
 const hasKind = (...kinds: readonly string[]): Predicate => (f) => f.stages.some((s) => kinds.includes(s.kind));
 const multiStage: Predicate = (f) => f.stages.length > 1;
+/** A single page-playoff stage: the engine's fixed 4-seat shape (generatePagePlayoff:
+ *  exactly 4 entrants), so no odd field can enter it (W1-driving Task 2). */
+const onlyPagePlayoff: Predicate = (f) => f.stages.length === 1 && f.stages[0].kind === "page_playoff";
 const entrant = (...kinds: string[]): Predicate => (f) => f.entrantKinds.some((k) => kinds.includes(k));
 
 /** Text-pinned copy of the product's points-table kinds
@@ -318,7 +321,8 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   M12a: rule(entrant("team"), `${NO_TEAM}: no substitute can come on for an injured player`, "league|football", "league|badminton"),
   M12b: rule(entrant("team"), `${NO_TEAM}: there is no team to play short`, "league|football", "league|badminton"),
   M12c: rule(declaresEvent("cricket.retire"), "the sport declares no retired-hurt event (module eventSchemas has no cricket.retire; ruling 30: cricket only)", "league|cricket", "league|football"),
-  F1: ALWAYS, F2: ALWAYS,
+  F1: rule(not(onlyPagePlayoff), "an odd field cannot enter a fixed 4-seat page playoff (engine generatePagePlayoff: exactly 4) — unfit (ruling 6, case by case)", T, "page_playoff_only|generic"),
+  F2: ALWAYS,
   F3: rule(hasKind("knockout", "double_elim"), "no knockout or double-elimination bracket in this row: nothing to size to a power of two", [KO, "double_elim|generic"], T),
   F4: rule(hasKind("group"), "no pooled (group) stage in this row", "groups_ko|generic", T),
   F5a: rule(table, `${NO_TABLE}: no points to tie on`, T, LADDER),

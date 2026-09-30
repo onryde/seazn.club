@@ -1,10 +1,13 @@
 // M1: seed 1's first opponent does not turn up. The walkover is recorded for
 // seed 1 and, in a bracket, seed 1 goes on. Canary: ALSO expect the ABSENT side.
+import { fieldSizeFor } from "../field-size.ts";
 import { winnerOf } from "../observed.ts";
 import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, decideFixture, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
+/** The scenario's default field. The call site asks fieldSizeFor, which
+ *  answers the FORMAT's field (a page playoff seeds 4; W1-driving Task 2). */
 const ENTRANTS = 8;
 const BRACKETS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
 
@@ -16,7 +19,7 @@ export const m1Walkover: Scenario = {
   canaryCheck: "m1-walkover-recorded",
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, ENTRANTS);
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "M1"));
     const seed1 = setup.idOfSeed(1);
     let target: Target | null = null;
     await playStage(ctx, rec, setup, {

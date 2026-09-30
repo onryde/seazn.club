@@ -1,10 +1,13 @@
 // F1: an odd field of 7. Everyone is drawn, and each inspected round seats
 // floor(7/2) pairs with one sit-out. Canary: also expect ceil — the answer
 // that differs from the right one.
+import { fieldSizeFor } from "../field-size.ts";
 import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
+/** The scenario's default field. The call site asks fieldSizeFor, which
+ *  answers the FORMAT's field (a page playoff seeds 4; W1-driving Task 2). */
 const ENTRANTS = 7;
 
 export const f1OddField: Scenario = {
@@ -13,7 +16,7 @@ export const f1OddField: Scenario = {
   canaryCheck: "f1-round-size",
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, ENTRANTS);
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "F1"));
     await playStage(ctx, rec, setup);
     const complete = await finishStage(ctx, rec, setup);
     const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });

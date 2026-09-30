@@ -11,6 +11,7 @@ import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, StageKind } from "@seazn/engine/core";
 import { BRACKET_STAGE_KINDS, withdrawTableEntrant } from "@seazn/engine/competition";
+import { generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
 import { describe, expect, it } from "vitest";
 import { configKeysFor } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
@@ -214,6 +215,31 @@ describe("applicability — predicates against the product's own declarations", 
       judged++;
     }
     expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+  });
+  it("F1 (an odd field) applies everywhere but a lone page playoff, whose ENGINE generator takes exactly one even size (W1-driving Task 2)", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+    // The premise, from the engine: a page playoff refuses the odd field F1 seeds; a stepladder (another fixed-shape bracket) takes it — the differing case.
+    expect(() => generatePagePlayoff({ entrants: ids(7) })).toThrow(EngineError);
+    expect(generateStepladder({ entrants: ids(7) }).fixtures.length).toBe(6);
+    expect(RULES.F1!.witness).toMatchObject({ keep: { cell: "league|generic" }, drop: { cell: "page_playoff_only|generic" } });
+    let judged = 0;
+    let dropped = 0;
+    for (const row of ROW_KEYS) for (const s of SPORT_KEYS) {
+      const bodies = stagesForRow(row);
+      const lonePagePlayoff = bodies.length === 1 && bodies[0]!.kind === "page_playoff";
+      expect(RULES.F1!.when(cellFacts(row, s)), `${row}|${s}`).toBe(!lonePagePlayoff);
+      judged++;
+      if (lonePagePlayoff) dropped++;
+    }
+    expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+    expect(dropped).toBe(SPORT_KEYS.length); // one row, every sport
+    // A multi-stage row that ENDS in a page playoff seeds its first stage, not the playoff: F1 still applies.
+    expect(stagesForRow("group_playoffs").some((b) => b.kind === "page_playoff")).toBe(true);
+    expect(RULES.F1!.when(cellFacts("group_playoffs", "generic"))).toBe(true);
+    // The planned drops carry it, kind inapplicable, one per sport.
+    const f1 = base.drops.filter((d) => d.scenario === "F1");
+    expect(f1.map((d) => d.cell).sort()).toEqual(SPORT_KEYS.map((s) => `page_playoff_only|${s}`).sort());
+    for (const d of f1) expect(d, d.cell).toMatchObject({ kind: "inapplicable", reason: expect.stringMatching(/odd field cannot enter a fixed 4-seat page playoff/) });
   });
   it("M5 applies exactly where a DRAW the sport allows somewhere is refused by some stage (supportsDraws), or a TIE the engine folds reaches a bracket stage (registry sweep)", () => {
     let judged = 0;
