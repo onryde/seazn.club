@@ -3,6 +3,9 @@
 // list, restated as a leaf for the modules that may not load the browser layer.
 // pad-adapters.test.ts pins the two equal.
 import { badmintonPad } from "./badminton.ts";
+import { boardgamePad } from "./boardgame.ts";
+import { carromPad } from "./carrom.ts";
+import { cricketPad } from "./cricket.ts";
 import { footballPad } from "./football.ts";
 import { genericPad } from "./generic.ts";
 import { hockeyPad } from "./hockey.ts";
@@ -14,6 +17,9 @@ import { volleyballPad } from "./volleyball.ts";
 
 export const PAD_ADAPTERS: Readonly<Partial<Record<string, MatrixPadAdapter>>> = Object.freeze({
   football: footballPad,
+  cricket: cricketPad,
+  boardgame: boardgamePad,
+  carrom: carromPad,
   generic: genericPad,
   volleyball: volleyballPad,
   badminton: badmintonPad,

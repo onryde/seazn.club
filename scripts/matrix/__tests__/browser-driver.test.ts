@@ -23,7 +23,7 @@ import {
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
 import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
-import { PAD_OWNER } from "../lib/pad-sports.ts";
+import { noPadReason } from "../lib/pad-sports.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import type { ReplayDeps, ReplayResult } from "../lib/pads/replay.ts";
@@ -1023,13 +1023,15 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
 
   it("a sport with no adapter is not tapped: it goes over http, and pad-route abstains ONCE naming the task that owes it; coverage still reds score", async () => {
     const r = fakeReplay(OK);
-    const { driver, http } = make({ http: padHttp(), spec: spec("league", "cricket"), pads: PAD_ADAPTERS, replay: r.fn });
+    // Every catalogue sport has an adapter since W1c Task 11, so the registry here lacks cricket's.
+    const pads = Object.fromEntries(Object.entries(PAD_ADAPTERS).filter(([k]) => k !== "cricket"));
+    const { driver, http } = make({ http: padHttp(), spec: spec("league", "cricket"), pads, replay: r.fn });
     await built(driver, spec("league", "cricket"));
     await driver.postStream("f1", EVENTS, "p");
     await driver.postStream("f1", EVENTS, "q");
     expect(r.calls).toEqual([]);
     expect(http.calls.filter((c) => c === "postStream")).toHaveLength(2);
-    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: `no pad adapter for cricket yet → ${PAD_OWNER.cricket}` });
+    expect(only(driver, "pad-route")).toMatchObject({ verdict: "abstain", checked: 0, reason: noPadReason("cricket") });
     expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "fail", evidence: ["score: invoked 2×, never in the browser"] });
   });
 

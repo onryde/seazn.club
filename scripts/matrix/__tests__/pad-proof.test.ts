@@ -3,6 +3,7 @@
 // outcomes come from the engine's own drawsAllowed, never from pad-proof.ts,
 // and the set's cases come from the pad registry and the DB's variant order.
 import { describe, expect, it } from "vitest";
+import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { winnerOf } from "../lib/observed.ts";
 import { PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
@@ -156,13 +157,28 @@ describe("PADPROOF", () => {
 
   it("a sport with no pad adapter is refused by name (NoPadAdapter), naming the task that owes it, before any driver call", async () => {
     const d = new FakePadDriver();
-    const sport = "cricket"; // owed by W1c Task 11 until its adapter lands
+    // Since W1c Task 11 every catalogue sport has an adapter (carry f), so the
+    // refusal is reached with a sport the catalogue does not have.
+    const sport = "curling";
     expect(PAD_SPORTS).not.toContain(sport);
-    const err = await padProof.run(ctxOf(d, sport)).catch((e: unknown) => e);
+    expect(SPORT_KEYS).not.toContain(sport);
+    const base = ctxOf(d, "generic");
+    const err = await padProof.run({ ...base, spec: { ...base.spec, caseId: `league|${sport}|x|PADPROOF`, sport } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(NoPadAdapter);
     expect(err).not.toBeInstanceOf(ScenarioUnsupported);
     expect((err as Error).message).toContain(noPadReason(sport));
     expect(d.calls).toEqual([]);
+  });
+
+  it("carry (f): NoPadAdapter is unreachable for every catalogue sport — each passes the PAD_SPORTS gate (11 checked)", async () => {
+    let checked = 0;
+    for (const sport of SPORT_KEYS) {
+      const d = new FakePadDriver();
+      const err = await padProof.run(ctxOf(d, sport)).catch((e: unknown) => e);
+      expect(err, sport).not.toBeInstanceOf(NoPadAdapter);
+      checked++;
+    }
+    expect(checked).toBe(11);
   });
 });
 

@@ -7,6 +7,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { boardgame } from "@seazn/engine/sports/boardgame";
+import { carrom } from "@seazn/engine/sports/carrom";
+import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
 import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
@@ -19,6 +22,9 @@ import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { PAD_OWNER, PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
 import { foldStream } from "../lib/fold.ts";
+import { BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
+import { CARROM_BOARD, CARROM_BOARD_TILE, carromPad } from "../lib/pads/carrom.ts";
+import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
 import { FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, footballGoalTile, footballPad } from "../lib/pads/football.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
@@ -32,6 +38,7 @@ import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
 import { compareRow, replayEvents, type ReplayResult } from "../lib/pads/replay.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
+import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { GeneratorUnsupported, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -97,6 +104,21 @@ describe("the pad adapter registry", () => {
       expect(noPadReason(s)).toBe(`no pad adapter for ${s} yet → ${owner}`);
     }
     expect(owned.length).toBe(SPORT_KEYS.length - PAD_SPORTS.length);
+  });
+
+  it("carry (f): every catalogue sport has an adapter — PAD_ADAPTERS covers all 11 SPORT_KEYS in order, and nothing is owed", () => {
+    let checked = 0;
+    for (const s of SPORT_KEYS) {
+      expect(PAD_ADAPTERS[s], s).toBeDefined();
+      expect(PAD_ADAPTERS[s]!.sport, s).toBe(s);
+      expect(PAD_SPORTS, s).toContain(s);
+      checked++;
+    }
+    expect(checked).toBe(11);
+    expect(Object.keys(PAD_ADAPTERS)).toEqual([...SPORT_KEYS]);
+    expect(Object.keys(PAD_OWNER)).toEqual([]);
+    // A sport the catalogue gains later, with no adapter, still names a wave.
+    expect(noPadReason("curling")).toBe("no pad adapter for curling yet → W1c (no task owns it)");
   });
 });
 
@@ -729,5 +751,354 @@ describe("the period kernel pins (hockey + icehockey share period-shared.ts)", (
       expect(sportModule(key)).toBe(m);
       expect(Object.keys(m.eventSchemas ?? {})).toEqual(expect.arrayContaining([`${key}.goal`, `${key}.period.advance`]));
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 11: cricket, boardgame, carrom.
+
+const NUM_SEL = selectorForTapStep({ kind: "number", value: 0 });
+const CONFIRM_SEL = selectorForTapStep({ kind: "confirm" });
+const HALF_SEL = (side: "home" | "away") => selectorForTapStep({ kind: "half", side });
+const CHIP_SEL = (chipId: string) => selectorForTapStep({ kind: "chip", chipId });
+const numberOf = (tap: string): number | null => (tap.startsWith(`${NUM_SEL}=`) ? Number(tap.slice(NUM_SEL.length + 1)) : null);
+const asEvents = (rows: readonly (LedgerRow | RowIn)[]): StreamEvent[] => rows.map((r) => ({ type: r.type, payload: r.payload }));
+interface InningsLike { runs: number; wickets: number; legalBalls: number; closed: boolean }
+
+/** cricket as Step 0 saw it (2026-09-30, 320, t20): an over sheet is the
+ *  overSummary tile, then runs, wickets and balls, each a number and a
+ *  confirm. It writes ONE row per over: this over added onto the fold's open
+ *  innings (0/0/0 when none is open), `partial: true`. Once the engine has an
+ *  outcome the tile is gone, so an over sheet after it writes nothing. */
+function cricketModel(ctx: TapAdapterContext) {
+  return (taps: readonly string[], ledger: readonly LedgerRow[]): RowIn[] => {
+    if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
+    const out: RowIn[] = [];
+    for (let i = 0; i + 7 <= taps.length; i += 7) {
+      const c = taps.slice(i, i + 7);
+      const [r, w, b] = [numberOf(c[1]!), numberOf(c[3]!), numberOf(c[5]!)];
+      if (c[0] !== TILE("overSummary") || c[2] !== CONFIRM_SEL || c[4] !== CONFIRM_SEL || c[6] !== CONFIRM_SEL || r === null || w === null || b === null) return out;
+      const folded = foldStream(cricket, ctx.cfg, ctx.entrants.home, ctx.entrants.away, asEvents([...ledger, ...out]));
+      if (folded.outcome !== null) return out;
+      const open = ((folded.state as { innings?: InningsLike[] }).innings ?? []).find((x) => !x.closed);
+      const base = open ?? { runs: 0, wickets: 0, legalBalls: 0 };
+      out.push({ type: "cricket.innings.summary", payload: { runs: base.runs + r, wickets: base.wickets + w, legalBalls: base.legalBalls + b, partial: true } });
+    }
+    return out;
+  };
+}
+
+describe("cricket", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "cricket.tsx"), "utf8"); });
+
+  it("cricket: over steps sum to the generated innings, and rowsFor matches — both innings of both outcomes, every generated variant, ballsPerOver from the engine cfg", () => {
+    const summary = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUMMARY);
+    expect(summary, "cricket.innings.summary is declared a fallback").toBeDefined();
+    let innings = 0;
+    for (const v of variantKeys("cricket")) {
+      const cfg = resolveSportCfg("cricket", v);
+      const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
+      for (const winner of ["home", "away"] as const) {
+        const r = req("cricket", cfg, { kind: "win", winner });
+        const evs = streamOf(r);
+        if (evs.length === 0) continue;
+        cricketPad.stepsFor(START, ctxOf(r));
+        for (const e of evs.filter((x) => x.type === CRICKET_SUMMARY)) {
+          const p = e.payload as { runs: number; wickets: number; legalBalls: number };
+          const overs = overSplit(p, bpo);
+          const at = `${v} ${winner} ${JSON.stringify(p)}`;
+          expect(overs.length, at).toBe(Math.ceil(p.legalBalls / bpo));
+          expect(overs.reduce((s, o) => s + o.runs, 0), at).toBe(p.runs);
+          expect(overs.reduce((s, o) => s + o.wickets, 0), at).toBe(p.wickets);
+          expect(overs.reduce((s, o) => s + o.balls, 0), at).toBe(p.legalBalls);
+          for (const [k, o] of overs.entries()) {
+            expect(o.balls, at).toBeLessThanOrEqual(bpo);
+            expect(o.balls, at).toBeGreaterThanOrEqual(1);
+            // The brief's spread: floor(runs/overs) on every over but the last, which takes the remainder,
+            // so a chase never passes its target before its last over.
+            if (k < overs.length - 1) expect({ runs: o.runs, balls: o.balls, wickets: o.wickets }, at).toEqual({ runs: Math.floor(p.runs / overs.length), balls: bpo, wickets: 0 });
+          }
+          const steps = cricketPad.stepsFor(e, ctxOf(r));
+          expect(steps, at).toEqual(overs.flatMap((o) => [
+            { kind: "tile", tileId: CRICKET_OVER_TILE },
+            { kind: "number", value: o.runs }, { kind: "confirm" },
+            { kind: "number", value: o.wickets }, { kind: "confirm" },
+            { kind: "number", value: o.balls }, { kind: "confirm" },
+          ]));
+          // Step 0: every generated innings ends itself (balls out, or the chase past its target), so no close row.
+          expect(summary!.rowsFor(e, ctxOf(r)), at).toBe(Math.ceil(p.legalBalls / bpo));
+          innings++;
+        }
+      }
+    }
+    console.info(`pad-adapters: cricket: ${innings} generated innings split into overs`);
+    expect(innings).toBeGreaterThanOrEqual(4); // t20 alone: 2 innings × 2 outcomes
+  });
+
+  it("replayed on the fake ledger: every innings a fallback of one row per over, no finding, and the stored rows fold to the requested outcome", async () => {
+    const cfg = resolveSportCfg("cricket", offlineBuilderDefault("cricket"));
+    const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
+    let cases = 0;
+    const rowsPer: number[] = [];
+    for (const winner of ["home", "away"] as const) {
+      const r = req("cricket", cfg, { kind: "win", winner });
+      const evs = generateStream(r);
+      const { res, ledger } = await replayOnModel(cricketPad, evs, ctxOf(r), cricketModel(ctxOf(r)));
+      expect(res.findings, winner).toEqual([]);
+      expect(res.rows.map((x) => x.verdict)).toEqual(["equal", "fallback", "fallback"]);
+      for (const row of res.rows.slice(1)) {
+        expect(row.stored.length).toBe(Math.ceil((row.expected.payload as { legalBalls: number }).legalBalls / bpo));
+        rowsPer.push(row.stored.length);
+      }
+      const folded = foldStream(cricket, cfg, HOME, AWAY, asEvents(ledger));
+      expect(matchesRequest(r, folded.outcome), winner).toBe("match");
+      cases++;
+    }
+    expect(cases).toBe(2);
+    expect(rowsPer).toEqual([20, 20, 20, 10]); // t20: 120 balls = 20 overs; the away chase 60 balls = 10
+  });
+
+  it("an innings the engine would not close itself, a chase past its target before its last over, a third innings, or no core.start is refused by name", () => {
+    const cfg = resolveSportCfg("cricket", offlineBuilderDefault("cricket"));
+    const B = (cfg as { ballsPerInnings: number }).ballsPerInnings;
+    const allOut = declaredAllOut(cricket.padSpec?.(cfg as never));
+    const ctx = (tag: string): TapAdapterContext => ({ cfg, entrants: { home: `${tag}-h`, away: `${tag}-a` } });
+    const sum = (runs: number, wickets: number, legalBalls: number): StreamEvent => ({ type: CRICKET_SUMMARY, payload: { runs, wickets, legalBalls } });
+    expect(() => cricketPad.stepsFor(sum(100, 2, B), ctx("nostart"))).toThrow(/before core\.start/);
+    const open = ctx("open");
+    cricketPad.stepsFor(START, open);
+    expect(() => cricketPad.stepsFor(sum(100, 2, B - 6), open)).toThrow(/innings 1 would stay open/);
+    // Its positive pair: a short innings all out closes itself — here mid-over,
+    // so the last over is short (every generated innings ends on a full over).
+    const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
+    const allOutSteps = cricketPad.stepsFor(sum(100, allOut, B - 4), open);
+    const balls = allOutSteps.filter((x, i) => x.kind === "number" && i % 7 === 5).map((x) => (x as { value: number }).value);
+    expect(balls.length).toBe(Math.ceil((B - 4) / bpo));
+    expect(balls.at(-1)).toBe(B - 4 - bpo * (balls.length - 1));
+    expect(balls.at(-1)).not.toBe(bpo);
+    expect(balls.reduce((a, b) => a + b, 0)).toBe(B - 4);
+    const chase = ctx("chase");
+    cricketPad.stepsFor(START, chase);
+    cricketPad.stepsFor(sum(180, 4, B), chase);
+    expect(() => cricketPad.stepsFor(sum(300, 3, 60), chase)).toThrow(/the chase passes its target \(181\) at over 7 of 10/);
+    expect(cricketPad.stepsFor(sum(181, 3, 60), chase).length).toBe(10 * 7);
+    expect(() => cricketPad.stepsFor(sum(10, 1, 6), chase)).toThrow(/a third innings/);
+    const shape = ctx("shape");
+    cricketPad.stepsFor(START, shape);
+    for (const payload of [null, { runs: 1, wickets: 0 }, { runs: 1, wickets: 0, legalBalls: 0 }, { runs: -1, wickets: 0, legalBalls: B }, { runs: 1.5, wickets: 0, legalBalls: B }, { runs: 1, wickets: 0, legalBalls: B, partial: true }, { runs: 1, wickets: 0, legalBalls: B + 1 }] as unknown[]) {
+      expect(() => cricketPad.stepsFor({ type: CRICKET_SUMMARY, payload }, shape), JSON.stringify(payload)).toThrow(/is not \{runs, wickets, legalBalls\}/);
+    }
+    expect(() => cricketPad.stepsFor({ type: "cricket.ball", payload: {} }, shape)).toThrow(/cricket\.ball/);
+  });
+
+  it("Step 0: an over row (cumulative, partial: true) mismatches the generated non-partial summary, which is why the innings is a fallback", () => {
+    const { sums } = summariesOf("cricket", CRICKET_SUMMARY, "away");
+    const last = { id: "r21", seq: 21, type: CRICKET_SUMMARY, payload: { runs: 150, partial: true, wickets: 5, legalBalls: 120 } };
+    expect(sums[0]!.payload).toEqual({ runs: 150, wickets: 5, legalBalls: 120 });
+    expect(compareRow(sums[0]!, last, cricketPad).verdict).toBe("mismatch");
+    expect(cricketPad.fallbacks.map((f) => f.eventType)).toEqual([CRICKET_SUMMARY]);
+    expect(cricketPad.tolerableExtraKeys?.(CRICKET_SUMMARY) ?? []).toEqual([]);
+  });
+
+  it("pins: the overSummary tile, its sheet's three steps in order with balls opening at ballsPerOver, the partial payload at the line the fallback cites, and the engine's event", () => {
+    expect(skin).toMatch(/if \(fidelity !== "fine"\) \{[\s\S]{0,1400}?tiles\.push\(superOverTile\(dueAwareTile\(\{\s*id: "overSummary",/);
+    const tile = /tiles\.push\(superOverTile\(dueAwareTile\(\{\s*id: "([^"]+)",/.exec(skin);
+    expect(CRICKET_OVER_TILE).toBe(tile![1]);
+    expect(skin).toContain(`action: { sheet: "${CRICKET_OVER_TILE}" },`);
+    expect(skin).toContain(`${CRICKET_OVER_TILE}: overSummarySheet(view),`);
+    expect(skin).toMatch(/\{ id: "runs", kind: "number",[^}]*initial: 0,[^}]*\},\s*\{ id: "wickets", kind: "number",[^}]*initial: 0,[^}]*\},\s*\{ id: "balls", kind: "number",[^}]*initial: bpo,[^}]*\},/);
+    expect(skin).toMatch(/event: "cricket\.innings\.summary",\s*steps,\s*buildPayload: \(answers\) => \(\{\s*runs: runs \+ Number\(answers\.runs\),\s*wickets: wickets \+ Number\(answers\.wickets\),\s*legalBalls: legalBalls \+ Number\(answers\.balls\),\s*partial: true,/);
+    const f = cricketPad.fallbacks[0]!;
+    const cite = /cricket\.tsx:(\d+)/.exec(f.why);
+    expect(cite, f.why).not.toBeNull();
+    expect(skin.split("\n")[Number(cite![1]) - 1]!.trim()).toBe("partial: true,");
+    expect(sportModule("cricket")).toBe(cricket);
+    expect(Object.keys(cricket.eventSchemas ?? {})).toContain(CRICKET_SUMMARY);
+  });
+});
+
+/** boardgame as Step 0 saw it (tapModel S): a half or the draw tile HOLDS a
+ *  result — `{winner}` from the half's side, `{winner: null}` from the draw
+ *  tile — a method chip rewrites the held `method`, and the hold's release
+ *  writes the one row. */
+function boardgameModel(ctx: TapAdapterContext) {
+  return (taps: readonly string[]): RowIn[] => {
+    if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
+    let held: Record<string, unknown> | null = null;
+    for (const t of taps) {
+      if (t === HALF_SEL("home")) held = { winner: ctx.entrants.home };
+      else if (t === HALF_SEL("away")) held = { winner: ctx.entrants.away };
+      else if (t === TILE("draw")) held = { winner: null };
+      else if (held !== null && t.startsWith(CHIP_SEL("method:").slice(0, -2))) {
+        const m = /pad-dock-chip-method:([^"]+)"/.exec(t);
+        if (m !== null) held = { ...(held as Record<string, unknown>), method: m[1] };
+      }
+    }
+    return held === null ? [] : [{ type: "boardgame.result", payload: held }];
+  };
+}
+
+describe("boardgame", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "boardgame.tsx"), "utf8"); });
+  const listOf = (name: string): string[] => {
+    const m = new RegExp(`export const ${name}: readonly string\\[\\] = \\[([^\\]]*)\\];`).exec(skin);
+    expect(m, `boardgame.tsx no longer exports ${name} as a literal list`).not.toBeNull();
+    return [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+  };
+
+  it("boardgame: a draw's steps never tap a half — the draw tile then its method chip; a win is the winner's half then its method chip", () => {
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    let draws = 0;
+    let wins = 0;
+    for (const outcome of outcomesFor("boardgame", cfg).filter((o) => o.kind !== "forfeit")) {
+      const r = req("boardgame", cfg, outcome);
+      for (const e of generateStream(r).filter((x) => x.type === BOARDGAME_RESULT)) {
+        const p = e.payload as { winner: string | null; method: string };
+        const steps = boardgamePad.stepsFor(e, ctxOf(r));
+        if (p.winner === null) {
+          expect(steps.some((s) => s.kind === "half")).toBe(false);
+          expect(steps).toEqual([{ kind: "tile", tileId: BOARDGAME_DRAW_TILE }, { kind: "chip", chipId: methodChipId(p.method) }]);
+          draws++;
+        } else {
+          const side = p.winner === HOME ? "home" : "away";
+          expect(steps).toEqual([{ kind: "half", side }, { kind: "chip", chipId: methodChipId(p.method) }]);
+          wins++;
+        }
+      }
+    }
+    expect({ draws, wins }).toEqual({ draws: 1, wins: 2 });
+  });
+
+  it("replayed on the fake ledger: every result row equal, and the stored rows fold to the requested outcome", async () => {
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    let cases = 0;
+    for (const outcome of outcomesFor("boardgame", cfg).filter((o) => o.kind !== "forfeit")) {
+      const r = req("boardgame", cfg, outcome);
+      const { res, ledger } = await replayOnModel(boardgamePad, generateStream(r), ctxOf(r), boardgameModel(ctxOf(r)));
+      expect(res.findings, JSON.stringify(outcome)).toEqual([]);
+      expect(res.rows.map((x) => x.verdict)).toEqual(["equal", "equal"]);
+      expect(matchesRequest(r, foldStream(boardgame, cfg, HOME, AWAY, asEvents(ledger)).outcome), JSON.stringify(outcome)).toBe("match");
+      cases++;
+    }
+    expect(cases).toBe(3);
+  });
+
+  it("a result by no entrant, with no method, or with a key past {winner, method} is refused by name", () => {
+    const r = req("boardgame", resolveSportCfg("boardgame", offlineBuilderDefault("boardgame")), { kind: "win", winner: "home" });
+    for (const payload of [null, { winner: "stranger", method: "checkmate" }, { winner: HOME }, { winner: HOME, method: "" }, { winner: null }, { winner: HOME, method: "checkmate", moves: 40 }] as unknown[]) {
+      expect(() => boardgamePad.stepsFor({ type: BOARDGAME_RESULT, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not \{winner: an entrant of the fixture or null, method\}/);
+    }
+    expect(() => boardgamePad.stepsFor({ type: "boardgame.pairing", payload: {} }, ctxOf(r))).toThrow(/boardgame\.pairing/);
+  });
+
+  it("Step 0: the rows Step 0 saw ({method, winner}) are equal to the generated results; no fallback, no tolerated key", () => {
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    let checked = 0;
+    for (const outcome of [{ kind: "win", winner: "home" }, { kind: "draw" }] as const) {
+      const e = generateStream(req("boardgame", cfg, outcome)).find((x) => x.type === BOARDGAME_RESULT)!;
+      const seen = outcome.kind === "draw" ? { method: "agreement", winner: null } : { method: "checkmate", winner: HOME };
+      expect(compareRow(e, { id: "r2", seq: 2, type: BOARDGAME_RESULT, payload: seen }, boardgamePad)).toEqual({ verdict: "equal", note: null });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(boardgamePad.fallbacks).toEqual([]);
+  });
+
+  it("pins: the draw tile id and its {winner: null}, the method chip id shape, tap model S, the result type, and every generated method is a chip the dock offers", () => {
+    const tile = /export const DRAW_TILE_ID = "([^"]+)";/.exec(skin);
+    expect(tile, "boardgame.tsx no longer exports DRAW_TILE_ID").not.toBeNull();
+    expect(BOARDGAME_DRAW_TILE).toBe(tile![1]);
+    expect(skin).toMatch(/id: DRAW_TILE_ID,[\s\S]{0,200}?action: \{ event: \{ type: RESULT_TYPE, payload: \{ winner: null \} \} \},/);
+    expect(skin).toContain("id: `method:${method}`,");
+    expect(methodChipId("checkmate")).toBe("method:checkmate");
+    expect(skin).toContain('tapModel: "S",');
+    expect(skin).toContain("export const RESULT_TYPE = `${SPORT}.result`;");
+    expect(skin).toContain('const SPORT = "boardgame";');
+    expect(Object.keys(boardgame.eventSchemas ?? {})).toContain(BOARDGAME_RESULT);
+    const decisive = listOf("DECISIVE_METHODS");
+    const drawn = listOf("DRAWN_METHODS");
+    let checked = 0;
+    for (const r of requestsFor("boardgame")) {
+      for (const e of streamOf(r).filter((x) => x.type === BOARDGAME_RESULT)) {
+        const p = e.payload as { winner: string | null; method: string };
+        expect(p.winner === null ? drawn : decisive, JSON.stringify(p)).toContain(p.method);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+/** carrom as Step 0 saw it (club-29): the board tile, the winner's side as a
+ *  choice, the opponent's coins as a number, confirm — one row at once, with
+ *  no hold and no `queenTo` key. */
+function carromModel(ctx: TapAdapterContext) {
+  return (taps: readonly string[]): RowIn[] => {
+    if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
+    if (taps.length !== 4 || taps[0] !== TILE("board") || taps[3] !== CONFIRM_SEL) return [];
+    const side = CHOICE_ID.exec(taps[1]!)?.[1];
+    const coins = numberOf(taps[2]!);
+    if ((side !== "home" && side !== "away") || coins === null) return [];
+    return [{ type: "carrom.board.summary", payload: { winner: ctx.entrants[side], opponentCoinsLeft: coins } }];
+  };
+}
+
+describe("carrom", () => {
+  let skin = "";
+  beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "carrom.tsx"), "utf8"); });
+
+  it("carrom: queenTo null ≡ absent only for board.summary", () => {
+    expect(carromPad.nullAsAbsentKeys?.(CARROM_BOARD)).toEqual(["queenTo"]);
+    let checked = 0;
+    for (const t of ["carrom.adjust", "carrom.toss", "core.start"]) {
+      expect(carromPad.nullAsAbsentKeys?.(t) ?? [], t).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    const { sums } = summariesOf("carrom", CARROM_BOARD, "home");
+    const seen = { id: "r2", seq: 2, type: CARROM_BOARD, payload: { winner: HOME, opponentCoinsLeft: 9 } };
+    expect(compareRow(sums[0]!, seen, carromPad)).toEqual({ verdict: "equal", note: null });
+    // Only a NULL queenTo is excused: a queen awarded to a side is not the absent key.
+    expect(compareRow({ ...sums[0]!, payload: { ...(sums[0]!.payload as object), queenTo: HOME } }, seen, carromPad).verdict).toBe("mismatch");
+    // And another type's null key is not excused.
+    expect(compareRow({ type: "carrom.adjust", payload: { by: HOME, note: null } }, { id: "r3", seq: 3, type: "carrom.adjust", payload: { by: HOME } }, carromPad).verdict).toBe("mismatch");
+  });
+
+  it("routes: the board tile, the winner's side, the opponent's coins, confirm; a queen board, coins off 0..9, or a stranger winner is refused by name", () => {
+    const { r, sums } = summariesOf("carrom", CARROM_BOARD, "away");
+    expect(carromPad.stepsFor(sums[0]!, ctxOf(r))).toEqual([{ kind: "tile", tileId: CARROM_BOARD_TILE }, { kind: "choice", optionId: "away" }, { kind: "number", value: 9 }, { kind: "confirm" }]);
+    for (const payload of [null, { winner: HOME, opponentCoinsLeft: 9, queenTo: HOME }, { winner: HOME, opponentCoinsLeft: 10, queenTo: null }, { winner: HOME, opponentCoinsLeft: -1 }, { winner: "stranger", opponentCoinsLeft: 9, queenTo: null }, { winner: HOME, opponentCoinsLeft: 9, queenTo: null, breaker: HOME }] as unknown[]) {
+      expect(() => carromPad.stepsFor({ type: CARROM_BOARD, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the board sheet's \{winner, opponentCoinsLeft 0\.\.9, queenTo null\}/);
+    }
+    expect(() => carromPad.stepsFor({ type: "carrom.adjust", payload: {} }, ctxOf(r))).toThrow(/carrom\.adjust/);
+  });
+
+  it("replayed on the fake ledger: every board row equal, and the stored rows fold to the requested outcome", async () => {
+    const cfg = resolveSportCfg("carrom", offlineBuilderDefault("carrom"));
+    let cases = 0;
+    let boards = 0;
+    for (const winner of ["home", "away"] as const) {
+      const r = req("carrom", cfg, { kind: "win", winner });
+      const evs = generateStream(r);
+      const { res, ledger } = await replayOnModel(carromPad, evs, ctxOf(r), carromModel(ctxOf(r)));
+      expect(res.findings, winner).toEqual([]);
+      expect(res.rows.every((x) => x.verdict === "equal")).toBe(true);
+      boards += res.rows.length - 1;
+      expect(matchesRequest(r, foldStream(carrom, cfg, HOME, AWAY, asEvents(ledger)).outcome), winner).toBe("match");
+      cases++;
+    }
+    expect({ cases, boards }).toEqual({ cases: 2, boards: 16 }); // club-29: 2 games × 4 boards each, Step 0 saw board 8 decide
+  });
+
+  it("pins: the board tile under live, its sheet, the side option ids, and a payload that never carries queenTo", () => {
+    expect(skin).toMatch(/if \(phase === "live"\) \{[\s\S]{0,300}?tiles\.push\(\{\s*id: "board",[\s\S]{0,200}?action: \{ sheet: "board" \},/);
+    expect(CARROM_BOARD_TILE).toBe("board");
+    expect(skin).toContain(`${CARROM_BOARD_TILE}: boardSheet(state),`);
+    expect(skin).toContain("return SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] }));");
+    expect(skin).toMatch(/function boardSheet\(state: CarromStateShape\): GuidedSheetSpec \{\s*return \{\s*event: "carrom\.board\.summary",[\s\S]{0,400}?buildPayload: \(answers\) => \(\{\s*winner: entrantOf\(state, sideAnswer\(answers\.winner\)\),\s*opponentCoinsLeft: Number\(answers\.coins \?\? 0\),\s*\}\),/);
+    expect(skin).toContain("`queenTo` is simply never");
+    expect(Object.keys(carrom.eventSchemas ?? {})).toContain(CARROM_BOARD);
   });
 });
