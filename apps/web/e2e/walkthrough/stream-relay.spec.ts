@@ -1063,6 +1063,10 @@ for (const width of [320, 1280] as const) {
     // which makes the division's phase match_day (the sheet then mounts on "Today") and is "Today"'s own positive row;
     // the third stays untimed and unstreamed — the row "Today" must still hide.
     const [f, timedToday, plain] = rig.fixtures as [RelayFixture, RelayFixture, RelayFixture];
+    // A division still in `setup` reads "setting_up" whatever its fixtures say (division-phase.ts rule 1) — a match day
+    // is a STARTED division, started through the request the desk itself sends.
+    const started = await apiJson(page.request, `/api/v1/divisions/${rig.divisionId}/start`, "POST");
+    expect(started.status, `start -> ${JSON.stringify(started.error)}`).toBe(200);
     await withDb((sql) => sql`update fixtures set scheduled_at = now() where id = ${timedToday.id}`);
     const fixturePath = `${rig.divPath}/f/${f.no}`;
 
@@ -1128,7 +1132,8 @@ for (const width of [320, 1280] as const) {
       expect(phone, "anti-vacuity: the set carries the chip, the names and the action").toEqual(
         expect.arrayContaining(["run-sheet-stream-chip"]),
       );
-      expect(phone.length, "anti-vacuity: time, names, chip, action").toBeGreaterThanOrEqual(4);
+      // The untimed row's time cell is plain text, not a control: names link, chip, row action.
+      expect(phone.length, "anti-vacuity: names, chip, action").toBeGreaterThanOrEqual(3);
       await page.setViewportSize({ width, height: 900 });
     }
     await shot(rowOf(page, f), `A12-chip-live-${width}.png`);
