@@ -16,7 +16,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql, type Tx } from "@/lib/db";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { fingerprintDestination, seal } from "../crypto";
-import { StreamTargetVanishedError, insertStreamTarget, readFirstInput, readInputBySlot, readTargetSecret, storeInputCredentials } from "../secret-columns";
+import {
+  KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, archiveStreamTarget, insertStreamTarget, keyHintOf,
+  lockStreamTarget, readFirstInput, readInputBySlot, readKeyHints, readTargetSecret, replaceTargetKey, storeInputCredentials,
+} from "../secret-columns";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -133,16 +136,19 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(other.id).not.toBe(r.targetId);
   });
 
-  // The guard's reach: the insert CONFLICTED (no row returned) and the read-back found nothing — the row was deleted
-  // between the two statements. No production path deletes a target today, so a real database cannot reach this
-  // window on demand; a scripted transaction answers both statements with nothing, which is exactly that window.
+  // The guard's reach: an ACTIVE read and an ARCHIVED read that both find nothing, then an insert that CONFLICTS (no row
+  // returned) — the conflicting row was archived or deleted between the statements. No production path makes that
+  // window on demand, so a scripted transaction answers every statement with nothing, which is exactly that window.
   //
   // m6 (lane C final review): the refusal used to be the END — nothing mapped it, so a lost race was a 500, and the comment
-  // promised a retry nobody made. The retry is now made HERE, once, in the same transaction: under READ COMMITTED the
-  // second insert is a new statement with a new snapshot, so it sees the conflicting row gone and lands. Only a second
-  // vanish in a row — the same destination re-created AND deleted again inside that retry — is still refused by name.
-  const INSERT_SQL = /^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null do nothing/;
-  const SELECT_SQL = /^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \?$/;
+  // promised a retry nobody made. The retry is now made HERE, once, in the same transaction: under READ COMMITTED each
+  // round's statements are new statements with new snapshots, so the second round sees the conflicting row gone and its
+  // insert lands. Only a second lost round in a row is still refused by name. D2 (V427) made each round THREE
+  // statements: the active read, the archived read, the insert.
+  const INSERT_SQL = /^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null and archived_at is null do nothing/;
+  const SELECT_SQL = /^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \? and archived_at is null$/;
+  const ARCHIVED_SQL = /^select id from org_stream_targets where org_id = \? and dest_fingerprint = \? and archived_at is not null order by archived_at desc, created_at desc limit 1$/;
+  const kindOf = (s: string) => INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "active" : ARCHIVED_SQL.test(s) ? "archived" : s;
   const scripted = (answers: unknown[][]) => {
     const statements: string[] = [];
     const tx = ((strings: TemplateStringsArray) => {
@@ -154,22 +160,21 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
 
   it("A19 guard + m6: a destination that conflicts and cannot be read back is RETRIED once in the same transaction, and the retry's insert lands — the caller gets the new row, never a 500 (mutant: no retry → StreamTargetVanishedError)", async () => {
     const landed = { id: randomUUID(), kind: "youtube", label: "x", watch_url: null, created_at: new Date() };
-    const { tx, statements } = scripted([[], [], [landed]]);   // conflict, gone, then the retry's insert returns the row
+    // round 1: no active, no archived, the insert conflicts; round 2: no active, no archived, the insert returns the row
+    const { tx, statements } = scripted([[], [], [], [], [], [landed]]);
     const out = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() });
     expect(out).toMatchObject({ id: landed.id, kind: "youtube", label: "x", watchUrl: null });
-    expect(statements).toHaveLength(3);
-    expect(statements[0]).toMatch(INSERT_SQL);
-    expect(statements[1]).toMatch(SELECT_SQL);
-    expect(statements[2]).toMatch(INSERT_SQL);
+    expect(statements).toHaveLength(6);
+    expect(statements.map(kindOf)).toEqual(["active", "archived", "insert", "active", "archived", "insert"]);
   });
 
   it("A19 guard: a destination that vanishes on the retry TOO is refused BY NAME — never an undefined row handed to the caller, and never a third attempt (mutant: retry forever / no refusal)", async () => {
-    const { tx, statements } = scripted([]);                   // every statement answers nothing: vanished twice
+    const { tx, statements } = scripted([]);                   // every statement answers nothing: lost twice
     const err = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() })
       .then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(StreamTargetVanishedError);
-    expect(statements).toHaveLength(4);
-    expect(statements.map((s) => (INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "select" : s))).toEqual(["insert", "select", "insert", "select"]);
+    expect(statements).toHaveLength(6);                        // six, not more: never a third round
+    expect(statements.map(kindOf)).toEqual(["active", "archived", "insert", "active", "archived", "insert"]);
   });
 
   it("A19: an undialable destination is refused BEFORE anything is written — no fingerprint means no row", async () => {
@@ -348,5 +353,123 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     const partial = await messageOf(sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0)));
     expect(partial).toMatch(/streamId/);
     expect(partial).not.toContain(creds.srt.passphrase.slice(0, 8));
+  });
+
+  /** A destination that dials: the rig's own youtube url with a fresh 65-char key. */
+  const dest = (streamKey = secret65()) => ({ url: "rtmps://a.rtmps.youtube.com/live2", streamKey });
+  const put = (orgId: string, rtmp: { url: string; streamKey: string }, label = "L", watchUrl: string | null = null) =>
+    sql.begin((tx) => insertStreamTarget(tx, { orgId, kind: "youtube", label, watchUrl, rtmp }));
+
+  it("D2 create order 1/3: an ACTIVE duplicate is returned as 'existing' and writes nothing — not its label, not its watch link", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const first = await put(orgId, d, "First", "https://youtu.be/one");
+    const again = await put(orgId, d, "Second", "https://youtu.be/two");
+    expect(first.outcome).toBe("inserted");
+    expect(again).toMatchObject({ id: first.id, outcome: "existing", label: "First", watchUrl: "https://youtu.be/one" });
+  });
+
+  it("D2 create order 2/3: an ARCHIVED duplicate is RESTORED — same id, the SUBMITTED label and watch link, archived_at cleared", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const first = await put(orgId, d, "Old name", null);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, orgId, first.id))).toBe(true);
+    const back = await put(orgId, d, "New name", "https://youtu.be/new");
+    expect(back).toMatchObject({ id: first.id, outcome: "restored", label: "New name", watchUrl: "https://youtu.be/new" });
+    const [row] = await sql<{ archived_at: Date | null }[]>`select archived_at from org_stream_targets where id = ${first.id}`;
+    expect(row!.archived_at).toBeNull();
+  });
+
+  it("D2 create order 2/3: of TWO archived rows of one destination, the MOST RECENTLY archived is the one restored", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const fp = fingerprintDestination(d.url, d.streamKey);
+    const raw = (label: string, archivedAt: string) => sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc, dest_fingerprint, archived_at)
+      values (${orgId}, 'youtube', ${label}, ${seal(JSON.stringify(d))}, ${fp}, ${archivedAt}) returning id`;
+    const [older] = await raw("older", "2026-09-01T00:00:00Z");
+    const [newer] = await raw("newer", "2026-09-20T00:00:00Z");
+    const back = await put(orgId, d, "again");
+    expect(back.id).toBe(newer!.id);      // differential: the wrong ORDER BY returns `older`
+    expect(back.id).not.toBe(older!.id);
+  });
+
+  it("D2 create order 3/3: no row of this destination (active or archived) inserts a new one", async () => {
+    const { orgId } = await rig();
+    const made = await put(orgId, dest());
+    expect(made.outcome).toBe("inserted");
+  });
+
+  it("archiveStreamTarget: true once, false on the second call, false for ANOTHER org's id; an archived row reads as absent to lockStreamTarget", async () => {
+    const a = await rig();
+    const b = await rig();
+    const t = await put(a.orgId, dest());
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, b.orgId, t.id))).toBe(false);
+    expect(await sql.begin((tx) => lockStreamTarget(tx, a.orgId, t.id))).toBe(true);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, t.id))).toBe(true);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, t.id))).toBe(false);
+    expect(await sql.begin((tx) => lockStreamTarget(tx, a.orgId, t.id))).toBe(false);
+  });
+
+  it("keyHintOf: null below KEY_HINT_MIN_LENGTH, the last KEY_HINT_CHARS characters at and above it", () => {
+    const short = "x".repeat(KEY_HINT_MIN_LENGTH - 1);
+    const exact = `${"y".repeat(KEY_HINT_MIN_LENGTH - KEY_HINT_CHARS)}abc`;
+    expect(keyHintOf(short)).toBeNull();
+    expect(keyHintOf(exact)).toBe(exact.slice(-KEY_HINT_CHARS));
+    expect(keyHintOf(exact)).toHaveLength(KEY_HINT_CHARS);
+  });
+
+  it("readKeyHints (Review Focus 1): each ACTIVE row's hint; an UNOPENABLE envelope reads null and never throws; archived rows are absent", async () => {
+    const { orgId } = await rig();
+    const good = await put(orgId, dest("abcd-1234-efgh-5678-ijkl"));
+    const gone = await put(orgId, dest());
+    await sql.begin((tx) => archiveStreamTarget(tx, orgId, gone.id));
+    const [bad] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'youtube', 'bad', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    const hints = await sql.begin((tx) => readKeyHints(tx, orgId));
+    expect(hints.get(good.id)).toBe("ijkl".slice(-KEY_HINT_CHARS));
+    expect(hints.get(bad!.id)).toBeNull();
+    expect(hints.has(gone.id)).toBe(false);
+    // rig() seeds one target of its own; it is active and counted.
+    expect(hints.size).toBe(3);
+  });
+
+  it("replaceTargetKey: re-seals the KEY under the SAME url and re-fingerprints; the same key again is a no-op", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const t = await put(orgId, d);
+    const next = secret65();
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, next))).toEqual({ ok: true, changed: true });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).toEqual({ url: d.url, streamKey: next });
+    const [row] = await sql<{ dest_fingerprint: string }[]>`select dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    expect(row!.dest_fingerprint).toBe(fingerprintDestination(d.url, next));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, next))).toEqual({ ok: true, changed: false });
+  });
+
+  it("replaceTargetKey: an ACTIVE row already holding the new key is 'duplicate' naming it; an ARCHIVED holder and another ORG's holder do not block", async () => {
+    const a = await rig();
+    const b = await rig();
+    const taken = dest();
+    const holder = await put(a.orgId, taken, "Holder");
+    const mover = await put(a.orgId, dest(), "Mover");
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, mover.id, taken.streamKey)))
+      .toEqual({ ok: false, reason: "duplicate", other: { id: holder.id, label: "Holder" } });
+    await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, holder.id));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, mover.id, taken.streamKey))).toEqual({ ok: true, changed: true });
+    const other = await put(b.orgId, dest(), "B");
+    expect(await sql.begin((tx) => replaceTargetKey(tx, b.orgId, other.id, taken.streamKey))).toEqual({ ok: true, changed: true });
+  });
+
+  it("replaceTargetKey: an archived or foreign target is 'not_found'; a stored url the allowlist no longer admits is 'undialable' with its rule", async () => {
+    const a = await rig();
+    const b = await rig();
+    const t = await put(a.orgId, dest());
+    expect(await sql.begin((tx) => replaceTargetKey(tx, b.orgId, t.id, secret65()))).toEqual({ ok: false, reason: "not_found" });
+    await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, t.id));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, t.id, secret65()))).toEqual({ ok: false, reason: "not_found" });
+    const [legacy] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc)
+      values (${a.orgId}, 'custom_rtmp', 'legacy', ${seal(JSON.stringify({ url: "rtmps://media.example.com/live", streamKey: secret65() }))}) returning id`;
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, legacy!.id, secret65()))).toEqual({ ok: false, reason: "undialable", rule: "host" });
   });
 });

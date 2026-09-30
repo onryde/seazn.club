@@ -564,14 +564,34 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     // DISTINCT would otherwise make two legacy rows collide), and it is what insertStreamTarget's
     // `on conflict (org_id, dest_fingerprint) where dest_fingerprint is not null` must match to INFER this index — a
     // drifted predicate turns every dedupe into 42P10. Neither is reachable from a plain insert, so both are pinned as
-    // text (the idempotency_key precedent above).
+    // text (the idempotency_key precedent above). V427 (D2) narrowed the predicate to ACTIVE rows too, keeping V421's
+    // own conjunct; insertStreamTarget's ON CONFLICT names the whole of it.
     const [idx] = await sql<{ indexdef: string }[]>`
       select indexdef from pg_indexes
        where schemaname = current_schema() and tablename = 'org_stream_targets'
          and indexname = 'org_stream_targets_org_dest_fingerprint'`;
     expect(idx?.indexdef, "org_stream_targets_org_dest_fingerprint is missing or renamed").toMatch(
-      /^CREATE UNIQUE INDEX org_stream_targets_org_dest_fingerprint ON \w+\.org_stream_targets USING btree \(org_id, dest_fingerprint\) WHERE \(dest_fingerprint IS NOT NULL\)$/,
+      /^CREATE UNIQUE INDEX org_stream_targets_org_dest_fingerprint ON \w+\.org_stream_targets USING btree \(org_id, dest_fingerprint\) WHERE \(\(dest_fingerprint IS NOT NULL\) AND \(archived_at IS NULL\)\)$/,
     );
+  });
+
+  it("archived_at (V427, D2): NULLABLE timestamptz with no default; an ARCHIVED row never blocks an active row of the same fingerprint, while two ACTIVE rows still collide by name", async () => {
+    const a = await rig();
+    const hex64 = () => (randomUUID() + randomUUID()).replace(/-/g, "");
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'org_stream_targets' and column_name = 'archived_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+    const fp = hex64();
+    const put = (archived: boolean) => sql`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc, dest_fingerprint, archived_at)
+      values (${a.orgId}, 'youtube', 'fp', ${Buffer.from("not-a-real-envelope")}, ${fp}, ${archived ? new Date() : null})`;
+    await put(true);
+    await put(true);               // two archived rows of one destination: history, both kept
+    await put(false);              // the active row lands beside them
+    await expect(put(false)).rejects.toMatchObject({ code: "23505", constraint_name: "org_stream_targets_org_dest_fingerprint" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${a.orgId} and dest_fingerprint = ${fp}`;
+    expect(n).toBe(3);
   });
 
   it("runner_gone_confirmed_at (V422, A22(c)): NULLABLE timestamptz with no default, so every existing row reads 'not confirmed'; the mark is REFUSED on every ACTIVE state and accepted on every TERMINAL one — both lists the domain's own, never typed here", async () => {
