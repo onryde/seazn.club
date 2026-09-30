@@ -6,7 +6,7 @@
 // slice), from the real planners (layers.ts planL2 over the committed
 // l2-pairs.json, slice.ts planSliceCases) and from the catalogue's own
 // atom→script declaration — never from lib/parity.ts.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -14,12 +14,13 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { cellId } from "../lib/catalogue.ts";
 import { identityOf, layerCaseId, planL2 } from "../lib/layers.ts";
+import { padProofPlanner } from "../lib/pad-proof-set.ts";
 import { loadL2Pairs } from "../lib/pairs.ts";
 import {
   BROWSER_ONLY_PREFIXES, DuplicateId, WidthSuffixMismatch, WrongDriver,
   compareRuns, headerLine, isBrowserOnly, parityVerdict, renderParity, type ParityReport,
 } from "../lib/parity.ts";
-import { parseResults, type AnyRunResults, type CaseResult, type CheckResult, type DriverKind, type Verdict } from "../lib/results.ts";
+import { CASE_STATES, parseResults, type AnyRunResults, type CaseResult, type CheckResult, type DriverKind, type Verdict } from "../lib/results.ts";
 import { SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
@@ -33,6 +34,8 @@ const A = "league|generic|score|LIFECYCLE";
 const B = "knockout|generic|score|LIFECYCLE";
 const C = "swiss|generic|score|LIFECYCLE";
 const RUNS = { http: "r-http", browser: "r-browser" };
+/** A report with nothing outside the browser plan and nothing planned without a script. */
+const NONE = { notDriven: [], outsidePlan: [] };
 
 const chk = (id: string, verdict: Verdict = "pass", checked = 2): CheckResult => ({ id, kind: "assertion", verdict, checked, reason: "", evidence: [] });
 /** Checks both drivers run (ids as the committed runs name them). */
@@ -84,34 +87,57 @@ function walkthroughBrowserOnly(): { browserOnly: Set<string>; httpIds: Set<stri
 describe("compareRuns", () => {
   it("empty case first: two results with no common case is exit 1 'compared 0' — never parity", () => {
     const empty = compareRuns(runOf("http", []), runOf("browser", []));
-    expect(empty).toEqual({ compared: 0, checks: 0, diffs: [] });
+    expect(empty).toEqual({ compared: 0, checks: 0, diffs: [], ...NONE });
     // No difference at all, and still not parity: nothing was compared.
     expect(parityVerdict(empty).code).toBe(1);
     expect(parityVerdict(empty).line).toMatch(/compared 0/);
     expect(renderParity(empty, RUNS)).toContain("compared 0 cases, 0 common checks, 0 differences");
-    // Two runs that each hold a case, and share none: each is a missing row, and still "compared 0".
+    // Two runs that each hold a case, and share none: the browser case is a
+    // missing row, the HTTP case lies outside the browser plan (listed, not a
+    // diff), and it is still "compared 0".
     const apart = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(B, 1280)]));
     expect(apart.compared).toBe(0);
-    expect(apart.diffs.map((d) => [d.kind, d.caseId])).toEqual([["missing", `${B}@1280`], ["missing", A]]);
+    expect(apart.diffs.map((d) => [d.kind, d.caseId])).toEqual([["missing", `${B}@1280`]]);
+    expect(apart.outsidePlan).toEqual([A]);
     expect(parityVerdict(apart).code).toBe(1);
     expect(parityVerdict(apart).line).toMatch(/compared 0/);
   });
 
-  it("anti-vacuity: cases compared with no common check between them are never parity — and one common check is", () => {
+  it("anti-vacuity: a pair with no common check is a `vacuous` row unless both its state and its reason match; a run with no common check at all is never parity", () => {
     const later = { state: "later" as const, reason: "W1-driving: deferred", checks: [] };
+    // One pair, the same deferral on both drivers: no row — but nothing was
+    // compared, so the run is never parity.
     const none = compareRuns(runOf("http", [httpCase(A, later)]), runOf("browser", [browserCase(A, 1280, later)]));
-    expect(none).toEqual({ compared: 1, checks: 0, diffs: [] });
+    expect(none).toEqual({ compared: 1, checks: 0, diffs: [], ...NONE });
     expect(parityVerdict(none).code).toBe(1);
     expect(parityVerdict(none).line).toMatch(/0 common checks/);
-    // Positive pair: the same pair with one common check is parity.
+    // Review I-1: beside a good pair, a pair that errored on BOTH drivers for
+    // different reasons is a row. The same state label is not the same verdict.
+    const errored = (reason: string) => ({ state: "red" as const, reason, checks: [] });
+    const both = compareRuns(
+      runOf("http", [httpCase(A), httpCase(B, errored("error: HTTP 500 on POST /stages"))]),
+      runOf("browser", [browserCase(A, 1280), browserCase(B, 1280, errored("error: selector timeout stage-rail"))]),
+    );
+    expect(both.compared).toBe(2);
+    expect(both.checks).toBe(COMMON().length);
+    expect(both.diffs).toEqual([{ caseId: `${B}@1280`, kind: "vacuous", id: null, http: "red: error: HTTP 500 on POST /stages", browser: "red: error: selector timeout stage-rail" }]);
+    expect(parityVerdict(both).code).toBe(1);
+    // The same state, a different reason (each driver deferred to another wave): a row too.
+    const waves = compareRuns(runOf("http", [httpCase(A), httpCase(B, later)]), runOf("browser", [browserCase(A, 1280), browserCase(B, 1280, { ...later, reason: "W4: deferred" })]));
+    expect(waves.diffs.map((d) => [d.kind, d.caseId])).toEqual([["vacuous", `${B}@1280`]]);
+    // Positive pairs: the same deferral beside a good pair is agreed, no row, parity;
+    // and one common check on its own is parity.
+    const agreed = compareRuns(runOf("http", [httpCase(A), httpCase(B, later)]), runOf("browser", [browserCase(A, 1280), browserCase(B, 1280, later)]));
+    expect(agreed).toEqual({ compared: 2, checks: COMMON().length, diffs: [], ...NONE });
+    expect(parityVerdict(agreed)).toEqual({ code: 0, line: "PARITY" });
     const one = compareRuns(runOf("http", [httpCase(A, { checks: [chk("life-loop-bounded")] })]), runOf("browser", [browserCase(A, 1280, { checks: [chk("life-loop-bounded")] })]));
-    expect(one).toEqual({ compared: 1, checks: 1, diffs: [] });
+    expect(one).toEqual({ compared: 1, checks: 1, diffs: [], ...NONE });
     expect(parityVerdict(one)).toEqual({ code: 0, line: "PARITY" });
   });
 
   it("caseIds match after stripping @width; one browser width per http case is compared, and several widths each compared", () => {
     const one = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280)]));
-    expect(one).toEqual({ compared: 1, checks: COMMON().length, diffs: [] });
+    expect(one).toEqual({ compared: 1, checks: COMMON().length, diffs: [], ...NONE });
     expect(parityVerdict(one)).toEqual({ code: 0, line: "PARITY" });
     // Several widths of one HTTP case: each is compared on its own, and a
     // difference at one width names that width's case.
@@ -155,7 +181,7 @@ describe("compareRuns", () => {
     // In the browser run: ignored, and never counted as common.
     const extra = [...COMMON(), ...BROWSER_EXTRA(), chk("ui-champion-shown", "abstain", 0), chk("pad-route", "abstain", 0), chk("finalize-ledger-row", "pass", 3)];
     const ignored = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280, { checks: extra })]));
-    expect(ignored).toEqual({ compared: 1, checks: COMMON().length, diffs: [] });
+    expect(ignored).toEqual({ compared: 1, checks: COMMON().length, diffs: [], ...NONE });
     // In the HTTP run: a row, whatever the browser recorded. The HTTP driver
     // never emits one, so its presence means the run was mislabeled.
     const mislabeled = compareRuns(runOf("http", [httpCase(A, { checks: [...COMMON(), chk("ui-standings-match", "pass", 1)] })]), runOf("browser", [browserCase(A, 1280)]));
@@ -168,14 +194,76 @@ describe("compareRuns", () => {
     expect(onlyHttp.diffs).toEqual([{ caseId: `${A}@1280`, kind: "check", id: "life-stage-completed", http: "pass/1", browser: "absent" }]);
   });
 
-  it("a case present on one side only is a `missing` row", () => {
+  it("a browser case absent from the HTTP run is a `missing` row; an HTTP case outside the browser plan is listed, never a diff", () => {
     const r = compareRuns(runOf("http", [httpCase(A), httpCase(B)]), runOf("browser", [browserCase(A, 1280), browserCase(C, 1280)]));
     expect(r.compared).toBe(1);
-    expect(r.diffs).toEqual([
-      { caseId: `${C}@1280`, kind: "missing", id: null, http: "absent", browser: "works" },
-      { caseId: B, kind: "missing", id: null, http: "works", browser: "absent" },
-    ]);
+    expect(r.diffs).toEqual([{ caseId: `${C}@1280`, kind: "missing", id: null, http: "absent", browser: "works" }]);
+    expect(r.outsidePlan).toEqual([B]);
+    expect(r.notDriven).toEqual([]);
     expect(parityVerdict(r).code).toBe(1);
+    // The controller's scope ruling: parity compares the BROWSER run's plan. An
+    // HTTP case outside it is listed by id (results.json names no plan, so the
+    // ids are the only way to see a mis-paired HTTP file) and costs no exit.
+    const outside = compareRuns(runOf("http", [httpCase(A), httpCase(B)]), runOf("browser", [browserCase(A, 1280)]));
+    expect(outside).toEqual({ compared: 1, checks: COMMON().length, diffs: [], notDriven: [], outsidePlan: [B] });
+    expect(parityVerdict(outside)).toEqual({ code: 0, line: "PARITY" });
+  });
+
+  // The scope ruling's exemption: a browser case is "planned, not driven" only
+  // when all three hold — it maps to no harness script, its state is 🚫 or ░,
+  // and it carries no check (run.ts recordPlanned's exact shape).
+  const PLANNED = ["no_path", "not_run"] as const;
+  it("an unmapped browser case is 'not driven' only when 🚫/░ with no check; in any other state it stays `missing` (a PADPROOF run fed to parity)", () => {
+    const atom = (n: number) => `swiss|generic|score|X${n}`;
+    let checked = 0;
+    for (const [i, state] of CASE_STATES.entries()) {
+      const r = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280), browserCase(atom(i), 375, { state, reason: "r", checks: [] })]));
+      if ((PLANNED as readonly string[]).includes(state)) {
+        expect({ state, notDriven: r.notDriven, diffs: r.diffs }).toEqual({ state, notDriven: [{ caseId: `${atom(i)}@375`, state }], diffs: [] });
+      } else {
+        expect({ state, notDriven: r.notDriven }).toEqual({ state, notDriven: [] });
+        expect(r.diffs, state).toEqual([{ caseId: `${atom(i)}@375`, kind: "missing", id: null, http: "absent", browser: expect.stringMatching(new RegExp(`^${state} — .*no harness script`)) }]);
+      }
+      checked++;
+    }
+    expect(checked).toBe(CASE_STATES.length);
+    // The real pad-proof plan: every case is PADPROOF, unmapped, and works with checks.
+    const pad = padProofPlanner({}).plan(() => "default").map((s) => aCase(`${s.caseId}@1280`, "browser", 1280));
+    expect(pad.length).toBeGreaterThan(0);
+    const padR = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", pad));
+    expect(padR.notDriven).toEqual([]);
+    expect(padR.diffs.map((d) => d.kind)).toEqual(pad.map(() => "missing"));
+  });
+
+  it("an unmapped ░ case that carries a check is still `missing` — a planned case never ran one", () => {
+    const planned = browserCase("swiss|generic|score|X9", 375, { state: "not_run", reason: "no scenario script yet (atom X9)", checks: [chk("life-loop-bounded")] });
+    const r = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280), planned]));
+    expect(r.notDriven).toEqual([]);
+    expect(r.diffs.map((d) => [d.kind, d.caseId])).toEqual([["missing", planned.caseId]]);
+  });
+
+  it("a MAPPED case that hit no_path at runtime is compared: against HTTP works it is one state row (m-3: no absent-check rows beside it)", () => {
+    const runtime = browserCase(A, 1280, { state: "no_path", reason: "W5: no organiser path", checks: [] });
+    const r = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [runtime]));
+    expect(r.compared).toBe(1);
+    expect(r.notDriven).toEqual([]);
+    expect(r.diffs).toEqual([{ caseId: `${A}@1280`, kind: "state", id: null, http: "works", browser: "no_path" }]);
+    // Same for a checkless HTTP side: one fact, one row.
+    const httpErr = compareRuns(runOf("http", [httpCase(A, { state: "red", reason: "error: HTTP 500", checks: [] })]), runOf("browser", [browserCase(A, 1280)]));
+    expect(httpErr.diffs).toEqual([{ caseId: `${A}@1280`, kind: "state", id: null, http: "red", browser: "works" }]);
+    // Both sides with checks keep their per-check rows (the quiet rule is only for a checkless side).
+    const withChecks = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280, { state: "red", checks: [chk("I1-rr-pair-once-per-leg", "pass", 28), ...BROWSER_EXTRA()] })]));
+    expect(withChecks.diffs.map((d) => d.kind)).toEqual(["state", "check", "check"]);
+  });
+
+  it("an all-🚫/░ browser run is 'compared 0' and never parity", () => {
+    const r = compareRuns(runOf("http", [httpCase(A), httpCase(B)]), runOf("browser", [
+      browserCase("swiss|generic|score|X1", 375, { state: "no_path", reason: "W4: none", checks: [] }),
+      browserCase("swiss|generic|score|X2", 390, { state: "not_run", reason: "no scenario script yet (atom X2)", checks: [] }),
+    ]));
+    expect(r).toEqual({ compared: 0, checks: 0, diffs: [], notDriven: [{ caseId: "swiss|generic|score|X1@375", state: "no_path" }, { caseId: "swiss|generic|score|X2@390", state: "not_run" }], outsidePlan: [A, B] });
+    expect(parityVerdict(r).code).toBe(1);
+    expect(parityVerdict(r).line).toMatch(/compared 0/);
   });
 
   it("v2 http evidence (no layer/driver/width) parses as http", () => {
@@ -187,7 +275,7 @@ describe("compareRuns", () => {
     const twin = (edit: (c: CaseResult, i: number) => CaseResult = (c) => c) => runOf("browser", v2.cases.map((c, i) =>
       edit({ ...c, caseId: `${c.caseId}@1280`, checks: [...c.checks, ...BROWSER_EXTRA()], layer: "L1", driver: "browser", width: 1280 }, i)));
     const r = compareRuns(v2, twin());
-    expect(r).toEqual({ compared: v2.cases.length, checks: v2.cases.reduce((n, c) => n + c.checks.length, 0), diffs: [] });
+    expect(r).toEqual({ compared: v2.cases.length, checks: v2.cases.reduce((n, c) => n + c.checks.length, 0), diffs: [], ...NONE });
     expect(parityVerdict(r).code).toBe(0);
     // The committed checks were read, not skipped: one `checked` moved on the browser side is a row.
     const first = v2.cases[0]!.checks[0]!;
@@ -199,7 +287,7 @@ describe("compareRuns", () => {
     expect(() => compareRuns(twin(), v2)).toThrow(/http run/);
   });
 
-  it("ruling (a): a committed L2 run's atom pairs with the HTTP script the catalogue maps it to; an atom with no script is a missing row, never dropped", () => {
+  it("ruling (a) and the scope ruling: a committed L2 run's atom pairs with the HTTP script the catalogue maps it to; a scriptless 🚫/░ case is listed as not driven, never dropped and never a diff", () => {
     const cells = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
     const planned = planL2(loadL2Pairs(), cells);
     const driven = planned.filter((c) => c.spec !== null);
@@ -209,31 +297,40 @@ describe("compareRuns", () => {
     console.info(`parity: ${planned.length} committed L2 runs on the slice — ${driven.length} driven (${renamed.length} renamed atom), ${scriptless.length} with no script`);
     expect(renamed.length).toBeGreaterThan(0);
     expect(scriptless.length).toBeGreaterThan(0);
-    // The HTTP side: the slice as L3 plans it, at the committed runs' presets.
+    // The HTTP side: the slice as L3 plans it, at the variants the committed
+    // W1b slice ran (review m-2: never read back from l2-pairs.json, so a
+    // committed preset that drifts from the builder default reds here).
+    const ranVariant = new Map(readRun(join(TRUTH, "w1b-slice", "results.json")).cases.map((c) => [c.sport, c.variant]));
     const presetOf = (sport: string): string => {
-      const c = planned.find((p) => identityOf(p).sport === sport);
-      if (c === undefined) throw new Error(`test: no committed L2 run on the slice for ${sport}`);
-      return identityOf(c).variant;
+      const v = ranVariant.get(sport);
+      if (v === undefined) throw new Error(`test: the committed w1b-slice ran no ${sport} case`);
+      return v;
     };
     const httpCases = planSliceCases(presetOf).map((s) => httpCase(s.caseId, { scenario: s.scenario }));
-    // The browser side: every planned case under the id the runner writes. The
-    // renamed atoms go red, so each pairing shows up as a state row naming ITS case.
-    const browserCases = planned.map((c) => aCase(layerCaseId(c), "browser", c.width, c.spec === null
+    // The browser side: every planned case under the id the runner writes, the
+    // 🚫/░ ones in run.ts recordPlanned's shape. With the renamed atoms red,
+    // each pairing shows up as a state row naming ITS case.
+    const browserCases = (renamedState: "red" | "works") => planned.map((c) => aCase(layerCaseId(c), "browser", c.width, c.spec === null
       ? { scenario: identityOf(c).scenario, state: c.noPath !== null ? "no_path" : "not_run", checks: [] }
-      : { scenario: c.spec.scenario, state: renamed.includes(c) ? "red" : "works" }));
-    const r = compareRuns(runOf("http", httpCases), runOf("browser", browserCases));
+      : { scenario: c.spec.scenario, state: renamed.includes(c) ? renamedState : "works" }));
+    const r = compareRuns(runOf("http", httpCases), runOf("browser", browserCases("red")));
     expect(r.compared).toBe(driven.length);
     expect(r.diffs.filter((d) => d.kind === "state")).toEqual(renamed.map((c) => ({ caseId: layerCaseId(c), kind: "state", id: null, http: "works", browser: "red" })));
-    expect(r.diffs.filter((d) => d.kind === "check")).toEqual([]);
-    // Every scriptless atom is a missing row that names it — none dropped.
-    const browserMissing = r.diffs.filter((d) => d.kind === "missing" && d.http === "absent");
-    expect(browserMissing.map((d) => d.caseId)).toEqual(scriptless.map(layerCaseId));
-    for (const d of browserMissing) expect(d.browser).toMatch(/no harness script/);
-    // And every HTTP case no L2 run drove is missing on the browser side. The
+    expect(r.diffs.filter((d) => d.kind !== "state")).toEqual([]);
+    // Every scriptless atom is listed as not driven, with its planned state —
+    // none dropped, none a diff.
+    expect(r.notDriven).toEqual(scriptless.map((c) => ({ caseId: layerCaseId(c), state: c.noPath !== null ? "no_path" : "not_run" })));
+    // And every HTTP case no L2 run drove lies outside the browser plan. The
     // keys paired are the planner's own (spec.scenario is the script).
     const paired = new Set(driven.map((c) => [c.spec!.row, c.spec!.sport, c.spec!.variant, c.spec!.scenario].join("|")));
     expect([...paired].filter((k) => !httpCases.some((h) => h.caseId === k))).toEqual([]);
-    expect(r.diffs.filter((d) => d.kind === "missing" && d.browser === "absent").map((d) => d.caseId)).toEqual(httpCases.map((h) => h.caseId).filter((id) => !paired.has(id)));
+    expect(r.outsidePlan).toEqual(httpCases.map((h) => h.caseId).filter((id) => !paired.has(id)));
+    expect(r.outsidePlan.length).toBeGreaterThan(0);
+    // Positive: the same L2 run with the driven cases agreeing is parity, exit 0.
+    const agreed = compareRuns(runOf("http", httpCases), runOf("browser", browserCases("works")));
+    expect({ compared: agreed.compared, diffs: agreed.diffs, notDriven: agreed.notDriven.length, outsidePlan: agreed.outsidePlan.length })
+      .toEqual({ compared: driven.length, diffs: [], notDriven: scriptless.length, outsidePlan: httpCases.length - paired.size });
+    expect(parityVerdict(agreed)).toEqual({ code: 0, line: "PARITY" });
   });
 
   it("ruling (b): the committed walkthrough-a legs, each against its HTTP run — 1 case, 17 common checks, 0 differences (Task 8's hand parity)", () => {
@@ -244,7 +341,7 @@ describe("compareRuns", () => {
       // The README's 17 is every check the HTTP case ran.
       expect(http.cases.map((c) => c.checks.length), h).toEqual([WA_COMMON_CHECKS]);
       const r = compareRuns(http, browser);
-      expect({ b, ...r }).toEqual({ b, compared: 1, checks: WA_COMMON_CHECKS, diffs: [] });
+      expect({ b, ...r }).toEqual({ b, compared: 1, checks: WA_COMMON_CHECKS, diffs: [], ...NONE });
       expect(parityVerdict(r).code, b).toBe(0);
       l1At320 += browser.schemaVersion === 3 ? browser.cases.filter((c) => c.layer === "L1" && c.width === 320).length : 0;
       pairs++;
@@ -263,13 +360,26 @@ describe("compareRuns", () => {
     expect(httpIds.size).toBeGreaterThan(0);
     expect([...browserOnly].filter((id) => !isBrowserOnly(id))).toEqual([]);
     expect([...httpIds].filter((id) => isBrowserOnly(id))).toEqual([]);
+    // Review m-8: the inverse half over EVERY committed HTTP run (W1a, W1b,
+    // W1c; every scenario and invariant), not only LIFECYCLE's ids. Tracked
+    // files only, so an untracked local run cannot change the answer.
+    const tracked = execFileSync("git", ["ls-files", "--", "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/*results.json"], { cwd: REPO, encoding: "utf8" }).split("\n").filter((f) => f !== "");
+    const httpRuns = tracked.map((f) => readRun(join(REPO, f))).filter((r) => r.schemaVersion === 2 || r.driver === "http");
+    const everyHttpId = new Set(httpRuns.flatMap((r) => r.cases.flatMap((c) => c.checks.map((k) => k.id))));
+    console.info(`parity: ${tracked.length} committed results.json, ${httpRuns.length} HTTP runs, ${everyHttpId.size} HTTP check ids`);
+    expect(httpRuns.length).toBeGreaterThan(2);
+    expect(everyHttpId.size).toBeGreaterThan(httpIds.size);
+    expect([...everyHttpId].filter((id) => isBrowserOnly(id))).toEqual([]);
   });
 
   // The browser driver is the authority on what it emits; each of these
   // modules runs only under --driver browser. finalize-ledger-row is its proof
   // of the console's Finalize route (controller ruling D: parity compares the
   // recorded outcome, never the route), so no HTTP case has one to compare.
-  const EMITTERS = ["lib/driver/browser-driver.ts", "lib/driver/mixed.ts", "lib/browser/evidence.ts"];
+  // The PADPROOF scenario runs only in --set pad-proof, which needs the browser
+  // (pad-proof-set.ts needsBrowser); its OWN literal ids are scanned (review
+  // m-1) — the life-* checks it borrows from assertions.ts are common ones.
+  const EMITTERS = ["lib/driver/browser-driver.ts", "lib/driver/mixed.ts", "lib/browser/evidence.ts", "lib/scenarios/pad-proof.ts"];
   const CHECK_ID = /(?:\bassertion\(\s*|\bid:\s*|\bconst id = )"([a-z0-9]+(?:-[a-z0-9]+)+)"/g;
   it("every check id the browser driver's own modules emit is browser-only — finalize-ledger-row included — and every prefix covers one", () => {
     const ids = new Set<string>();
@@ -301,34 +411,47 @@ describe("renderParity", () => {
   const section = (md: string, heading: string): string => md.split(/^## /m).find((s) => s.startsWith(heading)) ?? "";
   const bodyRows = (s: string): string[] => s.split("\n").filter((l) => l.startsWith("|")).slice(2);
 
-  it("writes the header line, then one table per diff kind; a case id's pipes are escaped, so each row keeps its columns", () => {
+  it("writes the header line, then one table per diff kind and the two listed-not-compared sets; a case id's pipes are escaped, so each row keeps its columns", () => {
+    const D = "swiss|generic|score|M1";
+    const NOT_DRIVEN = "swiss|generic|score|X9@375";
     const r: ParityReport = compareRuns(
-      runOf("http", [httpCase(A, { checks: [...COMMON(), chk("I4-nothing-ends-stuck", "pass", 37)] }), httpCase(B)]),
-      runOf("browser", [browserCase(A, 1280, { state: "red", checks: [...COMMON(), chk("I4-nothing-ends-stuck", "pass", 36), ...BROWSER_EXTRA()] }), browserCase(C, 1280)]),
+      runOf("http", [httpCase(A, { checks: [...COMMON(), chk("I4-nothing-ends-stuck", "pass", 37)] }), httpCase(B), httpCase(D, { state: "red", reason: "error: HTTP 500", checks: [] })]),
+      runOf("browser", [
+        browserCase(A, 1280, { state: "red", checks: [...COMMON(), chk("I4-nothing-ends-stuck", "pass", 36), ...BROWSER_EXTRA()] }),
+        browserCase(C, 1280),
+        browserCase(D, 1280, { state: "red", reason: "error: selector timeout", checks: [] }),
+        aCase(NOT_DRIVEN, "browser", 375, { state: "not_run", reason: "no scenario script yet (atom X9)", checks: [] }),
+      ]),
     );
-    const kinds = ["state", "check", "missing"] as const;
-    expect(kinds.map((k) => r.diffs.filter((d) => d.kind === k).length)).toEqual([1, 1, 2]);
+    const kinds = ["state", "check", "missing", "vacuous"] as const;
+    expect(kinds.map((k) => r.diffs.filter((d) => d.kind === k).length)).toEqual([1, 1, 1, 1]);
+    expect(r.outsidePlan).toEqual([B]);
+    expect(r.notDriven).toEqual([{ caseId: NOT_DRIVEN, state: "not_run" }]);
     const md = renderParity(r, RUNS);
-    // The brief's header line, exactly.
-    expect(headerLine(r)).toBe(`compared ${r.compared} cases, ${r.checks} common checks, ${r.diffs.length} differences`);
+    // The brief's header line, then the scope ruling's two counts, exactly.
+    expect(headerLine(r)).toBe(`compared ${r.compared} cases, ${r.checks} common checks, ${r.diffs.length} differences; 1 HTTP cases outside the browser plan; 1 planned without a harness script (🚫/░)`);
     expect(md).toContain(headerLine(r));
     expect(md).toContain(parityVerdict(r).line);
     let rows = 0;
-    for (const [heading, kind, width] of [["State differences", "state", 3], ["Check differences", "check", 4], ["Missing cases", "missing", 3]] as const) {
+    for (const [heading, kind, width] of [["State differences", "state", 3], ["Check differences", "check", 4], ["Missing cases", "missing", 3], ["Vacuous pairs", "vacuous", 3]] as const) {
       const s = section(md, heading);
       expect(s, heading).not.toBe("");
       const body = bodyRows(s);
       expect(body.length, heading).toBe(r.diffs.filter((d) => d.kind === kind).length);
       for (const row of body) {
         expect(cells(row).length, row).toBe(width);
-        expect(cells(row)[0]!.trim(), row).toMatch(/^(league|knockout|swiss)\\\|generic\\\|score\\\|LIFECYCLE(@1280)?$/);
+        expect(cells(row)[0]!.trim(), row).toMatch(/^(league|knockout|swiss)\\\|generic\\\|score\\\|(LIFECYCLE|M1)(@1280)?$/);
         rows++;
       }
     }
     expect(rows).toBe(r.diffs.length);
-    // An empty kind says so rather than printing an empty table.
+    // The listed sets name every id, not only a count (results.json names no plan).
+    expect(section(md, "Outside the browser plan (1)")).toContain(`- \`${B}\``);
+    expect(section(md, "Planned, not driven (🚫/░) (1)")).toContain(`- \`${NOT_DRIVEN}\` — not_run`);
+    // An empty kind or set says so rather than printing an empty table.
     const clean = renderParity(compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280)])), RUNS);
-    for (const heading of ["State differences (0)", "Check differences (0)", "Missing cases (0)"]) expect(clean).toContain(`## ${heading}\n\nNone.`);
+    const empty = ["State differences (0)", "Check differences (0)", "Missing cases (0)", "Vacuous pairs (0)", "Outside the browser plan (0)", "Planned, not driven (🚫/░) (0)"];
+    for (const heading of empty) expect(clean).toContain(`## ${heading}\n\nNone.`);
     expect(clean).toContain("PARITY");
   });
 });

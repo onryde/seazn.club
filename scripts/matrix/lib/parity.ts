@@ -8,15 +8,23 @@
 // names the SCRIPT (…|R4), so the atom is mapped through the catalogue's own
 // declaration, HARNESS_SCENARIO. A browser case whose scenario is neither an
 // atom that HARNESS_SCENARIO maps nor a script it maps to cannot pair (an L2
-// 🚫/░ atom, PADPROOF). It is a `missing` row, never dropped. Every browser
-// width of one HTTP case is compared on its own.
+// 🚫/░ atom, PADPROOF). Every browser width of one HTTP case is compared on
+// its own.
+//
+// Scope (controller ruling, Task 13 fix round 1): parity compares the BROWSER
+// run's plan. An unmapped case in run.ts recordPlanned's exact shape — 🚫 or
+// ░, no check — is listed as not driven; any other unmapped case is a
+// `missing` row, never dropped. A mapped browser case absent from the HTTP run
+// is `missing`. An HTTP case no browser case paired with lies outside the
+// browser plan: listed by id, never a diff.
 //
 // Per pair, the state is compared, then every check both sides ran, by verdict
 // AND checked: a run that checked fewer items is not the same verdict. A check
 // that one side ran and the other did not is a row, with one exception: a
 // browser-only check (BROWSER_ONLY_PREFIXES) in the browser run is ignored. The
 // HTTP driver never emits one, so a browser-only check in the HTTP run is
-// itself a row: that run was mislabeled.
+// itself a row: that run was mislabeled. A pair with no common check whose
+// state or reason differs is a `vacuous` row (review I-1).
 //
 // The layer is never compared (ruling b). Ruling 39 labels a run by its width,
 // and the committed walkthrough-a 320 legs, written before Task 12's fix, say
@@ -37,8 +45,20 @@ import type { AnyRunResults, CaseResult, CaseResultV2, CheckResult, DriverKind }
 export const BROWSER_ONLY_PREFIXES = ["ui-", "visual-", "no-horizontal-scroll", "mixed-", "builder-", "organiser-ui-path", "pad-", "finalize-ledger-row"] as const;
 export const isBrowserOnly = (id: string): boolean => BROWSER_ONLY_PREFIXES.some((p) => id.startsWith(p));
 
-export interface ParityRow { caseId: string; kind: "state" | "check" | "missing"; id: string | null; http: string; browser: string }
-export interface ParityReport { compared: number; checks: number; diffs: ParityRow[] }
+/** `vacuous` (review I-1): a pair with no common check whose state OR reason
+ *  differs — the same state label is not the same verdict. */
+export interface ParityRow { caseId: string; kind: "state" | "check" | "missing" | "vacuous"; id: string | null; http: string; browser: string }
+/** The controller's scope ruling (Task 13 fix round 1): parity compares the
+ *  BROWSER run's plan. `notDriven`: its 🚫/░ cases with no harness script,
+ *  listed and never compared. `outsidePlan`: HTTP case ids no browser case
+ *  paired with, listed and never a diff. Neither moves the exit code. */
+export interface ParityReport {
+  compared: number;
+  checks: number;
+  diffs: ParityRow[];
+  notDriven: { caseId: string; state: string }[];
+  outsidePlan: string[];
+}
 
 /** What a row says for the side that has no such case or check. */
 export const ABSENT = "absent";
@@ -116,10 +136,13 @@ export function httpKeyOf(c: AnyCase): { key: string } | { unmapped: string } {
 
 const fmt = (c: CheckResult): string => `${c.verdict}/${c.checked}`;
 
-/** The checks of one pair: rows into `diffs`, and the number of common checks. */
+/** The checks of one pair: rows into `diffs`, and the number of common checks.
+ *  A side that ran no check at all, in a pair whose states differ, gets no
+ *  `absent` row per check: the state row already says it (review m-3). */
 function compareChecks(caseId: string, h: AnyCase, b: AnyCase, diffs: ParityRow[]): number {
   const hc = byId(h.checks, (c) => c.id, `check of http case ${h.caseId}`);
   const bc = byId(b.checks, (c) => c.id, `check of browser case ${b.caseId}`);
+  const quiet = (h.checks.length === 0 || b.checks.length === 0) && h.state !== b.state;
   let common = 0;
   for (const c of h.checks) {
     const other = bc.get(c.id);
@@ -128,20 +151,23 @@ function compareChecks(caseId: string, h: AnyCase, b: AnyCase, diffs: ParityRow[
       continue;
     }
     if (other === undefined) {
-      diffs.push({ caseId, kind: "check", id: c.id, http: fmt(c), browser: ABSENT });
+      if (!quiet) diffs.push({ caseId, kind: "check", id: c.id, http: fmt(c), browser: ABSENT });
       continue;
     }
     common++;
     if (c.verdict !== other.verdict || c.checked !== other.checked) diffs.push({ caseId, kind: "check", id: c.id, http: fmt(c), browser: fmt(other) });
   }
   for (const c of b.checks) {
-    if (!hc.has(c.id) && !isBrowserOnly(c.id)) diffs.push({ caseId, kind: "check", id: c.id, http: ABSENT, browser: fmt(c) });
+    if (!quiet && !hc.has(c.id) && !isBrowserOnly(c.id)) diffs.push({ caseId, kind: "check", id: c.id, http: ABSENT, browser: fmt(c) });
   }
   return common;
 }
 
+/** A 🚫/░ case as run.ts recordPlanned writes it: planned, never driven. */
+const PLANNED_STATES: ReadonlySet<string> = new Set(["no_path", "not_run"]);
+
 /** Every browser case against the HTTP case it pairs with; then every HTTP
- *  case no browser case paired with. Rows are in that order. */
+ *  case no browser case paired with (outsidePlan). Rows are in that order. */
 export function compareRuns(http: AnyRunResults, browser: AnyRunResults): ParityReport {
   refuseSlot("http", http);
   refuseSlot("browser", browser);
@@ -149,11 +175,19 @@ export function compareRuns(http: AnyRunResults, browser: AnyRunResults): Parity
   byId<AnyCase>(browser.cases, (c) => c.caseId, "browser case");
   const paired = new Set<string>();
   const diffs: ParityRow[] = [];
+  const notDriven: ParityReport["notDriven"] = [];
+  const outsidePlan: string[] = [];
   let compared = 0;
   let checks = 0;
   for (const b of browser.cases) {
     const key = httpKeyOf(b);
     if ("unmapped" in key) {
+      // Exempt only in recordPlanned's exact shape: no script, 🚫/░, no check.
+      // Anything else (a PADPROOF run, a mapping hole) stays a missing row.
+      if (PLANNED_STATES.has(b.state) && b.checks.length === 0) {
+        notDriven.push({ caseId: b.caseId, state: b.state });
+        continue;
+      }
       diffs.push({ caseId: b.caseId, kind: "missing", id: null, http: ABSENT, browser: `${b.state} — ${key.unmapped}` });
       continue;
     }
@@ -165,16 +199,23 @@ export function compareRuns(http: AnyRunResults, browser: AnyRunResults): Parity
     paired.add(h.caseId);
     compared++;
     if (h.state !== b.state) diffs.push({ caseId: b.caseId, kind: "state", id: null, http: h.state, browser: b.state });
-    checks += compareChecks(b.caseId, h, b, diffs);
+    const common = compareChecks(b.caseId, h, b, diffs);
+    // Review I-1: nothing in common and the same state label is a verdict only
+    // when the reason matches too (a deferral both drivers owe the same wave).
+    if (common === 0 && h.state === b.state && h.reason !== b.reason) {
+      diffs.push({ caseId: b.caseId, kind: "vacuous", id: null, http: `${h.state}: ${h.reason}`, browser: `${b.state}: ${b.reason}` });
+    }
+    checks += common;
   }
   for (const h of http.cases) {
-    if (!paired.has(h.caseId)) diffs.push({ caseId: h.caseId, kind: "missing", id: null, http: h.state, browser: ABSENT });
+    if (!paired.has(h.caseId)) outsidePlan.push(h.caseId);
   }
-  return { compared, checks, diffs };
+  return { compared, checks, diffs, notDriven, outsidePlan };
 }
 
 /** 0 only for ≥1 case compared, ≥1 common check and no row. Nothing compared
- *  is never parity (R13, R25): an empty pair of runs has no difference. */
+ *  is never parity (R13, R25): an empty pair of runs has no difference, and an
+ *  all-🚫/░ browser run compares 0. notDriven and outsidePlan never move it. */
 export function parityVerdict(r: ParityReport): { code: 0 | 1; line: string } {
   if (r.compared === 0) return { code: 1, line: "NOT PARITY: compared 0 cases — the two runs share no case, and nothing compared is never parity" };
   if (r.checks === 0) return { code: 1, line: "NOT PARITY: 0 common checks — the compared cases share no check (vacuous)" };
@@ -182,7 +223,8 @@ export function parityVerdict(r: ParityReport): { code: 0 | 1; line: string } {
   return { code: 0, line: "PARITY" };
 }
 
-export const headerLine = (r: ParityReport): string => `compared ${r.compared} cases, ${r.checks} common checks, ${r.diffs.length} differences`;
+export const headerLine = (r: ParityReport): string =>
+  `compared ${r.compared} cases, ${r.checks} common checks, ${r.diffs.length} differences; ${r.outsidePlan.length} HTTP cases outside the browser plan; ${r.notDriven.length} planned without a harness script (🚫/░)`;
 
 /** A table cell: a case id's pipes escaped, and never a line break. */
 const cell = (s: string): string => s.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
@@ -191,10 +233,12 @@ const SECTIONS: readonly { kind: ParityRow["kind"]; heading: string; head: reado
   { kind: "state", heading: "State differences", head: ["case", "http", "browser"], row: (d) => [d.caseId, d.http, d.browser] },
   { kind: "check", heading: "Check differences", head: ["case", "check", "http", "browser"], row: (d) => [d.caseId, d.id ?? "", d.http, d.browser] },
   { kind: "missing", heading: "Missing cases", head: ["case", "http", "browser"], row: (d) => [d.caseId, d.http, d.browser] },
+  { kind: "vacuous", heading: "Vacuous pairs", head: ["case", "http", "browser"], row: (d) => [d.caseId, d.http, d.browser] },
 ];
 const line = (cells: readonly string[]): string => `| ${cells.map(cell).join(" | ")} |`;
 
-/** parity.md: the header line, the verdict, then one section per diff kind. */
+/** parity.md: the header line, the verdict, one section per diff kind, then
+ *  the two listed-not-compared sets. */
 export function renderParity(r: ParityReport, runs: { http: string; browser: string }): string {
   const out = [
     `# Parity: ${cell(runs.http)} (http) vs ${cell(runs.browser)} (browser)`,
@@ -211,5 +255,12 @@ export function renderParity(r: ParityReport, runs: { http: string; browser: str
     if (rows.length === 0) out.push("None.");
     else out.push(line(s.head), line(s.head.map(() => "---")), ...rows.map((d) => line(s.row(d))));
   }
+  // Listed, never compared: each id, because results.json names no plan and
+  // the list is the only way to see a mis-paired HTTP run.
+  const listed: readonly [string, readonly string[]][] = [
+    ["Outside the browser plan", r.outsidePlan.map((id) => `- \`${id}\``)],
+    ["Planned, not driven (🚫/░)", r.notDriven.map((c) => `- \`${c.caseId}\` — ${c.state}`)],
+  ];
+  for (const [heading, items] of listed) out.push("", `## ${heading} (${items.length})`, "", ...(items.length === 0 ? ["None."] : items));
   return `${out.join("\n")}\n`;
 }
