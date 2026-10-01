@@ -203,25 +203,30 @@ async function recordPersons(ctx: ScenarioContext, rec: Recorder, setup: Divisio
   if (setup.kind === "team") noteTeamMembers(rec, setup, out);
 }
 
-/** From round 2 on (round 1 seats only the division's own players), the
- *  first OBSERVED REPEAT in one round's seating gets the predicted signature,
- *  once per stage: a person in two seats of the round, or in one seat with
- *  themselves (T8-R3, m-1). The repeat itself is the evidence, read from the
- *  product's own members; that the person sat in an earlier pair is NOT — on
- *  an 8-player field every person does. A round with no repeat gets nothing. */
+/** From round 2 on (round 1 seats only the division's own players), each
+ *  OBSERVED REPEAT in one round's seating gets the predicted signature, once
+ *  per PERSON per stage, in the first round that repeats them: a person in two
+ *  seats of the round, or in one seat with themselves (T8-R3, m-1). The repeat
+ *  itself is the evidence, read from the product's own members; that the
+ *  person sat in an earlier pair is NOT — on an 8-player field every person
+ *  does. A round with no repeat gets nothing. T15: live, one round repeated
+ *  two persons and I10 named both while the note named only the first, so the
+ *  coverage table (every repeated person named) could not cover the case. */
 export function notePairEntrantDuplicates(rec: Recorder, setup: Pick<DivisionSetup, "persons">, rows: readonly FixtureRow[], persons: Readonly<Record<string, readonly string[]>>): void {
   const of = (side: string): readonly string[] => persons[side] ?? setup.persons.get(side) ?? [];
   const rounds = [...new Set(rows.map((f) => f.round_no ?? 0))].filter((r) => r >= 2).sort((a, b) => a - b);
+  const named = new Set<string>();
   for (const r of rounds) {
     const seats = rows.filter((x) => (x.round_no ?? 0) === r).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null);
     const people = [...new Set(seats.flatMap(of))];
     for (const p of people) {
+      if (named.has(p)) continue;
       const holding = seats.filter((side) => of(side).includes(p));
       const self = holding.find((side) => of(side).filter((x) => x === p).length > 1);
       if (holding.length < 2 && self === undefined) continue;
       const where = self !== undefined ? `in ${self} with themselves` : `in ${holding.join(" and ")}`;
       rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${r} seats ${p} twice, ${where} → ${PAIR_PLAYERS_ROUTE.wave}`);
-      return;
+      named.add(p);
     }
   }
 }

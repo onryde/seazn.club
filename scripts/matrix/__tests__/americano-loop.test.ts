@@ -403,12 +403,17 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(dup.round_no).toBe(2);
     // T8-R3 (m-1): the evidence is the REPEAT itself — the person and the two
     // seats holding them in round 2, as the fake's rows show them.
+    // T15: one note per repeated person — this fake's round 2 repeats more
+    // than one, as the live product's did, and I10 names every one of them.
     const notes = out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 seats "));
-    expect(notes.length).toBe(1);
-    const [, person, seats] = /^mexicano-pair-entrants-counted-as-players: round 2 seats (\S+) twice, in (.+) → W7$/.exec(notes[0]!) ?? [];
-    expect(dup.repeats.get(person!), `${person} repeats in round 2`).toBeDefined();
-    expect(seats!.split(" and ")).toEqual(dup.repeats.get(person!));
-    expect(notes[0]!.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).toBe(true);
+    expect(dup.repeats.size).toBeGreaterThan(1);
+    expect(notes.length).toBe(dup.repeats.size);
+    for (const note of notes) {
+      const [, person, seats] = /^mexicano-pair-entrants-counted-as-players: round 2 seats (\S+) twice, in (.+) → W7$/.exec(note) ?? [];
+      expect(dup.repeats.get(person!), `${person} repeats in round 2`).toBeDefined();
+      expect(seats!.split(" and ")).toEqual(dup.repeats.get(person!));
+      expect(note.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).toBe(true);
+    }
     // The FULL failing set (review 2 m-8), re-derived: I10 (Task 9) reds the
     // duplicate itself, naming round 2 and the person. Round 3's plan then
     // pairs a pair entrant's person with their own individual entry (the same
@@ -866,8 +871,16 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe4")])).toEqual([]);
     // A repeat with no earlier pair at all is still observed, still signed (the repeat is the evidence).
     expect(run([f(1, "e1", "e2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe3 and pe1 → ${PAIR_PLAYERS_ROUTE.wave}`]);
-    // Once per stage, however many rounds repeat a person.
+    // Once per PERSON per stage, however many rounds repeat them (T15: live,
+    // round 2 repeated two persons and I10 named both, but the note named only
+    // the first — the coverage table needs every repeated person named).
     expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1"), f(3, "pe3", "pe1")]).length).toBe(1);
+    // Two persons repeated in one round: each named once, in the round it first repeats.
+    expect(run([f(1, "pe1", "pe2"), f(2, "pe1", "pe3"), f(2, "pe4", "pe2"), f(3, "pe4", "pe2")])).toEqual([
+      `mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe1 and pe3 → ${PAIR_PLAYERS_ROUTE.wave}`,
+      `mexicano-pair-entrants-counted-as-players: round 2 seats p2 twice, in pe1 and pe4 → ${PAIR_PLAYERS_ROUTE.wave}`,
+      `mexicano-pair-entrants-counted-as-players: round 2 seats p3 twice, in pe4 and pe2 → ${PAIR_PLAYERS_ROUTE.wave}`,
+    ]);
   });
 });
 
