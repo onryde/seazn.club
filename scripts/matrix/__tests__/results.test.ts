@@ -7,6 +7,7 @@ import { L2_WIDTHS } from "../lib/pairs.ts";
 import { BaseNotUrl, LOCAL_BASE, baseScrubber, findSecrets, redact } from "../lib/redact.ts";
 import { BROWSER_WIDTHS, CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CaseResultV2, type CheckResult, type RunResults, type RunResultsV2 } from "../lib/results.ts";
 import { baseLiteralsIn, loopbackLiteralsIn } from "./loopback-literals.ts";
+import { MAX_WORKERS } from "../lib/workers.ts";
 
 /** The base every writeResults call below scrubs (FB-1): no evidence here names it unless a test says so. */
 const RUN_BASE = "http://localhost:3999";
@@ -382,6 +383,52 @@ describe("results v3 — the plan that produced a run (W1c Task 14 carry 6)", ()
     const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
     expect(() => parseResults(v2)).not.toThrow();
     expect(() => parseResults({ ...v2, plan: "slice" })).toThrow();
+  });
+});
+
+// W1-driving Task 11 (ruling 46): a run on N > 1 workers says so in its header.
+// Every v3 file written before the field — all the committed v3 evidence —
+// ran on one sign-in, so the field is optional to read, and absent means one.
+describe("results v3 — the run's worker count (W1-driving T11, ruling 46)", () => {
+  it("empty case first: a v3 run with no workers field (every run before T11, and every --workers 1 run) parses, and carries none", () => {
+    const old = parseResults(V3_RUN);
+    expect(old.schemaVersion).toBe(3);
+    expect("workers" in old).toBe(false);
+  });
+  it("every committed v3 results.json still parses — none carries the field", () => {
+    let v3Files = 0;
+    for (const f of COMMITTED_RESULTS) {
+      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number };
+      if (raw.schemaVersion !== 3) continue;
+      const parsed = parseResults(raw);
+      expect("workers" in parsed, f).toBe(false);
+      v3Files++;
+    }
+    expect(v3Files, "committed v3 results files read").toBeGreaterThan(0);
+  });
+  it("a worker count in 1..MAX_WORKERS parses and round-trips through writeResults unchanged", () => {
+    let checked = 0;
+    for (const workers of [2, MAX_WORKERS]) {
+      const run: RunResults = { ...V3_RUN, workers };
+      expect(parseResults(run)).toEqual(run);
+      const { path, written } = writeResults(mkdtempSync(join(tmpdir(), "fm-")), run, RUN_BASE);
+      expect(written.workers).toBe(workers);
+      expect((JSON.parse(readFileSync(path, "utf8")) as { workers: unknown }).workers).toBe(workers);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("a worker count outside 1..MAX_WORKERS, or not an integer, is refused by the v3 schema, on the field", () => {
+    let checked = 0;
+    for (const bad of [0, MAX_WORKERS + 1, 2.5, "3"]) {
+      expect(issuesOf({ ...V3_RUN, workers: bad }).some((i) => i.startsWith("workers: ")), String(bad)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+  it("v2 evidence carries no worker count: the v2 schema refuses one", () => {
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => parseResults({ ...v2, workers: 2 })).toThrow();
   });
 });
 

@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { baseScrubber, findSecrets, mapStrings } from "./redact.ts";
 import { BROWSER_WIDTHS } from "./widths.ts";
+import { MAX_WORKERS } from "./workers.ts";
 
 // Re-exported so every existing `from "./results.ts"` import keeps working.
 export { BROWSER_WIDTHS } from "./widths.ts";
@@ -109,6 +110,11 @@ export interface RunResults {
    *  carry 6. run.ts always writes it; v3 evidence written before the field
    *  (Task 8's walkthrough-a) has none, so it is optional to READ. */
   plan?: string;
+  /** W1-driving Task 11 (ruling 46): how many in-process workers ran the
+   *  cases, each on its own sign-in. Written only when more than one — every
+   *  v3 file before the field (all the committed v3 evidence) and every
+   *  `--workers 1` run is a single sign-in, so absent means one. */
+  workers?: number;
   cases: CaseResult[];
 }
 
@@ -178,6 +184,7 @@ export const RunResultsSchemaV3 = z.strictObject({
   layer: z.enum(LAYERS),
   driver: z.enum(DRIVER_KINDS),
   plan: z.string().min(1).optional(),
+  workers: z.number().int().min(1).max(MAX_WORKERS).optional(),
   cases: z.array(CaseSchemaV3),
 });
 

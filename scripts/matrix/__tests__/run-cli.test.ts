@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { API_ONLY_ROWS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
-import { NoOrganiserPath, RefusedCall } from "../lib/driver/types.ts";
+import { NoOrganiserPath, OrgMismatch, RefusedCall } from "../lib/driver/types.ts";
 import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
 import type { PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { CaseBrowser } from "../lib/browser/session.ts";
@@ -26,7 +26,8 @@ import { LOCAL_BASE } from "../lib/redact.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
-import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
+import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
+import { MAX_WORKERS } from "../lib/workers.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
@@ -1974,5 +1975,233 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
     expect(raw.cases.length).toBe(PAD_SPORTS.length);
     expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
+  });
+});
+
+// W1-driving Task 11 (ruling 46, D10): --workers N. Review Focus 4 — each
+// worker has its own session, a worker's case still refuses OrgMismatch,
+// results.cases[i] is plan item i whatever finished first, and a crash in one
+// case leaves every other index in place. The empty case of the queue (no
+// items) is workers.test.ts's; here the state transitions are the runner's:
+// one worker (today's run, unchanged), N workers, N > cases, a red case, an
+// environment refusal mid-run, and the browser refusal (D10).
+describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
+  /** Seven league cases the league fake can drive: generic × 4, badminton × 3. */
+  const SEVEN = ["generic|LIFECYCLE", "generic|M1", "generic|R4", "generic|F1", "badminton|LIFECYCLE", "badminton|M1", "badminton|R4"] as const;
+  const seven = () => ({
+    sports: ["generic", "badminton"], deniesFeatures: false,
+    plan: (v: (s: string) => string) => SEVEN.map((k) => {
+      const [sport, scenario] = k.split("|") as [string, string];
+      return { caseId: `league|${sport}|${v(sport)}|${scenario}`, row: "league", sport, variant: v(sport), scenario, canary: false };
+    }),
+  }) as never;
+  /** Each sign-in hands out its OWN session object, named, so a case's session says which worker ran it. */
+  function workerDeps(over: Partial<RunDeps> = {}): Deps & { sessions: Session[]; prepared: Map<string, Session>; driven: Map<string, Session> } {
+    const sessions: Session[] = [];
+    const prepared = new Map<string, Session>();
+    const driven = new Map<string, Session>();
+    const base = deps({
+      planCases: seven,
+      signIn: async (_b, e) => { base.order.push("signIn"); base.emails.push(`signIn ${e}`); const s: Session = { cookies: { worker: String(sessions.length) } }; sessions.push(s); return s; },
+      prepareCaseOrg: async (ctx, i) => { base.orgs.push(i); prepared.set(`org-${i.slug}`, ctx.session); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }; },
+      driverFor: (b, s, orgId) => { driven.set(orgId, s); const driver = new FakeLeagueDriver(orgId); base.drivers.push({ base: b, session: s, orgId, driver }); return driver; },
+      ...over,
+    });
+    return Object.assign(base, { sessions, prepared, driven });
+  }
+  const planIds = SEVEN.map((k) => { const [sport, scenario] = k.split("|"); return `league|${sport}|${sport === "generic" ? "score" : "bwf"}|${scenario}`; });
+
+  it("--workers 3 over 7 planned cases signs in exactly 3 times, every time as the run's owner", async () => {
+    capture();
+    const d = workerDeps();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk1", "--report-dir", dirFor()])).toBe(0);
+    expect(d.order.filter((x) => x === "signIn")).toHaveLength(3);
+    expect(d.sessions).toHaveLength(3);
+    expect(d.emails.filter((e) => e.startsWith("signIn "))).toEqual(Array(3).fill("signIn delivered+matrix-wk1@resend.dev"));
+    // The owner proof still follows the FIRST sign-in, once (run.ts's LOAD-BEARING note).
+    expect(d.emails.filter((e) => e.startsWith("db "))).toEqual(["db delivered+matrix-wk1@resend.dev"]);
+    expect(d.order.at(-1)).toBe("dispose");
+  });
+  it("each case's org is seeded AND driven on the session of the worker that ran it, and every worker ran a case", async () => {
+    capture();
+    const d = workerDeps();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk2", "--report-dir", dirFor()])).toBe(0);
+    let checked = 0;
+    for (let n = 1; n <= SEVEN.length; n++) {
+      const org = `org-m-wk2-${n}`;
+      expect(d.prepared.get(org), org).toBeDefined();
+      expect(d.driven.get(org), org).toBe(d.prepared.get(org));
+      expect(d.sessions, org).toContain(d.driven.get(org));
+      checked++;
+    }
+    expect(checked).toBe(7);
+    expect(new Set(d.driven.values()).size).toBe(3);
+  });
+  it("results.cases[i] is the plan's i-th case whatever finished first", async () => {
+    const io = capture();
+    const dir = dirFor();
+    // Later cases settle sooner, so completion order is the reverse of plan order.
+    const d = workerDeps({
+      prepareCaseOrg: async (_ctx, i) => {
+        const n = Number(i.slug.split("-").at(-1));
+        await new Promise((r) => setTimeout(r, (SEVEN.length - n) * 4));
+        return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] };
+      },
+    });
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk3", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "wk3").cases.map((c) => c.caseId)).toEqual(planIds);
+    // Teeth: the progress lines (printed as each case finishes) are NOT in plan order.
+    const finished = [...io.out().matchAll(/^\[(\d+)\/7\]/gm)].map((m) => Number(m[1]));
+    expect([...finished].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(finished).not.toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+  it("an OrgMismatch on one worker's case is that case's error red; every other case is unaffected", async () => {
+    capture();
+    const dir = dirFor();
+    const d = workerDeps({
+      driverFor: (_b, _s, orgId) => new (class extends FakeLeagueDriver {
+        override createCompetition(i: { name: string; slug: string }) {
+          if (orgId === "org-m-wk4-3") return Promise.reject(new OrgMismatch(orgId, "org-elsewhere"));
+          return super.createCompetition(i);
+        }
+      })(orgId),
+    });
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk4", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "wk4").cases;
+    expect(cases.map((c) => c.caseId)).toEqual(planIds);
+    expect(cases[2]!.state).toBe("red");
+    expect(cases[2]!.reason).toMatch(/^error: OrgMismatch: driver: competition landed in org org-elsewhere, expected org-m-wk4-3/);
+    const others = cases.filter((_c, k) => k !== 2);
+    expect(others.map((c) => c.reason.startsWith("error:"))).toEqual(Array(6).fill(false));
+    expect(others.filter((c) => c.scenario === "LIFECYCLE").map((c) => c.state)).toEqual(["works", "works"]);
+  });
+  // runCase keeps every driver and product refusal as its case's error red
+  // (the OrgMismatch case above), so a throw PAST it is a harness defect. One
+  // real seam reaches that today: the case's progress line. Review Focus 4 —
+  // the crash is recorded at its own plan index, and every other case keeps
+  // its own result.
+  it("a case whose run throws past runCase (its progress line cannot be written) is red at its own index as a crash; every other case keeps its result", async () => {
+    const lines: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.spyOn(process.stdout, "write").mockImplementation((s: string | Uint8Array) => {
+      const line = String(s);
+      if (line.startsWith("[3/7] ") && !line.includes("crashed")) throw new Error("stdout closed");
+      lines.push(line);
+      return true;
+    });
+    const dir = dirFor();
+    const clean = dirFor();
+    expect(await runSlice(workerDeps(), ["--workers", "3", "--run-id", "wkc", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "wkc").cases;
+    expect(cases.map((c) => c.caseId)).toEqual(planIds);
+    expect(cases[2]).toMatchObject({ state: "red", reason: "error: crashed — Error: stdout closed", checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, layer: "L3", driver: "http", width: null });
+    expect(lines.join("")).toContain(`[3/7] ${planIds[2]} → red error: crashed — Error: stdout closed`);
+    // Every other index holds what the same plan gives with nothing crashing.
+    vi.restoreAllMocks();
+    capture();
+    expect(await runSlice(workerDeps(), ["--workers", "3", "--run-id", "wkc", "--report-dir", clean])).toBe(0);
+    const want = resultsIn(clean, "wkc").cases;
+    let checked = 0;
+    for (const k of [0, 1, 3, 4, 5, 6]) {
+      expect([cases[k]!.caseId, cases[k]!.state, cases[k]!.reason], String(k)).toEqual([want[k]!.caseId, want[k]!.state, want[k]!.reason]);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(want[2]!.reason).not.toMatch(/crashed/);
+  });
+  it("a DB that stops proving it is ours in one worker's case refuses the run (exit 2): nothing written, no later case starts, and the DB is disposed only after every worker settled", async () => {
+    const io = capture();
+    const dir = dirFor();
+    let active = 0;
+    let activeAtDispose = -1;
+    const base = workerDeps();
+    const d = workerDeps({
+      openDb: async () => ({ ...(await base.openDb()), dispose: async () => { activeAtDispose = active; d.order.push("dispose"); } }),
+      prepareCaseOrg: async (_ctx, i) => {
+        d.orgs.push(i);
+        if (i.slug === "m-wk5-2") throw new DataDirMismatch("/tmp/pg", "/var/other");
+        active++;
+        await new Promise((r) => setTimeout(r, 20));
+        active--;
+        return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] };
+      },
+    });
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk5", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/matrix: refused — DataDirMismatch/);
+    expect(existsSync(join(dir, "wk5"))).toBe(false);
+    // Only the cases already in flight when it refused (at most one per worker) ever started.
+    expect(d.orgs.map((o) => o.slug)).toContain("m-wk5-2");
+    expect(d.orgs.length).toBeLessThanOrEqual(3);
+    expect(activeAtDispose).toBe(0);
+    expect(d.order.at(-1)).toBe("dispose");
+  });
+  it("--workers above the case count opens only as many workers as cases", async () => {
+    capture();
+    const d = workerDeps({ planCases: undefined });
+    expect(await runSlice(d, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wk6", "--report-dir", dirFor()])).toBe(0);
+    expect(d.order.filter((x) => x === "signIn")).toHaveLength(1);
+    capture();
+    const two = workerDeps({ planCases: undefined });
+    expect(await runSlice(two, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--run-id", "wk6b", "--report-dir", dirFor()])).toBe(0);
+    expect(two.order.filter((x) => x === "signIn")).toHaveLength(SCENARIO_KEYS.length);
+  });
+  it("--workers 3 is recorded in results.json's run header (parseResults reads it); --workers 1 writes today's header, with no workers field", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(workerDeps(), ["--workers", "3", "--run-id", "wk7", "--report-dir", dir])).toBe(0);
+    const three = JSON.parse(readFileSync(join(dir, "wk7", "results.json"), "utf8")) as RunResults;
+    expect(three.workers).toBe(3);
+    expect(parseResults(three)).toMatchObject({ schemaVersion: 3, workers: 3 });
+    capture();
+    expect(await runSlice(workerDeps(), ["--workers", "1", "--run-id", "wk7b", "--report-dir", dir])).toBe(0);
+    const one = JSON.parse(readFileSync(join(dir, "wk7b", "results.json"), "utf8")) as Record<string, unknown>;
+    expect("workers" in one).toBe(false);
+  });
+  it("--workers 1 is today's single-sign-in run: the same order, one sign-in, the same cases and states as no --workers at all", async () => {
+    let checked = 0;
+    const runs: { order: string[]; cases: [string, string][]; keys: string[] }[] = [];
+    for (const extra of [[], ["--workers", "1"]]) {
+      capture();
+      const dir = dirFor();
+      const d = deps();
+      expect(await runSlice(d, [...extra, "--only", "league|generic", "--run-id", "w1", "--report-dir", dir]), extra.join(" ")).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, "w1", "results.json"), "utf8")) as RunResults;
+      runs.push({ order: d.order, cases: raw.cases.map((c) => [c.caseId, c.state]), keys: Object.keys(raw).sort() });
+      expect(d.ctxs.every((c) => c.session === d.session)).toBe(true);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(runs[0]!.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+    expect(runs[1]).toEqual(runs[0]);
+  });
+  // "=-2" is one token: a bare "-2" after --workers is refused by parseArgs itself, as ambiguous.
+  it.each(["0", String(MAX_WORKERS + 1), "1.5", "abc", "", "=-2", " 3"])("--workers '%s' is a usage error naming the bound, before anything runs", async (n) => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, [...(n.startsWith("=") ? [`--workers${n}`] : ["--workers", n]), "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toContain(`1..${MAX_WORKERS}`);
+    expect(io.err()).toMatch(/usage: run\.ts .*--workers N/);
+  });
+  it("D10: --driver browser --workers 2 is a usage error naming the wave that owes browser workers; --workers 1 in a browser still runs", async () => {
+    const io = capture();
+    const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
+    expect(await runSlice(d, ["--driver", "browser", "--width", "1280", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/--workers 2 is HTTP-only in this wave .*W1d/);
+    expect(io.err()).toMatch(/usage: run\.ts/);
+    vi.restoreAllMocks();
+    capture();
+    const one = deps({ openBrowserRun: async () => fakeBrowserRun().run });
+    expect(await runSlice(one, ["--driver", "browser", "--width", "1280", "--workers", "1", "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wb1", "--report-dir", dirFor()])).toBe(0);
+    expect(one.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+  });
+  it("D10 holds for a layered plan too: --layer L1 --workers 2 is refused before anything runs", async () => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/W1d/);
   });
 });

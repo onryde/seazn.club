@@ -1,7 +1,12 @@
-// The runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
-// plan seeding, the scenario over its driver, the invariants → one redacted
-// results.json → MATRIX.md. L3 drives HttpDriver; `--driver browser --width W`
-// (W1c Task 6) drives each case through the organiser UI in one chromium
+// The runner: own-DB guard → preflight → one sign-in per worker → per case:
+// SQL org + plan seeding, the scenario over its driver, the invariants → one
+// redacted results.json → MATRIX.md. `--workers N` (W1-driving T11, ruling
+// 46) runs the cases on N in-process workers against the one server and DB,
+// each on its OWN sign-in, session and cookie jar (lib/workers.ts); results
+// stay in plan order. Over HTTP only in this wave (D10).
+//
+// L3 drives HttpDriver; `--driver browser --width W` (W1c Task 6) drives
+// each case through the organiser UI in one chromium
 // per run and one context per case (BrowserDriver), at width W — recorded as
 // W's layer: L1 at 1280, L2 at a phone width (layerOfWidth; T12 fix round 1).
 // `--driver browser --layer L1|L2` (W1c Task 12, ruling 39) runs a LAYERED
@@ -12,7 +17,7 @@
 // driven browser case, so a plan that only records opens none.
 //
 //   pnpm run matrix:l3 --
-//     [--base URL] [--run-id ID] [--report-dir DIR]
+//     [--base URL] [--run-id ID] [--report-dir DIR] [--workers N]
 //     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
 //   pnpm run matrix:browser -- --layer L1|L2 [--only row|sport] [--scenario KEY (L1)]
@@ -35,7 +40,9 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter, a run id that is empty or too long once slugged; an unknown
+//      filter, a run id that is empty or too long once slugged; a --workers
+//      that is not an integer in 1..MAX_WORKERS, or above 1 on a browser run
+//      (D10); an unknown
 //      --driver, --driver browser without --width, a --width outside
 //      BROWSER_WIDTHS, or a --width on an http run; --layer other than L1/L2,
 //      without --driver browser, beside --set or --canary, L2 with --scenario;
@@ -97,6 +104,7 @@ import { HttpDriver } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
+import { routeTo } from "./lib/routing.ts";
 import {
   API_ONLY_BROWSER_SET, LAYER_PLANNERS, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, widthSweepPlanner,
   type LayerCase, type PlannedLayerCase,
@@ -116,6 +124,7 @@ import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
+import { MAX_WORKERS, WorkersOutOfRange, runQueue } from "./lib/workers.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -415,7 +424,11 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]`;
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]`;
+
+/** D10 (ruling 52): browser workers are not this wave's — one chromium per
+ *  run, one context per case, one case at a time. */
+const BROWSER_WORKERS = routeTo("W1d", "browser workers inside a shard (D10)");
 
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
@@ -425,7 +438,20 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
  *  kept as typed until the plan is chosen: a plain browser run needs one
  *  (resolved by plainBrowserWidth), a layered plan sets its own and refuses
  *  any other (layeredWidthRefusal). */
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined }
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined; workers: number }
+
+/** `--workers` (W1-driving T11): digits only, then 1..MAX_WORKERS — the same
+ *  bound runQueue refuses by name (WorkersOutOfRange), checked here first so
+ *  a bad count is a usage error before anything touches the DB or the server.
+ *  Absent is one worker: today's single sign-in. */
+function parseWorkers(v: string | undefined): { workers: number } | { usage: string } {
+  if (v === undefined) return { workers: 1 };
+  // Digits only: Number("") is 0, Number(" 3") is 3 and Number("1.5") is 1.5 — none was asked for.
+  if (!/^\d+$/.test(v)) return { usage: `--workers must be an integer in 1..${MAX_WORKERS}, got '${v}'` };
+  const n = Number(v);
+  if (n < 1 || n > MAX_WORKERS) return { usage: `--workers: ${new WorkersOutOfRange(n).message}` };
+  return { workers: n };
+}
 
 /** The plan a run was made from, as its command line chose it — results.json's
  *  `plan` (W1c Task 14 carry 6, Task 12 review m-7), so a reader never guesses
@@ -478,18 +504,24 @@ export function withoutBareDashes(argv: readonly string[]): string[] {
 }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string; workers?: string };
   try {
     ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
       only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
-      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" },
+      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, workers: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
   }
   const how = parseDriver(values.driver, values.width);
   if ("usage" in how) return how;
+  const w = parseWorkers(values.workers);
+  if ("usage" in w) return w;
+  // D10: every browser plan (plain or layered) runs one case at a time.
+  if (how.driver === "browser" && w.workers > 1) {
+    return { usage: `--workers ${w.workers} is HTTP-only in this wave (D10); browser workers are owed by ${BROWSER_WORKERS.wave} — ${BROWSER_WORKERS.why}` };
+  }
   // W1c Task 12: --layer chooses the plan, and it is a browser plan.
   let layer: Cli["layer"];
   if (values.layer !== undefined) {
@@ -509,7 +541,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width, workers: w.workers };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -554,8 +586,26 @@ export function keepNotes(notes: readonly string[]): string[] {
  *  never makes writeResults throw the whole run away (it still refuses, as the backstop). */
 const redactCheck = (c: CheckResult): CheckResult => ({ ...c, reason: redact(c.reason), evidence: c.evidence.map((x) => redact(x)) });
 
-/** `reportDir`: the run's own report directory. */
+/** `reportDir`: the run's own report directory. `session`: the sign-in of
+ *  the worker running the case (W1-driving T11: one per worker). */
 interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string; reportDir: string }
+
+/** The environment, never a case: the DB stopped proving it is ours, or a
+ *  case's browser could not be set up. runCase rethrows these, and the worker
+ *  queue aborts the whole run on them rather than record a product red. */
+const abortsRun = (e: unknown): boolean => e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted;
+
+/** The run's browser could not be opened (no chromium, a hold mismatch): the
+ *  environment. Carries the original error so the abort reads exactly as it
+ *  did before workers (W1-driving T11) — `crashed` rethrows `original`. */
+class BrowserOpenFailed extends Error {
+  readonly original: unknown;
+  constructor(original: unknown) {
+    super("matrix: the run's browser could not be opened");
+    this.name = "BrowserOpenFailed";
+    this.original = original;
+  }
+}
 
 /** One case the runner DRIVES: its spec, the layer it records, and its browser
  *  and width — null over HTTP. A plain run gives every case the CLI's width
@@ -608,7 +658,7 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     // The DB stopped proving it is ours, or the case's browser could not be
     // set up: that is the environment, not this case. Abort the run rather
     // than record it as a product red.
-    if (e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted) throw e;
+    if (abortsRun(e)) throw e;
     if (e instanceof ScenarioUnsupported || e instanceof RowBuildDeferred) deferred = { wave: e.wave, reason: e.message };
     // M-4 ruling: a path this layer does not drive is 🚫 naming its wave, never an error red.
     else if (e instanceof NoOrganiserPath) noPath = { wave: e.wave, reason: e.reason };
@@ -678,6 +728,20 @@ export function canaryVerdict(key: string, c: CaseResult | undefined): number {
   return ok ? EXIT.OK : EXIT.NO_SIGNAL;
 }
 
+/** W1-driving T11 (Review Focus 4): a driven case whose run THREW past
+ *  runCase's own catch (which keeps every product or driver refusal as the
+ *  case's error red, so this is a harness defect) is recorded red at its own
+ *  plan index — every other worker's case keeps its result. Never for the
+ *  environment (abortsRun) nor for a planned case: those abort the run. */
+function crashResult(spec: CaseSpec, layer: Layer, width: BrowserWidth | null, e: unknown): CaseResult {
+  const { state, reason } = decideState({ checks: [], deferred: null, error: `crashed — ${errText(e)}`, mandated: null, noPath: null });
+  return {
+    caseId: atWidth(spec.caseId, width), row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
+    state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
+    ...(width === null ? { layer, driver: "http", width: null } as const : { layer, driver: "browser", width } as const),
+  };
+}
+
 /** One item of a run, in plan order: a case the runner drives at its layer
  *  and width (null over HTTP), or a layered plan's 🚫/░ case, recorded. */
 type RunItem =
@@ -724,7 +788,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // The sign-in is the one HTTP write before either proof. Switching orgs by
     // any other route (an API token, say) silently drops proof 2 — replace it
     // with an equivalent server-reads-our-write check before doing that.
-    const session = await deps.signIn(base, owner); // ONE sign-in per run (single worker)
+    // Worker 0's sign-in, before the proofs below; workers 1..N-1 sign in as
+    // the same owner when the queue opens them (W1-driving T11, ruling 46:
+    // the active org is a per-jar cookie, so one owner on N jars never
+    // switches another worker's org — proven live at T11 Step 0).
+    const first = await deps.signIn(base, owner);
     const userId = await db.userIdForEmail(owner);
     const plan = await db.chooseTopPublicPlan();
     const order = new Map<string, string[]>();
@@ -769,21 +837,32 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       }
       return opened.run;
     };
-    const ctx: RunCtx = { base, session, userId, plan, runId: cli.runId, reportDir: dir };
-    for (const [i, item] of items.entries()) {
-      let result: CaseResult;
-      if (item.kind === "planned") {
-        result = recordPlanned(item.case);
-      } else {
-        // Outside runCase's try: a browser that cannot open aborts the run (above).
-        const browser = item.width === null ? null : { run: await browserFor(), width: item.width };
-        const ran = await runCase(deps, ctx, { spec: item.spec, layer: item.layer, browser }, i);
-        result = ran.result;
-        if (ran.refusal !== null) refusals.set(result.caseId, ran.refusal);
-      }
-      cases.push(result);
+    const progress = (i: number, result: CaseResult): CaseResult => {
       say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}`);
-    }
+      return result;
+    };
+    // Today's loop body, on the worker's own session. A browser plan runs
+    // one worker (D10), so the browser is still opened at most once.
+    const runOne = async (session: Session, item: RunItem, i: number): Promise<CaseResult> => {
+      if (item.kind === "planned") return progress(i, recordPlanned(item.case));
+      let browser: { run: BrowserRun; width: BrowserWidth } | null = null;
+      if (item.width !== null) {
+        // Outside runCase's try: a browser that cannot open aborts the run (above).
+        try { browser = { run: await browserFor(), width: item.width }; } catch (e) { throw new BrowserOpenFailed(e); }
+      }
+      const ran = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir }, { spec: item.spec, layer: item.layer, browser }, i);
+      if (ran.refusal !== null) refusals.set(ran.result.caseId, ran.refusal);
+      return progress(i, ran.result);
+    };
+    // Throwing from here aborts the queue (lib/workers.ts): the in-flight
+    // cases finish, no other starts, and the error reaches runSlice's catch
+    // exactly as the sequential loop's did.
+    const crashed = (item: RunItem, i: number, e: unknown): CaseResult => {
+      if (e instanceof BrowserOpenFailed) throw e.original;
+      if (abortsRun(e) || item.kind === "planned") throw e;
+      return progress(i, crashResult(item.spec, item.layer, item.width, e));
+    };
+    cases.push(...await runQueue(items, cli.workers, async (n) => (n === 0 ? first : deps.signIn(base, owner)), runOne, crashed));
   } finally {
     // A failed close must not throw away the cases that already ran. The
     // browser is closed exactly once, after the last case or the abort.
@@ -802,7 +881,10 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid,
     // A layered plan names its layer; a plain one is its width's (layerOfWidth:
     // 1280 L1, a phone width L2), L3 over HTTP.
-    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli), cases,
+    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli),
+    // Ruling 46: written only for N > 1, so a one-worker run's header is today's.
+    ...(cli.workers > 1 ? { workers: cli.workers } : {}),
+    cases,
   };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
