@@ -43,7 +43,7 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "3292e33f84b693e5def6048012f6653ca7e31e1573fda3901da4fe67a62c5d43",
   "capture-descriptor.v1.json": "3052101953e6998969749455a10b7343621e6b1c37908457c3520477b8a38612",
-  "capture-beat.v1.json": "acaeb033927340fd9782894d99f821d848f52bcf32266b592a0730a6ba9f818f",
+  "capture-beat.v1.json": "e14329132400d45cd38e03b19cf85189fe35acb0b8b9a51e7ca98879fe07c736",
   "capture-start.v1.json": "d48f45fee7d1a73da22da83f3406bcaeb6a0b1f1c734278313de294f9215b2ea",
 };
 
@@ -129,14 +129,22 @@ const SPEC_REFUSALS: Record<string, number> = {
 const SPEC_DESCRIPTOR_REFUSALS = ["code_ended", "not_a_stream_code", "invalid", "rate_limited", "unavailable"];
 
 /** D16 (capture's field-by-field check, 2026-10-01): cross-field rules the server enforces in the twin. A refine is not
- *  exported to JSON Schema and the published bytes stay frozen, so ajv ADMITS each of these fixtures; only the twin
- *  refuses them (a 422). Each names its valid sibling, from which it differs in `field` alone. */
-const ZOD_ONLY: Record<string, { sibling: string; field: string; file: string; twin: Twin; rule: string }> = {
-  "capture-beat.v1/beat-invalid-cause-without-sid": { sibling: "beat-valid", field: "cause", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "cause rides only while a broadcast is held (sid non-null)" },
-  "capture-beat.v1/beat-invalid-endReason-not-ended": { sibling: "beat-valid-publishing", field: "endReason", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "endReason only with state ended (§6.3.2)" },
-  "capture-beat.v1/beat-invalid-stopped-with-sid": { sibling: "beat-valid-publishing", field: "stopped", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "stopped only while sid is null (§6.3.2, RR3)" },
-  "capture-beat.v1/beat-invalid-claim-with-rejoin": { sibling: "beat-valid-resume", field: "cause", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "a claim never rides with cause rejoin" },
-  "capture-descriptor.v1/invalid-srt-null-preferred-srt": { sibling: "valid-live-srt-null", field: "preferred", file: "capture-descriptor.v1.json", twin: S.CaptureDescriptor, rule: "cred.srt null ⇒ preferred rtmps (§6.4, A18)" },
+ *  exported to JSON Schema, so ajv ADMITS each of these fixtures; only the twin refuses them (a 422). Each names its
+ *  valid sibling, from which it differs in `field` alone. Controller ruling 2026-10-01: the published contract STATES
+ *  every rule the server enforces (one source of truth), so `stated` lists, per rule, the field descriptions that must
+ *  carry it — the vendoring repo reads the rule there, and a rule whose prose is dropped fails the run. */
+type Stated = [field: string, text: string];
+const ZOD_ONLY: Record<string, { sibling: string; field: string; file: string; twin: Twin; stated: Stated[] }> = {
+  "capture-beat.v1/beat-invalid-cause-without-sid": { sibling: "beat-valid", field: "cause", file: "capture-beat.v1.json", twin: S.CaptureBeat,
+    stated: [["cause", "only while sid is non-null"]] },
+  "capture-beat.v1/beat-invalid-endReason-not-ended": { sibling: "beat-valid-publishing", field: "endReason", file: "capture-beat.v1.json", twin: S.CaptureBeat,
+    stated: [["endReason", "only with state \"ended\""]] },
+  "capture-beat.v1/beat-invalid-stopped-with-sid": { sibling: "beat-valid-publishing", field: "stopped", file: "capture-beat.v1.json", twin: S.CaptureBeat,
+    stated: [["stopped", "only while sid is null"]] },
+  "capture-beat.v1/beat-invalid-claim-with-rejoin": { sibling: "beat-valid-resume", field: "cause", file: "capture-beat.v1.json", twin: S.CaptureBeat,
+    stated: [["cause", "never \"rejoin\" on a claim beat"], ["claim", "never together with cause \"rejoin\""]] },
+  "capture-descriptor.v1/invalid-srt-null-preferred-srt": { sibling: "valid-live-srt-null", field: "preferred", file: "capture-descriptor.v1.json", twin: S.CaptureDescriptor,
+    stated: [["preferred", "\"rtmps\" whenever cred.srt is null"]] },
 };
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -348,10 +356,11 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(zodOnlySeen).toBe(5);
   });
 
-  it("D16 cross-field rules (zod-only): each ZOD_ONLY fixture differs from a valid sibling in ONE field, and the twin refuses it on that field alone", () => {
+  it("D16 cross-field rules (zod-only): each ZOD_ONLY fixture differs from a valid sibling in ONE field, and the twin refuses it on that field alone; the file STATES each rule in its field prose", () => {
     const fileAdmits = fileValidator();
     let checked = 0;
-    for (const [key, { sibling, field, file, twin }] of Object.entries(ZOD_ONLY)) {
+    let statements = 0;
+    for (const [key, { sibling, field, file, twin, stated }] of Object.entries(ZOD_ONLY)) {
       const [dir, name] = key.split("/") as [string, string];
       const bad = fixture(dir, name), good = fixture(dir, sibling);
       const differing = [...new Set([...Object.keys(bad), ...Object.keys(good)])].filter((k) => JSON.stringify(bad[k]) !== JSON.stringify(good[k]));
@@ -363,9 +372,18 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       // Exactly one issue, raised on the rule's own field: the refusal is the refine, not some other guard.
       expect(result.error?.issues.map((i) => i.path.join(".")), key).toEqual([field]);
       expect(fileAdmits(file, "", bad), `${key}: the file states this rule in prose only, so ajv admits it`).toBe(true);
+      // One source of truth: the rule is written where the vendoring repo reads the field (every node of it).
+      for (const [prop, text] of stated) {
+        const nodes = nodesAt(rootOf(contract(file)), [prop]);
+        expect(nodes.length, `${key}: ${file} has ${prop}`).toBeGreaterThan(0);
+        for (const node of nodes) expect(node.description, `${key}: ${file} ${prop} states the rule`).toContain(text);
+        statements += nodes.length;
+      }
       checked++;
     }
     expect(checked).toBe(5);
+    // beat cause 1 + endReason 1 + stopped 1 + (cause 1 + claim 1) + the descriptor's preferred on 5 session states.
+    expect(statements).toBe(10);
     // CaptureSession (the session-only union later tasks import) carries the same A18 rule as the descriptor.
     const srtNull = fixture("capture-descriptor.v1", "valid-live-srt-null");
     expect(parses(S.CaptureSession, srtNull), "session: srt null with rtmps").toBe(true);

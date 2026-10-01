@@ -23,7 +23,7 @@
       "maxLength": 64
     },
     "claim": {
-      "description": "\"new\" or \"resume\" on a claim beat, otherwise null (§6.5, ask 2).",
+      "description": "\"new\" or \"resume\" on a claim beat, otherwise null (§6.5, ask 2). A claim rides only until the pairing's first 2xx, so it is never together with cause \"rejoin\" (a rejoin follows a 2xx live); the server refuses that pair with 422 (D16).",
       "anyOf": [
         {
           "type": "string",
@@ -93,6 +93,7 @@
       ]
     },
     "cause": {
+      "description": "Why the broadcast this phone holds was started (§6.3.2). Non-null only while sid is non-null (a broadcast is held), otherwise null; never \"rejoin\" on a claim beat. The server refuses either breach with 422 (D16, capture's field-by-field check 2026-10-01).",
       "anyOf": [
         {
           "type": "string",
