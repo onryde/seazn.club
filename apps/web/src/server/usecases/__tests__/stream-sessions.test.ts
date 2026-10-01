@@ -458,33 +458,18 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(gone.state).toBe("warming");
   });
 
-  // Lane D amendment D5 (class 1 — a fixture on both ends proves the fixture). capture-qr.v1.test.ts pins the contract
-  // against fixtures authored from §7.6; THIS is the seam: the payload the REAL builder (currentSession's qr) hands the
-  // Phone tab, through the phone's parser and the checksummed JSON contract's required-key sets. It crosses the wire as
-  // JSON, so the parse is of the serialised text, exactly what the QR encodes.
-  it("D5: the REAL builder's qr satisfies the checksummed v1 contract — parseCaptureQr accepts its JSON verbatim, and its keys equal the contract's required set at every level", async () => {
-    const contract = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../../docs/contracts/capture-qr.v1.json"), "utf8")) as {
-      required: string[]; properties: { cred: { required: string[]; properties: { srt: { required: string[] }; rtmps: { required: string[] } } } };
-    };
+  // Lane D amendment D5 (class 1 — a fixture on both ends proves the fixture). THIS is the seam: the payload the REAL
+  // builder (currentSession's qr) hands the Phone tab, through the phone's parser. It crosses the wire as JSON, so the
+  // parse is of the serialised text, exactly what the QR encodes. Capture QR v2 PR-1 T1 removed the v1 JSON contract
+  // (W4), so the contract's required-key levels went with it; the v1 builder and parseCaptureQr live until T11, and so
+  // does this round trip.
+  it("D5: the REAL builder's qr round-trips through the phone's v1 parser — parseCaptureQr accepts its JSON verbatim", async () => {
     const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     const qr = (await currentSession(r.auth, r.fixtureId, r.deps))!.qr;
     expect(qr, "the warming projection carries a qr").not.toBeNull();
     const wire = JSON.parse(JSON.stringify(qr)) as unknown;
     expect(parseCaptureQr(wire, r.deps.now())).toEqual({ ok: true, payload: qr });
-    const levels: [string, string[], string[]][] = [
-      ["top", Object.keys(qr!), contract.required],
-      ["cred", Object.keys(qr!.cred), contract.properties.cred.required],
-      ["cred.srt", Object.keys(qr!.cred.srt), contract.properties.cred.properties.srt.required],
-      ["cred.rtmps", Object.keys(qr!.cred.rtmps), contract.properties.cred.properties.rtmps.required],
-    ];
-    let checked = 0;
-    for (const [name, built, required] of levels) {
-      expect(required.length, `${name}: the contract declares no keys`).toBeGreaterThan(0);
-      expect([...built].sort(), `${name}: the builder's keys vs the contract's`).toEqual([...required].sort());
-      checked++;
-    }
-    expect(checked).toBe(4);
   });
 
   it("double start → 409 active_session carrying the existing id (r1: admit, and the partial index as the race backstop)", async () => {

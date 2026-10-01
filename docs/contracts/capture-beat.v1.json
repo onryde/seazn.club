@@ -1,0 +1,833 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seazn.club/contracts/capture-beat.v1.json",
+  "title": "Seazn capture beat, v1: POST /api/v1/capture/codes/{code}/beats",
+  "description": "The phone's heartbeat body (capture QR v2 spec 2026-10-01 §6.3.2; `at` amended §17.5, R5 final, agreed with capture 2026-10-01). Strict: anything malformed is 422, which the phone counts as a failed beat. $defs.answer is the 200 answer (§6.3.3). A beat never answers 410 (ask 8). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "The stream code (§6.1).",
+      "type": "string",
+      "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+    },
+    "slot": {
+      "description": "The camera slot, 0 in PR-1 (§6.3.1).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "phone": {
+      "description": "The phone's own install id (§6.3.2, §6.5).",
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 64
+    },
+    "claim": {
+      "description": "\"new\" or \"resume\" on a claim beat, otherwise null (§6.5, ask 2).",
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "new",
+            "resume"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "device": {
+      "description": "{model} on a claim beat, Build.MODEL only, otherwise null; read only on a claim (G0-e, §6.3.2).",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "model"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sid": {
+      "description": "The session this phone holds, or null (§6.3.2).",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "at": {
+      "description": "When the phone took the beat: ISO-8601 with any offset; a value with no zone is refused. The server normalises it to UTC before storing it; the phone sends Z (§17.5, R5).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "state": {
+      "description": "The phone's own state, in kebab-case (§6.3.2, §4).",
+      "type": "string",
+      "enum": [
+        "paired",
+        "arming",
+        "armed",
+        "connecting",
+        "publishing",
+        "degraded",
+        "reconnecting",
+        "ended"
+      ]
+    },
+    "cause": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "organiser",
+            "automatic",
+            "operator",
+            "rejoin"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "notReady": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "camera",
+            "sound",
+            "network",
+            "held"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "startFailed": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "not-found",
+            "cred-host",
+            "config",
+            "start-error"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stopped": {
+      "description": "A session this phone stopped; only while sid is null (§6.3.2, capture RR3, §6.8.2).",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "mode": {
+      "description": "\"automatic\" or \"operator\" (§6.3.2, §4).",
+      "type": "string",
+      "enum": [
+        "automatic",
+        "operator"
+      ]
+    },
+    "transport": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "srt",
+            "rtmps"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bitrateKbps": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "delivery": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "stalled",
+        "unknown"
+      ]
+    },
+    "deliveredLagS": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 99999
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "audioOk": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "battery": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "percent": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "charging": {
+              "type": "boolean"
+            },
+            "drainPctPerHour": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "percent",
+            "charging",
+            "drainPctPerHour"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "thermal": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 6
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "dataUsedMB": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "appVersion": {
+      "description": "The capture app's version (§6.3.2).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 40
+    },
+    "endReason": {
+      "description": "Only \"operator-stopped\", and only with state \"ended\" (§6.3.2, §6.8.2).",
+      "type": "string",
+      "const": "operator-stopped"
+    }
+  },
+  "required": [
+    "code",
+    "slot",
+    "phone",
+    "claim",
+    "device",
+    "sid",
+    "at",
+    "state",
+    "cause",
+    "notReady",
+    "startFailed",
+    "stopped",
+    "mode",
+    "transport",
+    "bitrateKbps",
+    "delivery",
+    "deliveredLagS",
+    "audioOk",
+    "battery",
+    "thermal",
+    "dataUsedMB",
+    "appVersion"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "answer": {
+      "description": "The 200 answer to a beat (§6.3.3; amended §17.5, R5 final): a union on `state`. The first precedence row that applies wins: taken, replaced, over, waiting, go-live, live. The common fields (label, scheduledStart, autoAllowed, destinationName, overlayUrl, pollSeconds) are required on waiting, go-live, live and over, and optional on replaced and taken; PR-1's server still sends them on every 2xx (ask 1). sid, startedBy and endReason are omitted where they do not apply, never null.",
+      "oneOf": [
+        {
+          "description": "The slot is empty, paired or starting; while starting, pollSeconds is 5 (§6.3.3 rows 4 and 5).",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "\"{side A} v {side B}\", or \"Match {n}\" in the competition's locale while a side is not yet known; at most 200 characters, cut with one \"…\" (§6.4, W25, §17.6).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "scheduledStart": {
+              "description": "fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "autoAllowed": {
+              "description": "Whether the server may start the broadcast on its own; always false in PR-1 (§6.4, §7.1).",
+              "type": "boolean"
+            },
+            "destinationName": {
+              "description": "The pre-picked destination's label, at most 80 characters cut with one \"…\"; null when there is none or it is archived (§6.4, §6.7.3, §17.6).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "overlayUrl": {
+              "description": "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pollSeconds": {
+              "description": "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300
+            },
+            "state": {
+              "type": "string",
+              "const": "waiting"
+            }
+          },
+          "required": [
+            "label",
+            "scheduledStart",
+            "autoAllowed",
+            "destinationName",
+            "overlayUrl",
+            "pollSeconds",
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The slot is armed: publish to sid; startedBy says who asked (§6.3.3 row 6).",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "\"{side A} v {side B}\", or \"Match {n}\" in the competition's locale while a side is not yet known; at most 200 characters, cut with one \"…\" (§6.4, W25, §17.6).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "scheduledStart": {
+              "description": "fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "autoAllowed": {
+              "description": "Whether the server may start the broadcast on its own; always false in PR-1 (§6.4, §7.1).",
+              "type": "boolean"
+            },
+            "destinationName": {
+              "description": "The pre-picked destination's label, at most 80 characters cut with one \"…\"; null when there is none or it is archived (§6.4, §6.7.3, §17.6).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "overlayUrl": {
+              "description": "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pollSeconds": {
+              "description": "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300
+            },
+            "state": {
+              "type": "string",
+              "const": "go-live"
+            },
+            "sid": {
+              "description": "The broadcast session (§6.3.3).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "startedBy": {
+              "description": "go-live only: who asked for the broadcast (§6.3.3, §17.5).",
+              "type": "string",
+              "enum": [
+                "organiser",
+                "automatic",
+                "operator"
+              ]
+            }
+          },
+          "required": [
+            "label",
+            "scheduledStart",
+            "autoAllowed",
+            "destinationName",
+            "overlayUrl",
+            "pollSeconds",
+            "state",
+            "sid",
+            "startedBy"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The slot is live, with or without video: keep publishing to sid. No startedBy (§6.3.3 row 7, §17.5).",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "\"{side A} v {side B}\", or \"Match {n}\" in the competition's locale while a side is not yet known; at most 200 characters, cut with one \"…\" (§6.4, W25, §17.6).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "scheduledStart": {
+              "description": "fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "autoAllowed": {
+              "description": "Whether the server may start the broadcast on its own; always false in PR-1 (§6.4, §7.1).",
+              "type": "boolean"
+            },
+            "destinationName": {
+              "description": "The pre-picked destination's label, at most 80 characters cut with one \"…\"; null when there is none or it is archived (§6.4, §6.7.3, §17.6).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "overlayUrl": {
+              "description": "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pollSeconds": {
+              "description": "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300
+            },
+            "state": {
+              "type": "string",
+              "const": "live"
+            },
+            "sid": {
+              "description": "The broadcast session (§6.3.3).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "required": [
+            "label",
+            "scheduledStart",
+            "autoAllowed",
+            "destinationName",
+            "overlayUrl",
+            "pollSeconds",
+            "state",
+            "sid"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The beat named an ended sid, by its sid or its stopped: show the line for endReason (§6.3.3 row 3, ask 8).",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "\"{side A} v {side B}\", or \"Match {n}\" in the competition's locale while a side is not yet known; at most 200 characters, cut with one \"…\" (§6.4, W25, §17.6).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "scheduledStart": {
+              "description": "fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "autoAllowed": {
+              "description": "Whether the server may start the broadcast on its own; always false in PR-1 (§6.4, §7.1).",
+              "type": "boolean"
+            },
+            "destinationName": {
+              "description": "The pre-picked destination's label, at most 80 characters cut with one \"…\"; null when there is none or it is archived (§6.4, §6.7.3, §17.6).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "overlayUrl": {
+              "description": "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pollSeconds": {
+              "description": "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300
+            },
+            "state": {
+              "type": "string",
+              "const": "over"
+            },
+            "sid": {
+              "description": "The broadcast session (§6.3.3).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "endReason": {
+              "description": "Why the broadcast ended, on the wire (§6.8.4): every DB end or fail reason maps to exactly one value. `failed` is a server-side end that is neither a stop nor a timeout (G0-f), including a completed session with no recorded end reason (R11).",
+              "type": "string",
+              "enum": [
+                "stopped",
+                "auto_stopped",
+                "no_inbound_timeout",
+                "target_rejected",
+                "max_duration",
+                "phone_lost",
+                "failed"
+              ]
+            }
+          },
+          "required": [
+            "label",
+            "scheduledStart",
+            "autoAllowed",
+            "destinationName",
+            "overlayUrl",
+            "pollSeconds",
+            "state",
+            "sid",
+            "endReason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The caller is not the slot's current phone (§6.3.3 row 2, ask 2, G0-g).",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "\"{side A} v {side B}\", or \"Match {n}\" in the competition's locale while a side is not yet known; at most 200 characters, cut with one \"…\" (§6.4, W25, §17.6).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "scheduledStart": {
+              "description": "fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "autoAllowed": {
+              "description": "Whether the server may start the broadcast on its own; always false in PR-1 (§6.4, §7.1).",
+              "type": "boolean"
+            },
+            "destinationName": {
+              "description": "The pre-picked destination's label, at most 80 characters cut with one \"…\"; null when there is none or it is archived (§6.4, §6.7.3, §17.6).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "overlayUrl": {
+              "description": "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pollSeconds": {
+              "description": "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300
+            },
+            "state": {
+              "type": "string",
+              "const": "replaced"
+            },
+            "device": {
+              "description": "replaced and taken only: the current phone's model, for the organiser panel's takeover notice. The phone ignores it, and PR-1 never sends it (G0-e, §7.5, §17.5).",
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "The beat's new claim was refused (§6.3.3 row 1, G0-g).",
+          "type": "object",
+          "properties": {
+            "label": {
+              "description": "\"{side A} v {side B}\", or \"Match {n}\" in the competition's locale while a side is not yet known; at most 200 characters, cut with one \"…\" (§6.4, W25, §17.6).",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "scheduledStart": {
+              "description": "fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4).",
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "autoAllowed": {
+              "description": "Whether the server may start the broadcast on its own; always false in PR-1 (§6.4, §7.1).",
+              "type": "boolean"
+            },
+            "destinationName": {
+              "description": "The pre-picked destination's label, at most 80 characters cut with one \"…\"; null when there is none or it is archived (§6.4, §6.7.3, §17.6).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "overlayUrl": {
+              "description": "The scorebug overlay page, or null when the org lacks streaming.overlay (§6.4.1, W11, W18).",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uri"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "pollSeconds": {
+              "description": "How often the phone polls and beats, 5 to 300 seconds (§6.6, §6.9).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 300
+            },
+            "state": {
+              "type": "string",
+              "const": "taken"
+            },
+            "device": {
+              "description": "replaced and taken only: the current phone's model, for the organiser panel's takeover notice. The phone ignores it, and PR-1 never sends it (G0-e, §7.5, §17.5).",
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "model"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

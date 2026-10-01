@@ -42,6 +42,13 @@ import { streamUrlSchema } from "../../lib/stream-url.ts";
 // in the relay block below, never re-typed. Relative + explicit `.ts`, same
 // reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
 import { CaptureQrV1 } from "../../lib/capture-qr.ts";
+// Capture QR v2 (PR-1 T1) — the phone↔web contract's zod twins (docs/contracts/capture-*.json), re-exported, never
+// re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and nothing else.
+export {
+  CAPTURE_CODE_RE, CaptureEndReason, CaptureStartedBy, CaptureCause, CapturePhoneState, CaptureNotReady,
+  CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,
+  CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
+} from "./capture-schemas.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
 // and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.

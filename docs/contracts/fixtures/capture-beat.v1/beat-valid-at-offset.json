@@ -1,0 +1,30 @@
+{
+  "code": "7k3m9p2qx4tz",
+  "slot": 0,
+  "phone": "a9c4e1f07b3d48e2a6f5c0d9b8e7f601",
+  "claim": "new",
+  "device": {
+    "model": "Pixel 8"
+  },
+  "sid": null,
+  "at": "2026-10-01T15:30:00+05:30",
+  "state": "paired",
+  "cause": null,
+  "notReady": null,
+  "startFailed": null,
+  "stopped": null,
+  "mode": "operator",
+  "transport": null,
+  "bitrateKbps": null,
+  "delivery": "unknown",
+  "deliveredLagS": null,
+  "audioOk": null,
+  "battery": {
+    "percent": 87,
+    "charging": false,
+    "drainPctPerHour": null
+  },
+  "thermal": 0,
+  "dataUsedMB": 0,
+  "appVersion": "1.4.0"
+}

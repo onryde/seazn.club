@@ -18,10 +18,9 @@
 // sport-agnostic, and the view model takes no sport input at all.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
-import { parseCaptureQr } from "@/lib/capture-qr";
 import { STREAM_PLATFORMS } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { messages } from "@/lib/messages";
@@ -31,7 +30,7 @@ import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usec
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneTabState, qrText,
+  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneTabState,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -417,11 +416,9 @@ describe("stream-session-view — health, elapsed, the paste code", () => {
     expect(elapsedLabel("2026-09-14T12:10:05Z", NOW)).toBe("0:00");
   });
 
-  it("the paste code IS the QR payload: the contract's own valid fixture round-trips through qrText and the phone's parser", () => {
-    const fixture = JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../docs/contracts/fixtures/capture-qr.v1/valid.json"), "utf8"));
-    const text = qrText(fixture);
-    expect(JSON.parse(text)).toEqual(fixture);
-    expect(parseCaptureQr(JSON.parse(text), NOW)).toEqual({ ok: true, payload: fixture });
+  // Capture QR v2 PR-1 T1 removed the v1 contract and its fixtures (W4), and with them the case that round-tripped the
+  // contract's own valid fixture through qrText. This pin rode in that case; it is the only one of the constant's value.
+  it("STREAM_POLL_MS is 5 s — the organiser panel's poll cadence", () => {
     expect(STREAM_POLL_MS).toBe(5000);
   });
 });

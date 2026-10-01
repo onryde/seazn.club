@@ -580,10 +580,25 @@ const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
 /** P3/P4 (fix round 3): what every Stop confirm must carry — its cancel from the PAGE's dictionary, and the touch size. */
 const STOP_CONFIRM_EXTRAS = { cancelLabel: m("stream.phone.stop.keep"), size: "touch" } as const;
 
-/** The checksummed contract's own valid payload (docs/contracts) — a real QR, not one typed here. */
-const QR = JSON.parse(
-  readFileSync(join(__dirname, "../../../../../..", "docs/contracts/fixtures/capture-qr.v1/valid.json"), "utf8"),
-) as CaptureQrV1;
+/** A v1 QR payload, the `session()` factory's default. Typed here: capture QR v2 PR-1 T1 removed the v1 contract and
+ *  its fixtures (W4), while the v1 builder, the panel's v1 rendering and this type live until T11. The values are the
+ *  removed `fixtures/capture-qr.v1/valid.json`'s, field for field, so no case below changes its input (A1). */
+const QR: CaptureQrV1 = {
+  v: 1,
+  sid: "2a6a0d4e-7c1b-4e9a-9f2d-3b1c5d7e9f01",
+  slot: 0,
+  cred: {
+    srt: {
+      url: "srt://live.cloudflare.com:778?passphrase=fixture-pass&streamid=2a6a0d4e-0",
+      streamId: "2a6a0d4e-0",
+      passphrase: "fixture-pass",
+      latencyMs: 2000,
+    },
+    rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "fixture-rtmps-key" },
+  },
+  preferred: "srt",
+  exp: 4102444800,
+};
 
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", state: "warming", desiredState: "live",
