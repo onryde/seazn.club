@@ -52,8 +52,8 @@
 - **R3 (owner, 2026-10-01).** A `200` from `billing-events`, `billing-quantity` or `billing-grant` whose named failure counters read above 0, or cannot be read, is `degraded`. A degraded job is never `ok`.
 - **Sentry (R5: owner, 2026-10-01; cron monitoring deferred).** The Worker sends **no** check-ins and creates **no** monitors. When `SENTRY_DSN` is set, every job that is not `ok` (`error`, or `degraded` under R3) sends exactly one Sentry **error event** over the envelope endpoint, tagged `job`, `reason`, `run` (`scheduled`|`manual`) and `http_status`. It goes to the same project and DSN as the Fly app's own reporting, and it carries no response body (the `lib/sentry.ts` PII rule: ids and counts only). Event sends are best-effort: 5 s timeout, never throw, never block a job.
 - **The run log.** Each job writes one `event:"job"` line. Each run writes one closing `event:"run"` line with `sentry: "on" | "off" | "misconfigured"`, so a missing DSN shows in the log rather than as silence.
-- **Env vars per Worker env:** `ENV_NAME` (`stg`|`prod`), `BASE_URL`, `ACTIVE` (`"true"`|`"false"`, default `"false"`). **Secrets:** `CRON_SECRET`, plus `SENTRY_DSN`, which is required on prod and recommended on stg.
-- **Never two schedulers per environment.** `ACTIVE` flips to `"true"` only after that environment's GitHub legs are gated off (Task 11).
+- **Env vars per Worker env:** `ENV_NAME` (`stg`|`prod`), `BASE_URL`, `ACTIVE` (`"true"`|`"false"`, default `"true"` in both envs). **Secrets:** `CRON_SECRET`, plus `SENTRY_DSN`, which is required on prod and recommended on stg.
+- **Overlap with the old GitHub schedules is accepted (owner, 2026-10-01).** `ACTIVE` is `"true"` by default in both envs, so a Worker fires from its first deploy and overlaps `onryde/seazn.club.workflow` until that environment's GitHub schedules are switched off: stg's right after the merge, prod's right after the tag (Task 11). That is safe because every job is idempotent and news-digest is capped at one cron digest per org per ISO week (V429). `ACTIVE` stays as the kill switch: anything but `"true"` runs no scheduled job, and the hourly firing only probes `/api/health`.
 - **Cloudflare writes: `STOP: owner OK required`.** Every step that writes to Cloudflare carries this marker. That covers the API token, every `wrangler secret put`, every deploy (including the merge to `main` and the `v*.*.*` tag, since they trigger `stg.yml` and `prod.yml`), every `BASE_URL` change, every `ACTIVE` flip, the rollback, and `wrangler tail`, which opens a tail session through the API. The dashboard's Workers Logs view is the read-only alternative to `wrangler tail`. An implementer who reaches a marked step stops and reports; it never runs the step. `wrangler deploy --dry-run` and local `wrangler dev` (never `--remote`) make no API calls and need no OK.
 - **B0 files are out of bounds** (see the branch note above).
 - Subagents run only the test files they changed. Do **not** run `apps/web` `tsc`/`lint` locally; CI covers it (`docs/superpowers/RULES.md`). The cron-worker's own `pnpm --filter @seazn/cron-worker typecheck` is cheap and allowed, and it is **owed after every task that adds or changes a `.ts` file under `apps/cron-worker`** (m8).
@@ -1199,7 +1199,7 @@ import { captureJobFailure, parseDsn } from "./sentry";
 export interface Env {
   ENV_NAME: string;
   BASE_URL: string;
-  /** "true" only after this env's GitHub legs are gated off (spec §7, §12.1). */
+  /** Kill switch (owner 2026-10-01: "true" by default in wrangler.json). Anything but "true" runs no scheduled job; the hourly firing only probes /api/health. */
   ACTIVE: string;
   CRON_SECRET: string;
   /** Required on prod; recommended on stg. Unset means no events, and the run line says `sentry:"off"`. */
@@ -1567,12 +1567,12 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
     "stg": {
       "name": "seazn-cron-stg",
       "triggers": { "crons": ["17 * * * *"] },
-      "vars": { "ENV_NAME": "stg", "BASE_URL": "https://stg.seazn.club", "ACTIVE": "false" }
+      "vars": { "ENV_NAME": "stg", "BASE_URL": "https://stg.seazn.club", "ACTIVE": "true" }
     },
     "prod": {
       "name": "seazn-cron-prod",
       "triggers": { "crons": ["17 * * * *"] },
-      "vars": { "ENV_NAME": "prod", "BASE_URL": "https://seazn.club", "ACTIVE": "false" }
+      "vars": { "ENV_NAME": "prod", "BASE_URL": "https://seazn.club", "ACTIVE": "true" }
     }
   }
 }
@@ -1635,11 +1635,12 @@ describe("wrangler.json ↔ schedule drift guard", () => {
     expect([...cfg.env[env].triggers.crons].sort()).toEqual(triggersOf().sort());
   });
 
-  it.each(["stg", "prod"])("%s declares ENV_NAME, BASE_URL and an explicit ACTIVE flag", (env) => {
+  // Owner 2026-10-01: ACTIVE is "true" by default in both envs, and stays the kill switch.
+  it.each(["stg", "prod"])("%s declares ENV_NAME, BASE_URL and ACTIVE=true", (env) => {
     const vars = cfg.env[env].vars;
     expect(vars.ENV_NAME).toBe(env);
     expect(vars.BASE_URL).toMatch(/^https:\/\//);
-    expect(["true", "false"]).toContain(vars.ACTIVE);
+    expect(vars.ACTIVE).toBe("true");
   });
 
   it("the top-level (env-less) Worker has no trigger, so a bare `wrangler deploy` schedules nothing", () => {
@@ -1967,15 +1968,15 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
 - Modify (comments only): the docstrings in `apps/web/src/app/api/cron/{ai-previews,billing-events,billing-grant,billing-quantity,news-digest,registrations,relay-sweep}/route.ts` and `apps/web/src/app/api/funnel/remind/route.ts`. That is 8 files; `relay-sweep` is new here (A6).
 - Modify (comments and test titles only, A6): `apps/web/src/lib/__tests__/relay-sweep-workflow.test.ts` (header `:1-5`, and the title at `:67`), and `apps/web/src/lib/__tests__/registrations-sweep-workflow.test.ts` (the `MOVED 2026-09-09` block at `:23-34`). After cutover they would name the other repo as the scheduler, which is a test lying in its name (AGENTS.md class 4).
 
-**The wording.** It must be true both before and after cutover, because this PR merges with `ACTIVE: "false"` (Task 11). Replace each route's scheduler sentence with:
+**The wording.** It must be true both while the old GitHub schedules still overlap the Worker and after they are switched off, because `ACTIVE` is `"true"` from the first deploy (Task 11). Replace each route's scheduler sentence with:
 
-`Schedule: apps/cron-worker/src/schedule.ts (the Cloudflare cron Worker). Until that environment's cutover (ACTIVE in apps/cron-worker/wrangler.json), the onryde/seazn.club.workflow leg fires it instead.`
+`Schedule: apps/cron-worker/src/schedule.ts (the Cloudflare cron Worker, live while ACTIVE is "true" in apps/cron-worker/wrangler.json). The onryde/seazn.club.workflow leg also fires it until that schedule is switched off, so both may fire it meanwhile.`
 
 `relay-sweep` is the exception. Nothing has ever scheduled it (R1), so its `:13-14` sentence ("The SCHEDULE lives in onryde/seazn.club.workflow (#757) …") becomes:
 
-`Schedule: apps/cron-worker/src/schedule.ts, daily 04:17 UTC (owner 2026-10-01), live once that environment's ACTIVE is on. No GitHub workflow schedules it (lib/__tests__/relay-sweep-workflow.test.ts).`
+`Schedule: apps/cron-worker/src/schedule.ts, daily 04:17 UTC (owner 2026-10-01), live while ACTIVE is "true" in apps/cron-worker/wrangler.json. No GitHub workflow schedules it (lib/__tests__/relay-sweep-workflow.test.ts).`
 
-Task 11 Step 7 removes the "Until … cutover" sentence once both environments have cut over.
+Task 11 Step 7 removes the "The onryde/seazn.club.workflow leg also fires it …" sentence once both environments' GitHub schedules are switched off.
 
 - [ ] **Step 1: Find the stale scheduler references**
 
@@ -1989,7 +1990,7 @@ Expected: at least one hit in each of the 8 route files. Read any file with no h
 - [ ] **Step 3: Edit the two guard tests (A6).**
   - `relay-sweep-workflow.test.ts` `:1-5`: the claim stays the same (no workflow **here** may schedule the sweep), but the reason changes. The schedule is the cron Worker's (`apps/cron-worker/src/schedule.ts`, daily 04:17 UTC, R1), so a GitHub workflow that also scheduled it would double-run retention and the orphan pass. Drop "naming it for the owner is Task 17's".
   - The same file's title at `:67`, `"the endpoint the other repo's workflow POSTs to exists here and calls the sweep"`, becomes `"the endpoint the cron Worker POSTs to exists here and calls the sweep"`. Leave the assertions alone.
-  - `registrations-sweep-workflow.test.ts` `:23-34`: keep the `MOVED 2026-09-09 (#757)` history, and add one sentence. The schedule then moved to `apps/cron-worker/src/schedule.ts` (Cloudflare cron Worker); the `onryde/seazn.club.workflow` legs fire it only until each environment's cutover. Leave every assertion and `runIf` alone.
+  - `registrations-sweep-workflow.test.ts` `:23-34`: keep the `MOVED 2026-09-09 (#757)` history, and add one sentence. The schedule then moved to `apps/cron-worker/src/schedule.ts` (Cloudflare cron Worker); the `onryde/seazn.club.workflow` legs fire it only until each environment's GitHub schedule is switched off. Leave every assertion and `runIf` alone.
 
 - [ ] **Step 4: Verify only comments and titles changed**
 
@@ -2026,12 +2027,12 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
 - **STOP: owner OK required (Cloudflare write).** Create a Cloudflare API token scoped to Account "Seazn Club" with Workers Scripts: Edit. If deploys answer 403, use the "Edit Cloudflare Workers" template scoped to the account. Store it as the repo secret `CLOUDFLARE_API_TOKEN`, and add the repo secret `CLOUDFLARE_ACCOUNT_ID` = `ecaa471818e93892078446eae972a543`.
 - Repo secrets `STAGING_CRON_SECRET` / `PROD_CRON_SECRET`, used by the smoke step. They hold the same values as the Fly apps' `CRON_SECRET`. Today they exist only in the workflow repo.
 - Repo variables `STAGING_CRON_WORKER_URL` / `PROD_CRON_WORKER_URL`: the Workers' `*.workers.dev` URLs, which the first `wrangler deploy` prints. The account's workers.dev subdomain is `ashokhein`, so they will be `https://seazn-cron-stg.ashokhein.workers.dev` and `https://seazn-cron-prod.ashokhein.workers.dev`.
-- **STOP: owner OK required (Cloudflare write).** Set the Worker secrets, once per env and **after that env's first deploy**, because `secret put` on a missing script creates the script:
+- **STOP: owner OK required (Cloudflare write).** Set the Worker secrets, once per env and **after that env's first deploy**, because `secret put` on a missing script creates the script. **Do it right away:** `ACTIVE` is `"true"` by default, so the Worker's first hourly firing runs the jobs, and until `CRON_SECRET` exists each one logs a 401 `error` line (and raises an event once `SENTRY_DSN` is set):
   - `pnpm --filter @seazn/cron-worker exec wrangler secret put CRON_SECRET --env stg`, and the same with `--env prod`;
   - `SENTRY_DSN` for `--env prod` (**required**; without it prod's run lines say `sentry:"off"` and failures reach only the logs), using the Fly prod app's DSN (`fly.toml`);
   - `SENTRY_DSN` for `--env stg` (recommended), using `fly.stg.toml`'s DSN. Events are tagged `environment: stg` and share the project's error quota.
-- **STOP: owner OK required (Cloudflare write).** Merging this PR runs `stg.yml`, which deploys `seazn-cron-stg`. The deploy creates the script, registers trigger 1 of 5, and turns on workers.dev and Workers Logs. After that, every push to `main` redeploys stg; the owner's OK to merge covers that.
-- **STOP: owner OK required (Cloudflare write).** The owner's next `v*.*.*` tag runs `prod.yml`, which deploys `seazn-cron-prod` and registers trigger 2 of 5. Tagging is the owner's call. The prod smoke then runs a real `ai-previews` deletion on the prod DB at every tag. It is idempotent, but it is a production side effect; say so in the PR body.
+- **STOP: owner OK required (Cloudflare write).** Merging this PR runs `stg.yml`, which deploys `seazn-cron-stg`. The deploy creates the script, registers trigger 1 of 5, turns on workers.dev and Workers Logs, and **starts scheduling at once** (`ACTIVE` is `"true"`), overlapping the stg GitHub schedules until the owner switches those off right after the merge (Task 11 Step 3). After that, every push to `main` redeploys stg; the owner's OK to merge covers that.
+- **STOP: owner OK required (Cloudflare write).** The owner's next `v*.*.*` tag runs `prod.yml`, which deploys `seazn-cron-prod`, registers trigger 2 of 5 and starts scheduling at once, overlapping the prod GitHub schedules until the owner switches those off right after the tag (Task 11 Step 5). Tagging is the owner's call. The prod smoke then runs a real `ai-previews` deletion on the prod DB at every tag. It is idempotent, but it is a production side effect; say so in the PR body.
 
 - [ ] **Step 1: Re-read both workflow files** (`sed -n 1,60p .github/workflows/stg.yml`, and the same for `prod.yml`). Confirm the triggers are still `push: branches: [main]` and `push: tags: v*.*.*`. They have changed before; see AGENTS.md on `e2e.yml`.
 
@@ -2065,6 +2066,11 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
       # deploy job runs beside this one (toolchain.test.ts forbids `needs:` in
       # this file), so the smoke retries across the Fly rollout (A7);
       # ai-previews is idempotent. An unset URL is a WARNING, never a silent skip.
+      # The Worker deploys with ACTIVE "true" (wrangler.json), so its own hourly
+      # trigger overlaps the GitHub schedules in onryde/seazn.club.workflow until
+      # those are switched off. The owner accepted that overlap: the jobs are
+      # idempotent, and news-digest is capped at one cron digest per org per ISO
+      # week (V429).
       - name: Smoke — manual run of ai-previews
         env:
           WORKER_URL: ${{ vars.STAGING_CRON_WORKER_URL }}
@@ -2241,13 +2247,13 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
 
 **Files:**
 - Modify (separate PR in `onryde/seazn.club.workflow`): the 7 curl workflows get a job-level gate on each leg.
-- Modify (this repo, small PRs): the `ACTIVE` values in `apps/cron-worker/wrangler.json`, and the transitional docstring sentence from Task 8.
+- Modify (this repo, small PR): the transitional docstring sentence from Task 8. `wrangler.json` already carries `ACTIVE: "true"` in both envs (owner, 2026-10-01), so no `ACTIVE` flip is part of the cutover.
 
-The implementer prepares the PRs; **the owner merges each step.** Never have two schedulers active for one environment. Every Cloudflare write below is marked; an implementer who reaches one stops and reports.
+The implementer prepares the PRs; **the owner merges each step.** **The two schedulers overlap, by the owner's ruling (2026-10-01):** a Worker fires from its first deploy, so stg overlaps the GitHub schedules from the merge until Step 3 switches them off (right after the merge), and prod from the tag until Step 5 does (right after the tag). Every job is idempotent and news-digest is capped per org per ISO week (V429), so the overlap costs duplicate calls, never duplicate effects. Every Cloudflare write below is marked; an implementer who reaches one stops and reports.
 
-The soak is read from **Workers Logs**: the `event:"job"`, `event:"run"` and `event:"probe"` lines, plus Sentry **error events** tagged `job`. Cron monitors are deferred (see "Deferred" below), so no Sentry monitor exists to read, and a stopped scheduler shows only as **missing** `event:"run"` lines. Count them; do not wait for an alert.
+The soak is read from **Workers Logs**: the `event:"job"` and `event:"run"` lines (with `sentryDelivered` and `sentryUndelivered` for the alert path), plus Sentry **error events** tagged `job`. The `event:"probe"` line appears only while a Worker's `ACTIVE` is not `"true"`. Cron monitors are deferred (see "Deferred" below), so no Sentry monitor exists to read, and a stopped scheduler shows only as **missing** `event:"run"` lines. Count them; do not wait for an alert.
 
-- [ ] **Step 1: Workflow-repo PR: add per-environment gates.** In each of `ai-preview-sweep.yml`, `billing-events.yml`, `billing-grant.yml`, `billing-quantity.yml`, `funnel-reminders.yml`, `news-digest.yml` and `registrations-sweep.yml`, add a job-level `if:` to each leg:
+- [ ] **Step 1: Workflow-repo PR: add per-environment gates.** Merge it **before** this PR merges, so that switching a leg off later is one variable flip. In each of `ai-preview-sweep.yml`, `billing-events.yml`, `billing-grant.yml`, `billing-quantity.yml`, `funnel-reminders.yml`, `news-digest.yml` and `registrations-sweep.yml`, add a job-level `if:` to each leg:
 
 ```yaml
   sweep-staging:            # (the job ids differ per file; keep each file's own)
@@ -2257,29 +2263,26 @@ The soak is read from **Workers Logs**: the `event:"job"`, `event:"run"` and `ev
     if: vars.CRON_ON_GITHUB_PROD != 'false'
 ```
 
-The default (variable unset) keeps today's behaviour. On prod, `registrations-sweep.yml`'s existing step-level `PROD_SWEEP_ENABLED` gate composes with the new job-level one. `simulation-nightly.yml` is untouched. There is no relay-sweep workflow to gate (R1); it starts the day its environment's `ACTIVE` flips.
+The default (variable unset) keeps today's behaviour. On prod, `registrations-sweep.yml`'s existing step-level `PROD_SWEEP_ENABLED` gate composes with the new job-level one. `simulation-nightly.yml` is untouched. There is no relay-sweep workflow to gate (R1); it starts the day its environment's Worker first deploys.
 
-- [ ] **Step 2: Probe week, with both Workers deployed and `ACTIVE: "false"`.** After the main PR merges, `seazn-cron-stg` deploys and probes `/api/health` hourly; prod does the same from the owner's next tag. Read the `{"event":"probe","httpStatus":200}` lines in the dashboard's Workers Logs, which is read-only. **STOP: owner OK required** before using `wrangler tail` instead, because it opens a tail session through the API.
-  - **If the probe shows 403 or HTML (a challenge):** **STOP: owner OK required (Cloudflare write: the PR redeploys).** Change that env's `BASE_URL` to `https://seazn-club-stg.fly.dev` (or the prod app's `fly.dev` host) in a PR. The app has no host redirect (`proxy.ts` has rewrites only, and `/api/*` POSTs without an `Origin` header pass), so no app change is needed. Re-probe.
+- [ ] **Step 2: Staging first deploy: secrets right away.** **STOP: owner OK required (Cloudflare write: the merge deploys `seazn-cron-stg`, and the secrets are Cloudflare writes).** Merging this PR deploys the Worker with scheduling on. Set `CRON_SECRET` and `SENTRY_DSN` for `--env stg` straight after the first deploy (Task 9's prerequisites); until `CRON_SECRET` exists every job logs a 401 `error` line. Read the first `event:"run"` and `event:"job"` lines in the dashboard's Workers Logs, which is read-only. **STOP: owner OK required** before using `wrangler tail` instead, because it opens a tail session through the API.
+  - **If the first jobs show 403 or HTML (a challenge from the zone):** **STOP: owner OK required (Cloudflare write: the PR redeploys).** Change that env's `BASE_URL` to `https://seazn-club-stg.fly.dev` (or the prod app's `fly.dev` host) in a PR. The app has no host redirect (`proxy.ts` has rewrites only, and `/api/*` POSTs without an `Origin` header pass), so no app change is needed. Re-check.
 
-- [ ] **Step 3: Staging switch, done in the same hour window.** **STOP: owner OK required (Cloudflare write: the merge redeploys and turns scheduling on).**
-  1. `gh variable set CRON_ON_GITHUB_STG --body false -R onryde/seazn.club.workflow`
-  2. Merge the PR that sets stg `ACTIVE` to `"true"` (this deploys through `stg.yml`).
-  3. Record the switch time.
+- [ ] **Step 3: Staging GitHub schedules off, right after the merge.** `gh variable set CRON_ON_GITHUB_STG --body false -R onryde/seazn.club.workflow`. Record the switch time. (This is a GitHub variable on the other repo, not a Cloudflare write.)
 
 - [ ] **Step 4: 72 h staging soak.** Pass bar (spec §2, §7), read from Workers Logs:
   - Each hourly firing logs one `event:"run"` line with `cron:"17 * * * *"`: at least 23 per 24 h, and each lists the 3 every-firing jobs.
   - Each daily job (ai-previews 03, relay-sweep 04, billing-quantity 06, billing-grant 07) and the Monday digest start at HH:17 ±15 min.
-  - Every `status:"error"` or `status:"degraded"` line, and every Sentry error event tagged `environment: stg`, is explained.
+  - Every `status:"error"` or `status:"degraded"` line, and every Sentry error event tagged `environment: stg`, is explained. A `sentryDelivered:false` line, or a non-empty `sentryUndelivered`, means the alert path itself is broken: fix the DSN before trusting a quiet soak.
   - relay-sweep has never run on a schedule before. Read its first runs' `ms`; at or near 60 s it is a timeout risk (the error is reported and the server-side pass still finishes). Its retention pass deletes recordings for real, which is intended (R1).
   - No org on staging gains a second cron digest in one ISO week. This query returns no rows: `select org_id, auto_source->>'cron_week', count(*) from org_posts where auto_source ? 'cron_week' group by 1,2 having count(*) > 1;`
   - Record the counts in the PR or issue before moving on.
 
-- [ ] **Step 5: Production switch.** Repeat Step 2's probe check for prod. Then **STOP: owner OK required (Cloudflare write).** Repeat Step 3 with `CRON_ON_GITHUB_PROD` and the prod `ACTIVE` flip, which `prod.yml` deploys on the next tag; tagging is the owner's call. Then run a 72 h soak with the same bar. In addition, prod's `event:"run"` lines must read `sentry:"on"`: the `SENTRY_DSN` prerequisite is set and parses.
+- [ ] **Step 5: Production: secrets right away, GitHub schedules off right after the tag.** **STOP: owner OK required (Cloudflare write).** The owner's `v*.*.*` tag runs `prod.yml`, which deploys `seazn-cron-prod` with scheduling on (tagging is the owner's call). Set `CRON_SECRET` and `SENTRY_DSN` for `--env prod` straight after that first deploy, then `gh variable set CRON_ON_GITHUB_PROD --body false -R onryde/seazn.club.workflow` and record the time. Then run a 72 h soak with Step 4's bar. In addition, prod's `event:"run"` lines must read `sentry:"on"` with `sentryUndelivered: []`: the `SENTRY_DSN` prerequisite is set, parses and is accepted by Sentry.
 
-- [ ] **Step 6: Rollback drill, written into the PR body and not executed.** **STOP: owner OK required (Cloudflare write) before any rollback.** Run `gh variable set CRON_ON_GITHUB_<ENV> --body true` and revert the `ACTIVE` PR, which redeploys. Alternatively, run an out-of-band `wrangler deploy --env <env>` with `"crons": []`; it cannot go through a PR, because the drift test pins the crons. Either takes effect within about an hour.
+- [ ] **Step 6: Rollback drill, written into the PR body and not executed.** **STOP: owner OK required (Cloudflare write) before any rollback.** Run `gh variable set CRON_ON_GITHUB_<ENV> --body true` to bring the GitHub legs back. To stop the Worker, set that env's `ACTIVE` to `"false"` in `apps/cron-worker/wrangler.json` and redeploy through a PR (the jobs stop; the hourly firing only probes). **A dashboard edit of the `ACTIVE` var is NOT durable:** the next `wrangler deploy` (every push to `main` for stg, every tag for prod) overwrites it with the file's value, so the durable kill switch is the file. For an immediate stop, run an out-of-band `wrangler deploy --env <env>` with `"crons": []`; it cannot go through a PR, because the drift test pins the crons. Either takes effect within about an hour.
 
-- [ ] **Step 7: Cleanup, after both soaks pass.** In a workflow-repo PR, delete the 7 moved workflow files. In this repo, drop the transitional "Until that environment's cutover …" sentence from the route docstrings (Task 8). Update memory `reference_scheduled_cron_workflows_live_in_a_separate_repo` and `reference_github_schedule_cron_runs_late_and_drops` to record the move.
+- [ ] **Step 7: Cleanup, after both soaks pass.** In a workflow-repo PR, delete the 7 moved workflow files. In this repo, drop the transitional "The onryde/seazn.club.workflow leg also fires it …" sentence from the route docstrings (Task 8). Update memory `reference_scheduled_cron_workflows_live_in_a_separate_repo` and `reference_github_schedule_cron_runs_late_and_drops` to record the move.
 
 ---
 
@@ -2306,7 +2309,7 @@ These would add missed-run alerting, the one thing error events cannot give (spe
   | §8 integration/E2E | T4, T10 |
   | §8 regression | T7 |
   | §8 smoke | T9 |
-  | §9 R1 | T4 probe, T11 Step 2 |
+  | §9 R1 | T4 probe (the kill-switch path), T11 Step 2 (first runs) |
   | §9 R2 | Moot: monitoring deferred (§13.5) |
   | §9 R3 | Workers metrics during the soak |
   | §9 R5 | T4 failing-job test |

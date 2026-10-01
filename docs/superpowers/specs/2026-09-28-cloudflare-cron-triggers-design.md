@@ -247,3 +247,5 @@ These come from the pre-flight review of the plan (`.superpowers/sdd/2026-09-28-
     - "A new workspace only needs a gates test step" missed the `container` job.
     - Root `lint` also covers `packages/reference`.
     - relay-sweep arrived in #902 and #904, not #908.
+16. **`ACTIVE` is `"true"` by default, and the overlap is accepted (owner, 2026-10-01).** Supersedes §12.1's `ACTIVE: "false"` until cutover and §7's one-line `ACTIVE` flip. Both Worker envs deploy active, so a Worker fires from its first deploy and overlaps the old GitHub schedules until the owner switches those off (stg right after the merge, prod right after the tag). `ACTIVE` stays as the kill switch (anything but `"true"` runs no scheduled job, and the hourly firing only probes `/api/health`); because `wrangler deploy` overwrites a dashboard edit, the durable switch is the value in `wrangler.json`.
+17. **Review fixes (2026-10-01).** `scheduled()` awaits the run instead of `ctx.waitUntil`; a Sentry event the server rejects is logged (`sentryDelivered`, `sentryUndelivered`) rather than reading as delivered; the Worker's fetches refuse redirects.
