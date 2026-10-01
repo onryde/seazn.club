@@ -136,9 +136,12 @@ export const KEPT_PLAYING_ROUTE = routeTo("W7", "r4-withdrawn-player-kept-playin
  *  pending (before = []), AND seed 3's person is seated in a fixture after
  *  the withdrawal round through ANY entrant — itself, or a pair entrant whose
  *  members (the stage's observed `persons`) hold the person. Policy "none"
- *  and an empty `before` are not enough on their own. */
+ *  and an empty `before` are not enough on their own. An americano entrant
+ *  with no linked person cannot reach here (setUpDivision reads one for every
+ *  entrant, personsNeeded): it is thrown by name (m-5), never a silent null. */
 export function keptPlayingNote(w: Pick<WithdrawalObs, "entrantId" | "afterRound" | "policy" | "before">, mine: readonly string[], stage: Pick<ObservedStage, "fixtures" | "persons">): string | null {
-  if (w.policy !== "none" || w.before.length > 0 || mine.length === 0) return null;
+  if (w.policy !== "none" || w.before.length > 0) return null;
+  if (mine.length === 0) throw new Error(`scenario: R4 on an americano stage, but the withdrawn entrant ${w.entrantId} has no linked person — the setup reads one for every entrant (personsNeeded)`);
   const persons = stage.persons ?? {};
   const holds = (side: string | null) => side !== null && (side === w.entrantId || (persons[side] ?? []).some((p) => mine.includes(p)));
   const later = stage.fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && (holds(f.home) || holds(f.away)));

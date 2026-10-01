@@ -34,7 +34,10 @@ export interface ObservedFixture {
 }
 
 export interface StandingsRowObs { entrantId: string; rank: number; points: number | null }
-export interface GenerateObs { status: number; code: string | null; total: number; created: number }
+/** `message` (W1-driving Task 8, T8-R1): a refused generate's message, as the
+ *  RefusedCall carries it (redacted) — the evidence a 5xx's cause is read
+ *  from. Absent on an answered generate (and on the model's). */
+export interface GenerateObs { status: number; code: string | null; total: number; created: number; message?: string }
 export interface PairRoundObs { roundNo: number; seated: number }
 /** `seedProposal` (W1-driving Task 6): the next stage's draft proposal the
  *  /complete minted (usecases/stages.ts progressCompletedStage) — null when
@@ -53,8 +56,12 @@ export interface CompleteObs { status: number; code: string | null; completed: b
  *  never "drained".
  *  "stalled_rounds" (W1-driving Task 8, D9): a mexicano whose generate
  *  created nothing before the stage's config.rounds were played — the product
- *  refusing to go on, never "drained" and never `cut_short`. */
-export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge" | "stalled_rounds";
+ *  refusing to go on, never "drained" and never `cut_short`.
+ *  "short_plan" (W1-driving Task 8, T8-R2): an americano whose Start planned
+ *  fewer rounds than the engine's planner lays out for its field and
+ *  config.rounds — or none — every planned round decided: a format played
+ *  short, never "drained". */
+export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge" | "stalled_rounds" | "short_plan";
 
 export interface ObservedStage {
   id: string;

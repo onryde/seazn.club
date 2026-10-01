@@ -23,10 +23,9 @@ import { describe, expect, it } from "vitest";
 import { SPORT_KEYS, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, type FixtureRow, type GenerateOut, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { americanoRoundSize } from "../lib/scenarios/f1-odd-field.ts";
-import { AmericanoModeMismatch, PAIR_PLAYERS_ROUTE, STALL_ROUTE, TEAM_MEMBER_ROUTE, modeOf, notePairEntrantDuplicates } from "../lib/scenarios/americano-loop.ts";
+import { AmericanoModeMismatch, PAIR_PLAYERS_ROUTE, SELF_PAIR_CAUSE, STALL_ROUTE, TEAM_MEMBER_ROUTE, americanoPlannedRounds, americanoRoundSize, modeOf, notePairEntrantDuplicates, playMexicano } from "../lib/scenarios/americano-loop.ts";
 import { lineupsPut, seatsEntrant } from "../lib/scenarios/assertions.ts";
-import { Recorder, decideFixture, ensureLineups, seatedOpen, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
+import { Recorder, decideFixture, ensureLineups, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { TARGET_OF } from "../lib/scenarios/m1-walkover.ts";
 import { KEPT_PLAYING_ROUTE, keptPlayingNote } from "../lib/scenarios/r4-withdrawal.ts";
@@ -35,6 +34,7 @@ import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 import { FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT, FakeAmericanoDriver, WAIT_UNLESS } from "./fake-formats-driver.ts";
+import { wireCodeFor } from "./product-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
@@ -99,6 +99,53 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(modeOf(stage("americano", { mode: "mexicano" }))).toBe("mexicano");
     // A shapeless mode reads as americano, as stages.ts:756 does.
     expect(modeOf(stage("americano", { mode: "MEXICANO" }))).toBe("americano");
+  });
+
+  it("T8-R2 empty case: an americano Start that planned NO round is short_plan, named — never drained", async () => {
+    class PlansNone extends FakeAmericanoDriver {
+      override async start() {
+        const out = await super.start();
+        this.fixtures = [];
+        return out;
+      }
+    }
+    const driver = new PlansNone({ mode: "americano" });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "americano" });
+    expect(out.observed.stages[0]!.exit).toBe("short_plan");
+    expect(out.notes).toContain(`americano: the product planned 0 of the ${ROUNDS} round(s) the engine lays out for 8 player(s) over config.rounds=${ROUNDS} — played short, never drained`);
+    expect(check(checks, "life-loop-bounded").verdict).toBe("fail");
+  });
+
+  it("T8-R2: an americano Start that planned 1 of the engine's rounds is short_plan, named — every planned round decided, still never drained", async () => {
+    class PlansOne extends FakeAmericanoDriver {
+      override async start() {
+        const out = await super.start();
+        this.fixtures = this.fixtures.filter((f) => f.round_no === 1);
+        return out;
+      }
+    }
+    // Badminton declares no draw, so one round's two fixtures leave no draw
+    // owed (generic's every-third-fixture draw would red on its own here).
+    const driver = new PlansOne({ mode: "americano" });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "americano", sport: "badminton" });
+    expect(driver.roundsDecided()).toEqual([1]);
+    expect(out.observed.stages[0]!.exit).toBe("short_plan");
+    expect(out.notes).toContain(`americano: the product planned 1 of the ${ROUNDS} round(s) the engine lays out for 8 player(s) over config.rounds=${ROUNDS} — played short, never drained`);
+    expect(check(checks, "life-loop-bounded").verdict).toBe("fail");
+    // Everything else reads green over the short format — the exit is what names it.
+    expect(failing(checks)).toEqual(["life-loop-bounded"]);
+    expect(out.observed.facts).not.toContain("cut_short");
+  });
+
+  it("T8-R2: the expected round count is the engine planner's (rounds that seat a match), never config.rounds alone", () => {
+    // The rule, from the engine's line (americano.ts:50, text-pinned in the F1
+    // test): a round seats min(floor(n/4), courtCount) matches, so with any
+    // court a field of 4+ fills every declared round and a field under 4 none.
+    const rule = (rounds: number, n: number) => (Math.floor(n / 4) >= 1 ? rounds : 0);
+    for (const [cfg, rounds, n] of [[{ courtCount: COURTS }, ROUNDS, 8], [{ courtCount: COURTS }, ROUNDS, 7], [{ courtCount: COURTS }, ROUNDS, 3], [{}, ROUNDS, 8], [{ courtCount: 1 }, 3, 12], [{ courtCount: COURTS }, ROUNDS, 0]] as const) {
+      expect(americanoPlannedRounds(cfg, rounds, n), `${JSON.stringify(cfg)} rounds=${rounds} n=${n}`).toBe(rule(rounds, n));
+    }
+    expect(americanoPlannedRounds({ courtCount: COURTS }, ROUNDS, 3), "a case where config.rounds alone is wrong").not.toBe(ROUNDS);
   });
 
   it("americano: no generate after Start; rounds played lowest first; every round decided, bounded by config.rounds", async () => {
@@ -200,42 +247,71 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(checks.filter((c) => c.id.startsWith("I10"))).toEqual([]);
   });
 
-  it("fast-check (rule 10, product-shaped fake): under any interleaving of decide / forfeit / generate / withdraw, a non-decided fixture blocks every later round, round 1 never repeats a person, and every later duplicate is explained by an earlier pair entrant", async () => {
-    let dupRuns = 0;
-    let round1Checks = 0;
-    let evidenceChecks = 0;
-    let blockedGenerates = 0;
-    let runs = 0;
+  it("fast-check (rule 10, m-2): playMexicano ITSELF over any per-round schedule of forfeit / void / withdraw, either sport, either person-id order, product or corrected player set — its exit and every note agree with the fake's own rows", async () => {
+    const reach = { runs: 0, round1Checks: 0, blockChecks: 0, dupSigned: 0, noDup: 0, stalledNonDecided: 0, refusedSigned: 0, drained: 0 };
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("generic", "badminton"),
       fc.boolean(),
-      fc.array(fc.constantFrom<Step>("decideOne", "forfeitOne", "generate", "withdrawOne"), { maxLength: 24 }),
-      async (sport, seedOrderedPersons, steps) => {
-        runs++;
-        const h = await MexicanoHarness.open(new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons }), sport);   // DEFAULT = the product's shape
-        for (const s of steps) {
-          // I-3: the product's wait (text-pinned below) is judged BEFORE the generate: a successful one creates scheduled fixtures.
-          const blocked = s === "generate" && h.anyNonDecided();
-          const before = h.driver.rows().length;
-          await h.step(s);
-          if (blocked) { blockedGenerates++; expect(h.driver.rows().length, "generate created a round past a non-decided fixture").toBe(before); }
-          const r1 = h.rounds().find((r) => r.round_no === 1);
-          if (r1) { round1Checks++; expect(new Set(r1.persons).size, "round 1").toBe(r1.persons.length); }   // only individuals exist before round 2
-          // Review 2 I-3: from round 2 a duplicate is the PRODUCT's (false premise 17); its evidence must hold.
-          for (const r of h.rounds().filter((x) => x.round_no >= 2)) for (const p of h.duplicatesIn(r)) {
-            evidenceChecks++;
-            expect(h.pairEntrantsBefore(r.round_no).some((e) => h.driver.membersOf(e).includes(p)), `round ${r.round_no}: ${p}`).toBe(true);
-          }
+      fc.boolean(),
+      fc.array(fc.constantFrom<Act>("none", "none", "forfeit", "void", "withdraw"), { maxLength: ROUNDS }),
+      async (sport, seedOrderedPersons, individualsOnly, acts) => {
+        reach.runs++;
+        // individualsOnly false = the product's shape; true = the corrected product (the only one that drains).
+        const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons, individualsOnly });
+        const ctx = ctxFor(driver, "LIFECYCLE", { row: "mexicano", sport });
+        const rec = new Recorder();
+        const setup = await setUpDivision(ctx, rec, 8);
+        await playMexicano(ctx, rec, setup, setup.stage, {
+          beforeRound: async (round, batch) => {
+            const act = acts[round - 1] ?? "none";
+            const f = batch[0];
+            if (f === undefined || act === "none") return;
+            if (act === "forfeit") await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover" });
+            if (act === "void") await driver.abandonFixture(driver.fixtures.find((x) => x.id === f.id)!);
+            if (act === "withdraw") {
+              const e = driver.entrants.find((x) => x.status !== "withdrawn");
+              if (e !== undefined) await driver.withdraw(e.id);
+            }
+          },
+        });
+        const rows = driver.rows();
+        const exit = rec.exit;
+        const label = `${sport} seedOrdered=${seedOrderedPersons} individualsOnly=${individualsOnly} acts=${acts.join(",")}`;
+        expect(["drained", "stalled_rounds", "refused_generate", "cap"], label).toContain(exit);
+        const nonDecided = rows.filter((f) => f.status !== "decided");
+        expect(rec.notes.some((n) => n.startsWith("mexicano-stalled-on-non-decided:") || n.startsWith("mexicano: stalled after")), `${label}: stalled_rounds ⟺ a stall note`).toBe(exit === "stalled_rounds");
+        expect(rec.notes.some((n) => n.startsWith("mexicano-stalled-on-non-decided:")), `${label}: the non-decided form ⟺ a fixture not decided`).toBe(exit === "stalled_rounds" && nonDecided.length > 0);
+        if (exit === "stalled_rounds") expect(rec.facts.has("cut_short"), `${label}: a stall is never cut_short`).toBe(false);
+        // The product's wait, the fake held to it (I-3): no round past the lowest round holding a non-decided fixture.
+        if (nonDecided.length > 0) {
+          reach.blockChecks++;
+          expect(Math.max(...rows.map((f) => f.round_no ?? 0)), label).toBeLessThanOrEqual(Math.min(...nonDecided.map((f) => f.round_no ?? 0)));
         }
-        if (h.rounds().some((r) => r.round_no >= 2 && h.duplicatesIn(r).length > 0)) dupRuns++;
+        reach.round1Checks++;
+        expect(driver.repeatsIn(1).size, `${label}: round 1 seats each person once`).toBe(0);
+        // m-1: the seating signature ⟺ a repeat the fake's rows show in some round ≥ 2.
+        const repeated = [...new Set(rows.map((f) => f.round_no ?? 0))].some((r) => r >= 2 && driver.repeatsIn(r).size > 0);
+        expect(rec.notes.some((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ seats /.test(n)), `${label}: seating signature ⟺ an observed repeat`).toBe(repeated);
+        if (repeated) reach.dupSigned++; else reach.noDup++;
+        // T8-R1: the refused-form signature ⟺ a 5xx carrying the self-pair's cause.
+        const last = rec.track(setup.stage.id).generates.at(-1);
+        const pk = exit === "refused_generate" && last !== undefined && last.status >= 500 && SELF_PAIR_CAUSE.test(last.message ?? "");
+        expect(rec.notes.some((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ generate refused/.test(n)), `${label}: refused signature ⟺ the PK cause`).toBe(pk);
+        if (pk) reach.refusedSigned++;
+        if (exit === "stalled_rounds" && nonDecided.length > 0) reach.stalledNonDecided++;
+        if (exit === "drained") reach.drained++;
         return true;
       },
     ), { numRuns: 200, seed: Number(process.env.MATRIX_FC_SEED ?? 20260930) });
-    expect(runs).toBe(200);
-    expect(dupRuns, "runs that reached a round-2 duplicate (anti-vacuity for the evidence invariant)").toBeGreaterThan(0);
-    expect(evidenceChecks).toBeGreaterThan(0);
-    expect(round1Checks).toBeGreaterThan(0);
-    expect(blockedGenerates, "generates judged against the wait").toBeGreaterThan(0);
+    // Reach counts (anti-vacuity): each biconditional is witnessed both ways.
+    expect(reach.runs).toBe(200);
+    expect(reach.round1Checks).toBe(200);
+    expect(reach.dupSigned, "runs with an observed round-≥2 repeat").toBeGreaterThan(0);
+    expect(reach.noDup, "runs with none").toBeGreaterThan(0);
+    expect(reach.stalledNonDecided, "runs stalled on a forfeit or a void").toBeGreaterThan(0);
+    expect(reach.refusedSigned, "runs refused on the self-pair").toBeGreaterThan(0);
+    expect(reach.blockChecks, "runs judged against the wait").toBeGreaterThan(0);
+    expect(reach.drained, "runs that played every round").toBeGreaterThan(0);
   }, 120_000);
 
   it("the fake's mexicano wait and player set ARE the product's (text pins, review 1 I-3, review 2 I-3)", () => {
@@ -298,16 +374,23 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     await expect(runOn(driver, "LIFECYCLE", { row: "americano" })).rejects.toThrow(`americano: stage ${"s1"} declares no config.rounds (null) — the loop has no bound`);
   });
 
-  it("mexicano round 2 (false premise 17): the product-shaped fake repeats a person; the case records the signature with its evidence, routed W7", async () => {
+  it("mexicano round 2 (false premise 17): the product-shaped fake repeats a person; the case records the signature with the observed repeat as its evidence, routed W7", async () => {
     // Badminton folds no score, so every mexicano point is 0 and the order is
     // by person id: round 2's pairing holds no self-pair, isolating the
     // duplicate (the self-pair path is its own test below).
     const driver = new FakeAmericanoDriver({ mode: "mexicano" });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
     expect(driver.selfPairsIn(2)).toBe(0);
-    const dup = driver.firstDuplicate();   // {round_no, person, viaPairEntrant} from the fake's own rows
+    const dup = driver.firstDuplicate();   // the first round ≥ 2 with a repeat, from the fake's own rows
     expect(dup.round_no).toBe(2);
-    expect(out.notes.filter((n) => n.includes("mexicano-pair-entrants-counted-as-players: round 2 seats") && n.includes(dup.person) && n.includes(dup.viaPairEntrant) && n.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).length).toBe(1);
+    // T8-R3 (m-1): the evidence is the REPEAT itself — the person and the two
+    // seats holding them in round 2, as the fake's rows show them.
+    const notes = out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 seats "));
+    expect(notes.length).toBe(1);
+    const [, person, seats] = /^mexicano-pair-entrants-counted-as-players: round 2 seats (\S+) twice, in (.+) → W7$/.exec(notes[0]!) ?? [];
+    expect(dup.repeats.get(person!), `${person} repeats in round 2`).toBeDefined();
+    expect(seats!.split(" and ")).toEqual(dup.repeats.get(person!));
+    expect(notes[0]!.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).toBe(true);
     // The FULL failing set (review 2 m-8), re-derived: no check sees the
     // duplicate yet (I10 is Task 9's). Round 3's plan then pairs a pair
     // entrant's person with their own individual entry (the same false
@@ -328,8 +411,12 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(driver.selfPairsIn(2)).toBeGreaterThan(0);
     expect(driver.roundsGenerated()).toEqual([1]);
     expect(driver.generates).toEqual([{ created: null, status: 500 }]);
+    // T8-R1: the refusal's message is kept, and it is the product's cause.
+    const g = out.observed.stages[0]!.generates;
+    expect(g.length).toBe(1);
+    expect(g[0]!.message).toMatch(SELF_PAIR_CAUSE);
     expect(check(checks, "life-loop-bounded").evidence.some((e) => /exited refused_generate/.test(e))).toBe(true);
-    expect(out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused 500") && n.includes(driver.pairEntrantIds().join(", ")) && n.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).length).toBe(1);
+    expect(out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused 500 INTERNAL (entrant_members_pkey") && n.includes(`after round 1 created pair entrants ${driver.pairEntrantIds().join(", ")}`) && n.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).length).toBe(1);
     // Re-derived under FP-5 (T6-R2: every reached stage is asked to complete
     // once): round 1 is all decided, so the complete SUCCEEDS — life-stage-
     // completed passes, and I4 fails on the unnamed 500 alone. Only round 1's
@@ -338,6 +425,32 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(check(checks, "life-stage-completed").verdict).toBe("pass");
     expect(check(checks, "I4-nothing-ends-stuck").evidence).toEqual(["stage 1: generate answered 500 INTERNAL — not a named refusal"]);
     expect(failing(checks)).toEqual(["I4-nothing-ends-stuck", "I8-generate-named", "life-draw-path-exercised", "life-loop-bounded"]);
+  });
+
+  it("T8-R1: a mexicano 5xx whose message is NOT the self-pair's cause stays unsigned — the same 500 with the product's cause is signed", async () => {
+    // After round 1, the round-2 generate answers 500 INTERNAL with a cause of
+    // its own (the points query's numeric cast, stages.ts:774-783, say).
+    class Other500 extends FakeAmericanoDriver {
+      override async generate(stageId = "s1"): Promise<GenerateOut> {
+        this.log("generate", stageId);
+        throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), 'invalid input syntax for type numeric: "x"');
+      }
+    }
+    const other = new Other500({ mode: "mexicano" });
+    const o = await runOn(other, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
+    expect(o.out.observed.stages[0]!.exit).toBe("refused_generate");
+    expect(o.out.observed.stages[0]!.generates.map((g) => [g.status, SELF_PAIR_CAUSE.test(g.message ?? "")])).toEqual([[500, false]]);
+    expect(other.pairEntrantIds().length, "pair entrants exist, so the message is what decides").toBeGreaterThan(0);
+    expect(o.out.notes.some((n) => n.includes("mexicano-pair-entrants-counted-as-players"))).toBe(false);
+    // The differing case: the same 500, carrying the product's cause, is signed.
+    class Pk500 extends FakeAmericanoDriver {
+      override async generate(stageId = "s1"): Promise<GenerateOut> {
+        this.log("generate", stageId);
+        throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), 'duplicate key value violates unique constraint "entrant_members_pkey"');
+      }
+    }
+    const pk = await runOn(new Pk500({ mode: "mexicano" }), "LIFECYCLE", { row: "mexicano", sport: "badminton" });
+    expect(pk.out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused 500")).length).toBe(1);
   });
 
   it("a 4xx mexicano refusal carries no pair-entrant signature (it has a reason of its own)", async () => {
@@ -425,7 +538,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(out.notes.filter((n) => n.startsWith(`r4-withdrawn-player-kept-playing: ${driver.personOfSeed(3)} still seated in`) && n.endsWith(`→ ${KEPT_PLAYING_ROUTE.wave}`)).length).toBe(1);
     // The round-2 duplicate is here too (false premise 17), named; no check sees it until Task 9's I10.
     const dup = driver.firstDuplicate();
-    expect(out.notes.some((n) => n.includes(`round ${dup.round_no} seats ${dup.person} twice`))).toBe(true);
+    expect(out.notes.some((n) => [...dup.repeats.keys()].some((p) => n.startsWith(`mexicano-pair-entrants-counted-as-players: round ${dup.round_no} seats ${p} twice`)))).toBe(true);
     // Full failing set at Task 8 (review 3 I-2; Task 9 Step 1 adds "I10-americano-seats-each-person-once"):
     expect(failing(checks)).toEqual(["r4-policy-reported"]);
   });
@@ -520,7 +633,9 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(keptPlayingNote({ ...w, policy: "walkover" }, ["p3"], stage)).toBeNull();
     expect(keptPlayingNote({ ...w, before: [{}] as never[] }, ["p3"], stage)).toBeNull();
     expect(keptPlayingNote(w, ["p5"], stage), "seated in round 1 only").toBeNull();
-    expect(keptPlayingNote(w, [], stage), "no person").toBeNull();
+    // m-5: no person for the withdrawn entrant is thrown by name — but only once the policy legs hold.
+    expect(() => keptPlayingNote(w, [], stage)).toThrow("scenario: R4 on an americano stage, but the withdrawn entrant e3 has no linked person — the setup reads one for every entrant (personsNeeded)");
+    expect(keptPlayingNote({ ...w, policy: "walkover" }, [], stage), "a cascade needs no person").toBeNull();
     expect(keptPlayingNote({ ...w, afterRound: 2 }, ["p3"], stage), "nothing after the round").toBeNull();
     // Directly, through its own entrant id:
     expect(keptPlayingNote(w, ["p9"], { fixtures: [{ id: "f3", roundNo: 2, home: "e3", away: "pe4" }] as never, persons: {} })).toMatch(/still seated in 1 later fixture/);
@@ -609,7 +724,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect([size.verdict, size.reason]).toEqual(["abstain", "americano: the stage declares no courtCount, so the engine's round size hangs on the live player count (stages.ts:757-758)"]);
   });
 
-  it("F1 on mexicano (corrected player set): the round size holds, but the sit-outs NEVER rotate — whoever sits out round 1 sits out every round (a product finding)", async () => {
+  it("F1 on mexicano (corrected player set): the round size holds, and exactly the 3 entrants round 1 sits out are the ones never seated in any of the 7 rounds — f1-everyone-drawn reds on exactly them (a product finding)", async () => {
     // pairMexicanoRound sorts by points then person id and sits out the
     // bottom (americano.ts quartets: byes = order.slice(playable * 4)); a
     // person who sat out round 1 has 0 points and stays at the bottom. The
@@ -621,9 +736,9 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
       const inRound = (r: number) => new Set(driver.fixturesOfRound(r).flatMap((f) => [f.home_entrant_id!, f.away_entrant_id!]).flatMap((e) => driver.membersOf(e)));
       const outOfRound1 = field.filter((e) => !inRound(1).has(driver.membersOf(e)[0]!));
       expect(outOfRound1.length, `${sport}: 7 players, one court of 4`).toBe(3);
+      expect(driver.roundsGenerated(), `${sport}: all 7 rounds were played`).toEqual([1, 2, 3, 4, 5, 6, 7]);
       const never = field.filter((e) => [1, 2, 3, 4, 5, 6, 7].every((r) => !inRound(r).has(driver.membersOf(e)[0]!)));
-      expect(never.length, `${sport}: someone never plays`).toBeGreaterThan(0);
-      expect(never.every((e) => outOfRound1.includes(e))).toBe(true);
+      expect([...never].sort(), `${sport}: whoever sits out round 1 sits out every round`).toEqual([...outOfRound1].sort());
       expect(check(checks, "f1-round-size").verdict).toBe("pass");
       const drawn = check(checks, "f1-everyone-drawn");
       expect(drawn.verdict).toBe("fail");
@@ -651,75 +766,28 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(driver.pairEntrantIds().length).toBeGreaterThan(0);
   });
 
-  it("notePairEntrantDuplicates: once per stage, only from round 2, only with the evidence of an earlier pair entrant", () => {
-    const setup = { entrantIds: new Set(["e1", "e2", "e3", "e4", "e5"]), persons: new Map([["e1", ["p1"]], ["e2", ["p2"]], ["e3", ["p3"]], ["e4", ["p4"]], ["e5", ["p5"]]]) };
+  it("notePairEntrantDuplicates (T8-R3, m-1): once per stage, only from round 2, only on an OBSERVED repeat in that round's seating — round-1 membership is no evidence", () => {
+    const setup = { persons: new Map([["e1", ["p1"]], ["e2", ["p2"]], ["e3", ["p3"]], ["e4", ["p4"]], ["e5", ["p5"]]]) };
     const f = (round: number, home: string, away: string) => ({ id: `${home}-${away}`, round_no: round, home_entrant_id: home, away_entrant_id: away }) as FixtureRow;
-    const persons = { pe1: ["p1", "p2"], pe2: ["p3", "p4"], pe3: ["p1", "p5"], pe4: ["p2", "p3"] };
+    const persons = { pe1: ["p1", "p2"], pe2: ["p3", "p4"], pe3: ["p1", "p5"], pe4: ["p2", "p3"], pe5: ["p4", "p5"], pe6: ["p6", "p6"] };
     const run = (rows: FixtureRow[]) => { const rec = new Recorder(); notePairEntrantDuplicates(rec, setup, rows, persons); return rec.notes; };
     expect(run([])).toEqual([]);
     // Round 1 alone may never carry it (only individuals exist before round 2).
     expect(run([f(1, "pe1", "pe3")])).toEqual([]);
-    // Round 2 seats p1 twice (pe3 and pe1), and pe1 is a round-1 pair: the evidence holds.
-    expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, directly and via pair entrant pe1 (a round-1 pair, q < r) → ${PAIR_PLAYERS_ROUTE.wave}`]);
-    // A duplicate no earlier pair explains (pe3 + pe4 hold p1, p5, p2, p3; round 1 seated only individuals): no signature.
-    expect(run([f(1, "e1", "e2"), f(2, "pe3", "pe1")])).toEqual([]);
+    // Round 2 seats p1 in two seats (pe3 and pe1): the repeat is the evidence.
+    expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe3 and pe1 → ${PAIR_PLAYERS_ROUTE.wave}`]);
+    // A person in one seat with themselves is a repeat too.
+    expect(run([f(1, "pe1", "pe2"), f(2, "pe6", "pe5")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p6 twice, in pe6 with themselves → ${PAIR_PLAYERS_ROUTE.wave}`]);
+    // Evidence FALSE: every round-2 person but p5 sat in a round-1 pair (pe1,
+    // pe2 hold p1-p4), yet round 2 (pe3: p1+p5, pe4: p2+p3) seats nobody twice
+    // — no signature. Round-1 membership is no evidence.
+    expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe4")])).toEqual([]);
+    // A repeat with no earlier pair at all is still observed, still signed (the repeat is the evidence).
+    expect(run([f(1, "e1", "e2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe3 and pe1 → ${PAIR_PLAYERS_ROUTE.wave}`]);
     // Once per stage, however many rounds repeat a person.
     expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1"), f(3, "pe3", "pe1")]).length).toBe(1);
   });
 });
 
-type Step = "decideOne" | "forfeitOne" | "generate" | "withdrawOne";
-/** Drives the product-shaped fake directly (no loop) for the fast-check
- *  property: the REAL setup, then one action per step. */
-class MexicanoHarness {
-  readonly driver: FakeAmericanoDriver;
-  readonly ctx: ScenarioContext;
-  readonly rec: Recorder;
-  readonly setup: DivisionSetup;
-  private constructor(driver: FakeAmericanoDriver, ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup) {
-    this.driver = driver;
-    this.ctx = ctx;
-    this.rec = rec;
-    this.setup = setup;
-  }
-  static async open(driver: FakeAmericanoDriver, sport: string, n = 8): Promise<MexicanoHarness> {
-    const ctx = ctxFor(driver, "LIFECYCLE", { row: "mexicano", sport });
-    const rec = new Recorder();
-    return new MexicanoHarness(driver, ctx, rec, await setUpDivision(ctx, rec, n));
-  }
-  #open(): FixtureRow[] { return this.driver.rows().filter((f) => f.stage_id === this.setup.stage.id && seatedOpen(f)); }
-  async step(s: Step): Promise<void> {
-    if (s === "decideOne" || s === "forfeitOne") {
-      const f = this.#open()[0];
-      if (f === undefined) return;
-      await decideFixture(this.ctx, this.rec, this.setup, f, s === "decideOne" ? { kind: "win", winner: "home" } : { kind: "forfeit", by: "away", reason: "walkover" });
-      return;
-    }
-    if (s === "generate") {
-      try {
-        await this.driver.generate(this.setup.stage.id);
-      } catch (e) {
-        if (!(e instanceof RefusedCall)) throw e;
-      }
-      return;
-    }
-    const e = this.driver.entrants.find((x) => x.status !== "withdrawn");
-    if (e === undefined) return;
-    await this.driver.withdraw(e.id);
-  }
-  rounds(): { round_no: number; persons: string[] }[] {
-    const nos = [...new Set(this.driver.rows().map((f) => f.round_no ?? 0))].sort((a, b) => a - b);
-    return nos.map((round_no) => ({
-      round_no,
-      persons: this.driver.fixturesOfRound(round_no).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null).flatMap((e) => this.driver.membersOf(e)),
-    }));
-  }
-  duplicatesIn(r: { persons: string[] }): string[] {
-    return [...new Set(r.persons.filter((p, i) => r.persons.indexOf(p) !== i))];
-  }
-  pairEntrantsBefore(round: number): string[] {
-    const pairs = new Set(this.driver.pairEntrantIds());
-    return [...new Set(this.driver.rows().filter((f) => (f.round_no ?? 0) < round).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null && pairs.has(e)))];
-  }
-  anyNonDecided(): boolean { return this.driver.rows().some((f) => f.status !== "decided"); }
-}
+/** One round's intervention in the rule-10 property (beforeRound). */
+type Act = "none" | "forfeit" | "void" | "withdraw";

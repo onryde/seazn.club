@@ -385,7 +385,8 @@ export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageI
     return g.fixtures;
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
-    push({ status: e.status, code: e.code, total: 0, created: 0 });
+    // T8-R1: the message is kept — a 5xx's cause is read from it (americano-loop.ts).
+    push({ status: e.status, code: e.code, total: 0, created: 0, message: e.message });
     return null;
   }
 }

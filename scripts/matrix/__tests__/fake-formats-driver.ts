@@ -1148,22 +1148,25 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   membersOf(entrantId: string): string[] { return this.#rows(entrantId); }
   pairEntrantIds(): string[] { return this.#pairs.map((p) => p.id); }
   selfPairsIn(round: number): number { return this.#selfPairs.get(round) ?? 0; }
-  /** The first person a round ≥ 2 seats twice, with a pair entrant an EARLIER
-   *  round seated that holds them (the signature's evidence). */
-  firstDuplicate(): { round_no: number; person: string; viaPairEntrant: string } {
+  /** Round r's observed repeats, from the fake's OWN rows: each person seated
+   *  more than once (in two seats, or one seat with themselves) → the seats
+   *  holding them, in row order (T8-R3: the signature's evidence). */
+  repeatsIn(round: number): Map<string, string[]> {
+    const seats = this.fixturesOfRound(round).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null);
+    const out = new Map<string, string[]>();
+    for (const p of new Set(seats.flatMap((s) => this.#rows(s)))) {
+      const holding = seats.filter((s) => this.#rows(s).includes(p));
+      if (holding.length > 1 || holding.some((s) => this.#rows(s).filter((x) => x === p).length > 1)) out.set(p, holding);
+    }
+    return out;
+  }
+  /** The first round ≥ 2 with an observed repeat, and its repeats. */
+  firstDuplicate(): { round_no: number; repeats: Map<string, string[]> } {
     const rounds = [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].filter((r) => r >= 2).sort((a, b) => a - b);
     for (const r of rounds) {
-      const seen = new Map<string, number>();
-      for (const f of this.fixturesOfRound(r)) for (const side of [f.home_entrant_id, f.away_entrant_id]) {
-        if (side !== null) for (const p of this.#rows(side)) seen.set(p, (seen.get(p) ?? 0) + 1);
-      }
-      for (const [person, n] of seen) {
-        if (n < 2) continue;
-        const via = this.rows().find((f) => (f.round_no ?? 0) < r && [f.home_entrant_id, f.away_entrant_id].some((s) => s !== null && this.#pair(s) !== undefined && this.#rows(s).includes(person)));
-        const pair = via === undefined ? undefined : [via.home_entrant_id, via.away_entrant_id].find((s) => s !== null && this.#pair(s) !== undefined && this.#rows(s).includes(person));
-        if (pair !== undefined && pair !== null) return { round_no: r, person, viaPairEntrant: pair };
-      }
+      const repeats = this.repeatsIn(r);
+      if (repeats.size > 0) return { round_no: r, repeats };
     }
-    throw new Error("fake: no round seats a person twice with an earlier pair entrant to explain it");
+    throw new Error("fake: no round from 2 on seats a person twice");
   }
 }

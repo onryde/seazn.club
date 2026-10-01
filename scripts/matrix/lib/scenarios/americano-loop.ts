@@ -8,6 +8,7 @@
 // Mexicano is `{ kind: "americano", config.mode: "mexicano" }`
 // (format-templates.ts:261, stages.ts:756), never a kind of its own: every
 // mexicano branch here keys on BOTH (review 3 I-1).
+import { generateAmericano, pairMexicanoRound } from "@seazn/engine/scheduling";
 import type { FixtureRow, StageRef } from "../driver/types.ts";
 import { routeTo } from "../routing.ts";
 import { decideRound, recordGenerate, seatedOpen, type DivisionSetup, type Recorder, type RoundHook } from "./common.ts";
@@ -22,6 +23,41 @@ type Mode = "americano" | "mexicano";
 export const STALL_ROUTE = routeTo("W7", "mexicano-stalled-on-non-decided: a mexicano waits on ANY fixture not 'decided' (stages.ts:769), so a walkover or a void stops every later round (false premise 14, D9)");
 export const PAIR_PLAYERS_ROUTE = routeTo("W7", "mexicano-pair-entrants-counted-as-players: the active read has no kind filter (stages.ts:2290-2293), so round 1's pair entrants are players from round 2 (false premise 17)");
 export const TEAM_MEMBER_ROUTE = routeTo("W7", "americano on team entrants plays one arbitrary roster member per team (stages.ts:744-747, false premise 10)");
+
+/** T8-R1: the product's cause for a self-pair — two identical member rows for
+ *  one pair entrant hit the entrant_members primary key (V213:9), and the
+ *  catch-all answers 500 with the database's message (api-v1/http.ts:244-247).
+ *  Only a refusal carrying it is the self-pair; any other 5xx stays unsigned. */
+export const SELF_PAIR_CAUSE = /entrant_members_pkey/;
+
+/** n placeholder players — the engine's planners read only their count and order. */
+const placeholders = (n: number): string[] => Array.from({ length: n }, (_, i) => `player-${i + 1}`);
+
+/** T7-R1 carry: the fixtures one americano/mexicano round seats over a field
+ *  of n, as the ENGINE declares it — its own planner run over n placeholder
+ *  players on the stage's courtCount (generateAmericano; mexicano's round
+ *  planner, pairMexicanoRound, quartets the same way). null when the stage
+ *  declares no courtCount: the product's default then hangs on the live
+ *  player count (stages.ts:757-758), and F1 abstains by name. */
+export function americanoRoundSize(config: Readonly<Record<string, unknown>>, n: number): number | null {
+  const courtCount = config.courtCount;
+  if (typeof courtCount !== "number") return null;
+  const players = placeholders(n);
+  return config.mode === "mexicano"
+    ? pairMexicanoRound(players.map((playerId) => ({ playerId, points: 0 })), { courtCount }, 1).matches.length
+    : generateAmericano(players, { mode: "americano", courtCount, rounds: 1 })[0].matches.length;
+}
+
+/** T8-R2: the rounds Start must plan for an americano over a field of n — the
+ *  ENGINE's planner (generateAmericano, the source F1's round size reads) run
+ *  over n placeholders on the stage's courts (declared, else the product's own
+ *  default, stages.ts:757-758) for config.rounds, counting only the rounds that
+ *  seat a match: the product writes nothing for an empty one, so a field under
+ *  4 plans none. Never config.rounds alone. */
+export function americanoPlannedRounds(config: Readonly<Record<string, unknown>>, rounds: number, n: number): number {
+  const courtCount = typeof config.courtCount === "number" ? config.courtCount : Math.max(1, Math.floor(n / 4));
+  return generateAmericano(placeholders(n), { mode: "americano", courtCount, rounds }).filter((r) => r.matches.length > 0).length;
+}
 
 /** The mode the stage is played in, read as the product reads it (stages.ts:756). */
 export const modeOf = (stage: Pick<StageRef, "kind" | "config">): Mode | null =>
@@ -72,11 +108,21 @@ export async function playAmericano(ctx: ScenarioContext, rec: Recorder, setup: 
     if (open.length === 0) break;
     await playLowest(ctx, rec, setup, stage, open, hooks);
   }
-  const left = await openOf(ctx, setup, stage);
-  track.exit = rec.exit = left.length === 0 ? "drained" : "cap";
+  const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === stage.id);
+  const left = rows.filter(seatedOpen);
+  // T8-R2: "nothing open" is drained only when Start planned every round the
+  // engine lays out for the field Start saw (every division entrant).
+  const planned = new Set(rows.map((f) => f.round_no ?? 0)).size;
+  const expected = americanoPlannedRounds(stage.config, rounds, setup.entrants.length);
   if (left.length > 0) {
+    track.exit = rec.exit = "cap";
     rec.facts.add("cut_short");
     rec.notes.push(`americano: ${left.length} fixture(s) open after config.rounds=${rounds}`);
+  } else if (planned < expected) {
+    track.exit = rec.exit = "short_plan";
+    rec.notes.push(`americano: the product planned ${planned} of the ${expected} round(s) the engine lays out for ${setup.entrants.length} player(s) over config.rounds=${rounds} — played short, never drained`);
+  } else {
+    track.exit = rec.exit = "drained";
   }
   await recordPersons(ctx, rec, setup, stage);
 }
@@ -128,18 +174,19 @@ export async function playMexicano(ctx: ScenarioContext, rec: Recorder, setup: D
 const pairSides = (setup: Pick<DivisionSetup, "entrantIds">, rows: readonly FixtureRow[]): string[] =>
   [...new Set(rows.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null && !setup.entrantIds.has(e)))];
 
-/** A mexicano generate refused with a 5xx after earlier rounds minted pair
- *  entrants: the self-pair path false premise 17 opens (a pair entrant's
- *  person paired with their own individual entry reaches the entrant_members
- *  key, V213:9). Named with its evidence; a 4xx is a refusal with a reason of
- *  its own and gets no signature. */
+/** A mexicano generate refused with a 5xx whose message is the self-pair's
+ *  cause (SELF_PAIR_CAUSE, T8-R1): a pair entrant's person paired with their
+ *  own individual entry reaches the entrant_members key — the path false
+ *  premise 17 opens. Named with the pair entrants the earlier rounds minted.
+ *  A 4xx is a refusal with a reason of its own, and any other 5xx is
+ *  unexplained: neither gets the signature (normal, harness-first triage). */
 async function noteRefusedAfterPairs(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, played: number): Promise<void> {
   const g = rec.track(stage.id).generates.at(-1)!;
-  if (g.status < 500 || played < 1) return;
+  if (g.status < 500 || !SELF_PAIR_CAUSE.test(g.message ?? "")) return;
   const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === stage.id);
   const pairs = pairSides(setup, rows);
-  if (pairs.length === 0) return;
-  rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${played + 1} generate refused ${g.status} ${g.code ?? "(no code)"} after round${played > 1 ? `s 1–${played}` : " 1"} created pair entrants ${pairs.join(", ")} → ${PAIR_PLAYERS_ROUTE.wave}`);
+  const after = played === 0 ? "before any round was decided" : `after round${played > 1 ? `s 1–${played}` : " 1"} created pair entrants ${pairs.join(", ")}`;
+  rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${played + 1} generate refused ${g.status} ${g.code ?? "(no code)"} (entrant_members_pkey: a person paired with themselves) ${after} → ${PAIR_PLAYERS_ROUTE.wave}`);
 }
 
 /** Every entrant seated in this stage → its persons (GET /entrants/{id}), so
@@ -154,25 +201,24 @@ async function recordPersons(ctx: ScenarioContext, rec: Recorder, setup: Divisio
   if (setup.kind === "team") noteTeamMembers(rec, setup, out);
 }
 
-/** From round 2 on: the first person seated twice in one round, with a pair
- *  entrant an EARLIER round seated that holds them, gets the predicted
- *  signature — once per stage. The evidence is required: a duplicate no
- *  earlier pair explains gets no signature and goes to normal triage. */
-export function notePairEntrantDuplicates(rec: Recorder, setup: Pick<DivisionSetup, "entrantIds" | "persons">, rows: readonly FixtureRow[], persons: Readonly<Record<string, readonly string[]>>): void {
+/** From round 2 on (round 1 seats only the division's own players), the
+ *  first OBSERVED REPEAT in one round's seating gets the predicted signature,
+ *  once per stage: a person in two seats of the round, or in one seat with
+ *  themselves (T8-R3, m-1). The repeat itself is the evidence, read from the
+ *  product's own members; that the person sat in an earlier pair is NOT — on
+ *  an 8-player field every person does. A round with no repeat gets nothing. */
+export function notePairEntrantDuplicates(rec: Recorder, setup: Pick<DivisionSetup, "persons">, rows: readonly FixtureRow[], persons: Readonly<Record<string, readonly string[]>>): void {
   const of = (side: string): readonly string[] => persons[side] ?? setup.persons.get(side) ?? [];
   const rounds = [...new Set(rows.map((f) => f.round_no ?? 0))].filter((r) => r >= 2).sort((a, b) => a - b);
   for (const r of rounds) {
-    const count = new Map<string, number>();
-    for (const f of rows.filter((x) => (x.round_no ?? 0) === r)) {
-      for (const side of [f.home_entrant_id, f.away_entrant_id]) if (side !== null) for (const p of of(side)) count.set(p, (count.get(p) ?? 0) + 1);
-    }
-    for (const [p, n] of count) {
-      if (n < 2) continue;
-      const earlier = rows.filter((f) => (f.round_no ?? 0) < r);
-      const via = pairSides(setup, earlier).find((e) => of(e).includes(p));
-      if (via === undefined) continue;
-      const q = Math.min(...earlier.filter((f) => f.home_entrant_id === via || f.away_entrant_id === via).map((f) => f.round_no ?? 0));
-      rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${r} seats ${p} twice, directly and via pair entrant ${via} (a round-${q} pair, q < r) → ${PAIR_PLAYERS_ROUTE.wave}`);
+    const seats = rows.filter((x) => (x.round_no ?? 0) === r).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null);
+    const people = [...new Set(seats.flatMap(of))];
+    for (const p of people) {
+      const holding = seats.filter((side) => of(side).includes(p));
+      const self = holding.find((side) => of(side).filter((x) => x === p).length > 1);
+      if (holding.length < 2 && self === undefined) continue;
+      const where = self !== undefined ? `in ${self} with themselves` : `in ${holding.join(" and ")}`;
+      rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${r} seats ${p} twice, ${where} → ${PAIR_PLAYERS_ROUTE.wave}`);
       return;
     }
   }

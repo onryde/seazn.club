@@ -12,11 +12,11 @@
 // planner over the field (americano.ts:50, min(floor(n/4), courtCount)),
 // never floor(n/2), and an entrant is drawn when its PERSON sits in a seated
 // pair entrant.
-import { generateAmericano, pairMexicanoRound } from "@seazn/engine/scheduling";
 import { fieldSizeFor } from "../field-size.ts";
 import type { CompleteObs, ObservedFixture } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
+import { americanoRoundSize } from "./americano-loop.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
@@ -41,21 +41,6 @@ export function ladderSweep(kind: string, seeded: readonly string[], steps: read
     { ok: decided === n - 1, note: `${decided} challenge(s) decided, expected ${n - 1}` },
     ...seeded.map((e) => ({ ok: ranks !== null && ranks.includes(e), note: ranks === null ? `${e}: the stage minted no finalRanks` : `${e} is missing from finalRanks` })),
   ]);
-}
-
-/** T7-R1 carry: the fixtures one americano/mexicano round seats over a field
- *  of n, as the ENGINE declares it — its own planner run over n placeholder
- *  players on the stage's courtCount (generateAmericano; mexicano's round
- *  planner, pairMexicanoRound, quartets the same way). null when the stage
- *  declares no courtCount: the product's default then hangs on the live
- *  player count (stages.ts:757-758), and F1 abstains by name. */
-export function americanoRoundSize(config: Readonly<Record<string, unknown>>, n: number): number | null {
-  const courtCount = config.courtCount;
-  if (typeof courtCount !== "number") return null;
-  const players = Array.from({ length: n }, (_, i) => `player-${i + 1}`);
-  return config.mode === "mexicano"
-    ? pairMexicanoRound(players.map((playerId) => ({ playerId, points: 0 })), { courtCount }, 1).matches.length
-    : generateAmericano(players, { mode: "americano", courtCount, rounds: 1 })[0].matches.length;
 }
 
 export const f1OddField: Scenario = {

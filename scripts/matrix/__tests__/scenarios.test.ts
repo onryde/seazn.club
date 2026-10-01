@@ -1491,7 +1491,8 @@ describe("setup, generate and complete — refusals are recorded, crashes propag
       override async generate(): Promise<never> { throw new RefusedCall("POST", "/api/v1/stages/s1/generate", STAGE_NOT_READY_STATUS, "STAGE_NOT_READY", "not ready"); }
     }
     const r = await runOn(new Refuses(), "F1");
-    expect(r.out.observed.stages[0]!.generates).toEqual([{ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", total: 0, created: 0 }]);
+    // T8-R1: the RefusedCall's message is kept with the refusal.
+    expect(r.out.observed.stages[0]!.generates).toEqual([{ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", total: 0, created: 0, message: `POST /api/v1/stages/s1/generate → HTTP ${STAGE_NOT_READY_STATUS} STAGE_NOT_READY: not ready` }]);
     class Crashes extends FakeLeagueDriver { override async generate(): Promise<never> { throw new TypeError("boom"); } }
     await expect(runOn(new Crashes(), "F1")).rejects.toThrow("boom");
   });
@@ -1706,7 +1707,7 @@ describe("the swiss branch of playStage on the swiss fake", () => {
       }
     }
     const r = await runOn(new RefusesRound3(), "LIFECYCLE", { row: "swiss" });
-    expect(r.out.observed.stages[0]!.generates.at(-1)).toEqual({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", total: 0, created: 0 });
+    expect(r.out.observed.stages[0]!.generates.at(-1)).toEqual({ status: STAGE_NOT_READY_STATUS, code: "STAGE_NOT_READY", total: 0, created: 0, message: `POST /api/v1/stages/s1/generate → HTTP ${STAGE_NOT_READY_STATUS} STAGE_NOT_READY: not ready` });
     expect(r.checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "fail", evidence: ["play loop exited refused_generate", expect.stringMatching(/fixture\(s\) left unfinished/)] });
   });
   it("a swiss batch is round r only, even when the stage already lists a later seated fixture (an ad-hoc addFixture at maxRound + 1)", async () => {
