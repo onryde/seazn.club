@@ -8,6 +8,7 @@ import { SEEDING_FAILED_AFTER_COMMIT } from "../lib/driver/types.ts";
 import { INVARIANTS, STEP_INVARIANTS, evaluateInvariant, evaluateInvariants, evaluateStepInvariants, type InvariantSpec } from "../lib/invariants.ts";
 import type { CaseFact, CompleteObs, ObservedFixture, ObservedOutcome, ObservedRun, ObservedStage, WithdrawalObs } from "../lib/observed.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
+import { structuralBracketFrom, structuralBracketText } from "./product-text.ts";
 import { GENERIC_ERROR_CODES, TERMINAL_STATUSES, isNamedRefusal, isTerminal, sameResult, toObservedOutcome } from "../lib/observed.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -245,6 +246,18 @@ describe("I2 structural (W1-driving Task 9, ruling 45)", () => {
     // A page playoff of anything but 4 is refused by the engine, as the product's Start refuses it.
     expect(() => terminalFinalKeys("page_playoff", F.slice(0, 3), {})).toThrow();
     expect(() => terminalFinalKeys("knockout", F, {})).toThrow(/'knockout' has no structural final/);
+  });
+  it("m-1: the product facts the keys rest on are pinned as text — ext_key IS the engine fixture id, each structural kind is laid out by its engine generator, and the reset key the product reads is the one terminalFinalKeys honours", () => {
+    const pin = structuralBracketText();
+    expect([...pin.kinds].sort()).toEqual([...STRUCTURAL_FINAL_KINDS].sort());
+    expect(terminalFinalKeys("double_elim", F, { [pin.resetKey]: true })).toEqual(finalsOf(generateDoubleElim({ entrants: F, bracketReset: true }).fixtures));
+    expect(terminalFinalKeys("double_elim", F, { [`${pin.resetKey}X`]: true })).toEqual(finalsOf(generateDoubleElim({ entrants: F }).fixtures)); // any other key: no reset
+    // The pin's own guards, each reached: a product that stopped storing the engine id, or stopped reading the reset.
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/stages.ts"), "utf8");
+    expect(src).toContain("extKey: f.id,");
+    expect(() => structuralBracketFrom(src.replace("extKey: f.id,", "extKey: `k-${f.id}`,"))).toThrow(/no longer stores the engine fixture id as ext_key/);
+    expect(() => structuralBracketFrom(src.replace(/, bracketReset: cfg\.\w+ === true/, ""))).toThrow(/no longer reads double elim's bracket reset/);
+    expect(() => structuralBracketFrom(src.replace("generateStepladder({ entrants: ids, seeds })", "generateSingleElim({ entrants: ids, seeds })"))).toThrow(/no longer lays out stepladder with generateStepladder/);
   });
   /** A completed bracket of `kind` over F whose terminal final (by the
    *  ENGINE's key) is won by `champ`; the other row is a filler decided
@@ -927,11 +940,22 @@ describe("I9 ladder", () => {
     expect(differ.verdict).toBe("fail");
     expect(differ.evidence).toEqual(["stage seq 1: finalRanks differ from ladder_order: a,b,c,d vs a,b,d,c"]);
   });
-  it("T7 carry r1-b: every seeded entrant exactly once — a duplicate standing in for a missing one, and a foreign id standing in for one, each fail although the length is right", () => {
-    const dup = evaluateInvariant(I9, run([ladder(["a", "a", "d", "c"], ["a", "a", "d", "c"])]));
-    expect(dup.evidence).toEqual(["a ranked 2×", "b not ranked"]);
-    const foreign = evaluateInvariant(I9, run([ladder(["a", "x", "d", "c"], ["a", "x", "d", "c"])]));
-    expect(foreign.evidence).toEqual(["b not ranked", "x ranked but not in the field"]);
+  // T9-R1: the raw stored order is the product's own (never pruned, field-complete), so every
+  // case below keeps it realistic and plants ONE defect in finalRanks.
+  it("T7 carry r1-b / T9-R1: a duplicate, a foreign id, a missing active entrant and a swapped active pair each red on their own", () => {
+    const raw = ["a", "b", "d", "c"];
+    expect(evaluateInvariant(I9, run([ladder(raw, raw)]))).toMatchObject({ verdict: "pass", checked: 4 }); // the clean baseline
+    const dup = evaluateInvariant(I9, run([ladder(["a", "b", "d", "c", "a"], raw)]));
+    expect(dup.verdict).toBe("fail");
+    expect(dup.evidence).toContain("a ranked 2×");
+    expect(evaluateInvariant(I9, run([ladder(["a", "b", "d", "c", "x"], raw)])).evidence).toEqual(["x ranked but not in the field"]);
+    const missing = evaluateInvariant(I9, run([ladder(["a", "d", "c"], raw)]));
+    expect(missing.verdict).toBe("fail");
+    expect(missing.evidence).toContain("b not ranked");
+    expect(evaluateInvariant(I9, run([ladder(["b", "a", "d", "c"], raw)])).evidence).toEqual(["stage seq 1: finalRanks differ from ladder_order: b,a,d,c vs a,b,d,c"]);
+    // At the right length, a duplicate or a foreign id standing in for an entrant still reds.
+    expect(evaluateInvariant(I9, run([ladder(["a", "a", "d", "c"], raw)])).evidence).toEqual(expect.arrayContaining(["a ranked 2×", "b not ranked"]));
+    expect(evaluateInvariant(I9, run([ladder(["a", "x", "d", "c"], raw)])).evidence).toEqual(expect.arrayContaining(["b not ranked", "x ranked but not in the field"]));
   });
   it("a ladder with no ladder_order observed fails by name, and so does one with no finalRanks", () => {
     expect(evaluateInvariant(I9, run([ladder(["a", "b", "c", "d"], undefined)])).evidence).toEqual(["stage seq 1: no ladder_order observed — finalRanks cannot be compared"]);
@@ -945,10 +969,24 @@ describe("I9 ladder", () => {
     expect(r.verdict).toBe("pass");                                 // "ranked but withdrawn" is NOT an I9 failure (W7's question)
     expect(r.checked).toBe(4);
   });
-  it("a withdrawn entrant may ALSO be absent from finalRanks (a pruning product); an active one may not; a withdrawn one ranked twice still fails", () => {
-    expect(evaluateInvariant(I9, run([ladder(["a", "b", "d"], ["a", "b", "d"])], { withdrawal: withdrawn("c") }))).toMatchObject({ verdict: "pass", checked: 4 });
-    expect(evaluateInvariant(I9, run([ladder(["a", "c", "d"], ["a", "c", "d"])], { withdrawal: withdrawn("c") })).evidence.join(" ")).toMatch(/b not ranked/);
-    expect(evaluateInvariant(I9, run([ladder(["a", "c", "b", "d", "c"], ["a", "c", "b", "d", "c"])], { withdrawal: withdrawn("c") })).evidence).toEqual(["c ranked 2×"]);
+  // T9-R1: the raw stored order keeps the withdrawn entrant's rung (ruling 53), whatever finalRanks do.
+  it("T9-R1: the withdrawn entrant may be ranked anywhere or not at all against the UNPRUNED raw order — the active entrants' relative order is what is judged", () => {
+    const raw = ["a", "c", "b", "d"];
+    const w = { withdrawal: withdrawn("c") };
+    expect(evaluateInvariant(I9, run([ladder(raw, raw)], w))).toMatchObject({ verdict: "pass", checked: 4 });                     // keeps its rung
+    expect(evaluateInvariant(I9, run([ladder(["a", "b", "d"], raw)], w))).toMatchObject({ verdict: "pass", checked: 4 });         // a pruning product
+    expect(evaluateInvariant(I9, run([ladder(["a", "b", "d", "c"], raw)], w))).toMatchObject({ verdict: "pass", checked: 4 });    // moved to the bottom
+    // The same pruned finalRanks with NO withdrawal recorded is a missing active entrant (the differing case).
+    expect(evaluateInvariant(I9, run([ladder(["a", "b", "d"], raw)])).evidence).toContain("c not ranked");
+  });
+  it("T9-R1: beside a withdrawal, a swapped active pair, a missing active entrant and the withdrawn entrant ranked twice each still red", () => {
+    const raw = ["a", "c", "b", "d"];
+    const w = { withdrawal: withdrawn("c") };
+    expect(evaluateInvariant(I9, run([ladder(["b", "a", "d"], raw)], w)).evidence).toEqual(["stage seq 1: finalRanks differ from ladder_order: b,a,d vs a,b,d (active entrants; withdrawn c set aside)"]);
+    const missing = evaluateInvariant(I9, run([ladder(["a", "d"], raw)], w));
+    expect(missing.verdict).toBe("fail");
+    expect(missing.evidence).toContain("b not ranked");
+    expect(evaluateInvariant(I9, run([ladder(["a", "c", "b", "d", "c"], raw)], w)).evidence).toEqual(["c ranked 2×"]);
   });
   it("a later ladder stage judged on a division-wide field fails by name (W1a carry 1)", () => {
     expect(evaluateInvariant(I9, run([{ ...ladder(["a", "b", "c", "d"], ["a", "b", "c", "d"]), seq: 2, fieldSource: "division" }])).evidence)
@@ -1033,12 +1071,18 @@ describe("I10 americano", () => {
     // An individual entrant is not a side the fold ranks.
     expect(evaluateInvariant(I10, run([am(ok, ["P12", "P34", "P13", "P24", "A"])])).evidence).toEqual(["A ranked but not seated in this stage"]);
   });
-  it("PF-8: the rank items are skipped when the stage was never asked to complete, and when /complete read no ranks — the round and person items still judge", () => {
+  it("PF-8 / T9-R2: the rank items are skipped when /complete was never asked (and when it answered not complete, which gives no ranks — I4 judges that); the round and person items still judge", () => {
     const never = evaluateInvariant(I10, run([am([r1(), r2()], null, { complete: null })]));
     expect(never).toMatchObject({ verdict: "pass", checked: 4 * 2 + 4 });
     const notDone = evaluateInvariant(I10, run([am([r1(), r2()], null, { complete: { status: 200, code: null, completed: false, finalRanks: null, seedProposal: null } })]));
     expect(notDone).toMatchObject({ verdict: "pass", checked: 4 * 2 + 4 });
-    // The positive pair: a completed stage with ranks DOES judge them.
+  });
+  it("T9-R2: a COMPLETED stage that read no finalRanks reds by name; the same stage with its ranks passes (the positive pair)", () => {
+    const withRanks = evaluateInvariant(I10, run([am([r1(), r2()])]));
+    expect(withRanks).toMatchObject({ verdict: "pass", checked: 4 * 2 + 4 + 4 });
+    const noRanks = evaluateInvariant(I10, run([am([r1(), r2()], null)]));
+    expect(noRanks).toMatchObject({ verdict: "fail", checked: 4 * 2 + 4 + 1, evidence: ["stage seq 1: completed, but no finalRanks were read — the pair ranking cannot be judged"] });
+    // A completed stage with WRONG ranks is judged item by item.
     expect(evaluateInvariant(I10, run([am([r1(), r2()], ["P12"])])).verdict).toBe("fail");
   });
   it("cut short: abstains", () => {

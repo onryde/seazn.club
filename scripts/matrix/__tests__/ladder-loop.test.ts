@@ -193,7 +193,7 @@ describe("ladderSchedule and playLadder — D8 (ruling 52)", () => {
 
   describe("I9 on the real snapshot (W1-driving Task 9)", () => {
     const I9 = "I9-ladder-order-is-the-field";
-    it("LIFECYCLE: I9 passes over every entrant, and the order it compares is the LIVE one the product holds — not the setup-time config copy", async () => {
+    it("LIFECYCLE: I9 passes over every entrant, and the order it compares is the raw stored order the product holds at the end of the run — not the setup-time config copy", async () => {
       const driver = new FakeLadderDriver();
       const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "ladder" });
       const s = out.observed.stages[0]!;
@@ -412,6 +412,8 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     expect([w.policy, w.walkovers, w.voided, w.skippedFinalized]).toEqual([expected, 0, 0, 0]);
     expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("pass");
     expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");   // seed 3's decided challenge unchanged
+    // T9-R1: I9 judges the active entrants against the raw stored order, the withdrawn entrant set aside.
+    expect(checks.find((c) => c.id === "I9-ladder-order-is-the-field")).toMatchObject({ verdict: "pass", checked: driver.entrants.length });
     const canary = await runOn(new FakeLadderDriver({ challengeRange: 3 }), "R4", { row: "ladder", canary: true });
     expect(canary.checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("fail");
   });
@@ -435,7 +437,10 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const w7 = out.notes.filter((n) => /W7/.test(n));
     expect(w7).toEqual([`ladder finalRanks rung ${ranks!.indexOf(seed3)} for withdrawn ${seed3} (raw held ${heldAt}) — W7 rulebook question`]);
     expect(out.notes.some((n) => /\bkeep\b/.test(n))).toBe(false);
-    expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);  // recorded, never asserted either way
+    expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);  // recorded, never asserted either way…
+    // …and I9 (T9-R1), which does read finalRanks, passes with the withdrawn entrant keeping its rung.
+    expect(ranks).toContain(seed3);
+    expect(checks.find((c) => c.id === "I9-ladder-order-is-the-field")).toMatchObject({ verdict: "pass", checked: driver.entrants.length });
   });
 
   it("R4 on a ladder with a PENDING challenge at withdrawal (fake option withdrawWhilePending): walkover by abandon, never by forfeit", async () => {
@@ -611,7 +616,10 @@ describe("R4 on a ladder: the W7 note on a stage that never completes (review m-
     expect(heldAt).toBeGreaterThanOrEqual(0);
     expect(out.observed.stages[0]!.complete?.finalRanks).not.toContain(seed3);
     expect(out.notes.filter((n) => /W7/.test(n))).toEqual([`ladder finalRanks hold no rung for withdrawn ${seed3} (raw held ${heldAt}) — W7 rulebook question`]);
-    expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);                     // still a note: ruling 53 asserts neither way
+    // Ruling 53 asserts neither way, and that is RUN, not inferred from check ids (T9-R1): I9 reads finalRanks
+    // and passes the pruned shape exactly as it passes the keep-rung one, against the UNPRUNED raw stored order.
+    expect(driver.ladderOrder()).toContain(seed3);
+    expect(checks.find((c) => c.id === "I9-ladder-order-is-the-field")).toMatchObject({ verdict: "pass", checked: driver.entrants.length });
   });
 });
 

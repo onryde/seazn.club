@@ -691,15 +691,17 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   return { home: seatedHome ? won.points : 0, away: seatedHome ? 0 : won.points, forOutcome: f.outcome };
 }
 
-/** W1-driving Task 9: a ladder's `ladder_order` is written by the product at
- *  the first challenge and on every decided swap (stages.ts:5538-5551,
- *  scoring.ts:774-786); the StageRef a play carries is the setup-time copy,
- *  which predates both. I9 compares finalRanks with the order the product
- *  holds NOW, so it is read once, for the ladder stages only — every other
- *  kind keeps the copy it was played with (a config edit probe must not leak
- *  into abstainOnStageConfig). A ladder the product lists without an order
- *  keeps none, and I9 says so by name. */
-async function liveLadderOrders(ctx: ScenarioContext, setup: DivisionSetup, plays: readonly StagePlay[]): Promise<Map<string, unknown>> {
+/** W1-driving Task 9: a ladder's `ladder_order` is the raw stored order — the
+ *  product writes it at the first challenge and on every decided swap
+ *  (stages.ts:5538-5551, scoring.ts:774-786) and never prunes it; it is NOT
+ *  ruling 53's "live" (pruned) order. The StageRef a play carries is the
+ *  setup-time copy, which predates both writes. I9 compares finalRanks with
+ *  the raw stored order as the product holds it at the end of the run, so it
+ *  is read once, for the ladder stages only — every other kind keeps the copy
+ *  it was played with (a config edit probe must not leak into
+ *  abstainOnStageConfig). A ladder the product lists without an order keeps
+ *  none, and I9 says so by name. */
+async function storedLadderOrders(ctx: ScenarioContext, setup: DivisionSetup, plays: readonly StagePlay[]): Promise<Map<string, unknown>> {
   const out = new Map<string, unknown>();
   if (!plays.some((p) => p.stage.kind === "ladder")) return out;
   for (const s of await ctx.driver.listStages(setup.division.id)) {
@@ -740,11 +742,11 @@ function terminalFinalsOf(stage: StageRef, play: StagePlay): readonly string[] |
 export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, plays: readonly StagePlay[], extra: { configEdit: ConfigEditObs | null; withdrawal: WithdrawalObs | null }): Promise<ObservedRun> {
   if (plays.length === 0) throw new Error("scenario: snapshot of a division with no stage played — a run observes at least its root stage");
   const all = await ctx.driver.listFixtures(setup.division.id);
-  const live = await liveLadderOrders(ctx, setup, plays);
+  const stored = await storedLadderOrders(ctx, setup, plays);
   const stages: ObservedStage[] = [];
   for (const [i, play] of plays.entries()) {
     const stage = play.stage;
-    const config = live.has(stage.id) ? { ...stage.config, ladder_order: live.get(stage.id) } : stage.config;
+    const config = stored.has(stage.id) ? { ...stage.config, ladder_order: stored.get(stage.id) } : stage.config;
     const rows = all.filter((f) => f.stage_id === stage.id);
     const fixtures: ObservedFixture[] = rows.map((f) => {
       const base = { ...toFixture(f), declared: null };

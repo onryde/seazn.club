@@ -180,6 +180,34 @@ export function bracketRoundNoText(): (lane: string | undefined, round: number, 
   return (lane, round, laneDepth) => (lane === "LB" ? laneDepth : lane === "GF" ? laneDepth * gf : 0) + round + 1;
 }
 
+/** stages.ts: the two product facts I2's structural terminal keys rest on
+ *  (W1-driving Task 9 m-1, scenarios/terminal-finals.ts). Every bracket row's
+ *  ext_key is the engine fixture id (bracketToGen `extKey: f.id`), and
+ *  generate() lays out page_playoff, double_elim and stepladder with the
+ *  engine's own generator — double elim's reset read as `cfg.<key> === true`.
+ *  Returns the kinds found and that config key; throws by name otherwise.
+ *  `src` is stages.ts's text (a parameter so a test can feed a variant). */
+export function structuralBracketFrom(src: string): { kinds: string[]; resetKey: string } {
+  const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(src)?.[1];
+  if (body === undefined || !/\n\s*extKey: f\.id,\n/.test(body)) {
+    throw new Error("product-text: stages.ts bracketToGen no longer stores the engine fixture id as ext_key — I2's terminal final keys would match no row");
+  }
+  const kinds: string[] = [];
+  let resetKey: string | null = null;
+  for (const [kind, gen] of [["page_playoff", "generatePagePlayoff"], ["double_elim", "generateDoubleElim"], ["stepladder", "generateStepladder"]] as const) {
+    const m = new RegExp(`case "${kind}": \\{\\s*const bracket = ${gen}\\(\\{ entrants: ids, seeds(?:, bracketReset: cfg\\.(\\w+) === true)? \\}\\);\\s*return bracketToGen\\(bracket, bracket\\.rounds\\);`).exec(src);
+    if (m === null) throw new Error(`product-text: stages.ts generate() no longer lays out ${kind} with ${gen} through bracketToGen — re-read it`);
+    if (kind === "double_elim") {
+      if (m[1] === undefined) throw new Error("product-text: stages.ts generate() no longer reads double elim's bracket reset from the stage config — re-read it");
+      resetKey = m[1];
+    }
+    kinds.push(kind);
+  }
+  if (resetKey === null) throw new Error("product-text: no double_elim arm was read — the reset key is unknown");
+  return { kinds, resetKey };
+}
+export const structuralBracketText = () => structuralBracketFrom(read("apps/web/src/server/usecases/stages.ts"));
+
 /** The literal words of every `throw new X(…)` in a product source file: each
  *  string argument, and a template's literal pieces (its head and the text
  *  after each substitution, which splits them). A committed regression `match`

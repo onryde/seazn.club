@@ -252,19 +252,17 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect([...linked].filter((p) => !played.has(p))).toEqual([]);
   });
 
-  it("I10 (Task 9) judges a round's persons: this case seats a person twice in round 2, and I10 reds naming that round and that person, as the fake's own rows show them", async () => {
-    // Badminton, as the pinned R4 seed-ordered case below: on generic, round
-    // 2's plan is a self-pair and the generate is refused (500), so no round
-    // 2 exists to carry a repeat (Task 8's pointer test claimed one there; it
-    // asserted only that no I10 check existed, so the claim was never read).
-    const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons: true });
-    const { checks } = await runOn(driver, "R4", { row: "mexicano", sport: "badminton" });
-    const dup = driver.firstDuplicate();
-    expect(dup.round_no).toBe(2);
-    expect(dup.repeats.size).toBeGreaterThan(0);
+  it("I10 (Task 9) on americano R4 (fixed rotation): no round seats anyone twice in the fake's own rows, so I10 PASSES over every round — the mexicano repeat (pinned below) is not a property of every americano stage", async () => {
+    // The differing case to the pinned mexicano sets (review m-4): the same
+    // invariant, the same withdrawal, a mode whose plan never reuses a person.
+    const driver = new FakeAmericanoDriver({ mode: "americano" });
+    const { checks } = await runOn(driver, "R4", { row: "americano" });
+    const rounds = [...new Set(driver.rows().map((f) => f.round_no ?? 0))].sort((a, b) => a - b);
+    expect(rounds.length).toBeGreaterThan(1);
+    expect(rounds.map((r) => driver.repeatsIn(r).size)).toEqual(rounds.map(() => 0));
     const c = check(checks, "I10-americano-seats-each-person-once");
-    expect(c.verdict).toBe("fail");
-    for (const e of i10RepeatEvidence(driver, dup)) expect(c.evidence).toContain(e);
+    expect(c.verdict, c.evidence.join("; ")).toBe("pass");
+    expect(c.checked).toBeGreaterThan(rounds.length * 4);  // one item per person per round, at least a court of 4 each
   });
 
   it("fast-check (rule 10, m-2): playMexicano ITSELF over any per-round schedule of forfeit / void / withdraw, either sport, either person-id order, product or corrected player set — its exit and every note agree with the fake's own rows", async () => {

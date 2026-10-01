@@ -96,6 +96,22 @@ function poolsOf(s: ObservedStage): Map<string, Set<string>> {
   return pools;
 }
 
+/** The permutation items, one authority for I2, I9 and I10 (Task 9 m-5):
+ *  finalRanks against the ids it must rank exactly once — one checked item
+ *  per id in `must`. An id in `may` is also allowed once or not at all; one
+ *  ranked twice still fails. Anything else ranked is `outside`. */
+function rankItems(ranks: readonly string[], must: readonly string[], may: ReadonlySet<string>, outside: string, fails: string[]): number {
+  const counts = new Map<string, number>();
+  for (const id of ranks) counts.set(id, (counts.get(id) ?? 0) + 1);
+  for (const e of must) {
+    const c = counts.get(e) ?? 0;
+    if (c === 1 || (c === 0 && may.has(e))) continue;
+    fails.push(`${e} ${c === 0 ? "not ranked" : `ranked ${c}×`}`);
+  }
+  for (const id of counts.keys()) if (!must.includes(id)) fails.push(`${id} ranked but ${outside}`);
+  return must.length;
+}
+
 /** The product's code for a /complete that COMMITTED and then failed to seed
  *  the next stage (usecases/stages.ts progressCompletedStage). The driver
  *  layer owns the constant (driver/types.ts SEEDING_FAILED_AFTER_COMMIT);
@@ -133,14 +149,7 @@ const I2: InvariantSpec = {
       // seeding failure, which the advance check owns. Skipped by name.
       if (seedingFailed(s)) { unread.push(`stage seq ${s.seq}`); continue; }
       const ranks = s.complete?.finalRanks ?? [];
-      const counts = new Map<string, number>();
-      for (const id of ranks) counts.set(id, (counts.get(id) ?? 0) + 1);
-      for (const e of s.field) {
-        checked++;
-        const c = counts.get(e) ?? 0;
-        if (c !== 1) fails.push(`${e} ${c === 0 ? "not ranked" : `ranked ${c}×`}`);
-      }
-      for (const id of counts.keys()) if (!s.field.includes(id)) fails.push(`${id} ranked but not in the field`);
+      checked += rankItems(ranks, s.field, new Set(), "not in the field", fails);
       if (s.kind === "knockout" && s.field.length > 0) {
         checked++;
         const lost = new Set<string>();
@@ -389,31 +398,20 @@ const I8: InvariantSpec = {
   },
 };
 
-/** finalRanks against the ids it must rank exactly once (the permutation
- *  items I2 also writes): one checked item per id in `must`; an id in `may`
- *  is also allowed once or not at all; anything else ranked is `outside`. */
-function rankItems(ranks: readonly string[], must: readonly string[], may: ReadonlySet<string>, outside: string, fails: string[]): number {
-  const counts = new Map<string, number>();
-  for (const id of ranks) counts.set(id, (counts.get(id) ?? 0) + 1);
-  for (const e of must) {
-    const c = counts.get(e) ?? 0;
-    if (c === 1 || (c === 0 && may.has(e))) continue;
-    fails.push(`${e} ${c === 0 ? "not ranked" : `ranked ${c}×`}`);
-  }
-  for (const id of counts.keys()) if (!must.includes(id)) fails.push(`${id} ranked but ${outside}`);
-  return must.length;
-}
-
-/** W1-driving Task 9. The product's ladder finalRanks is the RAW
- *  config.ladder_order (engine-db/competition.ts:606): written at the first
- *  challenge, swapped on every decided climb, never pruned — so a withdrawn
- *  entrant may keep its rung (ruling 53, a W7 question, not a red here) or a
- *  pruning product may drop it. Every other entrant is ranked exactly once
- *  (T7 carry r1-b: a permutation, not membership). `config.ladder_order` is
- *  the product's live order, read by the snapshot. */
+/** W1-driving Task 9 (T9-R1). The product's ladder finalRanks is the raw
+ *  stored config.ladder_order (engine-db/competition.ts:606): written at the
+ *  first challenge, swapped on every decided climb, never pruned. I9 judges
+ *  the ACTIVE entrants only — every non-withdrawn entrant ranked exactly
+ *  once, nothing outside the field (T7 carry r1-b), and their relative order
+ *  in finalRanks equal to the raw stored order with the withdrawn entrant
+ *  removed. The withdrawn entrant may be ranked once or not at all, anywhere:
+ *  whether it keeps its rung is ruling 53's W7 note, never asserted either
+ *  way. `config.ladder_order` is the raw stored order as the product holds it
+ *  at the end of the run (read by the snapshot) — not the pruned "live"
+ *  order of ruling 53. */
 const I9: InvariantSpec = {
   id: "I9-ladder-order-is-the-field",
-  description: "a completed ladder ranks every active entrant exactly once and nothing outside the field, its finalRanks are its ladder_order, and at least one challenge was decided",
+  description: "a completed ladder ranks every active entrant exactly once and nothing outside the field, in the raw stored ladder_order with the withdrawn entrant set aside, after at least one decided challenge",
   stageKinds: ["ladder"],
   abstainOn: ["cut_short"],
   abstainOnStageConfig: [],
@@ -429,9 +427,17 @@ const I9: InvariantSpec = {
       if (!s.fixtures.some((f) => twoSided(f) && f.outcome !== null && isTerminal(f.status))) fails.push(`stage seq ${s.seq}: no decided challenge on the ladder`);
       const ranks = s.complete?.finalRanks ?? [];
       checked += rankItems(ranks, s.field, withdrawn, "not in the field", fails);
-      const order = s.config.ladder_order;
-      if (!Array.isArray(order)) fails.push(`stage seq ${s.seq}: no ladder_order observed — finalRanks cannot be compared`);
-      else if (ranks.length !== order.length || ranks.some((id, i) => id !== order[i])) fails.push(`stage seq ${s.seq}: finalRanks differ from ladder_order: ${ranks.join(",")} vs ${order.join(",")}`);
+      const order: unknown = s.config.ladder_order;
+      if (!Array.isArray(order)) { fails.push(`stage seq ${s.seq}: no ladder_order observed — finalRanks cannot be compared`); continue; }
+      // Relative order over the active entrants: a foreign id is the
+      // permutation item's to name, and the withdrawn entrant sits anywhere.
+      const active = new Set(s.field.filter((e) => !withdrawn.has(e)));
+      const ranked = ranks.filter((e) => active.has(e));
+      const stored = (order as readonly unknown[]).filter((e): e is string => typeof e === "string" && active.has(e));
+      if (ranked.length !== stored.length || ranked.some((id, i) => id !== stored[i])) {
+        const aside = withdrawn.size > 0 ? ` (active entrants; withdrawn ${[...withdrawn].join(",")} set aside)` : "";
+        fails.push(`stage seq ${s.seq}: finalRanks differ from ladder_order: ${ranked.join(",")} vs ${stored.join(",")}${aside}`);
+      }
     }
     return result(fails, checked);
   },
@@ -442,7 +448,9 @@ const I9: InvariantSpec = {
  *  completed stage ranks its SIDES — the pair entrants the product minted,
  *  folded as a league (engine-db/competition.ts:360-365, :399; Task 8 Step
  *  0) — exactly once each. PF-8: "never played" is seated in 0 fixtures of
- *  any status, and the rank items are skipped while no ranks were read. A
+ *  any status, and the rank items are skipped while the stage was never
+ *  asked to complete (T9-R2); a completed stage that read no finalRanks reds
+ *  by name, since nothing else reads an americano's ranks. A
  *  field entrant with one person is judged by that person; one with a roster
  *  (a team sport) by the entrant, since the product seats one member per team
  *  (false premise 10; Task 8's W7 note). */
@@ -485,11 +493,12 @@ const I10: InvariantSpec = {
         else if (ps.length === 1) { if (!played.has(ps[0])) fails.push(`${ps[0]} never played`); }
         else if (!ps.some((p) => played.has(p))) fails.push(`${e} never played`);
       }
-      const ranks = s.complete?.finalRanks ?? null;
-      if (ranks !== null) {
-        const sides = [...new Set(seated.flatMap((f) => [f.home, f.away]).filter((e): e is string => e !== null))];
-        checked += rankItems(ranks, sides, new Set(), "not seated in this stage", fails);
-      }
+      // T9-R2 / PF-8: skipped only when /complete was never asked. A stage
+      // that answered not complete has no ranks to give (I4 judges that).
+      if (s.complete === null || !s.complete.completed) continue;
+      if (s.complete.finalRanks === null) { checked++; fails.push(`stage seq ${s.seq}: completed, but no finalRanks were read — the pair ranking cannot be judged`); continue; }
+      const sides = [...new Set(seated.flatMap((f) => [f.home, f.away]).filter((e): e is string => e !== null))];
+      checked += rankItems(s.complete.finalRanks, sides, new Set(), "not seated in this stage", fails);
     }
     return result(fails, checked);
   },
