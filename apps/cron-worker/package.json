@@ -1,0 +1,19 @@
+{
+  "name": "@seazn/cron-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit",
+    "dev": "wrangler dev --test-scheduled",
+    "deploy:stg": "wrangler deploy --env stg",
+    "deploy:prod": "wrangler deploy --env prod"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@types/node": "^26",
+    "postgres": "^3.4.9",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.145.0"
+  }
+}

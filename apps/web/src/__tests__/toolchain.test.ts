@@ -49,8 +49,8 @@ describe("toolchain: node floor", () => {
     expect(bases).toEqual([String(NODE_MAJOR), String(NODE_MAJOR)]);
   });
 
-  it("@types/node tracks the runtime major in both workspaces", () => {
-    for (const ws of ["apps/web", "packages/engine"]) {
+  it("@types/node tracks the runtime major in every TS workspace", () => {
+    for (const ws of ["apps/web", "packages/engine", "apps/cron-worker"]) {
       const pkg = JSON.parse(
         readFileSync(join(REPO_ROOT, ws, "package.json"), "utf8"),
       ) as { devDependencies?: Record<string, string> };
