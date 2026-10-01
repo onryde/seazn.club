@@ -678,9 +678,16 @@ describe("stg 2026-10-01 (SEAZN-CLUB-STG-A): the output word `disconnected` read
   it("the positive pair: a genuinely NEW word is still reported, once per session — and beside `disconnected` the report names the new word alone", async () => {
     outputWords = ["streaming"];
     expect(await cf.outputState("in_stg", { sessionId: "sess-stg-new-1" }), "an unseen word alone is still unknown").toBe("unknown");
+    expect(wordReports(), "the first read in a session reports").toHaveLength(1);
+    // B0 fix round 1, m-4: the title's "once per session", asserted — the same session's next poll reads the same word
+    // and reports nothing more.
+    expect(await cf.outputState("in_stg", { sessionId: "sess-stg-new-1" })).toBe("unknown");
+    expect(wordReports(), "once per session: the second poll in sess-stg-new-1 does not report again").toHaveLength(1);
     outputWords = ["disconnected", "streaming"];
     await cf.outputState("in_stg", { sessionId: "sess-stg-new-2" });
-    expect(wordReports()).toHaveLength(2);
+    expect(wordReports(), "a second session reports again").toHaveLength(2);
+    await cf.outputState("in_stg", { sessionId: "sess-stg-new-2" });
+    expect(wordReports(), "once per session: the second poll in sess-stg-new-2 does not report again").toHaveLength(2);
     expect(wordReports()[0]![1]?.extra?.words).toEqual(["streaming"]);
     expect(wordReports()[1]![1]?.extra).toMatchObject({ sessionId: "sess-stg-new-2", inputUid: "in_stg" });
     expect(wordReports()[1]![1]?.extra?.words, "`disconnected` is not among the unseen").toEqual(["streaming"]);
