@@ -25,6 +25,13 @@
 // abstains by name while the second leg is unseen. Americano plans every
 // round at Start, so its later games are pending ("walkover" expected, the
 // product's "none" reds); mexicano has generated nothing yet ("none").
+//
+// T15-R9: the re-seat itself is judged — r4-not-seated-later, the americano
+// sibling of r4-not-paired-later (swiss, entrant-level) and
+// r4-not-challenged-later (ladder): no person of the withdrawn entrant is
+// seated in a round after the withdrawal, through ANY entrant, as the
+// recorded seatings and the members the harness read show it. Without it a
+// mexicano re-seat redded nothing once the policy was derived (class 6).
 import type { CheckResult } from "../results.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
@@ -167,6 +174,51 @@ function secondLeg(w: Pick<WithdrawalObs, "entrantId" | "afterRound">, mine: rea
   if (mine.length === 0) throw new Error(`scenario: R4 on an americano stage, but the withdrawn entrant ${w.entrantId} has no linked person — the setup reads one for every entrant (personsNeeded)`);
   const holds = holdsPlayer(w.entrantId, mine, stage.persons ?? {});
   return stage.fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && (holds(f.home) || holds(f.away)));
+}
+
+/** Statuses that seat nobody to PLAY: the withdrawal cascade's own outputs
+ *  (open-format void → abandoned, forfeit model → forfeited; WALKOVER_MODEL)
+ *  and a cancelled row (LOCKED_STATUSES). A later fixture in one of them is
+ *  judged, never red: it is what a fixed product would leave. */
+const NOT_PLAYED: readonly string[] = Object.freeze(["abandoned", "forfeited", "cancelled"]);
+
+export interface NotSeatedLaterInput {
+  readonly kind: string;
+  readonly entrantId: string;
+  readonly afterRound: number;
+  /** The withdrawn entrant's persons (setup.persons). */
+  readonly mine: readonly string[];
+  readonly stage: Pick<ObservedStage, "fixtures" | "persons">;
+}
+
+/** T15-R9: no person of the withdrawn entrant is seated in a round after the
+ *  withdrawal, through any entrant — its own, or a pair entrant whose
+ *  recorded members hold the person. One item per two-sided fixture after
+ *  the withdrawal round; a fixture in a NOT_PLAYED status passes. Abstains by
+ *  name off the americano kinds, when no round followed, and when a later
+ *  fixture seats a side whose members were never recorded — unless a judged
+ *  fixture already reds (a definite red is never hidden by an unknown). */
+export function notSeatedLater(i: NotSeatedLaterInput): CheckResult {
+  const id = "r4-not-seated-later";
+  if (i.kind !== "americano") return assertion(id, [], "americano kinds only: a person is seated through minted pair entrants on americano/mexicano stages alone (swiss judges r4-not-paired-later, a ladder r4-not-challenged-later)");
+  if (i.mine.length === 0) throw new Error(`scenario: R4 on an americano stage, but the withdrawn entrant ${i.entrantId} has no linked person — the setup reads one for every entrant (personsNeeded)`);
+  const later = i.stage.fixtures.filter((f) => (f.roundNo ?? 0) > i.afterRound && f.home !== null && f.away !== null);
+  if (later.length === 0) return assertion(id, [], `no round followed the withdrawal (round ${i.afterRound}): nothing to judge`);
+  const persons = i.stage.persons ?? {};
+  const recorded = (side: string): boolean => side === i.entrantId || persons[side] !== undefined;
+  const holds = holdsPlayer(i.entrantId, i.mine, persons);
+  const judged = later.filter((f) => recorded(f.home!) && recorded(f.away!));
+  const items: Item[] = judged.map((f) => {
+    const through = [f.home, f.away].find((side) => holds(side)) ?? null;
+    const seated = through !== null && !NOT_PLAYED.includes(f.status);
+    return { ok: !seated, note: `${f.id} (round ${f.roundNo}, ${f.status}) seats withdrawn ${i.mine.join("+")} through ${through}` };
+  });
+  const unknown = later.find((f) => !judged.includes(f));
+  if (unknown !== undefined && items.every((x) => x.ok)) {
+    const side = recorded(unknown.home!) ? unknown.away : unknown.home;
+    return assertion(id, [], `cannot judge ${unknown.id}: it seats ${side}, whose members were never recorded`);
+  }
+  return assertion(id, items);
 }
 
 /** A stage row as it stood immediately before the withdrawal call. */
@@ -340,6 +392,7 @@ export const r4Withdrawal: Scenario = {
           later.map((f) => ({ ok: f.home !== w.entrantId && f.away !== w.entrantId, note: `${f.id} (round ${f.roundNo}) seats the withdrawn entrant` })),
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),
         challenged,
+        notSeatedLater({ kind, entrantId: w.entrantId, afterRound: w.afterRound, mine: setup.persons.get(w.entrantId) ?? [], stage: observed.stages[0] }),
         stageCompleted(observed),
         loopBounded(rec, observed),
         advanceSeededAsDeclared(plays, observed, rec.withdrawn),

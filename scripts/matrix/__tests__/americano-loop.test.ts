@@ -28,7 +28,7 @@ import { lineupsPut, seatsEntrant } from "../lib/scenarios/assertions.ts";
 import { MINTED_PAIRS_KIND_ROUTE, Recorder, decideFixture, ensureLineups, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { TARGET_OF } from "../lib/scenarios/m1-walkover.ts";
-import { KEPT_PLAYING_ROUTE, americanoPolicyExpectation, keptPlayingNote } from "../lib/scenarios/r4-withdrawal.ts";
+import { KEPT_PLAYING_ROUTE, americanoPolicyExpectation, keptPlayingNote, notSeatedLater } from "../lib/scenarios/r4-withdrawal.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -72,6 +72,9 @@ const check = (checks: readonly { id: string; verdict: string; evidence: string[
 /** The fake's oracle: does `person` sit in any fixture after `round`, through ANY entrant? */
 const seatedAfter = (driver: FakeAmericanoDriver, round: number, person: string): boolean =>
   driver.fixturesAfterRound(round).some((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => e !== null && driver.membersOf(e).includes(person)));
+/** T15-R9 oracle: the fake's later fixtures that seat `person` through ANY entrant (its own member rows). */
+const laterSeating = (driver: FakeAmericanoDriver, round: number, person: string) =>
+  driver.fixturesAfterRound(round).filter((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => e !== null && driver.membersOf(e).includes(person)));
 /** The function body of `name` in `src`, by brace matching from its first `{`. */
 function sliceFunction(src: string, name: string): string {
   const at = src.indexOf(`async function ${name}(`);
@@ -607,6 +610,11 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
       // T15-R6: nothing of seed 3's is pending when a mexicano withdrawal answers, so the derived policy is "none" —
       // judged (a pass on the product's "none") iff the second leg is seen, an abstain by name otherwise.
       expect(check(checks, "r4-policy-reported").verdict, label).toBe(later ? "pass" : "abstain");
+      // T15-R9: the re-seat is a CHECK now, not only the note — red iff the person sits in a later round; judged (a pass)
+      // when later rounds exist without them; an abstain by name when no round followed (the self-pair stop at round 2).
+      const after = driver.fixturesAfterRound(1).length;
+      expect(check(checks, "r4-not-seated-later").verdict, label).toBe(later ? "fail" : after > 0 ? "pass" : "abstain");
+      if (later) expect(check(checks, "r4-not-seated-later").evidence.length, label).toBe(Math.min(12, laterSeating(driver, 1, driver.personOfSeed(3)).length));
     }
     expect(seen.cases).toBe(SPORT_KEYS.length * 2);
     expect(seen.round2, "cases where round 2 was generated").toBeGreaterThan(0);
@@ -626,8 +634,25 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // Full failing set (review 3 I-2; Task 9 Step 1 adds I10). T15-R6: nothing of seed 3's was pending when the
     // withdrawal answered (round 2 not yet generated), so the derived policy is "none" — the product's answer — and
     // r4-policy-reported passes where the old fixed `policy !== "none"` redded. The re-seat stays the W7 note above.
-    expect(failing(checks)).toEqual(["I10-americano-seats-each-person-once"]);
+    // T15-R9: the re-seat reds r4-not-seated-later (covered by the kept-playing signature) — one item per later fixture.
+    expect(failing(checks)).toEqual(["I10-americano-seats-each-person-once", "r4-not-seated-later"]);
     expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1, reason: "1 ok" });
+    const p3 = driver.personOfSeed(3);
+    const reseat = laterSeating(driver, 1, p3);
+    expect(reseat.length).toBeGreaterThan(0);
+    expect(check(checks, "r4-not-seated-later")).toMatchObject({ checked: driver.fixturesAfterRound(1).length });
+    expect(check(checks, "r4-not-seated-later").evidence).toHaveLength(Math.min(12, reseat.length));
+    // The mexicano shape: p3 comes back through a pair entrant that is NOT seed 3's own entrant.
+    const seed3 = driver.entrants.find((e) => e.seed === 3)!.id;
+    expect(reseat.every((f) => f.home_entrant_id !== seed3 && f.away_entrant_id !== seed3)).toBe(true);
+    for (const e of check(checks, "r4-not-seated-later").evidence) {
+      const m = /^(\S+) \(round (\d+), (\w+)\) seats withdrawn (\S+) through (\S+)$/.exec(e);
+      expect(m, e).not.toBeNull();
+      expect(m![4]).toBe(p3);
+      expect(m![5]).not.toBe(seed3);
+      expect(driver.membersOf(m![5]!)).toContain(p3);
+      expect(reseat.map((f) => f.id)).toContain(m![1]);
+    }
     // I10 judges EVERY round, and the product-shaped fake repeats in each one
     // after the first (rounds 2–7 here), so its evidence is every round's
     // repeats as the fake's own rows show them — led by round 2's.
@@ -651,6 +676,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // T15-R6: with the second leg unseen the policy is not judged — an abstain by name, never a pass or a red.
     expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "abstain", checked: 0 });
     expect(check(checks, "r4-policy-reported").reason).toMatch(/^second leg unseen: \S+ is seated in no fixture after round 1/);
+    // T15-R9 negative pair: later rounds exist without the person — judged, a pass, every later fixture checked.
+    expect(check(checks, "r4-not-seated-later")).toMatchObject({ verdict: "pass", checked: driver.fixturesAfterRound(1).length });
   });
 
   it("M1 on americano (D14, ruling 51): targets the first fixture whose pair entrant has seed 1's person as a member, found through entrant members", async () => {
@@ -709,7 +736,10 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(k).toBeGreaterThan(0);
     expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "fail", checked: 1, evidence: [`policy none, expected walkover (${k} pending game(s) of ${p3} at withdrawal, through any entrant; withdrawal.ts open-format rule)`] });
     expect(out.notes).toContain(`r4-withdrawn-player-kept-playing: ${p3} still seated in ${k} later fixture(s) — predicted product red → ${KEPT_PLAYING_ROUTE.wave}`);
-    expect(failing(checks), "full failing set (review 3 I-2)").toEqual(["r4-policy-reported"]);
+    // T15-R9: the k later games red r4-not-seated-later too — both covered by the kept-playing signature.
+    expect(failing(checks), "full failing set (review 3 I-2; T15-R9)").toEqual(["r4-not-seated-later", "r4-policy-reported"]);
+    expect(check(checks, "r4-not-seated-later")).toMatchObject({ checked: driver.fixturesAfterRound(1).length });
+    expect(check(checks, "r4-not-seated-later").evidence).toHaveLength(Math.min(12, k));
   });
 
   it("R4 on americano WITHOUT the second leg (dropWithdrawnFromPlan): no predicted signature — the red goes to normal triage", async () => {
@@ -721,6 +751,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // T15-R6: the second leg unseen — abstain by name.
     expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "abstain", checked: 0 });
     expect(check(checks, "r4-policy-reported").reason).toMatch(/^second leg unseen: /);
+    expect(check(checks, "r4-not-seated-later")).toMatchObject({ verdict: "pass", checked: driver.fixturesAfterRound(1).length });
   });
 
   it("keptPlayingNote's legs, each alone: policy none AND nothing pending AND the person seated later — and through ANY entrant", () => {
@@ -742,6 +773,48 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(keptPlayingNote({ ...w, afterRound: 2 }, ["p3"], stage), "nothing after the round").toBeNull();
     // Directly, through its own entrant id:
     expect(keptPlayingNote(w, ["p9"], { fixtures: [{ id: "f3", roundNo: 2, home: "e3", away: "pe4" }] as never, persons: {} })).toMatch(/still seated in 1 later fixture/);
+  });
+
+  // T15-R9: a withdrawn entrant's PERSONS are never seated in a round after the withdrawal, through any entrant
+  // (americano and mexicano). Judged from the recorded seatings and the members the harness already read; a later
+  // fixture the product voided or forfeited seats nobody to play. Sport-independent: entrant and person ids only.
+  it("T15-R9: notSeatedLater — red when the person is seated later, through its own entrant or a DIFFERENT pair entrant; a pass with every later fixture judged otherwise", () => {
+    const persons = { e3: ["p3"], pe1: ["p3", "p5"], pe2: ["p1", "p2"], pe3: ["p3", "p6"], pe4: ["p7", "p8"], pe5: ["p1", "p7"], pe6: ["p2", "p8"] };
+    const fx = (id: string, roundNo: number, home: string, away: string, status = "decided") => ({ id, roundNo, home, away, status });
+    const w = { kind: "americano", entrantId: "e3", afterRound: 1, mine: ["p3"] as readonly string[] };
+    // POSITIVE, the mexicano shape: round 2 seats p3 through pe3 — a pair entrant, not e3.
+    const viaPair = notSeatedLater({ ...w, stage: { fixtures: [fx("f1", 1, "pe1", "pe2"), fx("f2", 2, "pe3", "pe4"), fx("f3", 2, "pe5", "pe6")] as never, persons } });
+    expect(viaPair).toMatchObject({ id: "r4-not-seated-later", verdict: "fail", checked: 2, evidence: ["f2 (round 2, decided) seats withdrawn p3 through pe3"] });
+    // POSITIVE, directly through the withdrawn entrant; a pending game counts (it is still due to be played).
+    expect(notSeatedLater({ ...w, stage: { fixtures: [fx("f4", 3, "pe4", "e3", "scheduled")] as never, persons } }))
+      .toMatchObject({ verdict: "fail", checked: 1, evidence: ["f4 (round 3, scheduled) seats withdrawn p3 through e3"] });
+    // NEGATIVE PAIR: later rounds without p3 pass, every later fixture judged — round 1 (before the withdrawal) is not.
+    expect(notSeatedLater({ ...w, stage: { fixtures: [fx("f1", 1, "pe1", "pe2"), fx("f3", 2, "pe5", "pe6"), fx("f5", 3, "pe4", "pe6")] as never, persons } }))
+      .toMatchObject({ verdict: "pass", checked: 2, reason: "2 ok" });
+    // A later fixture the product voided or forfeited seats nobody to play: judged, never red.
+    for (const status of ["abandoned", "forfeited", "cancelled"]) {
+      expect(notSeatedLater({ ...w, stage: { fixtures: [fx("f2", 2, "pe3", "pe4", status)] as never, persons } }), status).toMatchObject({ verdict: "pass", checked: 1 });
+    }
+  });
+
+  it("T15-R9: notSeatedLater abstains by name off the americano kinds, with no later round, and on a side whose members were never recorded — unless a definite red stands; no person is thrown", () => {
+    const persons = { e3: ["p3"], pe3: ["p3", "p6"], pe4: ["p7", "p8"], pe5: ["p1", "p7"] };
+    const fx = (id: string, roundNo: number, home: string, away: string) => ({ id, roundNo, home, away, status: "decided" });
+    const w = { kind: "americano", entrantId: "e3", afterRound: 1, mine: ["p3"] as readonly string[] };
+    const later = { fixtures: [fx("f2", 2, "pe3", "pe4")] as never, persons };
+    for (const kind of ["swiss", "league", "ladder", "knockout"]) {
+      const r = notSeatedLater({ ...w, kind, stage: later });
+      expect([r.verdict, r.checked], kind).toEqual(["abstain", 0]);
+      expect(r.reason, kind).toMatch(/^americano kinds only: /);
+    }
+    const none = notSeatedLater({ ...w, stage: { fixtures: [fx("f1", 1, "pe3", "pe4")] as never, persons } });
+    expect([none.verdict, none.checked, none.reason]).toEqual(["abstain", 0, "no round followed the withdrawal (round 1): nothing to judge"]);
+    const unknown = notSeatedLater({ ...w, stage: { fixtures: [fx("f6", 2, "pe9", "pe4")] as never, persons } });
+    expect([unknown.verdict, unknown.reason]).toEqual(["abstain", "cannot judge f6: it seats pe9, whose members were never recorded"]);
+    // A definite red outranks the unknown: the judged fixture still reds (the unknown one is not counted).
+    const both = notSeatedLater({ ...w, stage: { fixtures: [fx("f6", 2, "pe9", "pe4"), fx("f7", 2, "pe3", "pe5")] as never, persons } });
+    expect(both).toMatchObject({ verdict: "fail", checked: 1, evidence: ["f7 (round 2, decided) seats withdrawn p3 through pe3"] });
+    expect(() => notSeatedLater({ ...w, mine: [], stage: later })).toThrow("scenario: R4 on an americano stage, but the withdrawn entrant e3 has no linked person — the setup reads one for every entrant (personsNeeded)");
   });
 
   // T15-R6 (ruling 53's shape): the americano/mexicano policy is DERIVED from
