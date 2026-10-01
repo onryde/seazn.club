@@ -70,9 +70,12 @@ const OUTPUT_WORDS_SEEN: ReadonlySet<string> = new Set(["connected", "connecting
  *  → connected (a returning phone reads `reconnected` — as `unknown` it kept the chain on No signal over a sending phone
  *  and the I-2a clamp never fired); the five that mean it is not arriving, or not yet again → disconnected, the port's
  *  best word for "not sending now" (`reconnecting` included: the phone is not sending until it has reconnected); and
- *  `new_configuration_accepted`, which says nothing about video → unknown. Any other word → unknown, and reported. A
+ *  `new_configuration_accepted`, which says nothing about video → null, NOT evidence (G-a, controller ruling
+ *  2026-10-01; ports.ts IngestStatus.state): the caller carries its previous reading forward. As `unknown` it read as
+ *  No signal and held go-live over a phone that may be sending — the output is added on provisioned → warming, after
+ *  the QR is served, so Cloudflare can report it over a connected phone. Any other word → unknown, and reported. A
  *  Map, not an object literal: a word like `constructor` must not find Object.prototype. */
-const INPUT_STATES: ReadonlyMap<string, IngestState> = new Map<string, IngestState>([
+const INPUT_STATES: ReadonlyMap<string, IngestState | null> = new Map<string, IngestState | null>([
   ["connected", "connected"],
   ["reconnected", "connected"],
   ["reconnecting", "disconnected"],
@@ -81,7 +84,7 @@ const INPUT_STATES: ReadonlyMap<string, IngestState> = new Map<string, IngestSta
   ["failed_to_connect", "disconnected"],
   ["failed_to_reconnect", "disconnected"],
   ["disconnected", "disconnected"],
-  ["new_configuration_accepted", "unknown"],
+  ["new_configuration_accepted", null],
 ]);
 
 /** m-2: `captureError`'s shape (lib/sentry.ts), so the live pair passes it as is. */
@@ -292,7 +295,8 @@ export class CloudflareIngest implements IngestProvider {
         route: "relay.input_state", extra: { sessionId, inputUid: inputId, word: cur.state },
       });
     }
-    const state: IngestState = known ?? "unknown";
+    // `=== undefined`, never `??`: a `??` would turn G-a's null (no evidence) back into `unknown`.
+    const state: IngestState | null = known === undefined ? "unknown" : known;
     const protocol = cur.ingestProtocol === "srt" ? "srt" : cur.ingestProtocol === "rtmps" || cur.ingestProtocol === "rtmp" ? "rtmps" : null;
     // Dh: verbatim. It is Cloudflare's sentence, not ours to reword — Task 10
     // writes it straight to fixture_stream_samples.ingest_reason.

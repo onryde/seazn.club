@@ -34,7 +34,7 @@ import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffe
 import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
-import { createFailureOf, createRefusedBeforeCall, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
+import { createFailureOf, createRefusedBeforeCall, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
@@ -530,10 +530,32 @@ async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): 
     reportIngestReadFailure(err, { sessionId, orgId: row.org_id, inputUid: inputId, site: "expiry" });
     return true;
   }
-  if (status.state !== "connected") return false;
+  // G-a: a read with no evidence carries the previous poll's word. With nothing to carry the ingest is unseen, so it is
+  // held exactly as a failed read is (N1): a warming timeout's "no inbound video" must not be decided on a word that
+  // says nothing about video, over a phone that may be sending.
+  const phone = status.state ?? carriedIngest(await latestPollSample(sessionId));
+  if (phone === null) return true;
+  if (phone !== "connected") return false;
   await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${sessionId}`;
   await apply(sessionId, connectIfWarming, deps);
   return false;
+}
+
+/** The latest POLL sample — the one row the poll compares a new reading against (Ruling 13) and, for G-a, the phone's
+ *  previous reading. Read from the DB, not from process memory, so a carry survives a restart and any number of
+ *  processes. Undefined before any poll has recorded one. */
+async function latestPollSample(sessionId: string): Promise<{ ingest_state: string | null; output_state: string | null } | undefined> {
+  const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
+    select ingest_state, output_state from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`;
+  return prev;
+}
+
+/** G-a (controller ruling 2026-10-01): the word a no-evidence read (ports.ts IngestStatus.state null) carries forward —
+ *  the latest poll sample's. Null when there is none; and a stored word outside the port's three is a guard, not a
+ *  carry: the poll writes only those three, so anything else is not a reading this code can vouch for. */
+function carriedIngest(prev: { ingest_state: string | null } | undefined): IngestState | null {
+  const w = prev?.ingest_state ?? null;
+  return w === "connected" || w === "disconnected" || w === "unknown" ? w : null;
 }
 
 /** N1: the ONE rule for what an unobservable ingest holds back — `warming_timeout` and nothing else. That expiry's claim
@@ -1360,36 +1382,41 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     }
     if (read) {
       const { status, output } = read;
-      ingestState = { state: status.state, protocol: status.protocol };
+      // One read of the latest poll sample serves both the change check below and G-a's carry.
+      const prev = output !== null || status.state === null ? await latestPollSample(row.id) : undefined;
+      // G-a (controller ruling 2026-10-01): a read with NO evidence about video (`null`, ports.ts) carries the previous
+      // poll's word forward — never `unknown`, which read as No signal, and never a hold on go-live. With nothing to
+      // carry (no poll has read the phone yet) the phone is unseen on this poll: `ingest: null`, as for a failed read.
+      const phone: IngestState | null = status.state ?? carriedIngest(prev);
+      ingestState = phone === null ? null : { state: phone, protocol: status.protocol };
       outputObserved = output;
       // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed — for a poll
       // that READ. m-2 (B5 re-review 2): an outputs read that failed (`null`, ports.ts) is not evidence, so that poll
       // records neither; as `unknown` it was a non-ok word that moved the D3 hold toward the key box. The phone's read
-      // still answers the projection and still drives warming → live below.
-      if (output !== null) {
-        const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
-          select ingest_state, output_state from fixture_stream_samples where session_id = ${row.id} and source = 'poll' order by id desc limit 1`;
+      // still answers the projection and still drives warming → live below. G-a: a carried word is recorded as the
+      // reading it carries (the raw status keeps the no-evidence read itself); an unseen phone records nothing.
+      if (output !== null && phone !== null) {
         // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
         // on the status read). It is the one field that says WHY an input is disconnected, so a poll
         // sample without it records that something was wrong and drops the only explanation.
-        await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: status.state, outputState: output,
+        await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: phone, outputState: output,
           ingestReason: status.reason, sampledAt: deps.now(), raw: status });
-        if (!prev || prev.ingest_state !== status.state || prev.output_state !== output) {
+        if (!prev || prev.ingest_state !== phone || prev.output_state !== output) {
           const sid = row.id, orgId = row.org_id;
           await sql.begin(async (tx) => {
             await lockRow(tx, sid);
-            await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: status.state, occurredAt: deps.now(),
-              payload: { protocol: status.protocol, outputState: output, connected: status.state === "connected" } });
+            await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: phone, occurredAt: deps.now(),
+              payload: { protocol: status.protocol, outputState: output, connected: phone === "connected" } });
           });
         }
       }
-      if (status.state === "connected") {
+      if (phone === "connected") {
         await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
       }
       // m1 (lane C final review): both re-decided on the LOCKED row (T5-a) — a Stop or an expiry that landed after the
       // unlocked read above leaves a row these no longer apply to, and a plain apply of either was InvalidTransition, a 500.
       if (output === "rejected") await apply(row.id, (s) => (s.state === "warming" || s.state === "live" ? { type: "target_rejected" } : null), deps);
-      else if (row.state === "warming" && status.state === "connected") await apply(row.id, connectIfWarming, deps);
+      else if (row.state === "warming" && phone === "connected") await apply(row.id, connectIfWarming, deps);
       row = (await latestRow(fixtureId))!;
     }
   }

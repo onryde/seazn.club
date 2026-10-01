@@ -23,7 +23,11 @@ export interface IngestCredentials {
   rtmps: { url: string; streamKey: string };
 }
 export interface IngestStatus {
-  state: IngestState; protocol: IngestProtocol | null; enteredAt: string | null; lastSeenAt: string | null;
+  /** G-a (controller ruling 2026-10-01): `null` when the read carries NO evidence about video either way — Cloudflare's
+   *  `new_configuration_accepted` (an output was added or changed), which it can report over a phone that is sending.
+   *  The caller carries its PREVIOUS reading forward. `null` is never `unknown` (the chain's No signal) and decides
+   *  nothing on its own: it never takes warming → live and never lets a warming timeout claim "no inbound video". */
+  state: IngestState | null; protocol: IngestProtocol | null; enteredAt: string | null; lastSeenAt: string | null;
   /** Dh: Cloudflare's `status.current.reason`, VERBATIM — the sentence that says
    *  WHY the ingest is in this state. Task 10 writes it to every sample's
    *  `ingest_reason`. The edge LOCATION is dropped: GET /live_inputs/{uid}

@@ -642,8 +642,8 @@ describe("G-1: inputStatus maps every documented Cloudflare input word — and r
   });
   const inputReports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.input_state");
 
-  it("one row per word: connected/reconnected → connected; reconnecting, client_disconnect, ttl_exceeded, failed_to_connect, failed_to_reconnect (and the measured disconnected) → disconnected; new_configuration_accepted → unknown; none of them reported", async () => {
-    const rows: [string, IngestState][] = [
+  it("one row per word: connected/reconnected → connected; reconnecting, client_disconnect, ttl_exceeded, failed_to_connect, failed_to_reconnect (and the measured disconnected) → disconnected; new_configuration_accepted → null (G-a: no evidence, carried by the caller — never unknown); none of them reported", async () => {
+    const rows: [string, IngestState | null][] = [
       ["connected", "connected"],
       ["reconnected", "connected"],
       ["reconnecting", "disconnected"],
@@ -651,7 +651,7 @@ describe("G-1: inputStatus maps every documented Cloudflare input word — and r
       ["ttl_exceeded", "disconnected"],
       ["failed_to_connect", "disconnected"],
       ["failed_to_reconnect", "disconnected"],
-      ["new_configuration_accepted", "unknown"],
+      ["new_configuration_accepted", null],   // G-a (controller ruling 2026-10-01): says nothing about video
       ["disconnected", "disconnected"],   // R0-measured, not in the documented enum
     ];
     reported.mockClear();
@@ -663,6 +663,8 @@ describe("G-1: inputStatus maps every documented Cloudflare input word — and r
     }
     expect(checked, "the documented eight plus the measured disconnected").toBe(9);
     expect(rows.filter(([, s]) => s === "connected").length, "the phone-is-sending words").toBe(2);
+    expect(rows.filter(([, s]) => s === null).map(([w]) => w), "G-a: the one no-evidence word").toEqual(["new_configuration_accepted"]);
+    expect(rows.filter(([, s]) => s === "unknown"), "G-a: no documented word reads as unknown (No signal)").toHaveLength(0);
     expect(inputReports(), "a known word is never reported").toHaveLength(0);
   });
 

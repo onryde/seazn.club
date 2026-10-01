@@ -26,7 +26,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { OUTPUT_WARNING_AFTER_MS, createErrorCode, d3Warning, destinationWarning } from "@/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, createErrorCode, d3Warning, destinationWarning, phoneNoSignal } from "@/lib/stream-session-view";
 import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
@@ -4645,4 +4645,128 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
       expect(tally[k], `${k}: zero checked is a failure`).toBeGreaterThan(0);
     }
   }, 240_000);
+});
+
+// G-a (B5 re-review 4 gap hunt; controller ruling 2026-10-01): Cloudflare's input word `new_configuration_accepted` (an
+// output was added or changed) is NOT evidence about the phone. It used to map to `unknown`: the chain read No signal
+// over a phone that may be sending, and warming → live waited on it. The adapter now answers it with `state: null`
+// (ports.ts IngestStatus) and the session layer CARRIES the previous poll's word forward. Every expected word below is
+// the word an earlier REAL read produced on the same session, so a carry that invents a constant cannot pass both the
+// connected and the dropped case. Single-sport: the carry has no sport branch (stream sessions are sport-blind).
+describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's previous reading — never unknown, never a hold on go-live", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  /** The provider answering `new_configuration_accepted` on every input read: the real fake's reading, `state: null`. */
+  const noEvidence = (r: Rig): SessionDeps => {
+    const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      inputStatus: async (id: string, meta?: { sessionId?: string | null }) => ({ ...(await r.ingest.inputStatus(id, meta)), state: null }),
+    });
+    return { ...r.deps, drivers: { ...r.deps.drivers, ingest } };
+  };
+  const counts = async (sid: string) => {
+    const [{ samples }] = await sql<{ samples: number }[]>`select count(*)::int as samples from fixture_stream_samples where session_id = ${sid} and source = 'poll'`;
+    const [{ events }] = await sql<{ events: number }[]>`select count(*)::int as events from fixture_stream_events where session_id = ${sid} and type = 'ingest_status'`;
+    return { samples, events };
+  };
+  const lastPollWord = async (sid: string) => (await sql<{ ingest_state: string | null }[]>`
+    select ingest_state from fixture_stream_samples where session_id = ${sid} and source = 'poll' order by id desc limit 1`)[0]?.ingest_state;
+  const phoneOf = async (r: Rig, sid: string) => {
+    const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sid}`;
+    return (s: "connected" | "disconnected") => r.ingest.setState(inp!.ingest_input_id, s);
+  };
+  const consumesOf = async (sid: string) => (await sql<{ n: number }[]>`
+    select count(*)::int as n from org_stream_credits where session_id = ${sid} and reason = 'consume'`)[0]!.n;
+  const PAST_WARMING_MS = (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
+  const NEVER_MS = 24 * 60 * 60_000;
+
+  it("LIVE: connected stays connected (no No signal) across two no-evidence reads; a dropped phone stays DROPPED (the carry is the previous word, not a constant); each carried poll records the carried word and no event; a real word moves it again", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state, "PREMISE: a real connected read took it live").toBe("live");
+    expect(live.ingest?.state).toBe("connected");
+    const phone = await phoneOf(r, sessionId);
+    let carried = 0;
+    for (let i = 0; i < 2; i++) {   // a second call carries the same word
+      r.tick(5_000);
+      const before = await counts(sessionId);
+      const cur = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+      expect(cur.ingest?.state, `no-evidence read ${i + 1}: carried, not unknown`).toBe("connected");
+      expect(phoneNoSignal(cur), "no No signal over a phone that was sending").toBe(false);
+      expect(cur.state).toBe("live");
+      expect(await counts(sessionId), "a sample of the carried word, no event").toEqual({ samples: before.samples + 1, events: before.events });
+      expect(await lastPollWord(sessionId)).toBe("connected");
+      carried++;
+    }
+    // The phone drops on a REAL read, then the provider says nothing about video: the drop is carried.
+    phone("disconnected");
+    r.tick(5_000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state, "PREMISE: a real read saw the drop").toBe("disconnected");
+    r.tick(5_000);
+    const before = await counts(sessionId);
+    const dropped = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+    expect(dropped.ingest?.state, "the previous word, not connected and not unknown").toBe("disconnected");
+    expect(phoneNoSignal(dropped), "a carried drop is still a drop").toBe(true);
+    expect(await counts(sessionId)).toEqual({ samples: before.samples + 1, events: before.events });
+    carried++;
+    // A real word afterwards is read as itself.
+    phone("connected");
+    r.tick(5_000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state).toBe("connected");
+    expect(carried, "three carried polls ran").toBe(3);
+    const [{ unknowns }] = await sql<{ unknowns: number }[]>`
+      select count(*)::int as unknowns from fixture_stream_samples where session_id = ${sessionId} and ingest_state = 'unknown'`;
+    expect(unknowns, "no sample ever recorded the word as unknown").toBe(0);
+  });
+
+  it("WARMING with nothing to carry: the phone is unseen — ingest null, still warming, nothing recorded, nothing reported — and the next real `connected` takes it live with one consume (go-live is never held by the word)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);   // the fake's phone is now connected: a real read would go live
+    sentry.captureError.mockClear();
+    const unseen = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+    expect(unseen).toMatchObject({ state: "warming", ingest: null, failReason: null });
+    expect(phoneNoSignal(unseen)).toBe(false);
+    expect(await counts(sessionId), "no evidence and no carry: nothing recorded").toEqual({ samples: 0, events: 0 });
+    expect(sentry.captureError, "not a failed read: nothing reported").not.toHaveBeenCalled();
+    expect(await consumesOf(sessionId)).toBe(0);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state, "the next real read goes live").toBe("live");
+    expect(await consumesOf(sessionId)).toBe(1);
+  });
+
+  it("EXPIRY, the differential pair: past the warming timeout a no-evidence read with nothing to carry HOLDS the timeout (still warming, no no_inbound_timeout); with a previous poll that read `disconnected` the carried word lets it expire", async () => {
+    // Nothing to carry: held, exactly as an unreadable ingest is (N1).
+    const held = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const a = await createSession(held.auth, held.fixtureId, body(held.target.id), held.deps);
+    held.tick(PAST_WARMING_MS);
+    const cur = (await currentSession(held.auth, held.fixtureId, noEvidence(held)))!;
+    expect(cur).toMatchObject({ state: "warming", failReason: null, ingest: null });
+    expect(await held.row(a.sessionId)).toMatchObject({ state: "warming", fail_reason: null });
+    // The sequence: the next REAL read says disconnected, and the timeout fires on that evidence.
+    expect((await currentSession(held.auth, held.fixtureId, held.deps))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+
+    // A previous poll that read `disconnected`: carried, so the expiry has its evidence.
+    const prior = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const b = await createSession(prior.auth, prior.fixtureId, body(prior.target.id), prior.deps);
+    prior.tick(5_000);
+    expect((await currentSession(prior.auth, prior.fixtureId, prior.deps))!.ingest?.state, "PREMISE: a real poll read the phone silent").toBe("disconnected");
+    expect(await lastPollWord(b.sessionId)).toBe("disconnected");
+    prior.tick(PAST_WARMING_MS);
+    expect((await currentSession(prior.auth, prior.fixtureId, noEvidence(prior)))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+  });
+
+  it("the carry's guard: a latest poll sample whose word is not one of the port's three is not carried — the phone is unseen (ingest null), never that word", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+    await sql`insert into fixture_stream_samples (session_id, sampled_at, source, ingest_state, output_state, raw)
+              values (${sessionId}, now(), 'poll', 'playing', 'ok', '{}'::jsonb)`;
+    expect(await lastPollWord(sessionId), "PREMISE: the foreign word is the latest poll sample").toBe("playing");
+    r.tick(5_000);
+    const cur = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+    expect(cur.ingest, "not carried").toBeNull();
+    expect(cur.state).toBe("live");
+  });
 });
