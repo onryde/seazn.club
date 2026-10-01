@@ -811,18 +811,18 @@ describe("Q-A guard — a route never names a finished wave (ruling 28)", () => 
 });
 
 // W1-driving Task 13: the last W1-driving routes are retired (DRIVING_ROUTE /
-// DRIVING_WAVE, TEMPLATE_DRIVING). FP-1: one is NOT this task's — Task 14
-// owns lib/model/state.ts's MODEL_ROSTERS (PF-3) — so the guard names that
-// one site by file: Task 14 deleting it reds this test, and the expectation
-// becomes [] there. Reuses scanRoutes, so a comment citing the wave is never
-// a site (a raw text grep would read it).
-describe("Q-A guard — no route names W1-driving (W1-driving Task 13)", () => {
-  it("no route names W1-driving anywhere in the shipped harness — but Task 14's model rosters (FP-1)", () => {
+// DRIVING_WAVE, TEMPLATE_DRIVING). FP-1: the one T13 left, lib/model/state.ts's
+// MODEL_ROSTERS (PF-3), was Task 14's: the model fields team rosters now
+// (ruling 49), so the route is gone and nothing names the wave. Reuses
+// scanRoutes, so a comment citing the wave is never a site (a raw text grep
+// would read it).
+describe("Q-A guard — no route names W1-driving (W1-driving Tasks 13 and 14)", () => {
+  it("no route names W1-driving anywhere in the shipped harness (Task 14 retired the model's rosters route, FP-1)", () => {
     const root = resolve(REPO, "scripts/matrix");
     const scans = shipped(root).map((f) => ({ file: f.slice(root.length + 1), scan: scanRoutes(readFileSync(f, "utf8"), f) }));
     expect(scans.reduce((n, s) => n + s.scan.sites, 0)).toBeGreaterThan(0);
     expect(scans.flatMap((s) => s.scan.unread)).toEqual([]);
     const naming = scans.flatMap((s) => s.scan.waves.filter((w) => w === "W1-driving").map(() => s.file));
-    expect(naming).toEqual(["lib/model/state.ts"]);
+    expect(naming).toEqual([]);
   });
 });

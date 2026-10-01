@@ -18,20 +18,26 @@ import { generateDoubleElim, generatePagePlayoff, generateRoundRobin, generateSi
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
-import { BUILDER_DEFAULT_KNOBS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { resolvePositions, validateLineup } from "@seazn/engine/sport";
+import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
+import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type EntrantInput, type EntrantRow, type FixtureRow, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldStream } from "../lib/fold.ts";
-import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
+import { COMMAND_KINDS, ModelViolation, SWISS_BIAS, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
 import { FENCES, fenceBlocking } from "../lib/model/fences.ts";
 import { regressionFor, vacuityOf } from "../lib/model/run-cell.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import {
+  LINEUP_LOCKED_FINDING, LINEUP_SIDE_SIZE_FINDING, LINEUP_WARNED_CHECK, LINEUPS_CHECK, MODEL_FAMILY_ROUTE, ModelUnsupported,
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, NEXT_MATCH_UNHELD_FINDING, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
-  absorbFixtures, fedCandidates, fedMatchStarted, informativeSteps, orientationBound, type FixtureModel,
+  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelRowRefusal, orientationBound, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
-import { rosterMembers } from "../lib/scenarios/rosters.ts";
+import { NotAWave } from "../lib/routing.ts";
+import { Recorder, ensureLineups, type DivisionSetup } from "../lib/scenarios/common.ts";
+import { SIDE_SIZE_FOUND, rosterMembers, rosterSize } from "../lib/scenarios/rosters.ts";
+import type { ScenarioContext } from "../lib/scenarios/types.ts";
 import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
+import { offlineBuilderDefault } from "../lib/variants.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
@@ -468,27 +474,32 @@ describe("model commands — a correct product passes every step", () => {
     expect(m.history.length).toBe(m.steps.length);
     expect(informativeSteps(m)).toMatchObject({ id: VACUITY_CHECK, verdict: "pass" });
   });
-  it("every registry sport: the same sequence runs clean on each non-team sport, and a team sport is refused by name", async () => {
-    let modelled = 0;
-    let refused = 0;
+  it("every registry sport, team sports included (W1-driving Task 14, ruling 49): the same sequence runs clean, and a team sport's every scored fixture had a lineup per side", async () => {
+    let individual = 0;
+    let team = 0;
     for (const sport of SPORT_KEYS) {
       const variant = variantKeys(sport)[0] ?? "";
-      if (entrantKindFor(sport, resolveSportCfg(sport, variant)) === "team") {
-        await expect(fresh({}, { sport, variant }), sport).rejects.toThrow(/fields teams/);
-        refused++;
-        continue;
-      }
+      const isTeam = entrantKindFor(sport, resolveSportCfg(sport, variant)) === "team";
       const { m, d } = await fresh({}, { sport, variant });
       await everyKind(m, d);
       for (const k of COMMAND_KINDS) expect(m.counts[k].ran, `${sport} ${k}`).toBeGreaterThan(0);
       expect(m.counts.Score.accepted, sport).toBe(2);
       expect(m.counts.Withdraw.accepted, sport).toBe(1);
       expect(m.foldParity, sport).toBeGreaterThan(0);
-      modelled++;
+      if (isTeam) {
+        // Score ×2, Walkover: three fixtures the model posted to, two sides each.
+        expect(d.trace.filter((t) => t.startsWith("putLineup ")).length, sport).toBe(3 * 2);
+        expect(m.stepChecks.get(LINEUPS_CHECK) ?? 0, sport).toBeGreaterThan(0);
+        team++;
+      } else {
+        expect(d.trace.filter((t) => t.startsWith("putLineup ")), sport).toEqual([]);
+        expect(m.stepChecks.has(LINEUPS_CHECK), sport).toBe(false);
+        individual++;
+      }
     }
-    expect(modelled).toBeGreaterThan(0);
-    expect(refused).toBeGreaterThan(0);
-    expect(modelled + refused).toBe(SPORT_KEYS.length);
+    expect(individual).toBeGreaterThan(0);
+    expect(team).toBeGreaterThan(0);
+    expect(individual + team).toBe(SPORT_KEYS.length);
   });
   it("Score after a void never re-scores the voided fixture: in play is not open", async () => {
     // single-sport: candidate selection reads the model, not the sport.
@@ -562,7 +573,7 @@ describe("swiss: a step invariant with nothing to judge yet abstains for that st
     expect(c.check(m), `${kind} should be runnable`).toBe(true);
     await c.run(m, d);
   };
-  const vacuity = (m: ModelState) => vacuityOf({ counts: m.counts, stepChecks: Object.fromEntries(m.stepChecks), foldParity: m.foldParity, informative: informativeSteps(m).checked, stageKind: m.stageKind });
+  const vacuity = (m: ModelState) => vacuityOf({ counts: m.counts, stepChecks: Object.fromEntries(m.stepChecks), foldParity: m.foldParity, informative: informativeSteps(m).checked, stageKind: m.stageKind, entrantKind: m.kind });
   const i6Line = `step invariant ${I6} checked zero items`;
   /** 4 entrants → 2 boards a round, no bye (stages.ts: floor(n/2) boards, a bye shell when n is odd). */
   const BOARDS = 2;
@@ -1606,5 +1617,362 @@ describe("the product's own answer rides every refusal violation as `said` — t
     expect(v.check).toBe(ROSTER_LOCK_CHECK);
     expect(v.said).toBeNull();
     expect(regressionFor([caseFor("MB-T", v.check, "the product accepted")], CELL, v.check, v.said)).toBeNull();
+  });
+});
+
+// --- W1-driving Task 14 (ruling 49, D6) -----------------------------------------
+// State transitions (TEST-STRATEGY rule 1): no bias → a bias (the generator's
+// arbitraries); a row the model drives → a row it refuses (D6, before any
+// driver call); an individual division → a team one (rosters at create, a late
+// entrant's roster, a lineup per side before the first post, a second post on
+// the same fixture, a side met empty then seated under the same id, a fixture
+// already past scheduled). Empty cases FIRST: no bias; a row the model admits;
+// an individual sport (no member, no lineup, no lineup check).
+
+describe("Task 14: modelCommands and SWISS_BIAS (ruling 49)", () => {
+  /** The kind each arbitrary draws — sampled, so the multiset is exactly what fc.commands picks from. */
+  const kindsOf = (arbs: ReturnType<typeof modelCommands>): string[] => arbs.map((a) => String(fc.sample(a, 1)[0]).split("(")[0] ?? "");
+  const tally = (ks: readonly string[]) => ks.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<string, number>());
+
+  it("empty case first: no bias gives exactly one arbitrary per command kind (today's set)", () => {
+    expect(modelCommands({ fences: true }).length).toBe(COMMAND_KINDS.length);
+    expect(modelCommands({ fences: true, bias: {} }).length).toBe(COMMAND_KINDS.length);
+    expect(kindsOf(modelCommands({ fences: true }))).toEqual([...COMMAND_KINDS]);
+  });
+  it("SWISS_BIAS is the brief's weights, frozen: Start, Generate and Score ×3", () => {
+    expect(SWISS_BIAS).toEqual({ Start: 3, Generate: 3, Score: 3 });
+    expect(Object.isFrozen(SWISS_BIAS)).toBe(true);
+  });
+  it("SWISS_BIAS replicates Start, Generate and Score by weight; every kind still appears at least once", () => {
+    const n = COMMAND_KINDS.length + (SWISS_BIAS.Start! - 1) + (SWISS_BIAS.Generate! - 1) + (SWISS_BIAS.Score! - 1);
+    const arbs = modelCommands({ fences: true, bias: SWISS_BIAS });
+    expect(arbs.length).toBe(n);
+    const t = tally(kindsOf(arbs));
+    let checked = 0;
+    for (const k of COMMAND_KINDS) {
+      expect(t.get(k), k).toBe(SWISS_BIAS[k] ?? 1);
+      checked++;
+    }
+    expect(checked).toBe(COMMAND_KINDS.length);
+  });
+  it("a weight under 1 never drops a kind: each keeps its one arbitrary", () => {
+    expect(kindsOf(modelCommands({ fences: true, bias: { Start: 0, Score: -2 } }))).toEqual([...COMMAND_KINDS]);
+  });
+  it("every replicated arbitrary carries the fences flag it was given", () => {
+    let checked = 0;
+    for (const fences of [true, false]) {
+      for (const a of modelCommands({ fences, bias: SWISS_BIAS })) {
+        expect((fc.sample(a, 1)[0] as unknown as { fences: boolean }).fences).toBe(fences);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(2 * COMMAND_KINDS.length);
+  });
+});
+
+/** D6 (ruling 52, amending ruling 49): the family each model-refused row routes
+ *  to, typed from the ruling's text (plan D6, design §8) — never read from
+ *  MODEL_FAMILY_ROUTE, the code under test. */
+const D6: Readonly<Record<string, string>> = {
+  league_ko: "W5", groups_ko: "W5", group_stepladder: "W5", group_playoffs: "W5", group_group_ko: "W5",
+  ko_plate: "W4", qualifying_main: "W4",
+  swiss_playoff: "W3", swiss_knockout: "W3",
+  ladder: "W7", americano: "W7", mexicano: "W7",
+};
+/** Design §8's W7 row: americano, mexicano and ladder — the stage kinds they build. */
+const W7_STAGE_KINDS: readonly string[] = ["ladder", "americano"];
+
+describe("Task 14: family-routed refusals (D6, ruling 52)", () => {
+  it("empty case first: a single-stage row outside the ladder family is refused by nothing (counted)", () => {
+    const driven = ROW_KEYS.filter((r) => !(r in D6));
+    for (const row of driven) expect(modelRowRefusal(row), row).toBeNull();
+    expect(driven.length).toBeGreaterThan(0);
+    expect(driven).toContain("league");
+    expect(driven).toContain("swiss");
+  });
+  it.each(Object.entries(D6))("%s in the model is ModelUnsupported naming %s, before any driver call (D6)", async (row, wave) => {
+    const driver = new ModelFakeDriver();
+    const e: unknown = await newModelState({ driver, row: row as RowKey, sport: "generic", variant: "standard", entrants: 8, tag: "t" }).then(() => null, (x: unknown) => x);
+    expect(e).toBeInstanceOf(ModelUnsupported);
+    expect(e).toMatchObject({ name: "ModelUnsupported", wave });
+    expect((e as ModelUnsupported).reason.length).toBeGreaterThan(0);
+    expect(driver.calls).toEqual([]);
+  });
+  it("MODEL_FAMILY_ROUTE routes exactly D6's rows to D6's waves, each with a why; the builder's every multi-stage or W7 row is in it (counted)", () => {
+    expect(Object.fromEntries(Object.entries(MODEL_FAMILY_ROUTE).map(([r, x]) => [r, x.wave]))).toEqual(D6);
+    for (const [row, r] of Object.entries(MODEL_FAMILY_ROUTE)) expect(r.why.trim().length, row).toBeGreaterThan(0);
+    let multi = 0;
+    let w7 = 0;
+    let driven = 0;
+    for (const row of ROW_KEYS) {
+      const bodies = stagesForRow(row);
+      const routed = row in MODEL_FAMILY_ROUTE;
+      if (bodies.length > 1) { expect(routed, `${row} is multi-stage`).toBe(true); multi++; }
+      else if (W7_STAGE_KINDS.includes(bodies[0]!.kind)) { expect(routed, `${row} is the ladder family`).toBe(true); w7++; }
+      else { expect(routed, `${row} is single-stage`).toBe(false); driven++; }
+    }
+    expect([multi > 0, w7 > 0, driven > 0]).toEqual([true, true, true]);
+    expect(multi + w7 + driven).toBe(ROW_KEYS.length);
+    expect(multi + w7).toBe(Object.keys(D6).length);
+  });
+  it("assumptions are guards: an unrouted multi-stage row, and an unrouted open-window stage, are named errors — never admitted", () => {
+    const two: StagePostBody[] = [...stagesForRow("league"), { ...stagesForRow("knockout")[0]!, seq: 2 }];
+    expect(() => modelRowRefusal("league", two)).toThrow(/league is multi-stage and routes to no family/);
+    const open: StagePostBody[] = [{ ...stagesForRow("ladder")[0]!, seq: 1 }];
+    expect(() => modelRowRefusal("league", open)).toThrow(/league builds a ladder stage, an open-window format that routes to no family/);
+  });
+  it("ModelUnsupported names a programme wave or refuses to be built; its fields are assigned in the constructor", () => {
+    expect(() => new ModelUnsupported("W99", "x")).toThrow(NotAWave);
+    const e = new ModelUnsupported("W7", "a reason");
+    expect([e.name, e.wave, e.reason]).toEqual(["ModelUnsupported", "W7", "a reason"]);
+    expect(e.message).toContain("a reason");
+    expect(e.message).toContain("W7");
+  });
+});
+
+/** The team sports at their builder default, read from the engine's own entrant model. */
+const TEAM_SPORTS = SPORT_KEYS.filter((s) => entrantKindFor(s, resolveSportCfg(s, offlineBuilderDefault(s))) === "team");
+/** Records every entrant the model posts. */
+class SentSpy extends ModelFakeDriver {
+  readonly sent: EntrantInput[] = [];
+  override addEntrants(divisionId: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
+    this.sent.push(...es);
+    return super.addEntrants(divisionId, es);
+  }
+}
+async function teamFresh(sport = "football", driver: ModelFakeDriver = new SentSpy()): Promise<{ m: ModelState; d: ModelFakeDriver; variant: string; cfg: unknown }> {
+  const variant = offlineBuilderDefault(sport);
+  const m = await newModelState({ driver, row: "league", sport, variant, entrants: 4, tag: "t" });
+  return { m, d: driver, variant, cfg: resolveSportCfg(sport, variant) };
+}
+const putsOn = (d: ModelFakeDriver, f: string) => d.trace.filter((t) => t.startsWith(`putLineup ${f} `));
+const firstPost = (d: ModelFakeDriver, f: string) => d.trace.indexOf(`postStream ${f}`);
+const scoredBy = (m: ModelState) => [...m.fixtures.values()].filter((f) => (f.ledger ?? []).length > 0);
+/** Open fixtures as the Score/Walkover commands index them (commands.ts `open`). */
+const openOf = (m: ModelState) => [...m.fixtures.values()].filter((f) => f.home !== null && f.away !== null && f.ledger !== null && f.ledger.length === 0 && !TERMINAL_STATUSES.includes(f.status));
+
+describe("Task 14: team rosters at create (ruling 49)", () => {
+  it("empty case first: an individual division posts no members key, reads no roster and holds no rosters", async () => {
+    const d = new SentSpy();
+    const { m } = await fresh({}, {}, d);
+    expect(d.sent.length).toBe(4);
+    for (const e of d.sent) expect("members" in e).toBe(false);
+    expect(d.calls.filter((c) => c === "entrantMembers")).toEqual([]);
+    expect(m.rosters.size).toBe(0);
+    expect(d.memberCount()).toBe(0);
+  });
+  it("every team sport at its builder default: each entrant posts its full catalog roster as Matrix Team N, and the model holds what the product read back (counted)", async () => {
+    let checked = 0;
+    for (const sport of TEAM_SPORTS) {
+      const d = new SentSpy();
+      const { m, cfg } = await teamFresh(sport, d);
+      expect(m.kind, sport).toBe("team");
+      expect(m.entrants.length, sport).toBe(4);
+      for (const [i, id] of m.entrants.entries()) {
+        expect(d.sent[i], sport).toEqual({ displayName: `Matrix Team ${i + 1}`, seed: i + 1, kind: "team", members: rosterMembers(sport, cfg, i + 1) });
+        expect(m.rosters.get(id), sport).toEqual(await d.entrantMembers(id));
+        expect(m.rosters.get(id)?.length, sport).toBe(rosterSize(sport, cfg));
+      }
+      expect(d.memberCount(), sport).toBe(4 * rosterSize(sport, cfg));
+      checked++;
+    }
+    expect(checked).toBe(TEAM_SPORTS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+  it("a roster the product stores short is refused by name before the model runs a command", async () => {
+    class DropsOne extends ModelFakeDriver {
+      override addEntrants(divisionId: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
+        return super.addEntrants(divisionId, es.map((e, i) => (i === 1 && e.members !== undefined ? { ...e, members: e.members.slice(1) } : e)));
+      }
+    }
+    const cfg = resolveSportCfg("football", offlineBuilderDefault("football"));
+    const size = rosterSize("football", cfg);
+    await expect(teamFresh("football", new DropsOne())).rejects.toThrow(`model: entrant e2 (seed 2) reads back ${size - 1} roster member(s), ${size} posted — a short roster would play short`);
+  });
+});
+
+describe("Task 14: a lineup per side before the first post — ensureLineups' model twin (T45-R1, T45-R2)", () => {
+  it("empty case first: an individual sport's Score PUTs no lineup and owes no lineup check", async () => {
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    expect(d.trace.filter((t) => t.startsWith("putLineup "))).toEqual([]);
+    expect(m.stepChecks.has(LINEUPS_CHECK)).toBe(false);
+    expect(m.lineupsPut).toBe(0);
+  });
+  it("Score on a team fixture: one PUT per side, both before its first post; each lineup passes the engine's validateLineup", async () => {
+    const { m, d, cfg } = await teamFresh();
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    const [f] = scoredBy(m);
+    if (f === undefined || f.home === null || f.away === null) throw new Error("test: nothing scored");
+    expect(putsOn(d, f.id)).toEqual([`putLineup ${f.id} ${f.home}`, `putLineup ${f.id} ${f.away}`]);
+    for (const t of putsOn(d, f.id)) expect(d.trace.indexOf(t)).toBeLessThan(firstPost(d, f.id));
+    const positions = resolvePositions(sportModule("football") as never, cfg as never);
+    for (const side of [f.home, f.away]) {
+      const stored = d.lineups.get(`${f.id}|${side}`) ?? [];
+      expect(stored.length, side).toBeGreaterThan(0);
+      const slots = stored.map((s, i) => ({ personId: s.person_id, slot: s.slot, ...(s.position_key !== undefined ? { positionKey: s.position_key } : {}), roles: [...(s.roles ?? [])], orderNo: s.order_no ?? i + 1 }));
+      expect(validateLineup(positions, { entrantId: side, slots }), side).toEqual([]);
+    }
+    expect(m.lineupsPut).toBe(2);
+    expect([...(m.lineupSides.get(f.id) ?? [])]).toEqual([f.home, f.away]);
+    // Start judged no scored side; the Score judged its two.
+    expect(m.stepChecks.get(LINEUPS_CHECK)).toBe(2);
+  });
+  it("a second post on the same fixture (Correct) PUTs nothing more; a Walkover on another fixture gets its own two, before its post", async () => {
+    const { m, d } = await teamFresh();
+    await play(m, d, [["Start", 0], ["Score", 0, 0], ["Correct", 0]]);
+    const [f] = scoredBy(m);
+    expect(putsOn(d, f!.id)).toHaveLength(2);
+    expect(m.lineupsPut).toBe(2);
+    await play(m, d, [["Walkover", 0, 0]]);
+    const g = scoredBy(m).find((x) => x.id !== f!.id);
+    if (g === undefined) throw new Error("test: the walkover posted nothing");
+    expect(putsOn(d, g.id)).toEqual([`putLineup ${g.id} ${g.home}`, `putLineup ${g.id} ${g.away}`]);
+    for (const t of putsOn(d, g.id)) expect(d.trace.indexOf(t)).toBeLessThan(firstPost(d, g.id));
+    expect(m.lineupsPut).toBe(4);
+  });
+  it("the lineup check reds a scored side with no PUT, by fixture — the check is counted, never silent", async () => {
+    const { m, d } = await teamFresh();
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    const [f] = scoredBy(m);
+    m.lineupSides.delete(f!.id);
+    const e = await violation(play(m, d, [["Score", 0, 0]]));
+    expect(e.check).toBe(LINEUPS_CHECK);
+    expect(e.evidence.join(" ")).toContain(`${f!.id}: posted to with no lineup PUT for side ${f!.home}`);
+  });
+  it("a lineup warning that is not the known side-size finding is a named violation; the known one on its own row is a finding, counted", async () => {
+    class Warns extends ModelFakeDriver {
+      readonly warning: string;
+      constructor(warning: string) {
+        super();
+        this.warning = warning;
+      }
+      override putLineup(f: string, e: string, s: readonly LineupSlotWire[]): Promise<LineupChecked> {
+        return super.putLineup(f, e, s).then((c) => ({ ...c, warnings: [this.warning] }));
+      }
+    }
+    const sideSize = JSON.stringify({ kind: "starting_size", entrantId: "x", expected: 6, actual: 2 });
+    // Premises, read from their authorities: volleyball's builder default is the known side-size row.
+    expect(offlineBuilderDefault("volleyball")).toBe("beach");
+    expect(SIDE_SIZE_FOUND).toContain("volleyball/beach");
+    expect(SIDE_SIZE_FOUND).not.toContain(`football/${offlineBuilderDefault("football")}`);
+    const known = await teamFresh("volleyball", new Warns(sideSize));
+    await play(known.m, known.d, [["Start", 0], ["Score", 0, 0]]);
+    expect(known.m.findings.get(LINEUP_SIDE_SIZE_FINDING)?.count).toBe(2);
+    let reds = 0;
+    for (const [sport, w] of [["football", sideSize], ["football", JSON.stringify({ kind: "group_min", group: "gk" })], ["volleyball", "neither JSON nor the product's text"]] as const) {
+      const { m, d } = await teamFresh(sport, new Warns(w));
+      await play(m, d, [["Start", 0]]);
+      const e = await violation(play(m, d, [["Score", 0, 0]]));
+      expect(e.check, `${sport} ${w}`).toBe(LINEUP_WARNED_CHECK);
+      expect(e.evidence.join(" "), `${sport} ${w}`).toContain(w);
+      reds++;
+    }
+    expect(reds).toBe(3);
+  });
+  it("past scheduled: an owed side takes no PUT and is a finding; a foreign side and a division entrant with no roster are refused by name", async () => {
+    const { m, d } = await teamFresh();
+    await play(m, d, [["Start", 0]]);
+    const [f] = openOf(m);
+    if (f === undefined) throw new Error("test: no open fixture");
+    await ensureModelLineups(m, d, { ...f, status: "in_play" });
+    expect(putsOn(d, f.id)).toEqual([]);
+    expect(m.findings.get(LINEUP_LOCKED_FINDING)?.count).toBe(1);
+    await expect(ensureModelLineups(m, d, { ...f, home: "x9" })).rejects.toThrow(`model: fixture ${f.id} seats x9, which is not a division entrant — the model's single stage mints no entrant of its own`);
+    m.rosters.delete(f.away!);
+    await expect(ensureModelLineups(m, d, f)).rejects.toThrow(`model: fixture ${f.id} seats division entrant ${f.away}, which has no recorded roster`);
+  });
+  it("a late team entrant (pre-Start AddEntrant) posts its full roster, is read back, and its first scored fixture gets its lineup", async () => {
+    const d = new SentSpy();
+    const { m, cfg } = await teamFresh("football", d);
+    await play(m, d, [["AddEntrant", 0], ["Start", 0]]);
+    const late = m.entrants[4];
+    if (late === undefined) throw new Error("test: no late entrant");
+    expect(d.sent.at(-1)).toEqual({ displayName: "Matrix Team 5", seed: 5, kind: "team", members: rosterMembers("football", cfg, 5) });
+    expect(m.rosters.get(late)?.length).toBe(rosterSize("football", cfg));
+    const k = openOf(m).findIndex((f) => f.home === late || f.away === late);
+    expect(k).toBeGreaterThanOrEqual(0);
+    await play(m, d, [["Score", k, 0]]);
+    const f = scoredBy(m)[0]!;
+    expect(putsOn(d, f.id)).toContain(`putLineup ${f.id} ${late}`);
+  });
+  it("a late team entrant whose roster the product drops is caught by name, never played short", async () => {
+    class DropsLate extends ModelFakeDriver {
+      override addEntrants(divisionId: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
+        return super.addEntrants(divisionId, es.length === 1 ? es.map(({ members: _m, ...e }) => e) : es);
+      }
+    }
+    const { m, d, cfg } = await teamFresh("football", new DropsLate());
+    await expect(play(m, d, [["AddEntrant", 0]])).rejects.toThrow(`model: entrant e5 (seed 5) reads back 0 roster member(s), ${rosterSize("football", cfg)} posted — a short roster would play short`);
+  });
+});
+
+describe("Task 14: the model's lineup twin and the harness's ensureLineups PUT the same lineups, in the same order", () => {
+  /** A driver that only records PUTs, each answered checked with no warning. */
+  const recorder = () => {
+    const puts: [string, string, LineupSlotWire[]][] = [];
+    const driver = { putLineup: (f: string, e: string, s: readonly LineupSlotWire[]) => { puts.push([f, e, [...s]]); return Promise.resolve({ checked: true as const, warnings: [] }); } } as unknown as OrganiserDriver;
+    return { puts, driver };
+  };
+  /** The harness side over the model's own division: the same entrants, rosters and stage. */
+  const harnessOver = (m: ModelState, driver: OrganiserDriver) => ({
+    ctx: { driver, spec: { caseId: "t", row: "league", sport: m.sport, variant: m.variant, scenario: "LIFECYCLE", canary: false }, orgSlug: "o", cfg: m.cfg, tag: "t", denied: [] } as unknown as ScenarioContext,
+    setup: { kind: m.kind, rosterless: false, entrantIds: new Set(m.entrants), rosters: m.rosters, stages: [{ id: m.stageId, seq: 1, kind: m.stageKind, config: {}, status: "active" }] } as unknown as DivisionSetup,
+    rec: new Recorder(),
+  });
+  const row = (m: ModelState, id: string, home: string | null, away: string | null, status: string): FixtureRow =>
+    ({ id, stage_id: m.stageId, pool_id: null, round_no: 1, fixture_no: 1, home_entrant_id: home, away_entrant_id: away, status, outcome: null });
+  const asModel = (f: FixtureRow): FixtureModel => ({ id: f.id, round: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, ledger: [] });
+  const sides = (x: ReadonlyMap<string, ReadonlySet<string>>) => [...x].map(([k, v]) => [k, [...v]]);
+
+  it("empty case first: on an individual division both are a no-op", async () => {
+    const { m } = await fresh();
+    const a = recorder();
+    const b = recorder();
+    const h = harnessOver(m, a.driver);
+    const f = row(m, "g1", m.entrants[0]!, m.entrants[1]!, "scheduled");
+    await ensureLineups(h.ctx, h.rec, h.setup, f);
+    await ensureModelLineups(m, b.driver, asModel(f));
+    expect([a.puts, b.puts, h.rec.lineupsPut, m.lineupsPut]).toEqual([[], [], 0, 0]);
+  });
+  it("one sequence through both — a first call, a second, a side met empty then seated under the same id, a fixture past scheduled then back — the same PUTs, keys and count", async () => {
+    const { m } = await teamFresh();
+    const [e1, e2, e3, e4] = m.entrants as [string, string, string, string];
+    const a = recorder();
+    const b = recorder();
+    const h = harnessOver(m, a.driver);
+    const SEQ = [
+      row(m, "g1", e1, e2, "scheduled"), row(m, "g1", e1, e2, "scheduled"),
+      row(m, "g2", e3, null, "scheduled"), row(m, "g2", e3, e4, "scheduled"),
+      row(m, "g3", e1, e3, "in_play"), row(m, "g3", e1, e3, "scheduled"),
+    ];
+    for (const f of SEQ) {
+      await ensureLineups(h.ctx, h.rec, h.setup, f);
+      await ensureModelLineups(m, b.driver, asModel(f));
+    }
+    // The rule's own expectation (common.ts ensureLineups, T45-R2): once per
+    // SIDE, a null side skipped, nothing PUT past scheduled.
+    expect(a.puts.map(([f, e]) => `${f} ${e}`)).toEqual([`g1 ${e1}`, `g1 ${e2}`, `g2 ${e3}`, `g2 ${e4}`, `g3 ${e1}`, `g3 ${e3}`]);
+    expect(b.puts).toEqual(a.puts);
+    expect(m.lineupsPut).toBe(h.rec.lineupsPut);
+    expect(sides(m.lineupSides)).toEqual(sides(h.rec.lineupSides));
+    expect(h.rec.notes.filter((n) => n.startsWith("lineups: g3 was in_play")).length).toBe(1);
+    expect(m.findings.get(LINEUP_LOCKED_FINDING)?.count).toBe(1);
+  });
+  it("both refuse a side that is not a division entrant, and a division entrant with no recorded roster", async () => {
+    const { m } = await teamFresh();
+    const a = recorder();
+    const b = recorder();
+    const h = harnessOver(m, a.driver);
+    const foreign = row(m, "g1", m.entrants[0]!, "x9", "scheduled");
+    await expect(ensureLineups(h.ctx, h.rec, h.setup, foreign)).rejects.toThrow(/x9, which is not a division entrant/);
+    await expect(ensureModelLineups(m, b.driver, asModel(foreign))).rejects.toThrow(/x9, which is not a division entrant/);
+    const rosters = new Map(m.rosters);
+    rosters.delete(m.entrants[1]!);
+    (h.setup as { rosters: unknown }).rosters = rosters;
+    m.rosters.delete(m.entrants[1]!);
+    const bare = row(m, "g2", m.entrants[1]!, m.entrants[2]!, "scheduled");
+    await expect(ensureLineups(h.ctx, new Recorder(), h.setup, bare)).rejects.toThrow(/which has no recorded roster/);
+    await expect(ensureModelLineups(m, b.driver, asModel(bare))).rejects.toThrow(/which has no recorded roster/);
   });
 });

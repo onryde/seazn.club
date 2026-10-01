@@ -37,6 +37,7 @@ import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, parseRegressions, type Regress
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
+import { offlineVariantOrder } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -156,7 +157,6 @@ describe("model.ts", () => {
     const d = deps({ openDb: noDb(), harnessCommit: async () => { throw new Error("must not read git"); } });
     const refused: readonly (readonly string[])[] = [
       ["--cell", "nope|generic"],
-      ["--cell", "league|cricket"],
       ["--runs", "0"],
       ["--max-commands", "0"],
       ["--time-limit", "10"],
@@ -916,5 +916,60 @@ describe("the per-competition division cap (T15 fix round 1)", () => {
     // The pair: a cap of 1 is a plan the model can run on (one division per competition).
     capture();
     expect((await run(1, "cp1b")).exit).toBe(0);
+  });
+});
+
+// W1-driving Task 14 (ruling 49, D6). Not single-sport: a team cell (league|
+// cricket, refused as an unknown cell before T14) and the D6 rows on generic.
+// Transitions: a grid cell outside the slice → admitted; a row the model does
+// not drive → refused by family, exit 2, before git, the base, the preflight or
+// the DB. Empty case first: a cell off the grid is still a usage refusal.
+describe("model.ts --cell (W1-driving Task 14)", () => {
+  /** The live builder's variant order for any sport — the offline catalogue's, so no drift. */
+  const gridDeps = (driver: () => ModelFakeDriver): ModelDeps => deps({
+    driverFor: driver,
+    openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s), chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
+  });
+  it("empty case first: a cell off the grid is a usage refusal naming it, exit 2, before any DB work", async () => {
+    const io = capture();
+    expect(await runModel(deps({ openDb: noDb() }), ["--run-id", "g0", "--cell", "nope|generic"])).toBe(2);
+    expect(io.err()).toContain("unknown cell 'nope|generic' (not a grid cell");
+    expect(io.err()).toContain(MODEL_USAGE);
+  });
+  it("a team cell outside the slice (league|cricket) runs: rosters stored, a lineup per side before every post, no failure", async () => {
+    capture();
+    const dir = reportDir();
+    const made: ModelFakeDriver[] = [];
+    const exit = await runModel(gridDeps(() => { const d = new ModelFakeDriver(); made.push(d); return d; }), ["--run-id", "tc", "--report-dir", dir, "--cell", "league|cricket", "--runs", "5"]);
+    expect(exit).not.toBe(2);
+    const rep = JSON.parse(readFileSync(join(dir, "tc", "model-report.json"), "utf8")) as { cells: { cell: string; failure: unknown; stepChecks: Record<string, number> }[] };
+    expect(rep.cells.map((c) => c.cell)).toEqual(["league|cricket"]);
+    expect(rep.cells[0]?.failure).toBeNull();
+    expect(rep.cells[0]?.stepChecks["model-lineups-put"] ?? 0).toBeGreaterThan(0);
+    expect(made.length).toBe(1);
+    const d = made[0]!;
+    expect(d.memberCount()).toBeGreaterThan(0);
+    // The organiser's posts only: the withdrawal cascade's are the product's own (`… by-product`).
+    const posted = [...new Set(d.trace.flatMap((t) => /^postStream (\S+)$/.exec(t)?.[1] ?? []))];
+    expect(posted.length).toBeGreaterThan(0);
+    for (const f of posted) expect(d.trace.filter((t) => t.startsWith(`putLineup ${f} `)), f).toHaveLength(2);
+  });
+  // D6 (ruling 52), typed from the ruling — never read from MODEL_FAMILY_ROUTE.
+  it.each([["swiss_playoff|generic", "W3"], ["ko_plate|badminton", "W4"], ["league_ko|generic", "W5"], ["ladder|generic", "W7"]] as const)("%s is refused by family (%s): exit 2, ModelUnsupported on stderr, before git, the base, the preflight or the DB", async (cell, wave) => {
+    const io = capture();
+    const touched: string[] = [];
+    const d = deps({
+      openDb: noDb(),
+      harnessCommit: async () => { touched.push("git"); return "abc1234"; },
+      preflight: async () => { touched.push("preflight"); return { ok: true, refusals: [] }; },
+      env: {},
+    });
+    const dir = reportDir();
+    expect(await runModel(d, ["--run-id", "fr", "--report-dir", dir, "--cell", cell])).toBe(2);
+    expect(touched).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(io.err()).toContain(`model: refused ${cell} — ModelUnsupported:`);
+    expect(io.err()).toContain(`→ ${wave}`);
+    expect(io.err()).not.toContain("usage: model.ts");
   });
 });

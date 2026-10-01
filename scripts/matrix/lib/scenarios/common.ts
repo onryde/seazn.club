@@ -336,8 +336,9 @@ export function lineupWarningKind(warning: string): string | null {
 }
 
 /** The engine issue that states a side's starting count (catalog.ts
- *  LineupIssue): the one kind the side-size finding can show up as. */
-const SIDE_SIZE_KIND = "starting_size";
+ *  LineupIssue): the one kind the side-size finding can show up as. Exported
+ *  for the model's lineup twin (lib/model/state.ts, W1-driving Task 14). */
+export const SIDE_SIZE_KIND = "starting_size";
 
 /** T3-R1: the product checked a lineup the harness PUT and warned, and the
  *  warning is not the known side-size finding. The lineup was built to pass

@@ -23,7 +23,7 @@ import { fenceBlocking } from "./fences.ts";
 import { liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
   COMMAND_KINDS, ModelViolation, NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL,
-  absorbFixtures, checkStep, fedCandidates, fedMatchStarted, markUnknown, recordFinding, rosterLocked,
+  absorbFixtures, checkStep, ensureModelLineups, entrantInput, fedCandidates, fedMatchStarted, markUnknown, readRoster, recordFinding, rosterLocked,
   type CommandKind, type FixtureModel, type ModelState, type StepVerdict,
 } from "./state.ts";
 
@@ -202,12 +202,16 @@ abstract class Cmd implements fc.AsyncCommand<ModelState, OrganiserDriver> {
   toString(): string { return `${this.kind}(${this.k},${this.w})`; }
 }
 
-/** Posts events and records them in the fixture's ledger. A core.void's
+/** Posts events and records them in the fixture's ledger. On a team division
+ *  each side's lineup is PUT first (ensureModelLineups, T45-R1/R2), and the
+ *  sides posted to are recorded for the lineup check (decideFixture's
+ *  teamPosts). A core.void's
  *  target is the payload's event_id, as the product lifts it (scoring.ts). A
  *  refusal part-way leaves the ledger unknown: the posted prefix is not
  *  reported back. So does an answer the driver marks `retried` (HttpDriver's
  *  one SEQ_CONFLICT retry): the product's count moved under the post. */
 async function post(m: ModelState, d: OrganiserDriver, f: FixtureModel, events: readonly StreamEvent[]): Promise<PostedEvent[]> {
+  await ensureModelLineups(m, d, f);
   const prefix = `${m.tag}:${f.id}:p${++m.posts}`;
   let out: PostedEvent[];
   try {
@@ -216,6 +220,7 @@ async function post(m: ModelState, d: OrganiserDriver, f: FixtureModel, events: 
     f.ledger = null;
     throw e;
   }
+  if (m.kind === "team") m.teamPosts.set(f.id, [f.home, f.away].filter((e): e is string => e !== null && m.entrants.includes(e)));
   if (out.length !== events.length) {
     f.ledger = null;
     throw new Error(`model: the driver answered ${out.length} events for ${events.length} posted to ${f.id}`);
@@ -261,9 +266,10 @@ class AddEntrant extends Cmd {
     }
   }
   protected async act(m: ModelState, d: OrganiserDriver) {
-    const n = m.entrants.length + 1;
-    const [e] = await d.addEntrants(m.divisionId, [{ displayName: `Matrix Player ${n}`, seed: n, kind: m.kind }]);
+    // A late team entrant carries its full roster too, read back like the first ones (ruling 49).
+    const [e] = await d.addEntrants(m.divisionId, [entrantInput(m, m.entrants.length + 1)]);
     if (e === undefined) throw new Error("model: addEntrants answered no entrant");
+    if (m.kind === "team") m.rosters.set(e.id, await readRoster(d, m, e));
     m.entrants.push(e.id);
     // #879's trigger: the roster grew while the stage already had fixtures.
     if (m.fixtures.size > 0) m.lateEntry = true;
@@ -383,6 +389,16 @@ export function commandOf(kind: CommandKind, k: number, w: number, fences: boole
   return new CTORS[kind](k, w, fences);
 }
 
-export function modelCommands(opts: { fences: boolean }): fc.Arbitrary<fc.AsyncCommand<ModelState, OrganiserDriver>>[] {
-  return COMMAND_KINDS.map((kind) => fc.tuple(fc.nat({ max: 63 }), fc.nat({ max: 1 })).map(([k, w]) => commandOf(kind, k, w, opts.fences)));
+/** Ruling 49: a swiss cell's weights. A swiss seats one round per Generate,
+ *  and only a decided board can be corrected, so a uniform draw rarely got a
+ *  Correct in at the default runs (W1b's swiss|badminton read vacuous live).
+ *  Start, Generate and Score drawn three times as often get it there. */
+export const SWISS_BIAS: Readonly<Partial<Record<CommandKind, number>>> = Object.freeze({ Start: 3, Generate: 3, Score: 3 });
+
+/** One arbitrary per command kind — `bias[kind]` of them when a bias weights
+ *  it (never fewer than one, so no kind is dropped). No bias is the uniform
+ *  set every cell drew before Task 14, so a non-swiss cell, and every case
+ *  found on one, generates exactly what it did. */
+export function modelCommands(opts: { fences: boolean; bias?: Readonly<Partial<Record<CommandKind, number>>> }): fc.Arbitrary<fc.AsyncCommand<ModelState, OrganiserDriver>>[] {
+  return COMMAND_KINDS.flatMap((kind) => Array.from({ length: Math.max(1, opts.bias?.[kind] ?? 1) }, () => fc.tuple(fc.nat({ max: 63 }), fc.nat({ max: 1 })).map(([k, w]) => commandOf(kind, k, w, opts.fences))));
 }

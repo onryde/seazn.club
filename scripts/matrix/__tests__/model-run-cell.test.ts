@@ -23,14 +23,17 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { RefusedCall, RequestTimedOut, productMessageOf, type FixtureStateOut, type PostedEvent } from "../lib/driver/types.ts";
-import { COMMAND_KINDS, ModelViolation, newModelState, type ModelState } from "../lib/model/commands.ts";
+import { ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { COMMAND_KINDS, ModelViolation, SWISS_BIAS, commandOf, modelCommands, newModelState, type ModelState } from "../lib/model/commands.ts";
 import { FENCES } from "../lib/model/fences.ts";
-import { MODEL_ERROR, regressionFor, runCell, shrinkTarget, vacuityOf, type FailureKey, type RunCellInput } from "../lib/model/run-cell.ts";
-import { MATCH_REQUIRED_CHECKS } from "../lib/scenario-catalogue.ts";
-import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
+import { MODEL_ERROR, biasFor, regressionFor, runCell, shrinkTarget, vacuityOf, type FailureKey, type RunCellInput } from "../lib/model/run-cell.ts";
+import { MATCH_REQUIRED_CHECKS, loadRegressions } from "../lib/scenario-catalogue.ts";
+import { LINEUPS_CHECK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type UnknownLedger } from "../lib/model/state.ts";
 import { STEP_INVARIANTS } from "../lib/invariants.ts";
 import { SLICE_SPORTS } from "../lib/slice.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
+import { offlineBuilderDefault } from "../lib/variants.ts";
+import { MODEL_DEFAULTS } from "../model.ts";
 import { ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
 
 const CELL = "league|generic";
@@ -807,7 +810,7 @@ describe("vacuityOf — which zero counts make a cell vacuous, by stage kind (fi
   const covered = (stageKind: string | null, zero: readonly string[] = []) => ({
     counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, one()])) as Record<(typeof COMMAND_KINDS)[number], CommandCounts>,
     stepChecks: Object.fromEntries([...STEP_INVARIANTS.map((s) => s.id), ORIENTATION_CHECK].map((id) => [id, zero.includes(id) ? 0 : 3])),
-    foldParity: 2, informative: 4, stageKind,
+    foldParity: 2, informative: 4, stageKind, entrantKind: "individual" as string | null,
   });
   const line = (id: string) => `step invariant ${id} checked zero items`;
   const orientationLine = `step check ${ORIENTATION_CHECK} checked zero items`;
@@ -841,5 +844,140 @@ describe("vacuityOf — which zero counts make a cell vacuous, by stage kind (fi
   ];
   it.each(TABLE)("%s", (_why, kind, zero, want) => {
     expect(vacuityOf(covered(kind, zero))).toEqual(want);
+  });
+  it("W1-driving Task 14 (T45-R1): a team cell whose lineup check counted nothing is vacuous by name, on every stage kind; an individual cell, or no run, never owes it", () => {
+    const want = `step check ${LINEUPS_CHECK} checked zero items`;
+    const kinds = ["league", "swiss", "knockout", null];
+    for (const k of kinds) {
+      expect(vacuityOf({ ...covered(k), entrantKind: "team" }), String(k)).toEqual([want]);
+      expect(vacuityOf({ ...covered(k), entrantKind: "team", stepChecks: { ...covered(k).stepChecks, [LINEUPS_CHECK]: 1 } }), String(k)).toEqual([]);
+      expect(vacuityOf({ ...covered(k), entrantKind: "individual" }), String(k)).toEqual([]);
+      expect(vacuityOf({ ...covered(k), entrantKind: null }), String(k)).toEqual([]);
+    }
+    expect(kinds.length).toBe(4);
+  });
+});
+
+// --- W1-driving Task 14 (ruling 49, D6) -----------------------------------------
+// Not single-sport: this block runs swiss on badminton (the W1b vacuous cell),
+// a team sport (football) and the D6 rows on generic. State transitions: a
+// cell run uniform → the same cell run biased; a row the model refuses →
+// refused before any run starts; an individual cell → a team cell (a lineup
+// per side, counted). Empty case FIRST: a row with no bias runs today's set,
+// and the committed cases (all found before the bias) replay unchanged.
+
+let tags = 0;
+/** One cell through the REAL runCell on the model fake, at the model's own defaults. */
+function runModelCell(o: { row: RowKey; sport: string; variant?: string; runs: number; seed: number; entrants?: number; bias?: RunCellInput["bias"]; driver?: ModelFakeDriver }) {
+  const variant = o.variant ?? offlineBuilderDefault(o.sport);
+  const driver = o.driver ?? new ModelFakeDriver();
+  return {
+    driver,
+    report: runCell({
+      cell: `${o.row}|${o.sport}`, row: o.row, sport: o.sport, variant, runs: o.runs, seed: o.seed,
+      maxCommands: MODEL_DEFAULTS.maxCommands, timeLimitMs: MODEL_DEFAULTS.timeLimitMs, fences: true, regressions: [],
+      ...(o.bias === undefined ? {} : { bias: o.bias }),
+      newDriverState: async (n) => ({ real: driver, model: await newModelState({ driver, row: o.row, sport: o.sport, variant, entrants: o.entrants ?? 6, tag: `t${++tags}-${n}` }) }),
+    }),
+  };
+}
+/** The generator before Task 14, verbatim: one uniform arbitrary per kind. */
+const legacyCommands = (fences: boolean) => COMMAND_KINDS.map((kind) => fc.tuple(fc.nat({ max: 63 }), fc.nat({ max: 1 })).map(([k, w]) => commandOf(kind, k, w, fences)));
+const drawn = (arbs: ReturnType<typeof modelCommands>, seed: number, maxCommands: number): string[][] =>
+  fc.sample(fc.commands(arbs, { maxCommands, size: "max" }), { seed, numRuns: 25 }).map((it) => [...it].map(String));
+const SWISS_SEED = -1180181307;
+/** model.ts runs every cell at four entrants (its newDriverState); W1b's vacuous live run was at four. */
+const CLI_ENTRANTS = 4;
+
+describe("Task 14: which cells run biased (ruling 49)", () => {
+  it("empty case first: a row whose root stage is not swiss runs today's uniform set — no bias, counted over the builder's rows", () => {
+    let uniform = 0;
+    let swiss = 0;
+    for (const row of ROW_KEYS) {
+      if (stagesForRow(row)[0]?.kind === "swiss") { expect(biasFor(row), row).toBe(SWISS_BIAS); swiss++; }
+      else { expect(biasFor(row), row).toBeUndefined(); uniform++; }
+    }
+    expect(uniform).toBeGreaterThan(0);
+    expect(swiss).toBeGreaterThan(0);
+    expect(uniform + swiss).toBe(ROW_KEYS.length);
+  });
+  it("the committed cases replay byte-identical: each is a non-swiss cell, so its generator draws exactly what the pre-bias generator drew at its seed", () => {
+    const cases = loadRegressions();
+    let checked = 0;
+    for (const c of cases) {
+      const row = c.cell.split("|")[0] as RowKey;
+      expect(biasFor(row), c.id).toBeUndefined();
+      const arbs = modelCommands({ fences: c.fencesOn, ...(biasFor(row) === undefined ? {} : { bias: biasFor(row) }) });
+      expect(drawn(arbs, c.seed, c.maxCommands), c.id).toEqual(drawn(legacyCommands(c.fencesOn), c.seed, c.maxCommands));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("…and the comparison can see a bias: at a committed seed, the swiss generator draws differently", () => {
+    const c = loadRegressions()[0]!;
+    expect(drawn(modelCommands({ fences: true, bias: SWISS_BIAS }), c.seed, c.maxCommands)).not.toEqual(drawn(legacyCommands(true), c.seed, c.maxCommands));
+  });
+  it("the report says which bias ran: SWISS_BIAS on swiss, none on league, none when a test forces uniform", async () => {
+    const sw = await runModelCell({ row: "swiss", sport: "badminton", runs: 1, seed: 1 }).report;
+    const lg = await runModelCell({ row: "league", sport: "badminton", runs: 1, seed: 1 }).report;
+    const forced = await runModelCell({ row: "swiss", sport: "badminton", runs: 1, seed: 1, bias: null }).report;
+    expect([sw.bias, lg.bias, forced.bias]).toEqual([SWISS_BIAS, null, null]);
+  });
+});
+
+describe("Task 14: SWISS_BIAS keeps a swiss cell from reading vacuous at the default runs (ruling 49)", () => {
+  it(`swiss|badminton at MODEL_DEFAULTS.runs, seed ${SWISS_SEED}, the CLI's ${CLI_ENTRANTS} entrants: biased, Correct runs and the cell is not vacuous; uniform, the same seed reads vacuous`, async () => {
+    expect(MODEL_DEFAULTS.runs).toBe(20);
+    const biased = await runModelCell({ row: "swiss", sport: "badminton", runs: MODEL_DEFAULTS.runs, seed: SWISS_SEED, entrants: CLI_ENTRANTS }).report;
+    expect(biased.failure).toBeNull();
+    expect(biased.counts.Correct.ran).toBeGreaterThan(0);
+    expect(biased.vacuous).toEqual([]);
+    expect(biased.stepChecks["I6-swiss-no-rematch"] ?? 0).toBeGreaterThan(0);
+    const uniform = await runModelCell({ row: "swiss", sport: "badminton", runs: MODEL_DEFAULTS.runs, seed: SWISS_SEED, entrants: CLI_ENTRANTS, bias: null }).report;
+    expect(uniform.failure).toBeNull();
+    expect(uniform.vacuous).toContain("command Correct never ran");
+  });
+  it("over a fixed sweep of seeds, the biased swiss cell reads vacuous on fewer seeds than the uniform one (counts reported; zero seeds is a failure)", async () => {
+    const seeds = Array.from({ length: 60 }, (_, i) => fc.sample(fc.integer(), { seed: 7 + i, numRuns: 1 })[0]!);
+    let uniformVacuous = 0;
+    let biasedVacuous = 0;
+    for (const seed of seeds) {
+      const u = await runModelCell({ row: "swiss", sport: "badminton", runs: MODEL_DEFAULTS.runs, seed, entrants: CLI_ENTRANTS, bias: null }).report;
+      const b = await runModelCell({ row: "swiss", sport: "badminton", runs: MODEL_DEFAULTS.runs, seed, entrants: CLI_ENTRANTS }).report;
+      expect([u.failure, b.failure], String(seed)).toEqual([null, null]);
+      if (u.vacuous.length > 0) uniformVacuous++;
+      if (b.vacuous.length > 0) biasedVacuous++;
+    }
+    console.log(`T14 swiss sweep: ${seeds.length} seeds, uniform vacuous ${uniformVacuous}, biased vacuous ${biasedVacuous}`);
+    expect(seeds.length).toBe(60);
+    expect(biasedVacuous).toBeLessThan(uniformVacuous);
+  }, 120_000);
+});
+
+describe("Task 14: a team cell runs end to end with a lineup per side (ruling 49, T45-R1)", () => {
+  it("league|football at its builder default: rosters stored, every fixture the model posted to had exactly two lineups PUT before its first post, the lineup check counted", async () => {
+    const { driver, report } = runModelCell({ row: "league", sport: "football", runs: 5, seed: 1 });
+    const r = await report;
+    expect(r.failure).toBeNull();
+    expect(driver.memberCount()).toBeGreaterThan(0);
+    // The organiser's posts only: the withdrawal cascade's are the product's own (`… by-product`).
+    const posted = [...new Set(driver.trace.flatMap((t) => /^postStream (\S+)$/.exec(t)?.[1] ?? []))];
+    expect(posted.length).toBeGreaterThan(0);
+    for (const f of posted) {
+      const first = driver.trace.indexOf(`postStream ${f}`);
+      const puts = driver.trace.filter((t) => t.startsWith(`putLineup ${f} `));
+      expect(puts, f).toHaveLength(2);
+      for (const p of puts) expect(driver.trace.indexOf(p), f).toBeLessThan(first);
+    }
+    expect(r.stepChecks[LINEUPS_CHECK] ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe("Task 14: a row the model does not drive is refused by family through runCell, before any run (D6)", () => {
+  // The brief's table, typed from D6 (ruling 52) — never read from MODEL_FAMILY_ROUTE.
+  it.each([["league_ko", "W5"], ["swiss_playoff", "W3"], ["ko_plate", "W4"], ["group_group_ko", "W5"], ["ladder", "W7"], ["americano", "W7"], ["mexicano", "W7"]] as const)("%s is ModelUnsupported naming %s", async (row, wave) => {
+    const { driver, report } = runModelCell({ row, sport: "generic", variant: "standard", runs: 5, seed: 1, entrants: 8 });
+    await expect(report).rejects.toMatchObject({ name: "ModelUnsupported", wave });
+    expect(driver.calls).toEqual([]);
   });
 });

@@ -58,6 +58,7 @@ import { isMainModule } from "./lib/main-module.ts";
 import { productMessageOf, type OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
+import { modelRowRefusal } from "./lib/model/state.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
 import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, replayFences, type RegressionCase } from "./lib/scenario-catalogue.ts";
@@ -104,12 +105,15 @@ async function competitionSlots(d: OrganiserDriver, cap: number | null, input: (
   };
 }
 
-/** Every model cell: W1a's slice, in registry order. */
+/** The cells a run takes with no --cell: W1a's slice, in registry order. */
 const SLICE_CELLS: ReadonlyMap<string, { row: RowKey; sport: string }> = new Map(
   SLICE_ROWS.flatMap((row) => SLICE_SPORTS.map((sport) => [cellId(row, sport), { row, sport }] as const)),
 );
-/** Every grid cell's sport: a committed regression may name any of them. */
-const GRID_SPORT: ReadonlyMap<string, string> = new Map(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport) => [cellId(row, sport), sport] as const)));
+/** Every grid cell: `--cell` may name any of them (W1-driving Task 14), and a
+ *  committed regression may too. A row the model does not drive is refused
+ *  by family before the run (runModel, D6). */
+const GRID_CELLS: ReadonlyMap<string, { row: RowKey; sport: string }> = new Map(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport) => [cellId(row, sport), { row, sport }] as const)));
+const GRID_SPORT: ReadonlyMap<string, string> = new Map([...GRID_CELLS].map(([cell, { sport }]) => [cell, sport] as const));
 
 /** FNV-1a, 32-bit, over UTF-8 bytes, as a signed int (fast-check seeds are ints). */
 export function fnv1a32(text: string): number {
@@ -174,8 +178,8 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if (runs === null || maxCommands === null || timeLimitMs === null) return { usage: "--runs and --max-commands take an integer ≥ 1, --time-limit an integer ≥ 1000 (ms)" };
   const cells: SliceCell[] = [];
   for (const cell of v.cell ?? [...SLICE_CELLS.keys()]) {
-    const parts = SLICE_CELLS.get(cell);
-    if (parts === undefined) return { usage: `unknown cell '${cell}' (the model runs the slice cells: ${[...SLICE_CELLS.keys()].join(", ")})` };
+    const parts = GRID_CELLS.get(cell);
+    if (parts === undefined) return { usage: `unknown cell '${cell}' (not a grid cell: row|sport, a builder row and a registry sport; with no --cell the model runs the slice cells: ${[...SLICE_CELLS.keys()].join(", ")})` };
     cells.push({ cell, ...parts });
   }
   // fast-check seeds are 32-bit ints; a longer number is a typo, not a seed.
@@ -323,6 +327,13 @@ function printStub(c: ModelCell, runId: string): void {
 export async function runModel(deps: ModelDeps, argv: string[]): Promise<number> {
   const cli = parseCli(argv);
   if ("usage" in cli) { warn(`model: ${cli.usage}\n${MODEL_USAGE}`); return EXIT.REFUSED; }
+  // D6: a row the model does not drive is refused by family, before anything
+  // is asked of the environment — never a cell that fails every run.
+  for (const c of cli.cells) {
+    let refused: Error | null;
+    try { refused = modelRowRefusal(c.row); } catch (e) { refused = e instanceof Error ? e : new Error(String(e)); }
+    if (refused !== null) { warn(`model: refused ${c.cell} — ${errText(refused)}`); return EXIT.REFUSED; }
+  }
   // The committed cases first: a file the loader refuses is refused before
   // anything else is asked of the environment (T15 fix round 2).
   let regressions: RegressionCase[];
