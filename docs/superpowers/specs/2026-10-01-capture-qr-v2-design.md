@@ -55,7 +55,7 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W18 | **Overlay on every phone stream (O1, ruled YES 2026-10-01, on approving this spec at `137b9ec2b`).** The scorebug goes on phone streams for every plan. The rule stays the `streaming.overlay` entitlement (W11), so an override still switches it off for one org. |
 | W19 | **A live phone stream whose phone is gone ends (O2, ruled YES 2026-10-01).** After **15 min with no beat AND no video**, the session ends with endReason `phone_lost`. **Built in PR-1** (§6.8.5). |
 | W20 | **The SRT-on-`live.*` test is deferred (2026-10-01).** G0-h is no longer a publish gate. The schemas publish now with `cred.srt` nullable. The custom-host SRT proof becomes an **optional** later staging step (S2b), not a gate. (Its first form, "`STREAM_SRT_ENABLED` defaults to false", is superseded by W21 the same day.) |
-| W21 | **SRT uses Cloudflare's own host (owner direction, 2026-10-01).** `cred.srt.url` is `srt://live.cloudflare.com:778`, exactly as Cloudflare issues it. RTMPS stays on the environment's custom host (`live.seazn.club` / `live.stg.seazn.club`). `STREAM_SRT_ENABLED` **defaults ON**, so SRT is offered from launch; A18's `srt: null` stays a safety net. S2b could later move SRT to the custom host with **no contract change**. Capture's host rule must admit `live.cloudflare.com` for SRT: proposed to capture, their owner decides (§4.2 G0-i). |
+| W21 | **SRT uses Cloudflare's own host (owner direction, 2026-10-01).** `cred.srt.url` is `srt://live.cloudflare.com:778`, exactly as Cloudflare issues it. RTMPS stays on the environment's custom host (`live.seazn.club` / `live.stg.seazn.club`). `STREAM_SRT_ENABLED` **defaults ON**, so SRT is offered from launch; A18's `srt: null` stays a safety net. S2b could later move SRT to the custom host with **no contract change**. Capture's host rule admits `live.cloudflare.com` for SRT: **agreed** (§4.2 G0-i, capture's owner's ruling, 2026-10-01). |
 | W17 | **Answers sent to mobile-s1** (their owner approved them): `autoAllowed` sits in both waiting and session; there is one start endpoint, with `409 already_live` meaning take over; the heartbeat answer carries go-live and over; the server drives `pollSeconds`, 60 s and then 10 s from 30 min before the scheduled start; code names are neutral; the waiting answer carries the chosen destination's display name, or `null`; the panel shows the phone's mode. |
 
 ### 1.2 Capture's rulings we build against (their owner's; peer facts, not ours)
@@ -176,7 +176,7 @@ below in writing.** Each confirmation is recorded here with its date and capture
 | G0-f | **The end-reason value `failed`**, for a server-side end that is neither a stop nor a timeout (a credit running out at the live transition, a provider fault). Capture reads it "Stream ended by Seazn — ask the organiser". | **agreed**, `69ef359`, 2026-10-01 |
 | G0-g | **A claim and a stop are independent.** A claim refused while it carries `stopped` is answered `taken` or `replaced` by the claim rules, not `over X`. The stop is still applied, and that 2xx delivers it. | **agreed**, `69ef359`, 2026-10-01 |
 | G0-h | **The staging SRT test** on `srt://live.stg.seazn.club:778`. | **deferred by the owner, 2026-10-01 (W20): not a gate.** Optional later step S2b. |
-| G0-i | **Capture's ingest-host rule admits `live.cloudflare.com` for SRT** (W21). RTMPS stays on the environment's `live.*`. The schema documents the SRT hosts as {`live.cloudflare.com`, the environment's `live.*`}. | **proposed to capture, 2026-10-01; their owner decides.** Not a gate on publishing the schemas or on the plans. Until capture admits it, a phone refuses SRT `cred` (`startFailed: "cred-host"`), so a deployment whose phones run the old rule sets `STREAM_SRT_ENABLED` off (A18's safety net), with no contract change. |
+| G0-i | **Capture's ingest-host rule admits `live.cloudflare.com` for SRT** (W21). RTMPS stays on the environment's `live.*`. The schema documents the SRT hosts as {`live.cloudflare.com`, the environment's `live.*`}. | **agreed, 2026-10-01.** Capture reports that their owner ruled independently: `cred.srt` may sit on exactly `live.cloudflare.com` or the environment's `live.*` host, and RTMPS and every other URL stay strict `live.*`. Their A18 is being updated to match. So `STREAM_SRT_ENABLED` defaults on in prod and stg from launch, with **no interim `false`**. |
 
 - **The schemas are published first.** PR-1's first task writes them to `docs/contracts/` and removes v1, so
   capture can vendor them while the server is built.
@@ -584,8 +584,9 @@ treats that as success (capture's answer table).
   - `STREAM_SRT_ENABLED` **defaults ON** (W21): unset means on, in code. Setting it to `false` is the safety net: the
     descriptor then carries `cred.srt: null` and `preferred: "rtmps"`, and the phone publishes RTMPS only, with no
     SRT→RTMPS fallback, so a hold window ends the broadcast.
-  - The flag is turned off for an environment only when SRT fails there (S2), or while capture's host rule refuses
-    `live.cloudflare.com` (G0-i). Each flip is recorded in this file with its evidence.
+  - The flag is turned off for an environment only when SRT fails there (S2). Capture's host rule admits
+    `live.cloudflare.com` for SRT (G0-i, agreed), so there is no interim `false`. Each flip is recorded in this file
+    with its evidence.
   - **Moving SRT to the custom host later (S2b, optional)** is a server change only: rewrite the SRT host too. The
     contract already admits both hosts.
 
@@ -1617,8 +1618,8 @@ These were not ruled in conversation. Each is decided here with its reason, and 
 2. **O2 — a live phone that vanishes: YES** (W19). It ends after 15 min with no beat AND no video, endReason
    `phone_lost`, built in PR-1 (§6.8.5, T25a, S11).
 3. **The SRT test: DEFERRED** (W20), then **SRT on Cloudflare's host from launch** (W21): `STREAM_SRT_ENABLED`
-   defaults on; S2b (optional) could later move SRT to the custom host. Capture's host rule for SRT is theirs to
-   relax (G0-i).
+   defaults on; S2b (optional) could later move SRT to the custom host. Capture's host rule admits
+   `live.cloudflare.com` for SRT (G0-i, agreed 2026-10-01 by capture's owner), so no interim `false` is needed.
 
 **Open:**
 

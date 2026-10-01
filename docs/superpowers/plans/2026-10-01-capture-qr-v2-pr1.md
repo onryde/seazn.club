@@ -93,6 +93,9 @@ gate is re-run before the next batch starts.
   `preferred: "rtmps"`. `preferred` never names a null shape.
 - The schemas document the allowed SRT hosts as {`live.cloudflare.com`, the environment's `live.*`} in the
   `description`. They pattern-check no host, because capture enforces the host per environment.
+- **G0-i is agreed** (2026-10-01, capture's owner's ruling, relayed by capture). `cred.srt` may sit on exactly
+  `live.cloudflare.com` or the environment's `live.*`; RTMPS and every other URL stay strict `live.*`. So prod and stg
+  ship with `STREAM_SRT_ENABLED` unset (on), with no interim `false`. Only an S2 SRT failure turns it off.
 
 **Rulings the code must honour (spec §1):**
 
@@ -357,7 +360,8 @@ const WaitingFields = {
 export const CaptureWaiting = z.strictObject({ state: z.literal("waiting"), ...WaitingFields });
 
 /** W21: SRT is offered on srt://live.cloudflare.com:778 as Cloudflare issues it; RTMPS on the environment's live.*.
- *  No host is pattern-checked here: capture enforces the host per environment (G0-i). */
+ *  No host is pattern-checked here: capture enforces the host per environment (G0-i, agreed 2026-10-01:
+ *  cred.srt on exactly live.cloudflare.com or the env's live.*; RTMPS and every other URL strict live.*). */
 export const CaptureCred = z.strictObject({
   srt: z.strictObject({
     url: z.string().min(1), streamId: z.string().min(1), passphrase: z.string().min(1),
@@ -1676,7 +1680,7 @@ Owes: E2E and smoke.
   - the per-screen verdicts (T11);
   - the staging runbook S1–S11, copied from spec §12 with each step's command. S2 includes the
     `srt-live-transmit` UDP-relay note. S11 is the W19 real-Cloudflare run;
-  - the open items: §16 O3 (W19 promptness), G0-i (capture's SRT host rule), and the `Match {n}` label fallback
+  - the open items: §16 O3 (W19 promptness) and the `Match {n}` label fallback
     (Review Focus 5).
 
 - [ ] **Step 4: STOP.** No push and no PR. Report the branch, the gate counts and the open items to the orchestrator.
