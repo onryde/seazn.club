@@ -17,6 +17,7 @@ import { toObservedOutcome, winnerOf } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
 import { SEEDING_TIE_CODE, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake } from "../lib/scenarios/advance.ts";
 import { Recorder, ensureLineups, finishStage, playStage, recordGenerate, setUpDivision, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
+import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
@@ -263,6 +264,41 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(lineups.checked).toBe(driver.decidedFixtureIds().length * 2);
     expect(out.notes.some((n) => n === `lineups: ${driver.decidedFixtureIds().length * 2} PUT across ${driver.decidedFixtureIds().length} team fixture(s) scored`)).toBe(true);
     expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+});
+
+describe("the two checks this task adds, on their own", () => {
+  const stageRef = (seq: number) => ({ id: `s${seq}`, seq, kind: seq === 1 ? "league" : "knockout", config: {}, status: "active" });
+  const adv = (over: Partial<NonNullable<StagePlay["advance"]>>): NonNullable<StagePlay["advance"]> =>
+    ({ status: 200, code: null, proposalId: "sp-2-1", filled: 4, seeded: ["a", "b", "c", "d"], declared: 4, tiePicked: false, ...over });
+  const root: StagePlay = { stage: stageRef(1), field: ["a", "b", "c", "d", "e", "f"], advance: null, complete: null };
+  it("advance-seeded-as-declared: empty case first — a single stage abstains with its reason, a later stage never advanced abstains, never a pass", () => {
+    expect(advanceSeededAsDeclared([root], new Set())).toMatchObject({ verdict: "abstain", checked: 0, reason: "single-stage row — no later stage to seed" });
+    expect(advanceSeededAsDeclared([root, { stage: stageRef(2), field: null, advance: null, complete: null }], new Set())).toMatchObject({ verdict: "abstain", reason: "no later stage was confirmed" });
+  });
+  it("advance-seeded-as-declared: a REFUSED confirm is a failing item (nobody seeded), never an abstain", () => {
+    const refused: StagePlay = { stage: stageRef(2), field: [], advance: adv({ status: 422, code: "SEEDING_NOTHING_TO_FILL", seeded: [], filled: 0 }), complete: null };
+    expect(advanceSeededAsDeclared([root, refused], new Set())).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 2: confirm refused 422 SEEDING_NOTHING_TO_FILL — nobody seeded"] });
+  });
+  it("advance-seeded-as-declared: a seeded entrant from outside the source field fails; three items per advanced stage, counted", () => {
+    const ok: StagePlay = { stage: stageRef(2), field: ["a", "b", "c", "d"], advance: adv({}), complete: null };
+    expect(advanceSeededAsDeclared([root, ok], new Set())).toMatchObject({ verdict: "pass", checked: 3 });
+    const foreign: StagePlay = { ...ok, advance: adv({ seeded: ["a", "b", "c", "zz"] }) };
+    expect(advanceSeededAsDeclared([root, foreign], new Set())).toMatchObject({ verdict: "fail", evidence: ["stage 2: every seeded entrant comes from stage 1's field"] });
+    // FP-2's allowance never lets the count EXCEED the take.
+    const over: StagePlay = { ...ok, advance: adv({ seeded: ["a", "b", "c", "d", "e"] }) };
+    expect(advanceSeededAsDeclared([root, over], new Set(["f"]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: seeded 5, declared 4 less at most 1 withdrawn"] });
+  });
+  it("life-lineups-put: abstains for a non-team or rosterless division; a team division that scored nothing fails vacuous; a side scored with no PUT fails", () => {
+    const rec = new Recorder();
+    expect(lineupsPut(rec, { kind: "individual", rosterless: false })).toMatchObject({ verdict: "abstain", reason: "individual entrants carry no lineup" });
+    expect(lineupsPut(rec, { kind: "team", rosterless: true })).toMatchObject({ verdict: "abstain" });
+    expect(lineupsPut(rec, { kind: "team", rosterless: false })).toMatchObject({ verdict: "fail", checked: 0 });
+    rec.teamPosts.set("f1", ["a", "b"]);
+    rec.lineupSides.set("f1", new Set(["a"]));
+    expect(lineupsPut(rec, { kind: "team", rosterless: false })).toMatchObject({ verdict: "fail", checked: 2, evidence: ["f1: scored with no lineup PUT for side b"] });
+    rec.lineupSides.get("f1")!.add("b");
+    expect(lineupsPut(rec, { kind: "team", rosterless: false })).toMatchObject({ verdict: "pass", checked: 2 });
   });
 });
 
