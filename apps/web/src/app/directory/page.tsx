@@ -65,10 +65,7 @@ export default async function DirectoryPage({
         </div>
 
         <ScrollActiveTabIntoView>
-          <nav
-            aria-label={t(ui, "directory.sections")}
-            className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200"
-          >
+          <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200" aria-label={t(ui, "directory.sections")}>
             {tabs.map((tabKey) => (
               <Link
                 key={tabKey}
