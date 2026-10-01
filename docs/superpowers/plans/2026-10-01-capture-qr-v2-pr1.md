@@ -579,18 +579,20 @@ Owes: unit (parity, fixtures) and regression (v1 gone; QR has 4 keys).
 
 - Create: `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-a.html`
 - Create: `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-b.html`
-- Create: the screenshots `…/shots/{a,b}-{320,768,1280}-{nophone,paired,silent,restarts,warming,reconnecting}.png`
+- Create: the screenshots `…/shots/{a,b}-{320,768,1280}-{nophone,paired,silent,restarts,warming,reconnecting,paused}.png`
 
 - [ ] **Step 1: Read** `docs/superpowers/specs/2026-09-30-fixture-page-stream-mockups/option-a.html`. It is the
   Option A frame the panel already ships. Read spec §6.12.
 
-- [ ] **Step 2: Build two options**, each a static HTML page with six states side by side:
+- [ ] **Step 2: Build two options**, each a static HTML page with seven states side by side:
   - Ready, no phone;
   - Ready, phone paired;
   - Ready, phone paired but silent;
   - Ready inside the reuse window, at the limit: "Free restarts used (3 of 3) — this one uses 1 credit" (W23);
   - Waiting, warming with the countdown (W24);
-  - Live, "Reconnecting…" with the countdown (W24).
+  - Live, "Reconnecting…" with the countdown (W24);
+  - Live, "Reconnecting…" while the phone still beats: no countdown, with the reason "Phone is on a call — video
+    paused" (O5).
 
   Every option uses §6.12's copy verbatim. Stay inside the existing tokens: lime (`--mk-lime`) is never text.
   - **Option A ("QR first").** The QR leads the body, and Go live sits disabled under it with the pairing reason.
@@ -600,8 +602,8 @@ Owes: unit (parity, fixtures) and regression (v1 gone; QR has 4 keys).
 
 - [ ] **Step 3: Capture** each option at 320, 768 and 1280 with Playwright (`page.setViewportSize`, a full-page
   screenshot). Then check:
-  - all 36 PNGs exist;
-  - no two are byte-identical (`shasum` shows 36 distinct hashes);
+  - all 42 PNGs exist;
+  - no two are byte-identical (`shasum` shows 42 distinct hashes);
   - `document.documentElement.scrollWidth <= innerWidth` at each width, printed per image.
 
 - [ ] **Step 4: Commit** with `docs(capture): PR-1 Ready-state mockups, options A and B (T2)`. Then **STOP**. Send
@@ -890,7 +892,7 @@ export function lostCountdown(i: {
     - **`lostCountdown` (W24).** The empty case first: connected → null.
       - Live, no video and no beat for `RECONNECT_QUIET_SECONDS` − 1 s → null; at 30 s → `{kind:"live", elapsedMs:
         30_000, remainingMs: lostMinutes·60 000 − 30 000}`.
-      - Live, video gone 10 min but the phone beat 2 min ago → **null** (O5: W19 cannot fire while the phone beats).
+      - Live, video gone 10 min but the phone beat 2 min ago → **null** (O5, ruled 2026-10-01: no countdown while the phone beats).
       - Live, the two silences differ (beat 12 min, video 9 min) → elapsed is the **shorter** (9 min) and remaining
         is `lostMinutes` − 9 min. This is the ordering differential: the longer silence gives the wrong answer.
       - Warming, no video, 30 s after `warmingAt` → `{kind:"warming"}`, with remaining = `warmingAt` +
@@ -1172,7 +1174,7 @@ select count(*)::int as used from fixture_stream_sessions s
   - **`restart-allowance.test.ts`** (DB-backed, fake drivers, injected clock). Each case asserts the credit ledger
     rows, not just the flag:
     - **Boundary:** paid live, then three restarts that each reach video, all free (0 consume rows added). The 4th
-      that reaches video consumes 1 at live. Then the 5th is free again (O4: the paid 4th re-anchors).
+      that reaches video consumes 1 at live. Then the 5th is free again (O4, ruled YES 2026-10-01: the paid 4th re-anchors).
     - **No video:** a restart that is stopped before first ingest leaves `used` unchanged, so after three counted
       restarts and one without video, the next is still the 4th.
     - **Same sid:** a takeover (T4) and an operator rejoin of the live session never change `used`.
@@ -1681,7 +1683,7 @@ Owes: use-case, unit and money.
 
 - Produces `StreamPhone`, exactly the §9 row:
   - `code: {issuedAt, state: "active"|"finishing"|"ended", endCause} | null`;
-  - `phone: {present, silent, notResponding, model, appVersion, mode, notReady, startFailed, lastBeatAt, elapsedMs,
+  - `phone: {present, silent, notResponding, model, appVersion, mode, state, notReady, startFailed, lastBeatAt, elapsedMs,
     beat: {battery, bitrateKbps, delivery, thermal, dataUsedMB}} | null`;
   - `destination: {id, label} | null`;
   - `lastTakeover: {at, model} | null`;
@@ -1805,6 +1807,8 @@ Owes: the sequence test and the mutation table.
   - W19's "The phone and its video were gone for 15 minutes";
   - W24's "Reconnecting…", "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come
     back." and "No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.";
+  - O5's reasons from spec §6.12 (`stream.phone.paused.*`): "Phone is on a call — video paused" and its four
+    siblings;
   - W23's "Free restarts used ({used} of {limit})" and "Free restarts used ({used} of {limit}) — this one uses 1
     credit".
 - Modify: `apps/web/e2e/mobile.spec.ts`, only if a stream testid it asserts changes.
@@ -1814,6 +1818,8 @@ Owes: the sequence test and the mutation table.
 - Consumes `StreamPhone` (T9), the `stream-code` routes (T5), the `stream-settings` route (T5), and
   `captureQrV2Text` and `renderSeaznQr` / `SeaznQrImage` (existing, D7/D10, with `ph-no-capture` on the QR and the
   paste code).
+- Produces the pure `reconnectReasonOf(phone: StreamPhone["phone"]): "camera" | "sound" | "network" | "held" |
+  "weak" | null`, the §6.12 O5 mapping, exported from `stream-session-view.ts`.
 - Produces the pure `readyStateOf(phone: StreamPhone | null, session: StreamSessionCurrent | null): "no_phone" |
   "paired" | "silent" | "waiting" | "live" | "ended" | "code_ended"`, exported from `stream-session-view.ts`.
 
@@ -1828,6 +1834,10 @@ Owes: the sequence test and the mutation table.
       formatter; with a connected live session, the Phone node reads `stream.chain.word.noSignal`'s successor
       "Reconnecting…" only while the input is not connected, and no countdown renders when `countdown` is null;
     - W23: the restart line renders only when `restart` is non-null; the credit suffix only when `free` is false;
+    - O5: `reconnectReasonOf` over every `notReady` value, then `degraded`, `reconnecting` and `publishing` (→ null),
+      with the empty case first (`null` phone → null) and a count of 7. A live session, input not connected, the
+      phone beating with `notReady: "camera"` → "Reconnecting…" plus "Phone is on a call — video paused", and **no**
+      countdown sentence;
     - no `qr` or `reveal` is read.
   - Regression: `current` has no `qr`, and `?reveal=1` → 400.
 
@@ -1859,7 +1869,9 @@ cd $WT/apps/web && for p in mobile-320 mobile-360 mobile-se mobile-14 mobile-430
   `mobile-14` is 390. `mobile.spec.ts` is serial, so a red is a floor, not a total (AGENTS.md #21). Re-run after each
   fix until a full pass completes.
 
-- [ ] **Step 6: Mutate.** Enable Go live for `silent`. Red: the `readyStateOf` row.
+- [ ] **Step 6: Mutate.**
+  - Enable Go live for `silent`. Red: the `readyStateOf` row.
+  - Render the countdown whenever the input is down, ignoring `countdown: null`. Red: the O5 case.
 
 - [ ] **Step 7: Commit** with `feat(stream): panel Ready states for the stream code; v1 QR removed (T11)`, with the
   mutation and the per-screen verdicts in the body.
@@ -1942,8 +1954,7 @@ Owes: E2E and smoke.
   - the per-screen verdicts (T11);
   - the staging runbook S1–S11, copied from spec §12 with each step's command. S2 includes the
     `srt-live-transmit` UDP-relay note. S11 is the W19 real-Cloudflare run;
-  - the open items: §16 O4 (does a paid 4th restart re-anchor the free count?) and O5 (no countdown while the phone
-    still beats), plus the account's Cron Trigger count (four of the Free plan's five)
+  - the open item: the account's Cron Trigger count (four of the Free plan's five)
     (Review Focus 5).
 
 - [ ] **Step 4: STOP.** No push and no PR. Report the branch, the gate counts and the open items to the orchestrator.

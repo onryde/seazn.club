@@ -884,7 +884,7 @@ unchanged.
 | **Ready, phone paired** | The picker. Phone node: lime ring, "Paired". The QR folds into a "Show the code again" disclosure, with Revoke & reissue inside it. **Go live enabled.** |
 | **Ready, phone paired but silent** (§6.9) | Phone node amber, "Not answering". **Go live disabled**, with "The phone stopped checking in. Open Seazn Capture on it". The QR stays folded. |
 | **Waiting** (requested, provisioning or warming) | Phone node amber, "Starting". The line "Waiting for the phone's video". The pollSeconds line from §6.6 when relevant. Cancel. **No QR**: the phone is already paired. **Warming countdown (W24):** after 30 s in warming with no video, "No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.", counting down to the warming deadline (`warming_at` + `WARMING_TIMEOUT_MINUTES`). |
-| **Live, reconnecting** (W24) | The Phone node says "Reconnecting…" instead of "No signal" while the input is not connected. After `RECONNECT_QUIET_SECONDS` (30) with no video **and** no beat, the sentence "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." counts down to W19's end. `remaining` = 15 min − the **shorter** of the two silences, because W19 needs both. While the phone still beats, W19 cannot fire, so there is no countdown: "Reconnecting…" alone. |
+| **Live, reconnecting** (W24) | The Phone node says "Reconnecting…" instead of "No signal" while the input is not connected. After `RECONNECT_QUIET_SECONDS` (30) with no video **and** no beat, the sentence "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." counts down to W19's end. `remaining` = 15 min − the **shorter** of the two silences, because W19 needs both. While the phone still beats, W19 cannot fire, so there is **no countdown** (O5, ruled 2026-10-01). Instead the panel shows "Reconnecting…" and, when the latest beat carries one, the phone's reason, through `reconnectReasonOf(phone)`: `notReady` `camera` → "Phone is on a call — video paused" (the owner's example); `sound` → "Phone's microphone is in use — video paused"; `network` → "Phone has no network — video paused"; `held` → "Phone is upright — turn it sideways"; otherwise state `degraded` or `reconnecting` → "Phone's connection is weak — video paused". Only the first string is the owner's; the rest are this spec's, shown in the mockups for sign-off. The session does not end while the phone is alive, except at the `maxDurationMinutes` cap (300). |
 | **Ready or Ended, inside the reuse window** (W23) | Above Go live: "Free restarts used ({used} of 3)", or at the limit "Free restarts used (3 of 3) — this one uses 1 credit". |
 | **Live, Ended, Failed** | As today. The new end reasons use the copy in §6.8.4. |
 | **Code ended** (finish + 2 h) | "This match is over. Its stream code has ended." No QR and no Go live. |
@@ -1235,7 +1235,7 @@ alter table fixture_stream_settings
 |---|---|---|---|
 | `POST /api/v1/fixtures/{id}/stream-code` | 1 | ensure → `200 {qr, issuedAt}`, `private, no-store` | `422 fixture_finished`, `503 RELAY_KEK_MISSING`, `402` (no `streaming.relay`) |
 | `POST /api/v1/fixtures/{id}/stream-code/reissue` | 1 | → `200 {qr, issuedAt}` | as above |
-| `GET /api/v1/fixtures/{id}/stream-phone` | 1 | → `{code: {issuedAt, state: "active" \| "finishing" \| "ended", endCause} \| null, phone: {present, silent, notResponding, model, appVersion, mode, notReady, startFailed, lastBeatAt, elapsedMs, beat: {battery, bitrateKbps, delivery, thermal, dataUsedMB}} \| null, destination: {id, label} \| null, lastTakeover: {at, model} \| null, auto: {...} \| null}` (no secret). PR-2 fills `auto` and uses `lastTakeover`. | `404` |
+| `GET /api/v1/fixtures/{id}/stream-phone` | 1 | → `{code: {issuedAt, state: "active" \| "finishing" \| "ended", endCause} \| null, phone: {present, silent, notResponding, model, appVersion, mode, state, notReady, startFailed, lastBeatAt, elapsedMs, beat: {battery, bitrateKbps, delivery, thermal, dataUsedMB}} \| null, destination: {id, label} \| null, lastTakeover: {at, model} \| null, auto: {...} \| null}` (no secret). PR-2 fills `auto` and uses `lastTakeover`. | `404` |
 | `PUT /api/v1/fixtures/{id}/stream-settings` | 1 / 2 | `{targetId?}` (PR-1), `{autoStream?}` (PR-2) → the settings | `404` (target not in org, or archived) |
 | `POST /api/v1/fixtures/{id}/stream-sessions` | 1 | existing. It saves the pre-pick. | **new `409 phone_not_paired`** |
 | `GET …/stream-sessions/current` | 1 | existing **minus `qr`** and `?reveal`. It gains `startCause`. `endReason` widens (§6.8.4). | — |
@@ -1665,12 +1665,10 @@ These were not ruled in conversation. Each is decided here with its reason, and 
 5. **Free restarts: 3 per reuse window** (W23), **the reconnecting countdown** (W24) and **the localised label**
    (W25), all ruled 2026-10-01.
 
-**Open:**
+6. **O4 — a paid restart re-anchors: YES** (2026-10-01). The paid restart opens a fresh 24 h window with three
+   free restarts again, as §6.7.4 says.
+7. **O5 — no countdown while the phone still beats: YES** (2026-10-01). The panel shows "Reconnecting…" with no
+   countdown, plus the phone's reason when its beat carries one (§6.12). Nothing ends the session while the phone
+   is alive except the existing `maxDurationMinutes` cap (300).
 
-1. **O4 — after the paid 4th restart, are the next three free again?** This spec reads yes: the paid restart writes
-   a consume row, which re-anchors the 24 h window and resets the count, the same way the window works today
-   (§6.7.4). The alternative is "every restart after the third costs 1 credit until the window closes", which
-   needs a different anchor. The coordinator flagged W23 itself to the owner as a reading.
-2. **O5 — no countdown while the phone still beats.** W19 needs no beat **and** no video, so a phone that beats
-   without video is never ended by it. The countdown therefore shows only when both are silent, and "Reconnecting…"
-   shows alone otherwise (§6.12). A countdown in that case would promise an end that never comes.
+**Open:** none.
