@@ -4,7 +4,7 @@
 import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { STREAM_PLATFORM_PRESETS, checkDestination, isStreamPlatform, type DestinationRefusal } from "@/lib/stream-destinations";
-import { fingerprintDestination, hasValidKek, open, seal } from "./crypto";
+import { assertKek, fingerprintDestination, hasValidKek, open, seal } from "./crypto";
 import { log } from "@/server/logger";
 
 export interface InputCredentials {
@@ -195,6 +195,15 @@ export async function readFirstInput(tx: Tx, sessionId: string): Promise<InputRo
   return row ? readInputBySlot(tx, sessionId, row.slot) : null;
 }
 
+/** M3: a decrypt that failed under a missing or malformed RELAY_KEK is the DEPLOYMENT's fault, answered with the KEK's
+ *  OWN error — never the row's, which would otherwise depend on which row happened to be read first. Returns only when
+ *  the KEK is valid, so the failure really is this envelope's. */
+function rethrowKekFault(err: unknown): void {
+  if (hasValidKek("RELAY_KEK")) return;
+  assertKek("RELAY_KEK");
+  throw err;   // unreachable while assertKek throws for every key hasValidKek refuses; kept so a drift still fails closed
+}
+
 /** Open an org's destination credential. The `orgId` is NOT decoration and it is not the caller's convenience — it is
  *  the tenancy check itself (whole-branch review I5, auth).
  *
@@ -219,7 +228,7 @@ export async function readTargetSecret(tx: Tx, orgId: string, targetId: string):
     // M3 (B2 review): a missing or malformed RELAY_KEK is the DEPLOYMENT's fault — it stays the loud config error (a 500
     // that reaches Sentry), never an organiser-facing "replace your key". Only an envelope that will not open under a
     // valid KEK is this row's problem.
-    if (!hasValidKek("RELAY_KEK")) throw err;
+    rethrowKekFault(err);
     throw new TargetSecretUnreadableError(targetId, row.kind);
   }
   return { url: fields.url, streamKey: fields.streamKey };
@@ -247,7 +256,7 @@ export async function readKeyHints(tx: Tx, orgId: string): Promise<Map<string, s
     try {
       hint = keyHintOf(openFields(r.rtmp_enc, TARGET_SEALED).streamKey);
     } catch (err) {
-      if (!hasValidKek("RELAY_KEK")) throw err;
+      rethrowKekFault(err);
       hint = null;
     }
     hints.set(r.id, hint);
@@ -296,7 +305,7 @@ export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, 
   try {
     url = openFields(row.rtmp_enc, TARGET_SEALED).url;
   } catch (err) {
-    if (!hasValidKek("RELAY_KEK")) throw err;   // M3: a KEK fault is not an unopenable envelope — no recovery, no warn
+    rethrowKekFault(err);   // M3: a KEK fault is not an unopenable envelope — no recovery, no warn
     // N3 (B1 review): never silent — an unopenable envelope is how a KEK change shows itself. Target id and kind ONLY.
     log.warn({ targetId, kind: row.kind }, "stream target: the saved destination will not open — Replace key re-seals a platform row on its preset; a legacy kind is refused");
     if (!isStreamPlatform(row.kind)) return { ok: false, reason: "unreadable" };

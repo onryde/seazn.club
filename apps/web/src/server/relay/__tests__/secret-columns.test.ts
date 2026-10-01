@@ -630,6 +630,30 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
       expect(hints.get(r.targetId), "the readable row really has a hint, so null above is the row's fault").not.toBeNull();
       expect(hints.size).toBe(2);
     });
+
+    it("the KEK's fault wins over a ROW's fault, whatever order the rows come back in: with ONLY an unopenable row active, an unset or malformed KEK still answers with the KEK's own error — readKeyHints, readTargetSecret and replaceTargetKey (found red in the final-review baseline: heap order decided which error surfaced)", async () => {
+      const r = await rig();
+      const [bad] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      expect(await sql.begin((tx) => archiveStreamTarget(tx, r.orgId, r.targetId)), "PREMISE: the readable row is gone").toBe(true);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and archived_at is null`;
+      expect(n, "PREMISE: the unopenable row is the only active one").toBe(1);
+      let checked = 0;
+      for (const f of KEK_FAULTS) {
+        const reads: [string, () => Promise<unknown>][] = [
+          ["readKeyHints", () => sql.begin((tx) => readKeyHints(tx, r.orgId))],
+          ["readTargetSecret", () => sql.begin((tx) => readTargetSecret(tx, r.orgId, bad!.id))],
+          ["replaceTargetKey", () => sql.begin((tx) => replaceTargetKey(tx, r.orgId, bad!.id, secret65()))],
+        ];
+        for (const [name, read] of reads) {
+          const err = await withKek(f.value, () => read().then(() => null, (e: unknown) => e));
+          expect((err as Error | null)?.message, `${f.name} · ${name}`).toMatch(f.says);
+          expect(err, `${f.name} · ${name}`).not.toBeInstanceOf(TargetSecretUnreadableError);
+          checked++;
+        }
+      }
+      expect(checked).toBe(KEK_FAULTS.length * 3);
+    });
   });
 
   it("I2: a DAMAGED envelope whose fingerprint still matches (same KEK, same key) is re-sealed by replacing the SAME key — not the no-op an openable row gets (mutant: short-circuit on the fingerprint alone)", async () => {
