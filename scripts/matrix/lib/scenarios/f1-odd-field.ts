@@ -45,7 +45,7 @@ export const f1OddField: Scenario = {
         )),
         stageCompleted(observed),
         loopBounded(rec, observed),
-        advanceSeededAsDeclared(plays, rec.withdrawn),
+        advanceSeededAsDeclared(plays, observed, rec.withdrawn),
         lineupsPut(rec, setup),
       ],
     };

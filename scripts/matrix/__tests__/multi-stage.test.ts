@@ -7,22 +7,34 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandTake } from "@seazn/engine/competition";
+import type { StageKind } from "@seazn/engine/core";
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { DriverMisuse, RefusedCall } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { toObservedOutcome, winnerOf } from "../lib/observed.ts";
-import { decideState } from "../lib/results.ts";
-import { SEEDING_TIE_CODE, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake } from "../lib/scenarios/advance.ts";
-import { Recorder, ensureLineups, finishStage, playStage, recordGenerate, setUpDivision, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
+import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun } from "../lib/observed.ts";
+import { decideState, type CheckResult } from "../lib/results.ts";
+import { SEEDING_TIE_CODE, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
+import { Recorder, drawsDeclaredOnReached, ensureLineups, finishStage, playDivision, playStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
 import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeMultiStageDriver } from "./fake-formats-driver.ts";
+
+/** Fix round 1, m-5: LIFECYCLE's "config probe never ran" guard is reachable
+ *  only if playDivision skips stage 1's beforeComplete, which it never does.
+ *  The real playDivision runs for every test; `probeHook.drop` withholds the
+ *  hook for the one test that reaches the guard. */
+const probeHook = vi.hoisted(() => ({ drop: false }));
+vi.mock("../lib/scenarios/common.ts", async (importOriginal) => {
+  const m = await importOriginal<typeof import("../lib/scenarios/common.ts")>();
+  const playDivisionAsIs: typeof m.playDivision = (ctx, rec, setup, hooks = {}) => m.playDivision(ctx, rec, setup, probeHook.drop ? { ...hooks, beforeComplete: undefined } : hooks);
+  return { ...m, playDivision: playDivisionAsIs };
+});
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
@@ -43,6 +55,8 @@ async function runOn(driver: FakeMultiStageDriver, scenario: ScenarioKey, opts: 
 const verdict = (checks: { id: string; verdict: string }[], id: string) => checks.find((c) => c.id === id)?.verdict;
 const failed = (checks: { id: string; verdict: string; reason?: string }[]) => checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason ?? ""}`);
 const body = (take: unknown[]) => ({ kind: "knockout", name: "x", config: {}, seq: 2, progression: { sources: [{ stage: "previous", take }], placement: "rank_order", timing: "setup" } }) as never;
+/** The take kinds a row's stage-2 body declares. */
+const takesOfRow = (row: Row) => takesOf(stagesForRow(row)[1]!).map((t) => String(t.kind));
 /** The multi-stage rows, derived from the catalogue. */
 const MULTI = ROW_KEYS.filter((r) => stagesForRow(r).length > 1);
 /** The rows the fake can draw: stage 1 a league or a group (fake-formats-driver.ts). */
@@ -141,6 +155,18 @@ describe("playDivision on the fake — the product sequence", () => {
     expect([o1!.exit, o2!.exit]).toEqual(["drained", "drained"]);
     expect(o2!.complete).toMatchObject({ status: 200, completed: true, seedProposal: null });
     expect(o1!.complete?.seedProposal).toEqual({ id: driver.proposalIssuedFor(2), status: "draft" });
+    // Fix round 1, m-6: the product's ext_key and is_final survive into the observation, judged against the rows the
+    // fake served (the engine's bracket generator) — a non-final row omits isFinal, never carries false.
+    const served = new Map(driver.fixturesOfStage(2).map((f) => [f.id, f]));
+    expect(o2!.fixtures.length).toBe(served.size);
+    for (const f of o2!.fixtures) {
+      expect(f.extKey, f.id).toBe(served.get(f.id)!.ext_key);
+      expect(typeof f.extKey, f.id).toBe("string");
+    }
+    const finals = driver.fixturesOfStage(2).filter((f) => f.is_final === true).map((f) => f.id);
+    expect(finals).toHaveLength(1);
+    expect(o2!.fixtures.filter((f) => f.isFinal === true).map((f) => f.id)).toEqual(finals);
+    expect(o2!.fixtures.filter((f) => "isFinal" in f && f.isFinal !== true)).toEqual([]);
     // Stage 2's generates are its own: the setup draw, then the play loop's.
     expect(o2!.generates[0]).toMatchObject({ status: 200, created: 3 });
     expect(o1!.generates.every((g) => g.created === 0)).toBe(true);
@@ -205,6 +231,29 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(state.state).toBe("red");
     expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
   });
+  it("T6-R3 (m-12): draws are decided PER STAGE — a sport declaring draws on stage 1's kind and none on stage 2's posts draws in stage 1 and none in stage 2, swept over the registry", async () => {
+    const [k1, k2] = stagesForRow("league_ko").map((b) => b.kind as StageKind);
+    let swept = 0;
+    const judged: string[] = [];
+    for (const sport of SPORT_KEYS) {
+      const variant = offlineBuilderDefault(sport);
+      const cfg = resolveSportCfg(sport, variant);
+      swept++;
+      // The engine's own supportsDraws picks the sports, never a typed list.
+      if (!(drawsAllowed(sport, cfg, k1!) && !drawsAllowed(sport, cfg, k2!))) continue;
+      const { out } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko", sport, variant });
+      const [o1, o2] = out.observed.stages;
+      const asked = (fx: typeof o1.fixtures) => fx.filter((f) => f.declared !== null).map((f) => f.declared!.forOutcome.kind);
+      expect(asked(o1!.fixtures).filter((k) => k === "draw").length, `${sport}: stage 1 posts a draw`).toBeGreaterThan(0);
+      expect(asked(o2!.fixtures).length, `${sport}: stage 2 decided`).toBeGreaterThan(0);
+      expect(asked(o2!.fixtures), `${sport}: stage 2 asked for no draw`).not.toContain("draw");
+      expect(o2!.fixtures.map((f) => f.outcome?.kind ?? null), `${sport}: stage 2 shows no draw`).not.toContain("draw");
+      judged.push(sport);
+    }
+    expect(swept).toBe(SPORT_KEYS.length);
+    expect(judged.length).toBeGreaterThan(0);
+    process.stdout.write(`multi-stage m-12 per-stage draws: ${judged.length} of ${swept} sports declare draws on ${k1} and not on ${k2} (${judged.join(", ")})\n`);
+  });
   it("a tie on confirm: one recompute, tiePicks in the product's listed order, fact seeding_tie_picked", async () => {
     const driver = new FakeMultiStageDriver({ tieAt: 2 });
     const { out, checks, state } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
@@ -217,6 +266,18 @@ describe("playDivision on the fake — the product sequence", () => {
       `confirmSeedProposal s2 ${driver.proposalIssuedFor(2)}`, `confirmSeedProposal s2 ${driver.confirmedProposalIds[0]}`,
     ]);
     expect(driver.confirmedProposalIds[0]).not.toBe(driver.proposalIssuedFor(2));
+    expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+  it("m-9: a tie refusal whose recompute lists NO ties confirms the recompute as computed — no seeding_tie_picked fact, no '0 ties picked' note", async () => {
+    const driver = new FakeMultiStageDriver({ tieAt: 2, tieOnlyOnFirst: true });
+    const { out, checks, state } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    expect(driver.trace.filter((c) => c.startsWith("recomputeSeedProposal"))).toHaveLength(1);
+    expect(driver.tiesListed()).toEqual([]);
+    expect(driver.confirmedProposalIds).toEqual([`sp-2-2`]);
+    expect(driver.lastTiePicks()).toBeNull();
+    expect(out.observed.facts).not.toContain("seeding_tie_picked");
+    expect(out.notes.filter((n) => n.includes("seeding tie(s) picked"))).toEqual([]);
+    expect(out.notes).toContain("stage 2: the recompute listed no ties — confirmed as computed");
     expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
   });
   it("R4 withdraws seed 3 in stage 1; the withdrawn entrant is never seeded into stage 2", async () => {
@@ -236,6 +297,19 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(c.verdict).toBe("fail");
     expect(c.evidence).toEqual(["stage 2: no withdrawn entrant seeded"]);
   });
+  it("m-1: a product that leaves a seat empty for NO departed qualifier reds it — R4's withdrawn seed 3 ranks outside the take, so it excuses nothing", async () => {
+    const driver = new FakeMultiStageDriver({ dropLastSeat: true });
+    const { out, checks } = await runOn(driver, "R4", { row: "league_ko" });
+    const withdrawn = out.observed.withdrawal!.entrantId;
+    const declared = declaredTake(stagesForRow("league_ko")[1]!, 1);
+    // The precondition, from the product's own stage-1 table: the withdrawn entrant ranks outside rankRange 1..4.
+    const row = out.observed.stages[0]!.standings.flatMap((t) => t.rows).find((r) => r.entrantId === withdrawn)!;
+    expect(row.rank).toBeGreaterThan(declared);
+    expect(out.observed.stages[1]!.field).toHaveLength(declared - 1);
+    const c = checks.find((x) => x.id === "advance-seeded-as-declared")!;
+    expect(c.verdict).toBe("fail");
+    expect(c.evidence).toEqual([`stage 2: seeded ${declared - 1}, declared ${declared}`]);
+  });
   it("stage 1 not drained: asked to complete once (not ready, nothing committed); stage 2 is not_reached, never confirmed, and life-loop-bounded reds", async () => {
     const driver = new FakeMultiStageDriver({ refuseGenerateOnStage1: true });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
@@ -248,6 +322,45 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(verdict(checks, "life-loop-bounded")).toBe("fail");
     expect(verdict(checks, "advance-seeded-as-declared")).toBe("abstain");
     expect(out.notes).toContain("stage 2: not reached (stage 1 completed=false, proposal none)");
+  });
+  it("m-4: a refused seed advance — stage 2 is not_reached and never asked to complete; the advance check fails on it and life-loop-bounded names the run's worst exit", async () => {
+    const driver = new FakeMultiStageDriver({ refuseConfirm: "SEEDING_NOTHING_TO_FILL" });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    expect(driver.trace.filter((c) => c.startsWith("confirmSeedProposal"))).toEqual([`confirmSeedProposal ${driver.stageIdAt(2)} ${driver.proposalIssuedFor(2)}`]);
+    expect(driver.trace.filter((c) => c.startsWith("completeStage"))).toEqual([`completeStage ${driver.stageIdAt(1)}`]);
+    expect(out.observed.stages.map((s) => s.exit)).toEqual(["drained", "not_reached"]);
+    expect(out.observed.stages[1]!.complete).toBeNull();
+    expect(out.notes).toContain("stage 2: not reached (its seed advance was refused 422 SEEDING_NOTHING_TO_FILL)");
+    expect(checks.find((c) => c.id === "advance-seeded-as-declared")).toMatchObject({ verdict: "fail", evidence: ["stage 2: confirm refused 422 SEEDING_NOTHING_TO_FILL — nobody seeded"] });
+    const loop = checks.find((c) => c.id === "life-loop-bounded")!;
+    expect(loop.verdict).toBe("fail");
+    // Stage 1 drained; the run's exit is the worst stage's, not the last one playStage wrote.
+    expect(loop.evidence).toContain("play loop exited not_reached");
+  });
+  it("m-7: a /complete that commits and answers 409 STAGE_COMPLETED_SEEDING_FAILED is recorded COMPLETE with a named note; stage 2 is not_reached and the advance check FAILS on the missing proposal", async () => {
+    const driver = new FakeMultiStageDriver({ failSeedingOnComplete: 1 });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    expect(driver.commits).toEqual([driver.stageIdAt(1)]);
+    expect(out.observed.stages[0]!.complete).toEqual({ status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: true, finalRanks: null, seedProposal: null });
+    expect(out.notes).toContain("complete committed, but the next stage's seeding failed: 409 STAGE_COMPLETED_SEEDING_FAILED");
+    expect(out.notes).toContain("stage 2: not reached (stage 1 completed=true, proposal none)");
+    expect(out.observed.stages.map((s) => s.exit)).toEqual(["drained", "not_reached"]);
+    expect(driver.trace.some((c) => c.startsWith("confirmSeedProposal"))).toBe(false);
+    // The check that owns seeding fails, naming the half that failed — never an abstain.
+    expect(checks.find((c) => c.id === "advance-seeded-as-declared")).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED"] });
+    // Stage 1 DID complete: the stage check no longer blames it.
+    expect(checks.find((c) => c.id === "life-stage-completed")).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+  it("m-11: a later stage's posted body is looked up by seq, never by array index — reversed posted bodies advance the same", async () => {
+    const d = new FakeMultiStageDriver();
+    const ctx = ctxFor(d, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE"));
+    const posted = setup.built.posted;
+    const reversed: DivisionSetup = { ...setup, built: { ...setup.built, posted: { ...posted, stages: [...posted.stages].reverse() } } };
+    expect(reversed.built.posted.stages.map((b) => b.seq)).toEqual([2, 1]);
+    const plays = await playDivision(ctx, rec, reversed);
+    expect(plays[1]!.advance).toMatchObject({ status: 200, declared: declaredTake(stagesForRow("league_ko")[1]!, 1) });
   });
   it("a team sport on groups_ko plays both stages with a lineup per side on the later stage's fixtures too", async () => {
     const football = offlineBuilderDefault("football");
@@ -267,27 +380,117 @@ describe("playDivision on the fake — the product sequence", () => {
   });
 });
 
+describe("fix round 1, m-5 — the named 'cannot happen' refusals, each reached", () => {
+  const open = async () => {
+    const d = new FakeMultiStageDriver();
+    const ctx = ctxFor(d, "LIFECYCLE", { row: "league_ko" });
+    const rec = new Recorder();
+    return { d, ctx, rec, setup: await setUpDivision(ctx, rec, fieldSizeFor("league_ko", "LIFECYCLE")) };
+  };
+  it("snapshot over zero plays is refused by name", async () => {
+    const { ctx, rec, setup } = await open();
+    await expect(snapshot(ctx, rec, setup, [], { configEdit: null, withdrawal: null })).rejects.toThrow("scenario: snapshot of a division with no stage played");
+  });
+  it("a later stage with no posted body is refused by name", async () => {
+    const { ctx, rec, setup } = await open();
+    const posted = setup.built.posted;
+    const missing: DivisionSetup = { ...setup, built: { ...setup.built, posted: { ...posted, stages: posted.stages.filter((b) => b.seq !== 2) } } };
+    await expect(playDivision(ctx, rec, missing)).rejects.toThrow("scenario: stage 2 has no posted body");
+  });
+  it("LIFECYCLE refuses a run whose config probe never ran (playDivision withholding stage 1's beforeComplete)", async () => {
+    probeHook.drop = true;
+    try {
+      await expect(runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko" })).rejects.toThrow("scenario: LIFECYCLE's config probe never ran");
+    } finally {
+      probeHook.drop = false;
+    }
+    // …and with the hook back, the same run completes.
+    expect((await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko" })).state.state).toBe("works");
+  });
+});
+
 describe("the two checks this task adds, on their own", () => {
   const stageRef = (seq: number) => ({ id: `s${seq}`, seq, kind: seq === 1 ? "league" : "knockout", config: {}, status: "active" });
-  const adv = (over: Partial<NonNullable<StagePlay["advance"]>>): NonNullable<StagePlay["advance"]> =>
-    ({ status: 200, code: null, proposalId: "sp-2-1", filled: 4, seeded: ["a", "b", "c", "d"], declared: 4, tiePicked: false, ...over });
-  const root: StagePlay = { stage: stageRef(1), field: ["a", "b", "c", "d", "e", "f"], advance: null, complete: null };
+  const RANK_1_TO_4 = [{ kind: "rankRange", from: 1, to: 4 }];
+  const adv = (over: Partial<AdvanceObs>): AdvanceObs =>
+    ({ status: 200, code: null, proposalId: "sp-2-1", filled: 4, seeded: ["a", "b", "c", "d"], declared: 4, takes: RANK_1_TO_4, tiePicked: false, ...over });
+  const done: CompleteObs = { status: 200, code: null, completed: true, finalRanks: null, seedProposal: { id: "sp-2-1", status: "draft" } };
+  const root: StagePlay = { stage: stageRef(1), field: ["a", "b", "c", "d", "e", "f"], advance: null, complete: done };
+  /** Stage 1's observed table: the product ranked a..f 1..6 (one pool). */
+  const r = (entrantId: string, rank: number) => ({ entrantId, rank, points: null });
+  const tableOf = (rows: ReturnType<typeof r>[]): Pick<ObservedRun, "stages"> =>
+    ({ stages: [{ id: "s1", standings: [{ poolId: null, rows }], fixtures: [] }] }) as unknown as Pick<ObservedRun, "stages">;
+  const observed = tableOf(["a", "b", "c", "d", "e", "f"].map((e, i) => r(e, i + 1)));
   it("advance-seeded-as-declared: empty case first — a single stage abstains with its reason, a later stage never advanced abstains, never a pass", () => {
-    expect(advanceSeededAsDeclared([root], new Set())).toMatchObject({ verdict: "abstain", checked: 0, reason: "single-stage row — no later stage to seed" });
-    expect(advanceSeededAsDeclared([root, { stage: stageRef(2), field: null, advance: null, complete: null }], new Set())).toMatchObject({ verdict: "abstain", reason: "no later stage was confirmed" });
+    expect(advanceSeededAsDeclared([root], observed, new Set())).toMatchObject({ verdict: "abstain", checked: 0, reason: "single-stage row — no later stage to seed" });
+    const never: StagePlay = { stage: stageRef(2), field: null, advance: null, complete: null };
+    expect(advanceSeededAsDeclared([{ ...root, complete: null }, never], observed, new Set())).toMatchObject({ verdict: "abstain", reason: "no later stage was confirmed" });
+    // A source that answered "not ready" (completed false) committed nothing: still life-loop-bounded's, not this check's.
+    expect(advanceSeededAsDeclared([{ ...root, complete: { ...done, completed: false, seedProposal: null } }, never], observed, new Set())).toMatchObject({ verdict: "abstain" });
+  });
+  it("advance-seeded-as-declared (m-7): a source that COMMITTED with no proposal is a failing item naming the /complete answer, never an abstain", () => {
+    const never: StagePlay = { stage: stageRef(2), field: null, advance: null, complete: null };
+    const seedingFailed: StagePlay = { ...root, complete: { status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: true, finalRanks: null, seedProposal: null } };
+    expect(advanceSeededAsDeclared([seedingFailed, never], observed, new Set())).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 2: no proposal — stage 1's /complete answered 409 STAGE_COMPLETED_SEEDING_FAILED"] });
   });
   it("advance-seeded-as-declared: a REFUSED confirm is a failing item (nobody seeded), never an abstain", () => {
     const refused: StagePlay = { stage: stageRef(2), field: [], advance: adv({ status: 422, code: "SEEDING_NOTHING_TO_FILL", seeded: [], filled: 0 }), complete: null };
-    expect(advanceSeededAsDeclared([root, refused], new Set())).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 2: confirm refused 422 SEEDING_NOTHING_TO_FILL — nobody seeded"] });
+    expect(advanceSeededAsDeclared([root, refused], observed, new Set())).toMatchObject({ verdict: "fail", checked: 1, evidence: ["stage 2: confirm refused 422 SEEDING_NOTHING_TO_FILL — nobody seeded"] });
   });
   it("advance-seeded-as-declared: a seeded entrant from outside the source field fails; three items per advanced stage, counted", () => {
     const ok: StagePlay = { stage: stageRef(2), field: ["a", "b", "c", "d"], advance: adv({}), complete: null };
-    expect(advanceSeededAsDeclared([root, ok], new Set())).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(advanceSeededAsDeclared([root, ok], observed, new Set())).toMatchObject({ verdict: "pass", checked: 3 });
     const foreign: StagePlay = { ...ok, advance: adv({ seeded: ["a", "b", "c", "zz"] }) };
-    expect(advanceSeededAsDeclared([root, foreign], new Set())).toMatchObject({ verdict: "fail", evidence: ["stage 2: every seeded entrant comes from stage 1's field"] });
+    expect(advanceSeededAsDeclared([root, foreign], observed, new Set())).toMatchObject({ verdict: "fail", evidence: ["stage 2: every seeded entrant comes from stage 1's field"] });
     // FP-2's allowance never lets the count EXCEED the take.
     const over: StagePlay = { ...ok, advance: adv({ seeded: ["a", "b", "c", "d", "e"] }) };
-    expect(advanceSeededAsDeclared([root, over], new Set(["f"]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: seeded 5, declared 4 less at most 1 withdrawn"] });
+    expect(advanceSeededAsDeclared([root, over], observed, new Set(["d"]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: seeded 5, declared 4 less at most 1 withdrawn qualifier(s)", "stage 2: no withdrawn entrant seeded"] });
+  });
+  it("advance-seeded-as-declared (m-1): only a withdrawn QUALIFIER excuses a short seat — a withdrawn entrant the source table ranks outside the take excuses nothing", () => {
+    const short: StagePlay = { stage: stageRef(2), field: ["a", "b", "c"], advance: adv({ seeded: ["a", "b", "c"], filled: 3 }), complete: null };
+    // f withdrew ranked 6th, outside rankRange 1..4: the product left no seat empty for her.
+    expect(advanceSeededAsDeclared([root, short], observed, new Set(["f"]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: seeded 3, declared 4"] });
+    // d withdrew ranked 4th, inside it: FP-2 leaves her seat empty.
+    expect(advanceSeededAsDeclared([root, short], observed, new Set(["d"]))).toMatchObject({ verdict: "pass", checked: 3 });
+    // Two short with one qualifier withdrawn is still a fail: the slack is one seat per withdrawn qualifier.
+    const two: StagePlay = { ...short, field: ["a", "b"], advance: adv({ seeded: ["a", "b"], filled: 2 }) };
+    expect(advanceSeededAsDeclared([root, two], observed, new Set(["d", "f"]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: seeded 2, declared 4 less at most 1 withdrawn qualifier(s)"] });
+  });
+  it("advance-seeded-as-declared: a source stage the snapshot did not observe is a named failing item, never a silent zero", () => {
+    const ok: StagePlay = { stage: stageRef(2), field: ["a", "b", "c", "d"], advance: adv({}), complete: null };
+    expect(advanceSeededAsDeclared([root, ok], { stages: [] }, new Set())).toMatchObject({ verdict: "fail", evidence: ["stage 2: stage 1 was not observed — its tables bound FP-2's empty seats"] });
+  });
+  it("withdrawnQualifiers: each take kind reads the SOURCE stage's own observation — rankRange the sole table, topNPerGroup per pool, bestNth rank nth (an upper bound), roundLosers that round's losers; an unknown kind is refused", () => {
+    const all = new Set(["a", "b", "c", "d", "e", "f"]);
+    const sole = { standings: [{ poolId: null, rows: [r("a", 1), r("b", 2), r("c", 3)] }], fixtures: [] };
+    expect(withdrawnQualifiers([{ kind: "rankRange", from: 2, to: 3 }], sole, all).sort()).toEqual(["b", "c"]);
+    expect(withdrawnQualifiers([{ kind: "rankRange", from: 2, to: 3 }], sole, new Set(["a"]))).toEqual([]);
+    const pools = { standings: [{ poolId: "A", rows: [r("a", 1), r("b", 2), r("c", 3)] }, { poolId: "B", rows: [r("d", 1), r("e", 2), r("f", 3)] }], fixtures: [] };
+    expect(withdrawnQualifiers([{ kind: "topNPerGroup", n: 2 }], pools, all).sort()).toEqual(["a", "b", "d", "e"]);
+    expect(withdrawnQualifiers([{ kind: "topNPerGroup", n: 2 }], pools, new Set(["c", "f"]))).toEqual([]);
+    expect(withdrawnQualifiers([{ kind: "bestNth", nth: 3, count: 1 }], pools, all).sort()).toEqual(["c", "f"]);
+    // rankRange over a multi-pool source reads the pool keyed "" only (engine rankRangeSource): none here.
+    expect(withdrawnQualifiers([{ kind: "rankRange", from: 1, to: 4 }], pools, all)).toEqual([]);
+    const fx = (roundNo: number, home: string | null, away: string | null, winner: string | null) =>
+      ({ id: `${roundNo}${home}${away}`, roundNo, home, away, outcome: winner === null ? null : { kind: "win", winner } });
+    const bracket = { standings: [], fixtures: [fx(1, "a", "b", "a"), fx(1, "c", "d", "d"), fx(2, "a", "d", "a"), fx(1, "e", null, "e"), fx(1, "f", "a", null)] } as unknown as Pick<ObservedRun["stages"][number], "standings" | "fixtures">;
+    expect(withdrawnQualifiers([{ kind: "roundLosers", round: 1, count: 2 }], bracket, all).sort()).toEqual(["b", "c"]);
+    expect(() => withdrawnQualifiers([{ kind: "picks" }], sole, all)).toThrow(UnknownTakeKind);
+  });
+  it("T6-R3 (m-12): life-draw-path-exercised's drawOk is any REACHED stage's own declaration, never the root's alone", () => {
+    const sport = "football";
+    const variant = offlineBuilderDefault(sport);
+    const cfg = resolveSportCfg(sport, variant);
+    // From the engine's own supportsDraws: football declares draws on a league and none on a knockout.
+    expect(drawsAllowed(sport, cfg, "league")).toBe(true);
+    expect(drawsAllowed(sport, cfg, "knockout")).toBe(false);
+    const ctx = ctxFor(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko", sport, variant });
+    const play = (seq: number, kind: string, reached: boolean): StagePlay => ({ stage: { id: `s${seq}`, seq, kind, config: {}, status: "active" }, field: [], advance: null, complete: reached ? done : null });
+    expect(drawsDeclaredOnReached(ctx, [])).toBe(false);
+    expect(drawsDeclaredOnReached(ctx, [play(1, "knockout", true), play(2, "league", true)])).toBe(true);
+    expect(drawsDeclaredOnReached(ctx, [play(1, "knockout", true), play(2, "league", false)])).toBe(false);
+    expect(drawsDeclaredOnReached(ctx, [play(1, "league", true), play(2, "knockout", true)])).toBe(true);
+    expect(drawsDeclaredOnReached(ctx, [play(1, "knockout", true), play(2, "knockout", true)])).toBe(false);
   });
   it("life-lineups-put: abstains for a non-team or rosterless division; a team division that scored nothing fails vacuous; a side scored with no PUT fails", () => {
     const rec = new Recorder();
@@ -312,6 +515,9 @@ class AdvanceHarness {
   readonly before = new Set<string>();
   readonly after = new Set<string>();
   readonly refusals: string[] = [];
+  /** The last confirm's observation, and the last /complete's (m-3). */
+  lastAdvance: AdvanceObs | null = null;
+  lastComplete: CompleteObs | null = null;
   readonly d: FakeMultiStageDriver;
   readonly ctx: ScenarioContext;
   readonly rec: Recorder;
@@ -330,12 +536,12 @@ class AdvanceHarness {
   }
   get stage1() { return this.setup.stages[0]!; }
   get stage2() { return this.setup.stages[1]!; }
-  declared(): number {
-    const pools = new Set(this.d.fixturesOfStage(1).filter((f) => f.pool_id !== null).map((f) => f.pool_id)).size || 1;
-    return declaredTake(this.setup.built.posted.stages[1]!, pools);
-  }
+  get body2() { return this.setup.built.posted.stages.find((b) => b.seq === 2)!; }
+  pools(): number { return new Set(this.d.fixturesOfStage(1).filter((f) => f.pool_id !== null).map((f) => f.pool_id)).size || 1; }
+  declared(): number { return declaredTake(this.body2, this.pools()); }
   async confirm(id: string): Promise<void> {
-    const a = await confirmAdvance(this.ctx, this.rec, this.stage2, { id, status: "draft" }, this.declared());
+    const a = await confirmAdvance(this.ctx, this.rec, this.stage2, { id, status: "draft" }, this.body2, this.pools());
+    this.lastAdvance = a;
     // A tie's recompute is a proposal the product issued inside the advance.
     if (a.tiePicked && a.proposalId !== null && !this.issued.includes(a.proposalId)) this.issued.push(a.proposalId);
     if (a.status === 200) this.confirmed.push(a.proposalId!);
@@ -343,7 +549,7 @@ class AdvanceHarness {
   }
   async step(s: Step): Promise<void> {
     if (typeof s === "object") {
-      const id = this.setup.idOfSeed(s.withdrawOne + 1);
+      const id = this.setup.idOfSeed((s.withdrawOne % this.setup.entrants.length) + 1);
       try {
         await this.ctx.driver.withdraw(id);
         this.rec.withdrawn.add(id);
@@ -360,6 +566,7 @@ class AdvanceHarness {
       case "complete": {
         try {
           const c = await finishStage(this.ctx, this.rec, this.stage1.id);
+          this.lastComplete = c;
           if (c.seedProposal) this.issued.push(c.seedProposal.id);
         } catch (e) {
           if (!(e instanceof DriverMisuse)) throw e;
@@ -403,21 +610,41 @@ class AdvanceHarness {
   withdrawnBeforeConfirm(): Set<string> { return this.before; }
   withdrawnAfterConfirm(): Set<string> { return this.after; }
   stage2HasEntrants(): boolean { return this.seeded().length > 0; }
+  /** The harness's OWN check on the last confirm (m-3): the real snapshot of
+   *  both stages, judged against the entrants withdrawn so far (or `withdrawn`). */
+  async judge(withdrawn: ReadonlySet<string> = new Set(this.rec.withdrawn)): Promise<CheckResult> {
+    const a = this.lastAdvance;
+    if (a === null) throw new Error("harness: judge() before any confirm");
+    const plays: StagePlay[] = [
+      { stage: this.stage1, field: this.sourceField(), advance: null, complete: this.lastComplete },
+      { stage: this.stage2, field: a.seeded, advance: a, complete: null },
+    ];
+    const observed = await snapshot(this.ctx, this.rec, this.setup, plays, { configEdit: null, withdrawal: null });
+    return advanceSeededAsDeclared(plays, observed, withdrawn);
+  }
 }
 
 describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
-  it("fast-check: any order of organiser actions around an advance keeps the harness's advance invariants after every step", async () => {
+  it("fast-check: any order of organiser actions around an advance keeps the harness's advance invariants after every step — league_ko (rankRange) and groups_ko (topNPerGroup × pools)", async () => {
     // Plan review 2 I-2: weighted so the generate → play → complete → confirm path is reached; `playStage1` plays
     // stage 1 to its loop exit in one step (a league of 8 needs 7 rounds, which single-round steps would rarely reach).
     const cmd = fc.oneof(
       { arbitrary: fc.constantFrom<Step>("generateLater", "playStage1", "complete", "confirmLatest", "confirmStale", "recompute"), weight: 5 },
-      { arbitrary: fc.nat({ max: 7 }).map((seedIdx): Step => ({ withdrawOne: seedIdx })), weight: 1 }, // review 1 I-5: withdrawal at any point
+      { arbitrary: fc.nat({ max: 15 }).map((seedIdx): Step => ({ withdrawOne: seedIdx })), weight: 1 }, // review 1 I-5: withdrawal at any point (mod the field)
     );
-    const tally = { runs: 0, confirmed: 0, withdrewBeforeConfirm: 0, withdrewAfterConfirm: 0 };
-    await fc.assert(fc.asyncProperty(fc.array(cmd, { minLength: 1, maxLength: 16, size: "max" }), async (steps) => {
+    // m-3: the two take kinds the multi-stage rows use from a table source (catalogue: rankRange on league_ko,
+    // group_stepladder, group_playoffs; topNPerGroup × pools on groups_ko, group_group_ko). The rest have a swiss or
+    // knockout stage 1, which the fake does not draw (FAKE_ROWS).
+    const ROWS = ["league_ko", "groups_ko"] as const satisfies readonly Row[];
+    const kinds = ROWS.map((row) => takesOfRow(row));
+    expect(kinds).toEqual([["rankRange"], ["topNPerGroup"]]);
+    const per = Object.fromEntries(ROWS.map((r) => [r, { runs: 0, confirmed: 0, judged: 0, short: 0 }])) as Record<(typeof ROWS)[number], { runs: number; confirmed: number; judged: number; short: number }>;
+    const tally = { runs: 0, confirmed: 0, withdrewBeforeConfirm: 0, withdrewAfterConfirm: 0, judged: 0 };
+    await fc.assert(fc.asyncProperty(fc.constantFrom(...ROWS), fc.array(cmd, { minLength: 1, maxLength: 16, size: "max" }), async (row, steps) => {
       const d = new FakeMultiStageDriver();
-      const h = await AdvanceHarness.open(d, "league_ko");
+      const h = await AdvanceHarness.open(d, row);
       for (const s of steps) {
+        const confirmsBefore = h.confirmedIds().length;
         await h.step(s);
         expect(h.completesOf(1)).toBeLessThanOrEqual(1); // /complete never repeated after it committed
         expect(h.confirmedIds().every((id) => h.issuedIds().includes(id))).toBe(true);
@@ -425,9 +652,21 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
         // withdrawn LATER stays seated in stage 2 (the product walks it over, withdrawal.ts:191-209).
         expect(h.seeded().every((e) => h.sourceField().includes(e) && !h.withdrawnBeforeConfirm().has(e))).toBe(true);
         expect(h.stage2HasEntrants()).toBe(h.confirmedIds().length > 0); // no seat filled without a confirm
+        if (h.confirmedIds().length > confirmsBefore) {
+          // m-3: the harness's OWN observation and check, at the confirm that seated stage 2 — never the fake's.
+          const a = h.lastAdvance!;
+          expect([...a.seeded].sort()).toEqual([...h.seeded()].sort());
+          const c = await h.judge();
+          expect(c.verdict, `${row}: ${c.evidence.join("; ")}`).toBe("pass");
+          expect(c.checked).toBe(3);
+          tally.judged++;
+          per[row].judged++;
+          if (a.seeded.length < a.declared) per[row].short++;
+        }
       }
       tally.runs++;
-      if (h.confirmedIds().length > 0) tally.confirmed++;
+      per[row].runs++;
+      if (h.confirmedIds().length > 0) { tally.confirmed++; per[row].confirmed++; }
       if (h.withdrawnBeforeConfirm().size > 0 && h.confirmedIds().length > 0) tally.withdrewBeforeConfirm++;
       if (h.withdrawnAfterConfirm().size > 0) tally.withdrewAfterConfirm++;
       return true;
@@ -437,7 +676,12 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
     expect(tally.confirmed, "runs that reached a successful confirm").toBeGreaterThan(0);
     expect(tally.withdrewBeforeConfirm, "runs where a withdrawal preceded a successful confirm").toBeGreaterThan(0);
     expect(tally.withdrewAfterConfirm, "runs where a withdrawal followed a successful confirm").toBeGreaterThan(0);
-    process.stdout.write(`multi-stage fast-check tally (seed ${process.env.MATRIX_FC_SEED ?? 20260930}): ${JSON.stringify(tally)}\n`);
+    for (const row of ROWS) {
+      expect(per[row].confirmed, `${row}: runs that reached a successful confirm`).toBeGreaterThan(0);
+      expect(per[row].judged, `${row}: confirms the harness's own check judged`).toBeGreaterThan(0);
+    }
+    expect(tally.judged).toBe(ROWS.reduce((n, r) => n + per[r].judged, 0));
+    process.stdout.write(`multi-stage fast-check tally (seed ${process.env.MATRIX_FC_SEED ?? 20260930}): ${JSON.stringify({ ...tally, per })}\n`);
   }, 120_000);
   it("a withdrawal AFTER a confirm leaves the entrant seeded in stage 2, and stage 2 walks it over (review 2 I-2)", async () => {
     const d = new FakeMultiStageDriver();
@@ -474,12 +718,10 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
     expect(bye[0]!.status).toBe("forfeited");
     expect(winnerOf(toObservedOutcome(bye[0]!.outcome))).toBe(bye[0]!.home_entrant_id ?? bye[0]!.away_entrant_id);
     // The check takes the vacancy as the declared take less the withdrawn qualifier, never a pass on any count.
-    const plays: StagePlay[] = [
-      { stage: h.stage1, field: h.sourceField(), advance: null, complete: null },
-      { stage: h.stage2, field: h.seeded(), advance: { status: 200, code: null, proposalId: h.confirmedIds()[0]!, filled: declared - 1, seeded: h.seeded(), declared, tiePicked: false }, complete: null },
-    ];
-    expect(advanceSeededAsDeclared(plays, h.rec.withdrawn)).toMatchObject({ verdict: "pass", checked: 3 });
-    expect(advanceSeededAsDeclared(plays, new Set())).toMatchObject({ verdict: "fail", evidence: [`stage 2: seeded ${declared - 1}, declared ${declared}`] });
+    // The check bounds the vacancy by the withdrawn QUALIFIER, read off the product's own stage-1 table (m-1).
+    expect(h.lastAdvance).toMatchObject({ status: 200, declared });
+    expect(await h.judge()).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(await h.judge(new Set())).toMatchObject({ verdict: "fail", evidence: [`stage 2: seeded ${declared - 1}, declared ${declared}`] });
   });
   it("empty seed: every entrant withdrawn before /complete — the confirm is refused SEEDING_NOTHING_TO_FILL, recorded, and stage 2 seats nobody", async () => {
     const d = new FakeMultiStageDriver();
@@ -516,7 +758,10 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
     const h = await AdvanceHarness.open(d, "league_ko");
     await h.step("playStage1");
     const c = await finishStage(h.ctx, h.rec, h.stage1.id);
-    expect(c).toMatchObject({ status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: false, seedProposal: null });
+    // m-7: the product committed the stage; the 409 names the half that failed.
+    expect(c).toMatchObject({ status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: true, seedProposal: null });
+    expect(h.rec.notes).toContain("complete committed, but the next stage's seeding failed: 409 STAGE_COMPLETED_SEEDING_FAILED");
+    expect(h.completesOf(1)).toBe(1);
     await expect(finishStage(h.ctx, h.rec, h.stage1.id)).rejects.toBeInstanceOf(DriverMisuse);
     await h.step("generateLater");
     expect(h.rec.track(h.stage2.id).generates.at(-1)).toMatchObject({ status: 200, created: 3 });

@@ -5,7 +5,7 @@
 import type { MatchOutcome, StageCtx, StageKind } from "@seazn/engine/core";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import {
-  RefusedCall, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
+  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
 } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import { redact } from "../redact.ts";
@@ -18,7 +18,7 @@ import {
 import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
 import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
-import { confirmAdvance, declaredTake, type AdvanceObs } from "./advance.ts";
+import { confirmAdvance, type AdvanceObs } from "./advance.ts";
 import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
 import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
 
@@ -462,12 +462,25 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
 
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;
 
+/** T6-R3 (m-12): whether the engine declares a draw reachable on THIS
+ *  stage's kind (supportsDraws, via drawsAllowed). Decided per stage — a
+ *  later bracket never inherits the root's draws. */
+export function stageDrawsOk(ctx: ScenarioContext, stage: Pick<StageRef, "kind">): boolean {
+  return drawsAllowed(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
+}
+
+/** …and for the run (life-draw-path-exercised): some stage the run REACHED —
+ *  asked to complete, which every reached stage is — declares a draw. */
+export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly StagePlay[]): boolean {
+  return plays.some((p) => p.complete !== null && stageDrawsOk(ctx, p.stage));
+}
+
 /** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
  *  the root; the exit lands on the stage's own track and on the run alike. */
 export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook } = {}, stage: StageRef = setup.stage): Promise<void> {
   const track = rec.track(stage.id);
   const exit = (e: LoopExit) => { track.exit = e; rec.exit = e; };
-  const drawOk = drawsAllowed(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
+  const drawOk = stageDrawsOk(ctx, stage);
   const decideBatch = async (round: number, batch: FixtureRow[]) => {
     await hooks.beforeRound?.(round, batch);
     for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
@@ -527,8 +540,9 @@ const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => (exi
  *  no TBD rows commits and then answers 409 STAGE_COMPLETED_SEEDING_FAILED —
  *  FP-1). Then per stage: play it, complete it ONCE, and confirm the draft
  *  proposal that /complete returned on the next stage. The hooks run on stage
- *  1 only (D12). A stage after one that did not complete, or whose advance
- *  was refused, is recorded `not_reached`.
+ *  1 only (D12). A stage after one that did not complete, or that completed
+ *  with no proposal (409 STAGE_COMPLETED_SEEDING_FAILED, m-7), or whose
+ *  advance was refused, is recorded `not_reached`.
  *  Every REACHED stage is asked to complete once its loop ends, drained or
  *  not, as W1a's root always was (scenarios.test.ts "I-1": I4 judges the
  *  answer; life-loop-bounded reds the early stop). That is still "once": a
@@ -554,10 +568,11 @@ export async function playDivision(
         plays.push({ stage, field: null, advance: null, complete: null });
         continue;
       }
-      const body = setup.built.posted.stages[i];
+      // m-11: by seq, as builtAsPosted pairs them — never by array position.
+      const body = setup.built.posted.stages.find((b) => b.seq === stage.seq);
       if (body === undefined) throw new Error(`scenario: stage ${stage.seq} has no posted body — ${setup.built.posted.stages.length} posted, ${setup.stages.length} built`);
       const pools = new Set((await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id && f.pool_id !== null).map((f) => f.pool_id)).size || 1;
-      advance = await confirmAdvance(ctx, rec, stage, proposal, declaredTake(body, pools));
+      advance = await confirmAdvance(ctx, rec, stage, proposal, body, pools);
       field = advance.seeded;
       if (advance.status !== 200) {
         rec.track(stage.id).exit = "not_reached";
@@ -613,8 +628,12 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
  *  noted; whether the stage was left unfinished is life-loop-bounded's call.
  *  W1-driving Task 6: takes the stage id (any stage), and carries the next
  *  stage's draft proposal /complete minted — the only place its id is
- *  served. A 409 STAGE_COMPLETED_SEEDING_FAILED is recorded as the refusal
- *  it reads as (completed false); the driver never repeats it (FP-3). */
+ *  served. A 409 STAGE_COMPLETED_SEEDING_FAILED is the product saying the
+ *  stage COMMITTED and only the next stage's seeding failed (stages.ts
+ *  :4239-4252): recorded complete, with no proposal and a named note
+ *  (fix round 1, m-7; advance-seeded-as-declared fails on it). Its body
+ *  carries no events, so finalRanks stay null. The driver never repeats it
+ *  (FP-3). */
 export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<CompleteObs> {
   try {
     const c = await ctx.driver.completeStage(stageId);
@@ -622,6 +641,10 @@ export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: 
     return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null, seedProposal: c.seed_proposal ?? null };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
+    if (e.code === SEEDING_FAILED_AFTER_COMMIT) {
+      rec.notes.push(`complete committed, but the next stage's seeding failed: ${e.status} ${e.code}`);
+      return { status: e.status, code: e.code, completed: true, finalRanks: null, seedProposal: null };
+    }
     rec.notes.push(`complete refused ${e.status} ${e.code ?? "(no code)"}`);
     return { status: e.status, code: e.code, completed: false, finalRanks: null, seedProposal: null };
   }

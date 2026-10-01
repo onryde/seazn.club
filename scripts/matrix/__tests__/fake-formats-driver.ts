@@ -60,6 +60,20 @@ export interface FakeMultiStageOptions {
    *  seeded anyway, in the last seat. Only the advance-seeded-as-declared
    *  guard's own test uses it. */
   readonly seedWithdrawn?: boolean;
+  /** Only the FIRST proposal for `tieAt` flags its tie; a recompute lists
+   *  none (fix round 1, m-9: a tie refusal whose recompute has nothing left
+   *  to pick). */
+  readonly tieOnlyOnFirst?: boolean;
+  /** A deliberately WRONG product (fix round 1, m-1): confirm leaves the
+   *  highest offered seed's seat EMPTY for no departed qualifier — it walks
+   *  over like a vacancy. */
+  readonly dropLastSeat?: boolean;
+  /** Every confirm is refused 422 with this code (fix round 1, m-4). */
+  readonly refuseConfirm?: string;
+  /** The stage at this seq commits on /complete and then answers 409
+   *  STAGE_COMPLETED_SEEDING_FAILED, as a failed compute does after the
+   *  commit (stages.ts:4239-4252; fix round 1, m-7). */
+  readonly failSeedingOnComplete?: number;
 }
 
 type Side = "home" | "away";
@@ -404,7 +418,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       offered = offered.filter((q) => !departed.has(q.entrantId));
     }
     const ties: SeedTie[] = [];
-    if (this.opts.tieAt === target.seq) {
+    if (this.opts.tieAt === target.seq && !(this.opts.tieOnlyOnFirst === true && this.proposals.some((x) => x.seq === target.seq))) {
       const two = offered.find((q) => q.seed === 2);
       const three = offered.find((q) => q.seed === 3);
       if (two !== undefined && three !== undefined) ties.push({ slots: [this.#slotOf(target, 2), this.#slotOf(target, 3)], entrantIds: [three.entrantId, two.entrantId], reason: "points" });
@@ -445,6 +459,9 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       const events = BRACKETS.has(stage.kind) ? [{ type: "stage_completed", finalRanks: this.#finalRanks(stage) }] : [];
       const next = this.stages.find((s) => s.seq === stage.seq + 1);
       if (next === undefined) return { completed: true, events, division_completed: this.stages.every((s) => this.completedStages.has(s.id)) };
+      if (this.opts.failSeedingOnComplete === stage.seq) {
+        throw new RefusedCall("POST", path, 409, "STAGE_COMPLETED_SEEDING_FAILED", "fake: the next stage's seeding failed (failSeedingOnComplete)", null, { stageId, nextStageId: next.id });
+      }
       let p: Proposal;
       try {
         p = this.#compute(next, "POST", path);
@@ -472,6 +489,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       this.log("confirmSeedProposal", stageId, body.proposalId);
       const path = `/api/v1/stages/${stageId}/seed-proposal/confirm`;
       const target = this.#stage("POST", stageId);
+      if (this.opts.refuseConfirm !== undefined) throw new RefusedCall("POST", path, 422, this.opts.refuseConfirm, "fake: confirm refused (refuseConfirm)");
       const p = this.proposals.find((x) => x.id === body.proposalId && x.seq === target.seq);
       if (p === undefined) throw new RefusedCall("POST", path, 404, wireCodeFor(404), "seed proposal not found");
       if (p.status === "confirmed") throw new RefusedCall("POST", path, 409, "SEEDING_ALREADY_CONFIRMED", "this stage's slots are already filled from a confirmed proposal");
@@ -493,6 +511,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       const gone = [...bySeed.values()].filter((e) => this.#departed().has(e));
       if (gone.length > 0 && this.opts.seedWithdrawn !== true) throw new RefusedCall("POST", path, 422, "SEEDING_ENTRANT_WITHDRAWN", "a qualifier has withdrawn from this division — recompute the proposal", null, { entrantIds: gone });
       if (bySeed.size === 0) throw new RefusedCall("POST", path, 422, "SEEDING_NOTHING_TO_FILL", "nobody is left to seed into this stage — recompute the proposal once the field is settled");
+      if (this.opts.dropLastSeat === true) bySeed.delete(Math.max(...bySeed.keys()));
       const rows = this.fixtures.filter((f) => f.stage_id === target.id);
       const vacated = rows.some((f) => SIDES.some((side) => { const seed = this.slotsOf.get(f.id)?.[side]; return seed !== undefined && !bySeed.has(seed); }));
       if (vacated && TABLE.has(target.kind)) throw new Error(`fake: a vacated seat in a ${target.kind} target is not modelled`);

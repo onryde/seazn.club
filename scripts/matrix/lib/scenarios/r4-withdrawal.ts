@@ -97,7 +97,7 @@ export const r4Withdrawal: Scenario = {
         notes: rec.notes,
         assertions: [
           builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]),
-          stageCompleted(observed), loopBounded(rec, observed), advanceSeededAsDeclared(plays, rec.withdrawn), lineupsPut(rec, setup),
+          stageCompleted(observed), loopBounded(rec, observed), advanceSeededAsDeclared(plays, observed, rec.withdrawn), lineupsPut(rec, setup),
         ],
       };
     }
@@ -124,7 +124,7 @@ export const r4Withdrawal: Scenario = {
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),
         stageCompleted(observed),
         loopBounded(rec, observed),
-        advanceSeededAsDeclared(plays, rec.withdrawn),
+        advanceSeededAsDeclared(plays, observed, rec.withdrawn),
         lineupsPut(rec, setup),
       ],
     };

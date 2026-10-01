@@ -57,7 +57,7 @@ export const m1Walkover: Scenario = {
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
         stageCompleted(observed),
         loopBounded(rec, observed),
-        advanceSeededAsDeclared(plays, rec.withdrawn),
+        advanceSeededAsDeclared(plays, observed, rec.withdrawn),
         lineupsPut(rec, setup),
       ],
     };
