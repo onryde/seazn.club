@@ -68,20 +68,6 @@ export function phoneTabState(view: StreamSessionView | null): PhoneTabState {
   }
 }
 
-export function stepFor(state: PhoneTabState): 1 | 2 | 3 | 4 {
-  switch (state) {
-    case "idle": return 1;
-    case "provisioning":
-    case "warming": return 2;
-    case "live":
-    case "ending": return 3;
-    case "ended":
-    case "failed": return 4;
-  }
-}
-
-export const STEP_KEYS = ["stream.phone.step1", "stream.phone.step2", "stream.phone.step3", "stream.phone.step4"] as const satisfies readonly [MessageKey, MessageKey, MessageKey, MessageKey];
-
 export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {
   idle: "stream.phone.state.idle",
   provisioning: "stream.phone.state.provisioning",

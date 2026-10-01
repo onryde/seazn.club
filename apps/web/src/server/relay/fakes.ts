@@ -41,6 +41,18 @@ export const FAKE_REJECT_KEY_PREFIX = "reject-";
  *  destination still dialling. How a walkthrough crosses go-live into the amber warning. */
 export const FAKE_CONNECTING_KEY_PREFIX = "connecting-";
 
+/** T9a (spec 2026-09-30 §9.4, the D3 walkthrough): a connecting key that RECOVERS — `connecting-<ms>ms-<tail>` reads
+ *  `connecting` for <ms> after the input connects, then `ok`. How a walkthrough crosses the 30 s warning AND watches it
+ *  clear when the destination starts receiving, with no test-only route and no sleep: the fake's own clock decides. A
+ *  plain connecting key (no duration) still never recovers. */
+const RECOVERING_KEY = /^connecting-(\d+)ms-/;
+export function fakeRecoveringKey(recoverAfterMs: number, tail: string): string {
+  if (!Number.isInteger(recoverAfterMs) || recoverAfterMs < 0) {
+    throw new Error(`fakeRecoveringKey: recoverAfterMs must be a whole, non-negative number of ms, got ${recoverAfterMs}`);
+  }
+  return `${FAKE_CONNECTING_KEY_PREFIX}${recoverAfterMs}ms-${tail}`;
+}
+
 export const FAKE_CONNECT_AFTER_MS_DEFAULT = 3000;
 
 /** `FAKE_INGEST_CONNECT_AFTER_MS`, parsed STRICTLY (lane-A minors, Task 3 review
@@ -201,8 +213,14 @@ export class FakeIngest implements IngestProvider {
     // Cloudflare reports no output status before inbound video (ingest-cf.ts outputState): `unknown` until the input
     // connects, then `connecting` for a destination that never accepts. The walkthrough then crosses go-live in the
     // real shape, not a friendlier one.
-    if (row.outputs.some((o) => o.streamKey.startsWith(FAKE_CONNECTING_KEY_PREFIX)))
-      return !row.deleted && this.stateOf(row, row.createdAt) === "connected" ? "connecting" : "unknown";
+    const dialling = row.outputs.find((o) => o.streamKey.startsWith(FAKE_CONNECTING_KEY_PREFIX));
+    if (dialling) {
+      if (row.deleted || this.stateOf(row, row.createdAt) !== "connected") return "unknown";
+      // T9a: a recovering key receives once its duration has run from the clock's connect instant.
+      const recoverAfter = RECOVERING_KEY.exec(dialling.streamKey)?.[1];
+      if (recoverAfter !== undefined && this.clock() - (row.createdAt + this.connectAfterMs) >= Number(recoverAfter)) return "ok";
+      return "connecting";
+    }
     return "ok";
   }
 

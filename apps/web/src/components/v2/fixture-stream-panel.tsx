@@ -31,7 +31,7 @@
 import {
   Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode,
 } from "react";
-import { Check, Copy, RotateCcw, Smartphone, Video } from "lucide-react";
+import { Check, ChevronRight, Copy, RotateCcw, Smartphone, Video } from "lucide-react";
 import QRCode from "qrcode";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -44,12 +44,14 @@ import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { platformName } from "./stream-platform-mark";
+import { DestinationWarning, SignalChain } from "./stream-signal-chain";
 import { useTabReturn } from "./use-tab-return";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
+import { chainFor } from "@/lib/stream-chain";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
 } from "@/lib/stream-credit-packs";
@@ -57,18 +59,17 @@ import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STATE_PILL_KEYS,
-  STEP_KEYS,
   STREAM_POLL_MS,
   TARGET_REMOVED,
   createErrorCode,
   createErrorHolder,
   createErrorIsNotFound,
   createErrorText,
+  destinationWarning,
   elapsedLabel,
   healthChips,
   phoneTabState,
   qrText,
-  stepFor,
   type CreateFailureCode,
   type CreateErrorHolder,
   type PhoneTabState,
@@ -1380,7 +1381,6 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
   const state = phoneTabState(p.view);
-  const step = stepFor(state);
   const credits =
     p.balance === 1 ? msg("stream.phone.credits.one") : msg("stream.phone.credits.other", { n: p.balance });
   // The chooser opens either because the org cannot start without credits (FORCED — there is nothing behind it to go
@@ -1404,6 +1404,15 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const optionText = (t: StreamTarget) => `${t.label} (${platformName(msg, t.kind)})`;
   // A target_in_use refusal whose holder still has a page to open (T8): the Open Match link.
   const inUseHolder = p.createError?.code === "target_in_use" ? p.createError.holder : null;
+  // §3.2: the Signal path is drawn to the session's destination, or — with none — to the picked one. Neither (credits
+  // only, a list loading, failed or empty) draws no chain: a path to nowhere says nothing. Ended and failed draw none.
+  const chainTarget = p.view ? p.view.target : selected ?? null;
+  const drawn =
+    !creditsOnly && chainTarget
+      ? { to: chainTarget, chain: chainFor(p.view, { destInUse: state === "idle" && p.createError?.code === "target_in_use" }) }
+      : null;
+  // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running.
+  const warned = p.view !== null && destinationWarning(p.view);
 
   const onModeKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!ARROW.test(e.key)) return;
@@ -1452,33 +1461,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         </p>
       )}
 
-      {/* Steps: the ol at ≥ 768, ONE line below — same tree, two branches (§8a). None at all while credits-only (B3). */}
-      {!creditsOnly && (
-        <ol data-testid="stream-steps" className="mt-3 space-y-1 text-[13px] text-slate-700 max-md:hidden">
-          {STEP_KEYS.map((k, i) => {
-            const n = i + 1;
-            const cls = n === step ? "font-semibold text-purple-800" : n < step ? "text-slate-500" : "";
-            return (
-              <li key={k} aria-current={n === step ? "step" : undefined} className={`flex items-center gap-2 ${cls}`}>
-                <span
-                  aria-hidden
-                  className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] ${
-                    n === step ? "bg-purple-100" : "bg-slate-100"
-                  }`}
-                >
-                  {n < step ? <Check className="h-3.5 w-3.5" strokeWidth={2} /> : n}
-                </span>
-                {msg(k)}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-      {!creditsOnly && (
-        <p data-testid="stream-step" className="mt-3 text-[13px] font-semibold text-purple-800 md:hidden">
-          {msg("stream.phone.stepOf", { n: step, label: msg(STEP_KEYS[step - 1]) })}
-        </p>
-      )}
+      {/* §3.2 (T9a): the Signal path replaces §8a's stepper — one drawing at every width; only its destination label
+          moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
+      {drawn?.chain && <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: drawn.to.label }} />}
+      {warned && p.view && <DestinationWarning kind={p.view.target.kind} />}
 
       {p.view?.fixtureDecided && (state === "live" || state === "ending") && (
         <p
@@ -1751,19 +1737,26 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {(state === "live" || state === "ending") && p.view && (
         <div className="mt-3 space-y-2">
           <div className="flex flex-wrap items-center gap-2">{recAndElapsed(msg, p.view.startedAt, p.now)}</div>
-          <div data-testid="stream-health" className="flex flex-wrap gap-1">
-            {healthChips(p.view, msg, p.now, locale).map((c, i) => (
-              <span
-                key={i}
-                data-testid="stream-health-chip"
-                className={`rounded-md px-2 py-1 text-[11px] ${
-                  c.stale ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
-                }`}
-              >
-                {c.text}
-              </span>
-            ))}
-          </div>
+          {/* §3.3 (T9a): the health chips are Details — closed by default; the chain above carries the state. */}
+          <details data-testid="stream-details" className="group rounded-lg border border-slate-200 bg-white">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-medium text-slate-700 [&::-webkit-details-marker]:hidden">
+              <ChevronRight aria-hidden className="h-4 w-4 transition-transform group-open:rotate-90 motion-reduce:transition-none" strokeWidth={1.8} />
+              {msg("stream.details")}
+            </summary>
+            <div data-testid="stream-health" className="flex flex-wrap gap-2 px-3 pb-3">
+              {healthChips(p.view, msg, p.now, locale).map((c, i) => (
+                <span
+                  key={i}
+                  data-testid="stream-health-chip"
+                  className={`rounded-md px-2 py-1 text-[11px] ${
+                    c.stale ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"
+                  }`}
+                >
+                  {c.text}
+                </span>
+              ))}
+            </div>
+          </details>
           {state === "ending" ? (
             <p data-testid="stream-ending" className="text-xs text-slate-500">
               {msg("stream.phone.ending", { destination: p.view.target.label })}

@@ -37,10 +37,10 @@ import {
   setEntitlementOverrideSql,
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
-import { STREAM_POLL_MS } from "../../src/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest } from "../../src/server/relay/fakes";
+import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, fakeRecoveringKey } from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
 // ===========================================================================
@@ -522,6 +522,7 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-target"), "no select over nothing").toHaveCount(0);
     await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
     await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/directory?tab=streaming");
+    await expect(body.getByTestId("stream-chain"), "§3.2: no destination, no path to draw").toHaveCount(0);
     await expectNoHorizontalScroll(page);
     if (width === 320) expect(await expectTapTargets(body), "idle controls hit-tested").toBeGreaterThan(3);
     await shot(panel, `A1-${width}-1-idle.png`);
@@ -543,6 +544,9 @@ for (const width of WIDTHS) {
     await openPhoneTab(page, rig, f);
     await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(label));
     await expect(goLive, "the positive half: with a destination, Go live can start").toBeEnabled();
+    const chain = body.getByTestId("stream-chain");
+    await expect(chain).toHaveAttribute("data-phone", "notConnected");
+    await expect(chain).toHaveAttribute("data-dest", "notLive");
 
     // GO LIVE → the QR while the camera warms.
     await streamSlot(); // this test's share of the deployment's stream capacity
@@ -553,6 +557,8 @@ for (const width of WIDTHS) {
     const payload = JSON.parse(await body.getByTestId("stream-qr-text").inputValue()) as { v?: number; sid?: string };
     expect(payload.sid, "the paste code IS the QR payload, for THIS session").toBe(session.id);
     await expect(body.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect(chain).toHaveAttribute("data-phone", "waiting");
+    await expect(chain).toHaveAttribute("data-link1", "connecting");
     // Everything that reads the QR state goes first — it lasts only until the server's first read after the connect.
     await shot(panel, `A1-${width}-2-qr.png`);
     await expectNoHorizontalScroll(page);
@@ -569,6 +575,17 @@ for (const width of WIDTHS) {
     const first = await elapsed.innerText();
     await expect(elapsed, "the elapsed clock ticks every second while live").not.toHaveText(first, { timeout: 5_000 });
     await expect(body.getByTestId("stream-qr"), "live: the QR is gone").toHaveCount(0);
+    // §3.2's live-ok row: every live case here streams to an `ok` destination — the D3 case's positive twin.
+    await expect(chain).toHaveAttribute("data-dest", "live");
+    await expect(chain).toHaveAttribute("data-link2", "flowing");
+    await expect(body.getByTestId("stream-output-warning")).toHaveCount(0);
+    // §3.3: the health chips are Details — CLOSED until opened (class 19: what it opens at), then the ingest chip leads.
+    const details = body.getByTestId("stream-details");
+    await expect(details).toBeAttached();
+    await expect(body.getByTestId("stream-health"), "Details opens closed").not.toBeVisible();
+    await details.locator("summary").click();
+    await expect(body.getByTestId("stream-health")).toBeVisible();
+    await expect(body.getByTestId("stream-health-chip").first()).toHaveText(en("stream.health.ingest.connected"));
     // One credit consumed at go-live, drawn from the free monthly bucket (V426), and the chip is the projection's.
     await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rate - 1));
     const live = await ledger(rig.orgId);
@@ -593,6 +610,7 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-credit-used")).toHaveText(en("stream.phone.ended.credits"));
     await expect(body.getByTestId("stream-end-reason")).toHaveText(en("stream.phone.ended.reason.stopped"));
     await expect(body.getByTestId("stream-ended-never-live")).toHaveCount(0);
+    await expect(chain, "§3.2: ended draws no chain").toHaveCount(0);
     expect((await ledger(rig.orgId)).total, "stopping spends nothing more").toBe(rate - 1);
     await expectNoHorizontalScroll(page);
     if (width === 320) expect(await expectTapTargets(body), "ended controls hit-tested").toBeGreaterThan(0);
@@ -920,6 +938,102 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
   await expect(body.getByTestId("stream-go-live")).toBeEnabled();
   await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rig.monthlyRate));
 });
+
+// ===========================================================================
+// D3 — the destination not receiving while live (spec 2026-09-30 §3.2, §9.4; the round-1 regression)
+// ===========================================================================
+// The Signal path through a whole live session whose destination does not receive at first: the phone connects, the
+// destination dials (Connecting) — and at the 30 s line, not before, the amber warning shows with the stream STILL LIVE
+// and Stop one tap away (D3: a warning, never an ending). Then the destination starts receiving and the warning clears,
+// and Stop ends it. The fake decides when the destination receives: `fakeRecoveringKey` (server/relay/fakes.ts) reads
+// `connecting` for RECOVER_MS after the input connects, then `ok` — no test-only route, no sleep. Every wait below is
+// derived from OUTPUT_WARNING_AFTER_MS, the poll and the fake's connect (AGENTS.md class 20).
+/** The destination receives this long after the phone connects. Live is at most one poll plus slack after the connect,
+ *  so the warning holds from (live + 30 s) to (connect + RECOVER_MS): at least RECOVER_MS − 30 s − POLL_WAIT_MS of
+ *  window, which is two whole polls — the warning is observed on screen, never inferred. */
+const RECOVER_MS = OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS + 2 * STREAM_POLL_MS;
+for (const width of [320, 1280] as const) {
+  test(`D3 @${width}: live, the destination Connecting → at 30 s (not before) the amber warning, still live, Stop enabled → receiving resumes and it clears → Stop`, async ({
+    page,
+  }) => {
+    const NAVS = 1; // openPhoneTab
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + RECOVER_MS + 4 * POLL_WAIT_MS + NAVS * NAV_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRelayRig(page);
+    const target = await addTargetApi(page, rig.orgId, {
+      label: `D3 ${width}`, kind: "youtube", streamKey: fakeRecoveringKey(RECOVER_MS, randomBytes(6).toString("hex")),
+    });
+    const f = rig.fixtures[0]!;
+    const scope = await openPhoneTab(page, rig, f);
+    const body = scope.locator("[data-phone-body]");
+    const panel = scope.getByTestId("stream-panel");
+    const chain = body.getByTestId("stream-chain");
+    const warning = body.getByTestId("stream-output-warning");
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(target.label));
+    // READY: the chain is drawn to the picked destination — all slate (§3.2's idle row).
+    await expect(chain).toHaveAttribute("data-phone", "notConnected");
+    await expect(chain).toHaveAttribute("data-dest", "notLive");
+
+    await streamSlot();
+    await body.getByTestId("stream-go-live").click();
+    // WAITING: the phone half amber, link 1 animated — the phone connecting.
+    await expect(chain).toHaveAttribute("data-phone", "waiting", { timeout: POLL_WAIT_MS });
+    await expect(chain).toHaveAttribute("data-link1", "connecting");
+    await expect(chain).toHaveAttribute("data-dest", "notLive");
+
+    // LIVE: the phone and Seazn lime, the destination still dialling — Connecting, no warning yet.
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+    const liveAt = Date.now();
+    await expect(chain).toHaveAttribute("data-phone", "connected");
+    await expect(chain).toHaveAttribute("data-link1", "flowing");
+    await expect(chain).toHaveAttribute("data-dest", "connecting");
+    await expect(chain).toHaveAttribute("data-link2", "connecting");
+    await expect(warning, "under the 30 s line: no warning").toHaveCount(0);
+    await shot(panel, `D3-${width}-1-connecting.png`);
+
+    // AT THE LINE: the warning — polled, never slept. Its FIRST sighting is the bound: no earlier than one poll of
+    // rendering lag before 30 s from live (the server measures from live_at, which the pill can trail by one poll).
+    await expect
+      .poll(() => warning.count(), { message: "the D3 warning never showed", timeout: OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS, intervals: [500] })
+      .toBe(1);
+    const sightedAfter = Date.now() - liveAt;
+    expect(sightedAfter, "the warning did not fire early").toBeGreaterThanOrEqual(OUTPUT_WARNING_AFTER_MS - POLL_WAIT_MS);
+    await expect(warning).toBeVisible();
+    await expect(warning).toHaveAttribute("role", "status");
+    await expect(warning).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));
+    await expect(chain).toHaveAttribute("data-dest", "notReceiving");
+    await expect(chain).toHaveAttribute("data-link2", "problem");
+    await expect(chain, "the phone half never moves for the destination").toHaveAttribute("data-phone", "connected");
+    const open = warning.getByTestId("stream-output-open-directory");
+    await expect(open).toHaveAttribute("href", "/directory?tab=streaming");
+    await expect(open).toHaveAttribute("target", "_blank");
+    await expect(open).toHaveText(en("stream.output.openDirectory"));
+    // D3: a warning, never an ending — the session is live on the server, and Stop is right there.
+    const cur = await apiJson<{ state: string } | null>(page.request, `/api/v1/fixtures/${f.id}/stream-sessions/current`);
+    expect(cur.data?.state, "still live on the server: no auto-end").toBe("live");
+    await expect(body.getByTestId("stream-stop")).toBeVisible();
+    await expect(body.getByTestId("stream-stop")).toBeEnabled();
+    await expectNoHorizontalScroll(page);
+    if (width === 320) expect(await expectTapTargets(body), "warned-state controls hit-tested").toBeGreaterThan(1);
+    await shot(panel, `D3-${width}-2-warning.png`);
+
+    // RECEIVING RESUMES: the destination accepts; the next read is ok — the warning clears, the destination is Live.
+    await expect(warning, "the warning clears once the destination receives").toHaveCount(0, {
+      timeout: RECOVER_MS - OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS,
+    });
+    await expect(chain).toHaveAttribute("data-dest", "live");
+    await expect(chain).toHaveAttribute("data-link2", "flowing");
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
+    await shot(panel, `D3-${width}-3-receiving.png`);
+
+    // STOP.
+    await body.getByTestId("stream-stop").click();
+    await confirmStop(page);
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+    await expect(warning).toHaveCount(0);
+    await expect(chain, "ended draws no chain (§3.2)").toHaveCount(0);
+  });
+}
 
 // ===========================================================================
 // A7 — Stop is always reachable, whatever took the panel away

@@ -196,6 +196,34 @@ body {
   }
 }
 
+/* Spec 2026-09-30 §3.2 — the stream panel's Signal-path links (stream-signal-chain.tsx). Lime is a LINE colour here,
+   never text (D5), and only ever the --mk-lime token. Only `connecting` moves: the spec's D3 row is "amber dashes",
+   static — the animation runs only while connecting, and not at all under reduced motion. */
+.stream-link-idle { border-top: 2px dashed #cbd5e1; height: 0; }
+.stream-link-connecting {
+  height: 2px;
+  background-image: repeating-linear-gradient(90deg, var(--mk-lime) 0 6px, transparent 6px 12px);
+  background-size: 12px 2px;
+  animation: stream-link-flow 0.7s linear infinite;
+}
+.stream-link-problem {
+  height: 2px;
+  background-image: repeating-linear-gradient(90deg, #d97706 0 6px, transparent 6px 12px);
+  background-size: 12px 2px;
+}
+.stream-link-flowing {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--mk-lime);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--mk-lime) 45%, transparent);
+}
+@keyframes stream-link-flow { from { background-position: 0 0; } to { background-position: 12px 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .stream-link-connecting {
+    animation: none;
+  }
+}
+
 /* Keyboard focus is always visible; the color follows the org accent on
    public pages and defaults to the platform violet everywhere else. */
 :where(a, button, summary, [role="tab"]):focus-visible {

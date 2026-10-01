@@ -30,8 +30,8 @@ import { StreamEndReason, StreamFailReason, StreamIngest, StreamOutput, StreamSe
 import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
-  INGEST_STATE_KEYS, STATE_PILL_KEYS, STEP_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText, stepFor,
+  INGEST_STATE_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
+  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -173,11 +173,9 @@ describe("stream-session-view — state, step and pill", () => {
     expect([...reached].sort(), "every pill key is reachable, and nothing reaches a state without a pill").toEqual(Object.keys(STATE_PILL_KEYS).sort());
   });
 
-  it("step per state; four step keys and seven pill keys, in all four locales", () => {
-    expect((["idle", "provisioning", "warming", "live", "ending", "ended", "failed"] as const).map(stepFor)).toEqual([1, 2, 2, 3, 3, 4, 4]);
-    expect(STEP_KEYS).toEqual([1, 2, 3, 4].map((n) => `stream.phone.step${n}`));
+  it("seven pill keys, in all four locales (T9a: §8a's stepper and its four step keys are gone — the Signal path replaced it)", () => {
     for (const [s, k] of Object.entries(STATE_PILL_KEYS)) expect(k, s).toBe(`stream.phone.state.${s}`);
-    expect(inEveryLocale([...STEP_KEYS, ...Object.values(STATE_PILL_KEYS)])).toBe(LOCALES.length * (4 + 7));
+    expect(inEveryLocale(Object.values(STATE_PILL_KEYS))).toBe(LOCALES.length * 7);
   });
 });
 

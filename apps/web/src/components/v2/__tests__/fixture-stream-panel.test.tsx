@@ -57,6 +57,8 @@ import {
 } from "@/lib/stream-session-view";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import { platformName } from "@/components/v2/stream-platform-mark";
+import { DestinationWarning, SignalChain } from "@/components/v2/stream-signal-chain";
+import { chainFor } from "@/lib/stream-chain";
 import {
   CheckoutSheetBoundary,
   FixtureStreamPanel,
@@ -780,34 +782,25 @@ describe("one DOM, branched — never a second phone tree", () => {
     expect(checked, "the sweep read no elements").toBeGreaterThan(0);
   });
 
-  // D16: the Phone tab's stepper is the ONE sanctioned branch — the `ol` at ≥ 768 and its one-line twin below — and
-  // it is the only pair. Every other control is a single instance, the same at every width.
-  it("across every PhoneTabBody state, ONLY the stream-step / stream-steps pair is hidden by width, and every other control appears once", () => {
-    const MD_HIDDEN = /(^|\s)md:hidden(\s|$)/; // anchored: `max-md:hidden` must not satisfy it (AGENTS.md)
-    const MAX_MD_HIDDEN = /(^|\s)max-md:hidden(\s|$)/;
+  // D16 → §3.2 (T9a): §8a's stepper pair (the `ol` at ≥ 768 and its one-line twin) is gone. The Signal path is ONE
+  // drawing at every width — only its destination LABEL moves, inside `<SignalChain>` (stream-signal-chain.test.tsx
+  // pins that twin). So the body itself hides nothing by width, and every control is a single instance.
+  it("across every PhoneTabBody state, nothing the body renders is hidden by width, and every control appears once", () => {
     let states = 0;
-    let stepped = 0;
+    let chained = 0;
     for (const [name, tree] of bodyStates()) {
       const hidden = tree.filter((el) => /(^|\s)(max-)?md:hidden(\s|$)/.test(String(propsOf(el).className ?? "")));
-      // B3: the credits-only state has no stepper at all — so nothing in it is hidden by width either.
-      if (CREDITS_ONLY.has(name)) {
-        expect(hidden, name).toEqual([]);
-        states++;
-        continue;
-      }
-      stepped++;
-      expect(hidden.map((el) => attr(el, "data-testid")).sort(), name).toEqual(["stream-step", "stream-steps"]);
-      expect(String(attr(byTestId(tree, "stream-step")!, "className")), name).toMatch(MD_HIDDEN);
-      expect(String(attr(byTestId(tree, "stream-step")!, "className")), name).not.toMatch(MAX_MD_HIDDEN);
-      expect(String(attr(byTestId(tree, "stream-steps")!, "className")), name).toMatch(MAX_MD_HIDDEN);
+      expect(hidden.map((el) => attr(el, "data-testid") ?? el.type), name).toEqual([]);
       const ids = tree.map((el) => attr(el, "data-testid")).filter((id): id is string => typeof id === "string");
       const repeated = ids.filter((id, i) => ids.indexOf(id) !== i && id !== "stream-health-chip");
       expect(repeated, `${name}: a control is rendered twice`).toEqual([]);
+      expect(tree.filter((e) => e.type === SignalChain).length, `${name}: at most one chain`).toBeLessThanOrEqual(1);
+      if (chainOf(tree)) chained++;
       states++;
     }
     expect(states).toBe(bodyStates().length);
     expect(states).toBeGreaterThanOrEqual(8);
-    expect(stepped, "every state skipped the stepper check").toBe(states - CREDITS_ONLY.size);
+    expect(chained, "the chain was drawn in some state, or the single-instance check above was vacuous").toBeGreaterThan(0);
   });
 });
 
@@ -916,6 +909,13 @@ const textAt = (tree: ReactElement[], id: string): string => {
   const el = byTestId(tree, id);
   if (!el) throw new Error(`no ${id} in the tree`);
   return textOf(el).replace(/\s+/g, " ").trim();
+};
+
+/** §3.2 (T9a): the Signal path the body hands `<SignalChain>` — the node harness expands one level, so the chain is an
+ *  element whose PROPS are what this file reads (its drawing is stream-signal-chain.test.tsx's). */
+const chainOf = (tree: ReactElement[]) => {
+  const el = tree.find((e) => e.type === SignalChain);
+  return el ? (propsOf(el) as unknown as { chain: ReturnType<typeof chainFor>; destination: { kind: string; label: string } }) : undefined;
 };
 
 /** The ended card's chips, in order, by testid — every span in its chip row, so a chip added without a testid still counts. */
@@ -1124,7 +1124,8 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(String(attr(byTestId(tree, "stream-qr-field")!, "className")).split(/\s+/)).toContain(width);
     expect(String(attr(byTestId(tree, "stream-qr-column")!, "className"))).toMatch(/(^|\s)items-center(\s|$)/);
     expect(byTestId(tree, "stream-cancel")).toBeDefined();
-    expect(textAt(tree, "stream-step")).toBe(m("stream.phone.stepOf", { n: 2, label: m("stream.phone.step2") }));
+    // §3.2: waiting — the phone and Seazn amber, the destination not live yet (was §8a's "step 2 of 4").
+    expect(chainOf(tree)?.chain).toMatchObject({ phone: { word: "waiting" }, link1: "connecting", dest: { word: "notLive" } });
     // The copy button's accessible name at ≥ 768 (icon-only there) is its sr-only text.
     expect(textAt(tree, "stream-qr-copy")).toBe(m("stream.phone.qr.copy"));
     expect(textAt(body({ view: v, balance: 2, copied: true }), "stream-qr-copy")).toBe(m("stream.phone.qr.copied"));
@@ -1136,11 +1137,17 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(tree, "stream-qr-text")).toBeDefined();
   });
 
-  it("live: REC + elapsed, the health chips led by the INGEST STATE (C6), the solid red Stop; the decided chip only when decided", () => {
+  it("live: REC + elapsed, the health chips led by the INGEST STATE (C6) inside a CLOSED Details, the solid red Stop; the decided chip only when decided", () => {
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } });
     const tree = body({ view: live, balance: 1 });
     expect(byTestId(tree, "stream-rec")).toBeDefined();
     expect(textAt(tree, "stream-elapsed")).toBe("10:00");
+    // T9a (§3.3): the chips moved into Details, closed by default; the chain above carries the state.
+    const details = byTestId(tree, "stream-details")!;
+    expect(details.type).toBe("details");
+    expect(attr(details, "open"), "Details opens CLOSED (class 19: what it opens at)").toBeFalsy();
+    expect(textOf(walk(propsOf(details).children as ReactElement).find((e) => e.type === "summary")!)).toBe(m("stream.details"));
+    expect(walk(propsOf(details).children as ReactElement).some((e) => attr(e, "data-testid") === "stream-health"), "the chips are INSIDE Details").toBe(true);
     const chips = allTestIds(tree, "stream-health-chip");
     expect(textOf(chips[0]!)).toBe(m("stream.health.ingest.connected"));
     expect(chips).toHaveLength(1); // passthrough with no heartbeat: the ingest chip alone
@@ -1228,14 +1235,16 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
   });
 
-  it("B3: balance < 1 and no session is the heading and the credits card ONLY — no 'Ready' pill, no stepper; a credit brings both back", () => {
-    const tree = body({ view: null, balance: 0 });
+  it("B3: balance < 1 and no session is the heading and the credits card ONLY — no 'Ready' pill, no chain; a credit brings both back", () => {
+    const tree = body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1" });
     expect(textOf(tree.find((el) => el.type === "h4")!)).toContain(m("stream.phone.title"));
     expect(byTestId(tree, "stream-buy-pack-5"), "the credits card").toBeDefined();
-    for (const id of ["stream-state-pill", "stream-step", "stream-steps"]) expect(byTestId(tree, id), id).toBeUndefined();
-    // The positive pair, one credit up: the pill and the stepper are back (and the tiles are not).
+    for (const id of ["stream-state-pill"]) expect(byTestId(tree, id), id).toBeUndefined();
+    expect(chainOf(tree), "no chain while credits-only — even with a destination picked").toBeUndefined();
+    // The positive pair, one credit up: the pill and the chain are back (and the tiles are not).
     const funded = body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1" });
-    for (const id of ["stream-state-pill", "stream-step", "stream-steps", "stream-go-live"]) expect(byTestId(funded, id), id).toBeDefined();
+    for (const id of ["stream-state-pill", "stream-go-live"]) expect(byTestId(funded, id), id).toBeDefined();
+    expect(chainOf(funded)?.chain).toEqual(chainFor(null));
     expect(byTestId(funded, "stream-buy-pack-5")).toBeUndefined();
     // …and a FAILED session at balance 0 is not idle: it keeps its pill and stepper (the no_credits failure explains itself).
     const failed = body({ view: session({ state: "failed", qr: null, failReason: "no_credits" }), balance: 0 });
@@ -1257,8 +1266,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
     expect(tiles, "no packs declared — the absence above would be vacuous").toBeGreaterThan(0);
     expect(textAt(free, "stream-restart-free")).toBe(m("stream.phone.restartFree"));
-    // Not credits-only (B3): a startable tab keeps its pill and stepper.
-    for (const id of ["stream-state-pill", "stream-step", "stream-steps"]) expect(byTestId(free, id), id).toBeDefined();
+    // Not credits-only (B3): a startable tab keeps its pill and its chain.
+    expect(byTestId(free, "stream-state-pill")).toBeDefined();
+    expect(chainOf(free), "a free restart draws the chain").toBeDefined();
     // Still no balance chip and no Buy more — the org holds nothing to count or top up from here.
     expect(byTestId(free, "stream-balance")).toBeUndefined();
 
@@ -1638,6 +1648,91 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
 });
 
 // ─── PhoneTab: the container, driven (D15) ─────────────────────────────────────────────────────────────────────────
+// ─── T9a: the Signal path and the D3 warning, as the body wires them (spec 2026-09-30 §3.2) ─────────────────────────
+// The mapping is stream-chain.test.ts's and the drawing stream-signal-chain.test.tsx's. What is proven HERE is the
+// wiring: which session the body hands the mapping, which destination the chain is drawn to, and when the D3 box shows.
+// Expected chains are `chainFor` of the SAME projection — the wiring is the claim, and the mapping is pinned against
+// the spec on its own. Rule 1's states: no destination, waiting, live ok / connecting / <30 s / ≥30 s / back to ok,
+// stale phone, ending, ended, failed, in use.
+describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
+  const W = 30_000; // spec §0 D3 — stream-session-view.test.ts pins the lib's OUTPUT_WARNING_AFTER_MS to it
+  const live = (output: "ok" | "connecting" | "unknown" | "rejected" | null, elapsedMs = 0, over: Partial<StreamSessionView> = {}) =>
+    session({
+      state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" },
+      output: output ? { state: output, since: "2026-09-14T11:59:00Z", elapsedMs } : null,
+      ...over,
+    });
+  const warnings = (tree: ReactElement[]) => tree.filter((e) => e.type === DestinationWarning);
+
+  it("idle: drawn to the PICKED destination — and not drawn at all with nothing to draw it to (empty, loading, failed list)", () => {
+    const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
+    expect(chainOf(picked)?.chain).toEqual(chainFor(null));
+    expect(chainOf(picked)?.destination).toEqual({ kind: "twitch", label: "Alt" });
+    let none = 0;
+    for (const targets of [[] as StreamTarget[], { status: "loading" } as TargetsState, { status: "error" } as TargetsState]) {
+      expect(chainOf(body({ view: null, balance: 2, targets, selectedTargetId: null }))).toBeUndefined();
+      none++;
+    }
+    expect(none).toBe(3);
+    // A selection the list no longer holds draws nothing either (n1: nothing is drawn to a destination that is gone).
+    expect(chainOf(body({ view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t2" }))).toBeUndefined();
+  });
+
+  it("with a session: drawn to the SESSION's destination, whatever the picker holds", () => {
+    const tree = body({ view: session({ target: { id: "t9", kind: "facebook", label: "Page" } }), balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    expect(chainOf(tree)?.destination).toEqual({ kind: "facebook", label: "Page" });
+    expect(chainOf(tree)?.chain?.phone.word).toBe("waiting");
+  });
+
+  it("every state's chain is chainFor of the body's own projection; ended and failed draw none", () => {
+    let checked = 0;
+    for (const v of [session({ state: "provisioning", qr: null }), session(), live("ok"), live("connecting", W - 1), live("connecting", W), session({ state: "ending", qr: null })]) {
+      expect(chainOf(body({ view: v, balance: 2 }))?.chain, v.state).toEqual(chainFor(v));
+      checked++;
+    }
+    for (const v of [session({ state: "completed", qr: null }), session({ state: "failed", qr: null, failReason: "no_credits" })]) {
+      expect(chainOf(body({ view: v, balance: 2 })), v.state).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("D3: the warning shows at the 30 s line, NOT one millisecond before; never on ok; gone once it is ok again; never while ending", () => {
+    expect(warnings(body({ view: live("connecting", W - 1), balance: 1 })), "under the line").toHaveLength(0);
+    const at = warnings(body({ view: live("connecting", W), balance: 1 }));
+    expect(at, "at the line").toHaveLength(1);
+    expect(propsOf(at[0]!).kind, "names the session's platform").toBe("youtube");
+    let words = 0;
+    for (const o of ["unknown", "rejected"] as const) {
+      expect(warnings(body({ view: live(o, W * 3), balance: 1 })), o).toHaveLength(1);
+      words++;
+    }
+    expect(words).toBe(2);
+    expect(warnings(body({ view: live("ok", W * 3), balance: 1 })), "ok after a long time: no warning").toHaveLength(0);
+    expect(warnings(body({ view: live(null), balance: 1 })), "no output read").toHaveLength(0);
+    expect(warnings(body({ view: { ...live("connecting", W * 3), state: "ending" }, balance: 1 })), "ending").toHaveLength(0);
+    // The stream keeps running (D3): Stop is still there, enabled, beside the warning.
+    const warned = body({ view: live("connecting", W), balance: 1 });
+    expect(byTestId(warned, "stream-stop")).toBeDefined();
+    expect(propsOf(byTestId(warned, "stream-stop")!).disabled).toBeFalsy();
+    // A Twitch session's warning names Twitch.
+    expect(propsOf(warnings(body({ view: live("connecting", W, { target: { id: "t2", kind: "twitch", label: "Alt" } }), balance: 1 }))[0]!).kind).toBe("twitch");
+  });
+
+  it("a stale phone while live: the chain says No signal; the destination half still follows the output", () => {
+    const v = live("ok", 0, { ingest: { state: "disconnected", protocol: null } });
+    expect(chainOf(body({ view: v, balance: 1 }))?.chain).toMatchObject({ phone: { word: "noSignal" }, dest: { word: "live" } });
+  });
+
+  it("in use (mockup state 5): an idle target_in_use refusal draws the destination node 'In use'; any other refusal does not", () => {
+    const holder = { sessionId: "s9", fixtureId: "f-9", href: "/x", matchNo: 5, courtName: "Court 1", state: "live" as const, label: "Club" };
+    const inUse = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder } });
+    expect(chainOf(inUse)?.chain?.dest.word).toBe("inUse");
+    const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
+    expect(chainOf(other)?.chain?.dest.word).toBe("notLive");
+  });
+});
+
 describe("PhoneTab — fetch, poll, reveal and every action, through the real v1 paths", () => {
   type Server = {
     current: StreamSessionView | null;
