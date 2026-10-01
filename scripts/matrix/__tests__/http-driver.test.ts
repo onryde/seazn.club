@@ -98,6 +98,8 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
       // the one-division refusal can catch it (the stage-id guard cannot).
       ["two divisions", { answer: { divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }, { id: "d8", stages: [{ id: "s2", fixtureCount: 0 }] }] } }, DriverMisuse],
       ["other stages", { stages: [{ id: "s7", seq: 1, kind: "group", config: {}, status: "pending" }] }, DriverMisuse],
+      // T13-R1 m-7: the answer names another template than the one asked for.
+      ["another template", { answer: { templateKey: "t20-super8" } }, DriverMisuse],
     ];
     let refused = 0;
     for (const [what, o, cls] of cases) {
@@ -112,9 +114,15 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
     expect(two.calls.filter((c) => c.method !== "POST")).toEqual([]);
   });
 
+  it("readBackTemplate refuses an answer for another template by name, before anything is read back (T13-R1 m-7)", async () => {
+    const { t, calls } = fake(replies());
+    await expect(drv(t).readBackTemplate(answer({ templateKey: "t20-super8" }) as never, "box-league")).rejects.toThrow(/answered template t20-super8; asked for box-league/);
+    expect(calls).toEqual([]);
+  });
+
   it("readBackTemplate alone (the browser path's read-back) makes no POST", async () => {
     const { t, calls } = fake(replies());
-    const out = await drv(t).readBackTemplate(answer() as never);
+    const out = await drv(t).readBackTemplate(answer() as never, "box-league");
     expect(posts(calls)).toEqual([]);
     expect(out.stages.map((s) => s.id)).toEqual(["s1"]);
   });

@@ -184,8 +184,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
   }
   /** The card's product side (what the gallery's POST does), for the browser tests' fake page. */
   instantiateTemplate(key: string): FromTemplateAnswer { this.log("instantiateTemplate", key); return this.#instantiate(key); }
-  /** HttpDriver.readBackTemplate's product side. */
-  readBackTemplate(a: FromTemplateAnswer): Promise<FromTemplateOut> { return settle(() => { this.log("readBackTemplate"); return this.#readBack(a); }); }
+  /** HttpDriver.readBackTemplate's product side; `trace` keeps the key the caller asked for (T13-R1 m-7). */
+  readBackTemplate(a: FromTemplateAnswer, key: string): Promise<FromTemplateOut> { return settle(() => { this.log("readBackTemplate", key); return this.#readBack(a); }); }
   createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
     return settle(() => {
       this.log("createFromTemplate", key);

@@ -414,7 +414,7 @@ export class BrowserDriver implements OrganiserDriver {
       this.#ledger.record("createCompetition", "browser");
       this.#ledger.record("createDivision", "browser");
       const answer = await this.#write(() => this.#ui((p) => p.createFromTemplateUi(this.#ctx, key, input)));
-      out = await this.#http.readBackTemplate(answer);
+      out = await this.#http.readBackTemplate(answer, key);
     } else {
       this.#ledger.record("createCompetition", "http");
       this.#ledger.record("createDivision", "http");

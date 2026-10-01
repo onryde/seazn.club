@@ -118,7 +118,7 @@ export class HttpDriver implements OrganiserDriver {
    *  and start date: no visibility, so the product's default applies. */
   async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
     const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", { template_key: key, name: input.name, ends_on: input.endsOn });
-    return this.readBackTemplate(answer);
+    return this.readBackTemplate(answer, key);
   }
 
   /** What a template create built, read back — the answer carries ids only
@@ -126,9 +126,11 @@ export class HttpDriver implements OrganiserDriver {
    *  Refused by name: a competition outside the case org (RF4, as
    *  createCompetition), an applied visibility other than the default (the
    *  row is the one authority, as createCompetition reads it), a template
-   *  with other than one division, and stages that are not the ones the
-   *  create answered. */
-  async readBackTemplate(answer: FromTemplateAnswer): Promise<FromTemplateOut> {
+   *  with other than one division, stages that are not the ones the create
+   *  answered, and (T13-R1 m-7) an answer for another template than the
+   *  `key` the caller asked for — before anything is read back. */
+  async readBackTemplate(answer: FromTemplateAnswer, key: string): Promise<FromTemplateOut> {
+    if (answer.templateKey !== key) throw new DriverMisuse(`driver: the create answered template ${answer.templateKey}; asked for ${key}`);
     if (answer.divisions.length !== 1) throw new DriverMisuse(`driver: template ${answer.templateKey} built ${answer.divisions.length} division(s); a case drives exactly one`);
     const c = await this.#call<{ id: string; slug: string; org_id: string; visibility: string }>(`/api/v1/competitions/${answer.competitionId}`);
     if (c.org_id !== this.#expectedOrgId) throw new OrgMismatch(this.#expectedOrgId, c.org_id);

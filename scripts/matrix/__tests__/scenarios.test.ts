@@ -2035,9 +2035,11 @@ describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
     const driver = new FakeLeagueDriver();
     driver.templateOverride = (raw) => ({ ...raw, divisions: [{ ...raw.divisions[0]!, stages: [raw.divisions[0]!.stages[0]!] }] });
     const ctx = boxCtx(driver, { caseId: "group_group_ko|cricket|t20|LIFECYCLE", row: "group_group_ko", sport: "cricket", variant: "t20", template: "t20-super8" });
-    const setup = await setUpDivision(ctx, new Recorder(), 4);
-    expect(driver.calls.filter((c) => c === "entrantMembers")).toHaveLength(4);
-    expect(setup.rosters.size).toBe(4);
+    // D11 (T13-R1 m-1): a template case seats the template's own entrantCount, read from its JSON here.
+    const field = (JSON.parse(readFileSync(resolve(CATALOG, "t20-super8.json"), "utf8")) as { divisions: { entrantCount: number }[] }).divisions[0]!.entrantCount;
+    const setup = await setUpDivision(ctx, new Recorder(), field);
+    expect(driver.calls.filter((c) => c === "entrantMembers")).toHaveLength(field);
+    expect(setup.rosters.size).toBe(field);
     expect(driver.calls).not.toContain("postStages");
   });
 
@@ -2056,17 +2058,22 @@ describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
     expect(f1.calls).toEqual([]);
   });
 
-  it("guards, before any driver call: a spec whose sport or variant is not the template's, an entrant kind the template does not seed, a template that does not build the row", async () => {
-    const shapes: [string, Partial<CaseSpec>, unknown, RegExp][] = [
-      ["variant", { variant: "bwf", caseId: "group_only|badminton|bwf|LIFECYCLE" }, undefined, /box-league.*short/],
-      ["sport", { sport: "tennis" }, resolveSportCfg("tennis", "tour"), /box-league.*badminton/],
-      ["kind", {}, { ...resolveSportCfg("badminton", "short") as object, entrants: { kinds: ["team"] } }, /box-league seeds individual/],
-      ["row", { row: "group_group_ko" }, undefined, /box-league builds group_only/],
+  it("guards, before any driver call: a spec whose sport or variant is not the template's, an entrant kind the template does not seed, a template that does not build the row, overrides the card cannot carry, a field that is not the template's (T13-R1 m-1)", async () => {
+    const field = box.divisions[0]!.entrantCount;
+    const shapes: [string, Partial<CaseSpec>, unknown, RegExp, number][] = [
+      ["variant", { variant: "bwf", caseId: "group_only|badminton|bwf|LIFECYCLE" }, undefined, /box-league.*short/, field],
+      ["sport", { sport: "tennis" }, resolveSportCfg("tennis", "tour"), /box-league.*badminton/, field],
+      ["kind", {}, { ...resolveSportCfg("badminton", "short") as object, entrants: { kinds: ["team"] } }, /box-league seeds individual/, field],
+      ["row", { row: "group_group_ko" }, undefined, /box-league builds group_only/, field],
+      // The card takes no rule: an override would score under a rule the product never set.
+      ["overrides", { overrides: { bestOf: 1 } }, undefined, /box-league.*takes no overrides.*bestOf/, field],
+      // D11: the template's own count, never another (a PADPROOF's or a test's).
+      ["field", {}, undefined, new RegExp(`box-league seats ${field} entrants.*asked for ${field - 1}`), field - 1],
     ];
     let refused = 0;
-    for (const [what, over, cfg, msg] of shapes) {
+    for (const [what, over, cfg, msg, n] of shapes) {
       const driver = new FakeLeagueDriver();
-      await expect(setUpDivision(boxCtx(driver, over, cfg), new Recorder(), 16), what).rejects.toThrow(msg);
+      await expect(setUpDivision(boxCtx(driver, over, cfg), new Recorder(), n), what).rejects.toThrow(msg);
       expect(driver.calls, what).toEqual([]);
       refused++;
     }

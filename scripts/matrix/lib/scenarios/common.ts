@@ -200,14 +200,15 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   // catalog's, built by the product in the same act as its competition and
   // division; the case "posts" exactly that shape, so life-built-as-posted
   // judges the build against the catalog JSON.
-  const bodies = template === undefined ? stagesForRow(ctx.spec.row) : templateCase(ctx, kind, template);
+  const bodies = template === undefined ? stagesForRow(ctx.spec.row) : templateCase(ctx, kind, template, entrantCount);
   const rosterless = o.rosterlessTeams === true;
   const persons = personsNeeded(bodies);
   // No case drives a pair kind (no sport defaults to one; only a cfg entrants
   // override makes one), and the harness has no pair members to post.
   if (persons && kind === "pair") throw new Error(`scenario: ${ctx.spec.row} on a pair-kind division — americano plays one person per entrant (stages.ts americanoGen) and the harness posts no pair members`);
   // The override crosses the wire as the division's config, as the editor
-  // sends it; a template case carries none (the card takes no rule).
+  // sends it; a template case carries none (the card takes no rule —
+  // templateCase refuses one by name).
   const config: Record<string, unknown> = { ...(ctx.spec.overrides ?? {}) };
   let competition: CompetitionRef;
   let division: DivisionRef;
@@ -286,8 +287,13 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
  *  driver call: the template must build the case's row (templateRow, which
  *  also refuses a drifted catalog), the case must run on the template's own
  *  sport and variant (its cfg was resolved for them), and the case's entrant
- *  kind must be the one the template seeds. */
-function templateCase(ctx: ScenarioContext, kind: EntrantKind, key: string): StagePostBody[] {
+ *  kind must be the one the template seeds. T13-R1 m-1: the card takes no
+ *  rule, so a case carrying overrides is refused (run.ts resolves the cfg
+ *  with them, and the case would score under a rule the product never set);
+ *  and the field is the template's own entrantCount (D11), never another. */
+function templateCase(ctx: ScenarioContext, kind: EntrantKind, key: string, entrantCount: number): StagePostBody[] {
+  const overrides = Object.keys(ctx.spec.overrides ?? {});
+  if (overrides.length > 0) throw new Error(`scenario: catalog template ${key} takes no overrides (its card sets no rule); case ${ctx.spec.caseId} carries ${overrides.join(", ")}`);
   const builds = templateRow(key);
   if (builds !== ctx.spec.row) throw new Error(`scenario: catalog template ${key} builds ${builds}, not ${ctx.spec.row} (case ${ctx.spec.caseId})`);
   const t = templateField(key);
@@ -295,6 +301,7 @@ function templateCase(ctx: ScenarioContext, kind: EntrantKind, key: string): Sta
     throw new Error(`scenario: catalog template ${key} builds ${t.sport}/${t.variant}; case ${ctx.spec.caseId} runs ${ctx.spec.sport}/${ctx.spec.variant} — its cfg would score another variant`);
   }
   if (t.entrantKind !== kind) throw new Error(`scenario: catalog template ${key} seeds ${t.entrantKind} entrants; case ${ctx.spec.caseId}'s cfg plays ${kind}`);
+  if (entrantCount !== t.entrantCount) throw new Error(`scenario: catalog template ${key} seats ${t.entrantCount} entrants (D11); case ${ctx.spec.caseId} asked for ${entrantCount}`);
   return templateBodies(key);
 }
 

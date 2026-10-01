@@ -78,7 +78,9 @@ export async function createFromTemplateUi(c: PageCtx, key: string, input: { nam
   const before = await shoot(c, "01-competition-from-template-before");
   const { data } = await actAndAwait<FromTemplateAnswer>(page, { method: "POST", path: /^\/api\/v1\/competitions\/from-template$/ },
     () => page.getByTestId(TESTID.templateDetailSubmit.id).click({ timeout: t }), t);
-  if (data.public_quota_degraded !== undefined) {
+  // The product's own test, truthiness (template-gallery.tsx `if (created.public_quota_degraded) {`,
+  // text-pinned in page-objects.test.ts): a null note navigates there, so it navigates here (T13-R1 m-3).
+  if (data.public_quota_degraded) {
     await shoot(c, "01-competition-from-template-degraded", before);
     return data;
   }

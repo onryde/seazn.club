@@ -1294,6 +1294,13 @@ describe("BrowserDriver — the template card path (W1-driving Task 13)", () => 
     expect([pageCalls, http.calls]).toEqual([[], []]);
   });
 
+  it("the browser path's read-back is handed the key the case ASKED for, not the one the card answered — so HttpDriver's templateKey guard holds on this path too (T13-R1 m-7)", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver } = make({ http, spec: boxSpec(), pages: cardOn(http, { templateKey: "t20-super8" }) });
+    await driver.createFromTemplate("box-league", input);
+    expect(http.trace.filter((l) => l.startsWith("readBackTemplate"))).toEqual(["readBackTemplate box-league"]);
+  });
+
   it("a template case calls createFromTemplateUi(\"box-league\"), records createCompetition AND createDivision as browser actions, never posts a stage, and has no organiser-ui-path check", async () => {
     const http = new FakeHttp(ORG);
     const { driver, pageCalls, pageArgs } = make({ http, spec: boxSpec(), pages: cardOn(http) });

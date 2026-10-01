@@ -31,6 +31,7 @@ import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } 
 import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
+import { UnknownTemplate } from "../lib/templates.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -1082,7 +1083,7 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
   const answer = (over: Record<string, unknown> = {}) => ({
     competitionId: "comp-1", slug: "box-league-1", visibility: "public", divisions: [{ id: "div-1", stages: [{ id: "st-1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over,
   });
-  function galleryPage(o: { degraded?: boolean } = {}) {
+  function galleryPage(o: { degraded?: boolean; nullDegrade?: boolean } = {}) {
     const log: string[] = [];
     let screen = 0;
     let url = "about:blank";
@@ -1101,7 +1102,7 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
       click: async () => {
         act(`click ${d}`);
         if (d !== `testid:${TESTID.templateDetailSubmit.id}`) return;
-        const data = answer(o.degraded ? { visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 } } : {});
+        const data = answer(o.degraded ? { visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 } } : o.nullDegrade === true ? { public_quota_degraded: null } : {});
         emit(resp("/api/v1/competitions/from-template", data));
         if (!o.degraded) url = `${BASE}${paths.competition("org", "box-league-1")}`;
       },
@@ -1169,11 +1170,28 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     expect(g.log.at(-1)).toBe("shot 01-competition-from-template-degraded");
   });
 
+  it("the degrade is read as the product reads it — truthiness (template-gallery.tsx `if (created.public_quota_degraded)`): a null note navigates and waits for the landing (T13-R1 m-3)", async () => {
+    const product = readFileSync(resolve(REPO, "apps/web/src/components/v2/template-gallery.tsx"), "utf8");
+    expect(product).toContain("if (created.public_quota_degraded) {");
+    expect(readFileSync(resolve(REPO, "scripts/matrix/lib/browser/pages/competition.ts"), "utf8")).toContain("if (data.public_quota_degraded) {");
+    const g = galleryPage({ nullDegrade: true });
+    await createFromTemplateUi(g.ctx, "box-league", INPUT);
+    expect(g.log).toContain("waitForURL");
+    expect(g.log.at(-1)).toBe("shot 01-competition-from-template");
+  });
+
   it("an unsafe or unknown template key is refused by name before any navigation", async () => {
     const g = galleryPage();
-    for (const key of ["", "box league", "box-league\"]", "no-such-template"]) {
-      await expect(createFromTemplateUi(g.ctx, key, INPUT), JSON.stringify(key)).rejects.toThrow();
+    const keys = ["", "box league", "box-league\"]", "no-such-template"];
+    let refused = 0;
+    for (const key of keys) {
+      // By name (T13-R1 m-2): the templates module's own refusal, naming the key.
+      const e = await createFromTemplateUi(g.ctx, key, INPUT).then(() => null, (x: unknown) => x);
+      expect(e, JSON.stringify(key)).toBeInstanceOf(UnknownTemplate);
+      expect((e as UnknownTemplate).key, JSON.stringify(key)).toBe(key);
+      refused++;
     }
+    expect(refused).toBe(keys.length);
     expect(g.log).toEqual([]);
   });
 });
