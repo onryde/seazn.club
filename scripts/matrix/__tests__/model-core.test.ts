@@ -42,7 +42,10 @@ import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 import { FOREIGN_NEXT_MATCH, ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
-import { loadRegressions } from "../lib/scenario-catalogue.ts";
+import { loadRegressions, type RegressionCase } from "../lib/scenario-catalogue.ts";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { bracketRoundNoText, bracketWalkoverKindsText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalPendingText, withdrawalReason } from "./product-text.ts";
 
 const I7 = "I7-rr-no-pair-over-legs";
@@ -381,19 +384,65 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
 describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002..005 and MB-007..009's triggers, and nothing else", () => {
   const KO_TBD = "ko-withdraw-waiting-on-tbd";
   const KO_GEN = "ko-generate-after-roster-change";
-  /** The stage kinds the OPEN committed cases naming `fence` build: each
-   *  case's row has one stage (the model admits single-stage rows), read from
-   *  the builder's own bodies. A fence guards exactly what a committed case
-   *  witnesses (fences.ts header, final batch F-1), so the expectation comes
-   *  from regressions.json — never a list typed here. */
-  const witnessed = (fence: string): string[] => {
-    const kinds = loadRegressions().filter((r) => r.status === "open" && r.fence === fence).map((r) => {
+  const TRUTH_RUNS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
+  type ReportCell = { cell: string; failure: { seed: number; path: string; commands: string[] } | null };
+  let reports: { runId: string; cells: ReportCell[] }[] | null = null;
+  /** The command names of the failure a case was committed from, read from
+   *  its finding run's committed model report (the run, cell, seed and path the
+   *  case names): "Generate(0,0)" → "Generate". */
+  const findingCommands = (r: RegressionCase): string[] => {
+    if (reports === null) {
+      const found: { runId: string; cells: ReportCell[] }[] = [];
+      const walk = (dir: string): void => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          if (e.isDirectory()) walk(join(dir, e.name));
+          else if (/^model-report.*\.json$/.test(e.name)) found.push(JSON.parse(readFileSync(join(dir, e.name), "utf8")) as { runId: string; cells: ReportCell[] });
+        }
+      };
+      walk(TRUTH_RUNS);
+      reports = found;
+    }
+    const hits = reports.filter((rep) => rep.runId === r.runId).flatMap((rep) => rep.cells)
+      .filter((c) => c.cell === r.cell && c.failure?.seed === r.seed && c.failure.path === r.path);
+    expect(hits.length, `${r.id}: no committed report of run ${r.runId} holds its failure on ${r.cell}`).toBeGreaterThan(0);
+    const cmds = hits[0]!.failure!.commands.map((c) => c.slice(0, c.indexOf("(")));
+    expect(cmds.length, `${r.id}: its finding failure lists no command`).toBeGreaterThan(0);
+    return cmds;
+  };
+  /** The trigger a case's finding commands show (T16-R3). Its failing command
+   *  — the last — is the one its fence blocks. A Withdraw fence has one
+   *  trigger. A Generate fence's case failed on Generate after a roster
+   *  change, and the roster command before it names the branch: AddEntrant →
+   *  "added", Withdraw → "withdrawn". Neither, or both, is refused by name:
+   *  the branch would be a guess. */
+  const branchFrom = (id: string, cmds: readonly string[], blocks: CommandKind): string => {
+    if (cmds.at(-1) !== blocks) throw new Error(`${id}: ${cmds.join(" → ")} does not fail on the ${blocks} its fence blocks`);
+    if (blocks === "Withdraw") return "waiting-on-tbd";
+    const roster = new Set(cmds.slice(0, -1).filter((c) => c === "AddEntrant" || c === "Withdraw"));
+    if (roster.size !== 1) throw new Error(`${id}: ${cmds.join(" → ")} shows ${roster.size === 0 ? "no roster change" : "both roster changes"} before its failing Generate — no branch to read`);
+    return roster.has("AddEntrant") ? "added" : "withdrawn";
+  };
+  const branchOf = (r: RegressionCase, blocks: CommandKind): string => branchFrom(r.id, findingCommands(r), blocks);
+  /** Per trigger branch, the stage kinds the OPEN committed cases naming
+   *  `fence` build: each case's row has one stage (the model admits
+   *  single-stage rows), read from the builder's own bodies. A fence guards
+   *  exactly what a committed case witnesses (fences.ts header, final batch
+   *  F-1; T16-R3 adds the branch), so the expectation comes from
+   *  regressions.json and the finding reports — never a list typed here. */
+  const witnessed = (fence: string): Map<string, string[]> => {
+    const f = FENCES.find((x) => x.id === fence);
+    if (f === undefined) throw new Error(`no fence ${fence}`);
+    const by = new Map<string, Set<string>>();
+    for (const r of loadRegressions().filter((c) => c.status === "open" && c.fence === fence)) {
       const bodies = stagesForRow(r.cell.split("|")[0]!);
       expect(bodies.length, `${r.id}: ${r.cell} is not a single-stage row`).toBe(1);
-      return bodies[0]!.kind;
-    });
-    return [...new Set(kinds)].sort();
+      const branch = branchOf(r, f.blocks);
+      by.set(branch, (by.get(branch) ?? new Set<string>()).add(bodies[0]!.kind));
+    }
+    return new Map([...by].map(([b, kinds]) => [b, [...kinds].sort()]));
   };
+  /** Every kind `fence` is witnessed on, over all its branches. */
+  const witnessedKinds = (fence: string): string[] => [...new Set([...witnessed(fence).values()].flat())].sort();
   /** A started knockout, as the product lists it: e1 beat e4 and waits in the
    *  final for the winner of e2 v e3 (a TBD seat). */
   async function ko(finalStatus = "scheduled", side: "home" | "away" = "home"): Promise<ModelState> {
@@ -427,30 +476,70 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(checked).toBe(2 * PENDING_STATUSES.length);
     expect(PENDING_STATUSES.length).toBeGreaterThan(0);
   });
-  it("G-1 (T15-R8): each bracket fence applies on exactly the stage kinds its committed cases witness — knockout (MB-002..005), stepladder (MB-008), double elim (MB-007, MB-009) — each one a kind the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
+  it("G-1 (T15-R8, T16-R3): each bracket fence applies on exactly the stage kinds × trigger branches its committed cases' finding commands show — withdraw while waiting on a TBD seat: knockout (MB-002/003), stepladder (MB-008), double elim (MB-009); generate after an added entrant: knockout (MB-005), double elim (MB-007); generate after a withdrawal: knockout (MB-004) — each kind one the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
     const walkover = bracketWalkoverKindsText();
     expect(walkover.length, "BRACKET_WALKOVER_KINDS read empty").toBeGreaterThan(0);
-    // A started knockout where e1 waits on a TBD seat in the final: each
-    // fence's trigger holds there (Withdraw e1; Generate after a late entry),
-    // so the stage kind is the only thing that varies.
+    // A started knockout where e1 waits on a TBD seat in the final. Each
+    // branch's trigger holds in its own state and the other branch's does not
+    // (an added entrant with no withdrawal; a withdrawal with no added
+    // entrant), so branch and stage kind are the only things that vary.
     const s = await ko();
+    const e2 = s.entrants[1];
+    if (e2 === undefined) throw new Error("test: four entrants");
+    const BRANCH_STATE: Record<string, ModelState> = {
+      "waiting-on-tbd": s,
+      added: { ...s, lateEntry: true, withdrawn: new Set() },
+      withdrawn: { ...s, lateEntry: false, withdrawn: new Set([e2]) },
+    };
+    // The probe domain, per command a fence blocks: every branch branchOf can
+    // read for it. The expectation per branch is the cases', below.
+    const BRANCHES: Partial<Record<CommandKind, string[]>> = { Withdraw: ["waiting-on-tbd"], Generate: ["added", "withdrawn"] };
     const KINDS = [...new Set([...BRACKET_STAGE_KINDS, ...roundRobinKindsText(), "swiss", "ladder", "americano"])];
-    const triggered: Record<string, ModelState> = { [KO_TBD]: s, [KO_GEN]: { ...s, lateEntry: true } };
     let checked = 0;
-    for (const [id, state] of Object.entries(triggered)) {
+    let probes = 0;
+    for (const id of [KO_TBD, KO_GEN]) {
       const want = witnessed(id);
-      expect(want.length, `${id}: no open committed case witnesses it`).toBeGreaterThan(0);
+      expect(want.size, `${id}: no open committed case witnesses it`).toBeGreaterThan(0);
       const fence = FENCES.find((f) => f.id === id);
       if (fence === undefined) throw new Error(`no fence ${id}`);
+      const branches = BRANCHES[fence.blocks] ?? [];
+      expect(branches.length, `${id}: no branch to probe for ${fence.blocks}`).toBeGreaterThan(0);
+      for (const b of want.keys()) expect(branches, `${id}: a case shows branch ${b}, which is never probed`).toContain(b);
       const subject = fence.blocks === "Withdraw" ? (s.entrants[0] ?? null) : null;
-      // The fence's own predicate, so an earlier fence on the same command never shadows it.
-      const applies = KINDS.filter((stageKind) => fence.applies({ ...state, stageKind, fenced: new Map() }, subject)).sort();
-      expect(applies, id).toEqual(want);
-      for (const k of want) expect(walkover, `${id} on ${k}: not a bracket walkover kind`).toContain(k);
-      checked += KINDS.length;
+      for (const branch of branches) {
+        const state = BRANCH_STATE[branch];
+        if (state === undefined) throw new Error(`test: no state for branch ${branch}`);
+        // The fence's own predicate, so an earlier fence on the same command never shadows it.
+        const applies = KINDS.filter((stageKind) => fence.applies({ ...state, stageKind, fenced: new Map() }, subject)).sort();
+        expect(applies, `${id} ${branch}`).toEqual(want.get(branch) ?? []);
+        for (const k of applies) expect(walkover, `${id} ${branch} on ${k}: not a bracket walkover kind`).toContain(k);
+        checked += KINDS.length;
+        probes++;
+      }
     }
-    expect(checked).toBe(2 * KINDS.length);
+    expect(probes).toBe(3);
+    expect(checked).toBe(3 * KINDS.length);
     expect(KINDS.length).toBeGreaterThan(BRACKET_STAGE_KINDS.size);
+  });
+  it("T16-R3: the branch read from a case's finding commands — every open case of a bracket fence yields one, and a sequence showing no roster change, or both, is refused by name", () => {
+    const cases = loadRegressions().filter((r) => r.status === "open" && (r.fence === KO_TBD || r.fence === KO_GEN));
+    expect(cases.length, "no open bracket-fence case — the derivation would be vacuous").toBeGreaterThan(0);
+    const seen = new Map<string, number>();
+    for (const r of cases) {
+      const blocks = FENCES.find((f) => f.id === r.fence)!.blocks;
+      const b = branchOf(r, blocks);
+      seen.set(b, (seen.get(b) ?? 0) + 1);
+    }
+    expect([...seen.values()].reduce((a, n) => a + n, 0)).toBe(cases.length);
+    console.info(`T16-R3: ${cases.length} bracket-fence case(s) by branch ${JSON.stringify(Object.fromEntries(seen))}`);
+    // The refusals, and one sequence per branch, on synthetic command lists.
+    expect(branchFrom("x", ["Generate", "AddEntrant", "Generate"], "Generate")).toBe("added");
+    expect(branchFrom("x", ["Start", "Withdraw", "Generate"], "Generate")).toBe("withdrawn");
+    expect(branchFrom("x", ["Start", "Withdraw"], "Withdraw")).toBe("waiting-on-tbd");
+    expect(() => branchFrom("x", ["Start", "Generate"], "Generate")).toThrow(/no roster change/);
+    expect(() => branchFrom("x", ["AddEntrant", "Withdraw", "Generate"], "Generate")).toThrow(/both roster changes/);
+    expect(() => branchFrom("x", ["AddEntrant", "Generate", "Score"], "Generate")).toThrow(/does not fail on the Generate/);
+    expect(() => branchFrom("x", [], "Withdraw")).toThrow(/does not fail on the Withdraw/);
   });
   it("MB-002/003: …and offered for everyone else — a seated pending match (e2), a decided one only (e4), a TBD final no longer pending, fences off, and any stage kind no committed case witnesses", async () => {
     const s = await ko();
@@ -463,7 +552,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
       expect(commandOf("Withdraw", 0, 0, true).check(await ko(status)), status).toBe(true);
       checked++;
     }
-    const fencedOn = witnessed(KO_TBD);
+    const fencedOn = witnessedKinds(KO_TBD);
     for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => !fencedOn.includes(k)), "league", "swiss"]) {
       expect(commandOf("Withdraw", 0, 0, true).check({ ...s, stageKind }), stageKind).toBe(true);
       checked++;
@@ -484,11 +573,12 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(withdrawn.fenced.get(KO_GEN)).toBe(1);
     expect(fenceBlocking(withdrawn, "Generate", false)).toBeNull();
   });
-  it("MB-004/005: …and offered with no fixtures yet; on the other kinds a committed case witnesses (MB-007) it is this fence, on the round robins #879's own, and on every other kind none", async () => {
+  it("MB-004/005: …and offered with no fixtures yet; after an added entrant, on the other kinds a committed case witnesses (MB-007) it is this fence, on the round robins #879's own, and on every other kind none", async () => {
     const s: ModelState = { ...(await ko()), lateEntry: true };
     expect(commandOf("Generate", 0, 0, true).check({ ...s, fixtures: new Map(), fenced: new Map() }), "no fixtures").toBe(true);
     const rr = roundRobinKindsText();
-    const fencedOn = witnessed(KO_GEN);
+    const fencedOn = witnessed(KO_GEN).get("added") ?? [];
+    expect(fencedOn.length, "no committed case shows the added-entrant branch").toBeGreaterThan(0);
     let checked = 0;
     for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "swiss", ...rr]) {
       const want = rr.includes(stageKind) ? "late-entry-then-generate" : fencedOn.includes(stageKind) ? KO_GEN : null;

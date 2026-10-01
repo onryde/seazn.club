@@ -7,9 +7,10 @@
 // A fence guards only the stage kinds its committed cases name (final batch
 // F-1: the knockout fences applied to knockout alone), so the same bug on
 // another kind is still reported NEW rather than fenced away. W1-driving
-// (T15-R8 G-1, T16) widened the two bracket fences to the kinds MB-007 and
-// MB-008 witness; each kind list below is held to the committed cases by
-// model-core.test.ts, never typed there.
+// (T15-R8 G-1, T16) widened the two bracket fences to the kinds MB-007,
+// MB-008 and MB-009 witness, and T16-R3 narrowed the generate fence to the
+// trigger branch each kind's case shows. Each list below is held to the
+// committed cases' finding commands by model-core.test.ts, never typed there.
 //
 // Imports only types from state.ts, which strip-types erases: no cycle at load.
 import { PENDING_STATUSES } from "../observed.ts";
@@ -22,15 +23,19 @@ export interface Fence { readonly id: string; readonly issue: string | null; rea
 
 /** ko-withdraw-waiting-on-tbd's stage kinds: knockout (MB-002/003),
  *  stepladder (MB-008, w1drv-model-m6) and double elim (MB-009, found by the
- *  T16 run w1drv-t16-model-g1 once MB-007's fence steered that cell off its
- *  first trigger). All three are stages.ts BRACKET_WALKOVER_KINDS, the list
- *  withdrawal.ts walks over. */
+ *  T16 run w1drv-t16-model-g1, whose double-elim cell no fence fired on). All
+ *  three are stages.ts BRACKET_WALKOVER_KINDS, the list withdrawal.ts walks
+ *  over. */
 const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder", "double_elim"]);
-/** ko-generate-after-roster-change's stage kinds: knockout (MB-004/005) and
- *  double elim (MB-007, w1drv-model-m6): generateStageFixtures' bye-award
- *  path, which reads the same BRACKET_WALKOVER_KINDS. Stepladder is in that
- *  list too, but no committed case witnesses it there yet. */
-const GENERATE_AFTER_ROSTER_KINDS: readonly string[] = Object.freeze(["knockout", "double_elim"]);
+/** ko-generate-after-roster-change's stage kinds, per trigger branch
+ *  (T16-R3): after an ADDED entrant, knockout (MB-005) and double elim
+ *  (MB-007, w1drv-model-m6); after a WITHDRAWAL, knockout only (MB-004). Both
+ *  are generateStageFixtures' bye-award path, which reads the same
+ *  BRACKET_WALKOVER_KINDS. Stepladder is in that list too, and double elim
+ *  after a withdrawal, but no committed case shows either, so each still
+ *  reports NEW. */
+const GENERATE_AFTER_ADDED_KINDS: readonly string[] = Object.freeze(["knockout", "double_elim"]);
+const GENERATE_AFTER_WITHDRAWN_KINDS: readonly string[] = Object.freeze(["knockout"]);
 
 export const FENCES: readonly Fence[] = Object.freeze([
   {
@@ -56,8 +61,9 @@ export const FENCES: readonly Fence[] = Object.freeze([
     // fixture with an unassigned entrant (422 WRONG_PHASE) — so the withdrawal
     // the model holds legal is refused. Only the entrant this Withdraw would
     // pick, only while it waits in a pending fixture (the product's
-    // PENDING_STATUSES) on an empty seat. Every stepladder game after the first seats its seed against
-    // a TBD line (the L3 triage's P5), so MB-008 tripped on Start → Withdraw.
+    // PENDING_STATUSES) on an empty seat. Every stepladder game after the
+    // first seats its seed against a TBD line (the L3 triage's P5), so MB-008
+    // tripped on Start → Withdraw.
     applies: (m: ModelState, subject: string | null) => WITHDRAW_ON_TBD_KINDS.includes(m.stageKind) && subject !== null &&
       [...m.fixtures.values()].some((f) => PENDING_STATUSES.includes(f.status) && ((f.home === subject && f.away === null) || (f.away === subject && f.home === null))),
   },
@@ -69,10 +75,11 @@ export const FENCES: readonly Fence[] = Object.freeze([
     // generateStageFixtures: a Generate over a bracket whose fixtures exist,
     // after the roster changed — an entrant added (MB-005, MB-007, before
     // Start) or one withdrawn (MB-004, after) — 500s: the bye-award bulk
-    // UPDATE would strand home_slot_label. An added entrant is lifted once an
-    // accepted Rebuild or Generate re-seats the field (lateEntry); a
-    // withdrawal is never undone.
-    applies: (m: ModelState) => GENERATE_AFTER_ROSTER_KINDS.includes(m.stageKind) && m.fixtures.size > 0 && (m.lateEntry || m.withdrawn.size > 0),
+    // UPDATE would strand home_slot_label. Each branch only on the kinds its
+    // cases show. An added entrant is lifted once an accepted Rebuild or
+    // Generate re-seats the field (lateEntry); a withdrawal is never undone.
+    applies: (m: ModelState) => m.fixtures.size > 0 &&
+      ((m.lateEntry && GENERATE_AFTER_ADDED_KINDS.includes(m.stageKind)) || (m.withdrawn.size > 0 && GENERATE_AFTER_WITHDRAWN_KINDS.includes(m.stageKind))),
   },
 ]);
 

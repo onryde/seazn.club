@@ -911,7 +911,7 @@ describe("Task 14: which cells run biased (ruling 49)", () => {
       expect(drawn(arbs, c.seed, c.maxCommands), c.id).toEqual(drawn(legacyCommands(c.fencesOn), c.seed, c.maxCommands));
       checked++;
     }
-    // Every committed case, whatever the file holds (W1-driving T16 added MB-007/008; committed-catalogue pins the count).
+    // Every committed case, whatever the file holds (W1-driving T16 added MB-007..009; committed-catalogue pins the count).
     expect(cases.length, "no committed case — the replay check would be vacuous").toBeGreaterThan(0);
     expect(checked).toBe(cases.length);
   });
