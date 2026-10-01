@@ -855,6 +855,9 @@ export function PhoneTab({
         // anything: the hold is lifted and Go live may try again. One still held keeps it.
         const picked = next === null ? undefined : list.find((t) => t.id === next);
         setCreateError((e) => (e?.code === "target_in_use" && !picked?.inUse ? null : e));
+        // B5 review m-2: an EMPTY list has nothing to "pick another" from — the empty state (No destinations yet + Manage)
+        // says what to do, and a "removed" line kept past it would later sit beside an enabled Go live.
+        if (list.length === 0) setCreateError((e) => (e?.code === TARGET_REMOVED ? null : e));
         return list;
       } catch {
         if (seq !== listSeq.current) return null;
@@ -942,9 +945,12 @@ export function PhoneTab({
       // with the plain not-found shape). The list is read again: gone from it → say so, and the stale choice is cleared
       // (n1: never another destination in its place); still listed → the 404 was about something else, the generic
       // refusal.
-      const removed =
-        createErrorIsNotFound(err) && (await readTargets(false).then((list) => list !== null && !list.some((t) => t.id === chosen)));
-      setCreateError({ code: removed ? TARGET_REMOVED : code, holder: createErrorHolder(err) });
+      const reread = createErrorIsNotFound(err) ? await readTargets(false) : null;
+      const removed = reread !== null && !reread.some((t) => t.id === chosen);
+      // m-2: removed and NOTHING left — the empty state is the whole answer; "pick another" would point at nothing.
+      if (!(removed && reread.length === 0)) {
+        setCreateError({ code: removed ? TARGET_REMOVED : code, holder: createErrorHolder(err) });
+      }
     }
     // Either way the server's state is the answer: the new session, or — after a refusal — whatever is there (an
     // `active_session` refusal's running session IS the explanation; a dismissed card stays dismissed).

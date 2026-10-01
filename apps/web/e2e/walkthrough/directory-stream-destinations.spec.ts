@@ -964,7 +964,8 @@ for (const width of [320, 1280] as const) {
     await expect(goLive(body)).toBeDisabled();
 
     // 5. A choice removed while this tab stayed OPEN (another organiser, no return to announce it): picked here, then
-    //    Go live answers 404 — the tab says it was removed, re-reads, and drops it. Nothing starts.
+    //    Go live answers 404 — the tab re-reads and drops it. It was the ONLY one, so the answer is the empty state with
+    //    its way to Directory, not "removed, pick another" (B5 review m-2: there is nothing to pick). Nothing starts.
     await dir.bringToFront();
     const second = `Court 2 ${rig.tag}`;
     await addViaForm(dir, { platform: "twitch", label: second, key: twitchKey() }, "stream-dest-empty-add");
@@ -976,9 +977,9 @@ for (const width of [320, 1280] as const) {
     expect(removed.status(), "SETUP: removed elsewhere").toBe(200);
     await expect(picker(body), "premise: nothing told this tab yet").toHaveValue(b!.id);
     await goLive(body).click();
-    await expect(body.getByTestId("stream-create-error")).toHaveText(en("stream.error.target_removed"), { timeout: SAVE_MS });
-    await expect(body.getByTestId("stream-create-error")).not.toHaveText(en("stream.error.unknown"));
-    await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it").toBeVisible();
+    await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it: the empty state").toBeVisible({ timeout: SAVE_MS });
+    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/directory?tab=streaming");
+    await expect(body.getByTestId("stream-create-error"), "no 'pick another' with nothing to pick").toHaveCount(0);
     await expect(goLive(body)).toBeDisabled();
     expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
     await expectNoHorizontalScroll(page);

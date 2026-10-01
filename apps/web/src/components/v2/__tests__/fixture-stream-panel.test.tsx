@@ -2971,6 +2971,54 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).selectedTargetId).toBe("t1");
   });
 
+  // B5 review m-2: an EMPTY list has nothing to "pick another" from. The empty state (No destinations yet + Manage) says
+  // what to do; a "removed, pick another one" line beside it — or, after a destination is added, beside an enabled Go
+  // live on a DIFFERENT destination — contradicts the screen.
+  it("m-2: a Go live 404 that finds the list EMPTY is the empty state, not 'removed, pick another'; the next destination added is offered with no stale line", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: [TARGETS[0]!] });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    s.targets = [];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listOf(bodyOf(island).targets), "the 404 re-read the list: empty").toEqual([]);
+    expect(bodyOf(island).createError, "nothing to pick another from: the empty state says it").toBeNull();
+    const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(byTestId(shown, "stream-dest-empty"), "the empty state").toBeDefined();
+    expect(byTestId(shown, "stream-manage-destinations"), "…with the way to Directory").toBeDefined();
+    expect(byTestId(shown, "stream-create-error"), "no 'removed' line").toBeUndefined();
+    expect(propsOf(byTestId(shown, "stream-go-live")!).disabled).toBe(true);
+    // A destination added in Directory: offered, and nothing on screen still says "removed".
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId).toBe("t2");
+    expect(bodyOf(island).createError).toBeNull();
+  });
+
+  it("m-2: a 'removed' line from a list that still had others goes when a later read finds the list EMPTY — the empty state replaces it", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t2");
+    s.targets = [TARGETS[0]!];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError, "premise: others listed, so 'pick another' is true").toEqual({ code: TARGET_REMOVED, holder: null });
+    s.targets = [];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError, "the list emptied: the line goes").toBeNull();
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "a first destination after the empty list is offered").toBe("t2");
+    expect(bodyOf(island).createError, "…with no 'removed' line beside an enabled Go live").toBeNull();
+  });
+
   it("n1 (in use): a pick clears the target_in_use hold; a return that finds the picked destination FREE clears it too — one still held does not", async () => {
     const { doc } = stubPage();
     const holder = { sessionId: "s9", fixtureId: "f-9", href: "/x/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const };
