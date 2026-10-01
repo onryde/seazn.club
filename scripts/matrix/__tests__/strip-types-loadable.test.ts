@@ -181,6 +181,12 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(W1DRV_T6.length).toBe(1);
     expect(missing).toEqual([]);
   });
+  const W1DRV_T7 = ["lib/scenarios/ladder-loop.ts"];
+  it("W1-driving Task 7's modules are all in the walk", () => {
+    const missing = W1DRV_T7.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T7.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
 
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as

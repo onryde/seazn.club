@@ -170,3 +170,59 @@ export function thrownWords(path: string): string[] {
   if (out.length === 0) throw new Error(`product-text: ${path} throws no literal words — a vacuous pin`);
   return out;
 }
+
+/** A `new Set([...])` literal's string members, refused when empty. */
+function setMembers(m: RegExpExecArray | null, what: string): string[] {
+  if (m === null) throw new Error(`product-text: ${what} not found in the expected shape — re-read it`);
+  const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error(`product-text: ${what} names no member`);
+  return out;
+}
+
+/** withdrawal.ts TABLE_KINDS: the kinds the withdrawal module treats as a
+ *  table (its OWN copy — engine-db/competition.ts's includes americano, this
+ *  one does not). W1-driving T7, false premise 16. */
+export function withdrawalTableKindsText(): string[] {
+  return setMembers(/\nconst TABLE_KINDS = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/server/usecases/withdrawal.ts")), "withdrawal.ts TABLE_KINDS");
+}
+
+/** stages.ts BRACKET_WALKOVER_KINDS: the bracket kinds whose withdrawal
+ *  forfeits each pending line to the opponent (W1-driving T7). */
+export function bracketWalkoverKindsText(): string[] {
+  return setMembers(/\nexport const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\);/.exec(read("apps/web/src/server/usecases/stages.ts")), "stages.ts BRACKET_WALKOVER_KINDS");
+}
+
+/** stages.ts departedEntrantIds: the entrant statuses that have LEFT the
+ *  field — a challenge naming one is LADDER_ENTRANT_WITHDRAWN, and the live
+ *  ladder is the raw order without them (W1-driving T7). */
+export function departedStatusesText(): string[] {
+  const m = /\nasync function departedEntrantIds\(tx: Tx, divisionId: string\): Promise<Set<string>> \{[\s\S]*?status in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/stages.ts"));
+  if (m === null) throw new Error("product-text: stages.ts departedEntrantIds not found in the expected shape — re-read it");
+  const out = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error("product-text: stages.ts departedEntrantIds names no status");
+  return out;
+}
+
+export interface LadderText {
+  /** DEFAULT_LADDER_CHALLENGE_RANGE: the reach when the stage config names none. */
+  defaultRange: number;
+  /** issueChallenge's LADDER_* refusal codes, in source order. */
+  codes: string[];
+  /** The entrant statuses the first challenge's ladder_order is written from. */
+  fieldStatuses: string[];
+}
+
+/** stages.ts issueChallenge (W1-driving T7, D8): what FakeLadderDriver
+ *  mirrors, read from the product's text. */
+export function ladderText(): LadderText {
+  const src = read("apps/web/src/server/usecases/stages.ts");
+  const range = /\nexport const DEFAULT_LADDER_CHALLENGE_RANGE = (\d+);/.exec(src);
+  if (range === null) throw new Error("product-text: stages.ts DEFAULT_LADDER_CHALLENGE_RANGE not found");
+  const body = /\nexport async function issueChallenge\([\s\S]*?\n\}\n/.exec(src)?.[0];
+  if (body === undefined) throw new Error("product-text: stages.ts issueChallenge not found");
+  const codes = [...new Set([...body.matchAll(/"(LADDER_[A-Z_]+)"/g)].map((x) => x[1]))];
+  if (codes.length === 0) throw new Error("product-text: stages.ts issueChallenge throws no LADDER_* code");
+  const field = /where division_id = \$\{stage\.division_id\} and status in \(([^)]*)\)\s*order by seed nulls last/.exec(body);
+  if (field === null) throw new Error("product-text: issueChallenge's ladder_order initialisation is not the seed-ordered field read the fake mirrors — re-read it");
+  return { defaultRange: Number(range[1]), codes, fieldStatuses: [...field[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]) };
+}

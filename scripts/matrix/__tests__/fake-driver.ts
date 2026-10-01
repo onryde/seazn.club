@@ -20,7 +20,7 @@ import type { StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type ChallengeOut, type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { wireCodeFor } from "./product-text.ts";
@@ -336,6 +336,16 @@ export class FakeLeagueDriver implements OrganiserDriver {
     return settle(() => {
       this.log("confirmSeedProposal", stageId, body.proposalId);
       throw new RefusedCall("POST", `/api/v1/stages/${stageId}/seed-proposal/confirm`, 404, wireCodeFor(404), "seed proposal not found");
+    });
+  }
+  /** W1-driving T7: challenges exist on ladder stages only — stages.ts
+   *  issueChallenge throws a CODELESS 422, so the wire code is http.ts's
+   *  default for the status (read from the product). FakeLadderDriver
+   *  (fake-formats-driver.ts) models a ladder. */
+  challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    return settle(() => {
+      this.log("challenge", stageId, challengerId, opponentId);
+      throw new RefusedCall("POST", `/api/v1/stages/${stageId}/challenges`, 422, wireCodeFor(422), "challenges only exist on ladder stages");
     });
   }
   /** The table fake models no rebuild; refused by name (Task 13). */

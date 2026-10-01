@@ -43,11 +43,11 @@ import { sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, RefusedCall,
-  type CompleteOut, type FixtureRow, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
+  type ChallengeOut, type CompleteOut, type FixtureRow, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
-import { wireCodeFor } from "./product-text.ts";
+import { departedStatusesText, ladderText, wireCodeFor } from "./product-text.ts";
 
 export interface FakeMultiStageOptions {
   /** The TARGET stage seq whose proposals flag a tie between seeds 2 and 3,
@@ -580,5 +580,229 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     }
     e.status = "withdrawn";
     return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped };
+  }
+}
+
+// --- W1-driving Task 7: a single LADDER stage (D8, D14) ---------------------------------------------
+//
+// The shape it mirrors (usecases/stages.ts, pinned at 88b233484):
+//  - Start and generate create NOTHING: a ladder's generator is `gen = []`
+//    (stages.ts:2397-2398). Its fixtures come from challenges only.
+//  - issueChallenge (:5503-5657), in its order: 404 an unknown stage; 422
+//    (codeless) a non-ladder stage; on first use `ladder_order` is written
+//    from the field (status registered/confirmed) by seed (:5538-5551) and is
+//    NEVER pruned afterwards; LADDER_ENTRANT_FOREIGN when either side is off
+//    the raw order; LADDER_ENTRANT_WITHDRAWN when either is departed
+//    (departedEntrantIds, :4750); LADDER_CHALLENGE_NOT_UPWARD on RAW indices;
+//    LADDER_CHALLENGE_OUT_OF_RANGE when the LIVE distance exceeds
+//    config.challengeRange ?? DEFAULT (:5601-5640, extra `{range}`). Then ONE
+//    scheduled fixture, challenger home, round_no = count + 1, ext_key
+//    `ch-<n>`; the answer is `{fixture_id, ladder_order}` as it stood at issue.
+//    No guard stops an entrant holding two open challenges.
+//  - A decided WIN whose winner sits below its loser in the raw order swaps
+//    the two (scoring.ts:774-786). An award (forfeit) has no loser
+//    (fed-seats.ts advancingSides), so it moves nobody; nor does a draw.
+//  - Complete (engine-db/competition.ts:590-618): not complete with no
+//    fixture or any scheduled/in_play one; else finalRanks = the RAW order.
+//  - Withdraw (withdrawal.ts:213-217, the open-format branch): every pending
+//    fixture of the entrant is voided → abandoned and counted in `voided`;
+//    nothing is forfeited; the policy is `walkover` only when something was
+//    pending, else `none`. A repeat is a codeless 409 (:133-135).
+
+/** The product's ladder rules, read from its text once (product-text.ts). */
+const LADDER = ladderText();
+const DEPARTED = new Set(departedStatusesText());
+const FIELD = new Set(LADDER.fieldStatuses);
+/** The four refusal codes, by name — each asserted to be one the product throws. */
+const LADDER_CODE = ((): Readonly<Record<"foreign" | "withdrawn" | "notUpward" | "outOfRange", string>> => {
+  const named = { foreign: "LADDER_ENTRANT_FOREIGN", withdrawn: "LADDER_ENTRANT_WITHDRAWN", notUpward: "LADDER_CHALLENGE_NOT_UPWARD", outOfRange: "LADDER_CHALLENGE_OUT_OF_RANGE" } as const;
+  for (const c of Object.values(named)) if (!LADDER.codes.includes(c)) throw new Error(`fake: ${c} is not a code stages.ts issueChallenge throws (${LADDER.codes.join(", ")})`);
+  return named;
+})();
+
+export interface FakeLadderOptions {
+  /** The reach the fake ENFORCES, in place of the stage config's (stages.ts
+   *  reads config.challengeRange ?? DEFAULT_LADDER_CHALLENGE_RANGE). A test
+   *  seam: 1 makes every non-adjacent challenge refuse. */
+  readonly challengeRange?: number;
+  /** Refuse EVERY challenge with this code: a product that lets nothing be played. */
+  readonly refuseAll?: string;
+  /** Seed 3's FIRST challenge takes the harness's events but its result never
+   *  lands (in_play, no outcome): a challenge still under way when seed 3
+   *  withdraws (D14's differing case). */
+  readonly withdrawWhilePending?: boolean;
+  /** Every challenge answer carries the SEED order, however the ladder has
+   *  moved — staler than the product's own (issue-time) answer — so only a
+   *  re-list of the stage sees the live order. */
+  readonly staleLadderOrderInAnswer?: boolean;
+}
+
+/** One challenge the fake ISSUED, with the product's rule judged on the
+ *  fake's own order at issue time (never playLadder's). */
+export interface IssuedChallenge {
+  readonly step: number;
+  readonly fixtureId: string;
+  readonly challenger: string;
+  readonly opponent: string;
+  /** Adjacent on the LIVE order (raw minus departed) when issued. */
+  readonly liveAdjacentAtIssue: boolean;
+  /** Below its opponent on the RAW order when issued. */
+  readonly upward: boolean;
+  /** Either side departed when issued. */
+  readonly seatedDeparted: boolean;
+}
+/** A challenge whose fixture finished with a result: `winner` null for a draw. */
+export interface DecidedChallenge extends IssuedChallenge { readonly kind: string; readonly winner: string | null }
+
+interface LadderWithdrawal { readonly entrantId: string; readonly afterStep: number; readonly rawOrder: readonly string[] }
+
+export class FakeLadderDriver extends FakeLeagueDriver {
+  readonly opts: FakeLadderOptions;
+  /** stage.config.ladder_order: RAW, written on the first challenge, never pruned. */
+  #raw: string[] | null = null;
+  readonly #issued: IssuedChallenge[] = [];
+  readonly #refused: { challenger: string; opponent: string; code: string | null }[] = [];
+  readonly #swapped = new Set<string>();
+  readonly #withdrawals: LadderWithdrawal[] = [];
+  /** withdrawWhilePending: the challenge whose result is withheld. */
+  #held: string | null = null;
+  constructor(opts: FakeLadderOptions = {}, orgId = "org-fake") {
+    super(orgId);
+    this.opts = opts;
+  }
+  override acceptsStage(kind: string): boolean { return kind === "ladder"; }
+  override refuseStages(): never { throw new Error("fake: ladder only"); }
+  /** stages.ts:2397-2398: a ladder's start draws nothing. */
+  override start(): Promise<StartOut> {
+    return settle(() => {
+      this.log("start");
+      this.stage!.status = "active";
+      return { division_id: "d1", status: "active", started: true, generated: 0 };
+    });
+  }
+  /** A COPY of the config, ladder_order included once written: a caller's
+   *  earlier read never changes under it. */
+  override listStages(): Promise<StageRef[]> {
+    return settle(() => {
+      this.log("listStages");
+      if (this.stage === null) return [];
+      return [{ ...this.stage, config: { ...this.stage.config, ...(this.#raw !== null ? { ladder_order: [...this.#raw] } : {}) } }];
+    });
+  }
+  /** Entrant ids by seed (the order the product's first challenge writes). */
+  entrantsBySeed(): string[] {
+    return [...this.entrants].sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER) || (a.id < b.id ? -1 : 1)).map((e) => e.id);
+  }
+  /** The RAW ladder_order, as the product stores it ([] before any challenge). */
+  ladderOrder(): string[] { return [...(this.#raw ?? [])]; }
+  refusedChallenges(): { challenger: string; opponent: string; code: string | null }[] { return this.#refused.map((r) => ({ ...r })); }
+  issuedChallenges(): IssuedChallenge[] { return this.#issued.map((c) => ({ ...c })); }
+  /** Issued challenges whose fixture finished WITH a result, in issue order. */
+  decidedChallenges(): DecidedChallenge[] {
+    return this.#issued.flatMap((c) => {
+      const f = this.fixtures.find((x) => x.id === c.fixtureId)!;
+      const o = f.outcome as { kind?: string; winner?: string } | null;
+      if (o === null || typeof o.kind !== "string" || f.status === "abandoned") return [];
+      return [{ ...c, kind: o.kind, winner: typeof o.winner === "string" ? o.winner : null }];
+    });
+  }
+  withdrawnIds(): Set<string> { return new Set(this.entrants.filter((e) => DEPARTED.has(e.status)).map((e) => e.id)); }
+  /** Challenges issued when the FIRST withdrawal answered; null if none. */
+  withdrawnAfterStep(): number | null { return this.#withdrawals[0]?.afterStep ?? null; }
+  /** The same, as a bound: Infinity when nobody withdrew. */
+  firstWithdrawalStep(): number { return this.#withdrawals[0]?.afterStep ?? Number.POSITIVE_INFINITY; }
+  /** The raw order the moment the FIRST withdrawal answered ([] if none). */
+  rawOrderAtWithdrawal(): string[] { return [...(this.#withdrawals[0]?.rawOrder ?? [])]; }
+  #range(): number {
+    if (this.opts.challengeRange !== undefined) return this.opts.challengeRange;
+    const r = this.stage?.config.challengeRange;
+    return typeof r === "number" ? r : LADDER.defaultRange;
+  }
+  override challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    return settle(() => {
+      this.log("challenge", stageId, challengerId, opponentId);
+      const path = `/api/v1/stages/${stageId}/challenges`;
+      const refuse = (status: number, code: string | null, message: string, extra: Readonly<Record<string, unknown>> | null = null): never => {
+        this.#refused.push({ challenger: challengerId, opponent: opponentId, code });
+        throw new RefusedCall("POST", path, status, code, message, null, extra);
+      };
+      if (this.stage === null || this.stage.id !== stageId) return refuse(404, wireCodeFor(404), "stage not found");
+      if (this.opts.refuseAll !== undefined) return refuse(422, this.opts.refuseAll, "fake: every challenge refused");
+      // Written on first use INSIDE the product's transaction: a refusal rolls it back, so only an issued challenge keeps it.
+      const raw = this.#raw !== null && this.#raw.length > 0 ? this.#raw : this.entrantsBySeed().filter((id) => FIELD.has(this.entrants.find((e) => e.id === id)!.status));
+      const departed = this.withdrawnIds();
+      const ci = raw.indexOf(challengerId);
+      const oi = raw.indexOf(opponentId);
+      if (ci < 0 || oi < 0) return refuse(422, LADDER_CODE.foreign, "both players must be on the ladder");
+      const seatedDeparted = departed.has(challengerId) || departed.has(opponentId);
+      if (seatedDeparted) return refuse(422, LADDER_CODE.withdrawn, "a player who has withdrawn from this division can neither issue nor receive a challenge");
+      if (oi >= ci) return refuse(422, LADDER_CODE.notUpward, "you can only challenge upward");
+      const live = raw.filter((id) => !departed.has(id));
+      const range = this.#range();
+      const distance = live.indexOf(challengerId) - live.indexOf(opponentId);
+      if (distance > range) return refuse(422, LADDER_CODE.outOfRange, `challenges reach at most ${range} places up the ladder, counting only players still in the field`, { range });
+      this.#raw = raw;
+      const n = this.fixtures.length;
+      const f = this.seat(n + 1, challengerId, opponentId, { ext_key: `ch-${n + 1}` });
+      this.#issued.push({ step: this.#issued.length + 1, fixtureId: f.id, challenger: challengerId, opponent: opponentId, liveAdjacentAtIssue: distance === 1, upward: oi < ci, seatedDeparted });
+      return { fixture_id: f.id, ladder_order: this.opts.staleLadderOrderInAnswer === true ? this.entrantsBySeed() : [...raw] };
+    });
+  }
+  /** withdrawWhilePending: seed 3's FIRST challenge, still open. */
+  #withholds(f: FakeFixture): boolean {
+    if (this.opts.withdrawWhilePending !== true || PLAYED.has(f.status) || f.status === "abandoned") return false;
+    if (this.#held !== null) return this.#held === f.id;
+    const seed3 = this.entrants.find((e) => e.seed === 3)?.id;
+    if (seed3 === undefined || (f.home_entrant_id !== seed3 && f.away_entrant_id !== seed3)) return false;
+    this.#held = f.id;
+    return true;
+  }
+  override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
+    const f = this.fixtures.find((x) => x.id === id);
+    if (f !== undefined && this.#withholds(f)) {
+      this.log("postStream", id);
+      const base = f.events.length;
+      f.events = [...f.events, ...events];
+      f.status = "in_play";
+      f.outcome = null;
+      return events.map((_, k) => ({ seq: base + k + 1, status: "in_play", outcome: null, event_id: `${id}-${base + k + 1}` }));
+    }
+    const out = await super.postStream(id, events, prefix);
+    this.#swapOnWin(id);
+    return out;
+  }
+  /** scoring.ts:774-786: once per decided challenge, a WIN whose winner sits
+   *  below its loser on the raw order swaps them. */
+  #swapOnWin(id: string): void {
+    const f = this.fixtures.find((x) => x.id === id);
+    const o = f?.outcome as { kind?: string; winner?: string; loser?: string } | null | undefined;
+    if (f === undefined || this.#raw === null || this.#swapped.has(id) || o?.kind !== "win" || o.winner === undefined || o.loser === undefined) return;
+    this.#swapped.add(id);
+    const wi = this.#raw.indexOf(o.winner);
+    const li = this.#raw.indexOf(o.loser);
+    if (wi >= 0 && li >= 0 && wi > li) [this.#raw[wi], this.#raw[li]] = [this.#raw[li], this.#raw[wi]];
+  }
+  override async withdraw(entrantId: string): Promise<WithdrawOut> {
+    this.log("withdraw", entrantId);
+    const path = `/api/v1/entrants/${entrantId}/withdraw`;
+    const e = this.entrants.find((x) => x.id === entrantId);
+    if (e === undefined) throw new RefusedCall("POST", path, 404, wireCodeFor(404), "entrant not found");
+    if (e.status === "withdrawn") throw new RefusedCall("POST", path, 409, wireCodeFor(409), "entrant is already withdrawn");
+    let voided = 0;
+    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+      await this.abandonFixture(f);
+      voided++;
+    }
+    e.status = "withdrawn";
+    this.#withdrawals.push({ entrantId, afterStep: this.#issued.length, rawOrder: [...(this.#raw ?? [])] });
+    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
+  }
+  override completeStage(): Promise<CompleteOut> {
+    return settle(() => {
+      this.log("completeStage");
+      if (this.fixtures.length === 0 || this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
+      this.completed = true;
+      return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(this.#raw ?? [])] }] };
+    });
   }
 }

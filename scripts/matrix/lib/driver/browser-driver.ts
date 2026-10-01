@@ -53,7 +53,7 @@ import type { HttpDriver } from "./http-driver.ts";
 import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from "./mixed.ts";
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
@@ -506,6 +506,14 @@ export class BrowserDriver implements OrganiserDriver {
   recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
     this.#ledger.filler("recomputeSeedProposal");
     return this.#write(() => this.#http.recomputeSeedProposal(stageId));
+  }
+
+  /** Filler (ruling 47, W1-driving Task 7): a ladder challenge is always
+   *  HTTP, and a write (it inserts the challenge's fixture); the product's
+   *  answer or refusal passes through untouched. */
+  challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    this.#ledger.filler("challenge");
+    return this.#write(() => this.#http.challenge(stageId, challengerId, opponentId));
   }
 
   /** The setup filler this driver ran, by name (mixed.ts FILLER). */

@@ -228,6 +228,38 @@ describe("HttpDriver — the seed proposal (W1-driving T6, D1)", () => {
   });
 });
 
+describe("HttpDriver — ladder challenges (W1-driving T7, D8)", () => {
+  /** The route's own body schema, read as text (app/api/v1/stages/[id]/challenges/route.ts). */
+  const routeBody = (): string[] => {
+    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/app/api/v1/stages/[id]/challenges/route.ts"), "utf8");
+    const m = /const Body = z\.object\(\{([^}]*)\}\);/.exec(text);
+    expect(m, "challenges route Body schema not found").not.toBeNull();
+    expect(text).toContain("reply(201, await issueChallenge(auth, id, body))");
+    return [...m![1]!.matchAll(/(\w+): z\./g)].map((x) => x[1]!);
+  };
+  it("challenge POSTs {challenger_id, opponent_id} — the route's own field names — to the stage's challenges route and answers the 201's {fixture_id, ladder_order}", async () => {
+    const answer = { fixture_id: "f9", ladder_order: ["a", "b", "c"] };
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s1/challenges" ? ok(answer, 201) : undefined)]);
+    expect(await drv(t).challenge("s1", "c", "b")).toEqual(answer);
+    expect(posts(calls).map((c) => [c.path, c.body])).toEqual([["/api/v1/stages/s1/challenges", { challenger_id: "c", opponent_id: "b" }]]);
+    expect(Object.keys(posts(calls)[0]!.body as object).sort()).toEqual(routeBody().sort());
+  });
+  it("a refused challenge is the product's RefusedCall, its code and extra (the reach) carried — never a silent answer", async () => {
+    const { t } = fake([() => err(422, "LADDER_CHALLENGE_OUT_OF_RANGE", { range: 3 })]);
+    const e = await drv(t).challenge("s1", "h", "a").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 422, code: "LADDER_CHALLENGE_OUT_OF_RANGE", extra: { range: 3 } });
+  });
+  it("a second challenge is a second POST (the product guards no repeat; each issues its own fixture)", async () => {
+    let n = 0;
+    const { t, calls } = fake([() => ok({ fixture_id: `f${++n}`, ladder_order: ["a", "b"] }, 201)]);
+    const d = drv(t);
+    expect((await d.challenge("s1", "b", "a")).fixture_id).toBe("f1");
+    expect((await d.challenge("s1", "b", "a")).fixture_id).toBe("f2");
+    expect(posts(calls)).toHaveLength(2);
+  });
+});
+
 describe("HttpDriver — reads and probes", () => {
   const ref = { orgSlug: "o", competitionSlug: "c", divisionSlug: "d" };
   it("public standings go out with NO cookies (anonymous) and the public path", async () => {

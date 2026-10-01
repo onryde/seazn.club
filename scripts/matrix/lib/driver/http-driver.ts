@@ -14,7 +14,7 @@ import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
@@ -304,6 +304,14 @@ export class HttpDriver implements OrganiserDriver {
   async recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
     const p = await this.#call<{ id: string; status: string; computed: { qualifiers: SeedProposalOut["qualifiers"]; ties: SeedProposalOut["ties"] } }>(`/api/v1/stages/${stageId}/seed-proposal`, "POST", {});
     return { id: p.id, status: p.status, qualifiers: p.computed.qualifiers, ties: p.computed.ties };
+  }
+
+  /** W1-driving T7 (D8): a ladder challenge (route stages/[id]/challenges,
+   *  body `{challenger_id, opponent_id}` → 201 usecases/stages.ts
+   *  issueChallenge). The answer's ladder_order is the order at issue; a
+   *  refusal (LADDER_*, a non-ladder 422) is the product's RefusedCall. */
+  async challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    return this.#call(`/api/v1/stages/${stageId}/challenges`, "POST", { challenger_id: challengerId, opponent_id: opponentId });
   }
 
   async rebuild(stageId: string): Promise<void> {

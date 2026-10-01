@@ -417,7 +417,7 @@ describe("each scenario's assertion set is exactly its own (dropping one is caug
     // W1-driving T6: every scenario judges the seed advance and (T45-R1) the lineups owed on team fixtures.
     ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
-    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "r4-not-challenged-later", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
   ] as const)("%s", async (k, ids) => {
     expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
@@ -1002,10 +1002,15 @@ describe("deferrals are named", () => {
     expect(named).toBeDefined();
     expect(DRIVING_WAVE).toBe(named);
   });
-  it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {
+  it.each(["americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {
     const driver = new FakeLeagueDriver();
     await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: `${row}: challenge/rotation driving lands in ${DRIVING_WAVE}` });
     expect(driver.calls).toEqual([]);
+  });
+  it("W1-driving Task 7: the ladder is no longer deferred — it reaches the driver (and the league fake refuses its stage by name)", async () => {
+    const driver = new FakeLeagueDriver();
+    await expect(runOn(driver, "LIFECYCLE", { row: "ladder" })).rejects.toThrow("fake: league only");
+    expect(driver.calls).toEqual(["createCompetition", "createDivision", "postStages"]);
   });
 });
 
@@ -1774,17 +1779,17 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     ];
     const good = [after("a", "abandoned", null), after("b", "abandoned", null), after("c", "finalized", { kind: "win", winner: "x" }), after("d", "cancelled", null)];
     // The last item is the voided count (m-3): two fixtures abandoned by the cascade.
-    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2))).toEqual([true, true, true, true, true]);
-    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3))).toEqual([true, true, true, true, false]);
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2, "league"))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3, "league"))).toEqual([true, true, true, true, false]);
     const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x" }), after("c", "abandoned", null), after("d", "abandoned", null)];
-    expect(ok(cascadeItems("expunge", "w", before, bad, 0, 0))).toEqual([false, false, false, false, true]);
+    expect(ok(cascadeItems("expunge", "w", before, bad, 0, 0, "league"))).toEqual([false, false, false, false, true]);
   });
 
   it("the voided count covers only what the cascade abandoned — a fixture already abandoned before it does not count (withdrawal.ts applyUpdate)", () => {
     const before = [{ id: "a", status: "abandoned", outcome: null }, { id: "b", status: "scheduled", outcome: null }];
     const after2 = [after("a", "abandoned", null), after("b", "abandoned", null)];
-    expect(cascadeItems("expunge", "w", before, after2, 0, 1).at(-1)).toEqual({ ok: true, note: "reported 1 voided, observed 1" });
-    expect(cascadeItems("expunge", "w", before, after2, 0, 2).at(-1)).toEqual({ ok: false, note: "reported 2 voided, observed 1" });
+    expect(cascadeItems("expunge", "w", before, after2, 0, 1, "league").at(-1)).toEqual({ ok: true, note: "reported 1 voided, observed 1" });
+    expect(cascadeItems("expunge", "w", before, after2, 0, 2, "league").at(-1)).toEqual({ ok: false, note: "reported 2 voided, observed 1" });
   });
 
   it("walkover: a pending game goes to the OPPONENT; a TBD seat is voided; the reported count must match", () => {
@@ -1795,14 +1800,14 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     ];
     const good = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x" }), after("t", "abandoned", null, "w", null)];
     // …then the walkover count, then the voided count (the TBD seat).
-    expect(ok(cascadeItems("walkover", "w", before, good, 1, 1))).toEqual([true, true, true, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 2, 1))).toEqual([true, true, true, false, true]);
-    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0))).toEqual([true, true, true, true, false]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 1, "league"))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 2, 1, "league"))).toEqual([true, true, true, false, true]);
+    expect(ok(cascadeItems("walkover", "w", before, good, 1, 0, "league"))).toEqual([true, true, true, true, false]);
     const toW = [good[0]!, after("b", "forfeited", { kind: "award", winner: "w" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toW, 0, 1))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, toW, 0, 1, "league"))).toEqual([true, false, true, true, true]);
     const toThirdParty = [good[0]!, after("b", "forfeited", { kind: "award", winner: "z" }), good[2]!];
-    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 1))).toEqual([true, false, true, true, true]);
-    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 1))).toEqual([true, true, false, true, false]);
+    expect(ok(cascadeItems("walkover", "w", before, toThirdParty, 0, 1, "league"))).toEqual([true, false, true, true, true]);
+    expect(ok(cascadeItems("walkover", "w", before, [good[0]!, good[1]!], 1, 1, "league"))).toEqual([true, true, false, true, false]);
   });
 });
 
@@ -1904,5 +1909,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(fx("pp-final")).toMatchObject({ home: seed(1), away: null, status: "scheduled" });
     expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
     expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 200, code: null, completed: false });
+    // W1-driving Task 7 (false premise 16): the open-format cascade is judged by the abandon model, not the forfeit one.
+    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");
   });
 });

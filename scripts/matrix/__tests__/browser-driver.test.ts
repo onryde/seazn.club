@@ -1198,6 +1198,25 @@ describe("BrowserDriver — the roster seam is setup filler (ruling 47, W1-drivi
     expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
   });
 
+  it("W1-driving T7 (ruling 47): a ladder challenge never touches the page — it reaches HTTP once per call, is counted as filler, and its answer or refusal passes through", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, pages: uiAddsTo(http) });
+    await built(driver, spec("league"));
+    const pages = pageCalls.length;
+    const coverage = only(driver, "mixed-driver-coverage");
+    const answer = { fixture_id: "f9", ladder_order: ["e1", "e2"] };
+    const sent: unknown[] = [];
+    http.challenge = async (stageId, challengerId, opponentId) => { http.log("challenge", stageId, challengerId, opponentId); sent.push([stageId, challengerId, opponentId]); return answer; };
+    expect(await driver.challenge("s1", "e2", "e1")).toBe(answer);
+    expect(sent).toEqual([["s1", "e2", "e1"]]);
+    http.challenge = async () => { http.log("challenge"); throw new RefusedCall("POST", "/api/v1/stages/s1/challenges", 422, "LADDER_ENTRANT_WITHDRAWN", "withdrawn"); };
+    await expect(driver.challenge("s1", "e2", "e1")).rejects.toMatchObject({ code: "LADDER_ENTRANT_WITHDRAWN" });
+    expect(pageCalls.length).toBe(pages);
+    expect(http.calls.filter((c) => c === "challenge")).toEqual(["challenge", "challenge"]);
+    expect(driver.fillers).toEqual({ challenge: 2 });
+    expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
+  });
+
   it("a refused lineup is the product's RefusedCall, passed through, and still counted as the filler call it was", async () => {
     const http = new FakeHttp(ORG);
     const { driver } = make({ http, pages: uiAddsTo(http) });

@@ -19,6 +19,7 @@ import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
 import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
 import { confirmAdvance, type AdvanceObs } from "./advance.ts";
+import { playLadder } from "./ladder-loop.ts";
 import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
 import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
 
@@ -128,6 +129,10 @@ export class Recorder {
   /** W1-driving T6 (T45-R1): every team fixture the harness scored → its
    *  division-entrant sides, which life-lineups-put holds to a PUT each. */
   readonly teamPosts = new Map<string, string[]>();
+  /** W1-driving Task 7 (D8): every challenge playLadder issued, by its step —
+   *  what r4-not-challenged-later reads (a challenge's product round_no is
+   *  never relied on). */
+  readonly ladderSteps: { step: number; fixtureId: string }[] = [];
   /** W1-driving Task 4: lineup PUTs made, one per division-entrant side. */
   lineupsPut = 0;
   drawsPosted = 0;
@@ -151,7 +156,8 @@ export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth deferred 
  *  until W1-driving deletes the last of them. */
 export const DRIVING_WAVE = DRIVING_ROUTE.wave;
 
-const FORMAT_LATER = new Set(["ladder", "americano", "mexicano"]);
+/** W1-driving Task 7 drives the ladder (ladder-loop.ts); Task 8 the rest. */
+const FORMAT_LATER = new Set(["americano", "mexicano"]);
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
 export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
@@ -478,6 +484,9 @@ export function drawsDeclaredOnReached(ctx: ScenarioContext, plays: readonly Sta
 /** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
  *  the root; the exit lands on the stage's own track and on the run alike. */
 export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook } = {}, stage: StageRef = setup.stage): Promise<void> {
+  // W1-driving Task 7 (D8): a ladder generates nothing (stages.ts ladder gen
+  // is []); it is driven through challenges.
+  if (stage.kind === "ladder") return playLadder(ctx, rec, setup, stage, hooks);
   const track = rec.track(stage.id);
   const exit = (e: LoopExit) => { track.exit = e; rec.exit = e; };
   const drawOk = stageDrawsOk(ctx, stage);

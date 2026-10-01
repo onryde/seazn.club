@@ -47,8 +47,11 @@ export interface CompleteObs { status: number; code: string | null; completed: b
  *  through — is a loop that ran to its end; life-loop-bounded reds every
  *  other exit, and a drained loop that still leaves a fixture open.
  *  "not_reached" (W1-driving Task 6): a later stage the run never got to play
- *  — its source stage did not complete, or the seed advance was refused. */
-export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached";
+ *  — its source stage did not complete, or the seed advance was refused.
+ *  "refused_challenge" (W1-driving Task 7, D8): a ladder whose challenge was
+ *  refused, or whose field is too small to hold one — no challenge played is
+ *  never "drained". */
+export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge";
 
 export interface ObservedStage {
   id: string;
@@ -167,6 +170,16 @@ export function snap(f: ObservedFixture): FixtureSnap {
 export const PENDING_STATUSES: readonly string[] = Object.freeze(["scheduled", "in_play"]);
 /** Locked: the cascade reports these and never touches them (withdrawal.ts:102). */
 export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "cancelled"]);
+/** W1-driving Task 7 (false premise 16): the stage kinds whose withdrawal
+ *  walkover FORFEITS each pending fixture to the opponent — the withdrawal
+ *  module's TABLE_KINDS (withdrawal.ts:37) ∪ BRACKET_WALKOVER_KINDS
+ *  (stages.ts:880-884). Every other kind takes the open-format branch
+ *  (withdrawal.ts:213-217): pending fixtures are voided, nothing forfeited.
+ *  ladder-loop.test.ts holds it equal to the product's two sets, read as text. */
+export const FORFEIT_MODEL_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "knockout", "double_elim", "stepladder"]);
+/** W1-driving Task 7: entrant statuses that have LEFT the field (stages.ts
+ *  departedEntrantIds) — off the live ladder, refused as a challenge side. */
+export const DEPARTED_STATUSES: readonly string[] = Object.freeze(["withdrawn", "disqualified"]);
 
 /** A bye is the engine's only legitimate one-sided finished shape: a
  *  forfeited AWARD to the seated side (competition/stage.ts:30-34). */

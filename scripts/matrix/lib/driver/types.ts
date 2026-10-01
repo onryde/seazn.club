@@ -67,6 +67,11 @@ export interface SeedConfirmOut { readonly proposalId: string; readonly filled: 
  *  Pinned against the product's text by http-driver.test.ts. */
 export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
 export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number }
+/** W1-driving T7 (D8): a ladder challenge's answer (route stages/[id]/challenges
+ *  → 201 usecases/stages.ts issueChallenge). `ladder_order` is the RAW order
+ *  as it stood when the challenge was ISSUED — before its result lands, and
+ *  never pruned of a departed entrant. */
+export interface ChallengeOut { readonly fixture_id: string; readonly ladder_order: readonly string[] }
 export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
@@ -149,6 +154,11 @@ export interface OrganiserDriver {
    *  Throws RefusedCall on a refusal — 409 STAGE_HAS_RESULTS once any fixture
    *  carries a result (usecases/stages.ts rebuildStageFixtures). */
   rebuild(stageId: string): Promise<void>;
+  /** Issues a ladder challenge (POST /stages/:id/challenges, body
+   *  `{challenger_id, opponent_id}`): the product inserts ONE scheduled
+   *  fixture, challenger home. A refusal (FOREIGN, WITHDRAWN, NOT_UPWARD,
+   *  OUT_OF_RANGE, a non-ladder stage) throws RefusedCall. */
+  challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut>;
   standings(stageId: string, poolId: string | null): Promise<StandingsOut>;
   publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut>;
   /** A probe: returns the refusal, never throws on 4xx. */
