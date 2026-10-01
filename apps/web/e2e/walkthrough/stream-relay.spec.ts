@@ -490,6 +490,19 @@ async function shot(target: Locator, name: string): Promise<void> {
   await target.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), name) });
 }
 
+/** A crop of `target` with `pad` px of what surrounds it — for a control too small to read alone (a dot that overhangs
+ *  its button, the phone twin's badge on its icon). */
+async function shotAround(page: Page, target: Locator, name: string, pad = 24): Promise<void> {
+  await target.scrollIntoViewIfNeeded();
+  const b = (await target.boundingBox())!;
+  const vp = page.viewportSize()!;
+  const x = Math.max(0, b.x - pad);
+  const y = Math.max(0, b.y - pad);
+  await page.screenshot({
+    path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), name),
+    clip: { x, y, width: Math.min(vp.width, b.x + b.width + pad) - x, height: Math.min(vp.height, b.y + b.height + pad) - y },
+  });
+}
 
 /** m:ss / h:mm:ss — the ended chip's format (_THEMES.md §8a), computed here from the DB's own instants. */
 function duration(startedAt: Date, endedAt: Date): string {
@@ -1045,6 +1058,8 @@ for (const width of [320, 1280] as const) {
     const control = streamControl(page);
     await expect(control).toHaveAttribute("data-dot", "red");
     await shot(panel, `D3-${width}-1-connecting.png`);
+    // The Stream control itself (B5 review m-10): the desktop button at 1280, the phone header's Video icon + badge at 320.
+    await shotAround(page, control, `D3-${width}-button-1-red.png`);
 
     // THE 30 s LINE, both sides of it, on the SERVER's measure (M6: `output.elapsedMs` in each answer; the browser's
     // clock decides nothing). The page may warn only on an answer AT or past the line. So, sampled every RENDER_MS
@@ -1089,6 +1104,7 @@ for (const width of [320, 1280] as const) {
     // §2: D3 turns the Stream button's dot amber; it still reads "Live" (desktop text, or the phone twin's name).
     await expect(control).toHaveAttribute("data-dot", "amber");
     await expect(control).toHaveAccessibleName(en("stream.buttonLive"));
+    await shotAround(page, control, `D3-${width}-button-2-amber.png`);
     await expect(chain, "the phone half never moves for the destination").toHaveAttribute("data-phone", "connected");
     const open = warning.getByTestId("stream-output-open-directory");
     await expect(open).toHaveAttribute("href", "/directory?tab=streaming");
@@ -1122,6 +1138,7 @@ for (const width of [320, 1280] as const) {
     // §2: over — no dot, and the control is "Stream" again.
     await expect(control).not.toHaveAttribute("data-dot", /./);
     await expect(control).toHaveAccessibleName(en("stream.button"));
+    await shotAround(page, control, `D3-${width}-button-3-none.png`);
   });
 }
 
