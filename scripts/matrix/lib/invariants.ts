@@ -449,8 +449,9 @@ const I9: InvariantSpec = {
  *  folded as a league (engine-db/competition.ts:360-365, :399; Task 8 Step
  *  0) — exactly once each. PF-8: "never played" is seated in 0 fixtures of
  *  any status, and the rank items are skipped while the stage was never
- *  asked to complete (T9-R2); a completed stage that read no finalRanks reds
- *  by name, since nothing else reads an americano's ranks. A
+ *  asked to complete (T9-R2), or with a named note when it answered not
+ *  complete (T9-R4); a completed stage that read no finalRanks reds by name,
+ *  since nothing else reads an americano's ranks. A
  *  field entrant with one person is judged by that person; one with a roster
  *  (a team sport) by the entrant, since the product seats one member per team
  *  (false premise 10; Task 8's W7 note). */
@@ -464,6 +465,7 @@ const I10: InvariantSpec = {
   stepSafe: false, // "never played" holds only at the end of a run
   check(stages) {
     const fails: string[] = [];
+    const notes: string[] = [];
     let checked = 0;
     for (const s of stages) {
       const unobserved = divisionWideLaterStage(s);
@@ -493,14 +495,20 @@ const I10: InvariantSpec = {
         else if (ps.length === 1) { if (!played.has(ps[0])) fails.push(`${ps[0]} never played`); }
         else if (!ps.some((p) => played.has(p))) fails.push(`${e} never played`);
       }
-      // T9-R2 / PF-8: skipped only when /complete was never asked. A stage
-      // that answered not complete has no ranks to give (I4 judges that).
-      if (s.complete === null || !s.complete.completed) continue;
+      // T9-R2 / PF-8: skipped silently only when /complete was never asked
+      // (I4 reds that). T9-R4: a stage that answered not complete has no
+      // ranks to give, and the skip is NAMED — I4 reds the unnamed 200 shape
+      // but passes a named 4xx refusal, where this note is the only trace.
+      if (s.complete === null) continue;
+      if (!s.complete.completed) {
+        notes.push(`skipped the rank items of stage seq ${s.seq} (/complete answered ${s.complete.status} ${s.complete.code ?? "(no code)"}): stage not complete — no ranks to judge`);
+        continue;
+      }
       if (s.complete.finalRanks === null) { checked++; fails.push(`stage seq ${s.seq}: completed, but no finalRanks were read — the pair ranking cannot be judged`); continue; }
       const sides = [...new Set(seated.flatMap((f) => [f.home, f.away]).filter((e): e is string => e !== null))];
       checked += rankItems(s.complete.finalRanks, sides, new Set(), "not seated in this stage", fails);
     }
-    return result(fails, checked);
+    return result(fails, checked, notes);
   },
 };
 

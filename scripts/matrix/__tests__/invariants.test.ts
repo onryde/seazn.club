@@ -1004,6 +1004,7 @@ describe("I9 ladder", () => {
 // entrants' from setup, the pairs' from GET /entrants/{id}).
 describe("I10 americano", () => {
   const I10 = spec("I10-americano-seats-each-person-once");
+  const I4 = spec("I4-nothing-ends-stuck");   // T9-R4: which not-complete shape I4 reds, beside I10's note
   const persons = { A: ["p1"], B: ["p2"], C: ["p3"], D: ["p4"], P12: ["p1", "p2"], P34: ["p3", "p4"], P13: ["p1", "p3"], P24: ["p2", "p4"], P11: ["p1", "p1"] };
   const sidesOf = (fixtures: readonly ObservedFixture[]) => [...new Set(fixtures.flatMap((f) => [f.home, f.away]).filter((e): e is string => e !== null))];
   /** finalRanks defaults to the sides the fixtures seat — what the product's fold ranks. */
@@ -1071,11 +1072,21 @@ describe("I10 americano", () => {
     // An individual entrant is not a side the fold ranks.
     expect(evaluateInvariant(I10, run([am(ok, ["P12", "P34", "P13", "P24", "A"])])).evidence).toEqual(["A ranked but not seated in this stage"]);
   });
-  it("PF-8 / T9-R2: the rank items are skipped when /complete was never asked (and when it answered not complete, which gives no ranks — I4 judges that); the round and person items still judge", () => {
+  it("PF-8 / T9-R2 / T9-R4: the rank items are skipped silently when /complete was never asked, and with a NAMED note when it answered not complete — the unnamed 200 (I4 reds it) and a named 4xx (I4 passes it, so the note is the only trace); the round and person items still judge", () => {
     const never = evaluateInvariant(I10, run([am([r1(), r2()], null, { complete: null })]));
     expect(never).toMatchObject({ verdict: "pass", checked: 4 * 2 + 4 });
-    const notDone = evaluateInvariant(I10, run([am([r1(), r2()], null, { complete: { status: 200, code: null, completed: false, finalRanks: null, seedProposal: null } })]));
+    expect(never.evidence).toEqual([]);                             // never asked: nothing to note (I4 reds "never asked")
+    // T9-R4: the not-complete skip is NAMED, never silent, in both shapes the product answers.
+    const unnamed = { status: 200, code: null, completed: false, finalRanks: null, seedProposal: null };
+    const notDone = evaluateInvariant(I10, run([am([r1(), r2()], null, { complete: unnamed })]));
     expect(notDone).toMatchObject({ verdict: "pass", checked: 4 * 2 + 4 });
+    expect(notDone.evidence).toEqual(["skipped the rank items of stage seq 1 (/complete answered 200 (no code)): stage not complete — no ranks to judge"]);
+    expect(evaluateInvariant(I4, run([am([r1(), r2()], null, { complete: unnamed })])).verdict).toBe("fail");   // I4 reds this shape too
+    const named = { status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: false, finalRanks: null, seedProposal: null };
+    const refused = evaluateInvariant(I10, run([am([r1(), r2()], null, { complete: named })]));
+    expect(refused).toMatchObject({ verdict: "pass", checked: 4 * 2 + 4 });
+    expect(refused.evidence).toEqual(["skipped the rank items of stage seq 1 (/complete answered 409 STAGE_COMPLETED_SEEDING_FAILED): stage not complete — no ranks to judge"]);
+    expect(evaluateInvariant(I4, run([am([r1(), r2()], null, { complete: named })])).verdict).toBe("pass");   // I4 does NOT: the note is the only trace
   });
   it("T9-R2: a COMPLETED stage that read no finalRanks reds by name; the same stage with its ranks passes (the positive pair)", () => {
     const withRanks = evaluateInvariant(I10, run([am([r1(), r2()])]));
