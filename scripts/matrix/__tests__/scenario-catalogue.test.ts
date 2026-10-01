@@ -833,7 +833,9 @@ describe("Q-A guard — the judgement, apart from the tree", () => {
     expect(() => judgeRoutes([{ sites: 0, waves: [], unread: [] }], [], rows, ["W2"])).toThrow(/routes read across every construct/);
   });
   it("T1-R1: a walk over modules that reads 0 routes fails on its own floor, whatever counts.json routes", () => {
-    const rows = statusRows();
+    // Synthetic open rows (W1-driving Task 16): the real W1-driving row is
+    // closed now, and this test is about the floor, not about the index.
+    const rows = new Map([["W2", "not started"], ["W1-driving", "in progress"]]);
     // Two modules that name no wave: the walk found files, and read nothing.
     const walk = ["export const a = 1;", "export const b = 'x';"].map((src, i) => scanRoutes(src, `m${i}.ts`));
     expect(walk.map((w) => w.sites)).toEqual([0, 0]);
