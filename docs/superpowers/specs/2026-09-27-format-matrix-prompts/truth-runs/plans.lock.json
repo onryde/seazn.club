@@ -713,6 +713,37 @@
       ],
       "planned": {}
     },
+    "w1drv-http-slice": {
+      "plan": "slice",
+      "layered": false,
+      "driven": [
+        "league|generic|LIFECYCLE",
+        "league|generic|M1",
+        "league|generic|R4",
+        "league|generic|F1",
+        "league|badminton|LIFECYCLE",
+        "league|badminton|M1",
+        "league|badminton|R4",
+        "league|badminton|F1",
+        "knockout|generic|LIFECYCLE",
+        "knockout|generic|M1",
+        "knockout|generic|R4",
+        "knockout|generic|F1",
+        "knockout|badminton|LIFECYCLE",
+        "knockout|badminton|M1",
+        "knockout|badminton|R4",
+        "knockout|badminton|F1",
+        "swiss|generic|LIFECYCLE",
+        "swiss|generic|M1",
+        "swiss|generic|R4",
+        "swiss|generic|F1",
+        "swiss|badminton|LIFECYCLE",
+        "swiss|badminton|M1",
+        "swiss|badminton|R4",
+        "swiss|badminton|F1"
+      ],
+      "planned": {}
+    },
     "w1drv-l1/w1drv-l1-r1": {
       "plan": "--set w1-driving-l1",
       "layered": true,
