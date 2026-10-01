@@ -89,6 +89,44 @@ describe("wrangler.json ↔ schedule drift guard", () => {
   });
 });
 
+describe("deploy workflows ↔ wrangler.json (M-1)", () => {
+  const cfg = JSON.parse(readFileSync(join(__dirname, "../wrangler.json"), "utf8"));
+  const envNames = Object.keys(cfg.env).sort();
+  // The owner-agreed names (2026-10-01): a STAGING_ prefix for stg, PROD_ for prod. Typed here on purpose:
+  // they are a ruling, and the workflow files are what is being checked against it.
+  const PREFIX: Record<string, string> = { stg: "STAGING", prod: "PROD" };
+  /** One top-level job of a workflow file, from its `  <id>:` line to the next job key. */
+  const jobSection = (workflow: string, id: string): string | null => {
+    const lines = readFileSync(join(REPO, ".github/workflows", workflow), "utf8").split("\n");
+    const at = lines.findIndex((l) => l === `  ${id}:`);
+    if (at < 0) return null;
+    const next = lines.findIndex((l, i) => i > at && /^ {2}[\w-]+:\s*$/.test(l));
+    return lines.slice(at, next < 0 ? undefined : next).join("\n");
+  };
+  const refs = (section: string, ctx: "secrets" | "vars") =>
+    new Set([...section.matchAll(new RegExp(`\\$\\{\\{\\s*${ctx}\\.(\\w+)\\s*\\}\\}`, "g"))].map((m) => m[1]!));
+
+  it("the envs under test are exactly wrangler.json's, so the prefix map cannot go stale (anti-vacuity)", () => {
+    expect(envNames).toEqual(["prod", "stg"]);
+    expect(Object.keys(PREFIX).sort()).toEqual(envNames);
+  });
+
+  it.each(["stg", "prod"])("%s.yml's cron deploy job deploys its own --env only, with the agreed secret and variable names", (env) => {
+    const section = jobSection(`${env}.yml`, `deploy-cron-worker-${env}`);
+    expect(section, `${env}.yml has no deploy-cron-worker-${env} job`).not.toBeNull();
+    const deploys = [...section!.matchAll(/wrangler deploy --env (\S+)/g)].map((m) => m[1]!);
+    expect(deploys.length, "wrangler deploy occurrences").toBeGreaterThanOrEqual(1);
+    for (const e of deploys) {
+      expect(envNames, `--env ${e} is not a wrangler.json env`).toContain(e);
+      expect(e, `${env}.yml must deploy the ${env} Worker only`).toBe(env);
+    }
+    expect(refs(section!, "secrets")).toEqual(new Set(["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", `${PREFIX[env]}_CRON_SECRET`]));
+    expect(refs(section!, "vars")).toEqual(new Set([`${PREFIX[env]}_CRON_WORKER_URL`]));
+    // The unset-URL warning names the same variable, so a typo there cannot hide a skipped smoke.
+    expect(section).toContain(`::warning::${PREFIX[env]}_CRON_WORKER_URL is not set`);
+  });
+});
+
 describe("repo wiring", () => {
   it("A2: the Fly image's build context excludes this workspace", () => {
     // ci.yml's container job runs `turbo run typecheck` inside the builder image,
