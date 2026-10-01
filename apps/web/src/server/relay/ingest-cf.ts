@@ -115,7 +115,12 @@ export class CloudflareIngest implements IngestProvider {
   /** m-2 / G-1 / m-c: what has already been reported, `<what>:<session, or input:<uid> with no session>` — each kind of
    *  report goes out once per session (per process: the live pair is a process singleton, drivers.ts). */
   private readonly reported = new Set<string>();
-  /** m-c: CONSECUTIVE failed outputs reads per session (or input); a read that succeeds ends the run. */
+  /** m-c: CONSECUTIVE failed outputs reads per session (or input); a read that succeeds ends the run.
+   *
+   *  m-9 (final review) — both this run and `reported` above are PER PROCESS. With N web machines each one counts only
+   *  the reads it made itself, so a run of OUTPUT_READ_FAILURES_BEFORE_REPORT takes about N times as long to build up
+   *  as on one machine (later than the nominal 30 s), and a report goes out once per MACHINE, not once per session. This
+   *  is timing and duplication only: what the projection shows does not depend on it. */
   private readonly outputReadFailures = new Map<string, number>();
 
   /** m1 (lane-close review): does this environment carry both secrets the constructor below refuses without? Asked by
