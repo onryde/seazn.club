@@ -17,6 +17,29 @@ import { relayUnavailable } from "@/server/relay/drivers";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { relayCredits } from "@/server/usecases/stream-sessions";
 
+/** The ONE decision of whether Stream is offered, and how far (M-5, final review: the Directory's Streaming tab asks
+ *  this too, so it and the fixture panel cannot disagree). `entitled` is the panel (`streaming.overlay`); `relayEntitled`
+ *  adds the Phone tab's relay (`streaming.relay`, read only when entitled); `relayDisabled` is a relay-entitled org on a
+ *  deployment that cannot start a stream.
+ *
+ *  I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production) refuses every start and
+ *  every pack checkout, so the Phone tab shows that instead of buy tiles and Go live. It also skips the credits read in
+ *  the loader below: that read GRANTS the month's free credits, and a relay-less deployment has no business writing them.
+ *  N1 (fix round 2): asked WITHOUT constructing the drivers — a live deploy missing a Cloudflare secret must not take the
+ *  page down. m1 (lane-close review): nor may it offer Go live and buy tiles — such a deploy cannot start anything, so
+ *  it reads as unavailable too (drivers.ts `relayUnavailable`).
+ *
+ *  `competitionId` scopes both reads the way the overlay route's own gate does (an Event Pass grants for the competition
+ *  it was bought for); without one — the org-wide Directory — they resolve for the org. */
+export async function relayOffer(
+  orgId: string, competitionId?: string,
+): Promise<{ entitled: boolean; relayEntitled: boolean; relayDisabled: boolean }> {
+  const entitled = await hasFeature(orgId, "streaming.overlay", competitionId);
+  const relayEntitled = entitled && (await hasFeature(orgId, "streaming.relay", competitionId));
+  const relayDisabled = relayEntitled && relayUnavailable();
+  return { entitled, relayEntitled, relayDisabled };
+}
+
 export async function loadStreamPanelContext(args: {
   auth: AuthCtx;
   competitionId: string;
@@ -37,15 +60,7 @@ export async function loadStreamPanelContext(args: {
   // Everything after the FIRST read is behind `entitled`. Since V426 (Task 14b) every plan grants both keys, so the
   // reads below run; an org a staff override switched off still costs exactly one entitlement query and neither the
   // second read, the `public` dictionary import, nor a byte of it on the RSC flight.
-  const entitled = await hasFeature(auth.orgId, "streaming.overlay", competitionId);
-  const relayEntitled = entitled && (await hasFeature(auth.orgId, "streaming.relay", competitionId));
-  // I2 (Task 14b review): a deployment with no relay (R5 — RELAY_DRIVERS unset in production) refuses every start and
-  // every pack checkout, so the Phone tab shows that instead of buy tiles and Go live. It also skips the credits read
-  // below: that read GRANTS the month's free credits, and a relay-less deployment has no business writing them.
-  // N1 (fix round 2): asked WITHOUT constructing the drivers — a live deploy missing a Cloudflare secret must not take the
-  // page down. m1 (lane-close review): nor may it offer Go live and buy tiles — such a deploy cannot start anything, so
-  // it reads as unavailable too (drivers.ts `relayUnavailable`).
-  const relayDisabled = relayEntitled && relayUnavailable();
+  const { entitled, relayEntitled, relayDisabled } = await relayOffer(auth.orgId, competitionId);
   // G1 (Task 14 fix round 1): the match-credit checkout returns to the FIXTURE page now (relay-checkout/route.ts,
   // `?checkout=success&session_id=…`), and this render can beat Stripe's webhook — so reconcile the session before
   // reading the balance, exactly as the billing, upgrade and registration pages do on their own returns. Best-effort and

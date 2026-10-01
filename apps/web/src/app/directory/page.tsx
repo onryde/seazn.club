@@ -27,6 +27,7 @@ import { listVenues } from "@/server/usecases/venues";
 import { VenuesPanel } from "@/components/v2/venues-panel";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
+import { relayOffer } from "@/server/stream-panel-context";
 
 const TABS = ["players", "clubs", "officials", "venues", "streaming"] as const;
 type Tab = (typeof TABS)[number];
@@ -37,8 +38,14 @@ export default async function DirectoryPage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const { tab: rawTab } = await searchParams;
-  const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "players";
-  await requirePageAuth();
+  const { auth } = await requirePageAuth();
+  // M-5 (final review): the Streaming tab holds relay destinations (a stream key is only ever used by Go live), so it is
+  // offered exactly when the fixture panel offers Go live — the same decision (`relayOffer`), org-wide here: entitled to
+  // the panel AND the relay, on a deployment that can start a stream. Otherwise the tab is not listed, and its URL
+  // falls back to the first tab like any unknown one.
+  const offer = await relayOffer(auth.orgId);
+  const tabs = TABS.filter((k) => k !== "streaming" || (offer.relayEntitled && !offer.relayDisabled));
+  const tab: Tab = (tabs as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "players";
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
@@ -60,7 +67,7 @@ export default async function DirectoryPage({
             aria-label={t(ui, "directory.sections")}
             className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200"
           >
-            {TABS.map((tabKey) => (
+            {tabs.map((tabKey) => (
               <Link
                 key={tabKey}
                 href={`/directory?tab=${tabKey}`}
