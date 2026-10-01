@@ -34,7 +34,7 @@ import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 import { FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT, FakeAmericanoDriver, WAIT_UNLESS } from "./fake-formats-driver.ts";
-import { wireCodeFor } from "./product-text.ts";
+import { entrantMembersPkeyFrom, entrantMembersPkeyText, wireCodeFor } from "./product-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
@@ -42,6 +42,7 @@ const STAGES_TS = resolve(REPO, "apps/web/src/server/usecases/stages.ts");
 const FORMAT_TEMPLATES_TS = resolve(REPO, "apps/web/src/components/v2/format-templates.ts");
 const ENGINE_AMERICANO_TS = resolve(REPO, "packages/engine/src/scheduling/americano.ts");
 const ENTRANT_MEMBERS_SQL = resolve(REPO, "db/migration/v2-engine/tables/V213__entrant_members.sql");
+const HTTP_TS = resolve(REPO, "apps/web/src/server/api-v1/http.ts");
 /** PF-9: every case runs on the sport's builder-default variant. */
 const variantFor = offlineBuilderDefault;
 /** The catalogue's americano/mexicano body (catalogue.ts stagesForRow): its declared bound and courts. */
@@ -416,7 +417,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(g.length).toBe(1);
     expect(g[0]!.message).toMatch(SELF_PAIR_CAUSE);
     expect(check(checks, "life-loop-bounded").evidence.some((e) => /exited refused_generate/.test(e))).toBe(true);
-    expect(out.notes.filter((n) => n.startsWith("mexicano-pair-entrants-counted-as-players: round 2 generate refused 500 INTERNAL (entrant_members_pkey") && n.includes(`after round 1 created pair entrants ${driver.pairEntrantIds().join(", ")}`) && n.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).length).toBe(1);
+    expect(out.notes.filter((n) => n.startsWith(`mexicano-pair-entrants-counted-as-players: round 2 generate refused 500 INTERNAL (${entrantMembersPkeyText().name}:`) && n.includes(`after round 1 created pair entrants ${driver.pairEntrantIds().join(", ")}`) && n.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).length).toBe(1);
     // Re-derived under FP-5 (T6-R2: every reached stage is asked to complete
     // once): round 1 is all decided, so the complete SUCCEEDS — life-stage-
     // completed passes, and I4 fails on the unnamed 500 alone. Only round 1's
@@ -425,6 +426,50 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(check(checks, "life-stage-completed").verdict).toBe("pass");
     expect(check(checks, "I4-nothing-ends-stuck").evidence).toEqual(["stage 1: generate answered 500 INTERNAL — not a named refusal"]);
     expect(failing(checks)).toEqual(["I4-nothing-ends-stuck", "I8-generate-named", "life-draw-path-exercised", "life-loop-bounded"]);
+  });
+
+  it("T8-R5 (I-R1): SELF_PAIR_CAUSE is the product's — the name Postgres gives V213's unnamed entrant_members key, which the v1 catch-all carries into the 500 and the fake throws", () => {
+    const pk = entrantMembersPkeyText();
+    expect(pk.scanned, "migration files checked for a later name, rename or drop").toBeGreaterThan(0);
+    expect(SELF_PAIR_CAUSE.test(pk.violation), pk.violation).toBe(true);
+    // Canary: the same violation on ANOTHER table's key — a sibling `_pkey`, as
+    // a duplicate pair entrant row would raise — is NOT the cause (the regex is not over-broad).
+    for (const other of ["entrants_pkey", "em_pk"]) expect(SELF_PAIR_CAUSE.test(pk.violation.replace(pk.name, other)), other).toBe(false);
+    // The member insert has no ON CONFLICT, so a duplicate (entrant, person) row raises (stages.ts pairEntrantsFor).
+    const pairs = sliceFunction(readFileSync(STAGES_TS, "utf8"), "pairEntrantsFor");
+    expect(pairs).toContain("await tx`insert into entrant_members ${tx(memberRows)}`;");
+    expect(pairs).not.toMatch(/on conflict/i);
+    // The v1 catch-all: an error no earlier arm claims (a database error is
+    // none of them) answers 500 INTERNAL with the error's OWN message.
+    const http = readFileSync(HTTP_TS, "utf8");
+    const at = http.indexOf("\nasync function v1Inner<T>(");
+    expect(at, "http.ts v1Inner").toBeGreaterThan(-1);
+    const inner = http.slice(at, http.indexOf("\n}\n", at) + 2);
+    expect(inner).toMatch(/\n {4}if \(err instanceof HttpError\) \{[\s\S]*?\n {4}\}\n {4}Sentry\.captureException\(err\);\n {4}const message = err instanceof Error \? err\.message : "Server error";\n[^\n]*\n {4}return errorResponse\(requestId, 500, "INTERNAL", message\);\n {2}\}\n\}$/);
+    expect(wireCodeFor(500)).toBe("INTERNAL");
+  });
+
+  it("T8-R5: the key's name is derived, and refused by name when V213 names it, a later migration renames, names or drops a constraint on the table, or mentions the derived name", () => {
+    const v213 = readFileSync(ENTRANT_MEMBERS_SQL, "utf8");
+    const ok = entrantMembersPkeyFrom(v213, [{ path: "V1__other.sql", text: "create table other (id uuid primary key);" }]);
+    expect(ok).toEqual({ name: "entrant_members_pkey", violation: 'duplicate key value violates unique constraint "entrant_members_pkey"', scanned: 1 });
+    // Empty case: no other migration is a scan of nothing — refused, never a vacuous pass.
+    expect(() => entrantMembersPkeyFrom(v213, [])).toThrow("product-text: no migration besides V213 was scanned for entrant_members constraint changes");
+    // Temp copies of V213 with the key NAMED — on its line, or on the line
+    // before (each guard alone) — or on other columns: the default name no longer applies.
+    for (const named of ["  constraint em_pk primary key (entrant_id, person_id)", "  constraint em_pk\n  primary key (entrant_id, person_id)", "  primary key (entrant_id, org_id)"]) {
+      expect(() => entrantMembersPkeyFrom(v213.replace("  primary key (entrant_id, person_id)", named), [{ path: "x.sql", text: "" }]), named).toThrow("product-text: V213's entrant_members primary key is not the unnamed (entrant_id, person_id) clause");
+    }
+    for (const text of [
+      "alter table entrant_members rename constraint entrant_members_pkey to em_pk;",
+      "alter table if exists public.entrant_members\n  drop constraint entrant_members_pkey;",
+      "ALTER TABLE entrant_members ADD CONSTRAINT em_pk PRIMARY KEY (entrant_id, person_id);",
+      "alter index entrant_members_pkey rename to em_pk;",
+    ]) {
+      expect(() => entrantMembersPkeyFrom(v213, [{ path: "V999__later.sql", text }]), text).toThrow(/^product-text: V999__later\.sql changes entrant_members' constraints/);
+    }
+    // An alter that leaves the constraints alone is fine.
+    expect(entrantMembersPkeyFrom(v213, [{ path: "V998__col.sql", text: "alter table entrant_members add column note text;" }]).name).toBe("entrant_members_pkey");
   });
 
   it("T8-R1: a mexicano 5xx whose message is NOT the self-pair's cause stays unsigned — the same 500 with the product's cause is signed", async () => {
@@ -446,7 +491,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     class Pk500 extends FakeAmericanoDriver {
       override async generate(stageId = "s1"): Promise<GenerateOut> {
         this.log("generate", stageId);
-        throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), 'duplicate key value violates unique constraint "entrant_members_pkey"');
+        throw new RefusedCall("POST", `/api/v1/stages/${stageId}/generate`, 500, wireCodeFor(500), entrantMembersPkeyText().violation);
       }
     }
     const pk = await runOn(new Pk500({ mode: "mexicano" }), "LIFECYCLE", { row: "mexicano", sport: "badminton" });

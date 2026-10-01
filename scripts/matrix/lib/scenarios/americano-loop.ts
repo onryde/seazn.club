@@ -52,8 +52,10 @@ export function americanoRoundSize(config: Readonly<Record<string, unknown>>, n:
  *  ENGINE's planner (generateAmericano, the source F1's round size reads) run
  *  over n placeholders on the stage's courts (declared, else the product's own
  *  default, stages.ts:757-758) for config.rounds, counting only the rounds that
- *  seat a match: the product writes nothing for an empty one, so a field under
- *  4 plans none. Never config.rounds alone. */
+ *  seat a match (the product writes nothing for an empty one). A field under
+ *  4 never reaches the planner — Start refuses it STAGE_NOT_READY
+ *  (stages.ts:751-755) — so under 4 this answers 0 for a Start the product
+ *  would not accept. Never config.rounds alone. */
 export function americanoPlannedRounds(config: Readonly<Record<string, unknown>>, rounds: number, n: number): number {
   const courtCount = typeof config.courtCount === "number" ? config.courtCount : Math.max(1, Math.floor(n / 4));
   return generateAmericano(placeholders(n), { mode: "americano", courtCount, rounds }).filter((r) => r.matches.length > 0).length;

@@ -1,7 +1,7 @@
 // Product rules the model's fake and its pins READ from the product's source
 // instead of typing them (Task 13 fix round 1, ruling C-1): a product change
 // moves the fake with it, and turns the model's pin red.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,39 @@ import type * as TS from "typescript";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
+
+/** T8-R5 (I-R1), pure: the entrant_members primary key's name and the unique
+ *  violation a second (entrant, person) member row raises, as Postgres words
+ *  it. V213 declares the key with no `constraint <name>`, so Postgres names it
+ *  `<table>_pkey` (within NAMEDATALEN − 1 = 63 bytes). Refused by name when
+ *  V213's key is not that unnamed clause, or when any OTHER migration alters a
+ *  constraint on the table, or mentions the derived name (an index rename) —
+ *  the derived name would then not be the live one. `scanned` counts the other
+ *  migrations read; none is refused (anti-vacuity). */
+export function entrantMembersPkeyFrom(v213: string, others: readonly { path: string; text: string }[]): { name: string; violation: string; scanned: number } {
+  const table = /create table if not exists (\w+) \(([\s\S]*?)\n\);/.exec(v213);
+  if (table === null) throw new Error("product-text: V213 has no create table in the expected shape");
+  const [, name0, body] = table;
+  if (!/\n {2}primary key \(entrant_id, person_id\)\n$/.test(`${body}\n`) || /\bconstraint\s+\w+\s+primary\s+key\b/i.test(body)) throw new Error(`product-text: V213's ${name0} primary key is not the unnamed (entrant_id, person_id) clause`);
+  const name = `${name0}_pkey`;
+  if (name.length > 63) throw new Error(`product-text: ${name} exceeds 63 bytes — Postgres would truncate it`);
+  if (others.length === 0) throw new Error(`product-text: no migration besides V213 was scanned for ${name0} constraint changes`);
+  const alters = new RegExp(`alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:public\\.)?${name0}\\b[^;]*`, "gi");
+  for (const { path, text } of others) {
+    const touched = [...text.matchAll(alters)].some(([stmt]) => /\b(?:constraint|primary\s+key|rename)\b/i.test(stmt)) || text.includes(name);
+    if (touched) throw new Error(`product-text: ${path} changes ${name0}' constraints — the default ${name} may not be the live key name`);
+  }
+  return { name, violation: `duplicate key value violates unique constraint "${name}"`, scanned: others.length };
+}
+
+/** T8-R5 (I-R1): entrantMembersPkeyFrom over the repo's own migrations. */
+export function entrantMembersPkeyText(): { name: string; violation: string; scanned: number } {
+  const V213 = "db/migration/v2-engine/tables/V213__entrant_members.sql";
+  const others = readdirSync(resolve(REPO, "db/migration"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".sql") && !f.endsWith("V213__entrant_members.sql"))
+    .map((f) => ({ path: f, text: read(`db/migration/${f}`) }));
+  return entrantMembersPkeyFrom(read(V213), others);
+}
 
 /** api-v1 http.ts statusCode(): the code an HttpError that carries none of its
  *  own reaches the wire with. */

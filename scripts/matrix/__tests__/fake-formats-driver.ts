@@ -48,7 +48,11 @@ import {
 } from "../lib/driver/types.ts";
 import { isTerminal } from "../lib/observed.ts";
 import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
-import { departedStatusesText, ladderText, wireCodeFor } from "./product-text.ts";
+import { departedStatusesText, entrantMembersPkeyText, ladderText, wireCodeFor } from "./product-text.ts";
+
+/** The self-pair's 500 message, read once from V213 (product-text). */
+let selfPairText: string | undefined;
+const selfPairViolation = (): string => (selfPairText ??= entrantMembersPkeyText().violation);
 
 export interface FakeMultiStageOptions {
   /** The TARGET stage seq whose proposals flag a tie between seeds 2 and 3,
@@ -1009,7 +1013,8 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
       selfPairs += n;
     }
     // V213:9: two member rows for one entrant with the same person — the insert fails, the transaction with it.
-    if (selfPairs > 0) throw new RefusedCall("POST", path, 500, wireCodeFor(500), 'duplicate key value violates unique constraint "entrant_members_pkey"');
+    // T8-R5: the violation's text is built from the key name V213 gives Postgres, never typed.
+    if (selfPairs > 0) throw new RefusedCall("POST", path, 500, wireCodeFor(500), selfPairViolation());
     const idFor = (team: readonly [string, string]): string => {
       const sorted = [...team].sort() as [string, string];
       const found = this.#pairs.find((p) => p.members[0] === sorted[0] && p.members[1] === sorted[1]);
