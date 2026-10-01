@@ -309,8 +309,12 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     await startDivision(auth, division.id);
     // Generating the KO before the group stage completes must refuse — it
     // would otherwise bracket every division entrant, not the qualifiers.
+    // The refusal names BOTH stages under a reason the v1 envelope forwards
+    // (api-v1/http.ts), so the desk can say "Groups hasn't finished" in an
+    // amber notice instead of this English message in a red one.
     await expect(generateStageFixtures(auth, knockout.id)).rejects.toMatchObject({
       code: "STAGE_NOT_READY",
+      data: { reason: "previous_stage_incomplete", stageId: knockout.id, previousStageId: groups.id },
     });
     // Decide everything (home wins), complete → KO gets seeded.
     for (const fixture of generated.fixtures) await decide(auth, fixture.id, 1, 0);
