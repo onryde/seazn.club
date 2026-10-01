@@ -368,27 +368,34 @@ describe("regression cases (R29)", () => {
     }
     expect(checked).toBe(cases.length);
   });
-  // T15-R5 (W1-driving Task 16): a NEW product failure in committed W1-driving
-  // model evidence is committed as a regression case (R29), so the next model
-  // run judges it instead of rediscovering it. Scoped to the W1-driving runs
-  // (run id `w1drv-…`): W1b's first reports (w1b-model-0928a/b) hold failures
-  // found before W1b's own shrinks and harness fixes, committed as history.
-  // Expected values are the finding report's, never the catalogue's.
-  it("T15-R5: every new failure in a committed W1-driving model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences", () => {
+  // T15-R5 (W1-driving Task 16): a NEW product failure in committed model
+  // evidence is committed as a regression case (R29), so the next model run
+  // judges it instead of rediscovering it. Every run is held to it, from W1d
+  // on too (T16-R4 m-7), except the named history below. Expected values are
+  // the finding report's, never the catalogue's.
+  /** W1b's first model reports: they hold failures found before W1b's own
+   *  shrinks and harness fixes, committed as history and never as cases
+   *  (MB-001..005 were committed from W1b fix round 1's later runs). */
+  const PRE_FIX_HISTORY_RUNS: readonly string[] = ["w1b-model-0928a", "w1b-model-0928b"];
+  it("T15-R5: every new failure in a committed model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences — save the named pre-fix W1b history (T16-R4 m-7)", () => {
     type Cell = { cell: string; verdict: string; maxCommands: number; fences: boolean; failure: { check: string; seed: number; path: string; replayPath: string | null } | null };
     const found: { runId: string; cell: Cell; failure: NonNullable<Cell["failure"]> }[] = [];
+    const exempted = new Map<string, number>(PRE_FIX_HISTORY_RUNS.map((id) => [id, 0]));
     const walk = (dir: string): void => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         if (e.isDirectory()) walk(join(dir, e.name));
         else if (/^model-report.*\.json$/.test(e.name)) {
           const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as { runId: string; cells: Cell[] };
-          if (!rep.runId.startsWith("w1drv-")) continue;
-          for (const c of rep.cells) if (c.verdict === "new-failure" && c.failure !== null) found.push({ runId: rep.runId, cell: c, failure: c.failure });
+          const news = rep.cells.filter((c) => c.verdict === "new-failure" && c.failure !== null);
+          if (exempted.has(rep.runId)) { exempted.set(rep.runId, (exempted.get(rep.runId) ?? 0) + news.length); continue; }
+          for (const c of news) found.push({ runId: rep.runId, cell: c, failure: c.failure! });
         }
       }
     };
     walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
-    expect(found.length, "no NEW failure in W1-driving model evidence — the pin would be vacuous").toBeGreaterThan(0);
+    // The exemption is earned, not stale: each named run is committed and holds a NEW failure.
+    for (const [id, n] of exempted) expect(n, `${id}: the exempt run is gone or holds no NEW failure — drop it from the exemption`).toBeGreaterThan(0);
+    expect(found.length, "no NEW failure in committed model evidence — the pin would be vacuous").toBeGreaterThan(0);
     const cases = loadRegressions();
     let checked = 0;
     for (const { runId, cell, failure } of found) {
@@ -399,7 +406,7 @@ describe("regression cases (R29)", () => {
       checked++;
     }
     expect(checked).toBe(found.length);
-    console.info(`T15-R5: ${checked} W1-driving NEW failure(s), each a committed case`);
+    console.info(`T15-R5: ${checked} NEW failure(s), each a committed case; exempt ${JSON.stringify(Object.fromEntries(exempted))}`);
   });
   // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its
   // finding, so honouring it would fence out the very command the case exists
