@@ -34,7 +34,12 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
   // poller. `initialView` seeds the view: a unit-test seam only (the server never passes it; see StreamSessionProvider).
   const enabled = opts.enabled ?? true;
   const msg = useMsg();
-  const confirm = useConfirm();
+  // B5 review m-1: the console mounts the provider on EVERY fixture page, disabled when there is no stream. A disabled
+  // session never asks, so it needs no dialog (the console's node harnesses render none); an enabled one fails fast
+  // without it, as `useConfirm()` would. Asked anyway, a disabled one DECLINES — never a stop without a confirmation.
+  const dialog = useConfirm({ optional: true });
+  if (enabled && !dialog) throw new Error("useConfirm needs <ConfirmProvider> in the tree");
+  const confirm = dialog ?? (async () => false);
   const [view, setView] = useState<StreamSessionView | null>(opts.initialView ?? null);
   // "Start another" / "Try again" put the tab back to idle WITHOUT forgetting the server's answer. `current` returns
   // the LATEST session in any state, terminal ones included, so every later read (the refresh after a refused create,
@@ -174,23 +179,28 @@ const SessionCtx = createContext<(PhoneSession & { fixtureId: string }) | null>(
 
 /**
  * The page's ONE poller for `fixtureId`. Under an outer provider for the SAME fixture it adds nothing (its own hook is
- * disabled and the outer session passes through), so nesting can never start a second poll. `initialView` is a
- * unit-test seam only — the console mounts the provider without it, and so does every server-rendered page.
+ * disabled and the outer session passes through), so nesting can never start a second poll. `enabled` false (no stream
+ * on the page) adds nothing either: no read, no poll, and whatever is outside passes through. The element it renders is
+ * the same in every case (B5 review m-1): the console mounts it unconditionally, so a stream mount appearing or going
+ * away on a refresh flips `enabled`, never the tree — the subtree below is not remounted. `initialView` is a unit-test
+ * seam only — the console mounts the provider without it, and so does every server-rendered page.
  */
 export function StreamSessionProvider({
   fixtureId,
+  enabled = true,
   initialView,
   children,
 }: {
   fixtureId: string;
+  enabled?: boolean;
   initialView?: StreamSessionView | null;
   children: ReactNode;
 }) {
   const outer = useContext(SessionCtx);
   const reuse = outer !== null && outer.fixtureId === fixtureId;
-  const own = usePhoneSession(fixtureId, { enabled: !reuse, initialView });
-  if (reuse) return <>{children}</>;
-  return <SessionCtx.Provider value={{ ...own, fixtureId }}>{children}</SessionCtx.Provider>;
+  const owns = enabled && !reuse;
+  const own = usePhoneSession(fixtureId, { enabled: owns, initialView });
+  return <SessionCtx.Provider value={owns ? { ...own, fixtureId } : outer}>{children}</SessionCtx.Provider>;
 }
 
 /**

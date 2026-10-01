@@ -1167,6 +1167,8 @@ for (const width of [320, 1280] as const) {
 // ===========================================================================
 // A7 — Stop is always reachable, whatever took the panel away
 // ===========================================================================
+/** The no-stream page's measurement window, in poll periods: an enabled provider reads on mount, at once. */
+const NO_MOUNT_POLLS = 2;
 const A7_SWITCHES = [
   {
     id: "a",
@@ -1191,8 +1193,8 @@ const A7_SWITCHES = [
 
 for (const sw of A7_SWITCHES) {
   test(`A7(${sw.id}): a LIVE stream, then ${sw.name} → the stop probe still shows it live, and fits and is tappable at 1280 and 320 → Stop (at 320) → ended`, async ({ page }) => {
-    const NAVS = 2; // openFixture (the grant) + openPhoneTab
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS);
+    const NAVS = 3; // openFixture (the grant) + openPhoneTab + the page again once it is over
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 30_000 + NAVS * NAV_MS + NO_MOUNT_POLLS * STREAM_POLL_MS);
     await page.setViewportSize({ width: 1280, height: 900 });
     const rig = await seedRelayRig(page);
     const target = await addTargetApi(page, rig.orgId, { label: `A7${sw.id} destination` });
@@ -1237,6 +1239,23 @@ for (const sw of A7_SWITCHES) {
     await expect(probe).toHaveCount(0, { timeout: POLL_WAIT_MS });
     const row = (await sessionsOf({ fixtureId: f.id })).find((s) => s.id === live.id)!;
     expect(row, "the tap ended the stream").toMatchObject({ state: "completed", end_reason: "stopped" });
+
+    // B5 review m-1: once it is over, a page with no stream to show mounts no Stream control — and its session provider,
+    // always mounted now so a refresh never remounts the console, reads NOTHING (`enabled` false). The panel case keeps
+    // its panel (the overlay is still granted), so only the stop-only switches reach a page with no stream mount.
+    if (!sw.inPanel) {
+      let gets = 0;
+      page.on("request", (r) => {
+        if (r.method() === "GET" && new URL(r.url()).pathname.endsWith(`/fixtures/${f.id}/stream-sessions/current`)) gets++;
+      });
+      await page.setViewportSize({ width: 1280, height: 900 });
+      // Not `openFixture`: a frozen match with no stream renders neither the Scoring section nor the Stream card.
+      await page.goto(`${rig.divPath}/f/${f.no}`);
+      await expect(page.locator("header h1"), "the fixture page rendered").toContainText(`Side A ${rig.tag}`);
+      await expect(streamControl(page), "no stream on this page: no Stream control").toHaveCount(0);
+      await page.waitForTimeout(NO_MOUNT_POLLS * STREAM_POLL_MS);
+      expect(gets, "no stream mount: the provider reads nothing (an enabled one reads on mount)").toBe(0);
+    }
   });
 }
 

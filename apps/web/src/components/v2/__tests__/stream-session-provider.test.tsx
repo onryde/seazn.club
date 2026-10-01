@@ -60,6 +60,25 @@ describe("StreamSessionProvider / useSharedPhoneSession — one session per fixt
     expect(read(html, "f1"), "an inner provider that shadowed the outer would read none|unread").toBe("s1|loaded");
   });
 
+  // B5 review m-1: the console always mounts the provider (a stable root), `enabled` false when the page has no stream.
+  // A disabled provider adds nothing — it neither polls nor hands out a session of its own, whatever it was seeded with.
+  it("a DISABLED provider adds nothing: a reader under it keeps its own session, and an outer one passes through", () => {
+    const alone = renderToStaticMarkup(
+      <StreamSessionProvider fixtureId="f1" enabled={false} initialView={view("s1", "f1")}>
+        <Probe fixtureId="f1" />
+      </StreamSessionProvider>,
+    );
+    expect(read(alone, "f1"), "not the disabled provider's seeded session").toBe("none|unread");
+    const nested = renderToStaticMarkup(
+      <StreamSessionProvider fixtureId="f1" initialView={view("s1", "f1")}>
+        <StreamSessionProvider fixtureId="f1" enabled={false}>
+          <Probe fixtureId="f1" />
+        </StreamSessionProvider>
+      </StreamSessionProvider>,
+    );
+    expect(read(nested, "f1"), "the outer session passes through a disabled provider").toBe("s1|loaded");
+  });
+
   it("…while a nested provider for a DIFFERENT fixture is that fixture's own", () => {
     const html = renderToStaticMarkup(
       <StreamSessionProvider fixtureId="f1" initialView={view("s1", "f1")}>

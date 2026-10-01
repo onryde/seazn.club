@@ -37,9 +37,13 @@ type ConfirmFn = (opts: ConfirmOptions) => Promise<boolean>;
 
 const ConfirmContext = createContext<ConfirmFn | null>(null);
 
-export function useConfirm(): ConfirmFn {
+export function useConfirm(): ConfirmFn;
+/** `optional`: the dialog when a provider is mounted, else null — never throws. For a hook that asks only while it is
+ *  active, and owes the fail-fast itself then (a DISABLED stream session never asks; B5 review m-1). */
+export function useConfirm(opts: { optional: true }): ConfirmFn | null;
+export function useConfirm(opts?: { optional: true }): ConfirmFn | null {
   const fn = useContext(ConfirmContext);
-  if (!fn) throw new Error("useConfirm needs <ConfirmProvider> in the tree");
+  if (!fn && !opts?.optional) throw new Error("useConfirm needs <ConfirmProvider> in the tree");
   return fn;
 }
 

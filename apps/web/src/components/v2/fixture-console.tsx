@@ -1451,7 +1451,13 @@ export function FixtureConsole({
     </div>
   );
   // Spec §2 (T9b): ONE `current` poller per fixture page — the Stream button's dot and the panel read the same session.
-  return stream ? <StreamSessionProvider fixtureId={fixture.id}>{root}</StreamSessionProvider> : root;
+  // Always mounted (B5 review m-1): a stream mount that comes or goes on a refresh flips `enabled`, never the root's type,
+  // so the pad, the disclosures and the ledger are not remounted mid-match.
+  return (
+    <StreamSessionProvider fixtureId={fixture.id} enabled={!!stream}>
+      {root}
+    </StreamSessionProvider>
+  );
 }
 
 function decidedLock(status: string): boolean {

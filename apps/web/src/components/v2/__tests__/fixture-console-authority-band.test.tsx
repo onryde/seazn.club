@@ -23,6 +23,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { isValidElement } from "react";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { builtinModules } from "@seazn/engine/sports";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import { messages } from "@/lib/messages";
@@ -84,8 +86,7 @@ const EVENTS: EventIn[] = [
   },
 ];
 
-function consoleHtml(
-  over: {
+type ConsoleOver = {
     status?: string;
     outcome?: unknown;
     deviceHandover?: boolean;
@@ -102,8 +103,9 @@ function consoleHtml(
     /** T9b: the page's shared stream session, seeded through `StreamSessionProvider`'s test seam (the server never
      *  passes it). The console's own provider for the same fixture adds nothing beneath it, so this IS what it reads. */
     streamView?: StreamSessionView | null;
-  } = {},
-): string {
+};
+/** The console element the page renders for `over` (no outer provider). */
+function consoleTree(over: ConsoleOver = {}) {
   const status = over.status ?? "in_play";
   const live: LiveState = {
     status,
@@ -142,6 +144,10 @@ function consoleHtml(
       viewerPlan="community"
     />
   );
+  return tree;
+}
+function consoleHtml(over: ConsoleOver = {}): string {
+  const tree = consoleTree(over);
   return renderToStaticMarkup(
     over.streamView === undefined ? tree : <StreamSessionProvider fixtureId="f1" initialView={over.streamView}>{tree}</StreamSessionProvider>,
   );
@@ -533,5 +539,31 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     ).toBe("mb-3 flex flex-wrap items-center justify-between gap-2");
     expect(html).toMatch(/<h2[^>]*class="[^"]*\smax-md:hidden"[^>]*>[^<]*Scoring</);
     expect(html).toContain("Start match");
+  });
+});
+
+// B5 review m-1: the console's root ELEMENT TYPE must not depend on whether the page mounts a stream. A stop-only mount
+// whose session ends turns `stream` null on the next `router.refresh()` (every scored event); a root that flips between
+// `<StreamSessionProvider>` and the bare tree remounts the pad, the disclosures and the ledger mid-match. So the
+// provider is always there, and `enabled` says whether it polls.
+describe("the console root is stable across the stream mount (B5 review m-1)", () => {
+  it("every mount shape — none, stop-only, panel — renders the SAME root element type; only `enabled` differs", () => {
+    const shapes: { name: string; stream: FixtureStreamMount | undefined; polls: boolean }[] = [
+      { name: "no stream", stream: undefined, polls: false },
+      { name: "stop-only", stream: { mode: "stop-only" }, polls: true },
+      { name: "panel", stream: PANEL_MOUNT, polls: true },
+    ];
+    const roots = shapes.map((shape) => {
+      const island = renderIsland(FixtureConsole, consoleTree({ stream: shape.stream }).props);
+      const out = island.tree()[0];
+      island.unmount();
+      expect(isValidElement(out), `${shape.name}: the console rendered an element`).toBe(true);
+      return { ...shape, root: out! };
+    });
+    expect(roots.length).toBe(3);
+    for (const r of roots) {
+      expect(r.root.type, `${r.name}: the root is the session provider`).toBe(StreamSessionProvider);
+      expect((r.root.props as { enabled?: boolean }).enabled, `${r.name}: polls only with a stream mounted`).toBe(r.polls);
+    }
   });
 });
