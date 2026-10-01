@@ -2021,3 +2021,45 @@ describe("Task 14 fix round 1: the model's sinks on the shared lineup planner", 
     expect(m.findings.get(LINEUP_LOCKED_FINDING)?.evidence[0]).toContain(`${f!.id} was in_play when the model came to it`);
   });
 });
+
+// Review m-5: the fake's `by-product` trace label is set where the withdrawal
+// cascade writes, never read off the post's idempotency prefix.
+describe("Task 14 fix round 1: the fake labels the cascade's writes at their call sites", () => {
+  /** The table fake's other policy: a withdrawal walks every pending fixture over (no early expunge). */
+  class Walks extends ModelFakeDriver {
+    override expungesEarly(): boolean { return false; }
+  }
+  it.each([
+    ["expunge", () => new ModelFakeDriver()],
+    ["walkover", () => new Walks()],
+  ] as const)("an organiser post with no prefix is the organiser's; every write of a %s cascade is labelled by-product, and the label closes after it", async (policy, make) => {
+    // single-sport: the fake's trace is sport-blind.
+    const { m, d } = await fresh({}, {}, make());
+    await play(m, d, [["Start", 0], ["Score", 0, 0]]);
+    const scored = [...m.fixtures.values()].find((x) => x.ledger !== null && x.ledger.length > 0);
+    if (scored === undefined) throw new Error("test: Score decided nothing");
+    const who = scored.home!;
+    const [g] = openOf(m).filter((x) => x.home !== who && x.away !== who);
+    if (g === undefined) throw new Error("test: a round robin of 4 leaves a fixture the withdrawn entrant is not in");
+    await d.postStream(g.id, [{ type: "core.start", payload: {} }]);
+    expect(d.trace.at(-1)).toBe(`postStream ${g.id}`);
+    const before = d.trace.length;
+    const out = await d.withdraw(who);
+    expect(out.policy).toBe(policy);
+    const cascade = d.trace.slice(before).filter((t) => t.startsWith("postStream "));
+    // The product's own count of what it wrote: an expunge voids the played fixture's events and abandons all
+    // three (voided 3, so 3 abandons plus at least one void); a walkover forfeits the two pending ones.
+    if (policy === "expunge") {
+      expect(out.voided).toBe(3);
+      expect(cascade.length).toBeGreaterThan(out.voided);
+    } else {
+      expect(out.walkovers).toBe(2);
+      expect(cascade.length).toBe(out.walkovers);
+    }
+    for (const t of cascade) expect(t).toMatch(/^postStream \S+ by-product$/);
+    // The label closes with the cascade: the organiser's next post is its own again.
+    // (A second start may be refused; the fake writes the trace line before it judges the post.)
+    await d.postStream(g.id, [{ type: "core.start", payload: {} }]).catch(() => []);
+    expect(d.trace.at(-1)).toBe(`postStream ${g.id}`);
+  });
+});

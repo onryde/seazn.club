@@ -228,15 +228,18 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       return { created, existing: this.fixtures.length - created, fixtures: this.rows() };
     });
   }
-  override postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
+  override postStream(id: string, events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
+    // PF-4: `calls` keeps the bare name; `trace` carries the fixture (Task
+    // 14). The withdrawal cascade below writes through this method — the
+    // product's own write, which no organiser driver call makes — so its trace
+    // line says so: `postStream <f>` is the organiser's post, `postStream <f>
+    // by-product` the cascade's. The label is set at the cascade's call sites
+    // (#cascadePost), never read off the prefix (review m-5): an organiser
+    // post may carry none. Read here, synchronously, before any await.
+    const label = this.#cascading > 0 ? " by-product" : "";
     return Promise.resolve().then(() => {
-      // PF-4: `calls` keeps the bare name; `trace` carries the fixture (Task
-      // 14). The withdrawal cascade below writes through this method with no
-      // idempotency prefix — the product's own write, which no organiser
-      // driver call makes — so its trace line says so: `postStream <f>` is
-      // the organiser's post, `postStream <f> by-product` the cascade's.
       this.calls.push("postStream");
-      this.trace.push(prefix === "" ? `postStream ${id} by-product` : `postStream ${id}`);
+      this.trace.push(`postStream ${id}${label}`);
       const f = this.fixtures.find((x) => x.id === id);
       if (f === undefined) throw new Error(`fake: no fixture ${id}`);
       if (f.home_entrant_id === null || f.away_entrant_id === null) throw new Error(`fake: fixture ${id} is not seated`);
@@ -334,15 +337,27 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   override async abandonFixture(f: FakeFixture): Promise<void> {
     if (SETTLED.has(f.status) && f.outcome !== null) {
       const targets = liveEntries(this.ledgers.get(f.id) ?? []).filter((e) => !NOT_VOIDED.has(e.type)).sort((a, b) => b.seq - a.seq);
-      for (const t of targets) await this.postStream(f.id, [{ type: "core.void", payload: { event_id: t.id } }]);
+      for (const t of targets) await this.#cascadePost(f.id, [{ type: "core.void", payload: { event_id: t.id } }]);
     }
-    await this.postStream(f.id, [{ type: "core.abandon", payload: { reason: REASON } }]);
+    await this.#cascadePost(f.id, [{ type: "core.abandon", payload: { reason: REASON } }]);
   }
   /** withdrawal.ts applyUpdate's walkover: a bare core.forfeit, whatever the
    *  fixture's status — no START first (HttpDriver.forfeit's composition is the
    *  organiser's, not the cascade's). */
   override async walkoverFixture(f: FakeFixture, by: string): Promise<void> {
-    await this.postStream(f.id, [{ type: "core.forfeit", payload: { by, reason: REASON } }]);
+    await this.#cascadePost(f.id, [{ type: "core.forfeit", payload: { by, reason: REASON } }]);
+  }
+  /** Open while a withdrawal cascade writes (review m-5): postStream labels its trace line `by-product`. */
+  #cascading = 0;
+  /** The withdrawal cascade's write: through postStream (so a subclass's
+   *  override still sees it), labelled the product's own. */
+  async #cascadePost(id: string, events: readonly StreamEvent[]): Promise<void> {
+    this.#cascading++;
+    try {
+      await this.postStream(id, events);
+    } finally {
+      this.#cascading--;
+    }
   }
   override rebuild(_stageId: string): Promise<void> {
     return Promise.resolve().then(() => {

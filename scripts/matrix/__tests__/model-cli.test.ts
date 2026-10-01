@@ -941,9 +941,13 @@ describe("model.ts --cell (W1-driving Task 14)", () => {
     const dir = reportDir();
     const made: ModelFakeDriver[] = [];
     const exit = await runModel(gridDeps(() => { const d = new ModelFakeDriver(); made.push(d); return d; }), ["--run-id", "tc", "--report-dir", dir, "--cell", "league|cricket", "--runs", "5"]);
-    expect(exit).not.toBe(2);
-    const rep = JSON.parse(readFileSync(join(dir, "tc", "model-report.json"), "utf8")) as { cells: { cell: string; failure: unknown; stepChecks: Record<string, number> }[] };
+    const rep = JSON.parse(readFileSync(join(dir, "tc", "model-report.json"), "utf8")) as { cells: { cell: string; failure: unknown; vacuous: string[]; verdict: string; stepChecks: Record<string, number> }[] };
     expect(rep.cells.map((c) => c.cell)).toEqual(["league|cricket"]);
+    // Review m-7: the vacuous list itself, not just "not refused" — a team cell
+    // whose lineup check counted nothing would land here (vacuityOf) and exit 1.
+    expect(rep.cells[0]?.vacuous).toEqual([]);
+    expect(rep.cells[0]?.verdict).toBe("ok");
+    expect(exit).toBe(0);
     expect(rep.cells[0]?.failure).toBeNull();
     expect(rep.cells[0]?.stepChecks["model-lineups-put"] ?? 0).toBeGreaterThan(0);
     expect(made.length).toBe(1);

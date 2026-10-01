@@ -1,4 +1,8 @@
-// The fast-check model over W1a's slice, run live (design §7.5, R29):
+// The fast-check model over the format×sport grid, run live (design §7.5,
+// R29). --cell takes any grid cell (W1-driving Task 14); with none, a run
+// takes W1a's slice (SLICE_CELLS) and a --regressions replay takes every cell
+// a committed case names (T14-R2). Either way a cell on a row the model does
+// not drive is refused by family before anything runs (D6, ModelUnsupported):
 //
 //   pnpm run matrix:model --
 //     --run-id ID [--report-dir DIR] [--cell row|sport]... [--runs N]
@@ -13,7 +17,8 @@
 // fresh division in it (runCell), and the cell moves to a fresh competition
 // before the plan's per-competition division cap (DIVISION_CAP_KEY). A cell's seed is FNV-1a of `${runId}|${cell}`
 // — derived, logged and written, never read from a clock. --regressions
-// replays every committed regression on the cells instead, each at its own
+// replays every committed regression on the cells instead (a case on a cell
+// --cell left out is a skip said aloud: printed, counted, listed), each at its own
 // seed, path, replayPath and command bound (its maxCommands, W1b carry b), one
 // run, with the fences it was found at unless it names a fence of its own
 // (replayFences, W1c T2 ruling Q1).
