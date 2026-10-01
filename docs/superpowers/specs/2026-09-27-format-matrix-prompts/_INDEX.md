@@ -831,7 +831,7 @@ a peer session as the other.
       batched per ruling 41.
 
 The five decisions below are the owner's, made on 2026-10-01 and recorded by the controller in the W1-driving SDD
-ledger. Controller ruling T16-R4 numbered them. Quotation marks hold the owner's words where the ledger has them.
+ledger. Controller ruling T16-R4 numbered them. Quotation marks hold the owner's words where the ledger or the controller's 2026-10-01 conversation with the owner has them.
 Elsewhere the text is the controller's record.
 
 55. **Format templates stay in code** (2026-10-01). The owner, asked "should we hardcode like this, should driven from
@@ -2545,3 +2545,8 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
 24. **Cosmetic: the americano policy note prints a team entrant's whole roster** ("of <id>+<id>+…", Task 15).
 25. **Item 12 again, on the model CLI** (Task 16). A model run id reused against the same DB, after its report
     directory was removed, aborted on `organizations_slug_key` instead of refusing up front by name.
+26. **Two committed cases that share cell, check and match make an exploring run's fence rule blind** (Task 16
+    re-review 1). MB-007 and MB-010 share all three, so the narrowed-fence run (`w1drv-t16fr1-model-de`) labelled
+    the new withdrawn-trigger failure `known: MB-007` and exited 0; MB-010 was found only by reading its commands.
+    "A fence guards only what a committed case shows, else the bug reports NEW" does not hold for such pairs: make
+    the matcher (or the exploring run's report) distinguish cases by their shown trigger, not only cell/check/match.
