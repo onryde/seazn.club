@@ -410,6 +410,7 @@ describe("results v3 — the run's worker count (W1-driving T11, ruling 46)", ()
         continue;
       }
       expect(Number.isInteger(raw.workers) && (raw.workers as number) > 0, `${f}: workers header ${JSON.stringify(raw.workers)} is not a positive integer`).toBe(true);
+      if (parsed.schemaVersion !== 3) throw new Error(`${f}: a v3 header parsed as v${parsed.schemaVersion}`);
       expect(parsed.workers, f).toBe(raw.workers);
       withHeader++;
     }
