@@ -378,7 +378,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
   });
 });
 
-describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002..005, MB-007 and MB-008's triggers, and nothing else", () => {
+describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002..005 and MB-007..009's triggers, and nothing else", () => {
   const KO_TBD = "ko-withdraw-waiting-on-tbd";
   const KO_GEN = "ko-generate-after-roster-change";
   /** The stage kinds the OPEN committed cases naming `fence` build: each
@@ -427,7 +427,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(checked).toBe(2 * PENDING_STATUSES.length);
     expect(PENDING_STATUSES.length).toBeGreaterThan(0);
   });
-  it("G-1 (T15-R8): each bracket fence applies on exactly the stage kinds its committed cases witness — knockout (MB-002..005), stepladder (MB-008), double elim (MB-007) — each one a kind the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
+  it("G-1 (T15-R8): each bracket fence applies on exactly the stage kinds its committed cases witness — knockout (MB-002..005), stepladder (MB-008), double elim (MB-007, MB-009) — each one a kind the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
     const walkover = bracketWalkoverKindsText();
     expect(walkover.length, "BRACKET_WALKOVER_KINDS read empty").toBeGreaterThan(0);
     // A started knockout where e1 waits on a TBD seat in the final: each

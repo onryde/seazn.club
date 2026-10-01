@@ -20,11 +20,12 @@ import type { CommandKind, ModelState } from "./state.ts";
  *  case that names the fence (regressions.json `fence`) is its witness. */
 export interface Fence { readonly id: string; readonly issue: string | null; readonly blocks: CommandKind; applies(m: ModelState, subject: string | null): boolean }
 
-/** ko-withdraw-waiting-on-tbd's stage kinds: knockout (MB-002/003) and
- *  stepladder (MB-008, w1drv-model-m6). Both are stages.ts
- *  BRACKET_WALKOVER_KINDS, the list withdrawal.ts walks over. Double elim is
- *  in that list too, but no committed case witnesses it there yet. */
-const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder"]);
+/** ko-withdraw-waiting-on-tbd's stage kinds: knockout (MB-002/003),
+ *  stepladder (MB-008, w1drv-model-m6) and double elim (MB-009, found by the
+ *  T16 run w1drv-t16-model-g1 once MB-007's fence steered that cell off its
+ *  first trigger). All three are stages.ts BRACKET_WALKOVER_KINDS, the list
+ *  withdrawal.ts walks over. */
+const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder", "double_elim"]);
 /** ko-generate-after-roster-change's stage kinds: knockout (MB-004/005) and
  *  double elim (MB-007, w1drv-model-m6): generateStageFixtures' bye-award
  *  path, which reads the same BRACKET_WALKOVER_KINDS. Stepladder is in that
@@ -48,14 +49,14 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "ko-withdraw-waiting-on-tbd",
     issue: null,
     blocks: "Withdraw",
-    // MB-002/003 (knockout), MB-008 (stepladder). withdrawal.ts: a bracket
-    // withdrawal voids the entrant's pending fixture when its opponent is TBD
-    // ("A TBD opponent can't receive a walkover"), and that void rides
-    // core.abandon, which append-event.ts refuses on a fixture with an
-    // unassigned entrant (422 WRONG_PHASE) — so the withdrawal the model holds
-    // legal is refused. Only the entrant this Withdraw would pick, only while
-    // it waits in a pending fixture (the product's PENDING_STATUSES) on an
-    // empty seat. Every stepladder game after the first seats its seed against
+    // MB-002/003 (knockout), MB-008 (stepladder), MB-009 (double elim).
+    // withdrawal.ts: a bracket withdrawal voids the entrant's pending fixture
+    // when its opponent is TBD ("A TBD opponent can't receive a walkover"),
+    // and that void rides core.abandon, which append-event.ts refuses on a
+    // fixture with an unassigned entrant (422 WRONG_PHASE) — so the withdrawal
+    // the model holds legal is refused. Only the entrant this Withdraw would
+    // pick, only while it waits in a pending fixture (the product's
+    // PENDING_STATUSES) on an empty seat. Every stepladder game after the first seats its seed against
     // a TBD line (the L3 triage's P5), so MB-008 tripped on Start → Withdraw.
     applies: (m: ModelState, subject: string | null) => WITHDRAW_ON_TBD_KINDS.includes(m.stageKind) && subject !== null &&
       [...m.fixtures.values()].some((f) => PENDING_STATUSES.includes(f.status) && ((f.home === subject && f.away === null) || (f.away === subject && f.home === null))),

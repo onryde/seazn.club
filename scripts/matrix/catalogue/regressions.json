@@ -126,6 +126,24 @@
       "status": "open",
       "found": "2026-10-01",
       "runId": "w1drv-model-m6"
+    },
+    {
+      "id": "MB-009",
+      "title": "double elim withdraw of an entrant waiting for a TBD opponent is refused (422 WRONG_PHASE)",
+      "issue": null,
+      "cell": "double_elim|generic",
+      "variant": "score",
+      "check": "model-unexpected-refusal",
+      "seed": 791045864,
+      "path": "8:6:3:3:3",
+      "replayPath": "AASDEL:q",
+      "maxCommands": 30,
+      "fencesOn": true,
+      "fence": "ko-withdraw-waiting-on-tbd",
+      "match": "fixture has an unassigned entrant (bye/TBD)",
+      "status": "open",
+      "found": "2026-10-01",
+      "runId": "w1drv-t16-model-g1"
     }
   ]
 }
