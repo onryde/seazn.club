@@ -216,10 +216,11 @@ function rethrowKekFault(err: unknown): void {
  *  The two errors are not symmetric and the asymmetry is the argument: a false REJECT is a 404 on a stream target,
  *  which an organiser retries; a false ACCEPT hands one org another org's destination credential, which is
  *  unrecoverable the moment it is used. A wrong `orgId` therefore reads exactly like a missing row — no oracle, one
- *  sentence, and the id is not a secret so it stays in the message. */
+ *  sentence, and the id is not a secret so it stays in the message. An ARCHIVED (removed) row reads the same way (M-1,
+ *  final review): its key is never opened, whoever the caller is and whatever lock it holds. */
 export async function readTargetSecret(tx: Tx, orgId: string, targetId: string): Promise<{ url: string; streamKey: string }> {
   const [row] = await tx<{ rtmp_enc: Uint8Array; kind: string }[]>`
-    select rtmp_enc, kind from org_stream_targets where id = ${targetId} and org_id = ${orgId}`;
+    select rtmp_enc, kind from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
   if (!row) throw new Error(`stream target ${targetId} not found`);
   let fields: Record<(typeof TARGET_SEALED)[number], string>;
   try {

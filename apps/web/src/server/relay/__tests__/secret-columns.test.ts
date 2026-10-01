@@ -415,6 +415,19 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(await sql.begin((tx) => lockStreamTarget(tx, a.orgId, t.id))).toBe(false);
   });
 
+  it("M-1 (final review): readTargetSecret opens an ACTIVE row only — an archived (removed) destination's key reads as absent, exactly like another org's id; restoring it opens it again", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const t = await put(orgId, d);
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id)), "PREMISE: the active row opens").toEqual(d);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, orgId, t.id))).toBe(true);
+    await expect(sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).rejects.toThrow(`stream target ${t.id} not found`);
+    // The positive pair: re-adding the same key restores the SAME row, and it opens again.
+    const back = await put(orgId, d);
+    expect(back).toMatchObject({ id: t.id, outcome: "restored" });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).toEqual(d);
+  });
+
   it("keyHintOf: null below KEY_HINT_MIN_LENGTH, the last KEY_HINT_CHARS characters at and above it", () => {
     const short = "x".repeat(KEY_HINT_MIN_LENGTH - 1);
     const exact = `${"y".repeat(KEY_HINT_MIN_LENGTH - KEY_HINT_CHARS)}abc`;
