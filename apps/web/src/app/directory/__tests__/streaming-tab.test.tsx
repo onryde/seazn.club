@@ -13,13 +13,15 @@ import { prerender } from "react-dom/static";
 const m = vi.hoisted(() => ({
   hasFeature: vi.fn<(orgId: string, key: string, competitionId?: string) => Promise<boolean>>(),
   requirePageAuth: vi.fn(),
-  listStreamTargets: vi.fn(async () => []),
+  listStreamTargets: vi.fn<() => Promise<{ id: string; label: string }[]>>(async () => []),
   expireTargetHolders: vi.fn(async () => undefined),
   defaultDeps: vi.fn((appUrl: string) => ({ appUrl, marker: "deps" })),
+  captureError: vi.fn(),
 }));
 
 vi.mock("@/lib/entitlements", () => ({ hasFeature: m.hasFeature, orgPlanKey: async () => "pro" }));
 vi.mock("@/server/page-auth", () => ({ requirePageAuth: m.requirePageAuth }));
+vi.mock("@/lib/sentry", () => ({ captureError: m.captureError }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
 vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
@@ -34,7 +36,12 @@ vi.mock("@/server/usecases/officials", () => ({ listOfficialsForConsole: async (
 vi.mock("@/server/usecases/venues", () => ({ listVenues: async () => [] }));
 // Client islands → identifiable markers.
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
-vi.mock("@/components/v2/stream-destinations-panel", () => ({ StreamDestinationsPanel: () => <div data-testid="stream-destinations-panel" /> }));
+// The panel renders the labels it is handed, so a test can see the LIST arrive, not only the panel.
+vi.mock("@/components/v2/stream-destinations-panel", () => ({
+  StreamDestinationsPanel: ({ targets }: { targets: { id: string; label: string }[] }) => (
+    <div data-testid="stream-destinations-panel">{targets.map((t) => <span key={t.id} data-target-label={t.label} />)}</div>
+  ),
+}));
 vi.mock("@/components/v2/persons-panel", () => ({ PersonsPanel: () => <div data-testid="players-tab" /> }));
 vi.mock("@/components/v2/duplicates-panel", () => ({ DuplicatesPanel: () => <div /> }));
 vi.mock("@/components/v2/clubs-teams-list", () => ({ ClubsTeamsList: () => <div /> }));
@@ -58,9 +65,10 @@ const PANEL = 'data-testid="stream-destinations-panel"';
 beforeEach(() => {
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
-  m.listStreamTargets.mockClear();
-  m.expireTargetHolders.mockClear();
+  m.listStreamTargets.mockReset().mockResolvedValue([]);
+  m.expireTargetHolders.mockReset().mockResolvedValue(undefined);
   m.defaultDeps.mockClear();
+  m.captureError.mockClear();
   setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });   // a deployment that can start a stream
 });
 afterEach(() => setRelayDriversForTest(null));
@@ -78,6 +86,31 @@ describe("Directory › Streaming tab — offered exactly when the fixture panel
     expect(m.listStreamTargets).toHaveBeenCalledTimes(1);
     expect(m.expireTargetHolders.mock.invocationCallOrder[0]!, "the expiry runs BEFORE the list it unlocks")
       .toBeLessThan(m.listStreamTargets.mock.invocationCallOrder[0]!);
+  });
+
+  it("R-3 (re-review): the expiry tick is best-effort — when it THROWS (a due expiry's provider effect failing), the error is reported once and the destinations are still listed; a stuck holder simply stays until the next load", async () => {
+    const boom = new Error("cloudflare removeOutput: HTTP 502");
+    const destinations = [{ id: "t-1", label: "Club YouTube" }, { id: "t-2", label: "Club Facebook" }];
+    m.listStreamTargets.mockResolvedValue(destinations);
+    m.expireTargetHolders.mockRejectedValueOnce(boom);
+    const html = await render("streaming");
+    expect(html, "the tab renders, not an error page").toContain(PANEL);
+    let checked = 0;
+    for (const t of destinations) {
+      expect(html, `${t.label} is listed after the failed tick`).toContain(`data-target-label="${t.label}"`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(m.expireTargetHolders, "PREMISE: the tick ran, and threw").toHaveBeenCalledTimes(1);
+    expect(m.listStreamTargets, "listed anyway").toHaveBeenCalledTimes(1);
+    expect(m.captureError).toHaveBeenCalledTimes(1);
+    expect(m.captureError).toHaveBeenCalledWith(boom, expect.objectContaining({ orgId: ORG, route: "directory.streaming.expire_holders" }));
+    // The positive pair, and the second call: a tick that succeeds reports nothing and lists the same destinations.
+    const again = await render("streaming");
+    expect(again).toContain('data-target-label="Club YouTube"');
+    expect(m.captureError, "a clean tick reports nothing").toHaveBeenCalledTimes(1);
+    expect(m.expireTargetHolders).toHaveBeenCalledTimes(2);
+    expect(m.listStreamTargets).toHaveBeenCalledTimes(2);
   });
 
   it("NOT offered, for each of the three reasons the panel would not offer Go live: no tab link, `?tab=streaming` falls back to Players, and no destination is read or ticked", async () => {

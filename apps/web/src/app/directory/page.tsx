@@ -30,6 +30,7 @@ import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-pan
 import { relayOffer } from "@/server/stream-panel-context";
 import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
 import { baseUrlFromHeaders } from "@/lib/base-url";
+import { captureError } from "@/lib/sentry";
 
 const TABS = ["players", "clubs", "officials", "venues", "streaming"] as const;
 type Tab = (typeof TABS)[number];
@@ -271,7 +272,14 @@ async function StreamingTab({ ui, locale }: { ui: Dict; locale: string }) {
   // M-3 (final review): every holder of the org's destinations gets its lazy expiry BEFORE the list is read. The list's
   // "In use" lock disables Replace and Remove — the very buttons whose routes tick a held target — so an abandoned Go
   // live otherwise kept the lock up until someone opened that match or the daily sweep ran. Nothing due: no change.
-  await expireTargetHolders(auth.orgId, null, defaultDeps(await baseUrlFromHeaders()));
+  // R-3 (re-review): BEST-EFFORT. A due expiry's effect can throw (a provider call recordEffect rethrows); that is
+  // reported once and the list is read anyway — the lock is then merely stale until the next load, M-3's old state —
+  // never an error page in place of the Streaming tab.
+  try {
+    await expireTargetHolders(auth.orgId, null, defaultDeps(await baseUrlFromHeaders()));
+  } catch (err) {
+    captureError(err, { orgId: auth.orgId, route: "directory.streaming.expire_holders" });
+  }
   const targets = await listStreamTargets(auth, auth.orgId);
   return (
     <div className="space-y-4">
