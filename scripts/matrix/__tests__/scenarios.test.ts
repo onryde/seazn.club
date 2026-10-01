@@ -336,6 +336,53 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
+  // T12-R1: the probe saves the kinds the product's ACTIVE entrants hold
+  // (divisions.ts:857-871 checks a narrowed model against exactly those). On
+  // a league that is the one kind the harness registered — the engine's
+  // declared default — so the save is unchanged there. Empty first.
+  it("T12-R1 empty case: no active entrant with a kind in the product's list → no entrants-only save is sent, it is noted, and the check fails as vacuous", async () => {
+    class ServesNoKind extends FakeLeagueDriver {
+      override async listEntrants() { const rows = await super.listEntrants(); return this.fixtures.length > 0 ? rows.map(({ kind: _k, ...r }) => r) : rows; }
+    }
+    const r = await runOn(new ServesNoKind(), "LIFECYCLE");
+    expect(r.out.observed.configEdit!.attempts.filter((a) => a.kind === "entrants_only")).toEqual([]);
+    expect(r.out.notes).toContain("config entrants_only: not sent — the product lists no active entrant with a kind");
+    expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "fail", checked: 0 });
+  });
+  it.each(["generic", "badminton", "football"])("T12-R1: on a %s league the probe saves exactly the sport's declared default kind, is accepted, and notes no minted pairs", async (sport) => {
+    const variant = offlineBuilderDefault(sport);
+    const driver = new FakeLeagueDriver();
+    const bodies: Record<string, unknown>[] = [];
+    const save = driver.patchDivisionConfig.bind(driver);
+    driver.patchDivisionConfig = async (d: string, c: Record<string, unknown>) => { bodies.push(c); return save(d, c); };
+    const r = await runOn(driver, "LIFECYCLE", { sport, variant });
+    const entrantsOnly = bodies.filter((b) => b.entrants !== undefined);
+    expect(entrantsOnly).toHaveLength(1);
+    expect((entrantsOnly[0]!.entrants as { kinds: string[] }).kinds).toEqual([entrantKindFor(sport, resolveSportCfg(sport, variant))]);
+    expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(r.out.notes.some((n) => n.startsWith("americano-minted-pairs-block-kind-edit"))).toBe(false);
+  });
+  it("T12-R1: a withdrawn or disqualified entrant's kind is not in use — the probe leaves it out, as the product's guard does", async () => {
+    class DepartedTeam extends FakeLeagueDriver {
+      override async listEntrants() {
+        const rows = await super.listEntrants();
+        if (this.fixtures.length === 0) return rows;
+        return [...rows, { id: "x1", display_name: "Gone", seed: null, status: "withdrawn", kind: "team" }, { id: "x2", display_name: "Out", seed: null, status: "disqualified", kind: "pair" }];
+      }
+    }
+    const driver = new DepartedTeam();
+    const bodies: Record<string, unknown>[] = [];
+    const save = driver.patchDivisionConfig.bind(driver);
+    driver.patchDivisionConfig = async (d: string, c: Record<string, unknown>) => { bodies.push(c); return save(d, c); };
+    await runOn(driver, "LIFECYCLE");
+    expect((bodies.filter((b) => b.entrants !== undefined)[0]!.entrants as { kinds: string[] }).kinds).toEqual([entrantKindFor("generic", resolveSportCfg("generic", "score"))]);
+  });
+  it("T12-R1: the fake's guard is the product's — divisions.ts still selects the active kinds and refuses 422 ENTRANT_KIND_IN_USE", () => {
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/usecases/divisions.ts"), "utf8");
+    expect(src).toContain("select distinct kind from entrants");
+    expect(src).toContain("status not in ('withdrawn', 'disqualified')");
+    expect(src).toMatch(/new HttpError\(\s*422,[\s\S]{0,120}"ENTRANT_KIND_IN_USE"/);
+  });
   it("I-2: a product that 409s the entrants-only save reds life-entrants-edit-accepted, and only that", async () => {
     class LocksEntrantsToo extends FakeLeagueDriver {
       override async patchDivisionConfig(d: string, c: Record<string, unknown>) {

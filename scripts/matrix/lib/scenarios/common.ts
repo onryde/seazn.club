@@ -11,7 +11,7 @@ import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import { redact } from "../redact.ts";
 import { routeTo } from "../routing.ts";
 import {
-  isTerminal, snap, toObservedOutcome,
+  DEPARTED_STATUSES, isTerminal, snap, toObservedOutcome,
   type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
@@ -162,6 +162,13 @@ export class Recorder {
 export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth deferred from the first slice (ruling 28)");
 /** The deferral sites' wave argument (the Q-A guard reads it by value). */
 export const DRIVING_WAVE = DRIVING_ROUTE.wave;
+/** T12-R1: the product's withdraw-first guard (divisions.ts:857-871) refuses
+ *  an entrants model that drops a kind an ACTIVE entrant holds, and an
+ *  americano or mexicano stage MINTS pair entrants (stages.ts pairEntrantsFor)
+ *  that the organiser never registered and cannot withdraw. A predicted
+ *  product finding, written as a note: the signature words are verbatim, for
+ *  Task 15's triage rule. */
+export const MINTED_PAIRS_KIND_ROUTE = routeTo("W7", "americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) (divisions.ts:857-871)");
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
 export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
@@ -639,9 +646,23 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
     : typeof cfg.setTo === "number" ? { setTo: cfg.setTo === 15 ? 11 : 15, finalSetTo: cfg.setTo === 15 ? 11 : 15 }
     : null;
   if (formatDelta !== null) attempts.push({ kind: "format", ...(await ctx.driver.patchDivisionConfig(division.id, { ...division.config, ...formatDelta })) });
-  // The one save the lock lets through (entrants-only).
-  attempts.push({ kind: "entrants_only", ...(await ctx.driver.patchDivisionConfig(division.id, { ...division.config, entrants: { kinds: [entrantKindFor(ctx.spec.sport, ctx.cfg)] } })) });
+  // The one save the lock lets through (entrants-only). T12-R1: its kinds are
+  // the ones the product's ACTIVE entrants hold, read from the product's own
+  // list — divisions.ts:857-871 refuses any model missing one of them, so
+  // this is the narrowest entrants save the product can accept.
+  const active = (await ctx.driver.listEntrants(division.id)).filter((e) => !DEPARTED_STATUSES.includes(e.status));
+  const kinds = [...new Set(active.flatMap((e) => (e.kind === undefined ? [] : [e.kind])))];
+  if (kinds.length > 0) attempts.push({ kind: "entrants_only", ...(await ctx.driver.patchDivisionConfig(division.id, { ...division.config, entrants: { kinds } })) });
   rec.notes.push(...attempts.map((a) => `config ${a.kind}: ${a.status} ${a.code ?? ""}`.trim()));
+  // None to save is not a pass: life-entrants-edit-accepted fails on 0 attempts.
+  if (kinds.length === 0) rec.notes.push("config entrants_only: not sent — the product lists no active entrant with a kind");
+  // The kinds held only by entrants the harness never posted (the stage's
+  // minted pairs): those are what keep an organiser from narrowing.
+  const posted = new Set(active.filter((e) => setup.entrantIds.has(e.id)).flatMap((e) => (e.kind === undefined ? [] : [e.kind])));
+  const minted = active.filter((e) => !setup.entrantIds.has(e.id) && e.kind !== undefined && !posted.has(e.kind));
+  if (minted.length > 0) {
+    rec.notes.push(`americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block) — ${minted.length} minted pair entrant(s) active on this ${ctx.spec.row}, kinds saved ${kinds.join("+")} — predicted product red → ${MINTED_PAIRS_KIND_ROUTE.wave}`);
+  }
   return { attempts, before, after: await read() };
 }
 

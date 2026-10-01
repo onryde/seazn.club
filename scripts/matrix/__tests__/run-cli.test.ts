@@ -12,7 +12,7 @@ import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.
 import type { PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { CaseBrowser } from "../lib/browser/session.ts";
 import { EMPTY_PADS, OVERRIDE_ROUTE, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
-import type { Transport } from "../lib/driver/http-driver.ts";
+import { REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
@@ -27,7 +27,7 @@ import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
-import { MAX_WORKERS } from "../lib/workers.ts";
+import { MAX_WORKERS, TurnDeadlineExceeded } from "../lib/workers.ts";
 import { W1_DRIVING_SET } from "../lib/w1-driving-set.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -36,7 +36,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, PlanStageCapTooLow, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { EXIT, NOTES_CAP, PlanStageCapTooLow, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
@@ -1279,6 +1279,78 @@ describe("realDeps wiring (Task 7 M3)", () => {
   // and the admin route answered 401 "Staff access required". The loopback
   // server here answers exactly that whenever the owner is not staff at the
   // moment of the call, and stalls each POST so two windows WOULD overlap.
+  // Fix round 1 m-2: a provision whose admin call never answered held the
+  // owner's staff window forever, so every other worker's next case waited
+  // behind it. The loopback server below never answers the FIRST org's POST.
+  it("a case-org provision that hangs inside the staff window fails THAT case's seeding by name at the deadline; the other case's provision then runs and succeeds", async () => {
+    let staff = false;
+    const answered: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+      req.on("end", () => {
+        const reply = (status: number, v: unknown, cookie?: string) => {
+          res.writeHead(status, { "content-type": "application/json", ...(cookie === undefined ? {} : { "set-cookie": cookie }) });
+          res.end(JSON.stringify(v));
+        };
+        if (req.method === "POST" && req.url === "/api/orgs/active") return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${(JSON.parse(body) as { org_id: string }).org_id}; Path=/`);
+        if (req.url?.endsWith("/entitlement-override")) {
+          if (req.method === "POST" && req.url.includes("/o1/")) return; // the hung request: never answered
+          answered.push(`${req.method} ${req.url} staff=${String(staff)}`);
+          return staff ? reply(200, { ok: true, data: {} }) : reply(401, { ok: false, error: "Staff access required" });
+        }
+        return reply(404, { ok: false, error: "not found" });
+      });
+    });
+    await new Promise<void>((r) => { server.listen(0, "127.0.0.1", r); });
+    try {
+      const { port } = server.address() as AddressInfo;
+      let n = 0;
+      const m: MatrixSql = {
+        userIdForEmail: async () => "u1",
+        insertCaseOrg: async (i) => ({ orgId: `o${++n}`, orgSlug: i.slug }),
+        listPlanKeys: async () => [],
+        variantKeysInBuilderOrder: async () => [],
+        denyFeature: async () => {},
+        planGrants: async () => [],
+        planLimit: async () => null,
+      };
+      const p = {
+        getOrgSubscriptionId: async () => "sub",
+        updateSubscriptionPlan: async () => {},
+        createSubscriptionForOrg: async () => {},
+        setOwnerStaff: async (_o: string, on: boolean) => { staff = on; },
+      };
+      const f: DbFactories = { matrixSql: () => ({ sql: m, dispose: async () => {} }), planSql: () => ({ sql: p as never, dispose: async () => {} }) };
+      const base = `http://127.0.0.1:${port}`;
+      const real = realDeps(f, 150);
+      expect(real.turnDeadlineMs).toBe(150);
+      const both = await Promise.allSettled([1, 2].map((k) => real.prepareCaseOrg({ base, session: { cookies: {} }, userId: "u1", plan: "pro" }, { name: `Matrix h ${k}`, slug: `m-h-${k}` })));
+      expect(both[0]!.status).toBe("rejected");
+      const e = (both[0] as PromiseRejectedResult).reason as unknown;
+      expect(e).toBeInstanceOf(TurnDeadlineExceeded);
+      expect(e).toMatchObject({ label: "case-org provision (the owner's staff window)", ms: 150 });
+      expect(both[1]).toMatchObject({ status: "fulfilled", value: { orgId: "o2" } });
+      // The second org's window ran whole after the turn was released.
+      expect(answered).toEqual(["POST /api/admin/orgs/o2/entitlement-override staff=true", "DELETE /api/admin/orgs/o2/entitlement-override staff=true"]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => { server.close(() => { r(); }); });
+    }
+  });
+  it("realDeps holds each shared turn to TURN_DEADLINE_MS by default: the driver's per-request allowance for each request a turn makes, counted in bench's own source", () => {
+    expect(realDeps().turnDeadlineMs).toBe(TURN_DEADLINE_MS);
+    const body = (file: string, head: string): string => {
+      const src = readFileSync(resolve(REPO, file), "utf8");
+      const at = src.indexOf(head);
+      if (at < 0) throw new Error(`test: ${file} no longer has ${head}`);
+      return src.slice(at, src.indexOf("\n}\n", at));
+    };
+    const adminCalls = body("scripts/bench/lib/plan.ts", "export async function bustOrgEntitlements(").match(/\bt\.request\(/g)?.length ?? 0;
+    const signInCalls = body("scripts/bench/lib/http.ts", "export async function signIn(").match(/\bawait call\(/g)?.length ?? 0;
+    expect([adminCalls, signInCalls]).toEqual([2, 2]);
+    expect(TURN_DEADLINE_MS).toBe(Math.max(adminCalls, signInCalls) * REQUEST_TIMEOUT_MS);
+  });
   it("two workers' case orgs provisioned at once on ONE realDeps never overlap the owner's staff window (the live 401)", async () => {
     let staff = false;
     const events: string[] = [];
@@ -2256,15 +2328,47 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(overlapping).toBe(0);
     expect(resultsIn(dir, "wks").cases.map((c) => c.caseId)).toEqual(planIds);
   });
-  it("--workers above the case count opens only as many workers as cases", async () => {
+  // Fix round 1 m-2: a sign-in that never answered held the sign-in turn
+  // forever, parking every worker queued behind it. At the turn deadline it
+  // now fails by name; a worker that cannot open aborts the run, as any
+  // refused sign-in already did — it never hangs.
+  it("a workers' sign-in that never answers fails by name at the turn deadline: the run aborts (exit 3), writes nothing and disposes the DB, instead of hanging", async () => {
+    const io = capture();
+    let n = 0;
+    const d = workerDeps({ turnDeadlineMs: 40 });
+    const signIn = d.signIn;
+    // The first sign-in is worker 0's (before the owner proofs, outside the turn); the second is worker 1's turn.
+    d.signIn = async (b, e) => (++n === 2 ? new Promise<Session>(() => {}) : signIn(b, e));
+    const dir = dirFor();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wkh", "--report-dir", dir])).toBe(EXIT.ABORTED);
+    expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: workers' sign-in: held its turn past the 40ms deadline/);
+    expect(existsSync(join(dir, "wkh"))).toBe(false);
+    expect(d.order.at(-1)).toBe("dispose");
+  });
+  // Fix round 1 m-1: the header records the workers that RAN — one per
+  // sign-in the fake saw — never the number asked for.
+  it("--workers above the case count opens only as many workers as cases, and the header records the workers that ran", async () => {
     capture();
     const d = workerDeps({ planCases: undefined });
-    expect(await runSlice(d, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wk6", "--report-dir", dirFor()])).toBe(0);
+    const oneDir = dirFor();
+    expect(await runSlice(d, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wk6", "--report-dir", oneDir])).toBe(0);
     expect(d.order.filter((x) => x === "signIn")).toHaveLength(1);
+    // One case ran on one worker: today's single-sign-in header, no field.
+    const one = JSON.parse(readFileSync(join(oneDir, "wk6", "results.json"), "utf8")) as RunResults;
+    expect(one.cases).toHaveLength(1);
+    expect("workers" in one).toBe(false);
     capture();
     const two = workerDeps({ planCases: undefined });
-    expect(await runSlice(two, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--run-id", "wk6b", "--report-dir", dirFor()])).toBe(0);
-    expect(two.order.filter((x) => x === "signIn")).toHaveLength(SCENARIO_KEYS.length);
+    const twoDir = dirFor();
+    expect(await runSlice(two, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--run-id", "wk6b", "--report-dir", twoDir])).toBe(0);
+    const signIns = two.order.filter((x) => x === "signIn").length;
+    expect(signIns).toBe(SCENARIO_KEYS.length);
+    // The case below only witnesses m-1 while fewer workers ran than were asked for.
+    expect(signIns).toBeGreaterThan(1);
+    expect(signIns).toBeLessThan(MAX_WORKERS);
+    const header = JSON.parse(readFileSync(join(twoDir, "wk6b", "results.json"), "utf8")) as RunResults;
+    expect(header.workers).toBe(signIns);
+    expect(parseResults(header)).toMatchObject({ workers: signIns });
   });
   it("--workers 3 is recorded in results.json's run header (parseResults reads it); --workers 1 writes today's header, with no workers field", async () => {
     capture();

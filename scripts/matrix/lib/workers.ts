@@ -54,16 +54,43 @@ export async function runQueue<W, T, R>(
   return out;
 }
 
+/** A task that held a shared turn past its deadline (fix round 1 m-2): its
+ *  caller gets this, by name, and the turn passes to the next task. The task
+ *  itself is not aborted (a bench request takes no signal) — it is no longer
+ *  awaited, and its request may still land. */
+export class TurnDeadlineExceeded extends Error {
+  readonly label: string;
+  readonly ms: number;
+  constructor(label: string, ms: number) {
+    super(`${label}: held its turn past the ${ms}ms deadline — failed by name and the turn released (the request is not aborted and may still land)`);
+    this.name = "TurnDeadlineExceeded";
+    this.label = label;
+    this.ms = ms;
+  }
+}
+
 /** A lock for a resource every worker shares (found live, T11 Step 7): the
  *  case-org provision's entitlement bust flips the run's ONE owner to staff
  *  for two admin calls and back, so a second worker's demotion inside the
  *  first's window made the admin route answer 401. Tasks run one at a time,
  *  in call order; a task's rejection reaches its own caller only, and the
- *  next task still runs. One lock per run: each call makes a fresh one. */
-export function oneAtATime(): <T>(task: () => Promise<T>) => Promise<T> {
+ *  next task still runs. One lock per run: each call makes a fresh one.
+ *  m-2: each task holds the turn for at most `deadlineMs` — a hung request
+ *  must fail its own caller by name, never park every worker behind it. */
+export function oneAtATime(label: string, deadlineMs: number): <T>(task: () => Promise<T>) => Promise<T> {
+  if (!Number.isInteger(deadlineMs) || deadlineMs < 1) throw new RangeError(`oneAtATime(${label}): the deadline must be a positive whole number of ms, got ${deadlineMs}`);
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(task: () => Promise<T>): Promise<T> => {
-    const mine = tail.then(task);
+    const mine = tail.then(() => {
+      // The clock starts when the task's turn does, never when it queued.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => { reject(new TurnDeadlineExceeded(label, deadlineMs)); }, deadlineMs);
+      });
+      // `then(task)` turns a synchronous throw into this task's rejection; a
+      // settled task clears its timer, so none outlives the run.
+      return Promise.race([Promise.resolve().then(task), deadline]).finally(() => { clearTimeout(timer); });
+    });
     // The chain waits for this task to SETTLE, never to succeed: a rejection
     // must not stall every task queued behind it.
     tail = mine.then(() => undefined, () => undefined);

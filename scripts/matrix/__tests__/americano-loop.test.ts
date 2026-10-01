@@ -25,12 +25,12 @@ import { RefusedCall, type FixtureRow, type GenerateOut, type StageRef } from ".
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { AmericanoModeMismatch, PAIR_PLAYERS_ROUTE, SELF_PAIR_CAUSE, STALL_ROUTE, TEAM_MEMBER_ROUTE, americanoPlannedRounds, americanoRoundSize, modeOf, notePairEntrantDuplicates, playMexicano } from "../lib/scenarios/americano-loop.ts";
 import { lineupsPut, seatsEntrant } from "../lib/scenarios/assertions.ts";
-import { Recorder, decideFixture, ensureLineups, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
+import { MINTED_PAIRS_KIND_ROUTE, Recorder, decideFixture, ensureLineups, setUpDivision, type DivisionSetup } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { TARGET_OF } from "../lib/scenarios/m1-walkover.ts";
 import { KEPT_PLAYING_ROUTE, keptPlayingNote } from "../lib/scenarios/r4-withdrawal.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
-import { resolveSportCfg } from "../lib/sport-cfg.ts";
+import { entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 import { FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT, FakeAmericanoDriver, WAIT_UNLESS } from "./fake-formats-driver.ts";
@@ -873,3 +873,39 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
 
 /** One round's intervention in the rule-10 property (beforeRound). */
 type Act = "none" | "forfeit" | "void" | "withdraw";
+
+// T12-R1 (W1-driving fix round 1): live, both americano cells redded
+// life-entrants-edit-accepted with 422 ENTRANT_KIND_IN_USE — the probe saved
+// kinds = [the registered kind], and the product's withdraw-first guard
+// (divisions.ts:857-871) counts the pair entrants the stage MINTED, which the
+// organiser cannot withdraw. The probe now saves the kinds the product's
+// active entrants hold; the finding stays visible as a predicted W7 note.
+// The expected kinds are the engine's declared default kind (what the harness
+// registers) and the product's minted `pair` — never read back from the probe.
+describe("T12-R1: the entrants-only probe on an americano saves the kinds the product's active entrants hold", () => {
+  it.each(["generic", "badminton", "football"])("americano|%s: both kinds saved, the save accepted, the minted-pairs note recorded once", async (sport) => {
+    const driver = new FakeAmericanoDriver({ mode: "americano" });
+    const bodies: Record<string, unknown>[] = [];
+    const save = driver.patchDivisionConfig.bind(driver);
+    driver.patchDivisionConfig = async (d: string, c: Record<string, unknown>) => { bodies.push(c); return save(d, c); };
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "americano", sport });
+    const registered = entrantKindFor(sport, resolveSportCfg(sport, variantFor(sport)));
+    expect(registered).not.toBe("pair");
+    const entrantsOnly = bodies.filter((b) => b.entrants !== undefined);
+    expect(entrantsOnly).toHaveLength(1);
+    expect((entrantsOnly[0]!.entrants as { kinds: string[] }).kinds).toEqual([registered, "pair"]);
+    expect(check(checks, "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
+    const note = out.notes.filter((n) => n.startsWith("americano-minted-pairs-block-kind-edit: organiser cannot narrow entrant kinds on a running americano (minted pairs block)"));
+    expect(note).toHaveLength(1);
+    expect(note[0]).toContain(`→ ${MINTED_PAIRS_KIND_ROUTE.wave}`);
+    expect(note[0]).toMatch(/\d+ minted pair entrant\(s\) active/);
+  });
+  it("the narrowing the probe used to send is what the product refuses: [registered] alone → 422 ENTRANT_KIND_IN_USE on the same fake", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "americano" });
+    await runOn(driver, "LIFECYCLE", { row: "americano", sport: "badminton" });
+    const registered = entrantKindFor("badminton", resolveSportCfg("badminton", variantFor("badminton")));
+    const d = await driver.getDivision();
+    expect(await driver.patchDivisionConfig("d1", { ...d.config, entrants: { kinds: [registered] } })).toEqual({ status: 422, code: "ENTRANT_KIND_IN_USE" });
+    expect(await driver.patchDivisionConfig("d1", { ...d.config, entrants: { kinds: [registered, "pair"] } })).toEqual({ status: 200, code: null });
+  });
+});

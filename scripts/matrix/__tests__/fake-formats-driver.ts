@@ -953,6 +953,10 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
       ];
     });
   }
+  /** T12-R1: the product's guard counts the pair entrants the stage minted (status registered). */
+  override kindsInUse(): string[] {
+    return [...new Set([...super.kindsInUse(), ...(this.#pairs.length > 0 ? ["pair"] : [])])];
+  }
   #withdrawnPersons(): Set<string> {
     return new Set(this.entrants.filter((e) => e.status === "withdrawn").flatMap((e) => this.#rows(e.id)));
   }

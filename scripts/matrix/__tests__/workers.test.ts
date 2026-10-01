@@ -9,8 +9,11 @@
 //     in-flight ones finish, and runQueue rejects with that error;
 //   a second call on the same inputs → the same answer (no state carried over).
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
-import { MAX_WORKERS, WorkersOutOfRange, oneAtATime, runQueue } from "../lib/workers.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_WORKERS, TurnDeadlineExceeded, WorkersOutOfRange, oneAtATime, runQueue } from "../lib/workers.ts";
+
+/** A deadline no task in these tests comes near: they settle in microtasks. */
+const ROOMY_MS = 60_000;
 
 /** Yields to the microtask queue `n` times: an interleaving the property picks, deterministic per seed. */
 async function yields(n: number): Promise<void> {
@@ -207,7 +210,7 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
 // rejects (its caller sees it, the next still runs); called again after it drained.
 describe("oneAtATime — a run-wide lock for a resource the workers share", () => {
   it("empty case first: an idle lock (nothing queued) starts the first task at once and hands back its answer", async () => {
-    const lock = oneAtATime();
+    const lock = oneAtATime("t", ROOMY_MS);
     let started = false;
     const p = lock(async () => { started = true; return "first"; });
     await yields(2);
@@ -215,7 +218,7 @@ describe("oneAtATime — a run-wide lock for a resource the workers share", () =
     expect(await p).toBe("first");
   });
   it("concurrent tasks never overlap, run in call order, and each caller gets its own task's answer", async () => {
-    const lock = oneAtATime();
+    const lock = oneAtATime("t", ROOMY_MS);
     let active = 0;
     let maxActive = 0;
     const order: number[] = [];
@@ -234,7 +237,7 @@ describe("oneAtATime — a run-wide lock for a resource the workers share", () =
     expect(maxActive).toBe(1);
   });
   it("a task that rejects rejects ITS caller only; the next queued task still runs, and the lock is free afterwards", async () => {
-    const lock = oneAtATime();
+    const lock = oneAtATime("t", ROOMY_MS);
     const boom = new Error("bust refused");
     const ran: string[] = [];
     const first = lock(async () => { ran.push("a"); await yields(2); throw boom; });
@@ -245,12 +248,133 @@ describe("oneAtATime — a run-wide lock for a resource the workers share", () =
     expect(ran).toEqual(["a", "b", "c"]);
   });
   it("two locks are independent: each run gets its own", async () => {
-    const a = oneAtATime();
-    const b = oneAtATime();
+    const a = oneAtATime("t", ROOMY_MS);
+    const b = oneAtATime("t", ROOMY_MS);
     let active = 0;
     let maxActive = 0;
     const task = async () => { active++; maxActive = Math.max(maxActive, active); await yields(3); active--; };
     await Promise.all([a(task), b(task)]);
     expect(maxActive).toBe(2);
+  });
+});
+
+// Fix round 1 m-2: a task that never settles (a hung fetch inside the staff
+// window or a sign-in) used to hold the turn forever and park every other
+// worker behind it. Transitions, empty case first: a task settles inside its
+// deadline (its own answer, its timer cleared); a task outlives it (ITS caller
+// gets TurnDeadlineExceeded by name, the turn passes on); the next task after
+// a deadline (runs, with a fresh deadline of its own); a bad deadline (refused).
+describe("oneAtATime — m-2: a task past its deadline fails by name and releases the turn", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const never = <T>(): Promise<T> => new Promise<T>(() => {});
+  it("empty case first: a task that settles inside its deadline answers as before and leaves no timer behind — value, rejection and a synchronous throw alike", async () => {
+    vi.useFakeTimers();
+    const lock = oneAtATime("staff window", 1_000);
+    expect(await lock(async () => "ok")).toBe("ok");
+    await expect(lock(async () => { throw new Error("refused"); })).rejects.toThrow("refused");
+    await expect(lock((() => { throw new Error("sync"); }) as () => Promise<never>)).rejects.toThrow("sync");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("a task that never settles rejects ITS caller with TurnDeadlineExceeded at the deadline, naming the turn; the task queued behind it then runs", async () => {
+    vi.useFakeTimers();
+    const lock = oneAtATime("case-org provision", 1_000);
+    const hung = lock(never);
+    const caught = hung.catch((e: unknown) => e);
+    let nextRan = false;
+    const next = lock(async () => { nextRan = true; return "next"; });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(nextRan).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const e = await caught;
+    expect(e).toBeInstanceOf(TurnDeadlineExceeded);
+    expect(e).toMatchObject({ name: "TurnDeadlineExceeded", label: "case-org provision", ms: 1_000 });
+    expect(String(e)).toMatch(/^TurnDeadlineExceeded: case-org provision: held its turn past the 1000ms deadline/);
+    expect(await next).toBe("next");
+    expect(nextRan).toBe(true);
+    // The task after a deadline gets a full deadline of its own, not what is left of the last one.
+    const third = lock(never).catch((x: unknown) => x);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await third).toBeInstanceOf(TurnDeadlineExceeded);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it("on three workers, an item whose turn hangs is that item's named failure, and every other worker's items complete", async () => {
+    const lock = oneAtATime("staff window", 40);
+    const items = [0, 1, 2, 3, 4, 5, 6];
+    const HUNG = 2;
+    const out = await runQueue(
+      items, 3, async (n) => n,
+      async (_w, item) => lock(async () => { if (item === HUNG) return never<string>(); await yields(2); return `done ${item}`; }),
+      (_item, _i, e) => (e instanceof TurnDeadlineExceeded ? `failed ${e.name} ${e.label}` : `other ${String(e)}`),
+    );
+    expect(out[HUNG]).toBe("failed TurnDeadlineExceeded staff window");
+    let completed = 0;
+    for (const i of items.filter((x) => x !== HUNG)) { expect(out[i]).toBe(`done ${i}`); completed++; }
+    expect(completed).toBe(items.length - 1);
+  });
+  it("a deadline that is not a positive whole number of ms is refused by name, before any task runs", () => {
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => oneAtATime("staff window", bad), String(bad)).toThrow(/^oneAtATime\(staff window\): the deadline must be a positive whole number of ms, got /);
+    }
+    expect(() => oneAtATime("staff window", 1)).not.toThrow();
+  });
+});
+
+// Fix round 1 m-3 (rule 10): random durations, rejections, synchronous throws
+// and idle gaps between calls. After every step exactly one task is running;
+// tasks start in call order; each runs once; each caller gets its own task's
+// value or rejection. The reach counters prove each branch was exercised.
+describe("oneAtATime — m-3: the lock under random tasks (rule 10)", () => {
+  it("mutual exclusion, FIFO starts, one run per task and each caller's own answer — reach counted", async () => {
+    const reach = { runs: 0, tasks: 0, values: 0, rejections: 0, syncThrows: 0, gaps: 0, queuedBehind: 0 };
+    class Mine extends Error { readonly n: number; constructor(n: number) { super(`task ${n}`); this.n = n; } }
+    const step = fc.record({ wait: fc.nat({ max: 6 }), end: fc.constantFrom("value", "reject", "throw"), gap: fc.nat({ max: 3 }) });
+    await fc.assert(fc.asyncProperty(fc.array(step, { minLength: 1, maxLength: 12 }), async (steps) => {
+      reach.runs++;
+      const lock = oneAtATime("sweep", ROOMY_MS);
+      let active = 0;
+      let maxActive = 0;
+      const starts: number[] = [];
+      const ranTimes = new Array<number>(steps.length).fill(0);
+      const calls: Promise<number>[] = [];
+      for (const [n, st] of steps.entries()) {
+        // An idle gap lets the lock drain, so a later call can find it free.
+        if (st.gap > 0) { reach.gaps++; await yields(st.gap * 4); }
+        if (active > 0) reach.queuedBehind++;
+        const task = st.end === "throw"
+          ? ((() => { ranTimes[n]!++; starts.push(n); reach.syncThrows++; throw new Mine(n); }) as () => Promise<number>)
+          : async () => {
+            ranTimes[n]!++;
+            starts.push(n);
+            active++;
+            maxActive = Math.max(maxActive, active);
+            expect(active).toBe(1);
+            await yields(st.wait);
+            expect(active).toBe(1);
+            active--;
+            if (st.end === "reject") throw new Mine(n);
+            return n;
+          };
+        calls.push(lock(task));
+      }
+      const settled = await Promise.allSettled(calls);
+      reach.tasks += steps.length;
+      expect(maxActive).toBeLessThanOrEqual(1);
+      expect(starts).toEqual(steps.map((_s, n) => n));
+      expect(ranTimes).toEqual(steps.map(() => 1));
+      for (const [n, st] of steps.entries()) {
+        const got = settled[n]!;
+        if (st.end === "value") { expect(got).toEqual({ status: "fulfilled", value: n }); reach.values++; }
+        else {
+          expect(got.status).toBe("rejected");
+          expect((got as PromiseRejectedResult).reason).toBeInstanceOf(Mine);
+          expect(((got as PromiseRejectedResult).reason as Mine).n).toBe(n);
+          reach.rejections++;
+        }
+      }
+    }), { numRuns: 150 });
+    console.info(`oneAtATime sweep: ${JSON.stringify(reach)}`);
+    for (const [k, v] of Object.entries(reach)) expect(v, k).toBeGreaterThan(0);
   });
 });

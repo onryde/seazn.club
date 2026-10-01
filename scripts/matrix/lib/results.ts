@@ -110,10 +110,12 @@ export interface RunResults {
    *  carry 6. run.ts always writes it; v3 evidence written before the field
    *  (Task 8's walkthrough-a) has none, so it is optional to READ. */
   plan?: string;
-  /** W1-driving Task 11 (ruling 46): how many in-process workers ran the
-   *  cases, each on its own sign-in. Written only when more than one — every
-   *  v3 file before the field (all the committed v3 evidence) and every
-   *  `--workers 1` run is a single sign-in, so absent means one. */
+  /** W1-driving Task 11 (ruling 46): how many in-process workers RAN the
+   *  cases, each on its own sign-in — never more than the cases, so a
+   *  `--workers 8` run of three cases records 3 (fix round 1 m-1). Written
+   *  only when more than one ran — every v3 file before the field (all the
+   *  committed v3 evidence) and every one-worker run is a single sign-in, so
+   *  absent means one. */
   workers?: number;
   cases: CaseResult[];
 }

@@ -15,7 +15,8 @@ import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
-import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { DEPARTED_STATUSES } from "../lib/observed.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
@@ -137,7 +138,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
   addEntrants(_d: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
     return settle(() => {
       this.log("addEntrants");
-      this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
+      // `kind`: the product serves it on every row (entrants.ts COLS), as posted (T12-R1).
+      this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind }));
       // Inline members (schemas.ts CreateEntrant): stored with the entrant they came on.
       this.members = new Map(es.flatMap((e, i) => (e.members === undefined ? [] : [[`e${i + 1}`, this.rosterOf(`e${i + 1}`, e.members)] as const])));
       return this.entrants.map((e) => ({ ...e }));
@@ -409,8 +411,17 @@ export class FakeLeagueDriver implements OrganiserDriver {
     this.log("publicStandings");
     return { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: (await this.standings("s1", null)).rows }] };
   }
+  /** The distinct kinds of the division's ACTIVE entrants — divisions.ts:857-871
+   *  `select distinct kind from entrants where … status not in ('withdrawn',
+   *  'disqualified')`. A row with no kind names none. The americano fake adds
+   *  the pair entrants its stage mints. */
+  kindsInUse(): string[] {
+    return [...new Set(this.entrants.filter((e) => !DEPARTED_STATUSES.includes(e.status)).flatMap((e) => (e.kind === undefined ? [] : [e.kind])))];
+  }
   /** divisions.ts:795-870: once fixtures exist, a config that does not parse or
-   *  changes anything but `entrants` is 409 FORMAT_LOCKED; otherwise it saves. */
+   *  changes anything but `entrants` is 409 FORMAT_LOCKED; a model that no
+   *  longer accepts an active entrant's kind is 422 ENTRANT_KIND_IN_USE
+   *  (T12-R1, :857-871); otherwise it saves. */
   patchDivisionConfig(_d: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     return settle(() => {
       this.log("patchDivisionConfig");
@@ -423,6 +434,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
       }
       if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "FORMAT_LOCKED" };
       const entrants = config.entrants;
+      const next = entrantKindsFor(this.sport, entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed);
+      if (this.kindsInUse().some((k) => !next.includes(k))) return { status: 422, code: "ENTRANT_KIND_IN_USE" };
       this.divisionConfig = entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed;
       return { status: 200, code: null };
     });

@@ -105,7 +105,7 @@ import { createRealPlanSql, provisionPlan } from "../bench/lib/plan.ts";
 import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
 import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "./lib/catalogue.ts";
 import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
-import { HttpDriver } from "./lib/driver/http-driver.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
@@ -156,6 +156,9 @@ export interface RunDeps {
   preflight(base: string): Promise<{ ok: boolean; refusals: { reason: string; detail: string }[] }>;
   openDb(): Promise<RunDb>;
   signIn(base: string, email: string): Promise<Session>;
+  /** Fix round 1 m-2: how long one sign-in may hold the workers' sign-in
+   *  turn (default TURN_DEADLINE_MS). realDeps sets it; a test shortens it. */
+  turnDeadlineMs?: number;
   /** `deny` (ruling 24): feature keys the case org is denied after provisioning;
    *  `denied` is what was applied, and it is what the scenario judges. */
   prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string; denied: readonly string[] }>;
@@ -792,6 +795,9 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // A holder, not a `let`: it is opened inside browserFor, and the `finally`
   // must see that (a `let` assigned only in a closure narrows to null there).
   const opened: { run: BrowserRun | null } = { run: null };
+  // Fix round 1 m-1: the workers the queue actually opened (never more than
+  // the cases), counted where they open — the header records these.
+  const lanes = { opened: 0 };
   const db = await deps.openDb();
   try {
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
@@ -884,8 +890,14 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // owner's unused ones (apps/web/src/lib/login-link.ts), so workers signing
     // in at once deleted each other's links before they were consumed. The
     // sign-ins take turns; the cases still run concurrently.
-    const signInTurn = oneAtATime();
-    const open = async (n: number): Promise<Session> => (n === 0 ? first : signInTurn(() => deps.signIn(base, owner)));
+    // m-2: a sign-in that never answers fails by name at the deadline — its
+    // open throws, so the queue aborts as for any refused sign-in — instead of
+    // parking every worker behind it.
+    const signInTurn = oneAtATime("workers' sign-in", deps.turnDeadlineMs ?? TURN_DEADLINE_MS);
+    const open = async (n: number): Promise<Session> => {
+      lanes.opened++;
+      return n === 0 ? first : signInTurn(() => deps.signIn(base, owner));
+    };
     cases.push(...await runQueue(items, cli.workers, open, runOne, crashed));
   } finally {
     // A failed close must not throw away the cases that already ran. The
@@ -906,8 +918,9 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // A layered plan names its layer; a plain one is its width's (layerOfWidth:
     // 1280 L1, a phone width L2), L3 over HTTP.
     layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli),
-    // Ruling 46: written only for N > 1, so a one-worker run's header is today's.
-    ...(cli.workers > 1 ? { workers: cli.workers } : {}),
+    // Ruling 46: written only when more than one worker RAN (m-1: a --workers 8
+    // run of one case ran one), so a one-worker run's header is today's.
+    ...(lanes.opened > 1 ? { workers: lanes.opened } : {}),
     cases,
   };
   const { path: resultsPath, written } = writeResults(dir, results, base);
@@ -1029,16 +1042,28 @@ export function describeCommit(git: (args: string[]) => string): string {
   return dirty ? `${sha}-dirty` : sha;
 }
 
-export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
+/** Fix round 1 m-2: the most HTTP calls one shared turn holds — a case-org
+ *  provision's two admin calls (bench plan.ts bustOrgEntitlements) or a
+ *  sign-in's request and consume (bench http.ts signIn). Both go through
+ *  bench's raw(), so neither has HttpDriver's per-request timeout. */
+export const TURN_REQUESTS = 2;
+/** How long a task may hold a shared turn before it fails by name and the
+ *  turn passes on: the driver's allowance for one request, per request. */
+export const TURN_DEADLINE_MS = TURN_REQUESTS * REQUEST_TIMEOUT_MS;
+
+export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TURN_DEADLINE_MS): RunDeps {
   // W1-driving T11, found live (w1drv-t11-w3): provisionPlan's entitlement
   // bust flips the case org's owner — the run's ONE owner, whichever worker
   // seeds the org — to staff for two admin calls, then back. Two workers'
   // windows overlapped, one's demotion landed between the other's calls, and
   // the admin route answered 401 "Staff access required". The owner's staff
   // flag is per USER, not per session, so the provisions take turns.
-  const ownerStaffWindow = oneAtATime();
+  // m-2: a provision that hangs inside the window fails ITS case by name
+  // (runCase records the throw as that case's error) and the turn passes on.
+  const ownerStaffWindow = oneAtATime("case-org provision (the owner's staff window)", turnDeadlineMs);
   return {
     env: process.env,
+    turnDeadlineMs,
     // harnessCommit and openDb do no async work. Each body runs inside a
     // Promise executor, whose throw REJECTS — exactly what the `async` arrow
     // with no `await` did — so a failing git or handle open still reaches the
