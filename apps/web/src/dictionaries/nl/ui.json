@@ -5430,6 +5430,7 @@
   "stream.chain.aria": "Signaalpad: telefoon {phone}, Seazn {seazn}, {platform} {dest}",
   "stream.output.warning": "Live vanaf de telefoon, maar {platform} ontvangt het niet. Controleer de streamsleutel in Directory.",
   "stream.output.openDirectory": "Directory openen",
+  "stream.output.phoneWarning": "Seazn ontvangt geen video van de telefoon. Controleer of de telefoon nog streamt en bereik heeft.",
   "stream.details": "Details",
   "stream.styles.label": "Overlaystijl",
   "stream.link.label": "Overlaylink voor OBS",

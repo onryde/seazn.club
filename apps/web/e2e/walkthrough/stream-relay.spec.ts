@@ -1118,6 +1118,8 @@ for (const width of [320, 1280] as const) {
     expect.soft(overClaims, "no live answer claims more elapsed than the wall clock since the transition").toEqual([]);
     await expect(warning).toBeVisible();
     await expect(warning).toHaveAttribute("role", "status");
+    // I-1: the phone is sending (the chain's phone half is Connected), so the box points at the stream key.
+    await expect(warning).toHaveAttribute("data-cause", "destination");
     await expect(warning).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));
     await expect(chain).toHaveAttribute("data-dest", "notReceiving");
     await expect(chain).toHaveAttribute("data-link2", "problem");
@@ -2160,8 +2162,28 @@ for (const width of WIDTHS) {
     });
     await expect(chain).toHaveAttribute("data-phone", "noSignal", { timeout: POLL_WAIT_MS });
     await expect(chain).toHaveAttribute("data-link1", "problem");
+    // I-1 (owner 2026-10-01, option a): past the hold with NO SIGNAL from the phone, the D3 box points at the phone — the
+    // owner's sentence, nothing to open in Directory — and the stream keeps running (still live, Stop enabled, amber dot).
+    // The fake ingest cannot drop a phone that has connected (its connect rule is the clock; `setState` is in-process
+    // only), so the phone half is this frame's real-projection reshape, not a new driver seam.
+    const box = body.getByTestId("stream-output-warning");
+    await expect(box).toHaveAttribute("data-cause", "phone", { timeout: POLL_WAIT_MS });
+    await expect(box).toHaveText(en("stream.output.phoneWarning"));
+    await expect(box.getByTestId("stream-output-open-directory"), "no Directory link: the key is not the problem").toHaveCount(0);
+    await expect(box).toHaveAttribute("role", "status");
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
+    await expect(body.getByTestId("stream-stop")).toBeEnabled();
+    await expect(streamControl(page), "the phone box is a D3 warning: amber").toHaveAttribute("data-dot", "amber");
     await capture(scope, "live-no-signal");
+    await shot(box, `I1-${width}-1-phone-box.png`);
+    // THE PHONE RETURNS while the destination still dials: the real projection again — the not-receiving period never
+    // restarted, so past the hold it is the stream-key box at once, with its way to Directory.
     await page.unroute(CURRENT);
+    await expect(chain).toHaveAttribute("data-phone", "connected", { timeout: POLL_WAIT_MS });
+    await expect(box).toHaveAttribute("data-cause", "destination");
+    await expect(box).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));
+    await expect(box.getByTestId("stream-output-open-directory")).toBeVisible();
+    await shot(box, `I1-${width}-2-key-box-after-return.png`);
     await reshape((v) => {
       // The real ending projection: the poll reads ingest and output only while warming or live (B5 review m-6).
       v.state = "ending";

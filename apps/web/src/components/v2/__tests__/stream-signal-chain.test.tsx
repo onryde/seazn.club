@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DictProvider } from "@/components/i18n/dict-provider";
-import { DestinationWarning, SignalChain } from "@/components/v2/stream-signal-chain";
+import { D3Warning, SignalChain } from "@/components/v2/stream-signal-chain";
 import { platformName } from "@/components/v2/stream-platform-mark";
 import { chainFor, type Chain } from "@/lib/stream-chain";
 import { messages } from "@/lib/messages";
@@ -179,9 +179,10 @@ describe("SignalChain (spec §3.2)", () => {
   });
 });
 
-describe("DestinationWarning (D3)", () => {
-  it("is a status box naming the platform, with an Open Directory link to the Streaming tab in a new tab — 44 px on a phone", () => {
-    const html = renderToStaticMarkup(<DestinationWarning kind="twitch" />);
+describe("D3Warning (D3; I-1 — the cause decides the sentence)", () => {
+  it("the key box (cause destination) is a status box naming the platform, with an Open Directory link to the Streaming tab in a new tab — 44 px on a phone", () => {
+    const html = renderToStaticMarkup(<D3Warning cause="destination" kind="twitch" />);
+    expect(html).toMatch(/data-testid="stream-output-warning"[^>]*data-cause="destination"/);
     expect(html).toMatch(/data-testid="stream-output-warning"[^>]*role="status"|role="status"[^>]*data-testid="stream-output-warning"/);
     expect(html).toContain(messages["stream.output.warning"].replace("{platform}", "Twitch").replace(/'/g, "&#x27;"));
     expect(html).toMatch(/data-testid="stream-output-open-directory"[^>]*href="\/directory\?tab=streaming"/);
@@ -189,4 +190,38 @@ describe("DestinationWarning (D3)", () => {
     expect(html).toMatch(/data-testid="stream-output-open-directory"[^>]*class="[^"]*min-h-11[^"]*md:min-h-0/);
     expect(html).toContain(`>${messages["stream.output.openDirectory"]}</a>`);
   });
+
+  // I-1 (owner 2026-10-01, option a): the phone has no signal — the box points at the PHONE, in the owner's words, with
+  // nothing to open in Directory (the key is not the problem); the same amber status box, the stream keeps running.
+  it("the phone box (cause phone) says Seazn isn't getting video from the phone — the owner's sentence — and offers NO Directory link", () => {
+    const html = renderToStaticMarkup(<D3Warning cause="phone" kind="twitch" />);
+    expect(html).toMatch(/data-testid="stream-output-warning"[^>]*data-cause="phone"/);
+    expect(html).toMatch(/data-testid="stream-output-warning"[^>]*role="status"|role="status"[^>]*data-testid="stream-output-warning"/);
+    expect(messages["stream.output.phoneWarning"], "the owner's EN copy, verbatim").toBe(
+      "Seazn isn't getting video from the phone. Check the phone is still streaming and has signal.",
+    );
+    expect(html).toContain(messages["stream.output.phoneWarning"].replace(/'/g, "&#x27;"));
+    expect(html, "no Directory link").not.toContain("stream-output-open-directory");
+    expect(html, "never the key sentence").not.toContain(messages["stream.output.warning"].split("{platform}")[0]!.replace(/'/g, "&#x27;"));
+    expect(html, "amber, as the key box").toMatch(/border-amber-300 bg-amber-50/);
+  });
+
+  it("the phone box reads in the viewer's locale — every locale has its own sentence, never the English one", () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const d = dict(locale);
+      const text = d["stream.output.phoneWarning"];
+      expect(text, `${locale}: the key exists`).toBeTruthy();
+      if (locale !== "en") expect(text, `${locale}: translated`).not.toBe(dict("en")["stream.output.phoneWarning"]);
+      const html = renderToStaticMarkup(
+        <DictProvider dict={d} locale={locale}>
+          <D3Warning cause="phone" kind="youtube" />
+        </DictProvider>,
+      );
+      expect(html, locale).toContain(String(text).replace(/'/g, "&#x27;"));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
 });
+

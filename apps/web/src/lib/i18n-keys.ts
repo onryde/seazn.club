@@ -6275,6 +6275,7 @@ export type DictionaryKey =
   | "stream.link.label"
   | "stream.onAir"
   | "stream.output.openDirectory"
+  | "stream.output.phoneWarning"
   | "stream.output.warning"
   | "stream.phone.again"
   | "stream.phone.buyMore"

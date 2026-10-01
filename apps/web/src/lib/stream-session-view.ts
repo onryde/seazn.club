@@ -48,10 +48,29 @@ export function outputElapsedMs(view: Pick<StreamSessionCurrent, "output">): num
   return view.output ? view.output.elapsedMs : null;
 }
 
-/** D3: live, the destination not `ok`, for at least OUTPUT_WARNING_AFTER_MS of server-measured time. */
+/** D3: live, the destination not `ok`, for at least OUTPUT_WARNING_AFTER_MS of server-measured time. The HOLD — whether
+ *  a D3 box shows at all; `d3Warning` says which. */
 export function destinationWarning(view: Pick<StreamSessionCurrent, "state" | "output">): boolean {
   if (view.state !== "live" || !view.output || view.output.state === "ok") return false;
   return (outputElapsedMs(view) ?? 0) >= OUTPUT_WARNING_AFTER_MS;
+}
+
+/** The Signal path's "No signal" (§3.2): live, and the phone's ingest read is anything but `connected`. A NULL ingest (a
+ *  failed provider read, N1) is not no-signal — nothing is decided on an unknown, the poll's own rule. One predicate for
+ *  the chain's phone node and the D3 box, so the two cannot disagree. */
+export function phoneNoSignal(view: Pick<StreamSessionCurrent, "state" | "ingest">): boolean {
+  return view.state === "live" && view.ingest !== null && view.ingest.state !== "connected";
+}
+
+export type D3Box = "phone" | "destination";
+
+/** I-1 (owner 2026-10-01, option a): WHICH box the D3 hold shows. Phone first — with no signal from the phone the
+ *  destination cannot receive whatever its key, so the box points at the phone; only with the phone sending does it
+ *  point at the stream key. Null when the hold has not been reached, and for no session at all. */
+export function d3Warning(view: Pick<StreamSessionCurrent, "state" | "ingest" | "output"> | null): D3Box | null {
+  if (!view || !destinationWarning(view)) return null;
+  if (phoneNoSignal(view)) return "phone";
+  return "destination";
 }
 export type PhoneTabState = "idle" | "provisioning" | "warming" | "live" | "ending" | "ended" | "failed";
 

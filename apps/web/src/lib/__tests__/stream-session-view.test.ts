@@ -31,7 +31,7 @@ import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usec
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText,
+  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -481,6 +481,113 @@ describe("D3 — the destination warning (spec §5.6)", () => {
       }
     }
     expect(checked).toBe(6);
+  });
+});
+
+// I-1 (owner 2026-10-01, option a) — WHICH D3 box. The 30 s hold still decides WHETHER a box shows (live, the
+// destination not ok for OUTPUT_WARNING_AFTER_MS of server time — `destinationWarning`, pinned above). The PHONE decides
+// which: no signal from the phone → a box that points at the phone ("Seazn isn't getting video from the phone"), no
+// Directory link; the phone sending → the stream-key box. "No signal" is the Signal path's own word (§3.2): an ingest
+// read that is not `connected`. A NULL ingest (a failed provider read, N1) decides nothing, so it is not "no signal".
+// Every expected value below is that ruling, transcribed — never read back from `d3Warning`.
+describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () => {
+  type IngestWord = (typeof StreamIngest.shape.state.options)[number];
+  type OutputWord = (typeof StreamOutput.shape.state.options)[number];
+  type Box = "phone" | "destination" | null;
+  const W = OUTPUT_WARNING_AFTER_MS;
+  const since = "2026-09-30T12:00:00.000Z";
+  const v = (state: string, ingest: IngestWord | null, output: OutputWord | null, elapsedMs = 0) =>
+    ({
+      state,
+      ingest: ingest ? { state: ingest, protocol: ingest === "connected" ? "srt" : null } : null,
+      output: output ? { state: output, since, elapsedMs } : null,
+    }) as never;
+  /** The ruling as a function of its inputs — the oracle for the sweep. */
+  const ruling = (state: string, ingest: IngestWord | null, output: OutputWord | null, elapsedMs: number): Box => {
+    if (state !== "live" || output === null || output === "ok" || elapsedMs < W) return null;
+    return ingest !== null && ingest !== "connected" ? "phone" : "destination";
+  };
+
+  it("the empty case: no view, no box", () => {
+    expect(d3Warning(null)).toBeNull();
+  });
+
+  it("phone ok or no signal × destination ok / connecting / rejected / unknown, past the hold — the ruling's table, row by row", () => {
+    const rows: [IngestWord, OutputWord, Box][] = [
+      ["connected", "ok", null],
+      ["connected", "connecting", "destination"],
+      ["connected", "rejected", "destination"],
+      ["connected", "unknown", "destination"],
+      ["disconnected", "ok", null],
+      ["disconnected", "connecting", "phone"],
+      ["disconnected", "rejected", "phone"],
+      ["disconnected", "unknown", "phone"],
+      // Cloudflare's own "unknown" ingest (a 404 on the input) is not "connected" either: the chain says No signal.
+      ["unknown", "ok", null],
+      ["unknown", "connecting", "phone"],
+      ["unknown", "rejected", "phone"],
+      ["unknown", "unknown", "phone"],
+    ];
+    let checked = 0;
+    for (const [ingest, output, box] of rows) {
+      expect(d3Warning(v("live", ingest, output, W)), `phone ${ingest} × destination ${output}`).toBe(box);
+      checked++;
+    }
+    expect(checked).toBe(StreamIngest.shape.state.options.length * StreamOutput.shape.state.options.length);
+    expect(rows.filter((r) => r[2] === "phone").length, "the phone box was reached").toBeGreaterThan(0);
+    expect(rows.filter((r) => r[2] === "destination").length, "the key box was reached").toBeGreaterThan(0);
+  });
+
+  it("under the hold: no box at all, whatever the phone says — the hold is unchanged", () => {
+    let checked = 0;
+    for (const ingest of StreamIngest.shape.state.options) for (const output of StreamOutput.shape.state.options) {
+      expect(d3Warning(v("live", ingest, output, W - 1)), `${ingest} × ${output}`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(12);
+  });
+
+  it("a null ingest (a failed read) is not no-signal: past the hold it is the key box, as before", () => {
+    expect(d3Warning(v("live", null, "connecting", W))).toBe("destination");
+  });
+
+  it("the whole input space: every state × ingest (none included) × output (none included) × either side of the line", () => {
+    const ingests: (IngestWord | null)[] = [null, ...StreamIngest.shape.state.options];
+    const outputs: (OutputWord | null)[] = [null, ...StreamOutput.shape.state.options];
+    let checked = 0;
+    const seen = { phone: 0, destination: 0, none: 0 };
+    for (const state of StreamSessionState.options) for (const ingest of ingests) for (const output of outputs) for (const ms of [0, W - 1, W, 10 * W]) {
+      const want = ruling(state, ingest, output, ms);
+      expect(d3Warning(v(state, ingest, output, ms)), `${state} · ${ingest} · ${output} · ${ms}`).toBe(want);
+      seen[want ?? "none"]++;
+      checked++;
+    }
+    expect(checked).toBe(StreamSessionState.options.length * ingests.length * outputs.length * 4);
+    expect(seen.phone, "phone rows swept").toBeGreaterThan(0);
+    expect(seen.destination, "key rows swept").toBeGreaterThan(0);
+  });
+
+  it("the sequence: the phone drops → the box points at the phone; it returns while the destination still dials → the key box (the period never restarted); receiving → none", () => {
+    const steps: [string, ReturnType<typeof v>, Box][] = [
+      ["live, receiving", v("live", "connected", "ok", 0), null],
+      ["the phone drops: inside the hold", v("live", "disconnected", "unknown", 5_000), null],
+      ["30 s without the destination receiving, the phone still silent", v("live", "disconnected", "unknown", W), "phone"],
+      ["still silent", v("live", "disconnected", "connecting", W + 10_000), "phone"],
+      ["the phone returns; the destination is still dialling", v("live", "connected", "connecting", W + 15_000), "destination"],
+      ["the destination receives", v("live", "connected", "ok", 0), null],
+    ];
+    const got = steps.map(([, view]) => d3Warning(view));
+    expect(got).toEqual(steps.map(([, , box]) => box));
+  });
+
+  it("…and a phone that returns INSIDE the hold: no box until the hold, then the key box", () => {
+    const got = [
+      d3Warning(v("live", "disconnected", "unknown", 5_000)),
+      d3Warning(v("live", "connected", "connecting", 20_000)),
+      d3Warning(v("live", "connected", "connecting", W - 1)),
+      d3Warning(v("live", "connected", "connecting", W)),
+    ];
+    expect(got).toEqual([null, null, null, "destination"]);
   });
 });
 

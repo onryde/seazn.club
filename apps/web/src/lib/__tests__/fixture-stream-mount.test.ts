@@ -78,6 +78,14 @@ describe("streamButtonState — the Stream button's dot and label (spec §2)", (
     expect(at(W)).toEqual({ dot: "amber", labelKey: "stream.buttonLive" });
   });
 
+  it("I-1: the phone box is a D3 warning too — the dot is amber whichever way the box points, and red under the hold", () => {
+    const silent = (ms: number, out: string) =>
+      streamButtonState({ state: "live", ingest: { state: "disconnected", protocol: null }, output: { state: out, since: "2026-09-30T12:00:00.000Z", elapsedMs: ms } } as never);
+    expect(silent(W, "unknown")).toEqual({ dot: "amber", labelKey: "stream.buttonLive" });
+    expect(silent(W - 1, "unknown")).toEqual({ dot: "red", labelKey: "stream.buttonLive" });
+    expect(silent(W, "ok"), "a silent phone with the destination still ok: no box, no amber").toEqual({ dot: "red", labelKey: "stream.buttonLive" });
+  });
+
   it("ending: amber, labelled Stream (the session is still up, but no longer live)", () => {
     expect(streamButtonState(view("ending"))).toEqual({ dot: "amber", labelKey: "stream.button" });
   });

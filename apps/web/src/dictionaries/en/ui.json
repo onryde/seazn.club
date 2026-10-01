@@ -5430,6 +5430,7 @@
   "stream.chain.aria": "Signal path: phone {phone}, Seazn {seazn}, {platform} {dest}",
   "stream.output.warning": "Live from the phone, but {platform} isn't receiving it. Check the stream key in Directory.",
   "stream.output.openDirectory": "Open Directory",
+  "stream.output.phoneWarning": "Seazn isn't getting video from the phone. Check the phone is still streaming and has signal.",
   "stream.details": "Details",
   "stream.styles.label": "Overlay style",
   "stream.link.label": "Overlay link for OBS",

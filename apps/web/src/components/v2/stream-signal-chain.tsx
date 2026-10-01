@@ -8,6 +8,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { platformName } from "@/components/v2/stream-platform-mark";
 import type { Chain, ChainNode, ChainWord, LinkStyle, NodeTone } from "@/lib/stream-chain";
 import type { MessageKey } from "@/lib/messages";
+import type { D3Box } from "@/lib/stream-session-view";
 import type { StreamTargetKind } from "@/server/api-v1/schemas";
 
 const TONE_RING: Record<NodeTone, string> = {
@@ -195,13 +196,16 @@ export function SignalChain({
   );
 }
 
-/** D3 (spec §3.2): live from the phone, the destination not receiving for 30 s or more. A warning — the stream keeps
- *  running and Stop stays one tap away; only the server ends a session (`rejected`). */
-export function DestinationWarning({ kind }: { kind: StreamTargetKind }) {
+/** D3 (spec §3.2): live, the destination not receiving for 30 s or more. A warning — the stream keeps running and Stop
+ *  stays one tap away; only the server ends a session (`rejected`). I-1 (owner 2026-10-01, option a): `cause` is
+ *  `d3Warning`'s answer — the phone has no signal → the box points at the phone, with nothing to open in Directory; the
+ *  phone sending → the stream key, with the way to Directory. */
+export function D3Warning({ cause, kind }: { cause: D3Box; kind: StreamTargetKind }) {
   const msg = useMsg();
   return (
     <div
       data-testid="stream-output-warning"
+      data-cause={cause}
       role="status"
       className="mt-3 flex gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"
     >
@@ -209,18 +213,22 @@ export function DestinationWarning({ kind }: { kind: StreamTargetKind }) {
         <path d="M12 3.5 2.5 20h19z" />
         <path d="M12 10v4.5M12 17.2v.1" />
       </svg>
-      <p className="min-w-0">
-        <span>{msg("stream.output.warning", { platform: platformName(msg, kind) })}</span>{" "}
-        <a
-          data-testid="stream-output-open-directory"
-          href="/directory?tab=streaming"
-          target="_blank"
-          rel="noopener"
-          className="inline-flex min-h-11 items-center font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:decoration-amber-600 md:min-h-0"
-        >
-          {msg("stream.output.openDirectory")}
-        </a>
-      </p>
+      {cause === "phone" ? (
+        <p className="min-w-0">{msg("stream.output.phoneWarning")}</p>
+      ) : (
+        <p className="min-w-0">
+          <span>{msg("stream.output.warning", { platform: platformName(msg, kind) })}</span>{" "}
+          <a
+            data-testid="stream-output-open-directory"
+            href="/directory?tab=streaming"
+            target="_blank"
+            rel="noopener"
+            className="inline-flex min-h-11 items-center font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:decoration-amber-600 md:min-h-0"
+          >
+            {msg("stream.output.openDirectory")}
+          </a>
+        </p>
+      )}
     </div>
   );
 }

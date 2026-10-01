@@ -5430,6 +5430,7 @@
   "stream.chain.aria": "Ruta de la señal: teléfono {phone}, Seazn {seazn}, {platform} {dest}",
   "stream.output.warning": "En directo desde el teléfono, pero {platform} no lo está recibiendo. Revisa la clave de transmisión en Directorio.",
   "stream.output.openDirectory": "Abrir Directorio",
+  "stream.output.phoneWarning": "Seazn no está recibiendo vídeo del teléfono. Comprueba que el teléfono sigue transmitiendo y tiene señal.",
   "stream.details": "Detalles",
   "stream.styles.label": "Estilo del rótulo",
   "stream.link.label": "Enlace del rótulo para OBS",

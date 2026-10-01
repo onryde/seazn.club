@@ -58,7 +58,7 @@ import {
 } from "@/lib/stream-session-view";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
-import { DestinationWarning, SignalChain } from "@/components/v2/stream-signal-chain";
+import { D3Warning, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
 import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
 import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES, type SeaznQr } from "@/lib/seazn-qr";
@@ -1746,7 +1746,7 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
       output: output ? { state: output, since: "2026-09-14T11:59:00Z", elapsedMs } : null,
       ...over,
     });
-  const warnings = (tree: ReactElement[]) => tree.filter((e) => e.type === DestinationWarning);
+  const warnings = (tree: ReactElement[]) => tree.filter((e) => e.type === D3Warning);
 
   it("idle: drawn to the PICKED destination — and not drawn at all with nothing to draw it to (empty, loading, failed list)", () => {
     const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
@@ -1806,6 +1806,41 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
   it("a stale phone while live: the chain says No signal; the destination half still follows the output", () => {
     const v = live("ok", 0, { ingest: { state: "disconnected", protocol: null } });
     expect(chainOf(body({ view: v, balance: 1 }))?.chain).toMatchObject({ phone: { word: "noSignal" }, dest: { word: "live" } });
+  });
+
+  // I-1 (owner 2026-10-01, option a): past the hold, the box POINTS AT THE PHONE while the phone has no signal, and at
+  // the stream key only while the phone is sending. The stream keeps running either way: Stop stays, enabled.
+  it("I-1: past the hold, no signal from the phone → the phone box; the phone sending → the key box; under the hold → none", () => {
+    const silent = { ingest: { state: "disconnected" as const, protocol: null } };
+    let checked = 0;
+    for (const o of ["connecting", "unknown", "rejected"] as const) {
+      const phone = warnings(body({ view: live(o, W, silent), balance: 1 }));
+      expect(phone, `${o}: one box`).toHaveLength(1);
+      expect(propsOf(phone[0]!).cause, `${o}: it points at the phone`).toBe("phone");
+      const key = warnings(body({ view: live(o, W), balance: 1 }));
+      expect(propsOf(key[0]!).cause, `${o}: phone sending → the key box`).toBe("destination");
+      expect(warnings(body({ view: live(o, W - 1, silent), balance: 1 })), `${o}: under the hold`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(warnings(body({ view: live("ok", W * 3, silent), balance: 1 })), "silent phone but the destination ok: no box").toHaveLength(0);
+    const warned = body({ view: live("connecting", W, silent), balance: 1 });
+    expect(propsOf(byTestId(warned, "stream-stop")!).disabled, "the stream keeps running: Stop is there").toBeFalsy();
+  });
+
+  it("I-1 sequence through the body: drop → the phone box; back while the destination still dials → the key box; receiving → none", () => {
+    const silent = { ingest: { state: "disconnected" as const, protocol: null } };
+    const causes = [
+      live("ok", 0),
+      live("unknown", 5_000, silent),
+      live("unknown", W, silent),
+      live("connecting", W + 15_000),
+      live("ok", 0),
+    ].map((v) => {
+      const w = warnings(body({ view: v, balance: 1 }));
+      return w.length === 0 ? null : (propsOf(w[0]!).cause as string);
+    });
+    expect(causes).toEqual([null, null, "phone", "destination", null]);
   });
 
   it("in use (mockup state 5): an idle target_in_use refusal draws the destination node 'In use'; any other refusal does not", () => {

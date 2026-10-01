@@ -42,7 +42,7 @@ import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { PlatformMark, platformName } from "./stream-platform-mark";
-import { DestinationWarning, SignalChain } from "./stream-signal-chain";
+import { D3Warning, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
@@ -65,7 +65,7 @@ import {
   createErrorHolder,
   createErrorIsNotFound,
   createErrorText,
-  destinationWarning,
+  d3Warning,
   elapsedLabel,
   healthChips,
   phoneTabState,
@@ -1303,8 +1303,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
     !creditsOnly && chainTarget
       ? { to: chainTarget, chain: chainFor(p.view, { destInUse: state === "idle" && p.createError?.code === "target_in_use" }) }
       : null;
-  // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running.
-  const warned = p.view !== null && destinationWarning(p.view);
+  // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running. I-1: phone first.
+  const warned = d3Warning(p.view);
   // Ended and failed are summary cards that carry their own (visible) pill.
   const summary = state === "ended" || state === "failed";
   const pickerId = `stream-target-${p.fixtureId}`;
@@ -1376,7 +1376,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {/* §3.2 (T9a): the Signal path replaces §8a's stepper — one drawing at every width; only its destination label
           moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
       {drawn?.chain && <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: drawn.to.label }} />}
-      {warned && p.view && <DestinationWarning kind={p.view.target.kind} />}
+      {warned && p.view && <D3Warning cause={warned} kind={p.view.target.kind} />}
 
       {p.view?.fixtureDecided && (state === "live" || state === "ending") && (
         <p

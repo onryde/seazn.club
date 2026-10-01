@@ -1,7 +1,7 @@
 // lib/stream-chain.ts — spec 2026-09-30 §3.2, the Signal-path table as ONE pure mapping. `SignalChain`
 // (components/v2/stream-signal-chain.tsx) draws it; the Stream button's dot reads the same session through
 // `streamButtonState` (T9b). No React, no clock: D3's 30 s are the SERVER's measure on the projection (M6).
-import { destinationWarning, type StreamSessionView } from "@/lib/stream-session-view";
+import { destinationWarning, phoneNoSignal, type StreamSessionView } from "@/lib/stream-session-view";
 
 export type NodeTone = "slate" | "amber" | "lime" | "red";
 export type LinkStyle = "idle" | "connecting" | "flowing" | "problem";
@@ -49,7 +49,7 @@ export function chainFor(view: ChainView | null, opts: { destInUse?: boolean } =
       return { phone: node("amber", "waiting"), link1: "connecting", seazn: node("amber", "waiting"), link2: "idle", dest: node("slate", "notLive") };
     case "live": {
       const half = destinationHalf(view);
-      if (view.ingest && view.ingest.state !== "connected") {
+      if (phoneNoSignal(view)) {
         return { phone: node("amber", "noSignal"), link1: "problem", seazn: node("amber", "waiting"), ...half };
       }
       return { phone: node("lime", "connected"), link1: "flowing", seazn: node("lime", "receiving"), ...half };
