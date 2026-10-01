@@ -236,6 +236,15 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1-driving Task 16 fix round 1 (T16-R4 m-6): the findings-table CLI that
+  // generates _INDEX's per-case product-red table.
+  const W1DRV_T16 = ["findings-table.ts"];
+  it("W1-driving Task 16's modules are all in the walk", () => {
+    const missing = W1DRV_T16.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T16.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
