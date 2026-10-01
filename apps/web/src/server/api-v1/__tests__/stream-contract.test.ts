@@ -13,7 +13,7 @@ import { CaptureQrV1 } from "@/lib/capture-qr";
 import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
-import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
+import { deltaText, lastCheckList, MIGRATION, STREAM_DELTA_COUNT, STREAM_DELTA_FILES } from "@/server/relay/__tests__/_stream-migration";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_KEY_EMPTY, STREAM_PLATFORMS,
   STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
@@ -99,6 +99,58 @@ describe("relay wire enums equal their declarations", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// Capture QR v2 T3 (A4): a CHECK list is the LAST declaration in version order across the stream
+// fold, in either form — V410's inline unnamed column check, or a later `add constraint … check`.
+// Every expectation below is read straight off ONE file's own `in (…)` list with a regex local to
+// this test, never typed and never through lastCheckList itself.
+describe("the stream delta fold — lastCheckList reads both CHECK forms, last definition wins (A4)", () => {
+  const V410 = deltaText(410);
+  const V430 = deltaText(430);
+  const list = (m: RegExpMatchArray | null): string[] => (m ? [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!) : []);
+  // V410 :175 and :307 — the inline unnamed form.
+  const v410EndReasons = list(V410.match(/\n\s*end_reason\s+text null check \(end_reason in \(([^)]*)\)\)/));
+  const v410Sources = list(V410.match(/\n\s*source\s+text not null check \(source in \(([^)]*)\)\)/));
+  // V430 — the named form, under Postgres's default name for V410's inline check.
+  const v430EndReasons = list(V430.match(/add constraint fixture_stream_sessions_end_reason_check\s+check \(end_reason in \(([^)]*)\)\)/));
+  const v430Sources = list(V430.match(/add constraint fixture_stream_events_source_check\s+check \(source in \(([^)]*)\)\)/));
+
+  it("anti-vacuity: the fold read files, V410 and V430 among them BY NAME, and each file's own list parsed non-empty", () => {
+    expect(STREAM_DELTA_COUNT).toBeGreaterThan(0);
+    expect(STREAM_DELTA_COUNT).toBe(STREAM_DELTA_FILES.length);
+    expect(STREAM_DELTA_FILES).toContain("V410__stream_sessions.sql");
+    expect(STREAM_DELTA_FILES).toContain("V430__capture_stream_codes.sql");
+    expect(STREAM_DELTA_FILES.indexOf("V410__stream_sessions.sql")).toBeLessThan(STREAM_DELTA_FILES.indexOf("V430__capture_stream_codes.sql"));
+    expect([v410EndReasons.length, v430EndReasons.length, v410Sources.length, v430Sources.length].every((n) => n > 0)).toBe(true);
+  });
+
+  it("ordering differential: V410 alone folds to V410's two end reasons; V410 then V430 folds to V430's five; the reverse order folds back to V410's", () => {
+    expect(v410EndReasons).toHaveLength(2);
+    expect(v430EndReasons).toHaveLength(5);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410])).toEqual(v410EndReasons);       // the INLINE form
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V430])).toEqual(v430EndReasons);       // the NAMED form
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410, V430])).toEqual(v430EndReasons);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V430, V410])).toEqual(v410EndReasons); // order decides
+    expect(lastCheckList("fixture_stream_sessions", "end_reason")).toEqual(v430EndReasons);               // the whole fold
+    // V430 keeps both of V410's reasons — it widens, never narrows.
+    for (const r of v410EndReasons) expect(v430EndReasons).toContain(r);
+  });
+
+  it("fixture_stream_events.source: the folded list contains 'phone', V410's alone does not, and every V410 source is kept", () => {
+    const folded = lastCheckList("fixture_stream_events", "source");
+    expect(lastCheckList("fixture_stream_events", "source", [V410])).toEqual(v410Sources);
+    expect(folded).toEqual(v430Sources);
+    expect(folded).toContain("phone");
+    expect(v410Sources).not.toContain("phone");
+    expect([...folded].filter((x) => x !== "phone").sort()).toEqual([...v410Sources].sort());
+  });
+
+  it("the empty case: a column no folded file checks reads [], never a default", () => {
+    expect(lastCheckList("fixture_stream_sessions", "no_such_column")).toEqual([]);
+    expect(lastCheckList("no_such_table", "end_reason")).toEqual([]);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [])).toEqual([]);
   });
 });
 

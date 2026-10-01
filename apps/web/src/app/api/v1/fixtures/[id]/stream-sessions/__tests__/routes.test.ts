@@ -237,7 +237,8 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
   it("?reveal=1 — and nothing else — moves the reveal counters: a poll serves the QR without counting; any other value is 400 and counts nothing", async () => {
     const o = await organiser();
     const { sessionId } = (await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).body.data!;
-    const reveals = async () => (await sql<{ n: number }[]>`select credentials_reveal_count as n from fixture_stream_sessions where id = ${sessionId}`)[0]!.n;
+    // V430 renamed the counter `credentials_served_count` (capture QR v2 R3); until T11 it counts these reveals.
+    const reveals = async () => (await sql<{ n: number }[]>`select credentials_served_count as n from fixture_stream_sessions where id = ${sessionId}`)[0]!.n;
     const steps: [string, number, number][] = [
       ["", 200, 0], ["", 200, 0], ["?reveal=1", 200, 1],
       ["?reveal=true", 400, 1], ["?reveal=0", 400, 1], ["?reveal=", 400, 1], ["?reveal=1&reveal=true", 200, 2],

@@ -2274,27 +2274,30 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     // test — the warming window the claim is about.
     const r = await rig({ credits: 1, connectAfterMs: 10 * 60_000 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    const facts = () => sql<{ qr_issued_first_at: string; credentials_revealed_first_at: string | null; credentials_reveal_count: number }[]>`
-      select qr_issued_first_at, credentials_revealed_first_at, credentials_reveal_count from fixture_stream_sessions where id = ${sessionId}`;
+    // V430 (capture QR v2 R3): the reveal pair is `credentials_served_*`, and the QR's serve stamp
+    // is gone (the stream code's `first_shown_at` supersedes it, spec §6.13).
+    const facts = () => sql<{ credentials_served_first_at: Date | null; credentials_served_count: number }[]>`
+      select credentials_served_first_at, credentials_served_count from fixture_stream_sessions where id = ${sessionId}`;
     const first = (await currentSession(r.auth, r.fixtureId, r.deps, { reveal: true }))!;
     expect(first.qr).not.toBeNull();
     const [a] = await facts();
-    expect(a!.credentials_reveal_count).toBe(1);
+    expect(a!.credentials_served_count).toBe(1);
+    expect(a!.credentials_served_first_at, "the first reveal stamps first-at").toBeInstanceOf(Date);
     // Now the organiser's tab just sits there polling. Ten minutes of 5-second polls is
     // ~120 projections; three proves the shape. Before this split every one of them
     // counted as a reveal, and the De test pinned that — which is how the drift became
-    // uncatchable. The QR is still SERVED on each (the tab renders it), so
-    // `qr_issued_first_at` stays put rather than going null.
-    for (let i = 0; i < 3; i++) { r.tick(5000); await currentSession(r.auth, r.fixtureId, r.deps); }
+    // uncatchable. The QR is still SERVED on each (the tab renders it).
+    for (let i = 0; i < 3; i++) {
+      r.tick(5000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.qr, "a poll still serves the QR").not.toBeNull();
+    }
     const [mid] = await facts();
-    expect(mid!.credentials_reveal_count, "a poll is not a reveal").toBe(1);
-    expect(mid!.qr_issued_first_at).toEqual(a!.qr_issued_first_at);
+    expect(mid!.credentials_served_count, "a poll is not a reveal").toBe(1);
     r.tick(5000);
     await currentSession(r.auth, r.fixtureId, r.deps, { reveal: true });   // the organiser taps Copy
     const [b] = await facts();
-    expect(b!.credentials_reveal_count).toBe(2);
-    expect(b!.qr_issued_first_at).toEqual(a!.qr_issued_first_at);
-    expect(b!.credentials_revealed_first_at).toEqual(a!.credentials_revealed_first_at);
+    expect(b!.credentials_served_count).toBe(2);
+    expect(b!.credentials_served_first_at).toEqual(a!.credentials_served_first_at);
   });
 
   it("C1: the balance is readable with NO session — a credited org is not shown the buy card", async () => {

@@ -1530,9 +1530,8 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     if (row!.state !== "provisioning" && row!.state !== "warming") return null;
     const input = await readFirstInput(tx, row!.id);
     if (!input || !input.srt || !input.rtmps) return null;   // the empty case: null, not a default
-    // De, in two halves — and the split is the whole point.
-    // `qr_issued_first_at` is when the payload was first SERVED. Every projection that
-    // carries a QR is a serve, so it is coalesced unconditionally here.
+    // De. The serve stamp this used to coalesce here is gone (V430, capture QR v2 R3): the
+    // stream code's `first_shown_at` supersedes it (spec §6.13), so a QR serve writes nothing.
     // The REVEAL counters are a different fact: a reveal is the organiser's own act of
     // disclosing the credentials — the tab showing them for the first time this session,
     // or a tap on Copy — and the caller says so with `reveal`. A POLL IS NOT A REVEAL.
@@ -1544,12 +1543,13 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     // future admin view) inherits that lie.
     // The lock this transaction already holds is what makes the increment safe: two
     // concurrent reveals cannot lose a count. first-at is coalesced and never moves.
+    // V430 renamed the pair `credentials_served_*` (R3). Until T11 removes `?reveal=1` they count
+    // these organiser reveals; from T8a they ALSO count descriptor serves (spec §17.3).
     await lockRow(tx, row!.id);
-    await tx`update fixture_stream_sessions set qr_issued_first_at = coalesce(qr_issued_first_at, ${deps.now()}) where id = ${row!.id}`;
     if (opts.reveal) {
       await tx`update fixture_stream_sessions
-                  set credentials_revealed_first_at = coalesce(credentials_revealed_first_at, ${deps.now()}),
-                      credentials_reveal_count = credentials_reveal_count + 1
+                  set credentials_served_first_at = coalesce(credentials_served_first_at, ${deps.now()}),
+                      credentials_served_count = credentials_served_count + 1
                 where id = ${row!.id}`;
     }
     return {
