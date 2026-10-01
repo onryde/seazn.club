@@ -911,6 +911,43 @@ unchanged.
 - **Mockups (house rule "≥2 UI options before building").** A plan task (PR-1 Task 2) produces two static options for the
   Ready states, the warming and live countdowns (W24) and the restart count (W23) at 320, 768 and 1280, under `2026-10-01-capture-qr-v2-mockups/`. **The owner signs one off before the
   panel task starts.** The PR-1 build of the panel waits on that; the server work does not.
+- **Signed off: Option B ("Chain first"), rev 2. The owner approved it on 2026-10-01.** T11 builds this. Where a
+  table row above says otherwise, these rulings win.
+  - **The phone's messages.** A strip under the chain, with a caret on the Phone node, says the phone's state:
+    - "Pair a phone first…";
+    - "The phone stopped checking in…";
+    - "Waiting for the phone's video" with the warming countdown;
+    - the live countdown;
+    - the O5 reason.
+  - **The QR card.** The QR sits in a card beside the picker, or below it on a phone. Once paired, the card is one
+    line: "Paired · Show the code again".
+  - **The QR's size.** It paints at **at least 320 px from 768 up** (342 px, 6 px per module of the 57-module v2
+    symbol, as `SeaznQrImage` snaps it at `STREAM_QR_MAX_PX` 363). On a phone it paints at 228 px.
+    - At 768 the card column is the QR plus its padding (370 px), and the controls narrow to fit.
+    - **From 1024 the two columns are equal.**
+    - The paste code's Copy button sits beneath the field, inside the card, at every width, and Revoke & reissue stays
+      in the card.
+  - **The Phone node is 80 px wide below 768.** At ≥768 it stays 96 px; below 768 it was 64. The change lets
+    "Reconnecting…" (76 px at 11 px) fit on one line.
+    - The word keeps `overflow-wrap: anywhere` only as a fallback for a longer translation.
+    - `hyphens: auto` is not a fix: the test browser does not hyphenate.
+  - **At 3 of 3, "1 credit" appears once.** The amber line "Free restarts used (3 of 3) — this one uses 1 credit"
+    stands above Go live, and the credits line under it reads "{n} credits · Buy more", without "Uses 1 credit". Below
+    the limit the credits line is as today.
+  - **D3's phone sentence gives way.** The live countdown and the paused reason replace it ("Seazn isn't getting video
+    from the phone…") while either shows.
+    - The "!" stays on the Phone node during the countdown.
+    - It is dropped while the phone still beats.
+  - **The paused reasons.** The owner approved the four reasons beyond the owner's own "Phone is on a call — video
+    paused", exactly as written in the Live, reconnecting row: microphone, network, upright and weak connection.
+  - **The Revoke & reissue confirm.** It uses the house `useConfirm`, danger tone, with Cancel from `dialog.cancel`:
+    - `stream.code.reissue.confirm.title`: "Make a new code?"
+    - `stream.code.reissue.confirm.body`: "The current code stops working. Any phone using it must scan the new one."
+    - `stream.code.reissue.confirm.button`: "Make new code"
+  - **The mockup of record** is `2026-10-01-capture-qr-v2-mockups/option-b.html`. Its captures are
+    `shots/b-{320,768,1280}-*.png`, and `shots/extra/b-*-paired-open.png` and `shots/extra/b-{320,1280}-reissue-confirm.png`
+    show the disclosure and the confirm open. `option-a.html` is kept as the rejected alternative. §11.1.8's visual
+    comparison is against Option B rev 2.
 
 ### 6.13 v1 removal (W4): a hard cut
 
