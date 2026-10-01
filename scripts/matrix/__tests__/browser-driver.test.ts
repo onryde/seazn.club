@@ -1149,8 +1149,17 @@ describe("BrowserDriver — the roster seam is setup filler (ruling 47, W1-drivi
     const f = http.seat(1, "e1", "e2");
     const coverage = only(driver, "mixed-driver-coverage");
     const pages = pageCalls.length;
+    // I-1: the HTTP side's lineup check reaches the caller untouched. The
+    // page built the division, so the fake product learns its sport here.
+    await http.createDivision("c1", { name: "Matrix", slug: "d", sportKey: "football", variantKey: "11-a-side" });
+    const real = http.putLineup.bind(http);
+    const answered: unknown[] = [];
+    http.putLineup = async (...a) => { const out = await real(...a); answered.push(out); return out; };
     const members = await driver.entrantMembers("e1");
-    await driver.putLineup(f.id, "e1", members.map((m, i) => ({ person_id: m.person_id, slot: "starting" as const, order_no: i + 1, roles: [] })));
+    const check = await driver.putLineup(f.id, "e1", members.map((m, i) => ({ person_id: m.person_id, slot: "starting" as const, order_no: i + 1, roles: [] })));
+    expect(answered).toHaveLength(1);
+    expect(check).toEqual(answered[0]);
+    expect(check).toMatchObject({ checked: true });
     expect(pageCalls.length).toBe(pages);
     expect(http.calls.filter((c) => c === "entrantMembers" || c === "putLineup")).toEqual(["entrantMembers", "putLineup"]);
     expect(http.lineups.get(`${f.id}|e1`)?.map((s) => s.person_id)).toEqual(["p-e1-1", "p-e1-2", "p-e1-3"]);

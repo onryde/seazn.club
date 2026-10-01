@@ -25,12 +25,13 @@ import { resolvePositions, validateLineup, type PositionCatalog } from "@seazn/e
 import { forEachSport, forEachSportAsync } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
 import { stagesForRow } from "../lib/catalogue.ts";
-import { RefusedCall, type EntrantMember, type LineupSlotWire } from "../lib/driver/types.ts";
+import { LineupUnchecked, RefusedCall, type EntrantMember, type LineupSlotWire } from "../lib/driver/types.ts";
 import { WAVE_ID } from "../lib/routing.ts";
 import { ROSTER_MAX, RosterTooLarge, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
+import { wireCodeFor } from "./product-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
@@ -44,12 +45,26 @@ const toEngine = (entrantId: string, slots: readonly LineupSlotWire[]) => ({
 });
 const catalogOf = (sport: string, cfg: unknown): PositionCatalog => resolvePositions(sportModule(sport) as never, cfg as never);
 const isTeam = (sport: string, cfg: unknown) => entrantKindFor(sport, cfg) === "team";
+/** The sports that field teams at any preset, in registry order — derived
+ *  from the engine (forEachSport + entrantKindFor), so every sweep below is
+ *  pinned to the whole set rather than to "more than none" (m-8). */
+function teamSports(): string[] {
+  const out: string[] = [];
+  forEachSport(({ key }) => { if (offlineVariantOrder(key).some((p) => isTeam(key, resolveSportCfg(key, p)))) out.push(key); });
+  return out;
+}
 
 /** One committed rulebook row a table entry rests on: the file and the words it says. */
 interface RulebookQuote { readonly file: string; readonly quote: string }
+/** Every row names its source (fix round 1, m-7): a sized row its rule, an
+ *  excluded row the committed rulebook words it rests on — both required, so
+ *  a row without one does not compile (pinned below with @ts-expect-error). */
 type SideRow =
   | { readonly size: number; readonly source: string; readonly rulebook?: RulebookQuote }
-  | { readonly excluded: string; readonly rulebook?: RulebookQuote };
+  | { readonly excluded: string; readonly rulebook: RulebookQuote };
+// @ts-expect-error — an excluded row with no rulebook source must not compile (m-7).
+const NO_SOURCE: SideRow = { excluded: "no reason given a source" };
+void NO_SOURCE;
 
 const GOALS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/rulebook-W2-goals-boards.md";
 
@@ -57,12 +72,18 @@ const GOALS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/rulebook-
  *  review 4 m-c).
  *
  *  R9 reconciliation. R9 forbids an expected value typed into a test, and
- *  this is a table typed into a test. It stands because no declared quantity
- *  exists to derive the side size from: no setbased cfg declares players per
- *  side (beach differs from indoor only in its set targets), and the period
- *  kernel's positionsFor ignores hockey youth's `strength.base`. A side size
- *  read from the cfg would be null everywhere, and the finding would vanish.
- *  So the oracle is the rulebook, which TEST-STRATEGY allows. Every size below
+ *  this is a table typed into a test. Four of the five team sports DO declare
+ *  a side quantity — football `teamSize` (optional; football.ts says absent
+ *  means 11), cricket `playersPerSide`, hockey `strength.base` (players on the
+ *  pitch; youth 7) and icehockey `strength.base` (5 — SKATERS only, the
+ *  goalkeeper not counted) — but volleyball declares none (the setbased
+ *  kernel: beach differs from indoor only in its set targets), and the four
+ *  that do declare one mean different things by it. No single engine
+ *  declaration answers "players per side" for all five, and volleyball/beach,
+ *  the finding the plan names, would vanish under any of them. So the oracle
+ *  is the rulebook, which TEST-STRATEGY allows: one uniform source across all
+ *  five sports, independent of the engine, against which hockey youth's own
+ *  `strength.base` (7) and its 11-starter catalog plainly disagree. Every size below
  *  is a transcription of the cited rule, read from the document on
  *  2026-10-01, and NONE is read from the product's output — the catalog's
  *  `lineup.size` is what each row is compared WITH, never where it came from.
@@ -82,7 +103,7 @@ const RULEBOOK_SIDE_SIZE: Readonly<Record<string, SideRow>> = {
   "cricket/test": { size: 11, source: "ICC Men's Test Match Playing Conditions (effective June 2025), clause 1.1 (Number of players): \"A match is played between two sides, each of eleven players\" (read) — https://images.icc-cricket.com/image/upload/prd/lm8owaz03i86m1eneb7m.pdf" },
   "volleyball/beach": { size: 2, source: "FIVB Official Beach Volleyball Rules 2025-2028, Rule 4.1.1 (Team composition): \"A team is composed exclusively of two players\" (read) — https://www.fivb.com/wp-content/uploads/2025/02/FIVB-BeachVolleyball_Rules2025_2028-EN-v01.pdf" },
   "volleyball/indoor": { size: 6, source: "FIVB Official Volleyball Rules 2025-2028, Rule 7.3.1 (Team starting line-up): \"There must always be six players per team in play\" (read) — https://www.fivb.com/wp-content/uploads/2025/01/FIVB-Volleyball_Rules2025_2028-EN-v05.pdf" },
-  "icehockey/iihf": { size: 6, source: "IIHF Official Rulebook 2026/27 (v1.0, June 2026), Rule 5.1 (Eligible players): a team must be able to put on the ice five (5) skaters and one (1) goalkeeper at the beginning of the game (read) — https://blob.iihf.com/iihf-media/iihfmvc/media/downloads/rule%20book/2026-27_iihf_rule_book.pdf" },
+  "icehockey/iihf": { size: 6, source: "IIHF Official Rulebook 2026/27 (v1.0, June 2026), Rule 5.1 (Eligible players), the nearest rule — a MINIMUM to start a game, not a side size; 6 is its five skaters plus one goalkeeper, the side on the ice at full strength: \"For a team to play a game, it must be able to put on the ice at least five (5) skaters and one (1) goalkeeper at the beginning of the game\" (read) — https://blob.iihf.com/iihf-media/iihfmvc/media/downloads/rule%20book/2026-27_iihf_rule_book.pdf" },
   "icehockey/recreational": { excluded: "house variant: the committed W2 rulebook calls it a product rule with no IIHF basis and gives only its overtime, draw and points rule — no side size", rulebook: { file: GOALS, quote: "product rule, no IIHF basis" } },
   "hockey/fih-outdoor": { size: 11, source: "FIH Rules of Hockey (effective 1 March 2026), Rule 2.1 (Composition of teams): \"A maximum of eleven players from each team take part in play at any particular time during the match\" (read) — https://www.fih.hockey/static-assets/pdf/fih-Rules-of-hockey-2026-final.pdf" },
   "hockey/fih-shootout": { size: 11, source: "FIH Rules of Hockey (effective 1 March 2026), Rule 2.1 (Composition of teams): \"A maximum of eleven players from each team take part in play at any particular time during the match\" (read) — https://www.fih.hockey/static-assets/pdf/fih-Rules-of-hockey-2026-final.pdf" },
@@ -121,6 +142,7 @@ describe("rosters — the lineup builder against the engine", () => {
     const file = JSON.parse(read("scripts/matrix/catalogue/variants.json")) as { sports: { sport: string; cases: VariantCase[] }[] };
     let checked = 0;
     const sizes = new Set<number>();
+    const sports = new Set<string>();
     for (const s of file.sports) {
       for (const vc of s.cases) {
         const cfg = resolveSportCfg(vc.sport, vc.preset, { ...vc.overrides });
@@ -129,10 +151,14 @@ describe("rosters — the lineup builder against the engine", () => {
         const slots = lineupFor(vc.sport, cfg, asMembers(rosterSize(vc.sport, cfg)));
         expect(validateLineup(catalog, toEngine("e1", slots)), vc.id).toEqual([]);
         sizes.add(catalog.lineup.size);
+        sports.add(vc.sport);
         checked++;
       }
     }
     expect(checked, "committed team variant cfgs checked").toBeGreaterThan(0);
+    // m-8: the committed set reached every team sport, not merely one.
+    expect(teamSports().length, "team sports").toBe(5);
+    expect(sports).toEqual(new Set(teamSports()));
     // The committed set moves a catalog's size (football's teamSize override),
     // so this sweep proves the builder at sizes no preset has.
     const presetSizes = new Set<number>();
@@ -194,11 +220,17 @@ describe("rosters — the lineup builder against the engine", () => {
     const late: PositionCatalog = { groups: [{ key: "OUT", name: "Outfield" }, { key: "GK", name: "Goalkeeper", min: 1, max: 1 }], lineup: { size: 3 } };
     const lateSlots = lineupFor("x", {}, asMembers(3), () => late);
     expect(validateLineup(late, toEngine("e1", lateSlots))).toEqual([]);
-    expect(lateSlots.filter((s) => s.position_key === "GK").length).toBe(1);
+    // The GK count the catalog declares (min = max = 1), not the builder's pick.
+    const gk = late.groups.find((g) => g.key === "GK")!;
+    expect(lateSlots.filter((s) => s.position_key === "GK").length).toBe(gk.min);
     const capped: PositionCatalog = { groups: [{ key: "DEF", name: "Defence", max: 2 }, { key: "FWD", name: "Forward" }], lineup: { size: 4 } };
     const cappedSlots = lineupFor("x", {}, asMembers(4), () => capped);
     expect(validateLineup(capped, toEngine("e1", cappedSlots))).toEqual([]);
-    expect(cappedSlots.map((s) => s.position_key)).toEqual(["DEF", "DEF", "FWD", "FWD"]);
+    // m-9: which starter takes which open group is the builder's choice, not a
+    // rule — validateLineup (above) judges the caps; here, only that every
+    // starter holds a position the catalog declares.
+    const declared = new Set(capped.groups.map((g) => g.key));
+    expect(cappedSlots.filter((s) => s.position_key === undefined || !declared.has(s.position_key)).map((s) => s.person_id)).toEqual([]);
   });
 
   it("guards: a roster short of the starting lineup, group minimums above the lineup, or more required roles than starters are refused by name", () => {
@@ -248,6 +280,14 @@ describe("rosters — players per side against the catalog (a W2 finding, plan r
     expect(excluded).toEqual(["football/mini-soccer", "football/small-sided", "football/youth", "icehockey/recreational"]);
   });
 
+  it("hockey/youth is engine-witnessed: its own strength.base (players on the pitch) agrees with its rulebook row and not with its catalog", () => {
+    const base = (resolveSportCfg("hockey", "youth") as { strength?: { base?: unknown } }).strength?.base;
+    expect(typeof base, "hockey youth declares strength.base").toBe("number");
+    const row = RULEBOOK_SIDE_SIZE["hockey/youth"];
+    expect(row !== undefined && "size" in row ? row.size : undefined).toBe(base);
+    expect(catalogOf("hockey", resolveSportCfg("hockey", "youth")).lineup.size).not.toBe(base);
+  });
+
   it("every row that rests on a committed W2 rulebook row quotes words that file still says", () => {
     const quoted = Object.entries(RULEBOOK_SIDE_SIZE).flatMap(([id, r]) => (r.rulebook === undefined ? [] : [{ id, ...r.rulebook }]));
     expect(quoted.length, "rows citing a committed rulebook").toBeGreaterThan(0);
@@ -278,8 +318,8 @@ describe("rosters — the seam through the fake product (members stored, read ba
     return { d, cfg };
   }
 
-  it("every team sport: the roster is stored at the catalog's size, read back in squad order, and its lineup PUT is stored and passes validateLineup — counted", async () => {
-    let checked = 0;
+  it("every team sport: the roster is stored at the catalog's size, read back in squad order, and its lineup PUT is stored, answered checked with no warning, and passes validateLineup — counted", async () => {
+    const driven: string[] = [];
     await forEachSportAsync(async ({ key }) => {
       const cfg0 = resolveSportCfg(key, offlineBuilderDefault(key));
       if (!isTeam(key, cfg0)) return;
@@ -290,13 +330,17 @@ describe("rosters — the seam through the fake product (members stored, read ba
       expect(members.length, key).toBe(rosterSize(key, cfg));
       expect(members.map((m) => m.squad_number), key).toEqual(Array.from({ length: members.length }, (_, i) => i + 1));
       const slots = lineupFor(key, cfg, members);
-      await d.putLineup(f.id, home, slots);
+      // I-1: the fake answers as the product does — checked, warnings from
+      // the engine's validateLineup on the division's stored cfg.
+      expect(await d.putLineup(f.id, home, slots), key).toEqual({ checked: true, warnings: [] });
       const stored = d.lineups.get(`${f.id}|${home}`);
       expect(stored, key).toEqual(slots);
       expect(validateLineup(catalogOf(key, cfg), toEngine(home, stored!)), key).toEqual([]);
-      checked++;
+      driven.push(key);
     });
-    expect(checked, "team sports driven through the fake").toBeGreaterThan(0);
+    // m-8: pinned to the whole team-sport set, derived from the engine.
+    expect(driven.length, "team sports driven through the fake").toBe(teamSports().length);
+    expect(driven).toEqual(teamSports());
   });
 
   // One sport for the transitions: each is the fake's own rule, sport-blind
@@ -325,6 +369,32 @@ describe("rosters — the seam through the fake product (members stored, read ba
     expect(d.calls.filter((c) => c === "putLineup").length).toBe(2);
   });
 
+  it("a lineup the engine flags is SAVED and answered checked with the engine's warnings, as the product's warning-only PUT does (I-1)", async () => {
+    const { d, cfg } = await seeded("football");
+    const f = d.fixtures[0]!;
+    const home = f.home_entrant_id!;
+    const short = lineupFor("football", cfg, await d.entrantMembers(home)).filter((s) => s.slot === "starting").slice(1);
+    const issues = validateLineup(catalogOf("football", cfg), toEngine(home, short));
+    expect(issues.length, "the engine flags a starting lineup one short").toBeGreaterThan(0);
+    const check = await d.putLineup(f.id, home, short);
+    expect(check.checked).toBe(true);
+    // The fake's warning text is its own (JSON of the issue); the issues are the engine's.
+    expect(check.warnings.map((w) => JSON.parse(w) as unknown)).toEqual(issues);
+    expect(d.lineups.get(`${f.id}|${home}`)).toEqual(short);
+  });
+
+  it("a lineup whose check crashes is SAVED and refused by name as unchecked — the product's checked: false, as HttpDriver reads it", async () => {
+    // No division: the fake product has no sport to resolve a catalog from.
+    const d = new FakeLeagueDriver();
+    await d.addEntrants("d1", [1, 2].map((n) => ({ displayName: `Matrix Team ${n}`, seed: n, kind: "team" as const, members: [{ fullName: `Matrix Player ${n}.1`, squadNumber: 1, isCaptain: true }] })));
+    const f = d.seat(1, "e1", "e2");
+    const slots = (await d.entrantMembers("e1")).map((m, i) => ({ person_id: m.person_id, slot: "starting" as const, order_no: i + 1, roles: [] }));
+    const e = await d.putLineup(f.id, "e1", slots).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(LineupUnchecked);
+    expect((e as LineupUnchecked).reason).toBe("UnknownSport");
+    expect(d.lineups.get(`${f.id}|e1`)).toEqual(slots);
+  });
+
   it("refusals: a person who is not the entrant's member, an entrant who is not a side, and a fixture past scheduled — after a withdrawal — are 422s by name", async () => {
     const { d, cfg } = await seeded("football");
     const f = d.fixtures[0]!;
@@ -339,6 +409,17 @@ describe("rosters — the seam through the fake product (members stored, read ba
     const other = d.entrants.map((e) => e.id).find((id) => id !== home && id !== away)!;
     const notSide = await d.putLineup(f.id, other, lineupFor("football", cfg, await d.entrantMembers(other))).catch((e: unknown) => e);
     expect((notSide as RefusedCall).message).toMatch(/not a side of this fixture/);
+    // m-3: a person twice is refused (fixtures.ts:503-506) — and BEFORE the
+    // member check, as the product orders them: an away person twice under
+    // home reads "duplicate", not "not a member".
+    const twice = [homeSlots[0]!, { ...homeSlots[0]!, slot: "bench" as const }];
+    const dup = await d.putLineup(f.id, home, twice).catch((e: unknown) => e);
+    expect((dup as RefusedCall).status).toBe(422);
+    expect((dup as RefusedCall).message).toMatch(/: duplicate person in lineup$/);
+    const awayTwice = [awaySlots[0]!, awaySlots[0]!];
+    expect(((await d.putLineup(f.id, home, awayTwice).catch((e: unknown) => e)) as RefusedCall).message).toMatch(/: duplicate person in lineup$/);
+    // Every refusal carries the wire code a codeless 422 reaches the product's wire with (m-2).
+    for (const e of [notMine, notSide, dup]) expect((e as RefusedCall).code).toBe(wireCodeFor(422));
     expect(d.lineups.size).toBe(0);
     // Withdrawal: every fixture of the withdrawn entrant leaves `scheduled`.
     await d.withdraw(home);

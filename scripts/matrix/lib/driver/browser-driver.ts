@@ -54,7 +54,7 @@ import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from ".
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -487,8 +487,9 @@ export class BrowserDriver implements OrganiserDriver {
     return this.#http.entrantMembers(entrantId);
   }
 
-  /** Filler (ruling 47): always HTTP, and a write. */
-  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void> {
+  /** Filler (ruling 47): always HTTP, and a write; the product's lineup
+   *  check is returned untouched. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
     this.#ledger.filler("putLineup");
     return this.#write(() => this.#http.putLineup(fixtureId, entrantId, slots));
   }

@@ -101,9 +101,13 @@ export interface OrganiserDriver {
   entrantMembers(entrantId: string): Promise<EntrantMember[]>;
   /** Replaces the entrant's lineup for the fixture (PUT
    *  /fixtures/:id/lineups/:entrantId). The product takes it only while the
-   *  fixture is `scheduled` and only of the entrant's own members
-   *  (fixtures.ts putLineup); a refusal throws RefusedCall. */
-  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void>;
+   *  fixture is `scheduled`, with no person twice, and only of the entrant's
+   *  own members (fixtures.ts putLineup); a refusal throws RefusedCall. A
+   *  lineup it takes is saved and then checked — WARNING-ONLY — so the
+   *  answer is returned: `warnings` for the caller to record, never refused
+   *  here. A lineup saved UNCHECKED throws LineupUnchecked. An empty `slots`
+   *  is refused before any call (the product would delete the lineup, 2xx). */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked>;
   start(divisionId: string): Promise<StartOut>;
   generate(stageId: string): Promise<GenerateOut>;
   listFixtures(divisionId: string): Promise<FixtureRow[]>;
@@ -190,6 +194,28 @@ export class DriverMisuse extends Error {
   constructor(message: string) {
     super(redact(message));
     this.name = "DriverMisuse";
+  }
+}
+
+/** The product's verdict on a lineup it saved (fixtures.ts PutLineupOut's
+ *  LineupCheck, checked arm): validateLineup on the division's STORED config,
+ *  each issue as one warning string. Warnings do not stop the save. */
+export interface LineupChecked { readonly checked: true; readonly warnings: readonly string[] }
+
+/** A lineup PUT the product saved but did not check: its answer said
+ *  `checked: false` (validation crashed; `reason` is the error's kind), or
+ *  carried no check at all. Fail closed — an unchecked lineup is never read as
+ *  a clean one (fix round 1, I-1). */
+export class LineupUnchecked extends Error {
+  readonly fixtureId: string;
+  readonly entrantId: string;
+  readonly reason: string;
+  constructor(fixtureId: string, entrantId: string, reason: string) {
+    super(redact(`driver: the lineup for entrant ${entrantId} on fixture ${fixtureId} was saved UNCHECKED — ${reason}`));
+    this.name = "LineupUnchecked";
+    this.fixtureId = fixtureId;
+    this.entrantId = entrantId;
+    this.reason = reason;
   }
 }
 

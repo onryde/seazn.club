@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
+import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
 
@@ -607,16 +607,53 @@ describe("HttpDriver — rosters and lineups (W1-driving Task 3)", () => {
     expect(await drv(t).entrantMembers("e1")).toEqual([]);
   });
 
-  it("putLineup PUTs {slots} to the fixture's lineup for that entrant; a second PUT is a second call, never short-circuited", async () => {
+  // fix round 1, I-1 (T3-R1): the PUT is WARNING-ONLY — fixtures.ts putLineup
+  // saves, then answers `{ ...lineup, checked, warnings }` (PutLineupOut's
+  // LineupCheck), a 2xx even for a lineup the engine flags. The answer is the
+  // only product-side lineup verdict, so the driver returns it; `checked:
+  // false` (the check crashed, the lineup saved UNCHECKED) is refused by name.
+  const answer = (check: Record<string, unknown>) => ({ fixture_id: "f1", entrant_id: "e1", slots: [], ...check });
+
+  it("putLineup PUTs {slots} to the fixture's lineup for that entrant and returns the product's check; a second PUT is a second call, never short-circuited", async () => {
     const slots = [{ person_id: "p1", slot: "starting" as const, order_no: 1, position_key: "GK", roles: [] }, { person_id: "p2", slot: "bench" as const, order_no: 2, roles: [] }];
-    const { t, calls } = fake([(c) => (c.method === "PUT" ? ok({ fixture_id: "f1", entrant_id: "e1", slots: [] }) : undefined)]);
+    const { t, calls } = fake([(c) => (c.method === "PUT" ? ok(answer({ checked: true, warnings: [] })) : undefined)]);
     const d = drv(t);
-    await d.putLineup("f1", "e1", slots);
-    await d.putLineup("f1", "e1", slots.slice(0, 1));
+    expect(await d.putLineup("f1", "e1", slots)).toEqual({ checked: true, warnings: [] });
+    expect(await d.putLineup("f1", "e1", slots.slice(0, 1))).toEqual({ checked: true, warnings: [] });
     expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
       ["PUT", "/api/v1/fixtures/f1/lineups/e1", { slots }],
       ["PUT", "/api/v1/fixtures/f1/lineups/e1", { slots: slots.slice(0, 1) }],
     ]);
+  });
+
+  it("a lineup the product saved WITH warnings is returned with them, never refused here (Task 4 records them)", async () => {
+    // fixtures.ts formatLineupIssue's text, as the product would serve it.
+    const warnings = ["Starting lineup has 1 player(s), expected 11", "Position group \"GK\" has 0 starting player(s), minimum is 1"];
+    const { t } = fake([() => ok(answer({ checked: true, warnings }))]);
+    expect(await drv(t).putLineup("f1", "e1", [{ person_id: "p1", slot: "starting", roles: [] }])).toEqual({ checked: true, warnings });
+  });
+
+  it("a lineup the product saved UNCHECKED (checked: false — its validation crashed) is refused by name, carrying the product's reason", async () => {
+    const { t } = fake([() => ok(answer({ checked: false, warnings: [], reason: "TypeError" }))]);
+    const e = await drv(t).putLineup("f1", "e1", [{ person_id: "p1", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(LineupUnchecked);
+    expect([(e as LineupUnchecked).fixtureId, (e as LineupUnchecked).entrantId, (e as LineupUnchecked).reason]).toEqual(["f1", "e1", "TypeError"]);
+    expect((e as Error).message).toMatch(/entrant e1 on fixture f1.*TypeError/);
+  });
+
+  it("an answer with no lineup check at all (a product that stopped checking) is refused by name, never read as a clean lineup", async () => {
+    for (const bad of [{}, { checked: true }, { warnings: [] }, { checked: "yes", warnings: [] }, { checked: true, warnings: [7] }]) {
+      const { t } = fake([() => ok(answer(bad))]);
+      const e = await drv(t).putLineup("f1", "e1", [{ person_id: "p1", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+      expect(e, JSON.stringify(bad)).toBeInstanceOf(LineupUnchecked);
+      expect((e as LineupUnchecked).reason, JSON.stringify(bad)).toMatch(/no lineup check/);
+    }
+  });
+
+  it("empty case: putLineup with no slots is refused before any call — the product would DELETE the lineup and answer 2xx (m-4)", async () => {
+    const { t, calls } = fake([]);
+    await expect(drv(t).putLineup("f1", "e1", [])).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls).toEqual([]);
   });
 
   it("a refused PUT — the product's 422 (a codeless HttpError reaches the wire as http.ts's code) or a 409 — is RefusedCall with that status and code", async () => {

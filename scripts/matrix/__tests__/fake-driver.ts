@@ -11,17 +11,19 @@
 // first-round-only rule).
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import { generatePagePlayoff, type GeneratedBracket } from "@seazn/engine/scheduling";
+import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  RefusedCall, idempotencyKey, inSquadOrder,
+  LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
+import { wireCodeFor } from "./product-text.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
 
@@ -42,9 +44,12 @@ const PLAYED = new Set(["decided", "finalized", "forfeited"]);
 const PENDING = new Set(["scheduled", "in_play"]);
 // stages.ts:979 — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
-/** The fake's lineup refusal code — a fake's, not the product's (W1-driving
- *  Task 3; Task 4 Step 0 pins the product's). */
-export const FAKE_LINEUP_REFUSAL = "LINEUP_INVALID";
+/** The code the product's structural lineup refusals reach the wire with:
+ *  fixtures.ts throws them as codeless HttpError(422), so http.ts's status
+ *  default names them (read from the product, product-text.ts). Never
+ *  LINEUP_INVALID — that is the engine's event-time assertLineup code
+ *  (fix round 1, m-2). */
+const LINEUP_REFUSAL = wireCodeFor(422);
 
 /** Runs `body` NOW and settles with what it returns, or REJECTS with what it
  *  throws — exactly what an `async` method with no `await` does, since a
@@ -141,20 +146,36 @@ export class FakeLeagueDriver implements OrganiserDriver {
     });
   }
   /** fixtures.ts putLineup, in its order: the entrant must be a side of the
-   *  fixture, the fixture `scheduled`, and every person the entrant's member;
-   *  then the lineup is replaced whole. The refusal CODE is the fake's own:
-   *  the product's HttpError carries none, and Task 4 Step 0 pins what reaches
-   *  the wire. */
-  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void> {
+   *  fixture, the fixture `scheduled`, no person twice, and every person the
+   *  entrant's member; then the lineup is replaced whole and CHECKED, warning
+   *  only: the answer is `{ checked: true, warnings }`, the warnings the
+   *  engine's validateLineup on the division's stored cfg. The warning TEXT is
+   *  the fake's own (each issue as JSON); the product formats them in
+   *  fixtures.ts formatLineupIssue. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
     return settle(() => {
       this.log("putLineup");
       const path = `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`;
       const f = this.#f(fixtureId);
-      if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) throw new RefusedCall("PUT", path, 422, FAKE_LINEUP_REFUSAL, "entrant is not a side of this fixture");
-      if (f.status !== "scheduled") throw new RefusedCall("PUT", path, 422, FAKE_LINEUP_REFUSAL, `lineup is locked once a fixture is ${f.status}`);
+      if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "entrant is not a side of this fixture");
+      if (f.status !== "scheduled") throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, `lineup is locked once a fixture is ${f.status}`);
+      if (new Set(slots.map((s) => s.person_id)).size !== slots.length) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "duplicate person in lineup");
       const roster = new Set((this.members.get(entrantId) ?? []).map((m) => m.person_id));
-      if (slots.some((s) => !roster.has(s.person_id))) throw new RefusedCall("PUT", path, 422, FAKE_LINEUP_REFUSAL, "lineup contains a person who is not a member of the entrant");
-      this.lineups.set(`${fixtureId}|${entrantId}`, slots.map((s) => ({ ...s, ...(s.roles !== undefined ? { roles: [...s.roles] } : {}) })));
+      if (slots.some((s) => !roster.has(s.person_id))) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "lineup contains a person who is not a member of the entrant");
+      const stored = slots.map((s) => ({ ...s, ...(s.roles !== undefined ? { roles: [...s.roles] } : {}) }));
+      this.lineups.set(`${fixtureId}|${entrantId}`, stored);
+      let issues: ReturnType<typeof validateLineup>;
+      try {
+        issues = validateLineup(resolvePositions(sportModule(this.sport) as never, this.cfg as never), {
+          entrantId,
+          slots: stored.map((s, i) => ({ personId: s.person_id, slot: s.slot, ...(s.position_key !== undefined ? { positionKey: s.position_key } : {}), roles: [...(s.roles ?? [])], orderNo: s.order_no ?? i + 1 })),
+        });
+      } catch (err) {
+        // The product answers `checked: false, reason: <error kind>` and has
+        // already saved; HttpDriver refuses that answer as LineupUnchecked.
+        throw new LineupUnchecked(fixtureId, entrantId, err instanceof Error ? err.name : "unknown");
+      }
+      return { checked: true, warnings: issues.map((x) => JSON.stringify(x)) };
     });
   }
   /** Circle-method rounds over the entrant ids, "BYE" padding an odd field. */

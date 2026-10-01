@@ -13,9 +13,9 @@ import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
-  DriverMisuse, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
+  DriverMisuse, LineupUnchecked, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -146,8 +146,21 @@ export class HttpDriver implements OrganiserDriver {
     return inSquadOrder(e.members ?? []);
   }
 
-  async putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void> {
-    await this.#call<unknown>(`/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", { slots });
+  /** The product saves, then answers `{ ...lineup, checked, warnings }`
+   *  (fixtures.ts putLineup, WARNING-ONLY): the warnings are returned for the
+   *  caller to record; `checked: false`, or an answer with no check at all,
+   *  is LineupUnchecked. An empty `slots` is refused before any call: the
+   *  product would skip its member check, DELETE the lineup and answer 2xx. */
+  async putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
+    if (slots.length === 0) throw new DriverMisuse(`driver: putLineup for entrant ${entrantId} on fixture ${fixtureId} with no slots — the product would delete its lineup and answer 2xx, never refuse`);
+    const out = await this.#call<{ checked?: unknown; warnings?: unknown; reason?: unknown }>(`/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", { slots });
+    const raw: unknown = out.warnings;
+    const warnings: readonly string[] | null = Array.isArray(raw) && raw.every((w): w is string => typeof w === "string") ? raw : null;
+    if (out.checked === false && warnings !== null) throw new LineupUnchecked(fixtureId, entrantId, typeof out.reason === "string" ? out.reason : "the product gave no reason");
+    if (out.checked !== true || warnings === null) {
+      throw new LineupUnchecked(fixtureId, entrantId, `the PUT answered no lineup check (checked: ${JSON.stringify(out.checked)}, warnings: ${JSON.stringify(out.warnings)})`);
+    }
+    return { checked: true, warnings: [...warnings] };
   }
 
   /** The browser's roster filler (ruling 47): the entrants tab adds by name
