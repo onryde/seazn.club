@@ -80,13 +80,22 @@ export async function callJob(job: Job, target: CallTarget, deps: CallDeps, dead
   let last: CallOutcome = { status: "error", httpStatus: null, attempts: 0, ms: 0, reason: "deadline" };
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) await deps.sleep(BACKOFF_MS[attempt - 2]!);
+    // M-2: check the deadline BEFORE the backoff sleep too, so a run already past it never waits
+    // up to 8 s for an attempt it will refuse. The sleep itself can cross it, hence the second check.
     if (deps.now() >= deadlineMs) return { ...last, ms: deps.now() - started, reason: "deadline" };
+    if (attempt > 1) {
+      await deps.sleep(BACKOFF_MS[attempt - 2]!);
+      if (deps.now() >= deadlineMs) return { ...last, ms: deps.now() - started, reason: "deadline" };
+    }
     let res: Response;
     try {
       res = await deps.fetch(`${target.baseUrl}${job.path}`, {
         method: "POST",
         headers: { "x-cron-secret": target.secret, "user-agent": target.userAgent },
+        // M-3: never follow a redirect. fetch would replay the POST as a GET (a 200 HTML page then
+        // reads as ok without the job having run) and forward x-cron-secret to the new origin.
+        // A 3xx is a non-ok response: an error, not retried.
+        redirect: "manual",
         signal: AbortSignal.timeout(JOB_TIMEOUT_MS),
       });
     } catch (err) {

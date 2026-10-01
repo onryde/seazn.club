@@ -153,6 +153,43 @@ describe("runDue: jobs and the run log", () => {
   });
 });
 
+describe("runDue: outbound request hygiene (M-3, M-6)", () => {
+  const SECRET = "cron-secret-Zq81-distinctive";
+  const KEY = "dsnkeyQq7731distinctive";
+
+  it("every fetch the Worker makes (job, Sentry, probe) refuses redirects and carries a timeout of 60 s / 5 s / 10 s", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const h = harness(() => new Response("down", { status: 500 }));
+      await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps); // 3 failing jobs, 3 Sentry events
+      await runDue(TUESDAY_1417, TRIGGER_CRON, env({ ACTIVE: "false" }), h.deps); // the probe
+      expect(h.calls, "calls made: 3 jobs + 3 events + 1 probe").toHaveLength(7);
+      expect(h.calls.filter((c) => c.init?.redirect !== "manual")).toEqual([]);
+      expect([...new Set(timeout.mock.calls.map((c) => c[0]))].sort((a, b) => a - b)).toEqual([5_000, 10_000, 60_000]);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("no log line and no Sentry envelope carries CRON_SECRET or the DSN key", async () => {
+    const h = harness(() => new Response(JSON.stringify({ echoed: "route body" }), { status: 500 }));
+    await runDue(TUESDAY_1417, TRIGGER_CRON, env({ CRON_SECRET: SECRET, SENTRY_DSN: `https://${KEY}@o1.ingest.sentry.io/9` }), h.deps);
+    await runDue(TUESDAY_1417, TRIGGER_CRON, env({ ACTIVE: "false", CRON_SECRET: SECRET, SENTRY_DSN: `https://${KEY}@o1.ingest.sentry.io/9` }), h.deps);
+    // Positive pairs: the secret really is sent (as a header) and the key really is used (in the URL),
+    // so the needles are the right ones and the absence below is not vacuous.
+    expect(h.calls.some((c) => (c.init?.headers as Record<string, string> | undefined)?.["x-cron-secret"] === SECRET)).toBe(true);
+    expect(h.sentry().length, "events sent").toBeGreaterThan(0);
+    expect(h.sentry().every((c) => c.url.includes(KEY))).toBe(true);
+    expect(h.lines.length, "log lines written").toBeGreaterThan(0);
+    const logged = JSON.stringify(h.lines);
+    const envelopes = h.sentry().map((c) => String(c.init!.body)).join("\n");
+    for (const needle of [SECRET, KEY]) {
+      expect(logged, `log lines must not contain ${needle}`).not.toContain(needle);
+      expect(envelopes, `envelopes must not contain ${needle}`).not.toContain(needle);
+    }
+  });
+});
+
 describe("runDue: the R4 trigger seam", () => {
   it("refuses an unknown trigger by name: no job, no probe, no Sentry", async () => {
     for (const active of ["true", "false"]) {

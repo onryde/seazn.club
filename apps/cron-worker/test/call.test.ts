@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BACKOFF_MS, callJob, failureCountsOver0, userAgent, type CallDeps, type CallTarget } from "../src/call";
+import { callJob, failureCountsOver0, userAgent, type CallDeps, type CallTarget } from "../src/call";
 import { JOBS, type Job } from "../src/schedule";
 
 const job = (id: string): Job => JOBS.find((j) => j.id === id)!;
@@ -41,7 +41,8 @@ describe("callJob", () => {
     const d = deps([res(code), res(code), res(200)]);
     const out = await callJob(job("registrations"), T, d, Infinity);
     expect(out).toMatchObject({ status: "ok", attempts: 3 });
-    expect(d.sleeps).toEqual([...BACKOFF_MS]);
+    // Literal on purpose (spec §5): the title's 2 s then 8 s, not whatever BACKOFF_MS currently holds.
+    expect(d.sleeps).toEqual([2_000, 8_000]);
   });
 
   it("gives up after 3 attempts and reports the last status", async () => {
@@ -56,6 +57,33 @@ describe("callJob", () => {
     expect(await callJob(job("registrations"), T, d, Infinity)).toMatchObject({
       status: "error", httpStatus: code, attempts: 1, reason: "http",
     });
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds each attempt at 60 s (the plan's per-job HTTP timeout, spec §13: not today's 60/120/300 mix)", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      await callJob(job("registrations"), T, deps([res(200)]), Infinity);
+      expect(timeout).toHaveBeenCalledTimes(1);
+      expect(timeout).toHaveBeenCalledWith(60_000);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  // M-3: fetch follows redirects by default, replaying the POST as a GET and forwarding the secret.
+  it("never follows a redirect: a 302 is a non-ok response, reported and not retried", async () => {
+    const d = deps([new Response(null, { status: 302, headers: { location: "https://elsewhere.example/ok" } })]);
+    expect(await callJob(job("registrations"), T, d, Infinity)).toMatchObject({
+      status: "error", httpStatus: 302, attempts: 1, reason: "http",
+    });
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+    expect(d.fetch.mock.calls[0]![1].redirect).toBe("manual");
+  });
+
+  it("a thrown AbortError is a timeout too: reported once, never re-sent", async () => {
+    const d = deps([Object.assign(new Error("aborted"), { name: "AbortError" })]);
+    expect(await callJob(job("registrations"), T, d, Infinity)).toMatchObject({ status: "error", attempts: 1, reason: "timeout" });
     expect(d.fetch).toHaveBeenCalledTimes(1);
   });
 
@@ -77,6 +105,30 @@ describe("callJob", () => {
       expect(await callJob(job(id), T, d, Infinity)).toMatchObject({ status: "error", attempts: 1 });
       expect(d.fetch).toHaveBeenCalledTimes(1);
     }
+  });
+
+  // M-2: the deadline is checked BETWEEN attempts too, and BEFORE the backoff sleep.
+  it("a deadline reached after attempt 1 stops the retry without sleeping first", async () => {
+    let t = 0;
+    const d = { ...deps([res(503)]), now: () => t };
+    d.fetch.mockImplementationOnce(async () => {
+      t = 1_000;
+      return res(503);
+    });
+    expect(await callJob(job("registrations"), T, d, 1_000)).toMatchObject({
+      status: "error", httpStatus: 503, attempts: 1, reason: "deadline",
+    });
+    expect(d.fetch).toHaveBeenCalledTimes(1);
+    expect(d.sleeps, "no backoff wait for an attempt it will refuse").toEqual([]);
+  });
+
+  it("a deadline that the backoff sleep itself crosses refuses the next attempt", async () => {
+    let t = 0;
+    const sleeps: number[] = [];
+    const d = { ...deps([res(503), res(200)]), now: () => t, sleep: async (ms: number) => void (sleeps.push(ms), (t += ms)) };
+    expect(await callJob(job("registrations"), T, d, 1_500)).toMatchObject({ status: "error", httpStatus: 503, attempts: 1, reason: "deadline" });
+    expect(sleeps).toEqual([2_000]);
+    expect(d.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("does not start an attempt past the deadline", async () => {
@@ -153,6 +205,11 @@ describe("R3: failure counters inside a 200", () => {
 
   it("a job with no counters ignores its body", async () => {
     expect(await callJob(job("registrations"), T, deps([res(200, "<html>whatever</html>")]), Infinity)).toMatchObject({ status: "ok" });
+  });
+
+  it("a counter that is not a finite number is unreadable (1e999 parses to Infinity)", () => {
+    expect(failureCountsOver0(job("billing-grant"), '{"ok":true,"data":{"failed":1e999}}')).toEqual({ "data.failed": "unreadable" });
+    expect(failureCountsOver0(job("billing-grant"), '{"ok":true,"data":{"failed":"0"}}')).toEqual({ "data.failed": "unreadable" });
   });
 
   it("failureCountsOver0 reports only the offenders", () => {

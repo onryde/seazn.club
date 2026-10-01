@@ -1,0 +1,4 @@
+# Local state from `wrangler dev` and its secrets file (a local CRON_SECRET goes in .dev.vars).
+.wrangler/
+.dev.vars
+.dev.vars.*

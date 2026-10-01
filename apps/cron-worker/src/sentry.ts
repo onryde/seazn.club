@@ -73,6 +73,7 @@ export async function captureJobFailure(
       method: "POST",
       headers: { "content-type": "application/x-sentry-envelope" },
       body: envelope,
+      redirect: "manual", // M-3: never follow a redirect with a DSN-keyed request
       signal: AbortSignal.timeout(SENTRY_TIMEOUT_MS),
     });
     return res.ok;

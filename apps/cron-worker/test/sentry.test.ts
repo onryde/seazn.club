@@ -61,6 +61,18 @@ describe("captureJobFailure", () => {
     expect(event.exception.values[0].value).toBe("registrations failed: timeout");
   });
 
+  it("bounds the send at 5 s and never follows a redirect (the request carries the DSN key)", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const fetchFn = vi.fn(async () => new Response("{}"));
+      await send(fetchFn);
+      expect(timeout).toHaveBeenCalledWith(5_000);
+      expect((fetchFn.mock.calls[0]! as unknown as [string, RequestInit])[1].redirect).toBe("manual");
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   it("never sends the route's response body (lib/sentry.ts PII rule: ids and counts only)", async () => {
     const fetchFn = vi.fn(async () => new Response("{}"));
     await send(fetchFn);

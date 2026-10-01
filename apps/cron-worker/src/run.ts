@@ -5,7 +5,7 @@ import { captureJobFailure, parseDsn } from "./sentry";
 export interface Env {
   ENV_NAME: string;
   BASE_URL: string;
-  /** Kill switch (owner 2026-10-01: "true" by default in wrangler.json). Anything but "true" runs no job; the hourly firing only probes /api/health. */
+  /** Kill switch (owner 2026-10-01: "true" by default in wrangler.json). Anything but "true" runs no SCHEDULED job (the hourly firing only probes /api/health); the manual `/run` endpoint is unaffected. */
   ACTIVE: string;
   CRON_SECRET: string;
   /** Required on prod; recommended on stg. Unset means no events, and the run line says `sentry:"off"`. */
@@ -110,6 +110,7 @@ async function probe(scheduledTime: Date, env: Env, deps: RunDeps): Promise<void
   try {
     const res = await deps.fetch(`${env.BASE_URL}/api/health`, {
       headers: { "user-agent": userAgent(env.ENV_NAME) },
+      redirect: "manual", // M-3: a redirecting /api/health is a finding, not something to chase
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     httpStatus = res.status;

@@ -30,6 +30,15 @@ describe("handleManual", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  // M-5: authentication comes BEFORE the job lookup, so a caller without the secret learns nothing
+  // about which job ids exist (a lookup-first order would answer 404 for them and 401 for real ones).
+  it.each([[undefined], ["wrong"]])("an unknown job with secret %j is 401, not 404", async (s) => {
+    const { d, fetch } = deps();
+    expect((await handleManual(req("/run?job=nope", s), env, d)).status).toBe(401);
+    expect((await handleManual(req("/run", s), env, d)).status).toBe(401);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("401 when the Worker has no secret configured, whatever is sent", async () => {
     const { d, fetch } = deps();
     expect((await handleManual(req("/run?job=ai-previews", ""), { ...env, CRON_SECRET: "" }, d)).status).toBe(401);
