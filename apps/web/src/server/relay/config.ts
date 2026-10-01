@@ -149,6 +149,14 @@ export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
 export const CREDIT_REUSE_HOURS = 24;
 /** §9.1: SRT buffer 1.5–2.5 s, pinned; carried in the QR payload as latencyMs. */
 export const SRT_LATENCY_MS = 2000;
+/** m-c (B5 re-review 3; controller ruling 2026-10-01): how many CONSECUTIVE failed outputs reads (`outputState` → null,
+ *  "not read") the Cloudflare adapter waits before reporting, once per session. 6 = D3's 30 s hold over the organiser's
+ *  5 s poll (lib/stream-session-view.ts OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS): a failure that outlasts the hold is
+ *  the one that has blinded D3 — before round 2 it would have put the key box up by then, now it shows nothing — while
+ *  one or two failures are a 429 or a 5xx blip the next poll reads through, and reporting those would drown the signal.
+ *  A literal, not an import: this module is the relay's product numbers, and the test derives it from the two
+ *  declarations, so moving either moves the test. */
+export const OUTPUT_READ_FAILURES_BEFORE_REPORT = 6;
 /** Ruling R-A / C14: a discriminator the phone obeys; asserts NOTHING about
  *  which leg is production primary — R3 rules that, and this is the config line. */
 export const QR_PREFERRED_DEFAULT: "srt" | "rtmps" = "srt";

@@ -48,6 +48,9 @@ import { CaptureQrV1 } from "../../lib/capture-qr.ts";
 // `node --experimental-strip-types` with no tsconfig `paths` resolution.
 // lib/tz.ts is deliberately import-free, so it is safe for that generator.
 import { isValidIana } from "../../lib/tz.ts";
+// D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
+// for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
+import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
 
 // ---------------------------------------------------------------------------
 // Common
@@ -1325,6 +1328,17 @@ export const StreamIngest = z.object({
   protocol: z.enum(["srt", "rtmps"]).nullable(),
 });
 export type StreamIngest = z.infer<typeof StreamIngest>;
+/** D3 (spec §5.6) — the destination's side of a passthrough broadcast. For a non-ok `state`, `since` is when the
+ *  destination last received — the start of the current not-ok period, however its word changed inside it (I1, B2
+ *  review); for `ok`, when it began receiving. Clamped to go-live (the destination is not tried before it). `connecting`
+ *  is still dialling, never ok. `elapsedMs` is `now - since` on the SERVER's clock at this response (M6): the client
+ *  judges the 30 s warning on it, never on its own clock, so a browser running ahead cannot warn early. */
+export const StreamOutput = z.object({
+  state: z.enum(["ok", "connecting", "rejected", "unknown"]),
+  since: z.string(),
+  elapsedMs: z.number().int().nonnegative(),
+});
+export type StreamOutput = z.infer<typeof StreamOutput>;
 
 export const StreamSessionCurrent = z
   .object({
@@ -1336,6 +1350,9 @@ export const StreamSessionCurrent = z
     failReason: StreamFailReason.nullable(),
     health: StreamHealth.nullable(),
     ingest: StreamIngest.nullable(),
+    /** D3: null for a composed session, and whenever the server's poll did not read the destination (not warming/live,
+     *  or the provider read failed) — never a default object. */
+    output: StreamOutput.nullable(),
     /** Present only while provisioning/warming and only when the slot row exists — else null, never a default object. */
     qr: CaptureQrV1.nullable(),
     balance: z.number().int(),
@@ -1358,29 +1375,64 @@ export const StreamSessionCurrent = z
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
 
+/** D6: the platforms a NEW destination may name — a subset of `StreamTargetKind`, which stays whole for stored rows. */
+export const StreamPlatform = z.enum(STREAM_PLATFORMS);
+export type StreamPlatform = z.infer<typeof StreamPlatform>;
+
 export const CreateStreamTarget = z
   .object({
-    kind: StreamTargetKind,
+    kind: StreamPlatform,
     label: z.string().min(1).max(80),
-    /** Shape only here. Every destination rule — rtmp/rtmps, an allowlisted
-     *  provider host, its documented port, a path — lives in ONE place,
-     *  lib/stream-destinations.ts, applied by the usecase so its refusal is a
-     *  typed 422 DESTINATION_NOT_ALLOWED rather than a generic 400 (A18). */
-    rtmpUrl: z.string().max(500),
+    /** The platform's stream key. The ingest URL is filled by the server from the platform's preset
+     *  (lib/stream-destinations.ts STREAM_PLATFORM_PRESETS) — there is no url field (spec §5.2). */
     streamKey: z.string().min(1).max(200),
     /** The destination's PUBLIC watch link (R16 allowlist) — what the replay fill copies. */
     watchUrl: streamUrlSchema.optional(),
   })
   .strict();
 export type CreateStreamTarget = z.infer<typeof CreateStreamTarget>;
+
+/** Spec §5.3 — the session holding a destination. Nullable fields: a holder whose fixture was deleted
+ *  (`fixture_id` is `on delete set null`) still holds, and cannot be named or linked. `matchNo` is a number, never an
+ *  English "Match n": every client renders it through its own locale's `breadcrumb.match`. */
+export const StreamTargetHolder = z.object({
+  sessionId: z.string(),
+  fixtureId: z.string().nullable(),
+  href: z.string().nullable(),
+  matchNo: z.number().int().nullable(),
+  courtName: z.string().nullable(),
+  state: z.enum(["live", "waiting"]),
+});
+export type StreamTargetHolder = z.infer<typeof StreamTargetHolder>;
+
 export const StreamTarget = z.object({
   id: z.string(),
   kind: StreamTargetKind,
   label: z.string(),
   watchUrl: z.string().nullable(),
   createdAt: z.string(),
+  /** The key's last 3 characters, or null for a key under 12 characters or an envelope that will not open (§5.3). */
+  keyHint: z.string().nullable(),
+  inUse: StreamTargetHolder.nullable(),
 });
 export type StreamTarget = z.infer<typeof StreamTarget>;
+
+/** How a create landed (secret-columns.ts `insertStreamTarget`, spec §5.2 create order): `existing` — the key is already
+ *  an active destination, returned UNCHANGED (A19, owner decision (a): the typed name and watch link are not applied);
+ *  `restored` — a removed one brought back under the typed name and watch link (D2); `inserted` — a new row. */
+export const StreamTargetSaveOutcome = z.enum(["existing", "restored", "inserted"]);
+export type StreamTargetSaveOutcome = z.infer<typeof StreamTargetSaveOutcome>;
+/** POST /orgs/{id}/stream-targets — the stored row as the list reads it, plus how the save landed. */
+export const StreamTargetSaved = StreamTarget.extend({ outcome: StreamTargetSaveOutcome });
+export type StreamTargetSaved = z.infer<typeof StreamTargetSaved>;
+
+/** Spec §5.2 — Rename (`{label}`, allowed at any time) or Replace key (`{streamKey}`, refused while held). Exactly one. */
+export const PatchStreamTarget = z
+  .object({ label: z.string().min(1).max(80).optional(), streamKey: z.string().min(1).max(200).optional() })
+  .strict()
+  .refine((b) => (b.label === undefined) !== (b.streamKey === undefined), { message: "send exactly one of label or streamKey" });
+export type PatchStreamTarget = z.infer<typeof PatchStreamTarget>;
+export const StreamTargetRemoved = z.object({ removed: z.literal(true) });
 
 /** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
 export const RelayHeartbeat = z

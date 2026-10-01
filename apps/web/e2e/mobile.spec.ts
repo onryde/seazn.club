@@ -101,6 +101,15 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
   const deskHandover = page.locator('[data-role="device-handover"]');
   const phoneHandover = page.locator('[data-role="device-handover-phone"]');
   const handoverOffered = (await deskHandover.count()) > 0;
+  // Spec 2026-09-30 §2: Stream is the second twinned control — a desktop button and a phone strip icon, one mount.
+  const deskStream = page.locator('[data-role="fixture-stream"]');
+  const phoneStream = page.locator('[data-role="fixture-stream-phone"]');
+  const streamOffered = (await deskStream.count()) > 0;
+  // Twins are EQUAL in presence (one mount drives both) — never one without the other.
+  expect(await phoneStream.count(), "the stream twins are present together or not at all").toBe(await deskStream.count());
+  // Anti-vacuity: both callers are an organiser's fixture page on the shared Pro org (AUTH_STATE), where streaming is
+  // entitled since V426 — so the twin checks below must have something to check.
+  expect(streamOffered, "an organiser's fixture page on an entitled org offers Stream").toBe(true);
   const detailsToggle = page.locator('[data-role="match-details-toggle"]');
   const scoringHeading = page.locator('[data-role="console-scoring"] h2');
   const activityToggle = page.locator('[data-role="v3-activity-toggle"]');
@@ -111,6 +120,10 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
     if (handoverOffered) {
       await expect(phoneHandover).toBeVisible();
       await expect(deskHandover).toBeHidden();
+    }
+    if (streamOffered) {
+      await expect(phoneStream).toBeVisible();
+      await expect(deskStream).toBeHidden();
     }
     await expect(detailsToggle).toBeVisible();
     await expect(scoringHeading).toBeHidden();
@@ -215,6 +228,10 @@ async function expectPhoneComposition(page: Page, model: "S" | "T"): Promise<voi
     if (handoverOffered) {
       await expect(deskHandover).toBeVisible();
       await expect(phoneHandover).toBeHidden();
+    }
+    if (streamOffered) {
+      await expect(deskStream).toBeVisible();
+      await expect(phoneStream).toBeHidden();
     }
     await expect(detailsToggle).toBeHidden();
     await expect(scoringHeading).toBeVisible();
@@ -1292,11 +1309,20 @@ test("decider consoles: no horizontal scroll, score pad renders (not just a 2xx)
 //
 // Hence a geometry assertion against the scroller's own visible box. This is
 // the only instrument in the repo that can fail for the real reason.
+//
+// 2026-09-30 (fixture-page stream T7): a FIFTH tab, Streaming, now ends the
+// strip, so the test drives the LAST tab — the one furthest past the edge.
+// With Venues it went vacuous at 430, where Venues now fits unscrolled while
+// the strip still overflows (its own control below caught that).
 test("Directory: the active tab is scrolled into view at this width", async ({ page }) => {
-  await page.goto("/directory?tab=venues", { waitUntil: "load" });
+  await page.goto("/directory?tab=streaming", { waitUntil: "load" });
 
   const active = page.locator('nav [aria-current="page"]');
-  await expect(active).toHaveText(/venue/i);
+  await expect(active).toHaveText(/streaming/i);
+  expect(
+    await active.evaluate((el) => el === el.closest("nav")!.querySelector("a:last-of-type")),
+    "the driven tab is the strip's LAST one",
+  ).toBe(true);
 
   // Proves the assertion below can actually fail: force the strip back to the
   // unscrolled state this test exists to catch, and confirm the geometry check
@@ -1624,6 +1650,9 @@ test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async
     `/o/${orgSlug}/c/${compSlug}/registration?tab=settings`,
     `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants`,
     statusPath,
+    // B4 re-review n3: Directory → Streaming (spec 2026-09-30 §4) — its scrolling tab strip's axe ruling (class 23's
+    // scrollable-region-focusable) was resting on a read of the rule, not a run.
+    "/directory?tab=streaming",
   ];
   for (const path of routes) {
     const response = await page.goto(path, { waitUntil: "load" });

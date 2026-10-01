@@ -21,12 +21,10 @@
 //                       unknown. E5: storage lives ONLY here; no_credits lives
 //                       in BOTH (a balance can pass create and be gone at live),
 //                       and that asymmetry is the design, not an oversight.
-//   DESTINATION_REFUSAL_KEYS — which allowlist rule refused an ingest URL
-//                       (D2), total over the validator's own DESTINATION_REFUSALS.
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, type DestinationRefusal } from "@/lib/stream-destinations";
+import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import type { StreamEndReason, StreamFailReason, StreamSessionCurrent } from "@/server/api-v1/schemas";
 
@@ -37,6 +35,43 @@ export const STREAM_POLL_MS = 5_000;
 export const BEAT_STALE_SECONDS = 45;
 
 export type StreamSessionView = StreamSessionCurrent;
+
+/** D3 (owner 2026-09-30): how long a live stream's destination may be not-receiving before the panel warns. The stream
+ *  keeps running — a warning, never an ending; only `rejected` fails the session, and the server decides that. */
+export const OUTPUT_WARNING_AFTER_MS = 30_000;
+
+/** How long the destination has been in its current receiving / not-receiving period, as the SERVER measured it at the
+ *  response (M6, B2 review): the browser's clock is never consulted, so a browser running ahead of the server cannot
+ *  warn early and one running behind cannot warn late. At most one poll (STREAM_POLL_MS) stale, by construction. Null
+ *  when there is no output to judge. */
+export function outputElapsedMs(view: Pick<StreamSessionCurrent, "output">): number | null {
+  return view.output ? view.output.elapsedMs : null;
+}
+
+/** D3: live, the destination not `ok`, for at least OUTPUT_WARNING_AFTER_MS of server-measured time. The HOLD — whether
+ *  a D3 box shows at all; `d3Warning` says which. */
+export function destinationWarning(view: Pick<StreamSessionCurrent, "state" | "output">): boolean {
+  if (view.state !== "live" || !view.output || view.output.state === "ok") return false;
+  return (outputElapsedMs(view) ?? 0) >= OUTPUT_WARNING_AFTER_MS;
+}
+
+/** The Signal path's "No signal" (§3.2): live, and the phone's ingest read is anything but `connected`. A NULL ingest (a
+ *  failed provider read, N1) is not no-signal — nothing is decided on an unknown, the poll's own rule. One predicate for
+ *  the chain's phone node and the D3 box, so the two cannot disagree. */
+export function phoneNoSignal(view: Pick<StreamSessionCurrent, "state" | "ingest">): boolean {
+  return view.state === "live" && view.ingest !== null && view.ingest.state !== "connected";
+}
+
+export type D3Box = "phone" | "destination";
+
+/** I-1 (owner 2026-10-01, option a): WHICH box the D3 hold shows. Phone first — with no signal from the phone the
+ *  destination cannot receive whatever its key, so the box points at the phone; only with the phone sending does it
+ *  point at the stream key. Null when the hold has not been reached, and for no session at all. */
+export function d3Warning(view: Pick<StreamSessionCurrent, "state" | "ingest" | "output"> | null): D3Box | null {
+  if (!view || !destinationWarning(view)) return null;
+  if (phoneNoSignal(view)) return "phone";
+  return "destination";
+}
 export type PhoneTabState = "idle" | "provisioning" | "warming" | "live" | "ending" | "ended" | "failed";
 
 export function phoneTabState(view: StreamSessionView | null): PhoneTabState {
@@ -51,20 +86,6 @@ export function phoneTabState(view: StreamSessionView | null): PhoneTabState {
     case "failed": return "failed";
   }
 }
-
-export function stepFor(state: PhoneTabState): 1 | 2 | 3 | 4 {
-  switch (state) {
-    case "idle": return 1;
-    case "provisioning":
-    case "warming": return 2;
-    case "live":
-    case "ending": return 3;
-    case "ended":
-    case "failed": return 4;
-  }
-}
-
-export const STEP_KEYS = ["stream.phone.step1", "stream.phone.step2", "stream.phone.step3", "stream.phone.step4"] as const satisfies readonly [MessageKey, MessageKey, MessageKey, MessageKey];
 
 export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {
   idle: "stream.phone.state.idle",
@@ -106,7 +127,7 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "storage_exhausted", "ingest_unavailable",
-  "target_in_use", "destination_not_allowed", "plan_lacks_relay", "unknown",
+  "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
 
@@ -116,13 +137,15 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   active_session: "stream.error.active_session",
   storage_exhausted: "stream.error.storage_exhausted",
   ingest_unavailable: "stream.error.ingest_unavailable",
-  target_in_use: "stream.error.target_in_use",
+  // T3: the ONE holder-less "elsewhere" sentence; a holder with a match is named by `inUseText` (stream.inUse.*).
+  target_in_use: "stream.error.target_in_use.unknown",
   destination_not_allowed: "stream.error.destination_not_allowed",
+  target_unreadable: "stream.error.target_unreadable",
   plan_lacks_relay: "stream.error.plan_lacks_relay",
   unknown: "stream.error.unknown",
 };
 
-/** `target_in_use` without a court to name (the index race's `{ holder: null }`, or a holder fixture with no court). */
+/** `target_in_use` without a match to name (the index race's `{ holder: null }`, or a holder whose fixture was deleted). */
 const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unknown";
 
 /** The lower-case domain codes createSession puts on the wire VERBATIM (stream-sessions.ts `refuse`, `targetInUse`). */
@@ -151,52 +174,63 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   if (!w) return "unknown";
   if (VERBATIM_CODES.includes(w.code as CreateErrorCode)) return w.code as CreateErrorCode;
   if (w.code === DESTINATION_NOT_ALLOWED) return "destination_not_allowed";
+  if (w.code === TARGET_UNREADABLE) return "target_unreadable";
   if (w.code === "PAYMENT_REQUIRED" && PLAN_GATE_FEATURES.includes(w.extra.feature_key as string)) return "plan_lacks_relay";
   return "unknown";
 }
 
-export type CreateErrorHolder = { courtName: string | null; label: string };
+/** I1 (B4 review): a Go live answered 404 whose chosen destination a re-read of the list no longer holds — removed in
+ *  Directory while this tab stayed open. Never a wire code: D2 keeps the archived target on the EXISTING not-found shape
+ *  (a code-less 404, as a gone fixture is), so the Phone tab decides it after that re-read, not `createErrorCode`. */
+export const TARGET_REMOVED = "target_removed" as const;
+/** Every create refusal the Phone tab can show: the wire's (`CreateErrorCode`) plus the one it decides itself. */
+export type CreateFailureCode = CreateErrorCode | typeof TARGET_REMOVED;
+
+/** A create answered 404, read structurally off the `ApiV1Error` (`status`) — `false` for anything else, including an
+ *  error that never reached the server. */
+export function createErrorIsNotFound(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { status?: unknown }).status === 404;
+}
+
+export type CreateErrorHolder = {
+  courtName: string | null; label: string; matchNo: number | null; href: string | null; state: "live" | "waiting";
+};
 
 /** Who holds the destination on a `target_in_use` (`extra.holder`, stream-sessions.ts `targetInUse`); `null` on the
- *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. */
+ *  index-race variant `{ holder: null }`, on any other refusal, and on a holder without a label. A holder with no
+ *  `state` (a pre-T3 server) reads "live": that server refused only for a destination already on air. */
 export function createErrorHolder(err: unknown): CreateErrorHolder | null {
   const w = wireError(err);
   if (!w || w.code !== "target_in_use") return null;
-  const h = w.extra.holder as { courtName?: unknown; label?: unknown } | null | undefined;
+  const h = w.extra.holder as { courtName?: unknown; label?: unknown; matchNo?: unknown; href?: unknown; state?: unknown } | null | undefined;
   if (typeof h !== "object" || h === null || typeof h.label !== "string") return null;
-  return { courtName: typeof h.courtName === "string" ? h.courtName : null, label: h.label };
+  return {
+    courtName: typeof h.courtName === "string" ? h.courtName : null,
+    label: h.label,
+    matchNo: typeof h.matchNo === "number" ? h.matchNo : null,
+    href: typeof h.href === "string" ? h.href : null,
+    state: h.state === "waiting" ? "waiting" : "live",
+  };
 }
 
 type Msg = (k: MessageKey, vars?: Record<string, string | number>) => string;
 
-/** The refusal's sentence. `target_in_use` names the destination and the court holding it; without a court it says
- *  "another match" rather than render a hole. */
-export function createErrorText(error: { code: CreateErrorCode; holder: CreateErrorHolder | null }, msg: Msg): string {
-  if (error.code === "target_in_use") {
-    const h = error.holder;
-    return h?.courtName ? msg(CREATE_ERROR_KEYS.target_in_use, { destination: h.label, court: h.courtName }) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
-  }
-  return msg(CREATE_ERROR_KEYS[error.code]);
+/** Spec §3.3 — "{label} is {live|waiting for a phone} on Match {n} · {court}. Stop it there or pick another
+ *  destination." The match is the locale's own `breadcrumb.match`, never a server string (plan premise 10). No match
+ *  number (the holder's fixture was deleted) reads the one "elsewhere" sentence, never "Match null". */
+export function inUseText(msg: Msg, h: CreateErrorHolder): string {
+  if (h.matchNo === null) return msg(TARGET_IN_USE_ELSEWHERE_KEY);
+  const matchOnly = msg("breadcrumb.match", { no: h.matchNo });
+  const match = h.courtName ? msg("stream.inUse.matchCourt", { match: matchOnly, court: h.courtName }) : matchOnly;
+  return msg(h.state === "live" ? "stream.inUse.live" : "stream.inUse.waiting", { label: h.label, match });
 }
 
-/** D2: which allowlist rule refused an ingest URL — the client-side check (`destinationRefusal`) and the server's 422
- *  `DESTINATION_NOT_ALLOWED { rule }` share this one map. */
-export const DESTINATION_REFUSAL_KEYS: Record<DestinationRefusal, MessageKey> = {
-  scheme: "stream.target.refused.scheme",
-  userinfo: "stream.target.refused.userinfo",
-  ip_literal: "stream.target.refused.ip_literal",
-  host: "stream.target.refused.host",
-  port: "stream.target.refused.port",
-  path: "stream.target.refused.path",
-};
-
-/** The rule off a 422 `DESTINATION_NOT_ALLOWED`, validated against the validator's own list — `null` for an unknown
- *  rule, another code, or an error that never reached the server. */
-export function targetRefusalRule(err: unknown): DestinationRefusal | null {
-  const w = wireError(err);
-  if (!w || w.code !== DESTINATION_NOT_ALLOWED) return null;
-  const rule = w.extra.rule;
-  return (DESTINATION_REFUSALS as readonly unknown[]).includes(rule) ? (rule as DestinationRefusal) : null;
+/** The refusal's sentence. `target_in_use` names the destination, the match and its court (`inUseText`); without a
+ *  holder it says "another match" rather than render a hole. */
+export function createErrorText(error: { code: CreateFailureCode; holder: CreateErrorHolder | null }, msg: Msg): string {
+  if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
+  if (error.code === TARGET_REMOVED) return msg("stream.error.target_removed");
+  return msg(CREATE_ERROR_KEYS[error.code]);
 }
 
 export const INGEST_STATE_KEYS: Record<"connected" | "disconnected" | "unknown", MessageKey> = {

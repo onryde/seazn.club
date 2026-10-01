@@ -8,7 +8,7 @@ A **device link** turns any phone or tablet into a scoreboard for exactly one fi
 
 ## Hand one over
 
-On a fixture, choose **Hand over device**, then **Create scoring link**. You get a link (and QR) to hand to whoever is at the court. It works immediately.
+On a fixture, choose **Remote scoring**, then **Create scoring link**. You get a link (and QR) to hand to whoever is at the court. It works immediately.
 
 Need it again? **Show QR** shows the same link every time, so a QR you already handed out or printed on a [scorer sheet](/help/scoring/scorer-sheets) keeps working.
 

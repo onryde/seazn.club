@@ -1,20 +1,24 @@
 import "server-only";
-// server/usecases/stream-targets.ts — destinations (design §6.1). The list is
+// server/usecases/stream-targets.ts — destinations (design §6.1 org_stream_targets). The list is
 // a projection without the key; the key is read by the provision step alone
 // (server/relay/secret-columns.ts). `watchUrl` is validated by the ONE
 // allowlist (lib/stream-url.ts, R16) at the schema, and re-checked here so a
 // caller that bypasses parseBody still cannot store an off-list host.
-// `rtmpUrl` — the address the relay DIALS — is checked HERE, not at the schema
-// (A18, G2): the ONE destination validator (lib/stream-destinations.ts) owns
-// every rtmpUrl rule, and its refusal is a typed 422 with a stable code, which
-// a schema refinement could only surface as a generic 400 VALIDATION.
+// The ingest url is the platform's preset (D6); `checkDestination` still runs on it as a guard, so a
+// preset the allowlist stopped admitting refuses by rule, never silently.
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { DESTINATION_NOT_ALLOWED, checkDestination, type DestinationRefusal } from "@/lib/stream-destinations";
+import {
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
+  checkDestination, isStreamPlatform, type DestinationRefusal,
+} from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStreamTarget, StreamTarget } from "@/server/api-v1/schemas";
-import { insertStreamTarget, type StoredStreamTarget } from "@/server/relay/secret-columns";
+import type { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetSaved } from "@/server/api-v1/schemas";
+import {
+  archiveStreamTarget, insertStreamTarget, lockStreamTarget, readKeyHints, replaceTargetKey, type StoredStreamTarget,
+} from "@/server/relay/secret-columns";
+import { holderRows, listHolder, wireHolder, type TargetHolder } from "./stream-target-holders";
 
 // English API sentences, one per rule. Never the URL: its path can carry the stream key.
 const REFUSAL_MESSAGE: Record<DestinationRefusal, string> = {
@@ -33,38 +37,141 @@ export class DestinationNotAllowedError extends HttpError {
   }
 }
 
-export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<StreamTarget[]> {
-  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
-  const rows = await sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string }[]>`
-    select id, kind, label, watch_url, created_at from org_stream_targets
-     where org_id = ${orgId} order by created_at asc`;
-  return rows.map((r) => ({ id: r.id, kind: r.kind, label: r.label, watchUrl: r.watch_url, createdAt: new Date(r.created_at).toISOString() }));
+/** N1 (B2): 422 TARGET_UNREADABLE — the destination's saved key will not open (sealed under another KEK, or a damaged
+ *  byte). The sentence names the remedy that WORKS for the row: a platform row is recovered in place by Replace key
+ *  (secret-columns.ts replaceTargetKey re-seals it on its preset); a legacy kind has no preset and cannot be added again
+ *  (D6: create admits only the platforms), so it is removed (M4, B2 review). Carries no key, url or hint, and no extra. */
+export class TargetUnreadableError extends HttpError {
+  constructor(public readonly remedy: "replace_key" | "remove") {
+    super(
+      422,
+      remedy === "replace_key"
+        ? "This destination's saved stream key can no longer be read; replace the key, then go live again"
+        : "This destination's saved key can no longer be read and it is not a YouTube or Twitch destination, so it cannot be repaired; remove it and choose a YouTube or Twitch destination instead",
+      TARGET_UNREADABLE,
+    );
+  }
+
+  /** The remedy by the row's kind — the ONE place that decides it, for Go live and Replace key alike. */
+  static forKind(kind: string): TargetUnreadableError {
+    return new TargetUnreadableError(isStreamPlatform(kind) ? "replace_key" : "remove");
+  }
 }
 
-export async function createStreamTarget(auth: AuthCtx, orgId: string, body: CreateStreamTarget): Promise<StreamTarget> {
+const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREAM_KEY_EMPTY);
+
+export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<StreamTarget[]> {
+  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  const [rows, hints, holders] = await Promise.all([
+    sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string }[]>`
+      select id, kind, label, watch_url, created_at from org_stream_targets
+       where org_id = ${orgId} and archived_at is null order by created_at asc`,
+    sql.begin((tx) => readKeyHints(tx, orgId)) as Promise<Map<string, string | null>>,
+    holderRows(sql, { orgId }),
+  ]);
+  // holderRows is oldest-first, so the FIRST holder seen for a target is the one the list names.
+  const heldBy = new Map<string, TargetHolder>();
+  for (const h of holders) if (!heldBy.has(h.targetId)) heldBy.set(h.targetId, h);
+  return rows.map((r) => {
+    const h = heldBy.get(r.id);
+    return {
+      id: r.id, kind: r.kind, label: r.label, watchUrl: r.watch_url, createdAt: new Date(r.created_at).toISOString(),
+      keyHint: hints.get(r.id) ?? null, inUse: h ? listHolder(h) : null,
+    };
+  });
+}
+
+export async function createStreamTarget(auth: AuthCtx, orgId: string, body: CreateStreamTarget): Promise<StreamTargetSaved> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   // Task 9 review minor 7: surrounding whitespace is the commonest paste error from a platform dashboard, and it is
-  // part of no ingest URL or stream key any listed service issues. It is TRIMMED, not refused: the organiser cannot
-  // see it, so a refusal is a round trip over an invisible character, while the trimmed value is exactly what the
-  // platform issued — the validator still judges every byte that is left, and whitespace INSIDE the url is still its
-  // to refuse. Untrimmed, a key sealed with a trailing newline was a permanent dead row (no edit or delete surface, G3).
-  const rtmpUrl = body.rtmpUrl.trim();
+  // part of no stream key any listed service issues. It is TRIMMED, not refused: the organiser cannot see it, so a
+  // refusal is a round trip over an invisible character, while the trimmed value is exactly what the platform issued.
+  // Untrimmed, a key sealed with a trailing newline was a permanent dead row (G3).
   const streamKey = body.streamKey.trim();
-  // Seal the CANONICAL url the validator accepted, never the raw body: the bytes dialled are the bytes checked.
-  const destination = checkDestination(rtmpUrl);
+  // D6: the url is the platform's preset — sealed in the CANONICAL form the validator accepted (the bytes dialled are
+  // the bytes checked), and refused by rule if the allowlist ever stops admitting it.
+  const destination = checkDestination(STREAM_PLATFORM_PRESETS[body.kind]);
   if (!destination.ok) throw new DestinationNotAllowedError(destination.rule);
   // A whitespace-only key passes the schema's min(1) and is nothing once trimmed.
-  if (streamKey === "") throw new HttpError(422, "The stream key is empty");
+  if (streamKey === "") throw streamKeyEmpty();
+  const label = labelOf(body.label);
   const watch = body.watchUrl === undefined ? null : streamUrlSchema.safeParse(body.watchUrl);
   if (watch && !watch.success) throw new HttpError(422, "invalid watch link");
   const watchUrl = watch ? watch.data : null;
-  // A19: the same destination again is the EXISTING target (insertStreamTarget dedupes on the fingerprint), so the
-  // reply is the STORED row — its kind, label and watch link — never this body echoed onto an id it did not write.
+  // A19 + D2: the same destination again is the EXISTING target (unchanged — owner decision (a)), or its most recently
+  // archived row restored under this body's label and watch link (insertStreamTarget), so the reply is the STORED row —
+  // never this body echoed onto an id it did not write — plus the `outcome`, the only way the Directory can tell
+  // "already saved as {label}" from a save.
   const stored = (await sql.begin((tx) =>
-    insertStreamTarget(tx, { orgId, kind: body.kind, label: body.label, watchUrl, rtmp: { url: destination.url, streamKey } }),
+    insertStreamTarget(tx, { orgId, kind: body.kind, label, watchUrl, rtmp: { url: destination.url, streamKey } }),
   )) as StoredStreamTarget;
-  return {
-    id: stored.id, kind: stored.kind as StreamTarget["kind"], label: stored.label, watchUrl: stored.watchUrl,
-    createdAt: stored.createdAt.toISOString(),
-  };
+  // Read back through the list, so `keyHint` and `inUse` come from the one projection. A row archived between the
+  // insert and this read is a 409 retry, never a 500.
+  const row = (await listStreamTargets(auth, orgId)).find((t) => t.id === stored.id);
+  if (!row) throw new HttpError(409, "the destination changed while it was being saved; try again");
+  return { ...row, outcome: stored.outcome };
+}
+
+/** Spec §5.2 — 409 TARGET_IN_USE, naming the match that holds the destination. Uppercase: the spec's code for the
+ *  Directory's refusals (Go live's own refusal keeps its lowercase `target_in_use`). */
+export function targetHeld(h: TargetHolder): HttpError {
+  return new HttpError(
+    409,
+    `the destination "${h.label}" is ${h.state === "live" ? "live" : "waiting for a phone"} on ${h.matchNo === null ? "another match" : `match ${h.matchNo}`}`,
+    "TARGET_IN_USE",
+    { holder: wireHolder(h) },
+  );
+}
+
+const targetNotFound = () => new HttpError(404, "stream target not found");
+
+/** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Directory
+ *  would render as a blank name — and nothing left is a 422. */
+function labelOf(raw: string): string {
+  const label = raw.trim();
+  if (label === "") throw new HttpError(422, "The destination name is empty", DESTINATION_LABEL_EMPTY);
+  return label;
+}
+
+export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: string, body: PatchStreamTarget): Promise<StreamTarget> {
+  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  if (body.label !== undefined) {
+    const label = labelOf(body.label);
+    const renamed = await sql<{ id: string }[]>`
+      update org_stream_targets set label = ${label}
+       where id = ${targetId} and org_id = ${orgId} and archived_at is null returning id`;
+    if (renamed.length === 0) throw targetNotFound();
+  } else {
+    // Review Focus 2: trimmed exactly as create trims, so a re-paste of the same key fingerprints the same.
+    const streamKey = (body.streamKey ?? "").trim();
+    if (streamKey === "") throw streamKeyEmpty();
+    await sql.begin(async (tx) => {
+      if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+      const [holder] = await holderRows(tx, { orgId, targetId });
+      if (holder) throw targetHeld(holder);
+      const r = await replaceTargetKey(tx, orgId, targetId, streamKey);
+      if (r.ok) return;
+      if (r.reason === "not_found") throw targetNotFound();
+      if (r.reason === "undialable") throw new DestinationNotAllowedError(r.rule);
+      // I2: a legacy-kind row whose sealed key will not open has no platform preset to re-seal on.
+      if (r.reason === "unreadable") throw new TargetUnreadableError("remove");
+      throw new HttpError(409, `that stream key is already saved as "${r.other.label}"`, "DESTINATION_DUPLICATE", { other: r.other });
+    });
+  }
+  const row = (await listStreamTargets(auth, orgId)).find((t) => t.id === targetId);
+  if (!row) throw targetNotFound();
+  return row;
+}
+
+/** D2 — Remove is an archive, refused while held. The lock is taken BEFORE the holder check, and createSession takes
+ *  the same lock in its admission transaction, so a Remove and a Go live on one destination serialise. */
+export async function removeStreamTarget(auth: AuthCtx, orgId: string, targetId: string): Promise<{ removed: true }> {
+  if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  await sql.begin(async (tx) => {
+    if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+    const [holder] = await holderRows(tx, { orgId, targetId });
+    if (holder) throw targetHeld(holder);
+    await archiveStreamTarget(tx, orgId, targetId);
+  });
+  return { removed: true };
 }

@@ -88,6 +88,9 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   "src/components/v2/board/use-board-actions.ts": 1,
   // `<T,>(url: string, options?) => apiV1<T>(url, …)` — same wrapper shape
   "src/components/v2/device-score-pad.tsx": 1,
+  // `const path = `/api/v1/orgs/${orgId}/stream-targets/${t.id}`` — one literal
+  // shared by the row's Remove (DELETE) and Rename/Replace (PATCH)
+  "src/components/v2/stream-destinations-panel.tsx": 2,
 };
 
 describe("apiV1 call paths", () => {

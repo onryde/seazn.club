@@ -19,9 +19,14 @@ import { getEntrant } from "@/server/usecases/entrants";
 import { resolveModule } from "@/server/engine-db";
 import {
   FixtureConsole,
+  type FixtureStreamMount,
   type SideInfo,
   type LineupSlotIn,
 } from "@/components/v2/fixture-console";
+import { resolveLocale } from "@/lib/resolve-locale";
+import { loadStreamPanelContext } from "@/server/stream-panel-context";
+import { fixtureStreamMode } from "@/lib/fixture-stream-mount";
+import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { listFixtureAvailability } from "@/server/usecases/me";
 import { CheckinQr } from "@/components/v2/checkin-qr";
 import { FixtureOfficialsStrip } from "@/components/v2/fixture-officials-strip";
@@ -36,12 +41,18 @@ import { resolveScorePadBootstrap } from "@/server/usecases/fidelity";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { eventOutToEnvelope } from "@/components/v2/scorepad/wire";
 
+/** A search param as `URLSearchParams.get` reads it: the first value of a repeated key. */
+const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
+
 export default async function FixturePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string; divSlug: string; no: string }>;
+  /** The checkout return (relay-checkout/route.ts) and the run-sheet chip land here with `?stream=open`. */
+  searchParams: Promise<{ stream?: string | string[]; checkout?: string | string[]; session_id?: string | string[] }>;
 }) {
-  const { orgSlug, compSlug, divSlug, no } = await params;
+  const [{ orgSlug, compSlug, divSlug, no }, sp] = await Promise.all([params, searchParams]);
   const fixtureNo = Number(no);
   if (!Number.isInteger(fixtureNo) || fixtureNo < 1) notFound();
   const page = await requireFixturePage(orgSlug, compSlug, divSlug, fixtureNo);
@@ -117,6 +128,49 @@ export default async function FixturePage({
     fixture.home_entrant_id,
     fixture.away_entrant_id,
   ]);
+
+  // Spec 2026-09-30 §2 (P1) — Stream on the fixture page. The PAGE's canEdit (owner/admin), never the console's
+  // `canScore && !frozen`. The context loader reads nothing unless the full panel is offered (an organiser on a page that
+  // is not billing-frozen), and the session read runs only for an organiser: a scorer's or viewer's refresh pays nothing.
+  const frozen = competition.frozen ?? false;
+  const [streamContext, openStreams] = await Promise.all([
+    loadStreamPanelContext({
+      auth,
+      competitionId: competition.id,
+      sportKey: division.sport_key,
+      fixtureIds: [id],
+      locale: await resolveLocale(),
+      offered: canEdit && !frozen,
+      checkout: { status: first(sp.checkout), sessionId: first(sp.session_id) },
+    }),
+    canEdit ? openStreamStates(auth, [id]) : Promise.resolve({} as Awaited<ReturnType<typeof openStreamStates>>),
+  ]);
+  const streamMode = fixtureStreamMode({
+    canEdit,
+    entitled: streamContext?.entitled ?? false,
+    frozen,
+    activeSession: openStreams[id] !== undefined,
+  });
+  const streamMount: FixtureStreamMount | undefined =
+    streamMode === "panel" && streamContext
+      ? {
+          mode: "panel",
+          context: streamContext,
+          // The VENUE zone — the same clock the run sheet printed the row in (scheduleSettings.tz).
+          tz: schedule.tz,
+          fixture: {
+            id,
+            status: fixture.status,
+            outcome: state.outcome,
+            scheduled_at: fixture.scheduled_at,
+            home_entrant_id: fixture.home_entrant_id,
+            away_entrant_id: fixture.away_entrant_id,
+          },
+          entrantNames: Object.fromEntries([home, away].flatMap((s) => (s ? [[s.id, s.name] as const] : []))),
+        }
+      : streamMode === "stop-only"
+        ? { mode: "stop-only" }
+        : undefined;
 
   // S13/#422 — the v2 pad's bootstrap, resolved unconditionally now that the
   // feature flag that used to gate it is gone. `null` only on a resolution failure
@@ -227,6 +281,8 @@ export default async function FixturePage({
             fixture.status !== "finalized" &&
             fixture.status !== "cancelled"
           }
+          stream={streamMount}
+          streamReturn={first(sp.stream) === "open"}
           viewerPlan={viewerPlan}
         />
       </main>

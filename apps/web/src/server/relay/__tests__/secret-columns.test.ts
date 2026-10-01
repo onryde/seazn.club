@@ -12,11 +12,17 @@
 //     label and watch link it was given (`rtmp_enc` is NOT NULL, so there is no unsealed row to update later);
 //     `readFirstInput` reads the LOWEST slot of THIS session, or null — never a literal slot 0.
 import { randomBytes, randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { sql, type Tx } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination } from "@/lib/stream-destinations";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
+import { log } from "@/server/logger";
 import { fingerprintDestination, seal } from "../crypto";
-import { StreamTargetVanishedError, insertStreamTarget, readFirstInput, readInputBySlot, readTargetSecret, storeInputCredentials } from "../secret-columns";
+import {
+  KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, TargetSecretUnreadableError, archiveStreamTarget, insertStreamTarget, keyHintOf,
+  lockStreamTarget, readFirstInput, readInputBySlot, readKeyHints, readTargetSecret, replaceTargetKey, storeInputCredentials,
+} from "../secret-columns";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -77,6 +83,17 @@ async function messageOf(p: Promise<unknown>): Promise<string> {
   throw new Error("expected the read to throw, and it returned");
 }
 
+// m-7 (final review): pure — outside the DB block, so a run with no DATABASE_URL still witnesses the floor.
+describe("keyHintOf (pure)", () => {
+  it("keyHintOf: null below KEY_HINT_MIN_LENGTH, the last KEY_HINT_CHARS characters at and above it", () => {
+    const short = "x".repeat(KEY_HINT_MIN_LENGTH - 1);
+    const exact = `${"y".repeat(KEY_HINT_MIN_LENGTH - KEY_HINT_CHARS)}abc`;
+    expect(keyHintOf(short)).toBeNull();
+    expect(keyHintOf(exact)).toBe(exact.slice(-KEY_HINT_CHARS));
+    expect(keyHintOf(exact)).toHaveLength(KEY_HINT_CHARS);
+  });
+});
+
 describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opened", () => {
   it("an input's SRT and RTMPS legs round-trip on the observed shape; streamId comes from the envelope, not the bare url", async () => {
     const r = await rig();
@@ -133,16 +150,19 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(other.id).not.toBe(r.targetId);
   });
 
-  // The guard's reach: the insert CONFLICTED (no row returned) and the read-back found nothing — the row was deleted
-  // between the two statements. No production path deletes a target today, so a real database cannot reach this
-  // window on demand; a scripted transaction answers both statements with nothing, which is exactly that window.
+  // The guard's reach: an ACTIVE read and an ARCHIVED read that both find nothing, then an insert that CONFLICTS (no row
+  // returned) — the conflicting row was archived or deleted between the statements. No production path makes that
+  // window on demand, so a scripted transaction answers every statement with nothing, which is exactly that window.
   //
   // m6 (lane C final review): the refusal used to be the END — nothing mapped it, so a lost race was a 500, and the comment
-  // promised a retry nobody made. The retry is now made HERE, once, in the same transaction: under READ COMMITTED the
-  // second insert is a new statement with a new snapshot, so it sees the conflicting row gone and lands. Only a second
-  // vanish in a row — the same destination re-created AND deleted again inside that retry — is still refused by name.
-  const INSERT_SQL = /^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null do nothing/;
-  const SELECT_SQL = /^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \?$/;
+  // promised a retry nobody made. The retry is now made HERE, once, in the same transaction: under READ COMMITTED each
+  // round's statements are new statements with new snapshots, so the second round sees the conflicting row gone and its
+  // insert lands. Only a second lost round in a row is still refused by name. D2 (V427) made each round THREE
+  // statements: the active read, the archived read, the insert.
+  const INSERT_SQL = /^insert into org_stream_targets .* on conflict \(org_id, dest_fingerprint\) where dest_fingerprint is not null and archived_at is null do nothing/;
+  const SELECT_SQL = /^select id, kind, label, watch_url, created_at from org_stream_targets where org_id = \? and dest_fingerprint = \? and archived_at is null$/;
+  const ARCHIVED_SQL = /^select id from org_stream_targets where org_id = \? and dest_fingerprint = \? and archived_at is not null order by archived_at desc, created_at desc limit 1$/;
+  const kindOf = (s: string) => INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "active" : ARCHIVED_SQL.test(s) ? "archived" : s;
   const scripted = (answers: unknown[][]) => {
     const statements: string[] = [];
     const tx = ((strings: TemplateStringsArray) => {
@@ -154,22 +174,22 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
 
   it("A19 guard + m6: a destination that conflicts and cannot be read back is RETRIED once in the same transaction, and the retry's insert lands — the caller gets the new row, never a 500 (mutant: no retry → StreamTargetVanishedError)", async () => {
     const landed = { id: randomUUID(), kind: "youtube", label: "x", watch_url: null, created_at: new Date() };
-    const { tx, statements } = scripted([[], [], [landed]]);   // conflict, gone, then the retry's insert returns the row
+    // round 1: no active, no archived, the insert conflicts; round 2: no active, no archived, the insert returns the row
+    const { tx, statements } = scripted([[], [], [], [], [], [landed]]);
     const out = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() });
     expect(out).toMatchObject({ id: landed.id, kind: "youtube", label: "x", watchUrl: null });
-    expect(statements).toHaveLength(3);
-    expect(statements[0]).toMatch(INSERT_SQL);
-    expect(statements[1]).toMatch(SELECT_SQL);
-    expect(statements[2]).toMatch(INSERT_SQL);
+    expect(statements).toHaveLength(6);
+    expect(statements.map(kindOf)).toEqual(["active", "archived", "insert", "active", "archived", "insert"]);
   });
 
   it("A19 guard: a destination that vanishes on the retry TOO is refused BY NAME — never an undefined row handed to the caller, and never a third attempt (mutant: retry forever / no refusal)", async () => {
-    const { tx, statements } = scripted([]);                   // every statement answers nothing: vanished twice
+    const { tx, statements } = scripted([]);                   // every statement answers nothing: lost twice
     const err = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() })
       .then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(StreamTargetVanishedError);
-    expect(statements).toHaveLength(4);
-    expect(statements.map((s) => (INSERT_SQL.test(s) ? "insert" : SELECT_SQL.test(s) ? "select" : s))).toEqual(["insert", "select", "insert", "select"]);
+    expect(err, "M4: a 409 retry over the v1 envelope, never a 500").toMatchObject({ status: 409 });
+    expect(statements).toHaveLength(6);                        // six, not more: never a third round
+    expect(statements.map(kindOf)).toEqual(["active", "archived", "insert", "active", "archived", "insert"]);
   });
 
   it("A19: an undialable destination is refused BEFORE anything is written — no fingerprint means no row", async () => {
@@ -348,5 +368,387 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     const partial = await messageOf(sql.begin((tx) => readInputBySlot(tx, r.sessionId, 0)));
     expect(partial).toMatch(/streamId/);
     expect(partial).not.toContain(creds.srt.passphrase.slice(0, 8));
+  });
+
+  /** A destination that dials: the rig's own youtube url with a fresh 65-char key. */
+  const dest = (streamKey = secret65()) => ({ url: "rtmps://a.rtmps.youtube.com/live2", streamKey });
+  const put = (orgId: string, rtmp: { url: string; streamKey: string }, label = "L", watchUrl: string | null = null) =>
+    sql.begin((tx) => insertStreamTarget(tx, { orgId, kind: "youtube", label, watchUrl, rtmp }));
+
+  it("D2 create order 1/3: an ACTIVE duplicate is returned as 'existing' and writes nothing — not its label, not its watch link", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const first = await put(orgId, d, "First", "https://youtu.be/one");
+    const again = await put(orgId, d, "Second", "https://youtu.be/two");
+    expect(first.outcome).toBe("inserted");
+    expect(again).toMatchObject({ id: first.id, outcome: "existing", label: "First", watchUrl: "https://youtu.be/one" });
+  });
+
+  it("D2 create order 2/3: an ARCHIVED duplicate is RESTORED — same id, the SUBMITTED label and watch link, archived_at cleared", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const first = await put(orgId, d, "Old name", null);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, orgId, first.id))).toBe(true);
+    const back = await put(orgId, d, "New name", "https://youtu.be/new");
+    expect(back).toMatchObject({ id: first.id, outcome: "restored", label: "New name", watchUrl: "https://youtu.be/new" });
+    const [row] = await sql<{ archived_at: Date | null }[]>`select archived_at from org_stream_targets where id = ${first.id}`;
+    expect(row!.archived_at).toBeNull();
+  });
+
+  it("D2 create order 2/3: of TWO archived rows of one destination, the MOST RECENTLY archived is the one restored", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const fp = fingerprintDestination(d.url, d.streamKey);
+    const raw = (label: string, archivedAt: string) => sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc, dest_fingerprint, archived_at)
+      values (${orgId}, 'youtube', ${label}, ${seal(JSON.stringify(d))}, ${fp}, ${archivedAt}) returning id`;
+    const [older] = await raw("older", "2026-09-01T00:00:00Z");
+    const [newer] = await raw("newer", "2026-09-20T00:00:00Z");
+    const back = await put(orgId, d, "again");
+    expect(back.id).toBe(newer!.id);      // differential: the wrong ORDER BY returns `older`
+    expect(back.id).not.toBe(older!.id);
+  });
+
+  it("D2 create order 3/3: no row of this destination (active or archived) inserts a new one", async () => {
+    const { orgId } = await rig();
+    const made = await put(orgId, dest());
+    expect(made.outcome).toBe("inserted");
+  });
+
+  it("archiveStreamTarget: true once, false on the second call, false for ANOTHER org's id; an archived row reads as absent to lockStreamTarget", async () => {
+    const a = await rig();
+    const b = await rig();
+    const t = await put(a.orgId, dest());
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, b.orgId, t.id))).toBe(false);
+    expect(await sql.begin((tx) => lockStreamTarget(tx, a.orgId, t.id))).toBe(true);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, t.id))).toBe(true);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, t.id))).toBe(false);
+    expect(await sql.begin((tx) => lockStreamTarget(tx, a.orgId, t.id))).toBe(false);
+  });
+
+  it("m-8 (final review): a RESTORE re-seals the envelope with the submitted key — an archived row whose envelope was damaged (same fingerprint) opens again after re-adding the same key", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const t = await put(orgId, d);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, orgId, t.id))).toBe(true);
+    const [row] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string }[]>`select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    const damaged = Buffer.from(row!.rtmp_enc);
+    damaged[damaged.length - 1] ^= 0xff;                        // the auth tag's last byte: the envelope no longer opens
+    await sql`update org_stream_targets set rtmp_enc = ${damaged} where id = ${t.id}`;
+    const back = await put(orgId, d, "Re-added");
+    expect(back, "PREMISE: the same fingerprint restores the same row").toMatchObject({ id: t.id, outcome: "restored", label: "Re-added" });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id)), "the restore re-sealed what was typed").toEqual(d);
+    const [after] = await sql<{ dest_fingerprint: string }[]>`select dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    expect(after!.dest_fingerprint, "the fingerprint is unchanged (same url and key)").toBe(row!.dest_fingerprint);
+  });
+
+  it("M-1 (final review): readTargetSecret opens an ACTIVE row only — an archived (removed) destination's key reads as absent, exactly like another org's id; restoring it opens it again", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const t = await put(orgId, d);
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id)), "PREMISE: the active row opens").toEqual(d);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, orgId, t.id))).toBe(true);
+    await expect(sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).rejects.toThrow(`stream target ${t.id} not found`);
+    // The positive pair: re-adding the same key restores the SAME row, and it opens again.
+    const back = await put(orgId, d);
+    expect(back).toMatchObject({ id: t.id, outcome: "restored" });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).toEqual(d);
+  });
+
+  it("readKeyHints (Review Focus 1): each ACTIVE row's hint; an UNOPENABLE envelope reads null and never throws; archived rows are absent", async () => {
+    const { orgId } = await rig();
+    const good = await put(orgId, dest("abcd-1234-efgh-5678-ijkl"));
+    const gone = await put(orgId, dest());
+    await sql.begin((tx) => archiveStreamTarget(tx, orgId, gone.id));
+    const [bad] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'youtube', 'bad', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    const hints = await sql.begin((tx) => readKeyHints(tx, orgId));
+    expect(hints.get(good.id)).toBe("ijkl".slice(-KEY_HINT_CHARS));
+    expect(hints.get(bad!.id)).toBeNull();
+    expect(hints.has(gone.id)).toBe(false);
+    // rig() seeds one target of its own; it is active and counted.
+    expect(hints.size).toBe(3);
+  });
+
+  it("replaceTargetKey: re-seals the KEY under the SAME url and re-fingerprints; the same key again is a no-op", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const t = await put(orgId, d);
+    const next = secret65();
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, next))).toEqual({ ok: true, changed: true });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).toEqual({ url: d.url, streamKey: next });
+    const [row] = await sql<{ dest_fingerprint: string }[]>`select dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    expect(row!.dest_fingerprint).toBe(fingerprintDestination(d.url, next));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, next))).toEqual({ ok: true, changed: false });
+  });
+
+  it("replaceTargetKey: an ACTIVE row already holding the new key is 'duplicate' naming it; an ARCHIVED holder and another ORG's holder do not block", async () => {
+    const a = await rig();
+    const b = await rig();
+    const taken = dest();
+    const holder = await put(a.orgId, taken, "Holder");
+    const mover = await put(a.orgId, dest(), "Mover");
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, mover.id, taken.streamKey)))
+      .toEqual({ ok: false, reason: "duplicate", other: { id: holder.id, label: "Holder" } });
+    await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, holder.id));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, mover.id, taken.streamKey))).toEqual({ ok: true, changed: true });
+    const other = await put(b.orgId, dest(), "B");
+    expect(await sql.begin((tx) => replaceTargetKey(tx, b.orgId, other.id, taken.streamKey))).toEqual({ ok: true, changed: true });
+  });
+
+  it("replaceTargetKey: an archived or foreign target is 'not_found'; a stored url the allowlist no longer admits is 'undialable' with its rule", async () => {
+    const a = await rig();
+    const b = await rig();
+    const t = await put(a.orgId, dest());
+    expect(await sql.begin((tx) => replaceTargetKey(tx, b.orgId, t.id, secret65()))).toEqual({ ok: false, reason: "not_found" });
+    await sql.begin((tx) => archiveStreamTarget(tx, a.orgId, t.id));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, t.id, secret65()))).toEqual({ ok: false, reason: "not_found" });
+    const [legacy] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc)
+      values (${a.orgId}, 'custom_rtmp', 'legacy', ${seal(JSON.stringify({ url: "rtmps://media.example.com/live", streamKey: secret65() }))}) returning id`;
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, legacy!.id, secret65()))).toEqual({ ok: false, reason: "undialable", rule: "host" });
+  });
+
+  // I2 (B1 review): after a KEK change a row's envelope will not open — the list shows keyHint null for it (Review Focus
+  // 1) and Replace key is its in-place recovery. The stored url is gone with the envelope; a PLATFORM row's url is the
+  // platform's preset (D6), so it is re-sealed there; a legacy kind has no preset and is refused by name.
+  it("I2: replaceTargetKey on an UNOPENABLE envelope — a platform row is re-sealed on its preset with a fresh fingerprint (every platform); a legacy kind is 'unreadable' and nothing is written", async () => {
+    let checked = 0;
+    for (const kind of STREAM_PLATFORMS) {
+      const { orgId } = await rig();
+      const [row] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, ${kind}, 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      const next = secret65();
+      expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, row!.id, next)), kind).toEqual({ ok: true, changed: true });
+      const preset = checkDestination(STREAM_PLATFORM_PRESETS[kind]);
+      expect(preset.ok, kind).toBe(true);
+      const url = preset.ok ? preset.url : "";
+      expect(await sql.begin((tx) => readTargetSecret(tx, orgId, row!.id)), kind).toEqual({ url, streamKey: next });
+      const [after] = await sql<{ dest_fingerprint: string }[]>`select dest_fingerprint from org_stream_targets where id = ${row!.id}`;
+      expect(after!.dest_fingerprint, kind).toBe(fingerprintDestination(url, next));
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length);
+    const { orgId } = await rig();
+    const stale = Buffer.from("sealed-under-another-kek");
+    const [legacy] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'custom_rtmp', 'legacy', ${stale}) returning id`;
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, legacy!.id, secret65()))).toEqual({ ok: false, reason: "unreadable" });
+    const [kept] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null }[]>`
+      select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${legacy!.id}`;
+    expect(Buffer.from(kept!.rtmp_enc).equals(stale)).toBe(true);
+    expect(kept!.dest_fingerprint).toBeNull();
+  });
+
+  // N3 (B1 review): the recovery above was SILENT — an operator could not tell a KEK change from a quiet week. One warn
+  // per unopenable envelope, carrying the target id and kind ONLY: never the new key, the preset url, a hint, or bytes.
+  it("N3: an unopenable envelope is LOGGED once on Replace key — target id and kind only, for a platform row and a legacy one; an openable row logs nothing", async () => {
+    const warns: unknown[][] = [];
+    const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
+    try {
+      const stale = Buffer.from("sealed-under-another-kek");
+      const { orgId } = await rig();
+      const cases: { kind: string; want: string }[] = [{ kind: "youtube", want: "recovered" }, { kind: "custom_rtmp", want: "unreadable" }];
+      let checked = 0;
+      for (const c of cases) {
+        const [row] = await sql<{ id: string }[]>`
+          insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, ${c.kind}, 'stale', ${stale}) returning id`;
+        const next = secret65();
+        const before = warns.length;
+        const r = await sql.begin((tx) => replaceTargetKey(tx, orgId, row!.id, next));
+        expect(r.ok ? "recovered" : (r as { reason: string }).reason, c.kind).toBe(c.want);
+        const mine = warns.slice(before);
+        expect(mine, `${c.kind}: exactly one warn`).toHaveLength(1);
+        expect(mine[0]![0], c.kind).toEqual({ targetId: row!.id, kind: c.kind });
+        const text = JSON.stringify(mine[0]);
+        for (const leak of [next, next.slice(-3), STREAM_PLATFORM_PRESETS.youtube, "sealed-under-another-kek", stale.toString("hex")]) {
+          expect(text, `${c.kind}: the log line carries no secret`).not.toContain(leak);
+        }
+        checked++;
+      }
+      expect(checked).toBe(cases.length);
+      // The positive pair: a row whose envelope opens is an ordinary replace, and says nothing.
+      const preset = checkDestination(STREAM_PLATFORM_PRESETS.twitch);
+      const t = await put(orgId, { url: preset.ok ? preset.url : "", streamKey: secret65() });
+      const quiet = warns.length;
+      expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, secret65()))).toEqual({ ok: true, changed: true });
+      expect(warns.length, "an openable envelope logs nothing").toBe(quiet);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // M3 (B2 review): an envelope that will not open under a VALID KEK is the organiser's to fix (a KEK rotation, a damaged
+  // byte: TargetSecretUnreadableError → 422 Replace key). A MISSING or MALFORMED RELAY_KEK is the deployment's fault: it
+  // must stay the loud config error it was (a 500 that reaches Sentry), never a warn-level 422 telling every organiser to
+  // replace a key that is fine. Both branches, and the same guard on Replace key's recovery.
+  describe("M3: a missing or malformed RELAY_KEK is never filed as an unreadable destination", () => {
+    const withKek = async <T,>(value: string | undefined, body: () => Promise<T>): Promise<T> => {
+      const saved = process.env.RELAY_KEK;
+      if (value === undefined) delete process.env.RELAY_KEK;
+      else process.env.RELAY_KEK = value;
+      try {
+        return await body();
+      } finally {
+        process.env.RELAY_KEK = saved;
+      }
+    };
+    const KEK_FAULTS = [{ name: "unset", value: undefined, says: /RELAY_KEK is not set/ }, { name: "malformed", value: "zz".repeat(32), says: /RELAY_KEK must be exactly 64 hex/ }] as const;
+
+    it("readTargetSecret: an unset or malformed KEK rethrows the KEK's own error — not TargetSecretUnreadableError; a valid KEK on an unopenable envelope IS TargetSecretUnreadableError", async () => {
+      const r = await rig();
+      let checked = 0;
+      for (const f of KEK_FAULTS) {
+        const err = await withKek(f.value, () => sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId)).then(() => null, (e: unknown) => e));
+        expect(err, f.name).toBeInstanceOf(Error);
+        expect(err, f.name).not.toBeInstanceOf(TargetSecretUnreadableError);
+        expect((err as Error).message, f.name).toMatch(f.says);
+        checked++;
+      }
+      expect(checked).toBe(KEK_FAULTS.length);
+      // The other branch, under the valid KEK: an envelope sealed elsewhere is the typed organiser-side error.
+      const [row] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      const err = await sql.begin((tx) => readTargetSecret(tx, r.orgId, row!.id)).then(() => null, (e: unknown) => e);
+      expect(err).toBeInstanceOf(TargetSecretUnreadableError);
+      expect(err).toMatchObject({ targetId: row!.id, kind: "youtube" });
+      // …and the readable row still opens: the KEK was restored.
+      expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId))).toEqual(r.target);
+    });
+
+    it("replaceTargetKey: an unset or malformed KEK rethrows before the recovery — no 'unopenable envelope' warn, and the row is untouched", async () => {
+      const r = await rig();
+      const warns: unknown[][] = [];
+      const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
+      try {
+        const [before] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null }[]>`
+          select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${r.targetId}`;
+        let checked = 0;
+        for (const f of KEK_FAULTS) {
+          const err = await withKek(f.value, () => sql.begin((tx) => replaceTargetKey(tx, r.orgId, r.targetId, secret65())).then(() => null, (e: unknown) => e));
+          expect((err as Error | null)?.message, f.name).toMatch(f.says);
+          checked++;
+        }
+        expect(checked).toBe(KEK_FAULTS.length);
+        expect(warns.filter(([o]) => (o as { targetId?: string }).targetId === r.targetId), "no recovery warn for a KEK fault").toEqual([]);
+        const [after] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null }[]>`
+          select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${r.targetId}`;
+        expect(Buffer.from(after!.rtmp_enc).equals(Buffer.from(before!.rtmp_enc))).toBe(true);
+        expect(after!.dest_fingerprint).toBe(before!.dest_fingerprint);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("readKeyHints (N1, B2 re-review): an unset or malformed KEK rejects with the KEK's own error — never a list of null hints; under the valid KEK an unopenable ROW still reads null beside a readable one (Review Focus 1)", async () => {
+      const r = await rig();
+      const [bad] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      // The precondition: there ARE active rows to open, or a KEK fault could never be reached and "rejects" would be vacuous.
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and archived_at is null`;
+      expect(n).toBe(2);
+      let checked = 0;
+      for (const f of KEK_FAULTS) {
+        const err = await withKek(f.value, () => sql.begin((tx) => readKeyHints(tx, r.orgId)).then(() => null, (e: unknown) => e));
+        expect(err, f.name).toBeInstanceOf(Error);
+        expect((err as Error).message, f.name).toMatch(f.says);
+        checked++;
+      }
+      expect(checked).toBe(KEK_FAULTS.length);
+      // The other branch, with the KEK restored: the row's own fault is a null hint, the list still answers.
+      const hints = await sql.begin((tx) => readKeyHints(tx, r.orgId));
+      expect(hints.get(bad!.id)).toBeNull();
+      expect(hints.get(r.targetId)).toBe(keyHintOf(r.target.streamKey));
+      expect(hints.get(r.targetId), "the readable row really has a hint, so null above is the row's fault").not.toBeNull();
+      expect(hints.size).toBe(2);
+    });
+
+    it("the KEK's fault wins over a ROW's fault, whatever order the rows come back in: with ONLY an unopenable row active, an unset or malformed KEK still answers with the KEK's own error — readKeyHints, readTargetSecret and replaceTargetKey (found red in the final-review baseline: heap order decided which error surfaced)", async () => {
+      const r = await rig();
+      const [bad] = await sql<{ id: string }[]>`
+        insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'stale', ${Buffer.from("sealed-under-another-kek")}) returning id`;
+      expect(await sql.begin((tx) => archiveStreamTarget(tx, r.orgId, r.targetId)), "PREMISE: the readable row is gone").toBe(true);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_targets where org_id = ${r.orgId} and archived_at is null`;
+      expect(n, "PREMISE: the unopenable row is the only active one").toBe(1);
+      let checked = 0;
+      for (const f of KEK_FAULTS) {
+        const reads: [string, () => Promise<unknown>][] = [
+          ["readKeyHints", () => sql.begin((tx) => readKeyHints(tx, r.orgId))],
+          ["readTargetSecret", () => sql.begin((tx) => readTargetSecret(tx, r.orgId, bad!.id))],
+          ["replaceTargetKey", () => sql.begin((tx) => replaceTargetKey(tx, r.orgId, bad!.id, secret65()))],
+        ];
+        for (const [name, read] of reads) {
+          const err = await withKek(f.value, () => read().then(() => null, (e: unknown) => e));
+          expect((err as Error | null)?.message, `${f.name} · ${name}`).toMatch(f.says);
+          expect(err, `${f.name} · ${name}`).not.toBeInstanceOf(TargetSecretUnreadableError);
+          checked++;
+        }
+      }
+      expect(checked).toBe(KEK_FAULTS.length * 3);
+    });
+  });
+
+  it("I2: a DAMAGED envelope whose fingerprint still matches (same KEK, same key) is re-sealed by replacing the SAME key — not the no-op an openable row gets (mutant: short-circuit on the fingerprint alone)", async () => {
+    const { orgId } = await rig();
+    // Stored on the youtube PRESET — the url the recovery re-seals on — so the fingerprint really does match.
+    const preset = checkDestination(STREAM_PLATFORM_PRESETS.youtube);
+    expect(preset.ok).toBe(true);
+    const d = { url: preset.ok ? preset.url : "", streamKey: secret65() };
+    const t = await put(orgId, d);
+    const [row] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string }[]>`select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    expect(row!.dest_fingerprint, "the precondition: the same key fingerprints the same").toBe(fingerprintDestination(d.url, d.streamKey));
+    const damaged = Buffer.from(row!.rtmp_enc);
+    damaged[damaged.length - 1] ^= 0xff;                        // the auth tag's last byte: the envelope no longer opens
+    await sql`update org_stream_targets set rtmp_enc = ${damaged} where id = ${t.id}`;
+    await expect(sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).rejects.toThrow();
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, d.streamKey))).toEqual({ ok: true, changed: true });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).toEqual({ url: d.url, streamKey: d.streamKey });
+    // …and once it opens again, the same key IS the no-op.
+    expect(await sql.begin((tx) => replaceTargetKey(tx, orgId, t.id, d.streamKey))).toEqual({ ok: true, changed: false });
+  });
+
+  // M4 (B1 review): the two race catches — a restore and a key replace that meet a 23505 on the fingerprint index — and
+  // the refusal they end in. No production path opens those windows on demand, so a scripted transaction does: its
+  // savepoint REJECTS with the index's own 23505, exactly what Postgres raises when a concurrent writer won.
+  const conflict = () => Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint_name: "org_stream_targets_org_dest_fingerprint" });
+  const racing = (answers: unknown[][], savepointError: () => Error) => {
+    const statements: string[] = [];
+    const tx = ((strings: TemplateStringsArray) => {
+      statements.push(strings.join("?").replace(/\s+/g, " ").trim());
+      return Promise.resolve(answers[statements.length - 1] ?? []);
+    }) as unknown as Tx & { savepoint: unknown };
+    (tx as { savepoint: unknown }).savepoint = () => { statements.push("savepoint"); return Promise.reject(savepointError()); };
+    return { tx: tx as unknown as Tx, statements };
+  };
+
+  it("M4: a RESTORE that meets the fingerprint index's 23505 (a concurrent writer won) rounds again and returns the winner as 'existing' — never a 500; any OTHER error from the restore propagates (mutant: rethrow the conflict)", async () => {
+    const winner = { id: randomUUID(), kind: "youtube", label: "won", watch_url: null, created_at: new Date() };
+    // round 1: no active, one archived, its restore conflicts; round 2: the active read finds the winner
+    const { tx, statements } = racing([[], [{ id: randomUUID() }], [], [winner]], conflict);
+    const out = await insertStreamTarget(tx, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() });
+    expect(out).toMatchObject({ id: winner.id, label: "won", outcome: "existing" });
+    expect(statements.map(kindOf)).toEqual(["active", "archived", "savepoint", "active"]);
+    // The negative pair: a 23505 on ANOTHER constraint is not the race and is not swallowed.
+    const other = () => Object.assign(new Error("other"), { code: "23505", constraint_name: "some_other_index" });
+    const { tx: tx2 } = racing([[], [{ id: randomUUID() }]], other);
+    await expect(insertStreamTarget(tx2, { orgId: randomUUID(), kind: "youtube", label: "x", watchUrl: null, rtmp: destination() }))
+      .rejects.toMatchObject({ constraint_name: "some_other_index" });
+  });
+
+  it("M4: a key replace whose write meets the fingerprint index's 23505 re-reads the winner and is 'duplicate' naming it; a winner gone by the re-read is StreamTargetVanishedError — a 409 retry, never a 500 (mutant: rethrow the conflict)", async () => {
+    const d = dest();
+    const current = [{ rtmp_enc: seal(JSON.stringify(d)), dest_fingerprint: "stale-fingerprint", kind: "youtube" }];
+    const winner = { id: randomUUID(), label: "Court 2" };
+    // the row, no other holder, the write conflicts, the re-read finds the winner
+    const won = racing([current, [], [], [winner]], conflict);
+    expect(await replaceTargetKey(won.tx, randomUUID(), randomUUID(), secret65())).toEqual({ ok: false, reason: "duplicate", other: winner });
+    expect(won.statements).toHaveLength(4);
+    expect(won.statements[2]).toBe("savepoint");
+    // …and the winner already gone by the re-read.
+    const gone = racing([current, [], [], []], conflict);
+    const err = await replaceTargetKey(gone.tx, randomUUID(), randomUUID(), secret65()).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(StreamTargetVanishedError);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 409 });
   });
 });

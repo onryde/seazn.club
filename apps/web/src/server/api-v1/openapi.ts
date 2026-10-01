@@ -24,7 +24,9 @@ import { CompetitionHubDoc } from "../public-site/competition-hub-schema.ts";
 import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
 // Streaming R1, A18 — the destination refusal rules, for the 422 envelope below.
 // Zero imports in that file (it is client-safe), so the generator stays clean.
-import { DESTINATION_REFUSALS } from "../../lib/stream-destinations.ts";
+import {
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_KEY_EMPTY, TARGET_UNREADABLE,
+} from "../../lib/stream-destinations.ts";
 
 // ---------------------------------------------------------------------------
 // Route registry — one row per (path, method). The coverage test asserts this
@@ -163,7 +165,7 @@ export const ROUTES: RouteSpec[] = [
   { path: "/fixtures/{id}", method: "patch", summary: "Schedule move, venue, officials, pin/lock — blocking conflicts → 409, warn-level ones come back in `conflicts`", tag: "fixtures", request: S.PatchFixture, response: S.PatchedFixture, errors: [402, 409, 422] },
   { path: "/fixtures/{id}/stream", method: "put", summary: "Set or clear the fixture's public broadcast link (https, exact-host allowlist: YouTube, Facebook, Twitch, Kick) — surfaces as \"Watch live\" on the public match page", tag: "fixtures", request: S.PutFixtureStream, response: S.FixtureStream, errors: [403, 404, 422] },
   // Streaming R1 — phone relay sessions (design §6.3). Never key-reachable (key-scopes.ts).
-  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is streaming for another fixture), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
+  { path: "/fixtures/{id}/stream-sessions", method: "post", summary: "Start a phone-relay session for the fixture (one match credit is consumed when it goes live). 409 active_session when one is already running (its id is returned as `sessionId`), 409 overlay_required, 409 target_in_use (the destination is live or waiting on another match, named in `holder`), 402 no_credits, 422 DESTINATION_NOT_ALLOWED (the saved destination is no longer on the allowlist), 422 TARGET_UNREADABLE (the saved stream key can no longer be read: replace the key, or for a legacy destination remove it, since only YouTube and Twitch can be added; refused before any provider call, no row is written, no credit spent), 503 storage_exhausted (no row is written)", tag: "fixtures", request: S.CreateStreamSession, response: S.StreamSessionCreated, status: 201, errors: [402, 403, 404, 409, 422, 503] },
   { path: "/fixtures/{id}/stream-sessions/current", method: "get", summary: "The fixture's latest relay session as the organiser sees it (state, health, the QR payload while warming) — null when none exists", tag: "fixtures", response: S.StreamSessionCurrent.nullable(), query: { reveal: { schema: { type: "string", enum: ["1"] }, description: "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; absent, the read is a poll and counts nothing; any other value is 400" } }, errors: [403, 404] },
   { path: "/fixtures/{id}/stream-sessions/{sid}/stop", method: "post", summary: "Ask a running relay session to end (desired_state = ending); a passthrough session completes at once. Idempotent: a session already ending or ended answers the same projection and decides nothing (no transition, no provider call) — a tap on a session still ending is recorded as the organiser's action, one on an ended session writes nothing; 409 not_active when the fixture has since started a newer session", tag: "fixtures", response: S.StreamSessionCurrent, errors: [403, 404, 409] },
   { path: "/fixtures/{id}/lineups/{entrantId}", method: "get", summary: "Get a side's lineup", tag: "fixtures" },
@@ -221,7 +223,9 @@ export const ROUTES: RouteSpec[] = [
   // "fixtures" with the relay sessions they feed: there is no "organizations" tag (lane C A11).
   // Never key-reachable (key-scopes.ts).
   { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key)", tag: "fixtures", response: z.array(S.StreamTarget) },
-  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination; the RTMPS URL + key are sealed at rest (AES-256-GCM). rtmpUrl must be rtmp/rtmps on an allowlisted provider ingest host (YouTube, Facebook, Twitch, Kick, Vimeo, Restream, Cloudflare Stream) at the scheme's default port, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTarget, status: 201, errors: [403, 422] },
+  { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination UNCHANGED (`outcome: existing` — its name and watch link stand), or restores a removed one under the submitted name and watch link (`outcome: restored`); a new destination is `outcome: inserted`. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed. 409 when a concurrent save of the same destination won: try again", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTargetSaved, status: 201, errors: [403, 409, 422] },
+  { path: "/orgs/{id}/stream-targets/{targetId}", method: "patch", summary: "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it; only YouTube and Twitch can be added). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist", tag: "fixtures", request: S.PatchStreamTarget, response: S.StreamTarget, errors: [404, 409, 422] },
+  { path: "/orgs/{id}/stream-targets/{targetId}", method: "delete", summary: "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed", tag: "fixtures", response: S.StreamTargetRemoved, errors: [404, 409] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/live", method: "get", summary: "Public org live status: every competition the org home lists, with its status and how many of its public fixtures are in play — what the org home's status chips poll", tag: "public", public: true, response: S.PublicOrgLive },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
@@ -559,31 +563,45 @@ const TEMPLATE_INSTANTIATION_FAILED_ENVELOPE = {
   },
 } as const;
 
-// SCOPED to POST /orgs/{id}/stream-targets' 422 only (Streaming R1, A18 — G2):
-// the destination allowlist's refusal carries `rule`, which check refused, as
-// a real HttpError `extra` (usecases/stream-targets.ts DestinationNotAllowedError).
-// The enum IS lib/stream-destinations.ts's list, imported, not retyped.
-const DESTINATION_NOT_ALLOWED_ENVELOPE = {
-  type: "object",
-  required: ["ok", "error", "requestId"],
-  properties: {
-    ok: { const: false },
-    error: {
-      type: "object",
-      required: ["code", "message"],
-      properties: {
-        ...BASE_ERROR_PROPERTIES,
-        rule: {
-          type: "string",
-          enum: [...DESTINATION_REFUSALS],
-          description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused rtmpUrl — never the URL itself",
+// SCOPED to the 422 of the three stream routes that refuse a destination (Streaming R1, A18 — G2; POST and PATCH
+// stream-targets, POST stream-sessions): the allowlist's refusal carries `rule`, which check refused, as a real
+// HttpError `extra` (usecases/stream-targets.ts DestinationNotAllowedError). The enum IS lib/stream-destinations.ts's
+// list, imported, not retyped. Each route's variant names its own 422 codes on `code` (N1/N2, B2).
+function destinationRefusal422(codes: Record<string, string>) {
+  return {
+    type: "object",
+    required: ["ok", "error", "requestId"],
+    properties: {
+      ok: { const: false },
+      error: {
+        type: "object",
+        required: ["code", "message"],
+        properties: {
+          ...BASE_ERROR_PROPERTIES,
+          // N1/N2 (B2): the route's stable 422 codes (lib/stream-destinations.ts), named — the wire's `code` stays a string.
+          code: { type: "string", description: `This route's 422 codes — ${Object.entries(codes).map(([c, why]) => `${c}: ${why}`).join("; ")}` },
+          rule: {
+            type: "string",
+            enum: [...DESTINATION_REFUSALS],
+            description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused the ingest URL — never the URL itself",
+          },
         },
+        additionalProperties: true,
       },
-      additionalProperties: true,
+      requestId: { type: "string", format: "uuid" },
     },
-    requestId: { type: "string", format: "uuid" },
-  },
+  } as const;
+}
+const WHY_422 = {
+  [DESTINATION_NOT_ALLOWED]: "the destination is not on the allowlist (see `rule`)",
+  [STREAM_KEY_EMPTY]: "the stream key is blank once trimmed",
+  [DESTINATION_LABEL_EMPTY]: "the destination name is blank once trimmed",
+  [TARGET_UNREADABLE]: "the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added)",
 } as const;
+const pick422 = (...codes: (keyof typeof WHY_422)[]) => destinationRefusal422(Object.fromEntries(codes.map((c) => [c, WHY_422[c]])));
+const STREAM_TARGET_CREATE_422 = pick422(DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY);
+const STREAM_TARGET_PATCH_422 = pick422(DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE);
+const STREAM_SESSION_CREATE_422 = pick422(DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE);
 
 // SCOPED to POST /fixtures/{id}/stream-sessions (Streaming R1, lane C A21): the
 // typed refusals of `createSession` carry machine-readable extras as real
@@ -608,6 +626,32 @@ function scopedErrorEnvelope(extra: Record<string, unknown>) {
     },
   } as const;
 }
+const STREAM_TARGET_HOLDER_PROPERTIES = {
+  type: "object",
+  description: "On TARGET_IN_USE (409): the match whose stream holds the destination (always this organisation's)",
+  // B2 review nit: wireHolder always sends all six (null when empty), so a generated client must not see them optional.
+  required: ["fixtureId", "href", "matchNo", "courtName", "label", "state"],
+  properties: {
+    fixtureId: { type: ["string", "null"], format: "uuid", description: "The holding fixture; null if it was deleted" },
+    href: { type: ["string", "null"], description: "The holding fixture's organiser page; null if it was deleted" },
+    matchNo: { type: ["integer", "null"], description: "The holding fixture's number in its division; null if it was deleted" },
+    courtName: { type: ["string", "null"], description: "The holding fixture's court, when it has one" },
+    label: { type: "string", description: "The destination's own label" },
+    state: { enum: ["live", "waiting"], description: "live = a phone is sending (live or ending), or — on Go live only — an ENDED session whose Machine or destination output is still up and could not be released; waiting = requested, provisioning or warming" },
+  },
+} as const;
+// PATCH (Replace key) refuses TARGET_IN_USE or DESTINATION_DUPLICATE; DELETE (Remove) only TARGET_IN_USE — so only
+// PATCH's 409 documents `other` (M1, B1 review: an extra a route never sends is not documented on it).
+const STREAM_TARGET_DELETE_409 = scopedErrorEnvelope({ holder: STREAM_TARGET_HOLDER_PROPERTIES });
+const STREAM_TARGET_PATCH_409 = scopedErrorEnvelope({
+  holder: STREAM_TARGET_HOLDER_PROPERTIES,
+  other: {
+    type: "object",
+    description: "On DESTINATION_DUPLICATE (409): the active destination that already holds this stream key",
+    required: ["id", "label"],
+    properties: { id: { type: "string", format: "uuid" }, label: { type: "string" } },
+  },
+});
 const STREAM_SESSION_CREATE_ERRORS = {
   402: scopedErrorEnvelope({
     featureKey: { type: "string", description: "On no_credits (402): the entitlement whose match credits ran out (streaming.relay)" },
@@ -617,17 +661,14 @@ const STREAM_SESSION_CREATE_ERRORS = {
   }),
   409: scopedErrorEnvelope({
     sessionId: { type: ["string", "null"], format: "uuid", description: "On active_session (409): the fixture's running session — resume it rather than start another" },
+    // T3 (spec §5.5): the Directory's holder shape (stream-target-holders.ts wireHolder), nullable here alone.
     holder: {
+      ...STREAM_TARGET_HOLDER_PROPERTIES,
       type: ["object", "null"],
-      description: "On target_in_use (409): the fixture (always this organisation's) whose stream holds the destination; null when a concurrent start won the race and there is no holder to name",
-      properties: {
-        fixtureId: { type: ["string", "null"], format: "uuid", description: "The holding fixture; null if it was deleted" },
-        courtName: { type: ["string", "null"], description: "The holding fixture's court, when it has one" },
-        label: { type: "string", description: "The destination's own label" },
-      },
+      description: "On target_in_use (409): the match (always this organisation's) whose stream holds the destination — its number, organiser page, court and whether a phone is live or awaited; null when a concurrent start won the race and there is no holder to name",
     },
   }),
-  422: DESTINATION_NOT_ALLOWED_ENVELOPE,
+  422: STREAM_SESSION_CREATE_422,
   503: scopedErrorEnvelope({
     headroomMinutes: { type: "integer", description: "On storage_exhausted (503): recording minutes left once every active session's reservation is subtracted — below one session's maximum duration" },
   }),
@@ -643,8 +684,10 @@ const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> =
     409: TEMPLATE_VERSION_RETIRED_ENVELOPE,
     422: TEMPLATE_INSTANTIATION_FAILED_ENVELOPE,
   },
-  "POST /orgs/{id}/stream-targets": { 422: DESTINATION_NOT_ALLOWED_ENVELOPE },
+  "POST /orgs/{id}/stream-targets": { 422: STREAM_TARGET_CREATE_422 },
   "POST /fixtures/{id}/stream-sessions": STREAM_SESSION_CREATE_ERRORS,
+  "PATCH /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_PATCH_409, 422: STREAM_TARGET_PATCH_422 },
+  "DELETE /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_DELETE_409 },
 };
 
 function pathParams(path: string): object[] {

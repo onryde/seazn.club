@@ -14,7 +14,10 @@ import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
 import { MIGRATION } from "@/server/relay/__tests__/_stream-migration";
-import { DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, destinationRefusal } from "@/lib/stream-destinations";
+import {
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_KEY_EMPTY, STREAM_PLATFORMS,
+  STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
+} from "@/lib/stream-destinations";
 
 /** The quoted members of `<column> text … check (<column> in ('a','b'))` inside ONE table of V410. */
 function checkList(table: string, column: string): string[] {
@@ -100,34 +103,26 @@ describe("relay wire enums equal their declarations", () => {
 });
 
 describe("relay request schemas refuse what they must", () => {
-  const target = { kind: "youtube", label: "Club", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" };
+  const target = { kind: "youtube", label: "Club", streamKey: "k" };
 
-  it("CreateStreamTarget checks rtmpUrl's TYPE and LENGTH only — every destination rule is lib/stream-destinations.ts's, so its refusal reaches the typed 422 (A18)", () => {
-    // Off-list destinations PARSE here: were the schema to refuse them, the route would answer a generic
-    // 400 VALIDATION and DESTINATION_NOT_ALLOWED could never be sent. The one validator refuses each.
-    const offList = [
-      "https://a.rtmps.youtube.com/live2", // not an ingest scheme
-      "srt://live.cloudflare.com:778/x",   // the phone's leg, not a destination
-      "rtmps://a.rtmps.youtube.com",       // no path
-      "rtmp://127.0.0.1/live",             // an IP literal
-      "rtmp://seazn-relay.internal/live",  // the Fly private network
-      "",
-    ];
+  it("CreateStreamTarget (D6): the kind is exactly STREAM_PLATFORMS and the body carries NO ingest url — the server fills it from the platform's preset", () => {
+    // Every kind the one platform list declares parses; every stored kind outside it (the legacy rows a Directory
+    // still lists) is refused at create; an `rtmpUrl` field is refused by the strict schema, never silently dropped.
     let checked = 0;
-    for (const rtmpUrl of offList) {
-      expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl }).success, rtmpUrl).toBe(true);
-      expect(destinationRefusal(rtmpUrl), rtmpUrl).not.toBeNull();
+    for (const kind of STREAM_PLATFORMS) {
+      expect(S.CreateStreamTarget.safeParse({ ...target, kind }).success, kind).toBe(true);
       checked++;
     }
-    expect(checked).toBe(6);
-    // What the schema DOES own: a string of at most 500.
-    const at500 = `rtmps://a.rtmps.youtube.com/${"a".repeat(500 - "rtmps://a.rtmps.youtube.com/".length)}`;
-    expect(at500.length).toBe(500);
-    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: at500 }).success).toBe(true);
-    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: at500 + "a" }).success).toBe(false);
-    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: 42 }).success).toBe(false);
+    const legacy = S.StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    for (const kind of legacy) {
+      expect(S.CreateStreamTarget.safeParse({ ...target, kind }).success, kind).toBe(false);
+      checked++;
+    }
+    expect(legacy.length).toBeGreaterThan(0);
+    expect(checked).toBe(S.StreamTargetKind.options.length);
+    expect(S.CreateStreamTarget.safeParse({ ...target, rtmpUrl: STREAM_PLATFORM_PRESETS.youtube }).success).toBe(false);
     const missing: Record<string, unknown> = { ...target };
-    delete missing.rtmpUrl;
+    delete missing.kind;
     expect(S.CreateStreamTarget.safeParse(missing).success).toBe(false);
   });
 
@@ -176,11 +171,28 @@ describe("relay request schemas refuse what they must", () => {
   it("StreamSessionCurrent is strict, and its qr is the v1 payload or null — never a default object", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
+      health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
       restartFree: false,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // T4 D3: output is REQUIRED (null, or {state, since, elapsedMs}) — an absent field would read as "nothing to warn about".
+    const withoutOutput: Record<string, unknown> = { ...current };
+    delete withoutOutput.output;
+    expect(S.StreamSessionCurrent.safeParse(withoutOutput).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: {} }).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "healthy", since: "2026-09-30T12:00:00Z", elapsedMs: 0 } }).success).toBe(false);
+    // B2 fix round M6: the server's elapsed is REQUIRED — the client judges D3 on it, never on its own clock — and it is a
+    // whole, non-negative number of milliseconds.
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "connecting", since: "2026-09-30T12:00:00Z" } }).success, "no elapsedMs").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "connecting", since: "2026-09-30T12:00:00Z", elapsedMs: -1 } }).success, "negative").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state: "connecting", since: "2026-09-30T12:00:00Z", elapsedMs: 1.5 } }).success, "fractional").toBe(false);
+    let outputStates = 0;
+    for (const state of ["ok", "connecting", "rejected", "unknown"] as const) {   // ports.ts OutputState, the wire's source
+      expect(S.StreamSessionCurrent.safeParse({ ...current, output: { state, since: "2026-09-30T12:00:00Z", elapsedMs: 0 } }).success, state).toBe(true);
+      outputStates++;
+    }
+    expect(outputStates).toBe(S.StreamOutput.shape.state.options.length);
     // D3: creditUsed is REQUIRED and a boolean — an absent field must not read as "no credit used" on the client.
     const withoutCreditUsed: Record<string, unknown> = { ...current };
     delete withoutCreditUsed.creditUsed;
@@ -209,10 +221,12 @@ const STREAM_ROUTE = /\/(stream-sessions|stream-targets)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
 describe("the relay's routes are never key-reachable", () => {
-  it("ROUTES declares exactly the five relay operations (design §6.3 / §6.1)", () => {
+  it("ROUTES declares exactly the SEVEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove)", () => {
     expect(streamRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
+      "DELETE /orgs/:id/stream-targets/:targetId",
       "GET /fixtures/:id/stream-sessions/current",
       "GET /orgs/:id/stream-targets",
+      "PATCH /orgs/:id/stream-targets/:targetId",
       "POST /fixtures/:id/stream-sessions",
       "POST /fixtures/:id/stream-sessions/:sid/stop",
       "POST /orgs/:id/stream-targets",
@@ -257,18 +271,27 @@ describe("the relay's routes are never key-reachable", () => {
     const doc = buildOpenApiDocument() as Doc;
     const op = doc.paths["/api/v1/orgs/{id}/stream-targets"]!.post!;
     expect(op.summary).toContain("DESTINATION_NOT_ALLOWED");
-    // The summary names exactly the admitted providers: each one on the list, and LinkedIn (dropped in R1) nowhere.
+    // D6: the summary names exactly the platforms a destination can be CREATED on (STREAM_PLATFORMS) — every other
+    // allowlisted provider is a host a stored legacy row may still name, never one this route offers — and LinkedIn
+    // (dropped in R1) nowhere.
     const displayName: Record<string, string> = {
       youtube: "YouTube", facebook: "Facebook", twitch: "Twitch", kick: "Kick",
       vimeo: "Vimeo", restream: "Restream", cloudflare_stream: "Cloudflare Stream",
     };
     let named = 0;
+    let offered = 0;
     for (const provider of new Set(STREAM_DESTINATION_HOSTS.map((e) => e.provider))) {
       expect(displayName[provider], `no display name for ${provider}`).toBeDefined();
-      expect(op.summary).toContain(displayName[provider]);
+      if ((STREAM_PLATFORMS as readonly string[]).includes(provider)) {
+        expect(op.summary).toContain(displayName[provider]);
+        offered++;
+      } else {
+        expect(op.summary, provider).not.toContain(displayName[provider]);
+      }
       named++;
     }
     expect(named).toBe(7);
+    expect(offered).toBe(STREAM_PLATFORMS.length);
     expect(op.summary).not.toMatch(/linkedin/i);
     const err422 = op.responses["422"]!.content["application/json"].schema.properties.error;
     expect(Object.keys(err422.properties ?? {}).sort()).toEqual(["code", "current_seq", "message", "rule"]);
@@ -278,7 +301,13 @@ describe("the relay's routes are never key-reachable", () => {
     // pattern-matched, so a third route gaining `rule` still reds below.
     const sessionErr422 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["422"]!.content["application/json"].schema.properties.error;
     expect([...(sessionErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
-    const refusesDestinations = new Set(["post /api/v1/orgs/{id}/stream-targets", "post /api/v1/fixtures/{id}/stream-sessions"]);
+    // T2b: Replace key re-checks the platform's preset through the same validator (replaceTargetKey's `undialable`), so
+    // PATCH's 422 documents the same `rule` — the THIRD named route; DELETE has no 422 at all.
+    const patchErr422 = doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.patch!.responses["422"]!.content["application/json"].schema.properties.error;
+    expect([...(patchErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+    const refusesDestinations = new Set([
+      "post /api/v1/orgs/{id}/stream-targets", "post /api/v1/fixtures/{id}/stream-sessions", "patch /api/v1/orgs/{id}/stream-targets/{targetId}",
+    ]);
     let others = 0;
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
@@ -292,10 +321,40 @@ describe("the relay's routes are never key-reachable", () => {
     expect(others, "other routes with a 422 checked").toBeGreaterThan(0);
   });
 
+  // N1/N2 (B1 review): every 422 these routes answer carries a machine code (lib/stream-destinations.ts), and the spec
+  // names each one — in the route's summary AND on its 422's `code`. Which route throws which is the usecases' own
+  // (stream-targets.ts create/patch, stream-sessions.ts createSession); DELETE has no 422 at all.
+  it("N1/N2: each stream route's coded 422s are named in its summary and on its 422 `code`; DELETE documents no 422", () => {
+    type Doc = {
+      paths: Record<string, Record<string, { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties: { code: { description?: string } } } } } } } }> }>>;
+    };
+    const doc = buildOpenApiDocument() as Doc;
+    const CODED_422: [string, string, string[]][] = [
+      ["/api/v1/orgs/{id}/stream-targets", "post", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY]],
+      ["/api/v1/orgs/{id}/stream-targets/{targetId}", "patch", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE]],
+      ["/api/v1/fixtures/{id}/stream-sessions", "post", [DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE]],
+    ];
+    let checked = 0;
+    for (const [path, method, codes] of CODED_422) {
+      const op = doc.paths[path]![method]!;
+      const codeDoc = op.responses["422"]!.content["application/json"].schema.properties.error.properties.code.description ?? "";
+      for (const code of codes) {
+        expect(op.summary, `${method} ${path} summary names ${code}`).toContain(code);
+        expect(codeDoc, `${method} ${path} 422 code names ${code}`).toContain(code);
+        checked++;
+      }
+    }
+    expect(checked).toBe(9);
+    expect(doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.delete!.responses["422"]).toBeUndefined();
+    // The negative twin: a code a route never answers is not named on it — Go live never refuses a blank key or name.
+    const goLive = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
+    for (const never of [STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY]) expect(goLive.summary, never).not.toContain(never);
+  });
+
   // Task 11 follow-up (controller ruling): a start refused `target_in_use` names the fixture holding the destination —
   // `holder: { fixtureId, courtName, label }`, or null when the index race gives no holder to name. It is a wire field,
   // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
-  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, courtName, label }`; no other route's 409 gains `holder`", () => {
+  it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, href, matchNo, courtName, label, state }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder`, and PATCH alone DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
     type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
     type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
     const doc = buildOpenApiDocument() as Doc;
@@ -303,11 +362,36 @@ describe("the relay's routes are never key-reachable", () => {
     expect(Object.keys(err409.properties ?? {}).sort()).toEqual(["code", "current_seq", "holder", "message", "sessionId"]);
     const holder = err409.properties!.holder!;
     expect(holder.type, "holder is nullable (the race-loser refusal has no holder to name)").toEqual(["object", "null"]);
-    expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "label"]);
+    // T3 (spec §5.5): Go live's holder is the SAME shape as the Directory's (stream-target-holders.ts wireHolder) — the
+    // match's number, page and hold state beside the court and label.
+    expect(Object.keys(holder.properties ?? {}).sort()).toEqual(["courtName", "fixtureId", "href", "label", "matchNo", "state"]);
+    // T2b (spec §5.2): Replace key and Remove refuse TARGET_IN_USE naming the holder (the list's holder shape plus the
+    // destination's label — stream-target-holders.ts wireHolder), and Replace key ALONE refuses DESTINATION_DUPLICATE
+    // naming the other destination. M1 (B1 review): Remove never sends `other` (removeStreamTarget throws only
+    // TARGET_IN_USE or 404), so its 409 must not document it. Named routes, each with its exact key set.
+    const targetPath = "/api/v1/orgs/{id}/stream-targets/{targetId}";
+    const directory409: Record<"patch" | "delete", string[]> = {
+      patch: ["code", "current_seq", "holder", "message", "other"],
+      delete: ["code", "current_seq", "holder", "message"],
+    };
+    let directory = 0;
+    for (const method of ["patch", "delete"] as const) {
+      const e = doc.paths[targetPath]![method]!.responses["409"]!.content["application/json"].schema.properties.error;
+      expect(Object.keys(e.properties ?? {}).sort(), method).toEqual(directory409[method]);
+      expect(Object.keys(e.properties!.holder!.properties ?? {}).sort(), method).toEqual(["courtName", "fixtureId", "href", "label", "matchNo", "state"]);
+      if (method === "patch") expect(Object.keys(e.properties!.other!.properties ?? {}).sort(), method).toEqual(["id", "label"]);
+      directory++;
+    }
+    expect(directory).toBe(2);
+    // M4 (B1 review): a create that loses the destination race twice is StreamTargetVanishedError — a 409 "try again"
+    // on the wire, so POST documents a 409 (the plain envelope: no holder, no other).
+    const post409 = doc.paths["/api/v1/orgs/{id}/stream-targets"]!.post!.responses["409"]?.content["application/json"].schema.properties.error;
+    expect(Object.keys(post409?.properties ?? {}).sort(), "POST stream-targets documents 409").toEqual(["code", "current_seq", "message"]);
+    const documentsHolder = new Set(["post /api/v1/fixtures/{id}/stream-sessions", `patch ${targetPath}`, `delete ${targetPath}`]);
     let others = 0;
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
-        if (`${method} ${path}` === "post /api/v1/fixtures/{id}/stream-sessions") continue;
+        if (documentsHolder.has(`${method} ${path}`)) continue;
         const e = o.responses["409"]?.content["application/json"].schema.properties.error;
         if (!e) continue;
         expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");

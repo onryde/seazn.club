@@ -6,7 +6,7 @@
 // a scripted 409-once on deleteVideo; outputState rejects on a host that
 // says so and is `ok` otherwise (positive pair).
 import { describe, expect, it } from "vitest";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, FakeRecorder, FakeRunner } from "../fakes";
+import { FAKE_CONNECTING_KEY_PREFIX, FAKE_CONNECT_AFTER_MS_DEFAULT, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner, fakeRecoveringKey } from "../fakes";
 import { DELETE_RECORDING_AFTER_DAYS, INGEST_TIMEOUT_SECONDS, HOLD_SLACK_SECONDS } from "../config";
 import { pathTemplate } from "../sanitise";
 import { machineNameFor } from "../domain/runner";
@@ -134,6 +134,21 @@ describe("FakeIngest", () => {
     expect(outB).not.toBe(outA);          // one uid per output, not a constant
     expect(await fake.outputState(b.inputId)).toBe("ok");
     expect(fake.outputsFor(b.inputId)).toHaveLength(1);
+  });
+
+  it("outputState: a stream KEY starting with FAKE_REJECT_KEY_PREFIX is rejected on an allowlisted url, and the SAME url with another key is ok (D6: the url is a server preset, so the key is what a walkthrough can steer)", async () => {
+    const fake = new FakeIngest();
+    const url = "rtmp://a.rtmp.youtube.com/live2";
+    const bad = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    await fake.addOutput(bad.inputId, { url, streamKey: `${FAKE_REJECT_KEY_PREFIX}abc123` });
+    expect(await fake.outputState(bad.inputId)).toBe("rejected");
+    const good = await fake.createLiveInput({ sessionId: "s2", slot: 0 });
+    await fake.addOutput(good.inputId, { url, streamKey: "abc123" });
+    expect(await fake.outputState(good.inputId)).toBe("ok");
+    // The prefix is a PREFIX: the same letters later in a key do not reject.
+    const inner = await fake.createLiveInput({ sessionId: "s3", slot: 0 });
+    await fake.addOutput(inner.inputId, { url, streamKey: `abc-${FAKE_REJECT_KEY_PREFIX}` });
+    expect(await fake.outputState(inner.inputId)).toBe("ok");
   });
 
   it("C1: removeOutput takes exactly that output off its input — a repeat (Cloudflare's 404) resolves and changes nothing; the LIVE count per input and per destination only counts outputs on inputs that still exist", async () => {
@@ -421,5 +436,73 @@ describe("the provider-call recorder seam (ruling 13)", () => {
       ["fly", "destroyMachine", "DELETE", `${fly}/{id}`, runnerId, null],
     ]);
     expect(new Set(rec.calls.map((c) => `${c.status}/${c.latencyMs}/${c.attempt}`))).toEqual(new Set(["200/0/1"]));
+  });
+});
+
+describe("T4 — the fake's output state and session ids (spec §5.6 D3, §5.7)", () => {
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it("the four per-session calls record their session id on the provider-call row, exactly as the real adapter does", async () => {
+    const rec = new FakeRecorder();
+    const ingest = new FakeIngest({ clock: () => 0, recorder: rec });
+    const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    const out = await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" }, { sessionId: "sess-9" });
+    let checked = 0;
+    for (const [op, run] of [
+      ["inputStatus", () => ingest.inputStatus(inputId, { sessionId: "sess-9" })],
+      ["addOutput", () => ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k2" }, { sessionId: "sess-9" })],
+      ["outputState", () => ingest.outputState(inputId, { sessionId: "sess-9" })],
+      ["removeOutput", () => ingest.removeOutput(inputId, out, { sessionId: "sess-9" })],
+    ] as const) {
+      await run();
+      await flush();
+      expect(rec.calls.at(-1), op).toMatchObject({ operation: op, sessionId: "sess-9" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it(`a key starting with FAKE_CONNECTING_KEY_PREFIX reads unknown before the input connects and connecting after — never ok — and reads nothing else to decide`, async () => {
+    let now = 0;
+    const rec = new FakeRecorder();
+    const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000, recorder: rec });
+    const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: `${FAKE_CONNECTING_KEY_PREFIX}abc` });
+    await flush();
+    const before = rec.calls.length;
+    expect(await ingest.outputState(inputId)).toBe("unknown");
+    now = 3000;   // exactly connectAfterMs: inputStatus's own boundary (connected at >=)
+    expect(await ingest.outputState(inputId)).toBe("connecting");
+    await flush();
+    expect(rec.calls.slice(before).map((c) => c.operation), "no hidden inputStatus").toEqual(["outputState", "outputState"]);
+    // The positive pair: an ordinary key on a connected input is ok.
+    const plain = await ingest.createLiveInput({ sessionId: "s2", slot: 0 });
+    await ingest.addOutput(plain.inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "plain" });
+    now = 6000;
+    expect(await ingest.outputState(plain.inputId)).toBe("ok");
+  });
+
+  it("T9a (D3 walkthrough): a RECOVERING connecting key reads unknown before the connect, connecting for its duration after it, then ok — at exactly that duration, not one ms before", async () => {
+    let now = 0;
+    const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
+    const { inputId } = await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    const key = fakeRecoveringKey(45_000, "abc");
+    expect(key.startsWith(FAKE_CONNECTING_KEY_PREFIX), "still a connecting key — the same family the fake already reads").toBe(true);
+    await ingest.addOutput(inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: key });
+    const at = async (ms: number) => { now = ms; return ingest.outputState(inputId); };
+    const seen: [number, string][] = [];
+    for (const ms of [0, 2999, 3000, 3000 + 45_000 - 1, 3000 + 45_000, 3000 + 90_000]) seen.push([ms, await at(ms)]);
+    expect(seen).toEqual([
+      [0, "unknown"], [2999, "unknown"],                       // before the input connects: Cloudflare reports nothing
+      [3000, "connecting"], [3000 + 45_000 - 1, "connecting"], // the destination not receiving, for N s after the connect
+      [3000 + 45_000, "ok"], [3000 + 90_000, "ok"],             // then it receives, and stays receiving
+    ]);
+    // A plain connecting key (no duration) never recovers — the existing contract, unchanged.
+    const forever = await ingest.createLiveInput({ sessionId: "s2", slot: 0 });
+    await ingest.addOutput(forever.inputId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: `${FAKE_CONNECTING_KEY_PREFIX}def` });
+    now = 3000 + 10 * 45_000;
+    expect(await ingest.outputState(forever.inputId)).toBe("connecting");
+    // A malformed duration is refused at the key's making, never silently read as "forever".
+    for (const bad of [-1, 1.5, Number.NaN]) expect(() => fakeRecoveringKey(bad, "x"), String(bad)).toThrow();
   });
 });

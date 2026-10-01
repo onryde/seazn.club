@@ -23,12 +23,27 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { isValidElement } from "react";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
 import { builtinModules } from "@seazn/engine/sports";
 import { FixtureConsole } from "@/components/v2/fixture-console";
-import type { EventIn, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
+import { messages } from "@/lib/messages";
+import type { EventIn, FixtureStreamMount, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
+import { StreamSessionProvider } from "@/components/v2/stream-session-provider";
+import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
+import type { StreamSessionView } from "@/lib/stream-session-view";
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  // T9b: the "panel" mount renders the stream panel itself, which reads the URL (its return params).
+  usePathname: () => "/o/org/c/comp/d/div/f/1",
+  useSearchParams: () => new URLSearchParams(""),
+}));
+// The stop-only stream mount renders `PhoneStopProbe`, whose session hook asks for the page's confirm dialog. Its reads
+// run in effects, so they are inert under `renderToStaticMarkup`; the dialog itself is doubled (the page provides it).
+vi.mock("@/components/ui/confirm-provider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/confirm-provider")>()),
+  useConfirm: () => async () => true,
 }));
 
 const football = builtinModules.find((m) => m.key === "football")!;
@@ -71,8 +86,7 @@ const EVENTS: EventIn[] = [
   },
 ];
 
-function consoleHtml(
-  over: {
+type ConsoleOver = {
     status?: string;
     outcome?: unknown;
     deviceHandover?: boolean;
@@ -81,8 +95,17 @@ function consoleHtml(
     // with the panel it opens, rather than always defaulting both sides in.
     home?: SideInfo | null;
     away?: SideInfo | null;
-  } = {},
-): string {
+    /** The console's OWN canEdit (`canScore && !frozen`) — false is the read-only (frozen) shape. */
+    canEdit?: boolean;
+    /** Spec 2026-09-30 §2 — the page's stream mount and its `?stream=open`. */
+    stream?: FixtureStreamMount;
+    streamReturn?: boolean;
+    /** T9b: the page's shared stream session, seeded through `StreamSessionProvider`'s test seam (the server never
+     *  passes it). The console's own provider for the same fixture adds nothing beneath it, so this IS what it reads. */
+    streamView?: StreamSessionView | null;
+};
+/** The console element the page renders for `over` (no outer provider). */
+function consoleTree(over: ConsoleOver = {}) {
   const status = over.status ?? "in_play";
   const live: LiveState = {
     status,
@@ -91,7 +114,7 @@ function consoleHtml(
     state: {},
     outcome: over.outcome ?? null,
   };
-  return renderToStaticMarkup(
+  const tree = (
     <FixtureConsole
       fixture={{
         id: "f1",
@@ -106,8 +129,10 @@ function consoleHtml(
       away={over.away !== undefined ? over.away : side("e-away", "Summit Athletic")}
       initialState={live}
       initialEvents={status === "scheduled" ? [] : EVENTS}
-      canEdit
+      canEdit={over.canEdit ?? true}
       deviceHandover={over.deviceHandover ?? true}
+      stream={over.stream}
+      streamReturn={over.streamReturn}
       recorderNames={{ "user-1": "Dana Okafor" }}
       scorePadV2={{
         moduleVersion: football.version,
@@ -117,9 +142,52 @@ function consoleHtml(
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
       viewerPlan="community"
-    />,
+    />
+  );
+  return tree;
+}
+function consoleHtml(over: ConsoleOver = {}): string {
+  const tree = consoleTree(over);
+  return renderToStaticMarkup(
+    over.streamView === undefined ? tree : <StreamSessionProvider fixtureId="f1" initialView={over.streamView}>{tree}</StreamSessionProvider>,
   );
 }
+
+/** A minimal session as `current` returns it — what the Stream control and the stop probe read. */
+function streamView(state: StreamSessionView["state"], output: StreamSessionView["output"] = null): StreamSessionView {
+  return {
+    id: `s-${state}`,
+    fixtureId: "f1",
+    state,
+    output,
+    ingest: null,
+    startedAt: state === "live" || state === "ending" ? "2026-09-30T12:00:00.000Z" : null,
+    endedAt: null,
+    target: { id: "t1", kind: "youtube", label: "Club YouTube" },
+  } as unknown as StreamSessionView;
+}
+
+/** The "panel" mount — the whole Stream panel (entitled, not frozen) — with the relay off, so its Phone tab renders the
+ *  switched-off line and fetches nothing. */
+const PANEL_MOUNT: FixtureStreamMount = {
+  mode: "panel",
+  context: {
+    entitled: true,
+    relayEntitled: false,
+    relayDisabled: false,
+    sportKey: "football",
+    overlayDict: {},
+    orgId: "o-1",
+    streamBalance: 2,
+    streamSplit: null,
+    monthlyAllowance: 0,
+    currency: "gbp",
+    overlayKeys: {},
+  } satisfies StreamPanelContext,
+  fixture: { id: "f1", status: "finalized", outcome: null, scheduled_at: null, home_entrant_id: "e-home", away_entrant_id: "e-away" },
+  entrantNames: { "e-home": "Riverside FC", "e-away": "Summit Athletic" },
+  tz: "UTC",
+};
 
 /** The band's own markup, so "outlined only" is asserted about the BAND and
  *  not about a page that happens to have a primary button somewhere else. */
@@ -254,13 +322,150 @@ describe("phone composition — the match strip (spec §3.1)", () => {
   // "max-md:hidden". Every assertion below that has to tell the two classes
   // apart now requires a real class-boundary (a space, not a hyphen) before
   // "md:hidden", which "max-md:hidden" can never supply.
-  it("offers Hand over device twice: the desktop button hides on phones, the phone icon hides on desktop, and both share one accessible name", () => {
+  it("offers Remote scoring twice (D4): the desktop button hides on phones, the phone icon hides on desktop, and both share one accessible name", () => {
     const html = consoleHtml({ deviceHandover: true });
     expect(html).toMatch(/data-role="device-handover"[^>]*class="[^"]*\smax-md:hidden"/);
-    expect(html).toMatch(/data-role="device-handover"[^>]*>Hand over device</);
+    expect(html).toMatch(/data-role="device-handover"[^>]*>Remote scoring</);
     expect(html).toMatch(/<button[^>]*data-role="device-handover-phone"[^>]*>/);
     expect(html).toMatch(/data-role="device-handover-phone"[^>]*class="[^"]*\smd:hidden"/);
-    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="Hand over device"/);
+    expect(html).toMatch(/data-role="device-handover-phone"[^>]*aria-label="Remote scoring"/);
+  });
+
+  // Spec 2026-09-30 §2 (P1): Stream is the SECOND control that exists twice, beside Remote scoring.
+  it("offers Stream twice when mounted: desktop btn-ghost min-h-11 max-md:hidden, phone 44px md:hidden, one accessible name — and BEFORE the hand-over control in both places", () => {
+    const html = consoleHtml({ deviceHandover: true, stream: { mode: "stop-only" } });
+    expect(html).toMatch(/data-role="fixture-stream"[^>]*class="btn btn-ghost min-h-11\smax-md:hidden"/);
+    expect(html).toMatch(/data-role="fixture-stream"[^>]*>Stream</);
+    expect(html).toMatch(/data-role="fixture-stream-phone"[^>]*class="[^"]*\sh-11 w-11\s[^"]*\smd:hidden"/);
+    expect(html).toMatch(/data-role="fixture-stream-phone"[^>]*aria-label="Stream"/);
+    expect(html.indexOf('data-role="fixture-stream-phone"')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-role="fixture-stream-phone"')).toBeLessThan(html.indexOf('data-role="device-handover-phone"'));
+    expect(html.indexOf('data-role="fixture-stream"')).toBeLessThan(html.indexOf('data-role="device-handover"'));
+  });
+
+  it("renders neither Stream control without a mount — the positive pair's other half", () => {
+    const html = consoleHtml({ deviceHandover: true });
+    expect(html).not.toMatch(/data-role="fixture-stream"/);
+    expect(html).not.toMatch(/data-role="fixture-stream-phone"/);
+    expect(html).not.toMatch(/data-role="console-stream"/);
+  });
+
+  it("Review Focus 4: Stream stays reachable when the Scoring section does not render — finalized, cancelled, read-only (frozen) and TBD-sided", () => {
+    const shapes: { name: string; props: Parameters<typeof consoleHtml>[0] }[] = [
+      { name: "finalized", props: { status: "finalized" } },
+      { name: "cancelled", props: { status: "cancelled" } },
+      { name: "read-only", props: { canEdit: false } },
+      { name: "TBD side", props: { away: null } },
+    ];
+    let checked = 0;
+    for (const s of shapes) {
+      const html = consoleHtml({ ...s.props, stream: { mode: "stop-only" } });
+      expect(html, s.name).not.toMatch(/data-role="console-scoring"/);
+      expect(html, s.name).toMatch(/data-role="console-stream"/);
+      expect(html, s.name).toMatch(/data-role="fixture-stream"/);
+      expect(html, s.name).toMatch(/data-role="fixture-stream-phone"/);
+      // Closed, the card is an empty box on a phone — it hides there until the strip icon opens it.
+      expect(html, s.name).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
+      // …and it holds the ONE desktop Stream button.
+      expect(html.match(/data-role="fixture-stream"/g), s.name).toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // B3 fix round 1, Minor 6: the OPEN fallback card must show on a phone — the path an organiser at the court takes on a
+  // finalized or frozen fixture (the strip icon). Its closed class is pinned above; this pins the open one, anchored on the
+  // whole attribute value so a class list that still carries `max-md:hidden` cannot match.
+  // B3 N-2 (T9b): the card names itself ALWAYS — open or closed, in BOTH mounts. The panel inside no longer carries a
+  // visible title (spec §3.1: no heading, the frame is labelled for assistive tech), and the stop probe never did.
+  it("the OPEN fallback card shows on phones (no max-md:hidden); open or closed, in BOTH mounts, it keeps its own heading", () => {
+    const shapes: { name: string; props: Parameters<typeof consoleHtml>[0] }[] = [
+      { name: "finalized", props: { status: "finalized" } },
+      { name: "cancelled", props: { status: "cancelled" } },
+      { name: "read-only", props: { canEdit: false } },
+      { name: "TBD side", props: { away: null } },
+    ];
+    const mounts: { name: string; stream: FixtureStreamMount }[] = [
+      { name: "stop-only", stream: { mode: "stop-only" } },
+      { name: "panel", stream: PANEL_MOUNT },
+    ];
+    const heading = `<h2 class="text-sm font-semibold text-slate-700">${messages["stream.title"]}</h2>`;
+    let checked = 0;
+    for (const s of shapes) for (const mount of mounts) {
+      const at = `${s.name}, ${mount.name}`;
+      const open = consoleHtml({ ...s.props, stream: mount.stream, streamReturn: true });
+      expect(open, `${at}: open`).toMatch(/<section class="card p-5 max-md:p-3" data-role="console-stream">/);
+      expect(open, `${at}: the body is inside the card`).toMatch(/data-role="console-stream">[\s\S]*data-role="fixture-stream-body"/);
+      expect(open.split(heading).length - 1, `${at}: open, the card names itself once`).toBe(1);
+      const closed = consoleHtml({ ...s.props, stream: mount.stream });
+      expect(closed, `${at}: closed`).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
+      expect(closed.split(heading).length - 1, `${at}: closed, the card names itself once`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(shapes.length * mounts.length);
+    // The panel mount really rendered the panel: its frame carries the name the card's heading shows.
+    const panelOpen = consoleHtml({ status: "finalized", stream: PANEL_MOUNT, streamReturn: true });
+    expect(panelOpen).toContain(`data-testid="stream-panel" aria-label="${messages["stream.title"]}"`);
+    expect(panelOpen, "the panel has no visible heading of its own").not.toMatch(/data-testid="stream-panel"[^>]*>\s*<h3/);
+  });
+
+  // Spec §2 (T9b): the Stream button's dot and label read the page's ONE session — the same one the panel reads.
+  it("the Stream control's dot and label follow the shared session: none idle, red + 'Live' while live, amber while waiting — both twins", () => {
+    const dotOf = (html: string, role: string) => new RegExp(`data-role="${role}"[^>]*data-dot="([a-z]+)"`).exec(html)?.[1] ?? null;
+    const labelOf = (html: string) => /data-role="fixture-stream"[^>]*>(?:<span[^>]*><\/span>)?([^<]*)</.exec(html)?.[1];
+    const ariaOf = (html: string) => /data-role="fixture-stream-phone"[^>]*aria-label="([^"]*)"/.exec(html)?.[1];
+    const rows: { name: string; view: StreamSessionView | null; dot: string | null; label: string }[] = [
+      { name: "no session", view: null, dot: null, label: messages["stream.button"] },
+      { name: "waiting", view: streamView("warming"), dot: "amber", label: messages["stream.button"] },
+      { name: "live", view: streamView("live", { state: "ok", since: "2026-09-30T12:00:00.000Z", elapsedMs: 0 } as never), dot: "red", label: messages["stream.buttonLive"] },
+      { name: "live, D3", view: streamView("live", { state: "connecting", since: "2026-09-30T12:00:00.000Z", elapsedMs: 30_000 } as never), dot: "amber", label: messages["stream.buttonLive"] },
+      { name: "ended", view: streamView("completed"), dot: null, label: messages["stream.button"] },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      const html = consoleHtml({ stream: { mode: "stop-only" }, streamView: r.view });
+      expect(dotOf(html, "fixture-stream"), `${r.name}: desktop dot`).toBe(r.dot);
+      expect(dotOf(html, "fixture-stream-phone"), `${r.name}: phone dot`).toBe(r.dot);
+      expect(labelOf(html), `${r.name}: desktop label`).toBe(r.label);
+      // WCAG 1.4.1: the dot is colour only, so the icon twin's NAME says it too.
+      expect(ariaOf(html), `${r.name}: the phone twin's accessible name`).toBe(r.label);
+      if (r.dot === null) expect(html, `${r.name}: no data-dot at all`).not.toContain('data-dot="');
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(messages["stream.buttonLive"], "the case can witness the label change").not.toBe(messages["stream.button"]);
+  });
+
+  it("the fallback card is absent whenever the Scoring section renders (no second Stream button)", () => {
+    const html = consoleHtml({ stream: { mode: "stop-only" } });
+    expect(html).toMatch(/data-role="console-scoring"/);
+    expect(html).not.toMatch(/data-role="console-stream"/);
+    expect(html.match(/data-role="fixture-stream"/g)).toHaveLength(1);
+  });
+
+  it("?stream=open opens the stream panel on first render (streamReturn), and only then", () => {
+    const opened = consoleHtml({ stream: { mode: "stop-only" }, streamReturn: true });
+    expect(opened).toMatch(/data-role="fixture-stream"[^>]*aria-expanded="true"/);
+    expect(opened).toMatch(/data-role="fixture-stream-phone"[^>]*aria-expanded="true"/);
+    expect(opened).toMatch(/data-role="fixture-stream-body"/);
+    // One panel at a time: the hand-over panel is closed while Stream is open.
+    expect(opened).toMatch(/data-role="device-handover"[^>]*aria-expanded="false"/);
+    const closed = consoleHtml({ stream: { mode: "stop-only" } });
+    expect(closed).toMatch(/data-role="fixture-stream"[^>]*aria-expanded="false"/);
+    expect(closed).not.toMatch(/data-role="fixture-stream-body"/);
+    // A return param with no mount opens nothing (there is nothing to open).
+    expect(consoleHtml({ streamReturn: true })).not.toMatch(/data-role="fixture-stream-body"/);
+  });
+
+  it("an OPEN stream panel keeps a started, pad-less Scoring section on phones — exactly as an open hand-over panel does", () => {
+    // Decided football: the pad unmounts (no post-phase panel), so the section would hide on a phone…
+    const decided = { outcome: { kind: "win", winner: "e-home" } };
+    const scoringClass = (html: string) => /<section class="([^"]*)" data-role="console-scoring">/.exec(html)?.[1];
+    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" } })), "closed: nothing to show on a phone").toBe(
+      "card p-5 max-md:p-3 max-md:hidden",
+    );
+    // …unless the stream panel is open inside it.
+    expect(scoringClass(consoleHtml({ ...decided, stream: { mode: "stop-only" }, streamReturn: true }))).toBe("card p-5 max-md:p-3");
   });
 
   it("renders neither hand-over control when the page says this fixture may not be handed over", () => {
@@ -334,5 +539,31 @@ describe("phone composition — the match strip (spec §3.1)", () => {
     ).toBe("mb-3 flex flex-wrap items-center justify-between gap-2");
     expect(html).toMatch(/<h2[^>]*class="[^"]*\smax-md:hidden"[^>]*>[^<]*Scoring</);
     expect(html).toContain("Start match");
+  });
+});
+
+// B5 review m-1: the console's root ELEMENT TYPE must not depend on whether the page mounts a stream. A stop-only mount
+// whose session ends turns `stream` null on the next `router.refresh()` (every scored event); a root that flips between
+// `<StreamSessionProvider>` and the bare tree remounts the pad, the disclosures and the ledger mid-match. So the
+// provider is always there, and `enabled` says whether it polls.
+describe("the console root is stable across the stream mount (B5 review m-1)", () => {
+  it("every mount shape — none, stop-only, panel — renders the SAME root element type; only `enabled` differs", () => {
+    const shapes: { name: string; stream: FixtureStreamMount | undefined; polls: boolean }[] = [
+      { name: "no stream", stream: undefined, polls: false },
+      { name: "stop-only", stream: { mode: "stop-only" }, polls: true },
+      { name: "panel", stream: PANEL_MOUNT, polls: true },
+    ];
+    const roots = shapes.map((shape) => {
+      const island = renderIsland(FixtureConsole, consoleTree({ stream: shape.stream }).props);
+      const out = island.tree()[0];
+      island.unmount();
+      expect(isValidElement(out), `${shape.name}: the console rendered an element`).toBe(true);
+      return { ...shape, root: out! };
+    });
+    expect(roots.length).toBe(3);
+    for (const r of roots) {
+      expect(r.root.type, `${r.name}: the root is the session provider`).toBe(StreamSessionProvider);
+      expect((r.root.props as { enabled?: boolean }).enabled, `${r.name}: polls only with a stream mounted`).toBe(r.polls);
+    }
   });
 });

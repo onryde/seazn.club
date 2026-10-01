@@ -41,14 +41,14 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { baseUrl } from "@/lib/oauth";
-import { destinationRefusal } from "@/lib/stream-destinations";
+import { TARGET_UNREADABLE, checkDestination } from "@/lib/stream-destinations";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamSessionCreated, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { MAX_DURATION_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { StorageUsage } from "@/server/relay/ports";
-import { resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { defaultDeps, heartbeat } from "@/server/usecases/stream-sessions";
@@ -72,7 +72,6 @@ afterAll(() => {
 });
 
 const BASE = "https://test.local/api/v1";
-const YT = "rtmps://a.rtmps.youtube.com/live2";
 /** A pool no plausible number of foreign reservations can exhaust — the pool is ONE account across the whole test
  *  database (Task 10 deviation 4); only the storage test sets its own. */
 const ROOMY: StorageUsage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };
@@ -103,7 +102,7 @@ async function organiser(opts: { credits?: number; overlay?: boolean; relay?: bo
   // whole balance these refusal tests are written against.
   await spendMonthlyStreamGrant(auth.orgId);
   const streamKey = `k-${randomUUID().slice(0, 8)}`;
-  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", rtmpUrl: YT, streamKey });
+  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Club", streamKey });
   // The fake ingest never connects inside a test, so a passthrough session stays `warming` (its QR on show).
   const ingest = new FakeIngest({ connectAfterMs: 10 * 60_000 });
   ingest.storage = opts.storage ?? ROOMY;
@@ -345,12 +344,21 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const stale = await organiser();
     const retired = "rtmps://ingest.retired-provider.example:443/live";
     await resealTargetDestination(stale.target.id, { url: retired, streamKey: "k" });
-    const rule = destinationRefusal(retired);
-    expect(rule, "the fixture url must be one the allowlist refuses").not.toBeNull();
+    const verdict = checkDestination(retired);
+    expect(verdict.ok, "the fixture url must be one the allowlist refuses").toBe(false);
+    const rule = verdict.ok ? null : verdict.rule;
     const dest = await refuse("DESTINATION_NOT_ALLOWED", stale.fixtureId, { mode: "passthrough", targetId: stale.target.id }, 422);
     expect(dest).toMatchObject({ code: "DESTINATION_NOT_ALLOWED", rule });
     expect(JSON.stringify(dest)).not.toContain("retired-provider");
     expect(await sessionsOn(stale.fixtureId)).toBe(0);
+
+    // 422 TARGET_UNREADABLE (B2, was an unmapped 500) — the saved key will not open; the organiser replaces it. No extra.
+    const sealedAway = await organiser();
+    const unreadable = await rigTarget(sealedAway.auth.orgId, "Unreadable", "youtube");
+    const unread = await refuse("TARGET_UNREADABLE", sealedAway.fixtureId, { mode: "passthrough", targetId: unreadable }, 422);
+    expect(unread).toMatchObject({ code: TARGET_UNREADABLE });
+    expect(Object.keys(unread).sort()).toEqual(["code", "message"]);
+    expect(await sessionsOn(sealedAway.fixtureId)).toBe(0);
 
     // Truthful envelopes: every extra key the wire carried is a documented property of that route × status.
     const doc = buildOpenApiDocument() as {
@@ -359,7 +367,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const op = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
     let extrasChecked = 0;
     for (const s of seen) {
-      const documented = (op.responses[String(s.status)]?.content["application/json"].schema.properties.error.properties ?? {}) as Record<string, { properties?: Record<string, unknown> }>;
+      const documented = (op.responses[String(s.status)]?.content["application/json"].schema.properties.error.properties ?? {}) as Record<string, { properties?: Record<string, unknown>; required?: readonly string[] }>;
       for (const [key, value] of Object.entries(s.error)) {
         if (key === "code" || key === "message") continue;
         expect(documented, `${s.label} (${s.status}) carries \`${key}\` on the wire; the spec must document it`).toHaveProperty(key);
@@ -368,12 +376,14 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
         if (value !== null && typeof value === "object" && !Array.isArray(value)) {
           for (const inner of Object.keys(value)) {
             expect(documented[key]!.properties ?? {}, `${s.label}: \`${key}.${inner}\` is on the wire; the spec must document it`).toHaveProperty(inner);
+            // B2 review nit: wireHolder always sends every key (null when empty) — so the spec marks each one required.
+            expect(documented[key]!.required ?? [], `${s.label}: \`${key}.${inner}\` is always on the wire; the spec must mark it required`).toContain(inner);
             extrasChecked += 1;
           }
         }
       }
     }
-    expect(seen.map((s) => s.label)).toEqual(["no_credits", "plan_lacks_overlay", "storage_exhausted", "active_session", "target_in_use", "DESTINATION_NOT_ALLOWED"]);
+    expect(seen.map((s) => s.label)).toEqual(["no_credits", "plan_lacks_overlay", "storage_exhausted", "active_session", "target_in_use", "DESTINATION_NOT_ALLOWED", "TARGET_UNREADABLE"]);
     expect(extrasChecked, "anti-vacuity: the refusals above carry extras").toBeGreaterThanOrEqual(10);
   });
 
@@ -430,7 +440,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
   it("N3: a completion whose forced destroy FAILS still fills the replay link — the fill_replay effect after it runs", async () => {
     const o = await organiser();
     const watchUrl = `https://www.youtube.com/watch?v=${randomUUID().slice(0, 11)}`;
-    const replayTarget = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Replay", rtmpUrl: YT, streamKey: `k-${randomUUID().slice(0, 8)}`, watchUrl });
+    const replayTarget = await createStreamTarget(o.auth, o.auth.orgId, { kind: "youtube", label: "Replay", streamKey: `k-${randomUUID().slice(0, 8)}`, watchUrl });
     const sid = (await create(o.fixtureId, { mode: "composed", targetId: replayTarget.id })).body.data!.sessionId;
     await heartbeat(sid, o.runner.created[0]!.jobToken, { state: "playing" }, defaultDeps("http://app.test"));   // live: startedAt set
     const streamUrl = async () => (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${o.fixtureId}`)[0]!.stream_url;

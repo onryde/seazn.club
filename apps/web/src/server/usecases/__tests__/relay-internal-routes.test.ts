@@ -27,6 +27,7 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
 import { MAX_DURATION_MINUTES, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS } from "@/server/relay/config";
 import { failReasonFromExit, type ExitInfo } from "@/server/relay/domain/runner";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
@@ -59,7 +60,6 @@ const OOM_EXIT: ExitInfo = { exitCode: 137, oomKilled: true, requestedStop: fals
 /** A storage pool no plausible number of foreign reservations can exhaust — the pool is ONE account across the whole
  *  test database (Task 10 deviation 4), and these tests are not about it. */
 const ROOMY_STORAGE_MINUTES = 100_000_000;
-const YT = "rtmps://a.rtmps.youtube.com/live2";
 
 type Mode = "composed" | "passthrough";
 
@@ -75,7 +75,7 @@ async function session(mode: Mode = "composed") {
   await invalidateOrgEntitlements(auth.orgId);
   await grantCredits({ orgId: auth.orgId, delta: 1, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
   const streamKey = `k-${randomUUID().slice(0, 8)}`;
-  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", rtmpUrl: YT, streamKey });
+  const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", streamKey });
   // The fake ingest never connects inside a test: a passthrough session stays `warming` until the test moves it.
   const ingest = new FakeIngest({ connectAfterMs: 10 * 60_000 });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
@@ -158,9 +158,10 @@ describe.skipIf(!HAS_DB)("internal relay routes", () => {
     const body = (await json(ok)) as { ok: boolean; data: { sessionId: string; fixtureId: string; mode: string; maxDurationMinutes: number; target: { url: string; streamKey: string }; pageToken: string } };
     expect(body.ok).toBe(true);
     expect(body.data).toMatchObject({ sessionId: s.sessionId, fixtureId: s.fixtureId, mode: "composed", maxDurationMinutes: MAX_DURATION_MINUTES });
-    // The DECRYPTED destination, compared with what the organiser saved — not with anything the route computed.
+    // The DECRYPTED destination, compared with what the organiser saved (the key) and the platform's preset url (D6:
+    // the server fills it) — not with anything the route computed.
     expect(body.data.target.streamKey).toBe(s.streamKey);
-    expect(new URL(body.data.target.url).hostname).toBe(new URL(YT).hostname);
+    expect(body.data.target.url).toBe(STREAM_PLATFORM_PRESETS.youtube);
     // The page token is judged by the REAL verifier: a page credential for this sid, and never a job one.
     await expect(verifyRelayToken(body.data.pageToken, { sid: s.sessionId, scope: "relay-page" })).resolves.toMatchObject({ sid: s.sessionId });
     await expect(verifyRelayToken(body.data.pageToken, { sid: s.sessionId, scope: "relay-job" })).rejects.toMatchObject({ status: 401 });

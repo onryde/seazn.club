@@ -26,12 +26,16 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { createErrorCode } from "@/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS, createErrorCode, d3Warning, destinationWarning, phoneNoSignal } from "@/lib/stream-session-view";
 import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
-import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
-import { inputEnvelopesHex, resealTargetDestination, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
+import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
+import { routes } from "@/lib/routes";
+import { holdStateOf, type SessionState } from "@/server/relay/domain/session";
+import { inputEnvelopesHex, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -42,18 +46,20 @@ import {
 } from "@/server/relay/config";
 import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
-import type { RunnerSpec } from "@/server/relay/ports";
+import type { OutputState, ProviderCallRecorder, RunnerSpec } from "@/server/relay/ports";
 import * as telemetry from "@/server/relay/telemetry";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
   creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
 } from "../stream-credits";
-import { createStreamTarget } from "../stream-targets";
+import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
+import { getFixtureState } from "../fixtures";
+import { scoreEvent } from "../scoring";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
-  type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, heartbeat,
-  openStreamFixtureIds, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
+  type SessionDeps, apply, applyExpiry, createSession, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
+  holdStatesOf, openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
@@ -196,7 +202,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** `monthly: true` leaves this period's free match credits for createSession to grant (V426); by default the rig grants
  *  and spends them (`spendMonthlyStreamGrant`), so `credits` is the whole balance, as every pre-V426 test assumes. */
-async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; targetHost?: string; watchUrl?: string; kind?: "youtube" | "twitch" } = {}) {
+async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: boolean; credits?: number; monthly?: boolean; fixtures?: 1 | 2; streamKey?: string; watchUrl?: string; kind?: "youtube" | "twitch"; recorder?: ProviderCallRecorder } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null (_rig.ts:37), and fixture_stream_sessions.created_by is `uuid not null` — the
   // organiser who starts a stream is a REAL users row, so every `created_by` / `actor_user_id` below is a real id and
@@ -210,14 +216,15 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
   if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
   if (!opts.monthly) await spendMonthlyStreamGrant(auth.orgId);
   const target = await createStreamTarget(auth, auth.orgId, {
-    kind: opts.kind ?? "youtube", label: "Club",
-    rtmpUrl: `rtmps://${opts.targetHost ?? "a.rtmps.youtube.com"}/live2`, streamKey: "yt-key",
+    // D6: the url is the platform's preset (the server fills it); a rig steers the fake platform through the KEY
+    // (FAKE_REJECT_KEY_PREFIX makes it refuse the output).
+    kind: opts.kind ?? "youtube", label: "Club", streamKey: opts.streamKey ?? "yt-key",
     ...(opts.watchUrl ? { watchUrl: opts.watchUrl } : {}),
   });
   // The clock is LIVE (rows carry the DB's now()) and tickable: the fake
   // ingest connects `connectAfterMs` after creation on this same clock.
   let now = Date.now();
-  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: opts.connectAfterMs ?? 3000 });
+  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: opts.connectAfterMs ?? 3000, ...(opts.recorder ? { recorder: opts.recorder } : {}) });
   // Recording storage is ONE account-wide pool, so admission reserves against EVERY active session in the database —
   // including the ones other suites (stream-credits.test.ts seats `live` rows) and earlier runs left behind, which run
   // concurrently in CI's thread pool. The fake's default 1000-minute pool is exhausted by four of them, and every start
@@ -496,7 +503,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     // The positive pair: the same full pool refuses a start that has no running stream to name. Its own destination, so
     // the destination guard (decided before admission) is not what answers.
     const own = await createStreamTarget(r.auth, r.auth.orgId, {
-      kind: "youtube", label: "Court 2", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key-court-2",
+      kind: "youtube", label: "Court 2", streamKey: "yt-key-court-2",
     });
     await expect(createSession(r.auth, f2, body(own.id), r.deps)).rejects.toMatchObject({ status: 503, code: "storage_exhausted" });
     const rows = await sql<{ id: string; fixture_id: string }[]>`
@@ -532,7 +539,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("warming");
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live.state).toBe("live");
     expect(live.startedAt).not.toBeNull();
@@ -561,7 +568,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(warming.state).toBe("warming");
     expect(warming.creditUsed, "no consume row yet — the empty case").toBe(false);
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live.state).toBe("live");
     expect(live.creditUsed).toBe(true);
@@ -668,7 +675,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(warming).toMatchObject({ id: first.sessionId, state: "warming" });
     expect(warming.restartFree, "the empty case: nothing consumed on this fixture yet").toBe(false);
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live).toMatchObject({ state: "live", creditUsed: true, restartFree: true });
     await stopSession(r.auth, r.fixtureId, first.sessionId, r.deps);
@@ -721,17 +728,17 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     await currentSession(own.auth, own.fixtureId, own.deps);
     expect((await stopSession(own.auth, own.fixtureId, s2.sessionId, own.deps)).replayUrl).toBe("https://www.twitch.tv/club");
 
-    const tw = await rig({ credits: 1, kind: "twitch", targetHost: "live.twitch.tv", watchUrl: "https://www.twitch.tv/club" });
+    const tw = await rig({ credits: 1, kind: "twitch", watchUrl: "https://www.twitch.tv/club" });
     const s3 = await createSession(tw.auth, tw.fixtureId, body(tw.target.id), tw.deps);
     tw.tick(3000);
     await currentSession(tw.auth, tw.fixtureId, tw.deps);
     expect((await stopSession(tw.auth, tw.fixtureId, s3.sessionId, tw.deps)).replayUrl).toBeNull();
   });
 
-  // The brief's `reject.example` is REFUSED by the A18 allowlist at createStreamTarget (422), so the rig could not even
-  // save it. The fake rejects any output whose hostname contains "reject"; an allowlisted Restream host does.
+  // D6: the ingest url is the platform's preset, so no rig can name a "reject" host any more. The fake platform
+  // refuses an output whose stream KEY starts with FAKE_REJECT_KEY_PREFIX instead.
   it("a rejected destination fails the session with target_rejected", async () => {
-    const r = await rig({ credits: 1, targetHost: "reject.restream.io" });
+    const r = await rig({ credits: 1, streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}` });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(cur.state).toBe("failed");
@@ -837,7 +844,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(r.runner.created[0]!.attempt).toBe(1);
     const jobToken = r.runner.created[0]!.jobToken;
     const facts = await sessionFactsForJob(sessionId, jobToken, r.deps);
-    expect(facts.target).toEqual({ url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key" });
+    expect(facts.target).toEqual({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "yt-key" });
     expect(facts.mode).toBe("composed");
     expect(facts.pageToken.split(".")).toHaveLength(3);
     const pageToken = await mintRelayToken({ sid: sessionId, scope: "relay-page", expiresAt: new Date(Date.now() + 60_000) });
@@ -1940,10 +1947,12 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
   });
 
   it("SAMPLES and SNAPSHOTS: each heartbeat and each poll is a sample; an unchanged poll adds a sample but no observed event; admission writes a snapshot with the session, a refusal writes one without", async () => {
-    const r = await rig({ credits: 1 });   // C4
+    // The phone connects after two poll intervals, so two polls (one interval apart: I-1 serves a second poll inside
+    // the same interval from the first's sample) read it disconnected first.
+    const r = await rig({ credits: 1, connectAfterMs: 2 * STREAM_POLL_MS });   // C4
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    await currentSession(r.auth, r.fixtureId, r.deps); await currentSession(r.auth, r.fixtureId, r.deps);   // two disconnected polls
-    r.tick(3001); await currentSession(r.auth, r.fixtureId, r.deps);                                        // connected
+    await currentSession(r.auth, r.fixtureId, r.deps); r.tick(STREAM_POLL_MS); await currentSession(r.auth, r.fixtureId, r.deps);   // two disconnected polls
+    r.tick(STREAM_POLL_MS + 1); await currentSession(r.auth, r.fixtureId, r.deps);                                                  // connected
     const token = await mintRelayToken({ sid: sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) });
     await heartbeat(sessionId, token, { state: "playing", fps: 30, bitrateKbps: 4500, egressBytes: 1 }, r.deps);
     const samples = await sql<{ source: string; ingest_state: string | null; fps: number | null }[]>`select source, ingest_state, fps from fixture_stream_samples where session_id = ${sessionId} order by id`;
@@ -2004,6 +2013,51 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
   });
 });
 
+// B3 N-3 (re-review): DB-FREE — hoisted out of the DB-gated describe it sat in, so the I-1 kill tests run in EVERY
+// run, the sharded unit job's included, not only where DATABASE_URL is set.
+// Spec 2026-09-30 §2 (T6): `openStreamStates` feeds the run sheet's chip (the division's path to Stop) and the fixture
+// page's Stop-only mount. ONE guard decides "active" — the SQL `state in ACTIVE_STATES` filter. The fold after it
+// (`holdStatesOf`) REPORTS a row that got past it and skips it — B3 fix round 1, I-1 (controller ruling): the guard
+// must never block the organiser's page or its Stop, so it reports to Sentry instead of throwing.
+describe("holdStatesOf — the fold after the SQL filter (I-1: report and skip, never throw)", () => {
+  const row = (id: string, fixtureId: string, state: string) => ({ id, fixture_id: fixtureId, state: state as SessionState });
+  const reports = () =>
+    sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.open_stream_states");
+
+  it("every ACTIVE row maps to the hold state the domain declares; none is reported", () => {
+    sentry.captureError.mockClear();
+    let checked = 0;
+    for (const state of ACTIVE_STATES) {
+      expect(holdStatesOf([row(`s-${state}`, "fx", state)]), state).toEqual({ fx: holdStateOf(state) });
+      checked++;
+    }
+    expect(checked).toBe(ACTIVE_STATES.length);
+    expect(checked, "anti-vacuity: the declared ACTIVE set is not empty").toBeGreaterThan(0);
+    expect(reports(), "an active row is never an alarm").toEqual([]);
+    expect(holdStatesOf([]), "the empty case").toEqual({});
+  });
+
+  it("a TERMINAL or UNKNOWN row is skipped AND reported — session id and state only — and the page still gets every other row", () => {
+    const strays = [...TERMINAL_STATES, "archived_by_a_future_migration"];
+    let checked = 0;
+    for (const state of strays) {
+      sentry.captureError.mockClear();
+      const out = holdStatesOf([row("s-ok", "fx-ok", "live"), row(`s-${state}`, "fx-stray", state)]);
+      expect(out, `${state}: skipped, and the good row still maps`).toEqual({ "fx-ok": "live" });
+      expect(Object.prototype.hasOwnProperty.call(out, "fx-stray"), `${state}: no key at all (not a null value)`).toBe(false);
+      const sent = reports();
+      expect(sent, `${state}: reported once`).toHaveLength(1);
+      const [err, ctx] = sent[0]! as [Error, { orgId?: string; route: string; extra: Record<string, unknown> }];
+      expect(err).toBeInstanceOf(Error);
+      expect(ctx.extra, `${state}: the session id and state, nothing else`).toEqual({ sessionId: `s-${state}`, state });
+      expect(Object.keys(ctx).sort(), `${state}: no other context`).toEqual(["extra", "route"]);
+      checked++;
+    }
+    expect(checked).toBe(strays.length);
+    expect(TERMINAL_STATES.length, "anti-vacuity: the declared TERMINAL set is not empty").toBeGreaterThan(0);
+  });
+});
+
 describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every timed exit", () => {
   it("G7 (A22(d)): Cloudflare's FRACTIONAL storage minutes are admitted — used rounds UP and the limit DOWN into the integer columns — instead of 22P02-ing every start", async () => {
     const r = await rig({ credits: 1 });
@@ -2038,7 +2092,7 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
   });
 
   it("P1-F-b: a FAILED session carries fail_reason and NO end_reason, even when it was ending first (the DDL check would refuse the other order)", async () => {
-    const r = await rig({ credits: 1, targetHost: "reject.restream.io" });
+    const r = await rig({ credits: 1, streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}` });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(cur.state).toBe("failed");
@@ -2493,36 +2547,85 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     expect(after).toEqual({ monthly: pro, pack: 2, total: pro + 2, monthlyAllowance: pro });
   });
 
-  it("F1: openStreamFixtureIds names exactly the fixtures with a session still UP — every active state in, every terminal state out, another org's never", async () => {
-    // The billing-frozen division page mounts a stop probe for each id this returns, so an org whose competition froze
-    // mid-stream can still stop it. The states come from the engine's own ACTIVE_STATES / TERMINAL_STATES.
+  /** SETUP: a session row in `state` on `fixtureId`, created `ageSec` seconds ago (so a case controls which is newest). Two
+   *  ACTIVE rows at once need two destinations (V421: one active session per target). */
+  const seedSessionRow = async (r: Awaited<ReturnType<typeof rig>>, fixtureId: string, state: SessionState, ageSec: number, targetId = r.target.id): Promise<string> => {
+    const [row] = await sql<{ id: string }[]>`
+      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at, created_at,
+                                           sport_key, competition_id, division_id, entitlement_via_override)
+      select ${fixtureId}, ${r.auth.orgId}, 'passthrough', ${state}, ${targetId}, ${r.auth.userId}, now(),
+             now() - make_interval(secs => ${ageSec}), d.sport_key, d.competition_id, f.division_id, true
+        from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
+      returning id`;
+    return row!.id;
+  };
+
+  it("openStreamStates: every ACTIVE state maps to the hold state the domain declares; every terminal state, an unlisted fixture and another org's read are absent", async () => {
     const r = await rig({ fixtures: 2 });
     const [a, b] = r.fixtureIds as [string, string];
-    expect(await openStreamFixtureIds(r.auth, []), "the empty case asks nothing").toEqual([]);
-    expect(await openStreamFixtureIds(r.auth, [a, b]), "no session at all").toEqual([]);
-    const [row] = await sql<{ id: string }[]>`
-      insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
-                                           sport_key, competition_id, division_id, entitlement_via_override)
-      select ${a}, ${r.auth.orgId}, 'passthrough', 'completed', ${r.target.id}, ${r.auth.userId}, now(),
-             d.sport_key, d.competition_id, f.division_id, true
-        from fixtures f join divisions d on d.id = f.division_id where f.id = ${a}
-      returning id`;
+    expect(await openStreamStates(r.auth, []), "the empty case asks nothing").toEqual({});
+    expect(await openStreamStates(r.auth, [a, b]), "no session at all").toEqual({});
+    const id = await seedSessionRow(r, a, "completed", 0);
+    const other = await seedOrg();
     let checked = 0;
     for (const state of [...ACTIVE_STATES, ...TERMINAL_STATES]) {
-      await sql`update fixture_stream_sessions set state = ${state} where id = ${row!.id}`;
-      const open = ACTIVE_STATES.includes(state);
-      expect(await openStreamFixtureIds(r.auth, [a, b]), state).toEqual(open ? [a] : []);
+      await sql`update fixture_stream_sessions set state = ${state} where id = ${id}`;
+      // The expectation is the DOMAIN's declaration (relay/domain/session.ts), never this function's own table.
+      const hold = holdStateOf(state);
+      expect(hold !== null, `${state}: the domain calls it held exactly when it is ACTIVE`).toBe(ACTIVE_STATES.includes(state));
+      expect(await openStreamStates(r.auth, [a, b]), state).toEqual(hold ? { [a]: hold } : {});
       // Tenancy: another org naming the same fixture ids reads nothing.
-      const other = await seedOrg();
-      expect(await openStreamFixtureIds(other.auth, [a, b]), `${state}, another org`).toEqual([]);
+      expect(await openStreamStates(other.auth, [a, b]), `${state}, another org`).toEqual({});
+      // An id outside the list is never reported, even while it is up.
+      expect(await openStreamStates(r.auth, [b]), `${state}, unlisted`).toEqual({});
       checked++;
     }
     expect(checked).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
-    expect(checked).toBeGreaterThan(0);
-    // An id outside the list is never reported, even while it is up.
-    await sql`update fixture_stream_sessions set state = 'live' where id = ${row!.id}`;
-    expect(await openStreamFixtureIds(r.auth, [b])).toEqual([]);
-    await sql`update fixture_stream_sessions set state = 'completed' where id = ${row!.id}`;
+    // Both hold states were witnessed, so neither answer can be a constant.
+    expect(new Set(ACTIVE_STATES.map((s) => holdStateOf(s)))).toEqual(new Set(["live", "waiting"]));
+    await sql`update fixture_stream_sessions set state = 'completed' where id = ${id}`;
+  });
+
+  it("openStreamStates: a fixture whose NEWEST rows are terminal still reports its active session — terminal rows never reach the loop (the SQL filter is the one guard)", async () => {
+    const r = await rig({ fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "twitch", label: "Second", streamKey: "tw-key" });
+    const live = await seedSessionRow(r, a, "live", 60);
+    const provisioning = await seedSessionRow(r, b, "provisioning", 60, second.id);
+    let terminal = 0;
+    for (const s of TERMINAL_STATES) {
+      await seedSessionRow(r, b, s, 0, second.id); // NEWER than b's active row: `distinct on … created_at desc` would pick it
+      terminal++;
+    }
+    expect(terminal).toBe(TERMINAL_STATES.length);
+    expect(await openStreamStates(r.auth, [a, b])).toEqual({ [a]: holdStateOf("live"), [b]: holdStateOf("provisioning") });
+    await sql`update fixture_stream_sessions set state = 'completed' where id in (${live}, ${provisioning})`;
+  });
+
+  it("openStreamStates: ONLY terminal sessions on a fixture — absent (each terminal state alone)", async () => {
+    let checked = 0;
+    for (const s of TERMINAL_STATES) {
+      const r = await rig();
+      await seedSessionRow(r, r.fixtureId, s, 0);
+      expect(await openStreamStates(r.auth, [r.fixtureId]), s).toEqual({});
+      checked++;
+    }
+    expect(checked).toBe(TERMINAL_STATES.length);
+  });
+
+  it("§9.1 sequence — the run-sheet chip's state through a real session: waiting while the camera warms, live, then the organiser's Stop, then absent", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const before = (await currentSession(r.auth, r.fixtureId, r.deps))!.state;
+    expect(holdStateOf(before), `premise: ${before} is a waiting state`).toBe("waiting");
+    expect(await openStreamStates(r.auth, [r.fixtureId]), "the camera is warming").toEqual({ [r.fixtureId]: "waiting" });
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+    expect(await openStreamStates(r.auth, [r.fixtureId]), "on air").toEqual({ [r.fixtureId]: "live" });
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    const [{ state }] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sessionId}`;
+    expect(state, "the organiser's Stop ends the session (PATHS: completed)").toBe("completed");
+    expect(await openStreamStates(r.auth, [r.fixtureId]), "after Stop the chip is gone").toEqual({});
   });
 
   it("F18: a `requested` row nobody admitted is failed with admission_timeout on the next read (the net for a crash between the insert and provisioning)", async () => {
@@ -2764,6 +2867,22 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
 // DIFFERENT stages (_rig.ts's own loud invariant), which is exactly what the
 // fixture index cannot separate.
 // ---------------------------------------------------------------------------
+/** A fixture's number and its organiser page, read from its own rows (stream-target-holders.test.ts's read). */
+async function fixturePage(fixtureId: string): Promise<{ matchNo: number; href: string }> {
+  const [fx] = await sql<{ fixture_no: number; org: string; comp: string; div: string }[]>`
+    select f.fixture_no, o.slug as org, c.slug as comp, d.slug as div from fixtures f
+      join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+      join organizations o on o.id = c.org_id where f.id = ${fixtureId}`;
+  return { matchNo: fx!.fixture_no, href: routes.fixture(fx!.org, fx!.comp, fx!.div, fx!.fixture_no) };
+}
+
+/** Puts `fixtureId` on a court named `name` at a venue of `orgId` (the G-T1 idiom). */
+async function onCourt(orgId: string, fixtureId: string, name: string): Promise<void> {
+  const [v] = await sql<{ id: string }[]>`insert into venues (org_id, name, address) values (${orgId}, 'Main Arena', '12 Court Road') returning id`;
+  const [c] = await sql<{ id: string }[]>`insert into courts (venue_id, org_id, name) values (${v!.id}, ${orgId}, ${name}) returning id`;
+  await sql`update fixtures set court_id = ${c!.id} where id = ${fixtureId}`;
+}
+
 describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live session per target)", () => {
   async function twoFixturesOneTarget() {
     const r = await rig({ credits: 2, fixtures: 2 });
@@ -2801,6 +2920,109 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     }
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${b}`;
     expect(n).toBe(0);                                               // refused BEFORE the insert
+  });
+
+  // T3 (spec §3.3, §5.5): the refusal NAMES the match holding the destination — its number, its court, its organiser
+  // page and whether a phone is live or still awaited. Every expected field is read from the holder fixture's OWN rows
+  // (routes.fixture over its slugs, stream-target-holders.test.ts's read) and the hold state from the domain's
+  // holdStateOf, never from the usecase's output. `toEqual` on the holder: the wire carries exactly these six keys.
+  it("T3 target_in_use NAMES the match: a LIVE holder and a WARMING holder each answer {fixtureId, matchNo, href, courtName, label, state} — live, then waiting", async () => {
+    const seen = new Set<string>();
+    for (const connect of [true, false]) {
+      const r = await rig({ credits: 2, fixtures: 2, connectAfterMs: connect ? 3000 : 24 * 3_600_000 });
+      const [a, b] = r.fixtureIds as [string, string];
+      const court = `Court ${randomUUID().slice(0, 4)}`;
+      await onCourt(r.auth.orgId, a, court);
+      await createSession(r.auth, a, body(r.target.id), r.deps);
+      if (connect) r.tick(3000);
+      const held = (await currentSession(r.auth, a, r.deps))!;
+      expect(held.state, "the holder reached the state this leg is about").toBe(connect ? "live" : "warming");
+      const page = await fixturePage(a);
+      const err = await createSession(r.auth, b, body(r.target.id), r.deps).catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+      expect((err as HttpError).extra).toEqual({
+        holder: { fixtureId: a, matchNo: page.matchNo, href: page.href, courtName: court, label: r.target.label, state: holdStateOf(held.state as SessionState) },
+      });
+      seen.add(((err as HttpError).extra!.holder as { state: string }).state);
+    }
+    expect([...seen].sort(), "both hold states were witnessed").toEqual(["live", "waiting"]);
+  });
+
+  // F-A5 (owner, 2026-09-29: "a match already streaming answers a second start before credits, destination or storage
+  // are weighed"), applied to the holder guard by the owner's answer B to the B2 re-review's point 6 (2026-09-30): a
+  // stale second tab's Go live on a fixture that is ALREADY streaming is answered "already running", even when the
+  // destination it picked is held by another match. The expected answer is the unheld twin's — the same fixture's own
+  // second Go live on its own destination — so the held case is held to exactly what "already running" already means.
+  it("F-A5 over the holder guard: a fixture ALREADY streaming answers a second Go live 409 active_session even when the destination it picks is HELD by another match — exactly the unheld twin's answer, nothing spent, nothing started; once it has stopped, the same Go live is target_in_use naming the holder's match", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 2, fixtures: 2, recorder: rec });
+    const deps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const [a, b] = r.fixtureIds as [string, string];
+    const two = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID()}` });
+    const running = await createSession(r.auth, a, body(r.target.id), deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, a, deps))!.state, "A is really streaming").toBe("live");
+    await createSession(r.auth, b, body(two.id), deps);
+    const holder = (await currentSession(r.auth, b, deps))!;
+    expect(["warming", "live"], "B really holds the second destination").toContain(holder.state);
+    const money = async () => ({
+      balance: await creditBalance(sql, r.auth.orgId),
+      ledger: (await sql<{ n: number; net: number }[]>`
+        select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0],
+    });
+    const aRows = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${a}`)[0]!.n;
+    const attempt = async (targetId: string) => {
+      const before = { money: await money(), rows: await aRows() };
+      await new Promise((res) => setImmediate(res));
+      rec.calls.length = 0;
+      const err = await createSession(r.auth, a, body(targetId), deps).then(() => null, (e: unknown) => e);
+      await new Promise((res) => setImmediate(res));
+      expect(await money(), "a refusal spends nothing").toEqual(before.money);
+      expect(await aRows(), "a refusal writes no session row").toBe(before.rows);
+      expect(r.runner.created, "no Machine").toEqual([]);
+      expect(err).toBeInstanceOf(HttpError);
+      const e = err as HttpError;
+      return { status: e.status, code: e.code, extra: e.extra ?? null, calls: rec.calls.map((c) => `${c.operation}:${c.sessionId ?? "-"}`) };
+    };
+    const unheld = await attempt(r.target.id);
+    expect(unheld, "the twin: already running, on its own destination").toMatchObject({ status: 409, code: "active_session" });
+    const held = await attempt(two.id);
+    expect(held, "held by another match: still 'already running' — F-A5 — never target_in_use").toEqual(unheld);
+    // …and B's hold is untouched by the refused attempt.
+    expect((await currentSession(r.auth, b, deps))!.id).toBe(holder.id);
+    // The other side of the ruling: A stopped, the same Go live is the holder's refusal, naming B's match, and asks no provider.
+    await stopSession(r.auth, a, running.sessionId, deps);
+    expect(await currentSession(r.auth, a, deps).then((s) => s?.state ?? null), "A has stopped").not.toBe("live");
+    const page = await fixturePage(b);
+    const afterStop = await attempt(two.id);
+    expect(afterStop).toMatchObject({ status: 409, code: "target_in_use", calls: [] });
+    expect((afterStop.extra as { holder: { fixtureId: string; matchNo: number } }).holder).toMatchObject({ fixtureId: b, matchNo: page.matchNo });
+  });
+
+  it("F-A5 carry: a start that skipped the destination doors because its fixture was streaming is refused active_session even if that session ENDS before the admission transaction — it never goes on to take a destination another match holds", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const [a, b] = r.fixtureIds as [string, string];
+    const two = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID()}` });
+    const running = await createSession(r.auth, a, body(r.target.id), r.deps);
+    await createSession(r.auth, b, body(two.id), r.deps);
+    // The storage read sits between the door decision and the admission transaction: A's session ends inside it.
+    const real = r.ingest.storageUsage.bind(r.ingest);
+    let ended = 0;
+    const spy = vi.spyOn(r.ingest, "storageUsage").mockImplementation(async () => {
+      await sql`update fixture_stream_sessions set state = 'completed', ended_at = now(), end_reason = 'stopped' where id = ${running.sessionId}`;
+      ended++;
+      return real();
+    });
+    let err: unknown;
+    try {
+      err = await createSession(r.auth, a, body(two.id), r.deps).then(() => null, (e: unknown) => e);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(ended, "the race really ran").toBe(1);
+    expect(err).toMatchObject({ status: 409, code: "active_session" });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${a}`;
+    expect(n, "no second session for A").toBe(1);
   });
 
   it("G-T2 ADMITS after `completed`: a holder in the index's `completed` terminal state no longer holds the destination, so fixture B starts on the SAME target (failure class 13's other direction — a guard nothing releases bricks a paid destination)", async () => {
@@ -2869,13 +3091,19 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     .map((e) => ({ result: e.result, reason: e.payload.reason ?? null, fixtureId: e.payload.fixtureId ?? null, machineId: e.payload.machineId ?? null }));
 
   it.each(["composed", "passthrough"] as const)("I1 (%s B), the destroy keeps FAILING: another fixture's ended session whose Machine is still listed holds the destination — B's admission TRIES the destroy (recorded on A's ledger: reason admission, B's fixture), it fails, and B is refused 409 target_in_use naming that court with nothing created (mutant: the prior-Machine query scoped to this fixture only → 201)", async (mode) => {
-    const { r, b, old, machine, flaky, destroyCalls } = await zombieOnTarget();
+    const { r, a, b, old, machine, flaky, destroyCalls } = await zombieOnTarget();
     const callsBefore = destroyCalls.length;
     const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    const page = await fixturePage(a);
     try {
       const err = await createSession(r.auth, b, body(r.target.id, mode), flaky).catch((e: unknown) => e);
       expect(err).toMatchObject({ status: 409, code: "target_in_use" });
       expect((err as Error).message).toContain("Court 7");
+      // T3: an ENDED session whose Machine may still push reads `live` — to a person the destination is still receiving
+      // from that match — and names it like an active holder does (its number and page from A's own rows).
+      expect((err as HttpError).extra).toEqual({
+        holder: { fixtureId: a, matchNo: page.matchNo, href: page.href, courtName: "Court 7", label: r.target.label, state: "live" },
+      });
       expect(ingestSpy).not.toHaveBeenCalled();
     } finally {
       ingestSpy.mockRestore();
@@ -2992,6 +3220,73 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id} and state in ${sql([...ACTIVE_STATES])}`;
     expect(n).toBe(1);
+  });
+  // T2b (spec §5.2, D2): an ARCHIVED destination is absent to Go live — the existing not-found shape, nothing made.
+  // A credit on the rig: `admit` answers no_credits BEFORE target_not_found (domain/session.ts), so a creditless rig
+  // would be refused 402 and never reach the target — the brief's `rig()` was that premise.
+  it("an ARCHIVED target is refused at createSession with the existing not-found shape: 404, no live input, no machine, no session row", async () => {
+    const r = await rig({ credits: 1 });
+    await removeStreamTarget(r.auth, r.auth.orgId, r.target.id);
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    try {
+      await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps))
+        .rejects.toMatchObject({ status: 404, message: "stream target not found" });
+      expect(ingestSpy).not.toHaveBeenCalled();
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    expect(r.runner.created).toEqual([]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${r.fixtureId}`;
+    expect(n).toBe(0);
+  });
+
+  it("the ROW LOCK: createSession WAITS on a transaction that holds the target FOR UPDATE, and an archive committed there makes it 404", async () => {
+    const r = await rig({ credits: 1 });   // a credit: see the archived case above (no_credits outranks target_not_found)
+    let release!: () => void;
+    const held = new Promise<void>((res) => { release = res; });
+    let locked!: () => void;
+    const lockTaken = new Promise<void>((res) => { locked = res; });
+    const holder = sql.begin(async (tx) => {
+      expect(await lockStreamTarget(tx, r.auth.orgId, r.target.id)).toBe(true);
+      locked();
+      await held;
+      await archiveStreamTarget(tx, r.auth.orgId, r.target.id);
+    });
+    try {
+      await lockTaken;
+      let settled = false;
+      const start = createSession(r.auth, r.fixtureId, body(r.target.id), r.deps)
+        .finally(() => { settled = true; });
+      start.catch(() => {});                                 // observed below; no unhandled rejection meanwhile
+      await new Promise((res) => setTimeout(res, 300));
+      expect(settled, "createSession did not wait on the target row lock").toBe(false);
+      release();
+      await holder;
+      await expect(start).rejects.toMatchObject({ status: 404, message: "stream target not found" });
+    } finally {
+      release();                                             // a red above must not leave the holder tx open
+      await holder.catch(() => {});
+    }
+  });
+
+  // §9.1: the seam between the WRITER (replaceTargetKey reseals the stored destination and refingerprints) and the READER
+  // (createSession's readTargetSecret and addOutput) — nothing else drives both.
+  it("§9.1 sequence — replace a key, THEN go live: the output dials the NEW key, and the old key is dialled nowhere", async () => {
+    const r = await rig({ credits: 1 });
+    const before = await sql.begin((tx) => readTargetSecret(tx, r.auth.orgId, r.target.id));
+    const newKey = `k-${randomUUID()}`;
+    expect(newKey).not.toBe(before.streamKey);                        // or the test cannot tell the two apart
+    await patchStreamTarget(r.auth, r.auth.orgId, r.target.id, { streamKey: newKey });
+    const added = vi.spyOn(r.ingest, "addOutput");
+    try {
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      expect(added).toHaveBeenCalledTimes(1);
+      expect(added.mock.calls[0]![1]).toMatchObject({ url: before.url, streamKey: newKey });
+    } finally {
+      added.mockRestore();
+    }
+    expect(r.ingest.liveOutputsTo({ url: before.url, streamKey: newKey })).toBe(1);
+    expect(r.ingest.liveOutputsTo(before)).toBe(0);
   });
 });
 
@@ -3210,7 +3505,8 @@ describe.skipIf(!HAS_DB)("the lifecycle as a SEQUENCE — drawn orderings, invar
 // own saved target (url + key), never read back from the code under test.
 describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is removed on every way it ends", () => {
   type Rig = Awaited<ReturnType<typeof rig>>;
-  const destOf = (host = "a.rtmps.youtube.com") => ({ url: `rtmps://${host}/live2`, streamKey: "yt-key" });
+  // D6: every rig destination is the YouTube preset url; what differs between rigs is the key.
+  const destOf = (streamKey = "yt-key") => ({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey });
   const facts = async (sid: string) => (await sql<{ state: string; fail_reason: string | null; end_reason: string | null; output_uid: string | null; output_released_at: Date | null }[]>`
     select state, fail_reason, end_reason, output_uid, output_released_at from fixture_stream_sessions where id = ${sid}`)[0]!;
   const releaseRows = (sid: string) => sql<{ result: string; source: string; reason: string | null; output: string | null }[]>`
@@ -3221,9 +3517,9 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
   const flakyRemoval = (r: Rig) => {
     const down = { on: true, err: Object.assign(new Error("cloudflare remove output: HTTP 503 code 10000"), { status: 503 }) };
     const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
-      async removeOutput(inputId: string, outputId: string) {
+      async removeOutput(inputId: string, outputId: string, meta?: { sessionId?: string | null }) {
         if (down.on) throw down.err;
-        return FakeIngest.prototype.removeOutput.call(r.ingest, inputId, outputId);
+        return FakeIngest.prototype.removeOutput.call(r.ingest, inputId, outputId, meta);
       },
     });
     return { down, deps: { ...r.deps, drivers: { ...r.deps.drivers, ingest } } as SessionDeps };
@@ -3234,7 +3530,7 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
   };
 
   // Every terminal path the brief names, each driven through the REAL readers (the organiser's Stop and poll).
-  const PATHS: { name: string; host?: string; connectAfterMs?: number; drive: (r: Rig, sid: string) => Promise<unknown>; ends: Record<string, string | null> }[] = [
+  const PATHS: { name: string; streamKey?: string; connectAfterMs?: number; drive: (r: Rig, sid: string) => Promise<unknown>; ends: Record<string, string | null> }[] = [
     { name: "the organiser's Stop", drive: async (r, sid) => { await goLive(r); return stopSession(r.auth, r.fixtureId, sid, r.deps); },
       ends: { state: "completed", end_reason: "stopped", fail_reason: null } },
     { name: "a credit refused at go-live", drive: async (r) => {
@@ -3251,15 +3547,15 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
       r.tick((WARMING_TIMEOUT_MINUTES * 60 + 60) * 1000);
       return currentSession(r.auth, r.fixtureId, r.deps);
     }, ends: { state: "failed", fail_reason: "no_inbound_timeout", end_reason: null } },
-    { name: "a destination that rejects the output", host: "reject.restream.io", drive: (r) => currentSession(r.auth, r.fixtureId, r.deps),
+    { name: "a destination that rejects the output", streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}`, drive: (r) => currentSession(r.auth, r.fixtureId, r.deps),
       ends: { state: "failed", fail_reason: "target_rejected", end_reason: null } },
   ];
 
   it("every terminal path — Stop, credit refused, wall clock, warming timeout, target rejected — leaves ZERO live outputs on the destination, the output released on the row, and one ok release_output effect row (mutants: drop the domain predicate; drop the runEffects case → red at every path)", async () => {
     let paths = 0;
     for (const p of PATHS) {
-      const r = await rig({ credits: 1, ...(p.host ? { targetHost: p.host } : {}), ...(p.connectAfterMs ? { connectAfterMs: p.connectAfterMs } : {}) });
-      const dest = destOf(p.host);
+      const r = await rig({ credits: 1, ...(p.streamKey ? { streamKey: p.streamKey } : {}), ...(p.connectAfterMs ? { connectAfterMs: p.connectAfterMs } : {}) });
+      const dest = destOf(p.streamKey);
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
       expect(r.ingest.liveOutputsTo(dest), `${p.name}: the positive pair — the broadcast's output exists before it ends`).toBe(1);
       await p.drive(r, sessionId);
@@ -3322,7 +3618,13 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     await stopSession(r.auth, f1, old, cf.deps);
     expect((await facts(old)).output_released_at).toBeNull();
 
-    await expect(createSession(r.auth, f2, body(r.target.id), cf.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+    // T3: the ended session whose output may still simulcast is named like an active holder, and reads `live`.
+    const page = await fixturePage(f1);
+    const refused = await createSession(r.auth, f2, body(r.target.id), cf.deps).catch((e: unknown) => e);
+    expect(refused).toMatchObject({ status: 409, code: "target_in_use" });
+    expect((refused as HttpError).extra).toEqual({
+      holder: { fixtureId: f1, matchNo: page.matchNo, href: page.href, courtName: null, label: r.target.label, state: "live" },
+    });
     await expect(createSession(r.auth, f1, body(r.target.id), cf.deps)).rejects.toMatchObject({ status: 409, code: "active_session", extra: { sessionId: old } });
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where target_id = ${r.target.id}`;
     expect(n).toBe(1);                                                            // no second session, no second input
@@ -3352,5 +3654,1404 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     expect(r.ingest.liveOutputsTo(dest)).toBe(0);
     expect(f.output_released_at).toBeInstanceOf(Date);
     expect(await releaseRows(sessionId)).toEqual([{ result: "ok", source: "output", reason: "late_add", output: f.output_uid }]);
+  });
+});
+
+// T4 (spec §5.6 D3, §5.7). The destination's side of a passthrough broadcast reaches the projection as {state, since},
+// and every provider call a session makes carries that session's id on its stream_provider_calls row.
+describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the session id on every per-session provider call", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  const goLive = async (r: Rig) => {
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
+  };
+  const flush = () => new Promise((res) => setImmediate(res));
+  const iso = (d: Date) => d.toISOString();
+
+  it("output.since is when the destination's CURRENT receiving / not-receiving period began — the first ingest_status event after the last one on the other side of ok, not the latest poll and not the latest event — and elapsedMs is measured to the server's now", async () => {
+    const r = await rig({ credits: 1, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomUUID()}` });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const tLive = r.deps.now();
+    const first = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(first.output).toEqual({ state: "connecting", since: iso(tLive), elapsedMs: 0 });   // the real fake: a destination that never accepts
+    r.tick(10_000);
+    const second = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(second.output!.since, "unchanged state: since does not move with the poll").toBe(first.output!.since);
+    expect(second.output!.elapsedMs, "…and the elapsed does, on the server's clock").toBe(10_000);
+    // The state MOVES while live, so the trailing run starts after live_at and the clamp cannot answer for it.
+    let out: OutputState = "ok";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    try {
+      r.tick(5_000);
+      const tOk = r.deps.now();
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output).toEqual({ state: "ok", since: iso(tOk), elapsedMs: 0 });
+      out = "connecting";
+      r.tick(5_000);
+      const tBack = r.deps.now();
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "a second run of connecting starts at ITS first event").toEqual({ state: "connecting", since: iso(tBack), elapsedMs: 0 });
+      // An ingest_status event whose INGEST word changes but whose output word does not is inside the same run.
+      const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId}`;
+      r.ingest.setState(inp!.ingest_input_id, "disconnected");
+      r.tick(5_000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest event").toEqual({ state: "connecting", since: iso(tBack), elapsedMs: 5_000 });
+      r.tick(5_000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "not the latest poll").toEqual({ state: "connecting", since: iso(tBack), elapsedMs: 10_000 });
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect(n, "connected+connecting, ok, connecting, disconnected — four events, so the run really had a boundary and an inside").toBe(4);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("D3's clock starts at LIVE, never during warming: warm 45 s with the output non-ok, go live — no warning at live+0 s or live+29.999 s, a warning at live+30 s", async () => {
+    const WARM_MS = 45_000;
+    const POLL_MS = 5_000;
+    let checked = 0;
+    for (const nonOk of ["unknown", "connecting"] as const) {
+      // The output reads the SAME non-ok state before and after go-live — Cloudflare's shape when the destination has
+      // not been tried yet — so the trailing run of that state starts in warming. Only the live clamp stops the clock.
+      const r = await rig({ credits: 1, connectAfterMs: WARM_MS });
+      const outSpy = vi.spyOn(r.ingest, "outputState").mockResolvedValue(nonOk);
+      try {
+        await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+        let polls = 0;
+        for (let t = 0; t < WARM_MS; t += POLL_MS) {                // the organiser's poll through warming
+          expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, `${nonOk} t=${t}`).not.toBe("live");
+          polls++;
+          r.tick(POLL_MS);
+        }
+        expect(polls).toBe(WARM_MS / POLL_MS);
+        const live = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(live!.state, nonOk).toBe("live");
+        expect(live!.output, nonOk).toEqual({ state: nonOk, since: iso(r.deps.now()), elapsedMs: 0 });   // clamped to live_at
+        expect(destinationWarning(live!), `${nonOk} live+0`).toBe(false);
+        r.tick(OUTPUT_WARNING_AFTER_MS - 1);
+        const early = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(destinationWarning(early!), `${nonOk} live+29.999`).toBe(false);
+        r.tick(1);
+        const due = await currentSession(r.auth, r.fixtureId, r.deps);
+        expect(destinationWarning(due!), `${nonOk} live+30`).toBe(true);
+        expect(due!.state, "D3 warns; it never ends the stream").toBe("live");
+      } finally {
+        outSpy.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // I1 (B2 review): D3 is "the destination has not RECEIVED for 30 s" (spec §0 D3; §3.2 "output not ok ≥ 30 s") — a
+  // judgment of ok versus not-ok, never of the word. Every expected instant below is live + a spec offset, derived from
+  // OUTPUT_WARNING_AFTER_MS; the word-run boundary this replaced put the first warning at live+50 s here, and never
+  // raised it at all for a destination flapping between two non-ok words.
+  /** Poll at `ms` after `tLive` with the destination reading `word` — the organiser's poll IS the observation. */
+  const pollAt = async (r: Rig, tLive: number, ms: number, word: OutputState, set: (w: OutputState) => void) => {
+    r.tick(tLive + ms - r.deps.now().getTime());
+    set(word);
+    return (await currentSession(r.auth, r.fixtureId, r.deps))!;
+  };
+
+  it("I1 SEQUENCE: live reading connecting, unknown at +5 s, connecting at +20 s — a flip between two NON-ok words is still not receiving, so the warning is due at live+30 s (not 30 s after the flip), and a destination flapping between them stays warned", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      expect(destinationWarning(await pollAt(r, tLive, 5_000, "unknown", set)), "live+5 s").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, 20_000, "connecting", set)), "live+20 s").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, OUTPUT_WARNING_AFTER_MS - 1, "connecting", set)), "live+29.999 s").toBe(false);
+      const due = await pollAt(r, tLive, OUTPUT_WARNING_AFTER_MS, "connecting", set);
+      expect(due.output, "since the destination last received — it never has, so since live").toEqual({ state: "connecting", since: iso(new Date(tLive)), elapsedMs: OUTPUT_WARNING_AFTER_MS });
+      expect(destinationWarning(due), "live+30 s").toBe(true);
+      // Flapping every poll between the two non-ok words: every poll past 30 s warns.
+      let flaps = 0;
+      for (let ms = OUTPUT_WARNING_AFTER_MS + 5_000; ms <= 2 * OUTPUT_WARNING_AFTER_MS; ms += 5_000) {
+        const v = await pollAt(r, tLive, ms, flaps % 2 === 0 ? "unknown" : "connecting", set);
+        expect(destinationWarning(v), `flapping, live+${ms / 1000} s`).toBe(true);
+        flaps++;
+      }
+      expect(flaps, "the flapping leg ran").toBe(OUTPUT_WARNING_AFTER_MS / 5_000);
+      // The flips were really recorded (Ruling 13), so the boundary had words to mis-read: live, +5, +20, then every flap.
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect(n).toBe(3 + flaps);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("I1 pair: an ok DOES reset the clock — live connecting, ok at +10 s, unknown at +15 s, connecting at +20 s: no warning at live+30 s; due 30 s after the destination stopped receiving (+15 s)", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    try {
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const STOPPED = 15_000;
+      expect(destinationWarning(await pollAt(r, tLive, 10_000, "ok", set)), "receiving").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, STOPPED, "unknown", set)), "live+15 s").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, 20_000, "connecting", set)), "live+20 s").toBe(false);
+      const at30 = await pollAt(r, tLive, OUTPUT_WARNING_AFTER_MS, "connecting", set);
+      expect(destinationWarning(at30), "live+30 s: it received at +10 s, so not yet").toBe(false);
+      expect(destinationWarning(await pollAt(r, tLive, STOPPED + OUTPUT_WARNING_AFTER_MS - 1, "connecting", set)), "stopped+29.999 s").toBe(false);
+      const due = await pollAt(r, tLive, STOPPED + OUTPUT_WARNING_AFTER_MS, "connecting", set);
+      expect(due.output).toEqual({ state: "connecting", since: iso(new Date(tLive + STOPPED)), elapsedMs: OUTPUT_WARNING_AFTER_MS });
+      expect(destinationWarning(due), "stopped+30 s").toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // I-2a (controller ruling 2026-10-01, B5 re-review 2 §3): the destination is not fed while the phone is silent, so when
+  // the phone RETURNS Cloudflare has to re-dial it. The hold's clock therefore restarts at the phone's latest reconnect,
+  // exactly as it starts at live_at (review #9): `since` = the latest of (the not-receiving period's start, live_at, the
+  // last ingest reconnect). The PHONE box's timing is unchanged — during a drop the last connect predates it — and the
+  // KEY box needs 30 s of the phone sending with the destination still not receiving. Every instant below is live + an
+  // offset of the scenario's own and OUTPUT_WARNING_AFTER_MS; `d3Warning` reads the server's answer, the real consumer.
+  /** The fake's one scripted seam for the phone: `setState` on the session's live input (in-process only). */
+  const phoneOf = async (r: Rig, sessionId: string) => {
+    const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId}`;
+    return (s: "connected" | "disconnected") => r.ingest.setState(inp!.ingest_input_id, s);
+  };
+
+  it("I-2a SEQUENCE on the server's clock: dialling from live, the phone drops at +5 s → the PHONE box at live+30 s; it returns at +50 s → no box at once nor at return+29.999 s, the KEY box at return+30 s; a second drop keeps the return's clock; a second return restarts it", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const phone = await phoneOf(r, sessionId);
+      const DROP = 5_000;
+      const BACK = 50_000;
+      phone("disconnected");
+      expect(d3Warning(await pollAt(r, tLive, DROP, "connecting", set)), "the drop, inside the hold").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, W - 1, "connecting", set)), "live+29.999 s").toBeNull();
+      const silent = await pollAt(r, tLive, W, "connecting", set);
+      expect(silent.ingest?.state, "PREMISE: the phone really is silent on the server's read").toBe("disconnected");
+      expect(silent.output, "the drop did not move the clock: since live").toEqual({ state: "connecting", since: iso(new Date(tLive)), elapsedMs: W });
+      expect(d3Warning(silent), "live+30 s, phone silent").toBe("phone");
+      // THE PHONE RETURNS while the destination still dials.
+      phone("connected");
+      const back = await pollAt(r, tLive, BACK, "connecting", set);
+      expect(back.ingest?.state, "PREMISE: the phone is back on the server's read").toBe("connected");
+      expect(back.output, "the hold restarts at the return").toEqual({ state: "connecting", since: iso(new Date(tLive + BACK)), elapsedMs: 0 });
+      expect(d3Warning(back), "no key box at once").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, BACK + W - 1, "connecting", set)), "return+29.999 s").toBeNull();
+      const due = await pollAt(r, tLive, BACK + W, "connecting", set);
+      expect(due.output).toEqual({ state: "connecting", since: iso(new Date(tLive + BACK)), elapsedMs: W });
+      expect(d3Warning(due), "return+30 s, the phone sending: the key box").toBe("destination");
+      // A SECOND drop keeps the return's clock (the last connect predates it): the box flips to the phone at once.
+      phone("disconnected");
+      const again = await pollAt(r, tLive, BACK + W + 5_000, "connecting", set);
+      expect(again.output!.since, "a drop never moves the clock").toBe(iso(new Date(tLive + BACK)));
+      expect(d3Warning(again), "second drop, past the hold since the return").toBe("phone");
+      // …and a SECOND return restarts it again.
+      phone("connected");
+      const RETURN2 = BACK + W + 10_000;
+      const back2 = await pollAt(r, tLive, RETURN2, "connecting", set);
+      expect(back2.output).toEqual({ state: "connecting", since: iso(new Date(tLive + RETURN2)), elapsedMs: 0 });
+      expect(d3Warning(back2), "second return: no box at once").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, RETURN2 + W, "connecting", set)), "second return+30 s").toBe("destination");
+      // The scenario really had its boundaries on record (Ruling 13): live, drop, return, drop, return.
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect(n).toBe(5);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("I-2a pair: a SHORT drop whose re-dial crosses 30 s from the stop — receiving, the phone drops at +10 s, the destination stops at +15 s, the phone returns at +25 s: no key box at +45 s (mid-re-dial), the key box at return+30 s; and an ok destination's since ignores the return", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "ok";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const phone = await phoneOf(r, sessionId);
+      // ok's own since, across a drop and a return that never stopped it receiving: the clamp is the HOLD's only.
+      expect((await pollAt(r, tLive, 2_000, "ok", set)).output).toEqual({ state: "ok", since: iso(new Date(tLive)), elapsedMs: 2_000 });
+      phone("disconnected");
+      expect((await pollAt(r, tLive, 4_000, "ok", set)).output!.since, "ok across a drop").toBe(iso(new Date(tLive)));
+      phone("connected");
+      expect((await pollAt(r, tLive, 6_000, "ok", set)).output!.since, "ok across a return: not clamped to it").toBe(iso(new Date(tLive)));
+      const STOP = 15_000;
+      const BACK = 25_000;
+      phone("disconnected");
+      expect(d3Warning(await pollAt(r, tLive, 10_000, "ok", set)), "dropped, still receiving").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, STOP, "connecting", set)), "the destination stops").toBeNull();
+      phone("connected");
+      expect((await pollAt(r, tLive, BACK, "connecting", set)).output, "the return restarts the hold").toEqual({ state: "connecting", since: iso(new Date(tLive + BACK)), elapsedMs: 0 });
+      const midRedial = await pollAt(r, tLive, STOP + W, "connecting", set);
+      expect(midRedial.output!.elapsedMs, "30 s from the stop is 20 s from the return").toBe(STOP + W - BACK);
+      expect(d3Warning(midRedial), "stop+30 s, mid-re-dial: no key box").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, BACK + W, "connecting", set)), "return+30 s").toBe("destination");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // m-a (B5 re-review 3; MC4 survived): the clamp's reconnect is an event INTO `connected` — not any event that is not
+  // FROM connected. While the phone is silent, a destination flipping between two non-ok words records events from
+  // `disconnected` to `disconnected` (Cloudflare's output reads `unknown` without inbound video, so a drop produces
+  // exactly that flip). Read as a reconnect, each flip would push the PHONE box back by up to 30 s.
+  it("m-a: the phone silent from +5 s while the destination flips connecting → unknown → connecting: the flips are not reconnects — since stays at live, and the PHONE box shows at live+30 s", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const phone = await phoneOf(r, sessionId);
+      phone("disconnected");
+      expect(d3Warning(await pollAt(r, tLive, 5_000, "connecting", set)), "the drop").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, 15_000, "unknown", set)), "a flip while silent").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, 20_000, "connecting", set)), "and back").toBeNull();
+      const [{ flips }] = await sql<{ flips: number }[]>`
+        select count(*)::int as flips from fixture_stream_events
+         where session_id = ${sessionId} and type = 'ingest_status' and from_state = 'disconnected' and to_state = 'disconnected'`;
+      expect(flips, "PREMISE: the flips were recorded as silent-to-silent events").toBe(2);
+      const due = await pollAt(r, tLive, W, "connecting", set);
+      expect(due.output, "no reconnect happened: since is still live").toEqual({ state: "connecting", since: iso(new Date(tLive)), elapsedMs: W });
+      expect(d3Warning(due), "live+30 s: the phone box, on time").toBe("phone");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // m-b (B5 re-review 3; MWL survived): why a failed outputs read is `null` rather than a throw. Both reads share one try
+  // (N1), so a throw would null the PHONE's read too, and warming → live is decided on the phone's read — a token without
+  // the outputs scope would never go live. The null path keeps the phone's read deciding go-live on its own.
+  it("m-b: warming → live with EVERY outputs read failing (null): the phone's read alone takes the session live, the projection answers no output, and no poll sample or event is written", async () => {
+    const r = await rig({ credits: 1 });
+    // The port's NOT READ (`null`); the fake's own signature is the narrower OutputState, hence the cast (as in m-2).
+    const spy = vi.spyOn(r.ingest, "outputState").mockResolvedValue(null as unknown as OutputState);
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      const early = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(early.state, "PREMISE: not live before the phone connects").not.toBe("live");
+      r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
+      const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(spy, "PREMISE: the failed read really ran").toHaveBeenCalled();
+      expect(live.state, "the phone connected: live, without any output read").toBe("live");
+      expect(live.ingest?.state).toBe("connected");
+      expect(live.output, "nothing read, nothing answered").toBeNull();
+      const [{ samples }] = await sql<{ samples: number }[]>`select count(*)::int as samples from fixture_stream_samples where session_id = ${sessionId} and source = 'poll'`;
+      const [{ events }] = await sql<{ events: number }[]>`select count(*)::int as events from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect({ samples, events }).toEqual({ samples: 0, events: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // m-2 (B5 re-review 2 §4a): a FAILED outputs read — Cloudflare's failed envelope, or no result — is not evidence. The
+  // port answers it with `null` (ports.ts), and the poll SKIPS it: no sample, no event, no output on the projection. It
+  // used to be read as `unknown`, a non-ok word, so six failed polls on a healthy stream put the key box on screen.
+  it("m-2: failed outputs reads on a receiving stream record nothing and move nothing — no `unknown` sample, no event, no output on the projection, the phone still read — and the hold starts at the destination's real stop, not the first failure", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState | null = "ok";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out as OutputState);
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const at = async (ms: number, w: OutputState | null) => {
+        r.tick(tLive + ms - r.deps.now().getTime());
+        out = w;
+        return (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      };
+      const counts = async () => {
+        const [s] = await sql<{ n: number; unknown: number }[]>`
+          select count(*)::int as n, count(*) filter (where output_state = 'unknown')::int as unknown
+            from fixture_stream_samples where session_id = ${sessionId} and source = 'poll'`;
+        const [e] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+        return { samples: s!.n, unknown: s!.unknown, events: e!.n };
+      };
+      expect((await at(5_000, "ok")).output!.state).toBe("ok");
+      const before = await counts();
+      expect(before.samples, "PREMISE: the receiving polls were sampled").toBeGreaterThan(0);
+      let failed = 0;
+      for (let ms = 10_000; ms <= 40_000; ms += 5_000) {
+        const v = await at(ms, null);
+        expect(v.output, `+${ms / 1000} s: no output read, no output answered`).toBeNull();
+        expect(v.ingest?.state, `+${ms / 1000} s: the phone's read still stands`).toBe("connected");
+        expect(d3Warning(v), `+${ms / 1000} s`).toBeNull();
+        failed++;
+      }
+      expect(failed, "the failing leg ran past the hold").toBe(7);
+      expect(await counts(), "nothing recorded for a read that failed").toEqual(before);
+      // Reads resume: the destination really is still receiving, and its since never moved.
+      expect((await at(45_000, "ok")).output).toEqual({ state: "ok", since: iso(new Date(tLive)), elapsedMs: 45_000 });
+      // …and when it really stops, the hold counts from THAT, not from the first failure (+10 s).
+      const STOP = 50_000;
+      await at(STOP - 2_000, null);
+      expect((await at(STOP, "connecting")).output).toEqual({ state: "connecting", since: iso(new Date(tLive + STOP)), elapsedMs: 0 });
+      expect(d3Warning(await at(STOP + W - 1, "connecting")), "stop+29.999 s").toBeNull();
+      expect(d3Warning(await at(STOP + W, "connecting")), "stop+30 s").toBe("destination");
+      expect((await counts()).unknown, "never an `unknown` sample").toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // N4 (B2 re-review): `live_at` and the ingest_status events are written on one instance's clock and read under another's,
+  // so the boundary can sit a few seconds AHEAD of the server now answering. D3's elapsed is how long the destination
+  // has NOT received — a boundary in the future means it has not been not-receiving at all yet: 0, never negative (and
+  // the published contract is `nonnegative()`). Both sources of `since` are driven: the live clamp (`live_at` written
+  // ahead), and the event (written on a clock that then answers from behind it — events are append-only).
+  it("N4: a boundary AHEAD of this server's clock (another instance's skew) answers elapsedMs 0 — never negative — with since unchanged and no warning; the positive pair: once this clock passes it, elapsed counts up from it", async () => {
+    const SKEW_MS = 5_000;
+    let checked = 0;
+    for (const source of ["live_at", "event"] as const) {
+      const r = await rig({ credits: 1 });
+      let out: OutputState = "connecting";
+      const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+      try {
+        const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+        await goLive(r);
+        let boundary: number;
+        if (source === "live_at") {
+          boundary = r.deps.now().getTime() + SKEW_MS;
+          await sql`update fixture_stream_sessions set live_at = live_at + ${`${SKEW_MS} milliseconds`}::interval where id = ${sessionId}`;
+        } else {
+          r.tick(10_000);
+          out = "ok";
+          boundary = r.deps.now().getTime();
+          expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "the ok event is written here").toEqual({ state: "ok", since: iso(new Date(boundary)), elapsedMs: 0 });
+          r.tick(-SKEW_MS);
+        }
+        const word = source === "live_at" ? "connecting" : "ok";
+        const ahead = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(ahead.output, source).toEqual({ state: word, since: iso(new Date(boundary)), elapsedMs: 0 });
+        expect(destinationWarning(ahead), source).toBe(false);
+        r.tick(SKEW_MS + 1_000);
+        expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, `${source}: past it`).toEqual({ state: word, since: iso(new Date(boundary)), elapsedMs: 1_000 });
+      } finally {
+        spy.mockRestore();
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("output is null for a composed session (warming and live), and for a passthrough session once it has ended", async () => {
+    const composed = await rig({ credits: 1 });
+    const c = await createSession(composed.auth, composed.fixtureId, body(composed.target.id, "composed"), composed.deps);
+    const cWarming = (await currentSession(composed.auth, composed.fixtureId, composed.deps))!;
+    expect(cWarming.state).toBe("warming");
+    expect(cWarming.output).toBeNull();
+    await heartbeat(c.sessionId, composed.runner.created[0]!.jobToken, { state: "playing" }, composed.deps);
+    const cLive = (await currentSession(composed.auth, composed.fixtureId, composed.deps))!;
+    expect(cLive.state).toBe("live");
+    expect(cLive.output).toBeNull();
+    const ended = await rig({ credits: 1 });
+    const e = await createSession(ended.auth, ended.fixtureId, body(ended.target.id), ended.deps);
+    await goLive(ended);
+    expect((await currentSession(ended.auth, ended.fixtureId, ended.deps))!.output, "the positive twin").toEqual({ state: "ok", since: expect.any(String), elapsedMs: 0 });
+    const stopped = await stopSession(ended.auth, ended.fixtureId, e.sessionId, ended.deps);
+    expect(stopped.state).toBe("completed");
+    expect(stopped.output, "the Stop route's projection").toBeNull();
+    const view = (await currentSession(ended.auth, ended.fixtureId, ended.deps))!;
+    expect(view.state).toBe("completed");
+    expect(view.output).toBeNull();
+  });
+
+  it("spec §5.7: every per-session provider call records its session id — add_output, the poll's inputStatus + outputState, the expiry's pre-read, and releaseOutput's removeOutput", async () => {
+    const PER_SESSION = ["inputStatus", "addOutput", "outputState", "removeOutput"] as const;
+    // Leg 1, the golden path: create (addOutput), a warming poll, live, Stop (removeOutput).
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, recorder: rec });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    r.tick(STREAM_POLL_MS);   // I-1: goLive's poll is the NEXT interval's, not a second poll inside this one
+    await goLive(r);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    await flush();
+    const rows = rec.calls.filter((c) => (PER_SESSION as readonly string[]).includes(c.operation));
+    expect(new Set(rows.map((c) => c.operation)), "every one of the four was reached").toEqual(new Set(PER_SESSION));
+    let checked = 0;
+    for (const c of rows) {
+      expect(c.sessionId, `${c.operation} #${checked}`).toBe(sessionId);
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(PER_SESSION.length);
+    expect(rows.filter((c) => c.operation === "removeOutput")).toHaveLength(1);
+    // Leg 2, the expiry's pre-read (observeIngestBeforeExpiry): a warming session nobody polled, past its timeout. Its
+    // ONLY inputStatus is that pre-read — the poll never runs, because the reconcile ends the session first.
+    const rec2 = new FakeRecorder();
+    const x = await rig({ credits: 1, recorder: rec2, connectAfterMs: 24 * 3600_000 });
+    const made = await createSession(x.auth, x.fixtureId, body(x.target.id), x.deps);
+    await sql`update fixture_stream_sessions set created_at = now() - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 1}) where id = ${made.sessionId}`;
+    expect((await currentSession(x.auth, x.fixtureId, x.deps))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+    await flush();
+    const pre = rec2.calls.filter((c) => c.operation === "inputStatus");
+    expect(pre, "the expiry's pre-read, alone").toHaveLength(1);
+    expect(pre[0]!.sessionId).toBe(made.sessionId);
+    const released = rec2.calls.filter((c) => c.operation === "removeOutput");
+    expect(released, "the failure releases the output too").toHaveLength(1);
+    expect(released[0]!.sessionId).toBe(made.sessionId);
+  });
+});
+
+// B2 carried (B1 review): Go live on a destination whose saved key will not open (a KEK change, a damaged byte) was an
+// unmapped 500 out of the admission transaction. It is a clean refusal the organiser can act on — and, being inside that
+// transaction, it spends nothing and leaves no row.
+describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
+  it("is 422 TARGET_UNREADABLE telling the organiser to replace the key — no session row, ZERO provider calls of any kind (M1), and the money unmoved even after the clock runs past go-live (M2); Replace key then recovers it and Go live starts (sequence)", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, recorder: rec });
+    const targetId = await rigTarget(r.auth.orgId, "Unreadable", "youtube");   // the boundary's own rig: an envelope that will not open
+    const money = async () => ({
+      balance: await creditBalance(sql, r.auth.orgId),
+      ledger: (await sql<{ n: number; net: number }[]>`
+        select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0],
+    });
+    const before = await money();
+    expect(before.balance, "the rig's credit is there to be spent — or 'unmoved' could not fail").toBe(1);
+    // Both drivers report into ONE recorder for the refused attempt, so "zero provider calls" covers Cloudflare AND Fly.
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const warns: unknown[][] = [];
+    const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
+    let err: unknown;
+    try {
+      err = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
+    } finally {
+      spy.mockRestore();
+    }
+    // M2: run the clock past the fake's connect (3 s) and poll, THEN read the money. A refusal placed anywhere that let the
+    // start through would have gone live and consumed by now — this is the assertion that can fail.
+    r.tick(3000);
+    const projected = await currentSession(r.auth, r.fixtureId, refusedDeps);
+    expect(await money(), "no credit spent and no ledger row, past the moment a start would have gone live").toEqual(before);
+    expect(projected, "nothing to project").toBeNull();
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+    expect((err as Error).message).toMatch(/replace the key/i);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n, "no session row, in any state").toBe(0);
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation), "M1: no provider call of any kind — not even the read-only storage read").toEqual([]);
+    expect(r.runner.created).toEqual([]);
+    // The operator's side: one warn naming the fixture and target, never a key.
+    expect(warns.filter(([o]) => (o as { targetId?: string }).targetId === targetId).map(([o]) => o)).toEqual([{ fixtureId: r.fixtureId, targetId, kind: "youtube" }]);
+    // The organiser's remedy works: Replace key re-seals the platform row, and the same Go live now starts.
+    await patchStreamTarget(r.auth, r.auth.orgId, targetId, { streamKey: `k-${randomUUID()}` });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(targetId), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");
+    // The positive pair of M1's zero: a start that IS admitted reads the storage pool (so the zero above was not a
+    // recorder that sees nothing).
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation)).toContain("storageUsage");
+  });
+
+  it("M1 guard: the early probe answers only for this org's ACTIVE row — an archived unreadable destination is still 404 target_not_found, another org's is 404 too, and neither is read", async () => {
+    const r = await rig({ credits: 1 });
+    const archived = await rigTarget(r.auth.orgId, "Gone", "youtube");
+    await sql.begin((tx) => archiveStreamTarget(tx, r.auth.orgId, archived));
+    const other = await rig({ credits: 1 });
+    const foreign = await rigTarget(other.auth.orgId, "Theirs", "youtube");
+    let checked = 0;
+    for (const targetId of [archived, foreign]) {
+      const err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+      expect(err, targetId === archived ? "archived" : "another org's").toMatchObject({ status: 404 });
+      expect((err as HttpError).code, "never the unreadable refusal: that would confirm the row exists").not.toBe(TARGET_UNREADABLE);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("N2 (B2 re-review): the probe steps aside for EVERY admit refusal it can weigh, not only active_session — a 0-credit org Go live on an unreadable key is 402 no_credits (F-A5: the credit before any destination question), measured like every refused admission (one storage read, ruling 13); a credit then makes the same Go live the 422", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 0, recorder: rec });
+    expect(await creditBalance(sql, r.auth.orgId), "the rig really is broke — or 402 could not be the answer").toBe(0);
+    const targetId = await rigTarget(r.auth.orgId, "Unreadable", "youtube");
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const err = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err, "the credit is answered first, never 'replace the key'").toMatchObject({ status: 402, code: "no_credits" });
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation), "the admission answered it: exactly its one read-only storage read, nothing started").toEqual(["storageUsage"]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n).toBe(0);
+    // The positive pair: with a credit, the SAME Go live reaches the probe and is the unreadable refusal, before any read.
+    await grantCredits({ orgId: r.auth.orgId, delta: 1, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
+    rec.calls.length = 0;
+    const paid = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
+    expect(paid).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.map((c) => c.operation)).toEqual([]);
+  });
+
+  it("M3: a MISSING or MALFORMED RELAY_KEK is the deployment's fault, never the organiser's — Go live is a 500 (not an HttpError), never 422 TARGET_UNREADABLE, and writes nothing", async () => {
+    const r = await rig({ credits: 1 });
+    const saved = process.env.RELAY_KEK;
+    let checked = 0;
+    try {
+      for (const kek of [undefined, "not-hex"] as const) {
+        if (kek === undefined) delete process.env.RELAY_KEK;
+        else process.env.RELAY_KEK = kek;
+        const err = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).then(() => null, (e: unknown) => e);
+        expect(err, `KEK ${kek ?? "unset"}`).toBeInstanceOf(Error);
+        expect(err, `KEK ${kek ?? "unset"}: an HttpError would be answered as the organiser's fault`).not.toBeInstanceOf(HttpError);
+        expect((err as Error).message).toMatch(/RELAY_KEK/);
+        checked++;
+      }
+    } finally {
+      process.env.RELAY_KEK = saved;
+    }
+    expect(checked).toBe(2);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n).toBe(0);
+    // The positive pair: with the KEK back, the same readable target starts.
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");
+  });
+
+  it("a LEGACY-kind row (no platform preset to re-seal on) says REMOVE it — never 'add it again', which create no longer allows for its kind (M4) — the same code", async () => {
+    const r = await rig({ credits: 1 });
+    const targetId = await rigTarget(r.auth.orgId, "Old", "custom_rtmp");
+    const err = await createSession(r.auth, r.fixtureId, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+    expect((err as Error).message).toMatch(/remove it/i);
+    expect((err as Error).message, "M4: a legacy kind cannot be added again").not.toMatch(/add it again|re-?add/i);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The DESTINATION lifecycle as a SEQUENCE (TEST-STRATEGY rules 1, 2, 10; owner-raised on B2 fix round 1). B1 and B2 drove
+// add / Replace key / Remove / Go live / Stop one ordering at a time. Here fast-check draws the orderings — across TWO orgs
+// (each with two fixtures), both platforms, a target whose saved key will not open, a waiting session left past its
+// deadline, and a voided holder fixture — and a plain MODEL predicts every outcome. Expected values come from the model
+// and the spec (§5.2 create order / Replace key / Remove / "held means", §5.3 list shape, D2, D6 via the platform
+// presets), never from the code under test: the system is only ever asked to AGREE. Invariants after EVERY step:
+//   - at most one ACTIVE session holds a target, and every session holds a target of its own org;
+//   - each org's list is exactly its model's un-archived targets (label, key hint, and the holding match), so an
+//     archived target never appears and the other org never sees one;
+//   - archived flags and owners in the table match the model;
+//   - every refusal spends no credit and makes no provider call (beyond the lazy expiry of a session the door ended).
+// Remove and Replace key are refused IFF a live or waiting match holds the target, naming its matchNo; re-adding a
+// removed key restores the SAME id; Go live can never take an archived or foreign target.
+// Sport-agnostic (rule 6): nothing here reads the sport. Rule 6's analogue is the PLATFORM — both are drawn.
+// ---------------------------------------------------------------------------
+type DestOrg = 0 | 1;
+type DestPlatform = "youtube" | "twitch";
+type DestCmd =
+  | { kind: "add"; org: DestOrg; platform: DestPlatform; key: number; label: number }
+  | { kind: "replace"; org: DestOrg; slot: number; key: number }
+  | { kind: "remove"; org: DestOrg; slot: number }
+  | { kind: "goLive"; org: DestOrg; fixture: 0 | 1; slot: number }
+  | { kind: "connect"; org: DestOrg; fixture: 0 | 1 }
+  | { kind: "age"; org: DestOrg; fixture: 0 | 1 }
+  | { kind: "stop"; org: DestOrg; fixture: 0 | 1 }
+  | { kind: "void"; org: DestOrg; fixture: 0 | 1 };
+
+/** The key pool. "yt-key" is the rig's own saved key (both orgs'), and it is shorter than a hint needs; the other two are
+ *  long enough to show one. The same key on the OTHER platform is a different destination (D6: the url is per platform). */
+const DEST_KEYS = ["yt-key", "stream-key-aaaa-1", "stream-key-bbbb-2"] as const;
+const DEST_LABELS = ["Court 1", "Court 2"] as const;
+/** Drawn sequences per run (the pinned examples count inside it). Each run seeds two orgs, four fixtures, three targets. */
+const DEST_MODEL_RUNS = 100;
+/** A fixed seed: the scoped run is reproducible, and a red names a sequence anyone can replay. */
+const DEST_MODEL_SEED = 20260930;
+
+const destOrgArb = fc.oneof({ weight: 3, arbitrary: fc.constant<DestOrg>(0) }, { weight: 1, arbitrary: fc.constant<DestOrg>(1) });
+const destFixtureArb = fc.constantFrom<0 | 1>(0, 1);
+const destSlotArb = fc.nat({ max: 7 });
+const destKeyArb = fc.nat({ max: DEST_KEYS.length - 1 });
+const destCmdArb: fc.Arbitrary<DestCmd> = fc.oneof(
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("add" as const), org: destOrgArb, platform: fc.constantFrom<DestPlatform>("youtube", "twitch"), key: destKeyArb, label: fc.nat({ max: DEST_LABELS.length - 1 }) }) },
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("replace" as const), org: destOrgArb, slot: destSlotArb, key: destKeyArb }) },
+  { weight: 2, arbitrary: fc.record({ kind: fc.constant("remove" as const), org: destOrgArb, slot: destSlotArb }) },
+  { weight: 3, arbitrary: fc.record({ kind: fc.constant("goLive" as const), org: destOrgArb, fixture: destFixtureArb, slot: destSlotArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("connect" as const), org: destOrgArb, fixture: destFixtureArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("age" as const), org: destOrgArb, fixture: destFixtureArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("stop" as const), org: destOrgArb, fixture: destFixtureArb }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("void" as const), org: destOrgArb, fixture: destFixtureArb }) },
+);
+
+/** Two orderings every run reaches whatever the seed draws (anti-vacuity: each invariant below is otherwise satisfiable by
+ *  a sequence that never holds, restores, voids or crosses an org). Slots: 0 = org 0's rig target ("Club", youtube,
+ *  yt-key), 1 = org 0's UNREADABLE youtube target, 2 = org 1's rig target (the same key, another org); later adds append. */
+const DEST_PINNED: DestCmd[][] = [
+  [
+    { kind: "goLive", org: 0, fixture: 0, slot: 0 },
+    { kind: "remove", org: 0, slot: 0 },                  // held WAITING → 409 naming match 0's number
+    { kind: "connect", org: 0, fixture: 0 },
+    { kind: "replace", org: 0, slot: 0, key: 1 },         // held LIVE → 409
+    { kind: "void", org: 0, fixture: 0 },
+    { kind: "remove", org: 0, slot: 0 },                  // a void does not release the destination: still 409
+    { kind: "stop", org: 0, fixture: 0 },
+    { kind: "remove", org: 0, slot: 0 },                  // released → archived
+    { kind: "goLive", org: 0, fixture: 1, slot: 0 },      // an archived target cannot be taken → 404
+    { kind: "add", org: 0, platform: "youtube", key: 0, label: 1 },   // the same key again → the SAME id, restored
+    { kind: "goLive", org: 1, fixture: 0, slot: 0 },      // the other org → 404
+    { kind: "remove", org: 1, slot: 0 },                  // the other org → 404
+  ],
+  [
+    { kind: "goLive", org: 0, fixture: 0, slot: 1 },      // unreadable → 422 TARGET_UNREADABLE
+    { kind: "replace", org: 0, slot: 1, key: 1 },         // Replace key recovers it in place
+    { kind: "add", org: 0, platform: "twitch", key: 1, label: 0 },    // the same key on the other platform → a NEW target
+    { kind: "add", org: 0, platform: "youtube", key: 1, label: 0 },   // → the recovered row, unchanged
+    { kind: "replace", org: 0, slot: 0, key: 1 },         // another active row holds it → 409 DESTINATION_DUPLICATE
+    { kind: "goLive", org: 0, fixture: 0, slot: 1 },
+    { kind: "age", org: 0, fixture: 0 },                  // waiting, past its deadline
+    { kind: "goLive", org: 0, fixture: 1, slot: 1 },      // the start IS the tick: the stale holder expires, this one starts
+    { kind: "replace", org: 1, slot: 1, key: 2 },         // the other org → 404
+    { kind: "add", org: 1, platform: "youtube", key: 1, label: 0 },   // the other org's own row, never ours
+    { kind: "goLive", org: 0, fixture: 0, slot: 1 },      // held by fixture 1, WAITING → 409 target_in_use naming it
+  ],
+];
+
+/** Named regression cases (rule 10): each is the SHRUNK counterexample a seeded run found, committed before its fix. */
+/** Seed 20260930, path "0:1:0:0:0": the other org's Go live on this org's destination is 404 — and took the admission's
+ *  storage read. NOT a system defect: `createSession` records a storage snapshot for each admission check (ruling 13,
+ *  streaming-r1 plan "Data captured"), a refusal included, pinned by the SAMPLES and SNAPSHOTS test. The invariant was
+ *  worded too wide ("no provider call" → "none but the admission's own measurement"); this sequence keeps it honest. */
+const DEST_REGRESSION_ADMISSION_READ: DestCmd[] = [{ kind: "goLive", org: 1, fixture: 0, slot: 0 }, { kind: "remove", org: 1, slot: 0 }];
+/** Seed 20260930, path "73:1:0:2:6:5:5" (DEST_MODEL_RUNS = 100): a match already streaming, then Go live on an UNREADABLE
+ *  destination, answered 422 TARGET_UNREADABLE — B2 fix round 1's M1 probe ran before `admit`. F-A5 (owner, 2026-09-29):
+ *  "a match already streaming answers a second start before credits, destination or storage are weighed" — 409
+ *  active_session. A SYSTEM defect, introduced by M1. */
+const DEST_REGRESSION_FA5_UNREADABLE: DestCmd[] = [
+  { kind: "goLive", org: 0, fixture: 1, slot: 0 },
+  { kind: "goLive", org: 0, fixture: 1, slot: 1 },
+  { kind: "add", org: 1, platform: "youtube", key: 0, label: 0 },
+];
+/** NOT a seeded find — the owner's answer B to the B2 re-review's point 6 (2026-09-30): F-A5 over the destination-HOLDER
+ *  guard. A stale second tab's Go live on a fixture already LIVE, picking a destination another match holds, is 409
+ *  active_session — the holder guard answered target_in_use naming the other match. Once stopped, the same Go live IS
+ *  target_in_use naming it. Slot 3 is the org-0 target the `add` appends (the rig seeds slots 0-2). */
+const DEST_REGRESSION_FA5_HELD: DestCmd[] = [
+  { kind: "goLive", org: 0, fixture: 0, slot: 0 },
+  { kind: "connect", org: 0, fixture: 0 },                // fixture 0 is LIVE on slot 0
+  { kind: "add", org: 0, platform: "youtube", key: 1, label: 1 },
+  { kind: "goLive", org: 0, fixture: 1, slot: 3 },      // fixture 1 holds the new target, waiting
+  { kind: "goLive", org: 0, fixture: 0, slot: 3 },      // the stale second Go live → 409 active_session, not target_in_use
+  { kind: "stop", org: 0, fixture: 0 },
+  { kind: "goLive", org: 0, fixture: 0, slot: 3 },      // now → 409 target_in_use naming fixture 1's match
+];
+
+describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, both platforms, an unreadable key; a model predicts every step (rule 10)", () => {
+  it("no drawn ordering of add, Replace key, Remove, Go live, connect, ageing, Stop and a void breaks: one holder per target, lists = the model, same-id restore, refused iff held (naming the match), no archived or foreign take, and refusals that spend nothing and call no provider", async () => {
+    const tally = {
+      runs: 0, steps: 0, skipped: 0, checks: 0, refusals: 0,
+      targetHoldChecks: 0, listRowsChecked: 0, archivedAbsent: 0, sessionRowsChecked: 0, tableRowsChecked: 0, refusalMoneyChecks: 0, refusalCallChecks: 0,
+      heldRemoveRefusals: 0, heldReplaceRefusals: 0, sameIdRestores: 0, existingKept: 0, crossOrgRefusals: 0, archivedTakeRefusals: 0, unreadableRefusals: 0,
+      duplicateRefusals: 0, staleExpired: 0, heldAfterVoid: 0, otherPlatformNew: 0, runningOverHeld: 0,
+    };
+    const seen = new Set<DestCmd["kind"]>();
+    await fc.assert(
+      fc.asyncProperty(fc.array(destCmdArb, { minLength: 1, maxLength: 12 }), async (cmds) => {
+        tally.runs++;
+        const rec = new FakeRecorder();
+        // No clock connect: a phone connects only when a `connect` step says so (the fake's scripted state).
+        const NEVER_MS = 10 * 86_400_000;
+        const rigs = [await rig({ credits: 5, fixtures: 2, recorder: rec, connectAfterMs: NEVER_MS }), await rig({ credits: 5, fixtures: 2, recorder: rec, connectAfterMs: NEVER_MS })] as const;
+        const deps = rigs.map((r) => ({ ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } }) as SessionDeps);
+        const orgIds = rigs.map((r) => r.auth.orgId);
+
+        // ---- the model ----------------------------------------------------------------------------------------------
+        type MTarget = { id: string; org: DestOrg; platform: DestPlatform; key: string | null; label: string; archived: boolean; archivedAt: number };
+        type MSession = { id: string; target: string; status: "waiting" | "live" | "stale" };
+        type MFixture = { id: string; no: number; voided: boolean; session: MSession | null };
+        const fixtures: MFixture[][] = [];
+        for (const r of rigs) {
+          const rows = await sql<{ id: string; fixture_no: number }[]>`select id, fixture_no from fixtures where id in ${sql(r.fixtureIds as string[])}`;
+          fixtures.push((r.fixtureIds as string[]).map((id) => ({ id, no: rows.find((x) => x.id === id)!.fixture_no, voided: false, session: null })));
+        }
+        const targets: MTarget[] = [
+          { id: rigs[0].target.id, org: 0, platform: "youtube", key: "yt-key", label: "Club", archived: false, archivedAt: 0 },
+          { id: await rigTarget(orgIds[0]!, "Unreadable", "youtube"), org: 0, platform: "youtube", key: null, label: "Unreadable", archived: false, archivedAt: 0 },
+          { id: rigs[1].target.id, org: 1, platform: "youtube", key: "yt-key", label: "Club", archived: false, archivedAt: 0 },
+        ];
+        let archiveClock = 0;
+        const holderOf = (t: MTarget): MFixture | null => fixtures.flat().find((f) => f.session?.target === t.id) ?? null;
+        const holdWord = (s: MSession) => (s.status === "live" ? "live" : "waiting");
+        const hintOf = (key: string | null) => (key === null || key.length < KEY_HINT_MIN_LENGTH ? null : key.slice(-KEY_HINT_CHARS));
+
+        // ---- one step: model prediction, the system's answer, agreement ---------------------------------------------
+        type Refusal = { status: number; code: string | null; holderNo?: number | null; holderState?: string; otherId?: string };
+        const refusalOf = (err: unknown, label: string): Refusal => {
+          if (!(err instanceof HttpError) || err.status >= 500) throw new Error(`${label}: escaped with a non-refusal: ${String(err)}`);
+          const extra = err.extra as { holder?: { matchNo: number | null; state: string } | null; other?: { id: string } } | undefined;
+          return {
+            status: err.status, code: err.code ?? null,
+            ...(extra?.holder ? { holderNo: extra.holder.matchNo, holderState: extra.holder.state } : {}),
+            ...(extra?.other ? { otherId: extra.other.id } : {}),
+          };
+        };
+        const money = async () => Promise.all(orgIds.map(async (o) => (await sql<{ n: number; net: number }[]>`
+          select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${o}`)[0]));
+        const flush = () => new Promise((res) => setImmediate(res));
+
+        const step = async (c: DestCmd, label: string): Promise<void> => {
+          const o = c.org;
+          const auth = rigs[o].auth;
+          const orgId = orgIds[o]!;
+          const expired = new Set<string>();          // sessions a door ends lazily this step (their provider calls are theirs)
+          const expire = (f: MFixture) => { expired.add(f.session!.id); f.session = null; tally.staleExpired++; };
+          const t = "slot" in c ? targets[c.slot % targets.length]! : null;
+          const fx = "fixture" in c ? fixtures[o]![c.fixture]! : null;
+          let expected: Refusal | "ok" = "ok";
+          let run: () => Promise<unknown>;
+          let onOk: (value: unknown) => void = () => undefined;
+
+          switch (c.kind) {
+            case "add": {
+              const key = DEST_KEYS[c.key]!;
+              const lbl = DEST_LABELS[c.label]!;
+              const same = (x: MTarget) => x.org === o && x.platform === c.platform && x.key === key;
+              const active = targets.find((x) => same(x) && !x.archived);
+              const archived = targets.filter((x) => same(x) && x.archived).sort((a, b) => b.archivedAt - a.archivedAt)[0];
+              run = () => createStreamTarget(auth, orgId, { kind: c.platform, label: lbl, streamKey: key });
+              onOk = (v) => {
+                const { id: got, label: gotLabel, outcome } = v as { id: string; label: string; outcome: string };
+                if (active) {
+                  expect(got, `${label}: §5.2 create order 1 — the ACTIVE row with this destination`).toBe(active.id);
+                  // A19, owner decision (a): nothing is renamed — the model's label stands, and the wire says `existing`.
+                  expect(outcome, `${label}: A19 — the already-saved destination is reported as existing`).toBe("existing");
+                  expect(gotLabel, `${label}: A19 — the typed name is not applied`).toBe(active.label);
+                  tally.existingKept++;
+                } else if (archived) {
+                  expect(got, `${label}: D2 — re-adding a removed key restores the SAME id`).toBe(archived.id);
+                  archived.archived = false;
+                  archived.label = lbl;
+                  expect(outcome, `${label}: D2 — reported as restored`).toBe("restored");
+                  expect(gotLabel, `${label}: D2 — the restore takes the NEWLY typed name`).toBe(archived.label);
+                  tally.sameIdRestores++;
+                } else {
+                  expect(outcome, `${label}: §5.2 create order 3 — reported as inserted`).toBe("inserted");
+                  expect(targets.map((x) => x.id), `${label}: §5.2 create order 3 — a NEW row`).not.toContain(got);
+                  if (targets.some((x) => x.org === o && x.key === key && x.platform !== c.platform && !x.archived)) tally.otherPlatformNew++;
+                  targets.push({ id: got, org: o, platform: c.platform, key, label: lbl, archived: false, archivedAt: 0 });
+                }
+              };
+              break;
+            }
+            case "replace":
+            case "remove": {
+              const target = t!;
+              // The route's door (stream-targets/[targetId]/route.ts): this org's holders of the target get their lazy expiry first.
+              const holder0 = target.org === o ? holderOf(target) : null;
+              if (holder0?.session?.status === "stale") expire(holder0);
+              const holder = target.org === o ? holderOf(target) : null;
+              const newKey = c.kind === "replace" ? DEST_KEYS[c.key]! : null;
+              if (target.org !== o || target.archived) expected = { status: 404, code: null };
+              else if (holder) expected = { status: 409, code: "TARGET_IN_USE", holderNo: holder.no, holderState: holdWord(holder.session!) };
+              else if (c.kind === "replace" && !(target.key !== null && target.key === newKey)) {
+                const other = targets.find((x) => x !== target && x.org === o && !x.archived && x.platform === target.platform && x.key === newKey);
+                if (other) expected = { status: 409, code: "DESTINATION_DUPLICATE", otherId: other.id };
+              }
+              run = async () => {
+                await expireTargetHolders(orgId, target.id, deps[o]!);
+                return c.kind === "remove"
+                  ? removeStreamTarget(auth, orgId, target.id)
+                  : patchStreamTarget(auth, orgId, target.id, { streamKey: newKey! });
+              };
+              onOk = () => {
+                if (c.kind === "remove") { target.archived = true; target.archivedAt = ++archiveClock; }
+                else target.key = newKey;
+              };
+              if (expected !== "ok" && expected.code === "TARGET_IN_USE") {
+                if (c.kind === "remove") tally.heldRemoveRefusals++;
+                else tally.heldReplaceRefusals++;
+                if (holder!.voided) tally.heldAfterVoid++;
+              }
+              if (expected !== "ok" && expected.status === 404 && target.org !== o) tally.crossOrgRefusals++;
+              if (expected !== "ok" && expected.code === "DESTINATION_DUPLICATE") tally.duplicateRefusals++;
+              break;
+            }
+            case "goLive": {
+              if (fx!.voided) { tally.skipped++; return; }   // the spec says nothing of starting a voided match; not drawn
+              const target = t!;
+              if (fx!.session?.status === "stale") expire(fx!);            // the fixture's own lazy expiry comes first
+              // Precedence, from the declarations. F-A5 (owner, 2026-09-29: "a match already streaming answers a second start
+              // before credits, destination or storage are weighed"), over the destination-HOLDER guard too (the owner's
+              // answer B, 2026-09-30): a fixture still streaming after its own lazy expiry is active_session, and no
+              // destination door runs for it — so no other fixture's stale holder is expired either. Otherwise the holder
+              // guard (createSession's gap-4 placement, before admission), then `admit`'s order (session.ts, §6.3): the
+              // target's existence; and only then the saved key's readability. The rigs never lack the plan or the credit.
+              if (!fx!.session && target.org === o) {
+                for (const g of fixtures[o]!) if (g !== fx && g.session?.target === target.id && g.session.status === "stale") expire(g);
+              }
+              const other = target.org === o ? fixtures[o]!.find((g) => g !== fx && g.session?.target === target.id) : undefined;
+              if (fx!.session) {
+                expected = { status: 409, code: "active_session" };
+                if (other) tally.runningOverHeld++;
+              } else if (other) expected = { status: 409, code: "target_in_use", holderNo: other.no, holderState: holdWord(other.session!) };
+              else if (target.org !== o || target.archived) expected = { status: 404, code: null };
+              else if (target.key === null) expected = { status: 422, code: TARGET_UNREADABLE };
+              run = () => createSession(auth, fx!.id, body(target.id), deps[o]!);
+              onOk = (v) => { fx!.session = { id: (v as { sessionId: string }).sessionId, target: target.id, status: "waiting" }; };
+              if (expected !== "ok") {
+                if (expected.status === 404 && target.org !== o) tally.crossOrgRefusals++;
+                if (expected.status === 404 && target.org === o) tally.archivedTakeRefusals++;
+                if (expected.code === TARGET_UNREADABLE) tally.unreadableRefusals++;
+              }
+              break;
+            }
+            case "connect": {
+              const sess = fx!.session;
+              run = async () => {
+                if (sess && sess.status !== "live") {
+                  const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sess.id}`;
+                  rigs[o].ingest.setState(inp!.ingest_input_id, "connected");
+                }
+                return currentSession(auth, fx!.id, deps[o]!);
+              };
+              // A stale waiting session whose phone connects goes LIVE: the expiry's pre-read sees the ingest first (N1).
+              onOk = () => { if (sess) sess.status = "live"; };
+              break;
+            }
+            case "age": {
+              const sess = fx!.session;
+              if (sess?.status !== "waiting") { tally.skipped++; return; }
+              run = () => sql`update fixture_stream_sessions set created_at = created_at - make_interval(mins => ${WARMING_TIMEOUT_MINUTES + 5}) where id = ${sess.id}`;
+              onOk = () => { sess.status = "stale"; };
+              break;
+            }
+            case "stop": {
+              const sess = fx!.session;
+              if (!sess) { tally.skipped++; return; }
+              run = () => stopSession(auth, fx!.id, sess.id, deps[o]!);
+              onOk = () => { fx!.session = null; };
+              break;
+            }
+            case "void": {
+              if (fx!.voided) { tally.skipped++; return; }
+              run = async () => {
+                for (const [type, payload] of [["core.start", {}], ["core.abandon", { reason: "model: void" }]] as const) {
+                  await scoreEvent(auth, fx!.id, { expected_seq: (await getFixtureState(auth, fx!.id)).last_seq, type, payload });
+                }
+              };
+              onOk = () => { fx!.voided = true; };
+              break;
+            }
+          }
+
+          const moneyBefore = await money();
+          const callsBefore = rec.calls.length;
+          let value: unknown = null;
+          let err: unknown = null;
+          try {
+            value = await run!();
+          } catch (e) {
+            err = e;
+          }
+          await flush();
+          if (expected === "ok") {
+            if (err !== null) throw new Error(`${label}: the model expected success; the system refused: ${JSON.stringify(refusalOf(err, label))}`);
+            onOk(value);
+            return;
+          }
+          if (err === null) throw new Error(`${label}: the model expected ${JSON.stringify(expected)}; the system succeeded`);
+          expect(refusalOf(err, label), `${label}: the refusal`).toEqual(expected);
+          tally.refusals++;
+          // Every refusal spends nothing (both orgs' ledgers unmoved) and calls no provider — except for a session the
+          // door itself ended lazily this step, whose calls carry that session's id or its input's.
+          expect(await money(), `${label}: a refusal moved money`).toEqual(moneyBefore);
+          tally.refusalMoneyChecks++;
+          const inputs = expired.size === 0 ? [] : (await sql<{ ingest_input_id: string }[]>`
+            select ingest_input_id from fixture_stream_inputs where session_id in ${sql([...expired])}`).map((x) => x.ingest_input_id);
+          const stray = rec.calls.slice(callsBefore).filter((call) => !(call.sessionId != null && expired.has(call.sessionId)) && !(call.subjectId != null && inputs.includes(call.subjectId)));
+          // DEST_REGRESSION_ADMISSION_READ below: a refusal FROM `admit` still takes the admission's storage measurement —
+          // one read-only storageUsage, no session — and records it (a snapshot per admission check: ruling 13, streaming-r1
+          // plan "Data captured"); the SAMPLES and SNAPSHOTS test above and routes.test.ts A21 pin that snapshot. Every other refusal — the holder guard, an unreadable key, and
+          // every Directory refusal — asks the provider nothing.
+          const fromAdmit = c.kind === "goLive" && (expected.code === "active_session" || expected.status === 404);
+          expect(stray.map((call) => `${call.operation}:${call.sessionId ?? "-"}`), `${label}: a refusal called a provider`).toEqual(fromAdmit ? ["storageUsage:-"] : []);
+          tally.refusalCallChecks++;
+        };
+
+        // ---- invariants after every step ----------------------------------------------------------------------------
+        const check = async (after: string) => {
+          const active = await sql<{ id: string; org_id: string; fixture_id: string; target_id: string; state: string; target_org: string }[]>`
+            select s.id, s.org_id, s.fixture_id, s.target_id, s.state, t.org_id as target_org
+              from fixture_stream_sessions s join org_stream_targets t on t.id = s.target_id
+             where s.org_id in ${sql(orgIds)} and s.state in ${sql([...ACTIVE_STATES])}`;
+          const perTarget = new Map<string, number>();
+          for (const x of active) perTarget.set(x.target_id, (perTarget.get(x.target_id) ?? 0) + 1);
+          for (const tg of targets) {
+            expect(perTarget.get(tg.id) ?? 0, `${after}: more than one ACTIVE session holds ${tg.id}`).toBeLessThanOrEqual(1);
+            tally.targetHoldChecks++;
+          }
+          // §5.3: waiting = requested / provisioning / warming; live = live / ending — the spec's words, not holdStateOf.
+          const WAITING_STATES = ["requested", "provisioning", "warming"];
+          const want = fixtures.flatMap((fs, oi) => fs.filter((f) => f.session).map((f) => ({ id: f.session!.id, org: orgIds[oi], fixture: f.id, target: f.session!.target, hold: holdWord(f.session!) })));
+          const got = active.map((x) => ({ id: x.id, org: x.org_id, fixture: x.fixture_id, target: x.target_id, hold: WAITING_STATES.includes(x.state) ? "waiting" : "live" }));
+          const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
+          expect(got.sort(byId), `${after}: the ACTIVE sessions are the model's`).toEqual(want.sort(byId));
+          for (const x of active) {
+            expect(x.target_org, `${after}: session ${x.id} holds another org's destination`).toBe(x.org_id);
+            tally.sessionRowsChecked++;
+          }
+          for (const oi of [0, 1] as const) {
+            const list = await listStreamTargets(rigs[oi].auth, orgIds[oi]!);
+            const expectRows = targets.filter((tg) => tg.org === oi && !tg.archived).map((tg) => {
+              const h = holderOf(tg);
+              return { id: tg.id, label: tg.label, keyHint: hintOf(tg.key), inUse: h ? { sessionId: h.session!.id, matchNo: h.no, state: holdWord(h.session!) } : null };
+            });
+            const gotRows = list.map((row) => ({ id: row.id, label: row.label, keyHint: row.keyHint, inUse: row.inUse ? { sessionId: row.inUse.sessionId, matchNo: row.inUse.matchNo, state: row.inUse.state } : null }));
+            expect(gotRows.sort(byId), `${after}: org ${oi}'s list is its model's un-archived targets`).toEqual(expectRows.sort(byId));
+            tally.listRowsChecked += gotRows.length;
+            const listed = new Set(list.map((row) => row.id));
+            for (const tg of targets) {
+              if (tg.org === oi && !tg.archived) continue;
+              expect(listed.has(tg.id), `${after}: org ${oi}'s list shows ${tg.archived ? "an archived" : "the other org's"} target ${tg.id}`).toBe(false);
+              tally.archivedAbsent++;
+            }
+          }
+          const table = await sql<{ id: string; org_id: string; archived: boolean }[]>`
+            select id, org_id, archived_at is not null as archived from org_stream_targets where org_id in ${sql(orgIds)}`;
+          expect(table.map((x) => ({ id: x.id, org: x.org_id, archived: x.archived })).sort(byId), `${after}: the table's owners and archived flags`)
+            .toEqual(targets.map((tg) => ({ id: tg.id, org: orgIds[tg.org], archived: tg.archived })).sort(byId));
+          tally.tableRowsChecked += table.length;
+          tally.checks++;
+        };
+
+        await check("rig");
+        for (const [i, c] of cmds.entries()) {
+          seen.add(c.kind);
+          const label = `step ${i} ${JSON.stringify(c)}`;
+          await step(c, label);
+          tally.steps++;
+          await check(label);
+        }
+      }),
+      { numRuns: DEST_MODEL_RUNS, seed: DEST_MODEL_SEED, examples: [DEST_REGRESSION_FA5_HELD, DEST_REGRESSION_FA5_UNREADABLE, DEST_REGRESSION_ADMISSION_READ, ...DEST_PINNED].map((seq) => [seq]) },
+    );
+    console.info(`destination model: ${JSON.stringify(tally)}`);
+    // Anti-vacuity (rule 2): the property ran every run, checked after every step, and reached every behaviour it claims.
+    expect(tally.runs, "fast-check counts the pinned examples INSIDE numRuns").toBe(DEST_MODEL_RUNS);
+    expect(tally.checks, "one invariant pass per step plus one per rig").toBe(tally.steps + tally.runs);
+    expect([...seen].sort()).toEqual(["add", "age", "connect", "goLive", "remove", "replace", "stop", "void"]);
+    for (const k of ["targetHoldChecks", "listRowsChecked", "archivedAbsent", "sessionRowsChecked", "tableRowsChecked", "refusalMoneyChecks", "refusalCallChecks",
+      "heldRemoveRefusals", "heldReplaceRefusals", "sameIdRestores", "existingKept", "crossOrgRefusals", "archivedTakeRefusals", "unreadableRefusals", "duplicateRefusals",
+      "staleExpired", "heldAfterVoid", "otherPlatformNew", "runningOverHeld"] as const) {
+      expect(tally[k], `${k}: zero checked is a failure`).toBeGreaterThan(0);
+    }
+  }, 240_000);
+});
+
+// G-a (B5 re-review 4 gap hunt; controller ruling 2026-10-01): Cloudflare's input word `new_configuration_accepted` (an
+// output was added or changed) is NOT evidence about the phone. It used to map to `unknown`: the chain read No signal
+// over a phone that may be sending, and warming → live waited on it. The adapter now answers it with `state: null`
+// (ports.ts IngestStatus) and the session layer CARRIES the previous poll's word forward. Every expected word below is
+// the word an earlier REAL read produced on the same session, so a carry that invents a constant cannot pass both the
+// connected and the dropped case. Single-sport: the carry has no sport branch (stream sessions are sport-blind).
+describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's previous reading — never unknown, never a hold on go-live", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  /** The provider answering `new_configuration_accepted` on every input read: the real fake's reading, `state: null`. */
+  const noEvidence = (r: Rig): SessionDeps => {
+    const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      inputStatus: async (id: string, meta?: { sessionId?: string | null }) => ({ ...(await r.ingest.inputStatus(id, meta)), state: null }),
+    });
+    return { ...r.deps, drivers: { ...r.deps.drivers, ingest } };
+  };
+  const counts = async (sid: string) => {
+    const [{ samples }] = await sql<{ samples: number }[]>`select count(*)::int as samples from fixture_stream_samples where session_id = ${sid} and source = 'poll'`;
+    const [{ events }] = await sql<{ events: number }[]>`select count(*)::int as events from fixture_stream_events where session_id = ${sid} and type = 'ingest_status'`;
+    return { samples, events };
+  };
+  const lastPollWord = async (sid: string) => (await sql<{ ingest_state: string | null }[]>`
+    select ingest_state from fixture_stream_samples where session_id = ${sid} and source = 'poll' order by id desc limit 1`)[0]?.ingest_state;
+  const phoneOf = async (r: Rig, sid: string) => {
+    const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sid}`;
+    return (s: "connected" | "disconnected") => r.ingest.setState(inp!.ingest_input_id, s);
+  };
+  const consumesOf = async (sid: string) => (await sql<{ n: number }[]>`
+    select count(*)::int as n from org_stream_credits where session_id = ${sid} and reason = 'consume'`)[0]!.n;
+  const PAST_WARMING_MS = (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
+  const NEVER_MS = 24 * 60 * 60_000;
+
+  it("LIVE: connected stays connected (no No signal) across two no-evidence reads; a dropped phone stays DROPPED (the carry is the previous word, not a constant); each carried poll records the carried word and no event; a real word moves it again", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state, "PREMISE: a real connected read took it live").toBe("live");
+    expect(live.ingest?.state).toBe("connected");
+    const phone = await phoneOf(r, sessionId);
+    let carried = 0;
+    for (let i = 0; i < 2; i++) {   // a second call carries the same word
+      r.tick(5_000);
+      const before = await counts(sessionId);
+      const cur = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+      expect(cur.ingest?.state, `no-evidence read ${i + 1}: carried, not unknown`).toBe("connected");
+      expect(phoneNoSignal(cur), "no No signal over a phone that was sending").toBe(false);
+      expect(cur.state).toBe("live");
+      expect(await counts(sessionId), "a sample of the carried word, no event").toEqual({ samples: before.samples + 1, events: before.events });
+      expect(await lastPollWord(sessionId)).toBe("connected");
+      carried++;
+    }
+    // The phone drops on a REAL read, then the provider says nothing about video: the drop is carried.
+    phone("disconnected");
+    r.tick(5_000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state, "PREMISE: a real read saw the drop").toBe("disconnected");
+    r.tick(5_000);
+    const before = await counts(sessionId);
+    const dropped = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+    expect(dropped.ingest?.state, "the previous word, not connected and not unknown").toBe("disconnected");
+    expect(phoneNoSignal(dropped), "a carried drop is still a drop").toBe(true);
+    expect(await counts(sessionId)).toEqual({ samples: before.samples + 1, events: before.events });
+    carried++;
+    // A real word afterwards is read as itself.
+    phone("connected");
+    r.tick(5_000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state).toBe("connected");
+    expect(carried, "three carried polls ran").toBe(3);
+    const [{ unknowns }] = await sql<{ unknowns: number }[]>`
+      select count(*)::int as unknowns from fixture_stream_samples where session_id = ${sessionId} and ingest_state = 'unknown'`;
+    expect(unknowns, "no sample ever recorded the word as unknown").toBe(0);
+  });
+
+  it("WARMING with nothing to carry: the phone is unseen — ingest null, still warming, nothing recorded, nothing reported — and the next real `connected` takes it live with one consume (go-live is never held by the word)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);   // the fake's phone is now connected: a real read would go live
+    sentry.captureError.mockClear();
+    const unseen = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+    expect(unseen).toMatchObject({ state: "warming", ingest: null, failReason: null });
+    expect(phoneNoSignal(unseen)).toBe(false);
+    expect(await counts(sessionId), "no evidence and no carry: nothing recorded").toEqual({ samples: 0, events: 0 });
+    expect(sentry.captureError, "not a failed read: nothing reported").not.toHaveBeenCalled();
+    expect(await consumesOf(sessionId)).toBe(0);
+    r.tick(STREAM_POLL_MS);   // the next poll interval (I-1: a second poll inside this one would be served, not read)
+    const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(live.state, "the next real read goes live").toBe("live");
+    expect(await consumesOf(sessionId)).toBe(1);
+  });
+
+  it("EXPIRY (M-4, final review): past the warming timeout a no-evidence read with NOTHING to carry is read as `unknown`, so the timeout runs normally (failed no_inbound_timeout, no consume) — never an unbounded hold; a carried `disconnected` expires the same way; the differential: a carried `connected` takes it LIVE instead", async () => {
+    // Nothing to carry: `unknown`, so the warming timeout fires on schedule (before M-4 it was held until the wall clock).
+    const bare = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const a = await createSession(bare.auth, bare.fixtureId, body(bare.target.id), bare.deps);
+    expect(await lastPollWord(a.sessionId), "PREMISE: no poll sample exists to carry").toBeUndefined();
+    bare.tick(PAST_WARMING_MS);
+    expect((await currentSession(bare.auth, bare.fixtureId, noEvidence(bare)))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+    expect(await bare.row(a.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+    expect(await consumesOf(a.sessionId), "a timed-out warming session consumed nothing").toBe(0);
+
+    // A previous poll that read `disconnected`: carried, so the expiry has its evidence.
+    const prior = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const b = await createSession(prior.auth, prior.fixtureId, body(prior.target.id), prior.deps);
+    prior.tick(5_000);
+    expect((await currentSession(prior.auth, prior.fixtureId, prior.deps))!.ingest?.state, "PREMISE: a real poll read the phone silent").toBe("disconnected");
+    expect(await lastPollWord(b.sessionId)).toBe("disconnected");
+    prior.tick(PAST_WARMING_MS);
+    expect((await currentSession(prior.auth, prior.fixtureId, noEvidence(prior)))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+
+    // The differential: the SAME no-evidence read with a carried `connected` is not a timeout — the expiry's
+    // observation takes it live (one consume). Seated directly: a real `connected` poll would already have gone live.
+    const sending = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const c = await createSession(sending.auth, sending.fixtureId, body(sending.target.id), sending.deps);
+    await sql`insert into fixture_stream_samples (session_id, sampled_at, source, ingest_state, output_state, raw)
+              values (${c.sessionId}, now(), 'poll', 'connected', 'unknown', '{}'::jsonb)`;
+    sending.tick(PAST_WARMING_MS);
+    const went = (await currentSession(sending.auth, sending.fixtureId, noEvidence(sending)))!;
+    expect(went.state, "a carried connected is evidence of video: live, not timed out").toBe("live");
+    expect(went.failReason).toBeNull();
+    expect(await consumesOf(c.sessionId)).toBe(1);
+  });
+
+  it("NO evidence on EITHER read (the input word says nothing about video AND the outputs read failed): the phone still shows its carried word, and the poll records nothing (m-2)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state, "PREMISE: a real read saw the phone").toBe("connected");
+    const base = noEvidence(r);
+    const ingest = Object.assign(Object.create(base.drivers.ingest) as FakeIngest, { outputState: async () => null });
+    const blind: SessionDeps = { ...base, drivers: { ...base.drivers, ingest } };
+    r.tick(5_000);
+    const before = await counts(sessionId);
+    const cur = (await currentSession(r.auth, r.fixtureId, blind))!;
+    expect(cur.ingest?.state, "carried even though no outputs word came back").toBe("connected");
+    expect(phoneNoSignal(cur)).toBe(false);
+    expect(cur.state).toBe("live");
+    expect(await counts(sessionId), "an outputs read that failed records neither sample nor event").toEqual(before);
+  });
+
+  it("the carry's guard: a latest poll sample whose word is not one of the port's three is not carried — the phone is unseen (ingest null), never that word", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+    await sql`insert into fixture_stream_samples (session_id, sampled_at, source, ingest_state, output_state, raw)
+              values (${sessionId}, now(), 'poll', 'playing', 'ok', '{}'::jsonb)`;
+    expect(await lastPollWord(sessionId), "PREMISE: the foreign word is the latest poll sample").toBe("playing");
+    r.tick(5_000);
+    const cur = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
+    expect(cur.ingest, "not carried").toBeNull();
+    expect(cur.state).toBe("live");
+  });
+});
+
+// I-1 (final review; controller ruling 2026-10-01): every open organiser tab polls `current` every STREAM_POLL_MS, and
+// each poll read Cloudflare twice (inputStatus + outputState). A poll now CLAIMS the interval's read with a conditional
+// write (V428 `ingest_polled_at`); a poll that finds a claim younger than the claim WINDOW reads nothing and answers from
+// the latest poll sample. The window is the controller's ruling (2026-10-01): the lib's STREAM_POLL_MS less a 1 s jitter
+// allowance, so a lone tab on its own cadence reads every time while concurrent tabs coalesce — derived here from the
+// lib's constant and the ruled allowance, never imported from the code under test. Single-sport: the poll has no sport
+// branch (stream sessions are sport-blind).
+describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewers and processes — one claimed read per session per claim window", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  const WINDOW = STREAM_POLL_MS - 1_000;   // controller ruling 2026-10-01: STREAM_POLL_MS less a 1 s jitter allowance
+  /** Another PROCESS polling the same provider account: its own deps and adapter object, the same fake state. */
+  const elsewhere = (r: Rig): SessionDeps => ({ ...r.deps, drivers: { ...r.deps.drivers, ingest: Object.create(r.ingest) as FakeIngest } });
+  const readsOf = (r: Rig) => {
+    const ins = vi.spyOn(r.ingest, "inputStatus");
+    const outs = vi.spyOn(r.ingest, "outputState");
+    return { count: () => ins.mock.calls.length + outs.mock.calls.length, ins, outs, restore: () => { ins.mockRestore(); outs.mockRestore(); } };
+  };
+  const counts = async (sid: string) => {
+    const [{ samples }] = await sql<{ samples: number }[]>`select count(*)::int as samples from fixture_stream_samples where session_id = ${sid} and source = 'poll'`;
+    const [{ events }] = await sql<{ events: number }[]>`select count(*)::int as events from fixture_stream_events where session_id = ${sid} and type = 'ingest_status'`;
+    return { samples, events };
+  };
+
+  it("two CONCURRENT polls inside one interval make 2 Cloudflare reads, not 4 — and so do four, from two viewers on two processes; every answer carries the same reading", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const reads = readsOf(r);
+    try {
+      // From the very first poll: no claim, no sample.
+      const pair = await Promise.all([currentSession(r.auth, r.fixtureId, r.deps), currentSession(r.auth, r.fixtureId, elsewhere(r))]);
+      expect(reads.count(), "two concurrent first polls: ONE inputStatus + ONE outputState").toBe(2);
+      expect(reads.ins).toHaveBeenCalledTimes(1);
+      expect(reads.outs).toHaveBeenCalledTimes(1);
+      expect(pair.some((v) => v!.state === "live"), "PREMISE: the claimed read took it live").toBe(true);
+      // The next interval, four viewers at once (a second organiser on another device, on another process).
+      r.tick(STREAM_POLL_MS);
+      const coAuth = { ...r.auth, userId: await rigUser() };
+      const four = await Promise.all([
+        currentSession(r.auth, r.fixtureId, r.deps), currentSession(r.auth, r.fixtureId, elsewhere(r)),
+        currentSession(coAuth, r.fixtureId, r.deps), currentSession(coAuth, r.fixtureId, elsewhere(r)),
+      ]);
+      expect(reads.count(), "four concurrent polls one interval later: two more reads, not eight").toBe(4);
+      let checked = 0;
+      for (const v of four) {
+        expect(v!.ingest, `viewer ${checked + 1}`).toEqual({ state: "connected", protocol: four[0]!.ingest!.protocol });
+        expect(v!.output?.state, `viewer ${checked + 1}`).toBe(four[0]!.output!.state);
+        expect(v!.state).toBe("live");
+        checked++;
+      }
+      expect(checked).toBe(4);
+      expect((await counts(sessionId)).samples, "one sample per CLAIMED read: two").toBe(2);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("a LONE viewer on the tab's own STREAM_POLL_MS cadence reads Cloudflare on EVERY poll, even when each request lands a few ms EARLY (timer and network jitter) — coalescing is for concurrent viewers, never a halved cadence", async () => {
+    const r = await rig({ credits: 1 });
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live, and that poll claimed").toBe("live");
+    const reads = readsOf(r);
+    try {
+      const EARLY_MS = [1, 3, 17, 42, 9, 250, 25, 999];   // how early each request lands against the 5 s cadence
+      let checked = 0;
+      for (const early of EARLY_MS) {
+        const before = reads.count();
+        r.tick(STREAM_POLL_MS - early);
+        const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(reads.count() - before, `a poll ${early} ms early still reads (inputStatus + outputState)`).toBe(2);
+        expect(v.ingest?.state).toBe("connected");
+        checked++;
+      }
+      expect(checked, "every jittered poll ran").toBe(EARLY_MS.length);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("the window, in sequence: a poll 1 ms short of the claim window reads nothing and answers from the sample; a poll at exactly the window reads again; a second call after that reads nothing", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const reads = readsOf(r);
+    try {
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+      expect(reads.count()).toBe(2);
+      r.tick(WINDOW - 1);
+      const before = await counts(sessionId);
+      const served = (await currentSession(r.auth, r.fixtureId, elsewhere(r)))!;
+      expect(reads.count(), "inside the window: no call").toBe(2);
+      expect(served.ingest?.state, "answered from the sample").toBe("connected");
+      expect(await counts(sessionId), "a coalesced poll records nothing").toEqual(before);
+      r.tick(1);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state).toBe("connected");
+      expect(reads.count(), "at exactly the window after the claim: read again").toBe(4);
+      expect((await counts(sessionId)).samples).toBe(before.samples + 1);
+      await currentSession(r.auth, r.fixtureId, r.deps);
+      expect(reads.count(), "the second call of that window: nothing").toBe(4);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("the D3 hold and its clock are unchanged by coalescing: a served poll keeps the read's `since`, its elapsedMs runs on THIS response's clock, and the box arrives at exactly OUTPUT_WARNING_AFTER_MS whether that poll READ or was SERVED", async () => {
+    const P = STREAM_POLL_MS, HOLD = OUTPUT_WARNING_AFTER_MS;
+    expect(HOLD % P, "PREMISE: the hold is a whole number of poll intervals (both the lib's own constants)").toBe(0);
+    expect(P / 2 < WINDOW && WINDOW <= P, "PREMISE: half an interval is inside the window, a whole one is not").toBe(true);
+    let checked = 0;
+    for (const landingReads of [true, false]) {
+      const r = await rig({ credits: 1, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomUUID()}` });
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      r.tick(3000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live (that poll claimed at live+0)").toBe("live");
+      const tLive = r.deps.now();
+      // ON the claim grid: a poll every P from live, each one a read, the last AT the hold. HALF an interval off it: the
+      // first poll at P/2 is served, then claims at 3P/2, 5P/2, …, and the polls at HOLD − 1 and HOLD are both served
+      // (P/2 − 1 and P/2 after the last claim, inside the window).
+      const times: number[] = [];
+      if (landingReads) for (let t = P; t <= HOLD; t += P) times.push(t);
+      else {
+        for (let t = P / 2; t < HOLD; t += P) times.push(t);
+        times.push(HOLD - 1, HOLD);
+      }
+      const reads = readsOf(r);
+      try {
+        let at = 0;
+        for (const t of times) {
+          const callsBefore = reads.count();
+          r.tick(t - at);
+          at = t;
+          const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+          expect(v.output, `t=${t}`).toEqual({ state: "connecting", since: tLive.toISOString(), elapsedMs: t });
+          expect(d3Warning(v), `t=${t}`).toBe(t >= HOLD ? "destination" : null);
+          if (landingReads) expect(reads.count() - callsBefore, `t=${t}: on the cadence, every poll reads`).toBe(2);
+          else if (t >= HOLD - 1) expect(reads.count(), `t=${t}: served`).toBe(callsBefore);
+        }
+        // Anti-vacuity: on the grid P..HOLD is HOLD/P polls; off it, P/2..HOLD−P/2 is HOLD/P, plus the two at the hold.
+        expect(times.length, "the walk crossed the whole hold").toBe(landingReads ? HOLD / P : HOLD / P + 2);
+        checked++;
+      } finally {
+        reads.restore();
+      }
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a coalesced poll whose latest sample is NOT this interval's (another process holds the claim, its read still in flight) answers like a failed read — ingest and output null, nothing recorded, nothing decided; one ms younger and the sample is served", async () => {
+    let checked = 0;
+    for (const ageMs of [2 * STREAM_POLL_MS, 2 * STREAM_POLL_MS - 1]) {
+      const r = await rig({ credits: 1 });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      r.tick(3000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+      r.tick(ageMs);
+      // Another process claims this interval and has not written its sample yet.
+      await sql`update fixture_stream_sessions set ingest_polled_at = ${r.deps.now()} where id = ${sessionId}`;
+      const reads = readsOf(r);
+      try {
+        const before = await counts(sessionId);
+        const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(reads.count(), `age ${ageMs}: the claim is held elsewhere, no call`).toBe(0);
+        expect(await counts(sessionId)).toEqual(before);
+        expect(v.state).toBe("live");
+        if (ageMs >= 2 * STREAM_POLL_MS) {
+          expect(v.ingest, "a stale sample is not presented as now").toBeNull();
+          expect(v.output).toBeNull();
+        } else {
+          expect(v.ingest?.state, "the sample is this interval's: served").toBe("connected");
+          expect(v.output).not.toBeNull();
+        }
+        checked++;
+      } finally {
+        reads.restore();
+      }
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a served sample's stored words are guarded to their port types: an output word or a protocol the poll never writes is not served (null), never that word; the ingest word beside them still is", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+    await sql`insert into fixture_stream_samples (session_id, sampled_at, source, ingest_state, output_state, raw)
+              values (${sessionId}, ${r.deps.now()}, 'poll', 'connected', 'streaming', ${sql.json({ protocol: "webrtc" })})`;
+    r.tick(1);
+    const reads = readsOf(r);
+    try {
+      const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(reads.count(), "PREMISE: served, not read").toBe(0);
+      expect(v.ingest).toEqual({ state: "connected", protocol: null });
+      expect(v.output, "a foreign output word is not this poll's reading").toBeNull();
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("a claimed read that FAILS still holds the window (a 429 storm is coalesced too): one call and one report for two polls inside the window; the poll after it reads again", async () => {
+    const r = await rig({ credits: 1 });
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const err = Object.assign(new Error("cloudflare inputStatus: HTTP 429"), { status: 429 });
+    const down = vi.spyOn(r.ingest, "inputStatus").mockRejectedValue(err);
+    try {
+      sentry.captureError.mockClear();
+      const first = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(first.ingest, "PREMISE: a failed read answers without the ingest (N1)").toBeNull();
+      r.tick(WINDOW - 1);
+      const second = (await currentSession(r.auth, r.fixtureId, elsewhere(r)))!;
+      expect(second.ingest).toBeNull();
+      expect(down, "one call for the window").toHaveBeenCalledTimes(1);
+      expect(sentry.captureError, "one report for the window").toHaveBeenCalledTimes(1);
+      r.tick(1);
+      down.mockRestore();
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "the next window's read succeeds and goes live").toBe("live");
+    } finally {
+      down.mockRestore();
+    }
+  });
+});
+
+// M-3 (final review): the Directory lists destinations with an "In use" lock that disables Replace and Remove — the very
+// buttons whose routes tick a held target's expiry. The Directory ticks every holder of the org first (`targetId: null`).
+describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory's tick over every destination the org holds", () => {
+  it("expires every DUE holder of the org, leaves a holder that is not due, never touches another org's — and the list's lock follows; a second call is a no-op", async () => {
+    const r = await rig({ credits: 2, fixtures: 2, connectAfterMs: 24 * 60 * 60_000 });
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` });
+    const stuck = await createSession(r.auth, r.fixtureIds[0]!, body(r.target.id), r.deps);
+    const fresh = await createSession(r.auth, r.fixtureIds[1]!, body(second.id), r.deps);
+    const other = await rig({ credits: 1, connectAfterMs: 24 * 60 * 60_000 });
+    const foreign = await createSession(other.auth, other.fixtureId, body(other.target.id), other.deps);
+    // An abandoned Go live: warming past the timeout, read by nobody. Both orgs have one.
+    const due = new Date(r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000);
+    await sql`update fixture_stream_sessions set created_at = ${due} where id in ${sql([stuck.sessionId, foreign.sessionId])}`;
+    const held = async () => new Map((await listStreamTargets(r.auth, r.auth.orgId)).map((t) => [t.id, t.inUse !== null]));
+    expect(await held(), "PREMISE: both destinations show In use").toEqual(new Map([[r.target.id, true], [second.id, true]]));
+
+    await expireTargetHolders(r.auth.orgId, null, r.deps);
+    expect(await r.row(stuck.sessionId), "the due holder expired on the org-wide tick").toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+    expect((await r.row(fresh.sessionId)).state, "a holder that is not due is untouched").toBe("warming");
+    expect((await other.row(foreign.sessionId)).state, "another org's due holder is not this org's to tick").toBe("warming");
+    expect(await held(), "the lock is gone from the expired destination only").toEqual(new Map([[r.target.id, false], [second.id, true]]));
+
+    await expireTargetHolders(r.auth.orgId, null, r.deps);
+    expect((await r.row(fresh.sessionId)).state, "second call: still nothing due").toBe("warming");
+    // The empty case: an org with no holder at all.
+    const none = await rig({ credits: 1 });
+    await expect(expireTargetHolders(none.auth.orgId, null, none.deps)).resolves.toBeUndefined();
   });
 });

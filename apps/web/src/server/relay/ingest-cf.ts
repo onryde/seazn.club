@@ -24,7 +24,7 @@
 //    "not known yet" — `measured()` maps those to null on the VALUE, never on
 //    the state, because a video that ERRORED is no longer `live-inprogress`
 //    and a state-keyed rule would pass its -1 into recording_bytes.
-import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS } from "./config";
+import { DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT } from "./config";
 // The token is ACCOUNT-owned: /user/tokens/verify says "Invalid API Token"
 // while every Stream endpoint answers 200 (C12) — nothing here calls it.
 // Ruling 13: one stream_provider_calls row per call, through the injected
@@ -38,7 +38,7 @@ import { NOOP_RECORDER } from "./ports";
 import { redact } from "./sanitise";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallRecorder, StorageUsage,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
 } from "./ports";
 
 export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -60,6 +60,36 @@ export const LIST_VIDEOS_PAGE_LIMIT = 1000;
 
 interface CfEnvelope<T> { success: boolean; result?: T; errors?: { code?: number; message?: string }[] }
 
+/** m-2: every output `status.current.state` word `outputState` maps on purpose (staging check B, 2026-09-30, plus the
+ *  `error` it keeps for a refusal). Any other word is reported once per session. */
+const OUTPUT_WORDS_SEEN: ReadonlySet<string> = new Set(["connected", "connecting", "reconnecting", "error"]);
+
+/** G-1 (B5 re-review 3; controller ruling 2026-10-01): a live input's `status.current.state`, mapped word by word. The
+ *  documented enum (quoted in `outputState`'s comment) plus `disconnected`, which R0 MEASURED on an idle input although
+ *  the enum does not list it. The port has three words (ports.ts IngestState), so: the two that mean video is arriving
+ *  → connected (a returning phone reads `reconnected` — as `unknown` it kept the chain on No signal over a sending phone
+ *  and the I-2a clamp never fired); the five that mean it is not arriving, or not yet again → disconnected, the port's
+ *  best word for "not sending now" (`reconnecting` included: the phone is not sending until it has reconnected); and
+ *  `new_configuration_accepted`, which says nothing about video → null, NOT evidence (G-a, controller ruling
+ *  2026-10-01; ports.ts IngestStatus.state): the caller carries its previous reading forward. As `unknown` it read as
+ *  No signal and held go-live over a phone that may be sending — the output is added on provisioned → warming, after
+ *  the QR is served, so Cloudflare can report it over a connected phone. Any other word → unknown, and reported. A
+ *  Map, not an object literal: a word like `constructor` must not find Object.prototype. */
+const INPUT_STATES: ReadonlyMap<string, IngestState | null> = new Map<string, IngestState | null>([
+  ["connected", "connected"],
+  ["reconnected", "connected"],
+  ["reconnecting", "disconnected"],
+  ["client_disconnect", "disconnected"],
+  ["ttl_exceeded", "disconnected"],
+  ["failed_to_connect", "disconnected"],
+  ["failed_to_reconnect", "disconnected"],
+  ["disconnected", "disconnected"],
+  ["new_configuration_accepted", null],
+]);
+
+/** m-2: `captureError`'s shape (lib/sentry.ts), so the live pair passes it as is. */
+export type ErrorReporter = (err: unknown, context?: { route?: string; extra?: Record<string, unknown> }) => void;
+
 /** Dd: -1 (duration, size) and 0 (width, height) are Cloudflare's "not known
  *  yet". Tested on the VALUE, so an errored video's -1 is dropped too; a real
  *  recording is never negative and never 0 px, so nothing true is lost. */
@@ -78,6 +108,20 @@ export class CloudflareIngest implements IngestProvider {
 
   private readonly accountId: string;
   private readonly rec: ProviderCallRecorder;
+  /** m-2 (B5 re-review 2): where an unseen output word is reported. INJECTED, as the recorder is: this adapter imports no
+   *  app module (fakes.ts imports it, and e2e specs import fakes.ts outside Next), so the live pair passes
+   *  `captureError` (drivers.ts). Default: nothing. */
+  private readonly reportError: ErrorReporter;
+  /** m-2 / G-1 / m-c: what has already been reported, `<what>:<session, or input:<uid> with no session>` — each kind of
+   *  report goes out once per session (per process: the live pair is a process singleton, drivers.ts). */
+  private readonly reported = new Set<string>();
+  /** m-c: CONSECUTIVE failed outputs reads per session (or input); a read that succeeds ends the run.
+   *
+   *  m-9 (final review) — both this run and `reported` above are PER PROCESS. With N web machines each one counts only
+   *  the reads it made itself, so a run of OUTPUT_READ_FAILURES_BEFORE_REPORT takes about N times as long to build up
+   *  as on one machine (later than the nominal 30 s), and a report goes out once per MACHINE, not once per session. This
+   *  is timing and duplication only: what the projection shows does not depend on it. */
+  private readonly outputReadFailures = new Map<string, number>();
 
   /** m1 (lane-close review): does this environment carry both secrets the constructor below refuses without? Asked by
    *  `relayUnavailable()` (drivers.ts) WITHOUT constructing — the same two env reads, so the predicate cannot disagree
@@ -86,7 +130,7 @@ export class CloudflareIngest implements IngestProvider {
     return Boolean(env.CLOUDFLARE_ACCOUNT_ID) && Boolean(env.CLOUDFLARE_STREAM_TOKEN);
   }
 
-  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder } = {}) {
+  constructor(opts: { fetchImpl?: typeof fetch; accountId?: string; token?: string; recorder?: ProviderCallRecorder; reportError?: ErrorReporter } = {}) {
     const accountId = opts.accountId ?? process.env.CLOUDFLARE_ACCOUNT_ID;
     const token = opts.token ?? process.env.CLOUDFLARE_STREAM_TOKEN;
     if (!accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is not set (RELAY_DRIVERS=live needs it)");
@@ -96,6 +140,7 @@ export class CloudflareIngest implements IngestProvider {
     this.token = token;
     this.accountId = accountId;
     this.rec = opts.recorder ?? NOOP_RECORDER;
+    this.reportError = opts.reportError ?? (() => undefined);
   }
 
   /** One request, one record (ruling 13). `meta.ids` are the ids the caller
@@ -235,18 +280,28 @@ export class CloudflareIngest implements IngestProvider {
     };
   }
 
-  async inputStatus(inputId: string): Promise<IngestStatus> {
+  async inputStatus(inputId: string, meta: ProviderCallMeta = {}): Promise<IngestStatus> {
     const r = await this.call<{
       status?: { current?: { ingestProtocol?: string; state?: string; reason?: string | null; statusEnteredAt?: string; statusLastSeen?: string } } | null;
     }>("GET", `/live_inputs/${encodeURIComponent(inputId)}`, undefined,
-      { operation: "inputStatus", ids: [inputId], subjectId: inputId });
+      { operation: "inputStatus", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404) return { state: "unknown", protocol: null, enteredAt: null, lastSeenAt: null, reason: null };
     if (!r.json.success || !r.json.result) this.fail("input status", r);
     const cur = r.json.result.status?.current;
     // An input that has never connected has no `status.current` at all
     // (absent-as-false) — so there is no reason to report either.
     if (!cur) return { state: "disconnected", protocol: null, enteredAt: null, lastSeenAt: null, reason: null };
-    const state: IngestState = cur.state === "connected" ? "connected" : cur.state === "disconnected" ? "disconnected" : "unknown";
+    // G-1: the whole vocabulary, word by word (INPUT_STATES). An unseen word is `unknown` — never a sending phone — and
+    // reported once per session, as an unseen output word is. A status with no word at all is not a word: unknown, quiet.
+    const known = typeof cur.state === "string" ? INPUT_STATES.get(cur.state) : undefined;
+    if (typeof cur.state === "string" && known === undefined) {
+      const sessionId = meta.sessionId ?? null;
+      this.reportOnce("input-word", sessionId, inputId, new Error("cloudflare inputStatus: a live-input state word this adapter has never seen (read as unknown)"), {
+        route: "relay.input_state", extra: { sessionId, inputUid: inputId, word: cur.state },
+      });
+    }
+    // `=== undefined`, never `??`: a `??` would turn G-a's null (no evidence) back into `unknown`.
+    const state: IngestState | null = known === undefined ? "unknown" : known;
     const protocol = cur.ingestProtocol === "srt" ? "srt" : cur.ingestProtocol === "rtmps" || cur.ingestProtocol === "rtmp" ? "rtmps" : null;
     // Dh: verbatim. It is Cloudflare's sentence, not ours to reword — Task 10
     // writes it straight to fixture_stream_samples.ingest_reason.
@@ -256,35 +311,94 @@ export class CloudflareIngest implements IngestProvider {
   /** Dg: returns the created output's uid — Task 10 persists it as
    *  sessions.output_uid. The output object carries only uid/url/streamKey/
    *  enabled, so there is no error code here to capture. */
-  async addOutput(inputId: string, target: IngestTarget): Promise<string> {
+  async addOutput(inputId: string, target: IngestTarget, meta: ProviderCallMeta = {}): Promise<string> {
     const r = await this.call<{ uid: string }>("POST", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, {
       url: target.url, streamKey: target.streamKey, enabled: true,
-    }, { operation: "addOutput", ids: [inputId], subjectId: inputId });
+    }, { operation: "addOutput", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     // Review I4: the body carried the organiser's real destination stream key, so the refusal is redacted against
     // THAT value as well as the account token. This is the one call in the adapter that sends a secret.
     if (!r.json.success || !r.json.result) this.fail("add output", r, [target.streamKey]);
     return r.json.result.uid;
   }
 
-  async outputState(inputId: string): Promise<OutputState> {
+  /** D3 (spec §5.6). The words are OBSERVED, not a documented enum: Cloudflare's OpenAPI (fetched 2026-09-30, the
+   *  Cloudflare MCP `search` over `spec.paths`, `GET /accounts/{account_id}/stream/live_inputs/{live_input_identifier}/
+   *  outputs`) documents an output as `{enabled, streamKey, uid, url}` and NO `status` at all; the only connection enum
+   *  it documents is the live INPUT's `status` (`connected`, `reconnected`, `reconnecting`, `client_disconnect`,
+   *  `ttl_exceeded`, `failed_to_connect`, `failed_to_reconnect`, `new_configuration_accepted`), and the docs search finds
+   *  no output-status vocabulary either. Staging check B (2026-09-30) captured the raw `result[].status.current.state`:
+   *  a WRONG destination key read `connecting`, with no reason, for the ~2 minutes it was watched; a real key read
+   *  `connected`/`connected` (recorded with a history of `[connecting]`); and before any inbound video the output's
+   *  `status` was `null`. So: `error` → rejected (never yet seen, kept for a refusal Cloudflare may still word
+   *  that way); any `connecting`/`reconnecting` → connecting, which is how a wrong key shows; every output `connected` →
+   *  ok; anything else (no status yet, or a word this code has never seen) → unknown — an unseen word is never read as a
+   *  healthy destination. */
+  async outputState(inputId: string, meta: ProviderCallMeta = {}): Promise<OutputState | null> {
     const r = await this.call<{ enabled?: boolean; status?: { current?: { state?: string } } | null }[]>(
       "GET", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, undefined,
-      { operation: "outputState", ids: [inputId], subjectId: inputId },
+      { operation: "outputState", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null },
     );
     // A failed envelope's body is not authoritative, and a missing array is not
     // an empty one. An EMPTY array needs no clause of its own: it yields no
     // states, and the states rule below already answers that with "unknown" —
     // a separate `length === 0` check was two guards covering for each other,
     // so neither could be killed on its own.
-    if (!r.json.success || !r.json.result) return "unknown";
+    // m-2 (B5 re-review 2): a failed read is NOT READ — `null`, never `unknown`. As `unknown` it was a non-ok word: a
+    // 5xx, a 429 or a token without the outputs scope recorded `unknown` on every poll, and after 30 s of them a
+    // healthy organiser was told to check the stream key. The provider-call row (`call()` above) still records the
+    // failure's HTTP status and code.
+    // m-c (B5 re-review 3): a failure that PERSISTS leaves D3 blind for the rest of the stream with nothing said, so a
+    // run of OUTPUT_READ_FAILURES_BEFORE_REPORT in a row (config.ts says why that many) is reported, once per session,
+    // with the HTTP status and Cloudflare's code. A read that succeeds ends the run.
+    const runKey = meta.sessionId ?? `input:${inputId}`;
+    if (!r.json.success || !r.json.result) {
+      const consecutive = (this.outputReadFailures.get(runKey) ?? 0) + 1;
+      this.outputReadFailures.set(runKey, consecutive);
+      if (consecutive >= OUTPUT_READ_FAILURES_BEFORE_REPORT) {
+        const sessionId = meta.sessionId ?? null;
+        this.reportOnce("output-read-failed", sessionId, inputId, new Error("cloudflare outputState: the outputs read keeps failing — D3 cannot judge the destination"), {
+          route: "relay.output_read_failed",
+          extra: { sessionId, inputUid: inputId, consecutive, httpStatus: r.status, errorCode: r.json.errors?.[0]?.code ?? null },
+        });
+      }
+      return null;
+    }
+    this.outputReadFailures.delete(runKey);
     const states = r.json.result.map((o) => o.status?.current?.state).filter((s): s is string => typeof s === "string");
+    this.reportUnseenWords(states, inputId, meta.sessionId ?? null);
     if (states.includes("error")) return "rejected";
     // An output Cloudflare has not tried to push to yet carries NO status at
     // all: its `status.current.state` cannot move before inbound video. "ok"
     // there would be a positive claim about something never observed, and Task
     // 10 writes this answer straight into fixture_stream_samples.output_state.
-    // Absent evidence is `unknown` — the port has the word for it (ports.ts:33).
-    return states.length === 0 ? "unknown" : "ok";
+    // Absent evidence is `unknown` — the port has the word for it (ports.ts OutputState).
+    if (states.length === 0) return "unknown";
+    // D3 (spec §5.6; staging round 1, 2026-09-30): a present, non-error state is NOT "ok". An output still dialling — or
+    // re-dialling — the destination reads `connecting`/`reconnecting`; the panel said Live while YouTube received nothing
+    // because this returned "ok" for them.
+    if (states.some((s) => s === "connecting" || s === "reconnecting")) return "connecting";
+    return states.every((s) => s === "connected") ? "ok" : "unknown";
+  }
+
+  /** m-2 (B5 re-review 2 §4b): the output vocabulary is OBSERVED, not documented (above), so a word this adapter has
+   *  never seen still maps to `unknown` — never to a healthy destination — but it is REPORTED, with the raw word, so the
+   *  next unseen word (Cloudflare's input vocabulary has `reconnected`, for one) is learned from production instead of
+   *  sitting behind a key box on a working stream. Once per session, per process: a word that stays for a whole stream
+   *  is one report, not one per 5 s poll. A call with no session keys on its input. */
+  private reportUnseenWords(states: readonly string[], inputId: string, sessionId: string | null): void {
+    const unseen = states.filter((s) => !OUTPUT_WORDS_SEEN.has(s));
+    if (unseen.length === 0) return;
+    this.reportOnce("output-word", sessionId, inputId, new Error("cloudflare outputState: an output state word this adapter has never seen (read as unknown)"), {
+      route: "relay.output_state", extra: { sessionId, inputUid: inputId, words: [...new Set(unseen)] },
+    });
+  }
+
+  /** One report per kind per session (with no session, per input), through the injected reporter. */
+  private reportOnce(kind: string, sessionId: string | null, inputId: string, err: Error, context: Parameters<ErrorReporter>[1]): void {
+    const key = `${kind}:${sessionId ?? `input:${inputId}`}`;
+    if (this.reported.has(key)) return;
+    this.reported.add(key);
+    this.reportError(err, context);
   }
 
   /** C1 (lane C final review): "Delete an output" — `DELETE /accounts/{account_id}/stream/live_inputs/{live_input_
@@ -294,9 +408,9 @@ export class CloudflareIngest implements IngestProvider {
    *  whose documented success is HTTP 200 with the body `{}` — no `success` envelope, so a 2xx is success on its own
    *  (the DELETE tolerance below, I-3). A 404 is an output already gone: success, so every retry (the daily sweep, the
    *  next admission on the destination) is idempotent. The subject is the OUTPUT — the object the call is about. */
-  async removeOutput(inputId: string, outputId: string): Promise<void> {
+  async removeOutput(inputId: string, outputId: string, meta: ProviderCallMeta = {}): Promise<void> {
     const r = await this.call("DELETE", `/live_inputs/${encodeURIComponent(inputId)}/outputs/${encodeURIComponent(outputId)}`, undefined,
-      { operation: "removeOutput", ids: [inputId, outputId], subjectId: outputId });
+      { operation: "removeOutput", ids: [inputId, outputId], subjectId: outputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
     this.fail("remove output", r);
   }

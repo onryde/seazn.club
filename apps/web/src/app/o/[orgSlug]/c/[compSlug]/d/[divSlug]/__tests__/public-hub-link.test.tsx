@@ -88,11 +88,10 @@ vi.mock("@/lib/db", () => ({
   withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
   statementCount: () => 0,
 }));
-// Task 14b: the fixtures tab reads the Phone tab's credits through `relayCredits`, which GRANTS this month's free match
-// credits in a real transaction first — this page test is not about streaming, so that read is a zero double.
+// Spec 2026-09-30 §2 (T6): the fixtures tab's one stream read is `openStreamStates` (the run sheet's chip) — this page
+// test is not about streaming, so it is an empty double.
 vi.mock("@/server/usecases/stream-sessions", () => ({
-  relayCredits: async () => ({ monthly: 0, pack: 0, total: 0, monthlyAllowance: 0 }),
-  openStreamFixtureIds: async () => [],
+  openStreamStates: async () => ({}),
 }));
 
 import DivisionPage from "../page";

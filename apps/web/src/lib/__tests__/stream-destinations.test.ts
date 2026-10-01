@@ -15,11 +15,22 @@ import { describe, expect, it } from "vitest";
 import {
   DESTINATION_REFUSALS,
   STREAM_DESTINATION_HOSTS,
+  STREAM_PLATFORMS,
+  STREAM_PLATFORM_PRESETS,
   checkDestination,
   destinationIdentity,
-  destinationRefusal,
+  isStreamPlatform,
   type DestinationRefusal,
 } from "../stream-destinations";
+import { StreamTargetKind } from "@/server/api-v1/schemas";
+
+/** The rule `checkDestination` refused `url` for, or null when it admits it — the ONE validator's verdict, read as a rule.
+ *  (n4, B4 re-review: the lib's `destinationRefusal` wrapper had no production caller and was deleted; the tests keep
+ *  asking the validator itself.) */
+const destinationRefusal = (url: string): DestinationRefusal | null => {
+  const v = checkDestination(url);
+  return v.ok ? null : v.rule;
+};
 
 /** U+212A KELVIN SIGN — the one non-ASCII code point whose toLowerCase() is ASCII ("k"). Built, not typed. */
 const KELVIN = String.fromCharCode(0x212a);
@@ -154,7 +165,7 @@ describe("the URL that is sealed and dialled is the URL that was checked", () =>
     expect(checked).toBe(15);
   });
 
-  it("a refused URL yields its rule and no URL at all, in agreement with destinationRefusal", () => {
+  it("a refused URL yields its rule and no URL at all", () => {
     const refused: [string, DestinationRefusal][] = [
       ["rtmp://localhost/live", "host"],
       [`rtmps://live-api-s.faceboo${KELVIN}.com:443/rtmp/`, "host"],
@@ -163,7 +174,6 @@ describe("the URL that is sealed and dialled is the URL that was checked", () =>
     let checked = 0;
     for (const [url, rule] of refused) {
       expect(checkDestination(url), url).toEqual({ ok: false, rule });
-      expect(destinationRefusal(url)).toBe(rule);
       checked++;
     }
     expect(checked).toBe(3);
@@ -380,5 +390,63 @@ describe("destinationIdentity — one destination, one identity (A19b)", () => {
       rules.add(rule);
     }
     expect([...rules].sort()).toEqual([...DESTINATION_REFUSALS].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D6 (owner 2026-09-30, spec §5.4): a NEW destination names a platform, and the
+// server fills its ingest url from that platform's preset — so the one
+// validator must admit every preset, or create refuses every add for it.
+// ---------------------------------------------------------------------------
+describe("platform presets (D6)", () => {
+  it("every platform preset passes checkDestination, and every platform has one (D6)", () => {
+    let checked = 0;
+    for (const p of STREAM_PLATFORMS) {
+      expect(checkDestination(STREAM_PLATFORM_PRESETS[p]), p).toMatchObject({ ok: true });
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length);
+    expect(Object.keys(STREAM_PLATFORM_PRESETS).sort()).toEqual([...STREAM_PLATFORMS].sort());
+  });
+
+  it("isStreamPlatform (B2 review nit — the ONE platform-kind test, for Replace key's recovery and the unreadable remedy): true for every platform; false for every stored legacy kind, a wrong case, and prototype keys", () => {
+    let checked = 0;
+    for (const p of STREAM_PLATFORMS) {
+      expect(isStreamPlatform(p), p).toBe(true);
+      checked++;
+    }
+    // The legacy kinds are the wire enum's own, less the platforms (D6) — a kind added to either moves this sweep.
+    const legacy = StreamTargetKind.options.filter((k) => !(STREAM_PLATFORMS as readonly string[]).includes(k));
+    expect(legacy.length, "no legacy kind to refuse").toBeGreaterThan(0);
+    for (const k of [...legacy, "", "YouTube", "constructor", "toString"]) {
+      expect(isStreamPlatform(k), JSON.stringify(k)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length + legacy.length + 4);
+  });
+
+  // Moved here in T2a from stream-targets.test.ts, whose A18 cases drove these URLs through createStreamTarget's
+  // `rtmpUrl` — a field D6 removed. Only the URLs the refusal table and PUBLISHED above did not already pin are moved;
+  // expected rules and canonical forms are typed as they were there, never read back from the validator.
+  it("moved from stream-targets.test.ts (create takes no url since D6): the route's three off-list urls refuse by rule; two pasted spellings seal their canonical form", () => {
+    const refused: [string, DestinationRefusal][] = [
+      ["rtmp://seazn-relay.internal:1935/live", "host"],
+      ["rtmps://169.254.169.254/latest", "ip_literal"],
+      ["https://not-an-ingest.example/app", "scheme"],
+    ];
+    let checked = 0;
+    for (const [url, rule] of refused) {
+      expect(checkDestination(url), url).toEqual({ ok: false, rule });
+      checked++;
+    }
+    const canonical: [string, string][] = [
+      ["rtmps://A.RTMPS.YOUTUBE.COM:443/live2?backup=1", "rtmps://a.rtmps.youtube.com:443/live2?backup=1"],
+      ["rtmp://Live.Restream.IO/Live", "rtmp://live.restream.io/Live"],
+    ];
+    for (const [pasted, sealed] of canonical) {
+      expect(checkDestination(pasted), pasted).toEqual({ ok: true, url: sealed });
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });

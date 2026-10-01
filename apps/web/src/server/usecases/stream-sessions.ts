@@ -20,6 +20,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { checkDestination } from "@/lib/stream-destinations";
+import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
@@ -27,15 +28,15 @@ import {
   relayEnvironment,
 } from "@/server/relay/config";
 import {
-  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, isTerminal,
-  type Command, type Decision, type Effect, type Session,
+  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
+  type Command, type Decision, type Effect, type HoldState, type Session, type SessionState,
 } from "@/server/relay/domain/session";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
-import { createFailureOf, createRefusedBeforeCall, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
-import { readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
+import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
+import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
@@ -44,7 +45,8 @@ import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
   lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
-import { DestinationNotAllowedError } from "./stream-targets";
+import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
+import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
 import { setFixtureStreamUrl } from "./fixtures";
 
 export { ACTIVE_STATES, TERMINAL_STATES };
@@ -477,7 +479,7 @@ export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: 
     // a guard, not an assumption — it is reported like any failed removal rather than silently marked released.
     const inputId = row.ingest_input_uid;
     if (!inputId) throw new Error("stream session: an output is recorded with no live input to remove it from");
-    await recordEffect(s, "release_output", site === "sweep" ? "sweep" : "output", () => deps.drivers.ingest.removeOutput(inputId, outputUid),
+    await recordEffect(s, "release_output", site === "sweep" ? "sweep" : "output", () => deps.drivers.ingest.removeOutput(inputId, outputUid, { sessionId }),
       { inputUid: inputId, outputUid, reason: site });
     await sql`update fixture_stream_sessions set output_released_at = coalesce(output_released_at, ${deps.now()}) where id = ${sessionId}`;
     return true;
@@ -524,15 +526,81 @@ async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): 
   if (!inputId) return false;
   let status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>;
   try {
-    status = await deps.drivers.ingest.inputStatus(inputId);
+    status = await deps.drivers.ingest.inputStatus(inputId, { sessionId });
   } catch (err) {
     reportIngestReadFailure(err, { sessionId, orgId: row.org_id, inputUid: inputId, site: "expiry" });
     return true;
   }
-  if (status.state !== "connected") return false;
+  // G-a: a read with no evidence carries the previous poll's word. M-4 (final review; controller ruling): with NOTHING
+  // to carry it reads as `unknown`, so the warming timeout runs normally. It was held like a failed read (N1), and since
+  // a no-evidence read records nothing there was never anything to carry: a session whose every read said
+  // `new_configuration_accepted` held its destination and fixture to the wall clock (5 h), not the 10-min warming window.
+  const phone = status.state ?? carriedIngest(await latestPollSample(sessionId)) ?? "unknown";
+  if (phone !== "connected") return false;
   await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${sessionId}`;
   await apply(sessionId, connectIfWarming, deps);
   return false;
+}
+
+/** The latest POLL sample — the one row the poll compares a new reading against (Ruling 13) and, for G-a, the phone's
+ *  previous reading. Read from the DB, not from process memory, so a carry survives a restart and any number of
+ *  processes. Undefined before any poll has recorded one. */
+async function latestPollSample(sessionId: string): Promise<PollSample | undefined> {
+  const [prev] = await sql<PollSample[]>`
+    select ingest_state, output_state, sampled_at, raw->>'protocol' as protocol
+      from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`;
+  return prev;
+}
+type PollSample = { ingest_state: string | null; output_state: string | null; sampled_at: Date; protocol: string | null };
+
+/** I-1 (final review; controller ruling 2026-10-01): coalesce the organiser poll's Cloudflare reads ACROSS tabs, viewers
+ *  and processes. Every open organiser fixture page polls `current` every STREAM_POLL_MS, and each poll read the input
+ *  and its outputs: N tabs were N × 2 reads per 5 s against Cloudflare's account-wide API limit, and past that limit
+ *  every read 429s — so no poll could observe warming → live, and the D3 box went silent.
+ *
+ *  The mechanism is a CONDITIONAL WRITE (V428): a poll claims the read by stamping `ingest_polled_at`, and only when the
+ *  previous claim is at least POLL_CLAIM_WINDOW_MS old. Postgres re-checks the WHERE of a concurrent UPDATE against the row
+ *  the winner committed, so two polls racing on one session claim it ONCE: the loser gets no row back and reads nothing.
+ *  Not an advisory lock: the lock would have to be held across the two Cloudflare calls, which carry no timeout, so a
+ *  slow provider would pin a pooled connection per session. A claim also coalesces the reads that FAIL (a 429 or a 5xx
+ *  records no sample), which is the storm this exists to stop. The clock is deps.now(), the poll's own clock. */
+async function claimIngestPoll(sessionId: string, now: Date): Promise<boolean> {
+  const claimed = await sql<{ id: string }[]>`
+    update fixture_stream_sessions set ingest_polled_at = ${now}
+     where id = ${sessionId}
+       and (ingest_polled_at is null or ingest_polled_at <= ${new Date(now.getTime() - POLL_CLAIM_WINDOW_MS)})
+    returning id`;
+  return claimed.length === 1;
+}
+
+/** I-1 window (controller ruling 2026-10-01: "under 5 s" meant coalescing CONCURRENT viewers, not a hard number). A lone
+ *  tab polls on STREAM_POLL_MS by setInterval, so its next request lands about one interval after its own claim, give or
+ *  take timer and network jitter; with the window AT the interval, a request even 1 ms early was served the previous
+ *  reading and the lone viewer's Cloudflare cadence halved to 10 s. A second of allowance keeps every on-cadence poll a
+ *  read while polls from other tabs inside it still coalesce. */
+const POLL_JITTER_ALLOWANCE_MS = 1_000;
+const POLL_CLAIM_WINDOW_MS = STREAM_POLL_MS - POLL_JITTER_ALLOWANCE_MS;
+
+/** I-1: how old the latest poll sample may be for a poll that did NOT claim the read to answer from it — one poll
+ *  interval behind the claim it deferred to (whose own sample may still be in flight). Older than that is not this
+ *  poll's reading, and serving it would present a stale word as current: such a poll answers like a failed read
+ *  (ingest and output null) and decides nothing. */
+const COALESCED_SAMPLE_MAX_AGE_MS = 2 * STREAM_POLL_MS;
+
+/** I-1: the stored words of a poll sample, each guarded to its port type (the poll writes only those). */
+function sampledOutput(w: string | null): OutputState | null {
+  return w === "ok" || w === "connecting" || w === "rejected" || w === "unknown" ? w : null;
+}
+function sampledProtocol(w: string | null): IngestProtocol | null {
+  return w === "srt" || w === "rtmps" ? w : null;
+}
+
+/** G-a (controller ruling 2026-10-01): the word a no-evidence read (ports.ts IngestStatus.state null) carries forward —
+ *  the latest poll sample's. Null when there is none; and a stored word outside the port's three is a guard, not a
+ *  carry: the poll writes only those three, so anything else is not a reading this code can vouch for. */
+function carriedIngest(prev: { ingest_state: string | null } | undefined): IngestState | null {
+  const w = prev?.ingest_state ?? null;
+  return w === "connected" || w === "disconnected" || w === "unknown" ? w : null;
 }
 
 /** N1: the ONE rule for what an unobservable ingest holds back — `warming_timeout` and nothing else. That expiry's claim
@@ -612,7 +680,7 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
           return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id, tx))!.target_id) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
         if (inputId) {
-          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target), { inputUid: inputId });   // C9: exactly one, passthrough only
+          const outputUid = await recordEffect(current, "add_output", "output", () => deps.drivers.ingest.addOutput(inputId, target, { sessionId: current.id }), { inputUid: inputId });   // C9: exactly one, passthrough only
           // Dg: the slot-0 destination output's uid, beside ingest_input_uid (not a secret). The port
           // RETURNS it (Tasks 3/4); throwing that return away is what would leave the column inert.
           // coalesce so a re-run of an idempotent effect cannot move a recorded uid.
@@ -835,23 +903,14 @@ async function activeSessionIdFor(fixtureId: string, exec: Tx | typeof sql = sql
  *
  *  The `org_stream_targets` join is also the tenancy floor: a target belonging to another org yields no holder, and the
  *  later `admit` answers 404 `target_not_found` from `targetBelongsToOrg`. This function never leaks another org's state. */
-async function targetHolderFor(
-  targetId: string, orgId: string, fixtureId: string, deps: SessionDeps,
-): Promise<{ sessionId: string; courtName: string | null; holderFixtureId: string | null; label: string } | null> {
-  const holders = () => sql<{ id: string; court_name: string | null; fixture_id: string | null; label: string }[]>`
-    select s.id, c.name as court_name, s.fixture_id, t.label
-      from fixture_stream_sessions s
-      join org_stream_targets t on t.id = s.target_id
-      left join fixtures f on f.id = s.fixture_id
-      left join courts c on c.id = f.court_id
-     where s.target_id = ${targetId} and t.org_id = ${orgId}
-       and s.fixture_id is distinct from ${fixtureId}
-       and s.state in ${sql([...ACTIVE_STATES])}`;
-  const first = await holders();
+async function targetHolderFor(targetId: string, orgId: string, fixtureId: string, deps: SessionDeps): Promise<TargetHolder | null> {
+  // T3 (M2, B1 review): the ONE holder query (stream-target-holders.ts `holderRows`) — Go live, the Directory list and
+  // Replace key / Remove share one source for "held by a live or waiting match", so they cannot diverge.
+  const first = await holderRows(sql, { orgId, targetId, notFixtureId: fixtureId });
   if (first.length === 0) return null;
-  for (const h of first) await applyExpiry(h.id, deps);      // B: this start attempt IS the tick for the holder too
-  const [still] = await holders();
-  return still ? { sessionId: still.id, courtName: still.court_name, holderFixtureId: still.fixture_id, label: still.label } : null;
+  for (const h of first) await applyExpiry(h.sessionId, deps);      // B: this start attempt IS the tick for the holder too
+  const [still] = await holderRows(sql, { orgId, targetId, notFixtureId: fixtureId });
+  return still ?? null;
 }
 
 /** 2C-post m5 (Task 2C-post review m5; post-2C-post plan sync). The fixture's one-active index releases the moment a session
@@ -891,20 +950,18 @@ async function tearDownPriorMachines(
 ): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
   // ONE read carries each row's destination label and court (the target FK is `not null` and restricts deletes, so the
   // inner join drops nothing): a refusal never needs a second read that could find the row gone.
-  const prior = await sql<(Row & { holder_label: string; holder_court: string | null })[]>`
-    select p.*, t.label as holder_label, c.name as holder_court
+  const prior = await sql<(Row & TerminalHolderRow)[]>`
+    select p.*, t.label as holder_label, c.name as holder_court, ${terminalHolderCols()}
       from (select ${cols()} from fixture_stream_sessions
              where org_id = ${orgId} and (fixture_id = ${fixtureId} or target_id = ${targetId})
                and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}
                and not (runner_state = 'destroyed' and runner_gone_confirmed_at is not null)) p
       join org_stream_targets t on t.id = p.target_id
       left join fixtures f on f.id = p.fixture_id
-      left join courts c on c.id = f.court_id`;
+      left join courts c on c.id = f.court_id
+      ${terminalHolderJoins()}`;
   if (prior.length === 0) return { sameFixture: null, otherFixture: null };
-  const bySession = new Map(prior.map((r) => {
-    const holder: Holder = { sessionId: r.id, label: r.holder_label, courtName: r.holder_court, holderFixtureId: r.fixture_id };
-    return [r.id, { s: toSession(r), holder }] as const;
-  }));
+  const bySession = new Map(prior.map((r) => [r.id, { s: toSession(r), holder: terminalHolder(r) }] as const));
   const listed = (await deps.drivers.runner.list()).flatMap((m) => {
     const hit = m.sessionId ? bySession.get(m.sessionId) : undefined;
     return hit ? [{ m, ...hit }] : [];
@@ -938,12 +995,13 @@ async function tearDownPriorMachines(
 async function releasePriorOutputs(
   fixtureId: string, targetId: string, orgId: string, deps: SessionDeps,
 ): Promise<{ sameFixture: string | null; otherFixture: Holder | null }> {
-  const prior = await sql<{ id: string; fixture_id: string | null; holder_label: string; holder_court: string | null }[]>`
-    select s.id, s.fixture_id, t.label as holder_label, c.name as holder_court
+  const prior = await sql<({ id: string; fixture_id: string | null } & TerminalHolderRow)[]>`
+    select s.id, s.fixture_id, t.label as holder_label, c.name as holder_court, ${terminalHolderCols()}
       from fixture_stream_sessions s
       join org_stream_targets t on t.id = s.target_id
       left join fixtures f on f.id = s.fixture_id
       left join courts c on c.id = f.court_id
+      ${terminalHolderJoins()}
      where s.org_id = ${orgId} and (s.fixture_id = ${fixtureId} or s.target_id = ${targetId})
        and s.mode = 'passthrough' and s.state in ${sql([...TERMINAL_STATES])}
        and s.output_uid is not null and s.output_released_at is null
@@ -952,7 +1010,7 @@ async function releasePriorOutputs(
     if (await releaseOutput(p.id, "admission", deps)) continue;
     if (p.fixture_id !== fixtureId) {
       log.warn({ sid: p.id, fixtureId, holderFixtureId: p.fixture_id, targetId }, "stream session: another fixture's ended passthrough session may still be broadcasting on this destination and its output release failed — start refused");
-      return { sameFixture: null, otherFixture: { sessionId: p.id, label: p.holder_label, courtName: p.holder_court, holderFixtureId: p.fixture_id } };
+      return { sameFixture: null, otherFixture: terminalHolder(p) };
     }
     log.warn({ sid: p.id, fixtureId }, "stream session: this fixture's previous passthrough session may still be broadcasting and its output release failed — start refused");
     return { sameFixture: p.id, otherFixture: null };
@@ -960,25 +1018,51 @@ async function releasePriorOutputs(
   return { sameFixture: null, otherFixture: null };
 }
 
-/** The `target_in_use` refusal, ONE shape for both holders — an active session (`targetHolderFor`) and another fixture's
- *  ended session whose still-listed Machine admission could not destroy (I1). `code` is what the client acts on (Task
- *  13's `CreateErrorCode`, Task 14's dictionary key). The MESSAGE names the holder — the court when the fixture has one, else the fixture id — because
- *  "in use" alone sends an organiser hunting; it is the operator's line in the log and in Sentry. The client renders the
- *  DICTIONARY string keyed by `code` and never `err.message` (the carry Task 4 left for the Cloudflare refusal).
- *  Task 11 (controller ruling): the holder also rides as the machine-readable `extra` `{ holder: { fixtureId, courtName,
- *  label } }`, so that dictionary string can name the court. SAME-ORG BY CONSTRUCTION: both producers read only the
- *  caller's org (`targetHolderFor`: `t.org_id = $org`; `tearDownPriorMachines`: `org_id = $org`), and a session can only
+/** The `target_in_use` refusal, ONE shape for every holder — an active session (`targetHolderFor`) and another fixture's
+ *  ENDED session whose still-listed Machine (I1) or unreleased output (C1) admission could not take down. `code` is what
+ *  the client acts on (Task 13's `CreateErrorCode`). The MESSAGE names the holder because "in use" alone sends an
+ *  organiser hunting; it is the operator's line in the log and in Sentry. The client never renders `err.message`: it
+ *  renders the dictionary copy from the machine-readable `extra` `{ holder }` (Task 11's controller ruling, widened by
+ *  T3 to the match). SAME-ORG BY CONSTRUCTION: every producer reads only the caller's org (`holderRows`:
+ *  `t.org_id = $org`; `tearDownPriorMachines` / `releasePriorOutputs`: `org_id = $org`), and a session can only
  *  reference a target `admit` proved is the org's — so the extra never names another organisation's fixture. The
- *  holder's SESSION id is deliberately not in it: nothing a client does with it. */
-interface Holder { sessionId: string; label: string; courtName: string | null; holderFixtureId: string | null }
+ *  holder's SESSION id is deliberately not in it (`wireHolder`): nothing a client does with it.
+ *  An ACTIVE holder comes from `holderRows`; a TERMINAL one is built by `terminalHolder` below. */
+type Holder = Pick<TargetHolder, "sessionId" | "label" | "courtName" | "fixtureId" | "href" | "matchNo" | "state">;
 
+/** T3 (spec §5.5): the extra is `wireHolder`'s — the SAME shape the Directory's `TARGET_IN_USE` sends — so the client
+ *  names the match (`matchNo`, rendered through the locale's own breadcrumb.match), links its page (`href`) and says
+ *  whether a phone is live or awaited (`state`). The message is the operator's line: the match when it has a number,
+ *  else the court, else the fixture id. */
 function targetInUse(h: Holder): HttpError {
+  const where = h.matchNo !== null ? `match ${h.matchNo}` : h.courtName ? `court ${h.courtName}` : `fixture ${h.fixtureId ?? "(deleted)"}`;
   return new HttpError(
     409,
-    `the destination "${h.label}" is already streaming for ${h.courtName ? `court ${h.courtName}` : `fixture ${h.holderFixtureId ?? "(deleted)"}`}`,
+    `the destination "${h.label}" is already streaming for ${where}${h.matchNo !== null && h.courtName ? ` (court ${h.courtName})` : ""}`,
     "target_in_use",
-    { holder: { fixtureId: h.holderFixtureId, courtName: h.courtName, label: h.label } },
+    { holder: wireHolder(h) },
   );
+}
+
+/** The terminal holder's extra columns — the holder fixture's number and the slugs of its organiser page — read through
+ *  the same left joins `holderRows` uses (a deleted fixture leaves them all null). */
+interface TerminalHolderRow {
+  holder_label: string; holder_court: string | null;
+  fixture_no: number | null; org_slug: string | null; comp_slug: string | null; div_slug: string | null;
+}
+const terminalHolderCols = () => sql`f.fixture_no, o.slug as org_slug, comp.slug as comp_slug, d.slug as div_slug`;
+const terminalHolderJoins = () => sql`
+      left join divisions d on d.id = f.division_id
+      left join competitions comp on comp.id = d.competition_id
+      left join organizations o on o.id = comp.org_id`;
+
+/** An ENDED session whose Machine (`tearDownPriorMachines`) or output (`releasePriorOutputs`) may still be on air. It
+ *  reads `live`: to a person, the destination is still receiving from that match, whatever the row's state says. */
+function terminalHolder(r: TerminalHolderRow & { id: string; fixture_id: string | null }): Holder {
+  return {
+    sessionId: r.id, label: r.holder_label, courtName: r.holder_court, fixtureId: r.fixture_id, matchNo: r.fixture_no,
+    href: holderHref(r), state: "live",
+  };
 }
 
 function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headroom: number): never {
@@ -991,6 +1075,33 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
     case "storage_exhausted": throw new HttpError(503, "recording storage is exhausted; no new stream can start", "storage_exhausted", { headroomMinutes: headroom });
     case "active_session": throw new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: refusal.activeSessionId ?? null });
   }
+}
+
+/** B2: a saved key that will not open (a KEK change, a damaged byte) is the organiser's to fix — a typed 422 naming the
+ *  remedy, logged with the fixture, target and kind only. Any other error (a missing RELAY_KEK is one: secret-columns
+ *  rethrows it, M3) is returned unchanged for the caller to throw. */
+function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): unknown {
+  if (!(err instanceof TargetSecretUnreadableError)) return err;
+  log.warn({ fixtureId, targetId, kind: err.kind }, "stream session: the saved destination will not open — start refused; the organiser replaces the key");
+  return TargetUnreadableError.forKind(err.kind);
+}
+
+/** M1: the early probe `createSession` runs before its first provider call. Under the same row lock admission takes, and
+ *  only for this org's ACTIVE row — anything else is left for `admit` to answer 404, exactly as before. And only when
+ *  `admit` would pass on everything it can weigh WITHOUT the storage read (`admitsBarStorage`, asked with this fixture's
+ *  active session read on the same transaction): F-A5 (owner, 2026-09-29) puts "already running" — and the plan, the
+ *  credit and the target's existence — before any destination question, and an unreadable key is one. Every such
+ *  refusal is left for the admission below, which answers it as before, measurement included (the admission snapshot:
+ *  ruling 13, streaming-r1 plan "Data captured"; pinned by the SAMPLES and SNAPSHOTS test). Found by the
+ *  destination model's DEST_REGRESSION_FA5_UNREADABLE (stream-sessions.test.ts). */
+async function refuseUnreadableTarget(
+  orgId: string, fixtureId: string, targetId: string, admitsBarStorage: (activeSessionId: string | null) => boolean,
+): Promise<void> {
+  await sql.begin(async (tx) => {
+    if (!(await lockStreamTarget(tx, orgId, targetId))) return;
+    if (!admitsBarStorage(await activeSessionIdFor(fixtureId, tx))) return;
+    await readTargetSecret(tx, orgId, targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, targetId); });
+  });
 }
 
 export async function createSession(
@@ -1015,27 +1126,38 @@ export async function createSession(
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);
-  // The DESTINATION guard (gap 4), placed BEFORE the storage read and before `tearDownPriorMachines` — i.e. before any
-  // provider call this create would make FOR THE NEW SESSION, so a refused start leaves no Cloudflare live input, no Fly
-  // Machine and nothing to clean up. That early placement is the whole point of refusing in code at all (the index alone
-  // would refuse only at the insert, after `ingest.storageUsage()` had already been called), and it is what G-T1's
-  // zero-provider-call assertions witness. It sits AFTER this fixture's own lazy expiry on purpose: that expiry can
-  // RELEASE this very target. The one provider call that can precede it belongs to that OLD session's teardown.
-  const holder = await targetHolderFor(body.targetId, orgId, fixtureId, deps);
-  if (holder) {
-    log.warn({ fixtureId, targetId: body.targetId, holder: holder.sessionId, court: holder.courtName }, "stream session: the destination is already held by another fixture — start refused");
-    throw targetInUse(holder);
+  // F-A5 over the destination doors (owner, 2026-09-29, "a match already streaming answers a second start before
+  // credits, destination or storage are weighed"; applied to the holder guard by the owner's answer B, 2026-09-30): a
+  // fixture STILL streaming after its own lazy expiry skips every destination door below — the holder guard and both
+  // prior-teardown refusals, each a `target_in_use` naming ANOTHER match — and is carried to admission as this start's
+  // session, so `admit` answers it `active_session` in its own order (the plan first), under the same target row lock,
+  // with the same measurement as any refused admission and nothing spent. Carried, not re-read: were it to end between
+  // here and the admission transaction, this start has skipped the destination doors and must not proceed on that.
+  const stillRunning = existing ? await activeSessionIdFor(fixtureId) : null;
+  let priorMachineSessionId: string | null = stillRunning;
+  if (!stillRunning) {
+    // The DESTINATION guard (gap 4), placed BEFORE the storage read and before `tearDownPriorMachines` — i.e. before any
+    // provider call this create would make FOR THE NEW SESSION, so a refused start leaves no Cloudflare live input, no
+    // Fly Machine and nothing to clean up. That early placement is the whole point of refusing in code at all (the index
+    // alone would refuse only at the insert, after `ingest.storageUsage()` had already been called), and it is what
+    // G-T1's zero-provider-call assertions witness. It sits AFTER this fixture's own lazy expiry on purpose: that expiry
+    // can RELEASE this very target. The one provider call that can precede it belongs to that OLD session's teardown.
+    const holder = await targetHolderFor(body.targetId, orgId, fixtureId, deps);
+    if (holder) {
+      log.warn({ fixtureId, targetId: body.targetId, holder: holder.sessionId, court: holder.courtName }, "stream session: the destination is already held by another fixture — start refused");
+      throw targetInUse(holder);
+    }
+    // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while
+    // that destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the
+    // provider). I1: ANOTHER fixture's ended session with a Machine still listed on this destination is destroyed the
+    // same way; only when that destroy fails is the start `target_in_use`, naming its court, like an active holder.
+    const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
+    if (prior.otherFixture) throw targetInUse(prior.otherFixture);
+    // C1: the passthrough twin — an ended session whose output release failed is released now, refused only if it fails again.
+    const priorOutput = await releasePriorOutputs(fixtureId, body.targetId, orgId, deps);
+    if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
+    priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
   }
-  // 2C-post m5: a PREVIOUS session's Machine the provider still lists is destroyed before this one may start; while that
-  // destroy fails, admission answers `active_session` naming its session (outside the transaction: it calls the provider).
-  // I1: ANOTHER fixture's ended session with a Machine still listed on this destination is destroyed the same way; only
-  // when that destroy fails is the start `target_in_use`, naming its court, like an active holder.
-  const prior = await tearDownPriorMachines(fixtureId, body.targetId, orgId, deps);
-  if (prior.otherFixture) throw targetInUse(prior.otherFixture);
-  // C1: the passthrough twin — an ended session whose output release failed is released now, refused only if it fails again.
-  const priorOutput = await releasePriorOutputs(fixtureId, body.targetId, orgId, deps);
-  if (priorOutput.otherFixture) throw targetInUse(priorOutput.otherFixture);
-  const priorMachineSessionId = prior.sameFixture ?? priorOutput.sameFixture;
 
   // V426 (Task 14b, R3a): this month's free match credits are granted BEFORE the balance is read, so an org that has
   // never bought a pack is admitted on its plan's allowance. Idempotent and one indexed read once the period's row
@@ -1052,29 +1174,42 @@ export async function createSession(
     captureError(err, { orgId, route: "relay.session.monthly_grant" });
   }
 
-  const [overlay, relay, balance, restartWithinReuseWindow, target, usage, relayOverride] = await Promise.all([
+  const [overlay, relay, balance, restartWithinReuseWindow, relayOverride] = await Promise.all([
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
     creditBalance(sql, orgId),
     // I2 (§5.2): a restart of THIS fixture inside the reuse window costs nothing, so `admit` waives the balance gate for
     // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
     reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
-    sql<{ id: string }[]>`select id from org_stream_targets where id = ${body.targetId} and org_id = ${orgId}`,
-    deps.drivers.ingest.storageUsage().then(storageUsageForColumns),   // outside the transaction; G7: fitted to the integer columns
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
     // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
     // plan grants the relay, so the FALSE branch (plan-granted) is the common one; stream-sessions.test.ts
     // drives it through createSession on an org with no override row.
     overrideRow(orgId, "streaming.relay"),
   ]);
+  // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
+  // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
+  // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
+  // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
+  // authority for everything that row lock protects.
+  await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true,
+    headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here
+    activeSessionId: activeSessionId ?? priorMachineSessionId,
+  }).ok);
+  const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns);   // outside the transaction; G7: fitted to the integer columns
   const viaOverride = relayOverride?.bool_value === true;
 
   const sessionId = await (sql.begin(async (tx) => {
+    // Spec §5.2: the target ROW LOCK, taken inside the admission transaction and BEFORE admit reads it — Replace key and
+    // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
+    // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
+    const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
     const headroom = await storageHeadroomMinutes(tx, usage, deps.now());
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
-      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: target.length === 1, headroomMinutes: headroom,
+      overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg, headroomMinutes: headroom,
       maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: (await activeSessionIdFor(fixtureId, tx)) ?? priorMachineSessionId,   // m2: on the tx, never a 2nd pooled connection
     });
     if (!verdict.ok) {
@@ -1086,7 +1221,12 @@ export async function createSession(
     // validator — after `admit` (so a target of another org is still 404 `target_not_found`, and nothing is opened for
     // it) and before the insert, i.e. before any credit, Cloudflare input or Machine exists for this start. The refusal is
     // the same typed 422 the save would have given, and like it never carries the url (its path can hold the key).
-    const destination = checkDestination((await readTargetSecret(tx, orgId, body.targetId)).url);
+    // B2 (B1 review): a saved key that will not open (a KEK change, a damaged byte) was an unmapped 500 here. It is the
+    // organiser's to fix, so it is a typed 422 naming the remedy — thrown inside this transaction, so no row is written
+    // and nothing is spent (the credit is consumed only at live). M1: `refuseUnreadableTarget` already asked this before
+    // the storage read; this read, under the row lock, stays the authority (a Replace key cannot interleave with it).
+    const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, body.targetId); });
+    const destination = checkDestination(saved.url);
     if (!destination.ok) {
       log.warn({ fixtureId, targetId: body.targetId, rule: destination.rule }, "stream session: a saved destination the allowlist no longer admits — start refused");
       throw new DestinationNotAllowedError(destination.rule);
@@ -1222,17 +1362,41 @@ export async function relayCredits(auth: AuthCtx, orgId: string): Promise<RelayC
   return { ...(await creditBreakdown(sql, orgId)), monthlyAllowance };
 }
 
-/** F1: which of `fixtureIds` have a session still UP (an ACTIVE state) — THIS org's only. A billing-frozen competition
- *  renders no stream panel (the division page gates it on `editable`), yet the stop route still serves a frozen org's
- *  organiser, so the page mounts a stop probe for exactly these fixtures: a freeze never strands a stream on air. */
-export async function openStreamFixtureIds(auth: AuthCtx, fixtureIds: readonly string[]): Promise<string[]> {
-  if (fixtureIds.length === 0) return [];
-  const rows = await sql<{ fixture_id: string }[]>`
-    select distinct fixture_id from fixture_stream_sessions
-     where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}`;
-  // In the caller's order (the division's fixture order), so the probes stack the way the run sheet lists them.
-  const open = new Set(rows.map((r) => r.fixture_id));
-  return fixtureIds.filter((id) => open.has(id));
+/** Spec 2026-09-30 §2 — each listed fixture with a session still up, as a person reads it (live | waiting), THIS org's
+ *  only. Feeds the run sheet's chip (the division's path to Stop, frozen or not) and the fixture page's Stop-only mount.
+ *  At most one ACTIVE session per fixture (V410 `fixture_stream_sessions_one_active`); `distinct on … created_at desc`
+ *  still names the newest should that ever not hold. */
+export async function openStreamStates(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Record<string, HoldState>> {
+  if (fixtureIds.length === 0) return {};
+  const rows = await sql<OpenSessionRow[]>`
+    select distinct on (fixture_id) id, fixture_id, state from fixture_stream_sessions
+     where org_id = ${auth.orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}
+     order by fixture_id, created_at desc`;
+  return holdStatesOf(rows);
+}
+
+/** One row of `openStreamStates`' read. */
+export type OpenSessionRow = { id: string; fixture_id: string; state: SessionState };
+
+/** The fold after `openStreamStates`' SQL filter, DB-free. ONE guard decides "active": that filter. A row the domain does
+ *  not read as live/waiting (a terminal state, or a state this build does not know) means the filter and the domain
+ *  disagree — an assumption that broke. B3 fix round 1, I-1 (controller ruling): that must NEVER block the organiser's
+ *  page or its Stop, so the row is REPORTED to Sentry (session id and state only — no key, URL or secret) and skipped. */
+export function holdStatesOf(rows: readonly OpenSessionRow[]): Record<string, HoldState> {
+  const out: Record<string, HoldState> = {};
+  for (const r of rows) {
+    const s = holdStateOf(r.state);
+    // `undefined` too: a state added to the DB but not to `holdStateOf`'s switch falls through it.
+    if (s === null || s === undefined) {
+      captureError(new Error("openStreamStates: a session the domain does not read as up passed the ACTIVE_STATES filter"), {
+        route: "relay.open_stream_states",
+        extra: { sessionId: r.id, state: r.state },
+      });
+      continue;
+    }
+    out[r.fixture_id] = s;
+  }
+  return out;
 }
 
 export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
@@ -1247,45 +1411,72 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // The server-side ingest poll (design §6.4): passthrough warming → live on
   // connected; a rejected destination fails it. The client never decides.
   let ingestState: StreamSessionCurrent["ingest"] = null;
+  let outputObserved: OutputState | null = null;   // D3: what THIS poll read of the destination; null when it read nothing
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
     // N1: a provider read that throws is reported once and the projection answers without it (`ingest: null`) — never a
     // 500 on every organiser poll through an outage. Nothing is decided on an unknown; the next poll reads again.
     let read: { status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>; output: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["outputState"]>> } | null = null;
+    let coalesced = false;   // I-1: another poll claimed this interval's read
     if (inputId) {
-      try {
-        read = { status: await deps.drivers.ingest.inputStatus(inputId), output: await deps.drivers.ingest.outputState(inputId) };
-      } catch (err) {
-        reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
+      if (!(await claimIngestPoll(row.id, deps.now()))) coalesced = true;
+      else {
+        try {
+          read = { status: await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id }), output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
+        } catch (err) {
+          reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
+        }
+      }
+    }
+    if (coalesced) {
+      // I-1: no provider call — the view is the latest poll sample's, when it is recent enough to be this interval's
+      // reading. Nothing is recorded and nothing is decided: the poll that read decided on what it read. D3's `since`
+      // below is computed exactly as for a read (events, clamps, this response's clock), from the sampled word.
+      const sample = await latestPollSample(row.id);
+      if (sample && deps.now().getTime() - new Date(sample.sampled_at).getTime() < COALESCED_SAMPLE_MAX_AGE_MS) {
+        const phone = carriedIngest(sample);
+        ingestState = phone === null ? null : { state: phone, protocol: sampledProtocol(sample.protocol) };
+        outputObserved = sampledOutput(sample.output_state);
       }
     }
     if (read) {
       const { status, output } = read;
-      ingestState = { state: status.state, protocol: status.protocol };
-      // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed.
-      const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
-        select ingest_state, output_state from fixture_stream_samples where session_id = ${row.id} and source = 'poll' order by id desc limit 1`;
-      // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
-      // on the status read). It is the one field that says WHY an input is disconnected, so a poll
-      // sample without it records that something was wrong and drops the only explanation.
-      await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: status.state, outputState: output,
-        ingestReason: status.reason, sampledAt: deps.now(), raw: status });
-      if (!prev || prev.ingest_state !== status.state || prev.output_state !== output) {
-        const sid = row.id, orgId = row.org_id;
-        await sql.begin(async (tx) => {
-          await lockRow(tx, sid);
-          await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: status.state, occurredAt: deps.now(),
-            payload: { protocol: status.protocol, outputState: output, connected: status.state === "connected" } });
-        });
+      // One read of the latest poll sample serves both the change check below and G-a's carry.
+      const prev = output !== null || status.state === null ? await latestPollSample(row.id) : undefined;
+      // G-a (controller ruling 2026-10-01): a read with NO evidence about video (`null`, ports.ts) carries the previous
+      // poll's word forward — never `unknown`, which read as No signal, and never a hold on go-live. With nothing to
+      // carry (no poll has read the phone yet) the phone is unseen on this poll: `ingest: null`, as for a failed read.
+      const phone: IngestState | null = status.state ?? carriedIngest(prev);
+      ingestState = phone === null ? null : { state: phone, protocol: status.protocol };
+      outputObserved = output;
+      // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed — for a poll
+      // that READ. m-2 (B5 re-review 2): an outputs read that failed (`null`, ports.ts) is not evidence, so that poll
+      // records neither; as `unknown` it was a non-ok word that moved the D3 hold toward the key box. The phone's read
+      // still answers the projection and still drives warming → live below. G-a: a carried word is recorded as the
+      // reading it carries (the raw status keeps the no-evidence read itself); an unseen phone records nothing.
+      if (output !== null && phone !== null) {
+        // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
+        // on the status read). It is the one field that says WHY an input is disconnected, so a poll
+        // sample without it records that something was wrong and drops the only explanation.
+        await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: phone, outputState: output,
+          ingestReason: status.reason, sampledAt: deps.now(), raw: status });
+        if (!prev || prev.ingest_state !== phone || prev.output_state !== output) {
+          const sid = row.id, orgId = row.org_id;
+          await sql.begin(async (tx) => {
+            await lockRow(tx, sid);
+            await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: phone, occurredAt: deps.now(),
+              payload: { protocol: status.protocol, outputState: output, connected: phone === "connected" } });
+          });
+        }
       }
-      if (status.state === "connected") {
+      if (phone === "connected") {
         await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
       }
       // m1 (lane C final review): both re-decided on the LOCKED row (T5-a) — a Stop or an expiry that landed after the
       // unlocked read above leaves a row these no longer apply to, and a plain apply of either was InvalidTransition, a 500.
       if (output === "rejected") await apply(row.id, (s) => (s.state === "warming" || s.state === "live" ? { type: "target_rejected" } : null), deps);
-      else if (row.state === "warming" && status.state === "connected") await apply(row.id, connectIfWarming, deps);
+      else if (row.state === "warming" && phone === "connected") await apply(row.id, connectIfWarming, deps);
       row = (await latestRow(fixtureId))!;
     }
   }
@@ -1335,10 +1526,44 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   const [spend] = await sql<{ net: number }[]>`
     select coalesce(sum(delta), 0)::int as net from org_stream_credits
      where org_id = ${row.org_id} and session_id = ${row.id} and reason in ('consume', 'refund')`;
+  // D3: `since` is when the destination last received (I1, B2 review): for a non-ok word, the first ingest_status event
+  // after the last one that read `ok` — so a flip BETWEEN two non-ok words (unknown → connecting) is inside the same
+  // not-receiving period and never restarts the 30 s clock; for `ok`, the first event after the last non-ok one. These
+  // are the events the poll above already records on every change (Ruling 13). CLAMPED to the session's `live_at`. The
+  // destination is not tried before the phone is live, and Cloudflare reads `unknown` (non-ok) all through warming,
+  // so an unclamped run would start the 30 s clock during warming and warn on the first live render (review #9). While
+  // live, `since` is therefore "non-ok while live". `greatest` ignores a null `live_at` (not live yet). Null for
+  // composed sessions and whenever this poll did not read the output.
+  // I-2a (controller ruling 2026-10-01, B5 re-review 2 §3): for a NON-ok word it is clamped to the phone's latest
+  // RECONNECT as well — an ingest_status event INTO `connected` from anything else. The mirror of the live clamp: the
+  // destination is not fed while the phone is silent either, so when the phone returns Cloudflare re-dials it, and a
+  // clock carried over from the drop put the stream-key box up at once over a key that was fine. A drop never moves it
+  // (the last connect predates the drop), so the phone box's timing is unchanged; the key box needs 30 s of the phone
+  // sending with the destination still not receiving. An `ok` word's since is not clamped: a phone that came back
+  // without the destination ever stopping never restarted its receiving.
+  let output: StreamSessionCurrent["output"] = null;
+  if (row.mode === "passthrough" && outputObserved !== null) {
+    const [first] = await sql<{ since: Date | null }[]>`
+      select greatest(
+        (select occurred_at from fixture_stream_events
+          where session_id = ${row.id} and type = 'ingest_status'
+            and seq > coalesce((select max(seq) from fixture_stream_events
+                                 where session_id = ${row.id} and type = 'ingest_status'
+                                   and (coalesce(payload->>'outputState', '') = 'ok') <> ${outputObserved === "ok"}), 0)
+          order by seq asc limit 1),
+        (select live_at from fixture_stream_sessions where id = ${row.id}),
+        (select max(occurred_at) from fixture_stream_events
+          where ${outputObserved !== "ok"} and session_id = ${row.id} and type = 'ingest_status'
+            and to_state = 'connected' and coalesce(from_state, '') <> 'connected')
+      ) as since`;
+    const since = new Date(first?.since ?? deps.now());
+    // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.
+    output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
+  }
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
-    ingest: ingestState, qr,
+    ingest: ingestState, output, qr,
     balance: await creditBalance(sql, row.org_id),
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
@@ -1476,4 +1701,16 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
   if (!row || row.stream_url !== null || row.kind !== "youtube" || !row.watch_url) return;
   const actor: AuthCtx = { orgId: row.org_id, via: "session", userId: row.created_by, role: "owner", keyId: null };
   await setFixtureStreamUrl(actor, row.fixture_id, row.watch_url);
+}
+
+/** D2 — before Replace key or Remove reads "held", each current holder of the target gets its lazy expiry, the tick
+ *  Go live's `targetHolderFor` already gives it: a session stuck past its deadline must not refuse a Remove forever.
+ *  Outside any transaction (expiry may call the provider). Called by the stream-targets [targetId] route.
+ *
+ *  M-3 (final review): `targetId: null` ticks every holder of the ORG's destinations — the Directory's Streaming tab,
+ *  before it lists them. Its "In use" lock disables exactly the Replace and Remove buttons whose routes tick a single
+ *  target, so an abandoned Go live otherwise kept the lock up until someone opened that match or the daily sweep ran.
+ *  A holder that is not due is untouched (applyExpiry reads it and finds nothing to do). */
+export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<void> {
+  for (const h of await holderRows(sql, targetId === null ? { orgId } : { orgId, targetId })) await applyExpiry(h.sessionId, deps);
 }

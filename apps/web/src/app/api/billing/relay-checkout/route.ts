@@ -40,8 +40,8 @@ const schema = z
  * POST /api/billing/relay-checkout — an EMBEDDED one-time Checkout Session for
  * a match-credit pack (streaming R1, design §5.2 / §5.3; owner 2026-09-14:
  * "inbuilt as other"). Returns `{ client_secret }` exactly as
- * credit-pack-checkout/route.ts does; `return_url` is the division fixtures
- * tab with `?tab=fixtures&fixture=<id>&stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`.
+ * credit-pack-checkout/route.ts does; `return_url` is the organiser FIXTURE page
+ * (spec 2026-09-30 §2) with `?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`.
  *
  * Gate order, and why (P7, recorded at Task 0): `requireBillingOwner` — the
  * Stripe customer, the locked currency and the payer's card belong to the
@@ -70,8 +70,8 @@ export async function POST(req: Request) {
     const body = schema.parse(await req.json());
     if (body.orgId !== orgId) throw new HttpError(400, "orgId does not match the billing organisation");
 
-    const [fx] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string }[]>`
-      select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug
+    const [fx] = await sql<{ competition_id: string; org_slug: string; comp_slug: string; div_slug: string; fixture_no: number }[]>`
+      select c.id as competition_id, o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug, f.fixture_no
         from fixtures f
         join divisions d on d.id = f.division_id
         join competitions c on c.id = d.competition_id
@@ -104,7 +104,9 @@ export async function POST(req: Request) {
 
     const [sub] = await sql<{ stripe_customer_id: string | null }[]>`
       select stripe_customer_id from subscriptions where id = ${subscriptionId}`;
-    const tab = `${baseUrl(req)}${routes.division(fx.org_slug, fx.comp_slug, fx.div_slug, "fixtures")}&fixture=${body.fixtureId}`;
+    // Spec 2026-09-30 §2: the panel lives on the fixture page now, so the pack checkout returns THERE. `stream=open`
+    // opens the Stream panel on its Phone tab; the fixture page reconciles `session_id` before reading the balance.
+    const fixturePage = `${baseUrl(req)}${routes.fixture(fx.org_slug, fx.comp_slug, fx.div_slug, fx.fixture_no)}`;
     const currency = await preferredCurrency(orgId, req);
     let session: Awaited<ReturnType<typeof createRelayCheckout>>;
     try {
@@ -115,7 +117,7 @@ export async function POST(req: Request) {
         orgId,
         fixtureId: body.fixtureId,
         size: body.pack,
-        returnUrl: `${tab}&stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        returnUrl: `${fixturePage}?stream=open&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
         currency,
         customerId: sub?.stripe_customer_id,
         customerEmail: user.email,

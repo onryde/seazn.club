@@ -51,6 +51,13 @@ export function hasValidKek(name: KekName): boolean {
   return KEK_HEX.test(process.env[name] ?? "");
 }
 
+/** Throws `name`'s own configuration error (unset or malformed) — the same sentence `kek()` throws — and is a no-op
+ *  under a valid KEK. For a caller whose decrypt failed: under a bad KEK the KEK is the answer, never the envelope's
+ *  own error (final-review baseline: a damaged row read first surfaced "envelope too short" over "RELAY_KEK is not set"). */
+export function assertKek(name: KekName): void {
+  kek(name);
+}
+
 export function sealWith(name: KekName, plain: string): Buffer {
   const dek = randomBytes(KEY_LEN);
   const dataIv = randomBytes(IV_LEN);

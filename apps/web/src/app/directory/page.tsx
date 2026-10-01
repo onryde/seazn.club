@@ -25,8 +25,13 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { ScrollActiveTabIntoView } from "@/components/ui/scroll-active-tab-into-view";
 import { listVenues } from "@/server/usecases/venues";
 import { VenuesPanel } from "@/components/v2/venues-panel";
+import { listStreamTargets } from "@/server/usecases/stream-targets";
+import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
+import { relayOffer } from "@/server/stream-panel-context";
+import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
+import { baseUrlFromHeaders } from "@/lib/base-url";
 
-const TABS = ["players", "clubs", "officials", "venues"] as const;
+const TABS = ["players", "clubs", "officials", "venues", "streaming"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function DirectoryPage({
@@ -35,8 +40,14 @@ export default async function DirectoryPage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const { tab: rawTab } = await searchParams;
-  const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "players";
-  await requirePageAuth();
+  const { auth } = await requirePageAuth();
+  // M-5 (final review): the Streaming tab holds relay destinations (a stream key is only ever used by Go live), so it is
+  // offered exactly when the fixture panel offers Go live — the same decision (`relayOffer`), org-wide here: entitled to
+  // the panel AND the relay, on a deployment that can start a stream. Otherwise the tab is not listed, and its URL
+  // falls back to the first tab like any unknown one.
+  const offer = await relayOffer(auth.orgId);
+  const tabs = TABS.filter((k) => k !== "streaming" || (offer.relayEntitled && !offer.relayDisabled));
+  const tab: Tab = (tabs as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "players";
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
@@ -54,13 +65,14 @@ export default async function DirectoryPage({
         </div>
 
         <ScrollActiveTabIntoView>
-          <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200">
-            {TABS.map((tabKey) => (
+          <nav className="scroll-x scroll-x-fade mb-6 flex gap-1 whitespace-nowrap border-b border-slate-200" aria-label={t(ui, "directory.sections")}>
+            {tabs.map((tabKey) => (
               <Link
                 key={tabKey}
                 href={`/directory?tab=${tabKey}`}
                 aria-current={tab === tabKey ? "page" : undefined}
-                className={`border-b-2 px-4 py-2 text-sm font-medium transition ${
+                // m5 (B4 review): each tab is a 44-px tap target (the mockup's `min-h-11`), the new Streaming tab included.
+                className={`flex min-h-11 items-center border-b-2 px-4 py-2 text-sm font-medium transition ${
                   tab === tabKey
                     ? "border-purple-600 text-purple-700"
                     : "border-transparent text-slate-500 hover:text-slate-800"
@@ -76,6 +88,7 @@ export default async function DirectoryPage({
         {tab === "clubs" && <ClubsTab ui={ui} />}
         {tab === "officials" && <OfficialsTab ui={ui} />}
         {tab === "venues" && <VenuesTab ui={ui} />}
+        {tab === "streaming" && <StreamingTab ui={ui} locale={locale} />}
       </main>
     </DictProvider>
   );
@@ -245,6 +258,25 @@ async function VenuesTab({ ui }: { ui: Dict }) {
         orgId={auth.orgId}
         canEdit={canEdit}
       />
+    </div>
+  );
+}
+
+// Spec 2026-09-30 §4 (D1) — the ONE place streaming destinations are managed. Every member sees the list; Add / Rename /
+// Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
+// through the same use-case the API serves (VenuesTab's shape), so the list, its key hints and its "in use" badges are
+// the API's projection, never a second query.
+async function StreamingTab({ ui, locale }: { ui: Dict; locale: string }) {
+  const { auth, canEdit } = await requirePageAuth();
+  // M-3 (final review): every holder of the org's destinations gets its lazy expiry BEFORE the list is read. The list's
+  // "In use" lock disables Replace and Remove — the very buttons whose routes tick a held target — so an abandoned Go
+  // live otherwise kept the lock up until someone opened that match or the daily sweep ran. Nothing due: no change.
+  await expireTargetHolders(auth.orgId, null, defaultDeps(await baseUrlFromHeaders()));
+  const targets = await listStreamTargets(auth, auth.orgId);
+  return (
+    <div className="space-y-4">
+      <p className="max-w-xl text-sm text-slate-500">{t(ui, "directory.streaming.desc")}</p>
+      <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} />
     </div>
   );
 }

@@ -22,7 +22,8 @@
 //     effects) with the v1 transport, the checkout client, the confirm dialog
 //     and the QR encoder doubled — so the PATHS it calls, what it hands the
 //     body and what each action sends are pinned, not a source scan's guess;
-//   * `TargetForm` — its own island (it holds state).
+//   (T8, D1: the destination form moved to Directory → Streaming — the panel only picks; see
+//   stream-destinations-panel.test.tsx for the form.)
 // What none of this can see — layout, the cascade, a real Stripe iframe, a
 // real server — is the browser pass and Task 15's walkthrough.
 //
@@ -32,6 +33,7 @@ import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vite
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { EmbeddedCheckoutProvider } from "@stripe/react-stripe-js";
 import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
@@ -46,32 +48,34 @@ import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { LOCALES } from "@/lib/i18n-constants";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
-import { DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, destinationRefusal, type DestinationRefusal } from "@/lib/stream-destinations";
 import {
-  DESTINATION_REFUSAL_KEYS,
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STREAM_POLL_MS,
+  TARGET_REMOVED,
   qrText,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
+import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
+import { D3Warning, SignalChain } from "@/components/v2/stream-signal-chain";
+import QRCode from "qrcode";
+import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
+import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES, type SeaznQr } from "@/lib/seazn-qr";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { chainFor } from "@/lib/stream-chain";
 import {
   CheckoutSheetBoundary,
   FixtureStreamPanel,
-  FixtureStreamToggle,
   PhoneStopProbe,
   PhoneTab,
   PhoneTabBody,
-  QR_RENDER_OPTIONS,
-  TARGET_KINDS,
-  TargetForm,
   CANVAS_H,
   CANVAS_W,
   PREVIEW_MAX_W_PX,
   previewScaleFor,
-  stepRadio,
   type PhoneTabBodyProps,
+  type TargetsState,
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
@@ -85,7 +89,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
   apiV1: (url: string, options?: { method?: string; json?: unknown }) => apiV1(url, options),
 }));
 
-// Both `?stream=open` readers (the panel's tab and the toggle's auto-open) call `useSearchParams`.
+// The panel reads the URL only to STRIP a consumed return (G5); whether it opens on a return is the page's word.
 const searchParamsMock = vi.hoisted(() => {
   let p = new URLSearchParams("");
   return { set: (n: URLSearchParams) => { p = n; }, get: () => p };
@@ -138,11 +142,19 @@ vi.mock("@/lib/billing-checkout-client", () => ({
 const confirmMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
-// The encoder is doubled so its INPUT (the payload and the §7.6 options) is what the test reads.
-const qrcode = vi.hoisted(() => ({
-  toDataURL: vi.fn<(text: string, opts?: unknown) => Promise<string>>(async (text) => `data:image/png;base64,len${text.length}`),
+// The Seazn QR helper is doubled so its INPUT (the payload) is what the test reads (T10: the panel no longer calls
+// `qrcode` itself — `lib/seazn-qr` owns the EC level and the logo; its own test decodes the symbol). The painted size
+// is the shared component's (B6 fix round 1), so the helper takes no size at all.
+const seaznQr = vi.hoisted(() => ({
+  renderSeaznQr: vi.fn<(text: string) => Promise<{ src: string; modules: number }>>(async (text) => ({
+    src: `data:image/svg+xml;charset=utf-8,len${text.length}`,
+    modules: 113,
+  })),
 }));
-vi.mock("qrcode", () => ({ default: { toDataURL: qrcode.toDataURL } }));
+vi.mock("@/lib/seazn-qr", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seazn-qr")>()),
+  renderSeaznQr: seaznQr.renderSeaznQr,
+}));
 
 // The preview's own first fetch. Left rejecting by default: the panel must
 // render its seed from the ROW, so a failing fetch is the interesting case.
@@ -185,7 +197,14 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
   };
 }
 
+/** The panel ON ITS OBS TAB — what the W1 describes below are about. Since T9b Phone is the default (spec §3.1), so this
+ *  taps OBS overlay first, as an organiser would; `openPanel` renders it as it opens. */
 function open(o: Partial<StreamPanelContext> = {}) {
+  const island = openPanel(o);
+  click(byTestId(island.tree(), "stream-tab-obs"));
+  return island;
+}
+function openPanel(o: Partial<StreamPanelContext> = {}) {
   return renderIsland(FixtureStreamPanel, {
     fixture: FIXTURE,
     entrantNames: ENTRANTS,
@@ -234,6 +253,19 @@ const SHEET_PATH = join(
   "../../../../../..",
   "docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md",
 );
+/** §8a's `QR size` row's cap — the `N` of its `min(Npx, available)` rule (amended 2026-09-30 to ≥ 320, spec §7; 2026-10-01
+ *  to 363, so desktop keeps ≥ 320 at a whole number of px per module). */
+const sheetQrCap = (): number => {
+  const row = readFileSync(SHEET_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"));
+  if (!row) throw new Error("§8a lost its QR size row");
+  const cap = /min\((\d+)px, available\)/.exec(row)?.[1];
+  if (!cap) throw new Error("§8a's QR size row no longer states min(Npx, available)");
+  return Number(cap);
+};
+/** The stream QR as the body hands it to the shared component — an element the node harness does not expand, so it is
+ *  found by TYPE and its `testId` PROP, never by `data-testid` (which only the component's own <img> carries). */
+const qrImageOf = (tree: ReactElement[], testId: string): ReactElement | undefined =>
+  tree.find((el) => el.type === SeaznQrImage && propsOf(el).testId === testId);
 
 const DICT_DIR = join(__dirname, "..", "..", "..", "dictionaries");
 const uiDict = (locale: string): Record<string, string> =>
@@ -555,7 +587,7 @@ const QR = JSON.parse(
 
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", state: "warming", desiredState: "live",
-  failReason: null, health: null, ingest: { state: "disconnected", protocol: null },
+  failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
   qr: QR, balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
   restartFree: false,
@@ -563,8 +595,8 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
 });
 
 const TARGETS: StreamTarget[] = [
-  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z" },
-  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z" },
+  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null },
+  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: null, inUse: null },
 ];
 
 describe("the Phone tab reads the §5.3 gate, then hands the container the context (D15)", () => {
@@ -664,8 +696,9 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(src).not.toMatch(/result\.code/);
     // C1: the idle tab's balance has a source when there is no session (m2: a no_credits refusal reads it as 0).
     expect(src).toMatch(/view \? view\.balance : noCredits \? 0 : streamBalance/);
-    // De: the reveal flag exists.
-    expect(src).toMatch(/\?reveal=1/);
+    // De: the reveal flag exists — on the session's read, which T9b moved to the page's one poller.
+    const provider = readFileSync(join(__dirname, "..", "stream-session-provider.tsx"), "utf8");
+    expect(provider).toMatch(/\?reveal=1/);
     // The legacy transport prefixes nothing and drops the extras (404s here) — v1 only.
     expect(src).not.toMatch(/from "@\/lib\/client"/);
   });
@@ -753,7 +786,7 @@ describe("phone first — the 44px floor is the BASE, not an override", () => {
       for (const id of ["stream-tab-obs", "stream-tab-phone", "stream-link", "stream-copy", "stream-url-input", "stream-save"]) {
         check(byTestId(island.tree(), id), id);
       }
-      // The Phone tab's own controls live in `PhoneTabBody` / `TargetForm`; their floor is swept state by state below.
+      // The Phone tab's own controls live in `PhoneTabBody`; their floor is swept state by state below.
     }
     // The positive pair: without it an empty tree passes every check above. Two passes × (the registry's style tabs +
     // the six OBS-tab controls) — derived from the registry, so a fourth theme moves the floor with it.
@@ -761,12 +794,6 @@ describe("phone first — the 44px floor is the BASE, not an override", () => {
     expect(seen.length).toBeGreaterThanOrEqual(16);
   });
 
-  it("and the toggle in the row itself does too", () => {
-    const button = renderIsland(FixtureStreamToggle, { open: false, onToggle: () => {}, fixtureId: "f-1" })
-      .tree()
-      .find((el) => attr(el, "data-testid") === "fixture-stream-toggle");
-    expect(String(propsOf(button!).className ?? "")).toMatch(TAPPABLE);
-  });
 });
 
 describe("one DOM, branched — never a second phone tree", () => {
@@ -787,118 +814,99 @@ describe("one DOM, branched — never a second phone tree", () => {
     expect(checked, "the sweep read no elements").toBeGreaterThan(0);
   });
 
-  // D16: the Phone tab's stepper is the ONE sanctioned branch — the `ol` at ≥ 768 and its one-line twin below — and
-  // it is the only pair. Every other control is a single instance, the same at every width.
-  it("across every PhoneTabBody state, ONLY the stream-step / stream-steps pair is hidden by width, and every other control appears once", () => {
-    const MD_HIDDEN = /(^|\s)md:hidden(\s|$)/; // anchored: `max-md:hidden` must not satisfy it (AGENTS.md)
-    const MAX_MD_HIDDEN = /(^|\s)max-md:hidden(\s|$)/;
+  // D16 → §3.2 (T9a): §8a's stepper pair (the `ol` at ≥ 768 and its one-line twin) is gone. The Signal path is ONE
+  // drawing at every width — only its destination LABEL moves, inside `<SignalChain>` (stream-signal-chain.test.tsx
+  // pins that twin). So the body itself hides nothing by width, and every control is a single instance.
+  it("across every PhoneTabBody state, nothing the body renders is hidden by width, and every control appears once", () => {
     let states = 0;
-    let stepped = 0;
+    let chained = 0;
     for (const [name, tree] of bodyStates()) {
       const hidden = tree.filter((el) => /(^|\s)(max-)?md:hidden(\s|$)/.test(String(propsOf(el).className ?? "")));
-      // B3: the credits-only state has no stepper at all — so nothing in it is hidden by width either.
-      if (CREDITS_ONLY.has(name)) {
-        expect(hidden, name).toEqual([]);
-        states++;
-        continue;
-      }
-      stepped++;
-      expect(hidden.map((el) => attr(el, "data-testid")).sort(), name).toEqual(["stream-step", "stream-steps"]);
-      expect(String(attr(byTestId(tree, "stream-step")!, "className")), name).toMatch(MD_HIDDEN);
-      expect(String(attr(byTestId(tree, "stream-step")!, "className")), name).not.toMatch(MAX_MD_HIDDEN);
-      expect(String(attr(byTestId(tree, "stream-steps")!, "className")), name).toMatch(MAX_MD_HIDDEN);
+      expect(hidden.map((el) => attr(el, "data-testid") ?? el.type), name).toEqual([]);
       const ids = tree.map((el) => attr(el, "data-testid")).filter((id): id is string => typeof id === "string");
       const repeated = ids.filter((id, i) => ids.indexOf(id) !== i && id !== "stream-health-chip");
       expect(repeated, `${name}: a control is rendered twice`).toEqual([]);
+      expect(tree.filter((e) => e.type === SignalChain).length, `${name}: at most one chain`).toBeLessThanOrEqual(1);
+      if (chainOf(tree)) chained++;
       states++;
     }
     expect(states).toBe(bodyStates().length);
     expect(states).toBeGreaterThanOrEqual(8);
-    expect(stepped, "every state skipped the stepper check").toBe(states - CREDITS_ONLY.size);
+    expect(chained, "the chain was drawn in some state, or the single-instance check above was vacuous").toBeGreaterThan(0);
   });
 });
 
-describe("the toggle", () => {
-  it("carries the wave's testid, an accessible name and its expanded state", () => {
-    const tree = renderIsland(FixtureStreamToggle, { open: false, onToggle: () => {}, fixtureId: "f-1" }).tree();
-    const button = byTestId(tree, "fixture-stream-toggle");
-    expect(button, "no fixture-stream-toggle").toBeDefined();
-    expect(propsOf(button!)["aria-expanded"]).toBe(false);
-    expect(propsOf(button!)["aria-label"]).toBe(messages["stream.toggle"]);
-  });
-});
+// ─── The return (spec 2026-09-30 §2) ────────────────────────────────────────────────────────────────────────────────
+// The checkout return and the run sheet's chip both land on the FIXTURE page with `?stream=open`. The page reads it on the
+// server and hands the panel `openedByReturn`; the URL on its own opens nothing (T6 removed `checkoutReturnFor` and the
+// run-sheet toggle it drove). The page IS the fixture, so there is no `fixture` param to name a row any more.
+describe("the return opens the panel on the Phone tab — on the fixture page's word, `openedByReturn`", () => {
+  const RETURN = "stream=open&checkout=success&session_id=cs_test_1";
+  const panel = (openedByReturn?: boolean, relayEntitled = true) =>
+    renderIsland(FixtureStreamPanel, { fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled }), openedByReturn });
 
-// ─── The checkout return (owner ruling 4, re-ruled on C19) ────────────────────────────────────────────────────────
-describe("the checkout return opens THIS row's panel on the Phone tab", () => {
-  const RETURN = "tab=fixtures&fixture=f1&stream=open&checkout=success&session_id=cs_test_1";
-
-  it("?stream=open&fixture=<this id> fires onToggle once; another fixture's id, an absent query, and an already-open row do not", () => {
-    const calls: string[] = [];
+  it("T5: `openedByReturn` opens on the PHONE tab and strips the return; an ordinary open strips nothing", () => {
     searchParamsMock.set(new URLSearchParams(RETURN));
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("f1") });
-    expect(calls, "the row this URL names opens itself").toEqual(["f1"]);
-    // The three negatives, each on its own — two guards covering for each other are each untested (class 3).
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f2", onToggle: () => calls.push("f2") });
-    searchParamsMock.set(new URLSearchParams("tab=fixtures&fixture=f1"));
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("no-flag") });
-    searchParamsMock.set(new URLSearchParams(""));
-    renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle: () => calls.push("bare") });
-    searchParamsMock.set(new URLSearchParams(RETURN));
-    renderIsland(FixtureStreamToggle, { open: true, fixtureId: "f1", onToggle: () => calls.push("already") });
-    expect(calls, "no other row, no bare URL, and never a toggle on an open row").toEqual(["f1"]);
-  });
-
-  it("the second render is not a second open: once the organiser shuts the row, it STAYS shut (class 13, the ref)", () => {
-    const calls: number[] = [];
-    searchParamsMock.set(new URLSearchParams(RETURN));
-    const onToggle = () => calls.push(calls.length);
-    const island = renderIsland(FixtureStreamToggle, { open: false, fixtureId: "f1", onToggle });
-    expect(calls).toHaveLength(1);
-    island.rerender({ open: true, fixtureId: "f1", onToggle }); // the row opened
-    island.rerender({ open: false, fixtureId: "f1", onToggle }); // the organiser shut it — the URL still says open
-    expect(calls, "a shut row sprang back open").toHaveLength(1);
-  });
-
-  it("the panel it opens starts on the PHONE tab for that fixture, and on OBS for any other", () => {
-    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", `fixture=${FIXTURE.id}`)));
-    const here = open({ relayEntitled: true }).tree();
-    expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected")).toBe(true);
+    const here = panel(true).tree();
+    expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected"), "the fixture page's return lands on Phone").toBe(true);
     expect(byTestId(here, "stream-phone-gate"), "the Phone tab body").toBeDefined();
-    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", "fixture=some-other-row")));
-    const other = open({ relayEntitled: true }).tree();
-    expect(attr(byTestId(other, "stream-tab-obs")!, "aria-selected")).toBe(true);
-    expect(byTestId(other, "stream-phone-gate")).toBeUndefined();
-    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}`));
-    expect(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-tab-obs")!, "aria-selected"), "no flag, no Phone tab").toBe(true);
+    expect(router.replace, "the return's params are stripped (G5)").toHaveBeenCalledWith(PATHNAME, { scroll: false });
+    router.replace.mockReset();
+    // The same URL without the page's word: an ordinary open — still Phone (T9b's default), and nothing stripped.
+    const ordinary = panel(false).tree();
+    expect(attr(byTestId(ordinary, "stream-tab-phone")!, "aria-selected")).toBe(true);
+    expect(router.replace, "an ordinary open strips nothing").not.toHaveBeenCalled();
   });
 
-  it("G5: once THIS row has consumed the return, its params are stripped with router.replace — every other param kept, once", () => {
+  // Spec §3.1 (T9b): tabs Phone first, the default; OBS overlay second, today's OBS tab.
+  it("T9b: Phone is the FIRST tab and the DEFAULT — first in the markup, selected with no openedByReturn; OBS is one tap away", () => {
+    for (const openedByReturn of [undefined, false]) {
+      const island = panel(openedByReturn);
+      const tree = island.tree();
+      const tabs = tree.filter((el) => attr(el, "role") === "tab" && typeof attr(el, "data-stream-style") !== "string");
+      expect(tabs.map((el) => attr(el, "data-testid")), "the mode tabs, in DOM order").toEqual(["stream-tab-phone", "stream-tab-obs"]);
+      expect(attr(tabs[0]!, "aria-selected"), "Phone is selected").toBe(true);
+      expect(attr(tabs[1]!, "aria-selected"), "OBS is not").toBe(false);
+      expect(byTestId(tree, "stream-phone-gate"), "the Phone tab's body is what shows").toBeDefined();
+      expect(byTestId(tree, "stream-preview"), "…and the OBS preview is not").toBeUndefined();
+      expect(textOf(tabs[1]!)).toBe(m("stream.tab.obs"));
+      click(byTestId(tree, "stream-tab-obs"));
+      expect(byTestId(island.tree(), "stream-preview"), "OBS overlay opens on a tap").toBeDefined();
+    }
+  });
+
+  it("T6: the old run-sheet return URL (`?stream=open&fixture=<this id>`) opens nothing by itself — the URL is no longer a reader", () => {
+    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}&${RETURN}`));
+    panel(undefined).tree();
+    expect(router.replace, "nothing consumed, nothing stripped").not.toHaveBeenCalled();
+  });
+
+  it("G5: once consumed, the return's params are stripped with router.replace — every other param kept, once", () => {
     // A reload or a shared link must not re-open the panel (or re-run the reconcile) on a URL whose purchase is done.
-    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}&stream=open&checkout=success&session_id=cs_test_1&court=2`));
-    const island = open({ relayEntitled: true });
+    searchParamsMock.set(new URLSearchParams(`${RETURN}&court=2`));
+    const island = panel(true);
     expect(router.replace).toHaveBeenCalledTimes(1);
-    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?tab=fixtures&court=2`, { scroll: false });
-    island.rerender({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }) });
+    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?court=2`, { scroll: false });
+    island.rerender({ fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled: true }), openedByReturn: true });
     expect(router.replace, "a re-render stripped again").toHaveBeenCalledTimes(1);
-    // The empty cases: another row's return, and an ordinary visit, touch nothing.
-    router.replace.mockReset();
-    searchParamsMock.set(new URLSearchParams(RETURN.replace("fixture=f1", "fixture=some-other-row")));
-    open({ relayEntitled: true });
-    searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}`));
-    open({ relayEntitled: true });
-    expect(router.replace).not.toHaveBeenCalled();
     // …and a return with nothing else on the URL lands on the bare path.
-    searchParamsMock.set(new URLSearchParams(`fixture=${FIXTURE.id}&stream=open`));
-    open({ relayEntitled: false });
+    router.replace.mockReset();
+    searchParamsMock.set(new URLSearchParams("stream=open"));
+    panel(true, false);
     expect(router.replace).toHaveBeenCalledWith(PATHNAME, { scroll: false });
+    // A `fixture` param is no longer the return's (the page IS the fixture): it is kept like any other.
+    router.replace.mockReset();
+    searchParamsMock.set(new URLSearchParams("stream=open&fixture=kept"));
+    panel(true, false);
+    expect(router.replace).toHaveBeenCalledWith(`${PATHNAME}?fixture=kept`, { scroll: false });
   });
 
   it("B2: the return scrolls the opened panel into view ONCE — smooth, instant under reduced motion; an ordinary open never scrolls", () => {
     const REDUCE = "(prefers-reduced-motion: reduce)";
-    const attach = (reduce: boolean, query: string) => {
+    const attach = (reduce: boolean, openedByReturn: boolean) => {
       vi.stubGlobal("matchMedia", (q: string) => ({ matches: reduce && q === REDUCE, media: q }));
-      searchParamsMock.set(new URLSearchParams(query));
-      const section = byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!;
+      searchParamsMock.set(new URLSearchParams(openedByReturn ? RETURN : ""));
+      const section = byTestId(panel(openedByReturn).tree(), "stream-panel")!;
       const el = { scrollIntoView: vi.fn() };
       const ref = attr(section, "ref");
       if (typeof ref === "function") {
@@ -907,20 +915,18 @@ describe("the checkout return opens THIS row's panel on the Phone tab", () => {
       }
       return el.scrollIntoView;
     };
-    const RETURN_HERE = RETURN.replace("fixture=f1", `fixture=${FIXTURE.id}`);
     try {
-      const smooth = attach(false, RETURN_HERE);
+      const smooth = attach(false, true);
       expect(smooth).toHaveBeenCalledTimes(1);
       expect(smooth).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
-      const still = attach(true, RETURN_HERE);
+      const still = attach(true, true);
       expect(still).toHaveBeenCalledWith({ block: "start", behavior: "auto" });
-      expect(attach(false, `tab=fixtures&fixture=${FIXTURE.id}`), "an ordinary open scrolled").not.toHaveBeenCalled();
-      expect(attach(false, RETURN.replace("fixture=f1", "fixture=some-other-row")), "another row's return scrolled this one").not.toHaveBeenCalled();
+      expect(attach(false, false), "an ordinary open scrolled").not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
     // The landing clears the console's sticky bars rather than tucking the panel's heading under them.
-    const cls = String(attr(byTestId(open({ relayEntitled: true }).tree(), "stream-panel")!, "className")).split(/\s+/);
+    const cls = String(attr(byTestId(panel(true).tree(), "stream-panel")!, "className")).split(/\s+/);
     expect(cls.some((c) => /^scroll-mt-/.test(c)), "no scroll margin").toBe(true);
   });
 });
@@ -928,17 +934,34 @@ describe("the checkout return opens THIS row's panel on the Phone tab", () => {
 // ─── PhoneTabBody: every §8a / §8b state from the projection alone ──────────────────────────────────────────────────
 const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
-  view: null, balance: 0, targets: [], busy: false, createError: null, checkoutError: null,
-  selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showTargetForm: false, showBuy: false,
+  fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
+  selectedTargetId: null, qrImage: null, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
-  onSelectTarget: () => {}, onAddTarget: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
-  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onSaveTarget: async () => {}, onTileIntent: () => {},
+  onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
+  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onTileIntent: () => {},
 };
-const body = (p: Partial<PhoneTabBodyProps> = {}): ReactElement[] => walk(expandWithHooks(PhoneTabBody, { ...BODY, ...p }));
+/** A loaded list — what most states render with. */
+const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
+/** `targets` may be given as a bare list (a LOADED one) — every state below that is not about the load itself. */
+type BodyArgs = Omit<Partial<PhoneTabBodyProps>, "targets"> & { targets?: StreamTarget[] | TargetsState };
+const body = ({ targets, ...p }: BodyArgs = {}): ReactElement[] =>
+  walk(expandWithHooks(PhoneTabBody, { ...BODY, ...p, targets: Array.isArray(targets) ? ok(targets) : targets ?? BODY.targets }));
+/** The list a TargetsState holds, or a failure naming the state it was in. */
+const listOf = (t: TargetsState): StreamTarget[] => {
+  if (t.status !== "ok") throw new Error(`the destinations are ${t.status}, not loaded`);
+  return t.list;
+};
 const textAt = (tree: ReactElement[], id: string): string => {
   const el = byTestId(tree, id);
   if (!el) throw new Error(`no ${id} in the tree`);
   return textOf(el).replace(/\s+/g, " ").trim();
+};
+
+/** §3.2 (T9a): the Signal path the body hands `<SignalChain>` — the node harness expands one level, so the chain is an
+ *  element whose PROPS are what this file reads (its drawing is stream-signal-chain.test.tsx's). */
+const chainOf = (tree: ReactElement[]) => {
+  const el = tree.find((e) => e.type === SignalChain);
+  return el ? (propsOf(el) as unknown as { chain: ReturnType<typeof chainFor>; destination: { kind: string; label: string } }) : undefined;
 };
 
 /** The ended card's chips, in order, by testid — every span in its chip row, so a chip added without a testid still counts. */
@@ -954,15 +977,21 @@ const endedChips = (tree: ReactElement[]): string[] => {
 const CREDITS_ONLY = new Set(["idle, balance 0 (the credits card)"]);
 
 /** Every state the body renders, named — the sweeps below iterate THIS list and assert they read all of it. */
+/** A target_in_use refusal's holder — another match, live, with its page (T8). */
+const IN_USE_HOLDER = { sessionId: "s9", fixtureId: "f-9", href: "/o/org/c/comp/d/div/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const, label: "Club YouTube" };
+
 function bodyStates(): [string, ReactElement[]][] {
   return [
     ["idle, balance 0 (the credits card)", body({ view: null, balance: 0 })],
     ["idle, balance 2", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" })],
-    ["idle, the destination form open", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", showTargetForm: true })],
+    ["idle, no destinations yet", body({ view: null, balance: 2, targets: [], selectedTargetId: null })],
+    ["idle, the destination list failed to load", body({ view: null, balance: 2, targets: { status: "error" }, selectedTargetId: null })],
+    ["idle, the destination list loading", body({ view: null, balance: 2, targets: { status: "loading" }, selectedTargetId: null })],
     ["idle, a refused create", body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } })],
     ["idle, Buy more opened", body({ view: null, balance: 2, showBuy: true, checkoutError: "owner" })],
+    ["idle, the destination in use", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder: IN_USE_HOLDER } })],
     ["provisioning", body({ view: session({ state: "provisioning", qr: null }), balance: 2 })],
-    ["warming, the QR", body({ view: session(), balance: 2, qrDataUrl: "data:image/png;base64,AAAA" })],
+    ["warming, the QR", body({ view: session(), balance: 2, qrImage: { src: "data:image/png;base64,AAAA", modules: 113 } })],
     ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", qr: null, fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
     ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z", qr: null }), balance: 1 })],
     ["ended", body({ view: session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
@@ -1019,14 +1048,14 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(bought).toEqual(STREAM_CREDIT_PACKS.map((p) => p.size));
   });
 
-  it("balance 2 and no session: idle controls, opening at clean feed with scorebug DISABLED, the first destination selected", () => {
+  it("balance 2 and no session: idle controls, the first destination selected — and NO feed-mode control (spec §3.1)", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
     expect(textAt(tree, "stream-balance")).toBe(m("stream.phone.credits.other", { n: 2 }));
     expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
-    expect(propsOf(byTestId(tree, "stream-mode-clean")!)["aria-checked"]).toBe(true);
-    expect(propsOf(byTestId(tree, "stream-mode-clean")!).disabled, "the positive pair: clean is enabled").toBeFalsy();
-    expect(propsOf(byTestId(tree, "stream-mode-scorebug")!).disabled).toBe(true); // composed is R2's; the seam is visible
-    expect(propsOf(byTestId(tree, "stream-mode-scorebug")!)["aria-checked"]).toBe(false);
+    // T9b: the disabled "With scorebug — Coming soon" control is gone, and the radiogroup with it (passthrough only).
+    for (const id of ["stream-mode", "stream-mode-clean", "stream-mode-scorebug"]) expect(byTestId(tree, id), id).toBeUndefined();
+    const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={null} balance={2} targets={ok(TARGETS)} selectedTargetId="t1" />);
+    expect(html.includes("Coming soon"), "no Coming soon, in any key").toBe(false);
     expect(byTestId(tree, "stream-go-live")).toBeDefined();
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBeFalsy();
     expect(byTestId(tree, "stream-buy-pack-5")).toBeUndefined();
@@ -1083,10 +1112,13 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(hidden).toBe(5);
   });
 
-  it("no destination yet: the select says to add one and Go live is disabled — the empty case", () => {
-    const tree = body({ view: null, balance: 2, targets: [], selectedTargetId: null });
-    expect(textAt(tree, "stream-target")).toBe(m("stream.phone.destination.none"));
-    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBe(true);
+  it("no destination yet: the empty copy with its Directory link, no select, and Go live DISABLED — even with a stale selection (the empty case)", () => {
+    for (const selectedTargetId of [null, "t1"]) {
+      const tree = body({ view: null, balance: 2, targets: [], selectedTargetId });
+      expect(textAt(tree, "stream-dest-empty"), String(selectedTargetId)).toContain(m("stream.dest.empty"));
+      expect(byTestId(tree, "stream-target"), "no select over nothing").toBeUndefined();
+      expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, String(selectedTargetId)).toBe(true);
+    }
   });
 
   it("balance ≥ 1: Buy more OPENS the pack chooser — it never picks a pack for the organiser", () => {
@@ -1112,11 +1144,13 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(body({ view: null, balance: 0, checkoutError: "owner" }), "stream-create-error")).toBeUndefined();
   });
 
-  it("a refused create shows the E5 create-error copy, keyed by code; target_in_use NAMES the court (D12)", () => {
+  it("a refused create shows the E5 create-error copy, keyed by code; target_in_use NAMES the match and court (D12, spec §5.5)", () => {
     const tree = body({ view: null, balance: 1, createError: { code: "storage_exhausted", holder: null } });
     expect(textAt(tree, "stream-create-error")).toBe(m("stream.error.storage_exhausted"));
-    const named = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel" } } });
-    expect(textAt(named, "stream-create-error")).toBe(m("stream.error.target_in_use", { destination: "Club channel", court: "Court 3" }));
+    const named = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: { courtName: "Court 3", label: "Club channel", matchNo: 4, href: "/x", state: "live" } } });
+    expect(textAt(named, "stream-create-error")).toBe(
+      m("stream.inUse.live", { label: "Club channel", match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 4 }), court: "Court 3" }) }),
+    );
     const elsewhere = body({ view: null, balance: 1, createError: { code: "target_in_use", holder: null } });
     expect(textAt(elsewhere, "stream-create-error")).toBe(m("stream.error.target_in_use.unknown"));
     expect(byTestId(body({ view: null, balance: 1 }), "stream-create-error"), "the empty case").toBeUndefined();
@@ -1124,12 +1158,22 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
   it("warming: the QR image (a real alt), the paste code equal to the payload (a real name), the caption, Cancel — one centred column at the QR box's own width", () => {
     const v = session();
-    const tree = body({ view: v, balance: 2, qrDataUrl: "data:image/png;base64,AAAA" });
-    const img = byTestId(tree, "stream-qr")!;
-    expect(attr(img, "src")).toBe("data:image/png;base64,AAAA");
-    expect(String(attr(img, "className"))).toContain("w-[min(264px,100%)]");
-    expect(attr(img, "alt")).toBe(m("stream.phone.qr.alt"));
+    const symbol: SeaznQr = { src: "data:image/png;base64,AAAA", modules: 113 };
+    const tree = body({ view: v, balance: 2, qrImage: symbol });
+    // T10: the QR is a <SeaznQrImage> element (renderIsland does not expand it): find it by type and `testId` prop,
+    // never by data-testid, and pin its props. The width is the sheet's rule, read from the row.
+    const qrEl = qrImageOf(tree, "stream-qr");
+    expect(qrEl, "the Waiting state renders the stream QR through SeaznQrImage").toBeDefined();
+    expect(byTestId(tree, "stream-qr"), "no bare img bypasses the component").toBeUndefined();
+    expect(propsOf(qrEl!).qr, "the symbol the panel encoded, whole").toBe(symbol);
+    expect(propsOf(qrEl!).alt).toBe(m("stream.phone.qr.alt"));
+    expect(propsOf(qrEl!).sensitive, "D10a: the capture credentials never reach a replay").toBe(true);
+    const cap = sheetQrCap();
+    expect(cap).toBeGreaterThanOrEqual(320); // spec §7's floor on desktop
+    expect(propsOf(qrEl!).maxSize, "the sheet's cap; the component snaps inside it").toBe(cap);
     const field = byTestId(tree, "stream-qr-text")!;
+    // D10a: the paste code IS the payload — the text carries the replay block as well as the image.
+    expect(String(attr(field, "className")).split(/\s+/), "the paste code is ph-no-capture").toContain("ph-no-capture");
     expect(attr(field, "value")).toBe(JSON.stringify(v.qr));
     expect(attr(field, "readOnly")).toBe(true);
     expect(attr(field, "aria-label")).toBe(m("stream.phone.qr.field"));
@@ -1137,26 +1181,62 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const box = byTestId(tree, "stream-qr-box")!;
     const width = String(attr(box, "className")).match(/(^|\s)(max-w-\[\d+px\])(\s|$)/)?.[2];
     expect(width, "the QR box has no max width").toBeDefined();
+    // The box holds the cap exactly: the cap + its `p-3` (12) twice + its 1-px border twice, so the box is never the
+    // thing that snaps the QR down a scale on desktop.
+    expect(Number(/\d+/.exec(width!)![0]), "the box's max width is the cap plus its chrome").toBe(cap + 2 * (12 + 1));
+    expect(String(attr(box, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["p-3", "border"]));
     expect(String(attr(byTestId(tree, "stream-qr-field")!, "className")).split(/\s+/)).toContain(width);
     expect(String(attr(byTestId(tree, "stream-qr-column")!, "className"))).toMatch(/(^|\s)items-center(\s|$)/);
     expect(byTestId(tree, "stream-cancel")).toBeDefined();
-    expect(textAt(tree, "stream-step")).toBe(m("stream.phone.stepOf", { n: 2, label: m("stream.phone.step2") }));
+    // §3.2: waiting — the phone and Seazn amber, the destination not live yet (was §8a's "step 2 of 4").
+    expect(chainOf(tree)?.chain).toMatchObject({ phone: { word: "waiting" }, link1: "connecting", dest: { word: "notLive" } });
     // The copy button's accessible name at ≥ 768 (icon-only there) is its sr-only text.
     expect(textAt(tree, "stream-qr-copy")).toBe(m("stream.phone.qr.copy"));
     expect(textAt(body({ view: v, balance: 2, copied: true }), "stream-qr-copy")).toBe(m("stream.phone.qr.copied"));
   });
 
   it("warming before the encoder answers: a placeholder the QR's size, and the paste code is ALREADY there (§8a: always rendered)", () => {
-    const tree = body({ view: session(), balance: 2, qrDataUrl: null });
+    const v = session();
+    const tree = body({ view: v, balance: 2, qrImage: null });
+    expect(qrImageOf(tree, "stream-qr"), "no QR before the encoder answers").toBeUndefined();
     expect(byTestId(tree, "stream-qr")).toBeUndefined();
+    // The placeholder holds the QR's own snapped square and caption line, so the box does not jump when the symbol
+    // lands (review m-7): the same cap, and the module count of THIS payload — QRCode's own matrix plus the quiet zone.
+    const box = byTestId(tree, "stream-qr-box")!;
+    const placeholder = walk(propsOf(box).children as ReactElement).find((el) => el.type === SeaznQrPlaceholder);
+    expect(placeholder, "the placeholder renders").toBeDefined();
+    expect(propsOf(placeholder!).maxSize).toBe(sheetQrCap());
+    const modules = QRCode.create(qrText(v.qr!), { errorCorrectionLevel: "H" }).modules.size + 2 * 4;
+    expect(propsOf(placeholder!).modules).toBe(modules);
+    // No payload yet (provisioning before the credentials exist): the box's own square, unsnapped.
+    const early = byTestId(body({ view: session({ qr: null }), balance: 2, qrImage: null }), "stream-qr-box");
+    expect(early, "premise: the waiting box shows before the credentials do").toBeDefined();
+    const ph = walk(propsOf(early!).children as ReactElement).find((el) => el.type === SeaznQrPlaceholder);
+    expect(propsOf(ph!).modules).toBeNull();
     expect(byTestId(tree, "stream-qr-text")).toBeDefined();
   });
 
-  it("live: REC + elapsed, the health chips led by the INGEST STATE (C6), the solid red Stop; the decided chip only when decided", () => {
+  it("live (§3.3, mockup state 3): On air + the elapsed time in mono, a FULL-WIDTH solid red Stop, then a CLOSED Details led by the INGEST STATE (C6); the decided chip only when decided", () => {
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } });
     const tree = body({ view: live, balance: 1 });
-    expect(byTestId(tree, "stream-rec")).toBeDefined();
+    expect(textAt(tree, "stream-on-air")).toBe(m("stream.onAir"));
+    expect(byTestId(tree, "stream-rec"), "T9b: no REC badge in the tab — On air says it").toBeUndefined();
     expect(textAt(tree, "stream-elapsed")).toBe("10:00");
+    const clock = String(attr(byTestId(tree, "stream-elapsed")!, "className")).split(" ");
+    for (const c of ["font-mono", "text-3xl", "tabular-nums"]) expect(clock, c).toContain(c);
+    // The mockup's order: On air, then Stop, then Details.
+    const at = (id: string) => tree.findIndex((el) => attr(el, "data-testid") === id);
+    expect(at("stream-on-air")).toBeLessThan(at("stream-stop"));
+    expect(at("stream-stop")).toBeLessThan(at("stream-details"));
+    const stopClass = String(attr(byTestId(tree, "stream-stop")!, "className")).split(" ");
+    for (const c of ["w-full", "min-h-12", "bg-red-600", "text-white"]) expect(stopClass, c).toContain(c);
+    expect(stopClass, "full width at every width").not.toContain("md:w-auto");
+    // T9a (§3.3): the chips moved into Details, closed by default; the chain above carries the state.
+    const details = byTestId(tree, "stream-details")!;
+    expect(details.type).toBe("details");
+    expect(attr(details, "open"), "Details opens CLOSED (class 19: what it opens at)").toBeFalsy();
+    expect(textOf(walk(propsOf(details).children as ReactElement).find((e) => e.type === "summary")!)).toBe(m("stream.details"));
+    expect(walk(propsOf(details).children as ReactElement).some((e) => attr(e, "data-testid") === "stream-health"), "the chips are INSIDE Details").toBe(true);
     const chips = allTestIds(tree, "stream-health-chip");
     expect(textOf(chips[0]!)).toBe(m("stream.health.ingest.connected"));
     expect(chips).toHaveLength(1); // passthrough with no heartbeat: the ingest chip alone
@@ -1244,14 +1324,17 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
   });
 
-  it("B3: balance < 1 and no session is the heading and the credits card ONLY — no 'Ready' pill, no stepper; a credit brings both back", () => {
-    const tree = body({ view: null, balance: 0 });
-    expect(textOf(tree.find((el) => el.type === "h4")!)).toContain(m("stream.phone.title"));
+  it("B3: balance < 1 and no session is the credits card ONLY — no 'Ready' pill, no chain, no credits line; a credit brings them back", () => {
+    const tree = body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1" });
+    // T9b: the tab has no heading of its own any more (the console card names it); the h4 is gone in every state.
+    expect(tree.some((el) => el.type === "h4"), "no tab heading").toBe(false);
     expect(byTestId(tree, "stream-buy-pack-5"), "the credits card").toBeDefined();
-    for (const id of ["stream-state-pill", "stream-step", "stream-steps"]) expect(byTestId(tree, id), id).toBeUndefined();
-    // The positive pair, one credit up: the pill and the stepper are back (and the tiles are not).
+    for (const id of ["stream-state-pill", "stream-credits-line"]) expect(byTestId(tree, id), id).toBeUndefined();
+    expect(chainOf(tree), "no chain while credits-only — even with a destination picked").toBeUndefined();
+    // The positive pair, one credit up: the pill and the chain are back (and the tiles are not).
     const funded = body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1" });
-    for (const id of ["stream-state-pill", "stream-step", "stream-steps", "stream-go-live"]) expect(byTestId(funded, id), id).toBeDefined();
+    for (const id of ["stream-state-pill", "stream-go-live"]) expect(byTestId(funded, id), id).toBeDefined();
+    expect(chainOf(funded)?.chain).toEqual(chainFor(null));
     expect(byTestId(funded, "stream-buy-pack-5")).toBeUndefined();
     // …and a FAILED session at balance 0 is not idle: it keeps its pill and stepper (the no_credits failure explains itself).
     const failed = body({ view: session({ state: "failed", qr: null, failReason: "no_credits" }), balance: 0 });
@@ -1273,8 +1356,9 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
     expect(tiles, "no packs declared — the absence above would be vacuous").toBeGreaterThan(0);
     expect(textAt(free, "stream-restart-free")).toBe(m("stream.phone.restartFree"));
-    // Not credits-only (B3): a startable tab keeps its pill and stepper.
-    for (const id of ["stream-state-pill", "stream-step", "stream-steps"]) expect(byTestId(free, id), id).toBeDefined();
+    // Not credits-only (B3): a startable tab keeps its pill and its chain.
+    expect(byTestId(free, "stream-state-pill")).toBeDefined();
+    expect(chainOf(free), "a free restart draws the chain").toBeDefined();
     // Still no balance chip and no Buy more — the org holds nothing to count or top up from here.
     expect(byTestId(free, "stream-balance")).toBeUndefined();
 
@@ -1377,7 +1461,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
     const tree = body({ view: live, balance: 2, planGate: true, showBuy: true });
     expect(byTestId(tree, "stream-stop"), "a plan refusal took Stop away from a live stream").toBeDefined();
-    expect(byTestId(tree, "stream-rec")).toBeDefined();
+    expect(byTestId(tree, "stream-on-air")).toBeDefined();
     const slot = byTestId(tree, "stream-plan-gate")!;
     expect(slot, "no gate in the buy slot").toBeDefined();
     expect(textOf(byTestId(tree, "stream-switched-off")!)).toContain(m("stream.phone.switchedOff"));
@@ -1494,29 +1578,42 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
   it("B7: each native select names its selection in a title, so a clipped option is still readable", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
-    expect(attr(byTestId(tree, "stream-target")!, "title")).toBe("Alt");
-    expect(attr(byTestId(body({ view: null, balance: 2, targets: [] }), "stream-target")!, "title")).toBe(m("stream.phone.destination.none"));
+    expect(attr(byTestId(tree, "stream-target")!, "title")).toBe(`Alt (${platformName(m, "twitch")})`);
     expect(String(attr(byTestId(tree, "stream-target")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "min-w-0"]));
   });
 
-  it("the state pill: its copy and §8a's colour per state, the live dot only when live", () => {
-    const PILL_CLASS: Record<string, string> = {
-      "idle, balance 2": "bg-slate-100", provisioning: "bg-amber-100", "warming, the QR": "bg-amber-100", live: "bg-red-100",
-      ending: "bg-slate-100", ended: "bg-emerald-100", failed: "bg-red-50",
-    };
-    let checked = 0;
+  // T9b (spec §3.1): the chain says the state, so in the tab the pill is for assistive tech only — still `aria-live`, still
+  // the state's own copy. Ended and failed draw no chain (§3.2): their card shows the pill, in §8a's colour.
+  it("the state pill: sr-only (aria-live, the state's copy) wherever the chain shows; VISIBLE in the ended and failed cards in §8a's colour", () => {
+    const VISIBLE: Record<string, string> = { ended: "bg-emerald-100", failed: "bg-red-50" };
+    let hidden = 0;
+    let shown = 0;
     for (const [name, tree] of bodyStates()) {
-      if (!(name in PILL_CLASS)) continue;
-      const pill = byTestId(tree, "stream-state-pill")!;
-      expect(String(attr(pill, "className")), name).toContain(PILL_CLASS[name]);
-      expect(Boolean(byTestId(tree, "stream-live-dot")), name).toBe(name === "live");
-      checked++;
+      const pill = byTestId(tree, "stream-state-pill");
+      if (name === "idle, balance 0 (the credits card)") {
+        expect(pill, name).toBeUndefined(); // B3: credits only
+        continue;
+      }
+      expect(pill, name).toBeDefined();
+      expect(attr(pill!, "aria-live"), name).toBe("polite");
+      const cls = String(attr(pill!, "className"));
+      if (name in VISIBLE) {
+        expect(cls, name).toContain(VISIBLE[name]);
+        expect(cls.split(" "), name).not.toContain("sr-only");
+        shown++;
+      } else {
+        expect(cls, name).toBe("sr-only");
+        hidden++;
+      }
+      expect(byTestId(tree, "stream-live-dot"), `${name}: no live dot in the tab (the chain's red ring is it)`).toBeUndefined();
     }
-    expect(checked).toBe(Object.keys(PILL_CLASS).length);
+    expect(shown).toBe(Object.keys(VISIBLE).length);
+    expect(hidden, "anti-vacuity: the sr-only states were reached").toBeGreaterThanOrEqual(10);
   });
 
   it("phone first: every stream-* control in every state carries the unprefixed 44px floor", () => {
-    const TAPPABLE = /(^|\s)(min-h-11|h-11)(\s|$)/;
+    // min-h-12 (48 px: the mockup's Go live and Stop stream) clears the floor too.
+    const TAPPABLE = /(^|\s)(min-h-11|min-h-12|h-11)(\s|$)/;
     let seen = 0;
     for (const [name, tree] of bodyStates()) {
       for (const el of tree) {
@@ -1529,135 +1626,382 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
     expect(seen, "the sweep found no controls").toBeGreaterThanOrEqual(24);
   });
-
-  it("the mode control is a radiogroup with arrow keys over the ENABLED options only (composed is disabled this wave)", () => {
-    const both = [{ id: "clean", enabled: true }, { id: "scorebug", enabled: true }] as const;
-    expect(stepRadio(both, "clean", "ArrowRight")).toBe("scorebug");
-    expect(stepRadio(both, "scorebug", "ArrowRight"), "wraps").toBe("clean");
-    expect(stepRadio(both, "clean", "ArrowLeft"), "wraps backwards").toBe("scorebug");
-    expect(stepRadio(both, "clean", "ArrowDown")).toBe("scorebug");
-    expect(stepRadio(both, "clean", "Enter"), "not an arrow").toBe("clean");
-    const oneEnabled = [{ id: "clean", enabled: true }, { id: "scorebug", enabled: false }] as const;
-    expect(stepRadio(oneEnabled, "clean", "ArrowRight"), "a disabled option is skipped").toBe("clean");
-    // The body wires it: an arrow on the group never selects the disabled scorebug.
-    const picked: string[] = [];
-    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", onMode: (x) => picked.push(x) });
-    const group = byTestId(tree, "stream-mode")!;
-    expect(attr(group, "role")).toBe("radiogroup");
-    (propsOf(group).onKeyDown as (e: unknown) => void)({ key: "ArrowRight", preventDefault: () => {}, currentTarget: { querySelector: () => null } });
-    expect(picked).toEqual([]);
-    // Roving tabindex: the checked radio is the one tab stop.
-    expect(attr(byTestId(tree, "stream-mode-clean")!, "tabIndex")).toBe(0);
-  });
 });
 
-// ─── TargetForm (D10, D11) ─────────────────────────────────────────────────────────────────────────────────────────
-describe("TargetForm — the platform is labelled, the ingest URL is checked BEFORE it is sent", () => {
-  type Save = PhoneTabBodyProps["onSaveTarget"];
-  const form = (onSave: Save = async () => {}) => renderIsland(TargetForm, { onSave, onCancel: () => {} });
-  const type = (island: ReturnType<typeof form>, id: string, value: string) =>
-    (propsOf(byTestId(island.tree(), id)!).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
-  const submit = async (island: ReturnType<typeof form>) => {
-    await (propsOf(byTestId(island.tree(), "stream-target-form")!).onSubmit as (e: { preventDefault: () => void }) => Promise<void>)({ preventDefault: () => {} });
-    await Promise.resolve();
-  };
-  const fill = (island: ReturnType<typeof form>, rtmpUrl: string) => {
-    type(island, "stream-target-label", "Club channel");
-    type(island, "stream-target-rtmp", rtmpUrl);
-    type(island, "stream-target-key", "live-key-123");
-  };
-
-  it("the kind select offers exactly the StreamTargetKind enum, opens at YouTube, and never shows a raw enum id (no LinkedIn)", () => {
-    expect([...TARGET_KINDS]).toEqual([...StreamTargetKind.options]);
-    const tree = form().tree();
-    const select = byTestId(tree, "stream-target-kind")!;
-    expect(attr(select, "value")).toBe("youtube");
-    const options = walk(propsOf(select).children as ReactElement[]).filter((el) => el.type === "option");
-    expect(options.map((o) => attr(o, "value"))).toEqual([...StreamTargetKind.options]);
-    const labels = options.map((o) => textOf(o));
-    expect(labels).toEqual(["YouTube", "Facebook", "Twitch", "Kick", m("stream.target.kind.other")]);
-    for (const l of labels) expect(l).not.toMatch(/custom_rtmp|linkedin/i);
-  });
-
-  it("an ingest URL the allowlist refuses is refused INLINE, by its rule, and never sent (D10) — one URL per rule", async () => {
-    // The rulebook is lane C's validator: each URL's premise is asserted against it, then the FORM must show that rule's
-    // copy. Keyed by EVERY DestinationRefusal (a Record, so a rule added to lane C's list is a type error here until it
-    // gets a URL) and counted against DESTINATION_REFUSALS itself.
-    const URL_FOR: Record<DestinationRefusal, string> = {
-      scheme: "https://a.rtmps.youtube.com/live2",
-      userinfo: "rtmps://user:pass@a.rtmps.youtube.com/live2",
-      ip_literal: "rtmps://203.0.113.7/live2",
-      host: "rtmps://evil.example/live2",
-      port: "rtmps://a.rtmps.youtube.com:8443/live2",
-      path: "rtmps://a.rtmps.youtube.com",
-    };
+// ─── T8: the picker picks from Directory (D1) ────────────────────────────────────────────────────────────────────────
+describe("T8 — the destination picker: Directory manages, the panel picks (D1)", () => {
+  it("D1: no inline add anywhere — no add button, no destination form, no key field in ANY state; 'Manage destinations' opens the Directory tab in a new tab", () => {
     let checked = 0;
-    for (const rule of DESTINATION_REFUSALS) {
-      const url = URL_FOR[rule];
-      expect(destinationRefusal(url), `premise: ${url}`).toBe(rule);
-      const onSave = vi.fn<Save>(async () => {});
-      const island = form(onSave);
-      fill(island, url);
-      await submit(island);
-      expect(onSave, url).not.toHaveBeenCalled();
-      expect(textAt(island.tree(), "stream-target-error"), url).toBe(m(DESTINATION_REFUSAL_KEYS[rule]));
+    for (const [name, tree] of bodyStates()) {
+      for (const id of ["stream-target-add", "stream-target-form", "stream-dest-form", "stream-target-key", "stream-dest-key"]) {
+        expect(byTestId(tree, id), `${name}: ${id}`).toBeUndefined();
+      }
+      expect(tree.filter((el) => el.type === "input" && attr(el, "type") === "password"), `${name}: a key field`).toEqual([]);
+      expect(tree.filter((el) => el.type === "form"), `${name}: a form`).toEqual([]);
       checked++;
     }
-    expect(checked).toBe(DESTINATION_REFUSALS.length);
-    expect(checked).toBeGreaterThanOrEqual(6);
-  });
-
-  it("m8: the stream KEY field keeps password managers out — never autofilled with a login, never offered for saving", () => {
-    const key = byTestId(form().tree(), "stream-target-key")!;
-    expect(attr(key, "type")).toBe("password");
-    expect(attr(key, "autoComplete")).toBe("new-password");
-    expect(attr(key, "data-1p-ignore")).toBe(true);
-    expect(attr(key, "data-lpignore")).toBe("true");
-  });
-
-  it("an allowed URL is sent — with surrounding whitespace too, which the server trims (it is not a refusal)", async () => {
-    const onSave = vi.fn<Save>(async () => {});
-    const island = form(onSave);
-    fill(island, "  rtmps://a.rtmps.youtube.com/live2 ");
-    await submit(island);
-    expect(onSave).toHaveBeenCalledTimes(1);
-    expect(onSave.mock.calls[0]![0]).toMatchObject({ kind: "youtube", label: "Club channel", streamKey: "live-key-123" });
-    expect(byTestId(island.tree(), "stream-target-error")).toBeUndefined();
-  });
-
-  it("the server's 422 DESTINATION_NOT_ALLOWED shows the SAME rule copy; any other failure the generic one", async () => {
-    const refused = form(async () => { throw new ApiV1Error("refused", 422, DESTINATION_NOT_ALLOWED, { rule: "port" }); });
-    fill(refused, "rtmps://a.rtmps.youtube.com/live2");
-    await submit(refused);
-    expect(textAt(refused.tree(), "stream-target-error")).toBe(m(DESTINATION_REFUSAL_KEYS.port));
-    const other = form(async () => { throw new ApiV1Error("The stream key is empty", 422, "ERROR"); });
-    fill(other, "rtmps://a.rtmps.youtube.com/live2");
-    await submit(other);
-    expect(textAt(other.tree(), "stream-target-error")).toBe(m("stream.target.error"));
-  });
-
-  it("every field and button carries the unprefixed 44px floor", () => {
-    const TAPPABLE = /(^|\s)(min-h-11|h-11)(\s|$)/;
-    const tree = form().tree();
-    let seen = 0;
-    for (const el of tree) {
-      if (!["button", "select", "input"].includes(String(el.type))) continue;
-      seen++;
-      expect(String(attr(el, "className") ?? ""), String(attr(el, "data-testid") ?? el.type)).toMatch(TAPPABLE);
+    expect(checked, "every body state was read").toBe(bodyStates().length);
+    let linked = 0;
+    for (const targets of [ok(TARGETS), ok([]), { status: "error" } as const]) {
+      const link = byTestId(body({ view: null, balance: 2, targets, selectedTargetId: null }), "stream-manage-destinations");
+      expect(link, targets.status).toBeDefined();
+      expect(link!.type).toBe("a");
+      expect(attr(link!, "href")).toBe("/directory?tab=streaming");
+      expect(attr(link!, "target")).toBe("_blank");
+      expect(attr(link!, "rel")).toBe("noopener");
+      expect(textOf(link!)).toBe(m("stream.dest.manage"));
+      linked++;
     }
-    expect(seen).toBe(7); // label, kind, url, key, watch, save, cancel
+    expect(linked).toBe(3);
+  });
+
+  it("one destination: the select and Go live ENABLED (the positive pair of the empty case)", () => {
+    const tree = body({ view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t1" });
+    expect(byTestId(tree, "stream-dest-empty")).toBeUndefined();
+    expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBeFalsy();
+  });
+
+  it("m12: the select's id is the FIXTURE's own (two mounted panels never share one), and its label names it", () => {
+    let checked = 0;
+    for (const fixtureId of ["f-1", "f-2"]) {
+      const tree = body({ fixtureId, view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t1" });
+      const select = byTestId(tree, "stream-target")!;
+      expect(attr(select, "id"), fixtureId).toBe(`stream-target-${fixtureId}`);
+      const label = tree.find((el) => el.type === "label" && attr(el, "htmlFor") === attr(select, "id"));
+      expect(label, `${fixtureId}: a <label> names the select`).toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a failed destination load is an ERROR with Retry — never shown as 'none' (the silent catch this replaces)", () => {
+    let retried = 0;
+    const tree = body({ view: null, balance: 2, targets: { status: "error" }, selectedTargetId: "t1", onRetryTargets: () => retried++ });
+    const err = byTestId(tree, "stream-dest-load-error")!;
+    expect(attr(err, "role")).toBe("alert");
+    expect(textOf(err)).toContain(m("stream.dest.loadError"));
+    expect(byTestId(tree, "stream-dest-empty"), "an unread list is not an empty one").toBeUndefined();
+    expect(byTestId(tree, "stream-target")).toBeUndefined();
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "no Go live on a list nobody read").toBe(true);
+    expect(textAt(tree, "stream-dest-retry")).toBe(m("stream.dest.retry"));
+    click(byTestId(tree, "stream-dest-retry"));
+    expect(retried).toBe(1);
+  });
+
+  it("loading: neither 'none' nor an error, no select, and Go live waits", () => {
+    const tree = body({ view: null, balance: 2, targets: { status: "loading" }, selectedTargetId: "t1" });
+    for (const id of ["stream-dest-empty", "stream-dest-load-error", "stream-target"]) expect(byTestId(tree, id), id).toBeUndefined();
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBe(true);
+  });
+
+  it("each option names the destination AND its platform — every stored kind, legacy ones included", () => {
+    const all = StreamTargetKind.options.map((kind, i) => ({ ...TARGETS[0]!, id: `k${i}`, kind, label: `Dest ${i}` }));
+    const select = byTestId(body({ view: null, balance: 2, targets: all, selectedTargetId: "k0" }), "stream-target")!;
+    const options = walk(propsOf(select).children as ReactElement[]).filter((el) => el.type === "option");
+    expect(options.map((o) => textOf(o))).toEqual(all.map((t) => `${t.label} (${platformName(m, t.kind)})`));
+    expect(options.length, "every stored kind was offered").toBe(StreamTargetKind.options.length);
+  });
+
+  it("a target_in_use refusal names the match and links 'Open Match {n}' to its page; a holder whose fixture is gone shows no link", () => {
+    const held = body({
+      view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1",
+      createError: { code: "target_in_use", holder: { label: "Club YouTube", matchNo: 5, courtName: "Court 1", href: "/o/a/c/b/d/c/f/5", state: "waiting" } },
+    });
+    expect(textAt(held, "stream-create-error")).toBe(
+      m("stream.inUse.waiting", { label: "Club YouTube", match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 5 }), court: "Court 1" }) }),
+    );
+    const open = byTestId(held, "stream-in-use-open")!;
+    expect(open.type).toBe("a");
+    expect(attr(open, "href")).toBe("/o/a/c/b/d/c/f/5");
+    expect(textOf(open)).toBe(m("stream.inUse.open", { match: m("breadcrumb.match", { no: 5 }) }));
+    let none = 0;
+    for (const holder of [
+      { label: "X", matchNo: null, courtName: null, href: null, state: "live" as const },
+      { label: "X", matchNo: 7, courtName: null, href: null, state: "live" as const },
+      { label: "X", matchNo: null, courtName: null, href: "/o/a/c/b/d/c/f/7", state: "live" as const },
+    ]) {
+      const gone = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder } });
+      expect(byTestId(gone, "stream-in-use-open"), JSON.stringify(holder)).toBeUndefined();
+      none++;
+    }
+    expect(none).toBe(3);
+    const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
+    expect(byTestId(other, "stream-in-use-open"), "only an in-use refusal links a match").toBeUndefined();
   });
 });
 
 // ─── PhoneTab: the container, driven (D15) ─────────────────────────────────────────────────────────────────────────
+// ─── T9a: the Signal path and the D3 warning, as the body wires them (spec 2026-09-30 §3.2) ─────────────────────────
+// The mapping is stream-chain.test.ts's and the drawing stream-signal-chain.test.tsx's. What is proven HERE is the
+// wiring: which session the body hands the mapping, which destination the chain is drawn to, and when the D3 box shows.
+// Expected chains are `chainFor` of the SAME projection — the wiring is the claim, and the mapping is pinned against
+// the spec on its own. Rule 1's states: no destination, waiting, live ok / connecting / <30 s / ≥30 s / back to ok,
+// stale phone, ending, ended, failed, in use.
+describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
+  const W = 30_000; // spec §0 D3 — stream-session-view.test.ts pins the lib's OUTPUT_WARNING_AFTER_MS to it
+  const live = (output: "ok" | "connecting" | "unknown" | "rejected" | null, elapsedMs = 0, over: Partial<StreamSessionView> = {}) =>
+    session({
+      state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" },
+      output: output ? { state: output, since: "2026-09-14T11:59:00Z", elapsedMs } : null,
+      ...over,
+    });
+  const warnings = (tree: ReactElement[]) => tree.filter((e) => e.type === D3Warning);
+
+  it("idle: drawn to the PICKED destination — and not drawn at all with nothing to draw it to (empty, loading, failed list)", () => {
+    const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
+    expect(chainOf(picked)?.chain).toEqual(chainFor(null));
+    expect(chainOf(picked)?.destination).toEqual({ kind: "twitch", label: "Alt" });
+    let none = 0;
+    for (const targets of [[] as StreamTarget[], { status: "loading" } as TargetsState, { status: "error" } as TargetsState]) {
+      expect(chainOf(body({ view: null, balance: 2, targets, selectedTargetId: null }))).toBeUndefined();
+      none++;
+    }
+    expect(none).toBe(3);
+    // A selection the list no longer holds draws nothing either (n1: nothing is drawn to a destination that is gone).
+    expect(chainOf(body({ view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t2" }))).toBeUndefined();
+  });
+
+  it("with a session: drawn to the SESSION's destination, whatever the picker holds", () => {
+    const tree = body({ view: session({ target: { id: "t9", kind: "facebook", label: "Page" } }), balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    expect(chainOf(tree)?.destination).toEqual({ kind: "facebook", label: "Page" });
+    expect(chainOf(tree)?.chain?.phone.word).toBe("waiting");
+  });
+
+  it("every state's chain is chainFor of the body's own projection; ended and failed draw none", () => {
+    let checked = 0;
+    for (const v of [session({ state: "provisioning", qr: null }), session(), live("ok"), live("connecting", W - 1), live("connecting", W), session({ state: "ending", qr: null })]) {
+      expect(chainOf(body({ view: v, balance: 2 }))?.chain, v.state).toEqual(chainFor(v));
+      checked++;
+    }
+    for (const v of [session({ state: "completed", qr: null }), session({ state: "failed", qr: null, failReason: "no_credits" })]) {
+      expect(chainOf(body({ view: v, balance: 2 })), v.state).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("D3: the warning shows at the 30 s line, NOT one millisecond before; never on ok; gone once it is ok again; never while ending", () => {
+    expect(warnings(body({ view: live("connecting", W - 1), balance: 1 })), "under the line").toHaveLength(0);
+    const at = warnings(body({ view: live("connecting", W), balance: 1 }));
+    expect(at, "at the line").toHaveLength(1);
+    expect(propsOf(at[0]!).kind, "names the session's platform").toBe("youtube");
+    let words = 0;
+    for (const o of ["unknown", "rejected"] as const) {
+      expect(warnings(body({ view: live(o, W * 3), balance: 1 })), o).toHaveLength(1);
+      words++;
+    }
+    expect(words).toBe(2);
+    expect(warnings(body({ view: live("ok", W * 3), balance: 1 })), "ok after a long time: no warning").toHaveLength(0);
+    expect(warnings(body({ view: live(null), balance: 1 })), "no output read").toHaveLength(0);
+    expect(warnings(body({ view: { ...live("connecting", W * 3), state: "ending" }, balance: 1 })), "ending").toHaveLength(0);
+    // The stream keeps running (D3): Stop is still there, enabled, beside the warning.
+    const warned = body({ view: live("connecting", W), balance: 1 });
+    expect(byTestId(warned, "stream-stop")).toBeDefined();
+    expect(propsOf(byTestId(warned, "stream-stop")!).disabled).toBeFalsy();
+    // A Twitch session's warning names Twitch.
+    expect(propsOf(warnings(body({ view: live("connecting", W, { target: { id: "t2", kind: "twitch", label: "Alt" } }), balance: 1 }))[0]!).kind).toBe("twitch");
+  });
+
+  it("a stale phone while live: the chain says No signal; the destination half still follows the output", () => {
+    const v = live("ok", 0, { ingest: { state: "disconnected", protocol: null } });
+    expect(chainOf(body({ view: v, balance: 1 }))?.chain).toMatchObject({ phone: { word: "noSignal" }, dest: { word: "live" } });
+  });
+
+  // I-1 (owner 2026-10-01, option a): past the hold, the box POINTS AT THE PHONE while the phone has no signal, and at
+  // the stream key only while the phone is sending. The stream keeps running either way: Stop stays, enabled.
+  it("I-1: past the hold, no signal from the phone → the phone box; the phone sending → the key box; under the hold → none", () => {
+    const silent = { ingest: { state: "disconnected" as const, protocol: null } };
+    let checked = 0;
+    for (const o of ["connecting", "unknown", "rejected"] as const) {
+      const phone = warnings(body({ view: live(o, W, silent), balance: 1 }));
+      expect(phone, `${o}: one box`).toHaveLength(1);
+      expect(propsOf(phone[0]!).cause, `${o}: it points at the phone`).toBe("phone");
+      const key = warnings(body({ view: live(o, W), balance: 1 }));
+      expect(propsOf(key[0]!).cause, `${o}: phone sending → the key box`).toBe("destination");
+      expect(warnings(body({ view: live(o, W - 1, silent), balance: 1 })), `${o}: under the hold`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(warnings(body({ view: live("ok", W * 3, silent), balance: 1 })), "silent phone but the destination ok: no box").toHaveLength(0);
+    const warned = body({ view: live("connecting", W, silent), balance: 1 });
+    expect(propsOf(byTestId(warned, "stream-stop")!).disabled, "the stream keeps running: Stop is there").toBeFalsy();
+    // The chain's "!" follows the box (ruling 2026-10-01): on the phone node, not the destination, through the body.
+    expect(chainOf(warned)?.chain).toMatchObject({ phone: { word: "noSignal", mark: "bang" }, dest: { word: "notReceiving", mark: null } });
+    expect(chainOf(body({ view: live("connecting", W), balance: 1 }))?.chain, "the phone sending: the '!' is the destination's")
+      .toMatchObject({ phone: { mark: null }, dest: { word: "notReceiving", mark: "bang" } });
+  });
+
+  // I-2a (controller ruling 2026-10-01): the server restarts the hold when the phone returns (pinned on the server's
+  // clock in stream-sessions.test.ts). This feeds the body the elapsed the server answers at each step, so it asserts
+  // the box AND the "!" the body draws from them — not the clock.
+  it("I-1/I-2a: the box and the '!' through the body for each answer of a drop-and-return, as the server times it: drop → phone; back → none until 30 s after the return → key; receiving → none", () => {
+    const silent = { ingest: { state: "disconnected" as const, protocol: null } };
+    const seen = [
+      live("ok", 0),
+      live("unknown", 5_000, silent),
+      live("unknown", W, silent),
+      live("connecting", 0),
+      live("connecting", W - 1),
+      live("connecting", W),
+      live("ok", 0),
+    ].map((v) => {
+      const b = body({ view: v, balance: 1 });
+      const w = warnings(b);
+      const c = chainOf(b)!.chain!;
+      const bang = c.phone.mark === "bang" ? "phone" : c.dest.mark === "bang" ? "dest" : null;
+      return [w.length === 0 ? null : (propsOf(w[0]!).cause as string), bang];
+    });
+    expect(seen).toEqual([[null, null], [null, null], ["phone", "phone"], [null, null], [null, null], ["destination", "dest"], [null, null]]);
+  });
+
+  it("in use (mockup state 5): an idle target_in_use refusal draws the destination node 'In use'; any other refusal does not", () => {
+    const holder = { sessionId: "s9", fixtureId: "f-9", href: "/x", matchNo: 5, courtName: "Court 1", state: "live" as const, label: "Club" };
+    const inUse = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder } });
+    expect(chainOf(inUse)?.chain?.dest.word).toBe("inUse");
+    const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
+    expect(chainOf(other)?.chain?.dest.word).toBe("notLive");
+  });
+});
+
+// ─── T9b: the frame (spec §3.1 / §3.3, mockup option-a states 1, 3 and 5) ────────────────────────────────────────────
+describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the in-use picker", () => {
+  const SEP = " · ";
+  const localeDict = (locale: "es" | "fr") => uiDict(locale);
+  const balanceIn = (html: string): string => /data-testid="stream-balance"[^>]*>([^<]*)</.exec(html)?.[1] ?? "";
+
+  it("Ready: 'Uses 1 credit · {n} credits · Buy more' — three parts, the balance in the plural key's own text, the split as its title", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    expect(textAt(tree, "stream-credits-line")).toBe(
+      [m("stream.credits.uses"), m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP),
+    );
+    expect(attr(byTestId(tree, "stream-balance")!, "title"), "no split, no title").toBeUndefined();
+    // Both buckets held and adding up: the split is the balance's title, and a visually hidden copy reads it out.
+    const split = { monthly: 2, pack: 3, total: 5 };
+    const both = body({ view: null, balance: 5, split, targets: TARGETS, selectedTargetId: "t1" });
+    const sentence = m("stream.credits.split", { m: 2, p: 3 });
+    expect(attr(byTestId(both, "stream-balance")!, "title")).toBe(sentence);
+    expect(textAt(both, "stream-balance"), "the balance itself is the total, as before").toBe(m("stream.phone.credits.other", { n: 5 }));
+    expect(textAt(both, "stream-credits-split").trim()).toBe(sentence);
+    expect(String(attr(byTestId(both, "stream-credits-split")!, "className"))).toBe("sr-only");
+    // A split that no longer adds up (a session moved the balance) titles nothing.
+    expect(attr(byTestId(body({ view: null, balance: 4, split, targets: TARGETS, selectedTargetId: "t1" }), "stream-balance")!, "title")).toBeUndefined();
+  });
+
+  it("the balance reads the plural key's ONE and OTHER forms in es and fr — never a number dropped into a fixed word", () => {
+    let checked = 0;
+    for (const locale of ["es", "fr"] as const) {
+      const d = localeDict(locale);
+      const one = d["stream.phone.credits.one"]!;
+      const other = d["stream.phone.credits.other"]!;
+      // The case can witness the defect: "{n} credits" at n = 1 is not the singular.
+      expect(other.replace("{n}", "1"), `${locale}: the one form differs from other at n=1`).not.toBe(one);
+      for (const [n, want] of [[1, one], [9, other.replace("{n}", "9")]] as const) {
+        const html = renderToStaticMarkup(
+          <DictProvider dict={d} locale={locale}>
+            <PhoneTabBody {...BODY} view={null} balance={n} targets={ok(TARGETS)} selectedTargetId="t1" />
+          </DictProvider>,
+        );
+        expect(balanceIn(html), `${locale} n=${n}`).toBe(want);
+        expect(html, `${locale}: the uses part`).toContain(`>${d["stream.credits.uses"]}<`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("'Uses 1 credit' only where Go live would spend one: not inside the reuse window, not mid-session; ending disables Buy more", () => {
+    const free = body({ view: null, balance: 2, restartFree: true, targets: TARGETS, selectedTargetId: "t1" });
+    expect(textAt(free, "stream-credits-line")).toBe([m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP));
+    const live = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
+    expect(textAt(live, "stream-credits-line"), "a mid-match top-up stays").toBe([m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP));
+    const ending = body({ view: session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
+    expect(propsOf(byTestId(ending, "stream-buy-more")!).disabled).toBe(true);
+    // The empty case: credits only (balance 0, no free restart) has no line at all — the tiles are the whole tab.
+    expect(byTestId(body({ view: null, balance: 0 }), "stream-credits-line")).toBeUndefined();
+  });
+
+  it("Ready's DOM order (mockup state 1): Manage destinations, the picker, a full-width Go live, then the credits line", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    const order = ["stream-manage-destinations", "stream-target", "stream-go-live", "stream-credits-line"].map((id) => {
+      const i = tree.findIndex((el) => attr(el, "data-testid") === id);
+      expect(i, `${id} rendered`).toBeGreaterThan(-1);
+      return i;
+    });
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const go = String(attr(byTestId(tree, "stream-go-live")!, "className")).split(" ");
+    for (const c of ["btn-primary", "w-full", "min-h-12"]) expect(go, c).toContain(c);
+    // The picker shows the selected destination's platform mark inside the field, and a chevron at its end.
+    const mark = tree.find((el) => el.type === PlatformMark);
+    expect(mark && propsOf(mark).kind, "the mark is the SELECTED destination's").toBe("youtube");
+    expect(propsOf(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" }), "stream-target")!).value).toBe("t2");
+    const markT2 = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" }).find((el) => el.type === PlatformMark);
+    expect(markT2 && propsOf(markT2).kind).toBe("twitch");
+    const select = String(attr(byTestId(tree, "stream-target")!, "className")).split(" ");
+    for (const c of ["appearance-none", "min-w-0", "pr-9", "truncate"]) expect(select, c).toContain(c);
+  });
+
+  it("n1: with a list and NO selection the picker shows a placeholder 'Pick a destination', no platform mark, Go live disabled; a selection has no placeholder", () => {
+    const none = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: null });
+    const select = byTestId(none, "stream-target")!;
+    expect(attr(select, "value")).toBe("");
+    const options = walk(select).filter((el) => el.type === "option");
+    expect(options.map((o) => attr(o, "value"))).toEqual(["", "t1", "t2"]);
+    expect(textOf(options[0]!)).toBe(m("stream.dest.pick"));
+    expect(attr(options[0]!, "disabled"), "the placeholder cannot be chosen back").toBe(true);
+    expect(none.some((el) => el.type === PlatformMark), "no mark for nothing").toBe(false);
+    expect(propsOf(byTestId(none, "stream-go-live")!).disabled).toBe(true);
+    // The positive pair: a selection, no placeholder.
+    const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    expect(walk(byTestId(picked, "stream-target")!).filter((el) => el.type === "option").map((o) => attr(o, "value"))).toEqual(["t1", "t2"]);
+  });
+
+  it("in use (mockup state 5): the picker turns red and says why under itself, Open Match beside it, and Go live waits", () => {
+    const createError = { code: "target_in_use" as const, holder: IN_USE_HOLDER };
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError });
+    const select = byTestId(tree, "stream-target")!;
+    expect(String(attr(select, "className"))).toMatch(/(^|\s)border-red-300(\s|$)/);
+    expect(attr(select, "aria-invalid")).toBe(true);
+    const box = tree.find((el) => attr(el, "id") === attr(select, "aria-describedby"))!;
+    expect(box, "aria-describedby names the box").toBeDefined();
+    expect(attr(box, "role")).toBe("alert");
+    const inBox = walk(box);
+    expect(textOf(inBox.find((el) => attr(el, "data-testid") === "stream-create-error")!)).toBe(
+      m("stream.inUse.live", { label: IN_USE_HOLDER.label, match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 5 }), court: "Court 1" }) }),
+    );
+    const open = inBox.find((el) => attr(el, "data-testid") === "stream-in-use-open")!;
+    expect(attr(open, "href")).toBe(IN_USE_HOLDER.href);
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "Go live waits for another pick").toBe(true);
+    expect(allTestIds(tree, "stream-create-error"), "said once").toHaveLength(1);
+    // The positive pair: any OTHER refusal leaves the picker alone, Go live tappable, the sentence at the foot.
+    const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
+    expect(attr(byTestId(other, "stream-target")!, "aria-invalid")).toBeUndefined();
+    expect(String(attr(byTestId(other, "stream-target")!, "className"))).not.toContain("border-red-300");
+    expect(propsOf(byTestId(other, "stream-go-live")!).disabled).toBeFalsy();
+    expect(textAt(other, "stream-create-error")).toBe(m("stream.error.storage_exhausted" as MessageKey));
+  });
+
+  it("the no-credit state is the pack tiles, unchanged — every catalogue pack, by its own test id", () => {
+    const tree = body({ view: null, balance: 0 });
+    let checked = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      expect(byTestId(tree, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the catalogue declares packs").toBeGreaterThan(0);
+    expect(byTestId(tree, "stream-go-live")).toBeUndefined();
+  });
+});
+
 describe("PhoneTab — fetch, poll, reveal and every action, through the real v1 paths", () => {
   type Server = {
     current: StreamSessionView | null;
     targets: StreamTarget[];
     failCurrent?: boolean;
+    /** The destination list's read fails (a network error) while set. */
+    failTargets?: boolean;
     create?: () => unknown;
     stop?: () => unknown;
-    saveTarget?: (json: unknown) => unknown;
   };
   const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
@@ -1675,8 +2019,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
         // A fresh object per response, as JSON off the wire is — an identity-keyed effect must not be flattered.
         return s.current === null ? null : structuredClone(s.current);
       }
-      if (key === "GET /api/v1/orgs/o-1/stream-targets") return s.targets;
-      if (key === "POST /api/v1/orgs/o-1/stream-targets") return s.saveTarget!(options?.json);
+      if (key === "GET /api/v1/orgs/o-1/stream-targets") {
+        if (s.failTargets) throw new TypeError("Failed to fetch");
+        return structuredClone(s.targets);
+      }
       if (key === "POST /api/v1/fixtures/f-1/stream-sessions") return s.create!();
       if (/^POST \/api\/v1\/fixtures\/f-1\/stream-sessions\/[^/]+\/stop$/.test(key)) return s.stop!();
       throw new Error(`unrouted ${key}`);
@@ -1708,7 +2054,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
   beforeEach(() => {
     vi.useFakeTimers();
-    qrcode.toDataURL.mockClear();
+    seaznQr.renderSeaznQr.mockClear();
     confirmMock.mockReset();
     confirmMock.mockResolvedValue(true);
     checkout.fetch.mockReset();
@@ -1796,11 +2142,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "a destination is selected").toBeFalsy();
   });
 
-  it("opens at the FIRST destination (created_at order, as the route returns it) and at clean feed; no destination → none selected", async () => {
+  it("opens at the FIRST destination (created_at order, as the route returns it); no destination → none selected", async () => {
     const two = track(await mount({ current: null, targets: TARGETS }));
     expect(bodyOf(two).selectedTargetId).toBe("t1");
-    expect(bodyOf(two).mode).toBe("clean");
-    expect(bodyOf(two).targets.map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(listOf(bodyOf(two).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     const none = track(await mount({ current: null, targets: [] }));
     expect(bodyOf(none).selectedTargetId).toBeNull();
   });
@@ -1827,11 +2172,12 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     await settle();
     expect(plainPolls() - before, "three polls ran").toBe(3);
     expect(reveals(), "polls are not reveals").toBe(1);
-    // The QR is encoded CLIENT-side from the payload itself, with §7.6's settings — ONCE per payload (m10): every poll is
-    // a fresh object off the wire, and an effect keyed on the object re-encoded the same symbol on each.
-    expect(qrcode.toDataURL).toHaveBeenCalledWith(qrText(QR), QR_RENDER_OPTIONS);
-    expect(qrcode.toDataURL, "the same payload was re-encoded per poll").toHaveBeenCalledTimes(1);
-    expect(bodyOf(island).qrDataUrl).toBe(`data:image/png;base64,len${qrText(QR).length}`);
+    // The QR is encoded CLIENT-side from the payload itself, through the Seazn QR helper (T10, D7) — ONCE per payload
+    // (m10): every poll is a fresh object off the wire, and an effect keyed on the object re-encoded the same symbol on
+    // each. It is an SVG: the shared component, not this call, decides the painted size.
+    expect(seaznQr.renderSeaznQr.mock.calls[0]).toEqual([qrText(QR)]);
+    expect(seaznQr.renderSeaznQr, "the same payload was re-encoded per poll").toHaveBeenCalledTimes(1);
+    expect(bodyOf(island).qrImage).toEqual({ src: `data:image/svg+xml;charset=utf-8,len${qrText(QR).length}`, modules: 113 });
     const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     bodyOf(island).onCopy();
@@ -1843,17 +2189,17 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     // previous session's symbol under the new session's paste code.
     const QR2: CaptureQrV1 = { ...QR, sid: "7d1e2f3a-4b5c-4d6e-8f70-819203a4b5c6" };
     expect(qrText(QR2), "premise: the two payloads differ").not.toBe(qrText(QR));
-    let answer: (url: string) => void = () => {};
-    qrcode.toDataURL.mockImplementationOnce(() => new Promise<string>((resolve) => { answer = resolve; }));
+    let answer: (qr: SeaznQr) => void = () => {};
+    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise<SeaznQr>((resolve) => { answer = resolve; }));
     s.current = session({ id: "s2", qr: QR2 });
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
     await settle();
     expect(reveals(), "a new session's QR is a new disclosure").toBe(3);
-    expect(qrcode.toDataURL).toHaveBeenLastCalledWith(qrText(QR2), QR_RENDER_OPTIONS);
-    expect(bodyOf(island).qrDataUrl, "s1's symbol was painted over s2's payload").toBeNull();
-    answer("data:image/png;base64,S2");
+    expect(seaznQr.renderSeaznQr).toHaveBeenLastCalledWith(qrText(QR2));
+    expect(bodyOf(island).qrImage, "s1's symbol was painted over s2's payload").toBeNull();
+    answer({ src: "data:image/png;base64,S2", modules: 113 });
     await settle();
-    expect(bodyOf(island).qrDataUrl).toBe("data:image/png;base64,S2");
+    expect(bodyOf(island).qrImage).toEqual({ src: "data:image/png;base64,S2", modules: 113 });
   });
 
   it("m5: a clipboard that REFUSES is neither a reveal nor 'Copied'", async () => {
@@ -1868,13 +2214,14 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).copied).toBe(false);
   });
 
-  it("§7.6's encoding settings are the sheet's: EC-M and a 4-module quiet zone", () => {
+  it("§8a's encoding settings are the helper's: EC-H, a 4-module quiet zone, and the Seazn logo (amended 2026-09-30, D7)", () => {
     const sheet = readFileSync(SHEET_PATH, "utf8");
     const row = sheet.split("\n").find((l) => l.startsWith("| QR encoding |"));
     expect(row, "§8a lost its QR encoding row").toBeDefined();
-    expect(row!).toMatch(/EC-M/);
-    expect(row!).toMatch(/4-module quiet zone/);
-    expect(QR_RENDER_OPTIONS).toMatchObject({ errorCorrectionLevel: "M", margin: 4 });
+    expect(row!).toContain(`EC-${SEAZN_QR_ERROR_CORRECTION} with a ${SEAZN_QR_QUIET_MODULES}-module quiet zone`);
+    expect(row!).toMatch(/Seazn logo/);
+    expect(SEAZN_QR_ERROR_CORRECTION).toBe("H"); // spec §7, the rulebook
+    expect(SEAZN_QR_QUIET_MODULES).toBe(4); // §7.6's quiet zone, unchanged by the amendment
   });
 
   it("polls while a session is in flight and STOPS once it is terminal — nothing polls behind an ended card", async () => {
@@ -1892,11 +2239,18 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
   it("refusals: target_in_use carries the holder (D12); a plan refusal from CREATE is the switched-off state (I4), never a retry", async () => {
     const s = serve({ current: null, targets: TARGETS });
-    s.create = () => { throw new ApiV1Error("in use", 409, "target_in_use", { holder: { fixtureId: "f-9", courtName: "Court 3", label: "Club" } }); };
+    // T3: the wire holder names the match (stream-target-holders.ts wireHolder); `waiting` so the state is read, not defaulted.
+    s.create = () => {
+      throw new ApiV1Error("in use", 409, "target_in_use", {
+        holder: { fixtureId: "f-9", href: "/o/a/c/b/d/c/f/4", matchNo: 4, courtName: "Court 3", label: "Club", state: "waiting" },
+      });
+    };
     const inUse = track(await mount(s));
     bodyOf(inUse).onGoLive();
     await settle();
-    expect(bodyOf(inUse).createError).toEqual({ code: "target_in_use", holder: { courtName: "Court 3", label: "Club" } });
+    expect(bodyOf(inUse).createError).toEqual({
+      code: "target_in_use", holder: { courtName: "Court 3", label: "Club", matchNo: 4, href: "/o/a/c/b/d/c/f/4", state: "waiting" },
+    });
 
     const plan = serve({ current: null, targets: TARGETS });
     plan.create = () => { throw new ApiV1Error("upgrade", 402, "PAYMENT_REQUIRED", { feature: "x", feature_key: "streaming.relay", reason: "This feature needs a plan upgrade." }); };
@@ -2408,6 +2762,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       s.stop = () => { s.failCurrent = true; throw new TypeError("Failed to fetch"); };
       const island = await probe(s);
       expect(byTestId(island.tree(), "stream-qr"), "the probe never shows the credentials").toBeUndefined();
+      expect(qrImageOf(island.tree(), "stream-qr"), "…nor through the shared QR component").toBeUndefined();
       click(byTestId(island.tree(), "stream-cancel"));
       await settle();
       expect(calls()).toContain("POST /api/v1/fixtures/f-1/stream-sessions/s1/stop");
@@ -2494,28 +2849,41 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).view?.state).toBe("live");
   });
 
-  it("D11: re-saving the SAME destination replaces its row (A19 answers with the existing one); a new one is appended and selected", async () => {
-    const s = serve({ current: null, targets: TARGETS });
-    s.saveTarget = () => ({ ...TARGETS[0]!, label: "Club HQ" });
-    const island = track(await mount(s));
-    bodyOf(island).onAddTarget();
-    expect(bodyOf(island).showTargetForm).toBe(true);
-    bodyOf(island).onSelectTarget("t2");
-    const resaved = bodyOf(island).onSaveTarget({ kind: "youtube", label: "Club HQ", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k", watchUrl: "" });
+  it("the list's first read is LOADING, then ok; a FAILED read is the error state (never 'none'), and Retry re-reads it and selects the first destination (never a removed one's replacement)", async () => {
+    const s = serve({ current: null, targets: TARGETS, failTargets: true });
+    const island = track(renderIsland(PhoneTab, TAB));
     await settle();
-    await resaved;
-    expect(bodyOf(island).targets.map((t) => t.id), "a duplicate option / React key").toEqual(["t1", "t2"]);
-    expect(bodyOf(island).targets[0]!.label).toBe("Club HQ");
+    expect(bodyOf(island).targets).toEqual({ status: "error" });
+    expect(bodyOf(island).selectedTargetId, "nothing selected from a list nobody read").toBeNull();
+    const reads = () => calls().filter((c) => c === "GET /api/v1/orgs/o-1/stream-targets").length;
+    expect(reads()).toBe(1);
+    s.failTargets = false;
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(reads(), "Retry re-reads the list").toBe(2);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     expect(bodyOf(island).selectedTargetId).toBe("t1");
-    expect(bodyOf(island).showTargetForm).toBe(false);
-    const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/orgs/o-1/stream-targets" && o?.method === "POST");
-    expect(post?.[1]?.json, "an empty watch link is omitted, never sent as ''").toEqual({ kind: "youtube", label: "Club HQ", rtmpUrl: "rtmps://a.rtmps.youtube.com/live2", streamKey: "k" });
-    s.saveTarget = () => ({ id: "t3", kind: "custom_rtmp", label: "Vimeo", watchUrl: null, createdAt: "2026-09-03T10:00:00.000Z" });
-    const added = bodyOf(island).onSaveTarget({ kind: "custom_rtmp", label: "Vimeo", rtmpUrl: "rtmps://rtmp-global.cloud.vimeo.com/live", streamKey: "k2", watchUrl: "https://vimeo.com/123" });
+    // A second Retry keeps a selection that still exists, and drops one that does not.
+    bodyOf(island).onSelectTarget("t2");
+    bodyOf(island).onRetryTargets();
     await settle();
-    await added;
-    expect(bodyOf(island).targets.map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
-    expect(bodyOf(island).selectedTargetId).toBe("t3");
+    expect(bodyOf(island).selectedTargetId, "kept: still in the list").toBe("t2");
+    s.targets = [TARGETS[0]!];
+    bodyOf(island).onRetryTargets();
+    await settle();
+    // B4 re-review n1 (reverses the old "falls to the first remaining"): the removed choice is cleared, nothing chosen.
+    expect(bodyOf(island).selectedTargetId, "t2 was removed in Directory: cleared, t1 NOT picked for them").toBeNull();
+    expect(reads()).toBe(4);
+  });
+
+  it("D1: the container never writes a destination — every call it makes is a read of the list or a session route", async () => {
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onRetryTargets();
+    await settle();
+    const writes = apiV1.mock.calls.filter(([url, o]) => /stream-targets/.test(url) && (o?.method ?? "GET") !== "GET");
+    expect(writes, "no POST, PATCH or DELETE to the destination routes").toEqual([]);
+    expect(calls().filter((c) => c === "GET /api/v1/orgs/o-1/stream-targets").length, "the positive pair: the list WAS read").toBe(2);
   });
 
   it("Try again on a failed session is the same return to idle as Start another — the refusal cleared, the destination kept", async () => {
@@ -2524,5 +2892,302 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onAgain();
     expect(bodyOf(island).view).toBeNull();
     expect(bodyOf(island).selectedTargetId).toBe("t1");
+  });
+
+  // ─── I1 (B4 review): the picker re-reads its list when the organiser comes back from Directory ──────────────────────
+  // "Manage destinations" opens Directory in a NEW tab (D1), so the round trip — add or remove there, come back here —
+  // never remounts this tab. `apps/web` vitest has no DOM: a minimal `document` / `window` (EventTargets, the only
+  // surface `useTabReturn` touches) is stubbed BEFORE the mount, so the listeners are the real ones the hook adds.
+  const stubPage = () => {
+    const doc = Object.assign(new EventTarget(), { visibilityState: "visible" as "visible" | "hidden" });
+    const win = new EventTarget();
+    vi.stubGlobal("document", doc);
+    vi.stubGlobal("window", win);
+    return { doc, win };
+  };
+  const LIST = "GET /api/v1/orgs/o-1/stream-targets";
+  const listReads = () => calls().filter((c) => c === LIST).length;
+
+  it("I1: coming back to the tab re-reads the list — the destination added in Directory is offered and Go live is enabled; ONE read per return (focus + visibilitychange), none on the hide, none while a session is up", async () => {
+    const { doc, win } = stubPage();
+    const s = serve({ current: null, targets: [] });
+    const island = track(await mount(s));
+    expect(listReads(), "the mount's read").toBe(1);
+    expect(listOf(bodyOf(island).targets)).toEqual([]);
+    expect(bodyOf(island).selectedTargetId, "the empty case: nothing to pick").toBeNull();
+
+    // Added in the Directory tab; the organiser comes back. A real return fires BOTH events — one read, not two.
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads(), "one read for one return — the second event lands while the first read is in flight").toBe(2);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    expect(bodyOf(island).selectedTargetId, "the new destination is picked, so Go live is enabled").toBe("t1");
+    expect(bodyOf(island).targets.status, "a quiet re-read never flashes loading").toBe("ok");
+
+    // A second return is a second read (the dedupe is per read in flight, never once per mount).
+    s.targets = [TARGETS[0]!, TARGETS[1]!];
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads()).toBe(3);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(bodyOf(island).selectedTargetId, "a selection still listed stays").toBe("t1");
+
+    // The HIDE fires visibilitychange too — leaving the tab is not a return.
+    doc.visibilityState = "hidden";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(listReads(), "no read on the hide").toBe(3);
+    doc.visibilityState = "visible";
+
+    // Removed in Directory: the return drops it, and the stale selection is CLEARED — never a silent fall to another
+    // destination (B4 re-review n1): streaming to one the organiser did not pick is the worse mistake.
+    bodyOf(island).onSelectTarget("t2");
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(listReads()).toBe(4);
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    expect(bodyOf(island).selectedTargetId, "the removed choice is cleared, and nothing is picked for them").toBeNull();
+
+    // A return whose read FAILS keeps the picker the organiser already has — a quiet read never turns it into an error.
+    s.failTargets = true;
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads()).toBe(5);
+    expect(bodyOf(island).targets.status, "the list already shown stays").toBe("ok");
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    s.failTargets = false;
+
+    // With a session up there is no picker to refresh: a return reads nothing.
+    s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+    bodyOf(island).onSelectTarget("t1");
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).view?.state).toBe("warming");
+    const before = listReads();
+    doc.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("focus"));
+    await settle();
+    expect(listReads(), "no list read while a session is up").toBe(before);
+  });
+
+  it("I1: a Go live answered 404 re-reads the list — the chosen destination is GONE: 'removed' copy and the stale choice cleared; still listed (a 404 about something else): the generic copy, choice kept", async () => {
+    stubPage();
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t2");
+    // Removed in Directory while this tab stayed open — no return event, so only the 404 can tell.
+    s.targets = [TARGETS[0]!];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    const before = listReads();
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listReads(), "the 404 re-read the list").toBe(before + 1);
+    expect(bodyOf(island).createError).toEqual({ code: TARGET_REMOVED, holder: null });
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
+    expect(bodyOf(island).selectedTargetId, "the stale choice is cleared — and t1 is NOT picked for them (n1)").toBeNull();
+    expect(bodyOf(island).busy, "the tap is over").toBe(false);
+
+    // The positive pair: a 404 whose chosen destination IS still listed is not "removed".
+    bodyOf(island).onSelectTarget("t1");
+    s.create = () => { throw new ApiV1Error("fixture not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listReads()).toBe(before + 2);
+    expect(bodyOf(island).createError).toEqual({ code: "unknown", holder: null });
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+
+    // Another refusal never re-reads the list.
+    s.create = () => { throw new ApiV1Error("busy", 409, "active_session", { sessionId: "s9" }); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listReads(), "a 409 reads no list").toBe(before + 2);
+  });
+
+  // B4 re-review n1: after a "removed" answer the picker is EMPTY until the organiser picks — Go live cannot start, and
+  // nothing is picked for them on any later read. The sentence explaining it stays until that pick, however many
+  // returns come between.
+  it("n1: removed → no selection, Go live held, the 'removed' line kept across a later return; the next PICK clears it and starts again", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t2");
+    s.targets = [TARGETS[0]!];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError).toEqual({ code: TARGET_REMOVED, holder: null });
+    expect(bodyOf(island).selectedTargetId).toBeNull();
+    // What the organiser sees: the placeholder, and Go live disabled.
+    const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(attr(byTestId(shown, "stream-target")!, "value")).toBe("");
+    expect(propsOf(byTestId(shown, "stream-go-live")!).disabled, "no destination, no start").toBe(true);
+
+    // A LATER return re-reads the list (t1 still there): still nothing picked, still the sentence.
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "a later read never picks for them").toBeNull();
+    expect(bodyOf(island).createError, "the explanation outlives the return").toEqual({ code: TARGET_REMOVED, holder: null });
+
+    // The pick — after that return — clears the sentence and lets Go live start.
+    s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+    bodyOf(island).onSelectTarget("t1");
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    expect(bodyOf(island).createError, "the pick answers the removed line").toBeNull();
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(apiV1.mock.calls.some(([u, o]) => o?.method === "POST" && /stream-sessions$/.test(u) && (o.json as { targetId?: string }).targetId === "t1")).toBe(true);
+  });
+
+  it("n1's edge: a removal that EMPTIES the list holds nothing — there is nothing to fall to, so the next destination added is a first one, offered (directory-stream-destinations I1, steps 4→5)", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: [TARGETS[0]!] });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    s.targets = [];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "removed, and nothing left").toBeNull();
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "the only destination, added after the list emptied: offered").toBe("t2");
+    // …while a removal that leaves OTHERS listed still holds (the positive pair of n1).
+    s.targets = [TARGETS[0]!, TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    bodyOf(island).onSelectTarget("t1");
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "t1 removed, t2 still there: NOT picked for them").toBeNull();
+    // …and emptying it from there, then adding, offers again.
+    s.targets = [];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+  });
+
+  // B5 review m-2: an EMPTY list has nothing to "pick another" from. The empty state (No destinations yet + Manage) says
+  // what to do; a "removed, pick another one" line beside it — or, after a destination is added, beside an enabled Go
+  // live on a DIFFERENT destination — contradicts the screen.
+  it("m-2: a Go live 404 that finds the list EMPTY is the empty state, not 'removed, pick another'; the next destination added is offered with no stale line", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: [TARGETS[0]!] });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    s.targets = [];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(listOf(bodyOf(island).targets), "the 404 re-read the list: empty").toEqual([]);
+    expect(bodyOf(island).createError, "nothing to pick another from: the empty state says it").toBeNull();
+    const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(byTestId(shown, "stream-dest-empty"), "the empty state").toBeDefined();
+    expect(byTestId(shown, "stream-manage-destinations"), "…with the way to Directory").toBeDefined();
+    expect(byTestId(shown, "stream-create-error"), "no 'removed' line").toBeUndefined();
+    expect(propsOf(byTestId(shown, "stream-go-live")!).disabled).toBe(true);
+    // A destination added in Directory: offered, and nothing on screen still says "removed".
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId).toBe("t2");
+    expect(bodyOf(island).createError).toBeNull();
+  });
+
+  it("m-2: a 'removed' line from a list that still had others goes when a later read finds the list EMPTY — the empty state replaces it", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t2");
+    s.targets = [TARGETS[0]!];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError, "premise: others listed, so 'pick another' is true").toEqual({ code: TARGET_REMOVED, holder: null });
+    s.targets = [];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError, "the list emptied: the line goes").toBeNull();
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "a first destination after the empty list is offered").toBe("t2");
+    expect(bodyOf(island).createError, "…with no 'removed' line beside an enabled Go live").toBeNull();
+  });
+
+  it("n1 (in use): a pick clears the target_in_use hold; a return that finds the picked destination FREE clears it too — one still held does not", async () => {
+    const { doc } = stubPage();
+    const holder = { sessionId: "s9", fixtureId: "f-9", href: "/x/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const };
+    const held = { ...TARGETS[0]!, inUse: holder };
+    const s = serve({ current: null, targets: [held, TARGETS[1]!] });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    s.create = () => { throw new ApiV1Error("in use", 409, "target_in_use", { holder: { ...holder, label: "Club" } }); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError?.code).toBe("target_in_use");
+    // A return while t1 is STILL held: the hold stands.
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError?.code, "still held — the line stays").toBe("target_in_use");
+    // f-9 stopped; the next return finds t1 free: the hold is lifted, the selection kept.
+    s.targets = TARGETS;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError, "freed — Go live may try again").toBeNull();
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    // And a PICK clears it outright.
+    s.targets = [held, TARGETS[1]!];
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError?.code).toBe("target_in_use");
+    bodyOf(island).onSelectTarget("t2");
+    expect(bodyOf(island).createError, "picking another destination answers it").toBeNull();
+  });
+
+  it("m2: an OLDER read that answers LATE never overwrites a newer one — neither its list nor its failure", async () => {
+    stubPage();
+    // The list route answers in the order the TEST releases, not the order asked.
+    const pending: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    const s = serve({ current: null, targets: [] });
+    const base = apiV1.getMockImplementation()!;
+    apiV1.mockImplementation((url, options) =>
+      `${options?.method ?? "GET"} ${url}` === LIST
+        ? new Promise((resolve, reject) => { pending.push({ resolve, reject }); })
+        : base(url, options),
+    );
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(pending.length, "the mount's read is in flight").toBe(1);
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(pending.length, "Retry asked again").toBe(2);
+    pending[1]!.resolve([TARGETS[1]!]);
+    await settle();
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t2"]);
+    pending[0]!.resolve([TARGETS[0]!]);
+    await settle();
+    expect(listOf(bodyOf(island).targets).map((t) => t.id), "the late answer of the older read is dropped").toEqual(["t2"]);
+    expect(bodyOf(island).selectedTargetId).toBe("t2");
+
+    // The same for a late FAILURE: a newer read's list stands.
+    bodyOf(island).onRetryTargets();
+    await settle();
+    bodyOf(island).onRetryTargets();
+    await settle();
+    expect(pending.length).toBe(4);
+    pending[3]!.resolve(TARGETS);
+    await settle();
+    pending[2]!.reject(new TypeError("Failed to fetch"));
+    await settle();
+    expect(bodyOf(island).targets.status, "a late failure of an older read never replaces the newer list").toBe("ok");
+    expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
+    void s;
   });
 });

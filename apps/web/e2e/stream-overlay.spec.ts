@@ -20,7 +20,7 @@
 // full pass completes.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type Browser, type Page } from "@playwright/test";
+import { test, expect, type Browser, type Locator, type Page } from "@playwright/test";
 import {
   apiJson,
   invalidateOrgEntitlements,
@@ -122,6 +122,22 @@ async function resolveToken(page: Page, token: string): Promise<string> {
     return value;
   }, token);
 }
+
+/** The fixture's organiser page — where the stream panel lives (spec 2026-09-30 §2). The overlay rig carries no
+ *  fixture NUMBER, so it is read over the API, from the same row the page resolves. */
+async function openFixture(page: Page, r: OverlayRig): Promise<void> {
+  const fx = await apiJson<{ fixture_no: number | null }>(page.request, `/api/v1/fixtures/${r.fixtureId}`);
+  expect(fx.data?.fixture_no ?? 0, "the rig's fixture has a run-sheet number").toBeGreaterThan(0);
+  await page.goto(`/o/${r.orgSlug}/c/${r.compSlug}/d/${r.divSlug}/f/${fx.data!.fixture_no}`);
+  await expect(
+    page.locator('[data-role="console-scoring"], [data-role="console-stream"]').first(),
+    "the fixture console rendered",
+  ).toBeAttached({ timeout: 30_000 });
+}
+
+/** The width's own Stream control — the desktop button at ≥768, the strip icon below. Exactly one is visible. */
+const streamControl = (page: Page): Locator =>
+  page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
 
 let rig: OverlayRig;
 /** The route's status for this exact fixture while an override switched
@@ -700,8 +716,9 @@ test.describe("the overlay puts the right score on air", () => {
 // function and the props but never the paint. This is the only thing that can.
 //
 // The panel is opened ONCE, at 1280, and the viewport is then narrowed: the
-// toggle is a phone-folded control at 320 (AGENTS.md 22) and clicking it there
-// is a different test's problem. React state survives a resize.
+// Stream control is a desktop button that becomes a strip icon below 768
+// (spec 2026-09-30 §2), and clicking that is a different test's problem
+// (stream-relay.spec.ts opens it at every width). React state survives a resize.
 // ===========================================================================
 
 test.describe("§8's live preview", () => {
@@ -712,23 +729,16 @@ test.describe("§8's live preview", () => {
     try {
       await signInAs(page, rig.ownerEmail);
       await page.setViewportSize({ width: 1280, height: 900 });
-      await page.goto(`/o/${rig.orgSlug}/c/${rig.compSlug}/d/${rig.divSlug}?tab=fixtures`);
-
-      // PREMISE, and the reason this is not the four-line test the review
-      // estimated: the run sheet opens on its "Today" filter, and
-      // `seedRosteredFixture` does not schedule for today — so the row that
-      // carries the toggle is filtered OUT of the sheet even though the same
-      // page's "Now playing" strip is showing the fixture. Assert the sheet
-      // rendered first, or "no toggle" is indistinguishable from "no page".
-      await expect(
-        page.locator('[data-testid="run-sheet"]'),
-        "the fixtures tab did not render its run sheet at all",
-      ).toHaveCount(1);
-      await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
-
-      const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
-      await expect(toggle, "the rig's org holds streaming.overlay, so the row offers the panel").toHaveCount(1);
-      await toggle.click();
+      // Spec 2026-09-30 §2: the panel lives on the fixture page. `openFixture` asserts the console rendered first, so
+      // "no Stream control" stays distinguishable from "no page".
+      await openFixture(page, rig);
+      const control = streamControl(page);
+      await expect(control, "the rig's org holds streaming.overlay, so the fixture page offers Stream").toHaveCount(1);
+      await control.click();
+      // Spec 2026-09-30 §3.1 (T9b): Phone is the first tab and the default; OBS overlay is the second, one tap away.
+      await expect(page.locator('[data-testid="stream-tab-phone"]'), "the panel opens on its Phone tab").toHaveAttribute("aria-selected", "true");
+      await page.locator('[data-testid="stream-tab-obs"]').click();
+      await expect(page.locator('[data-testid="stream-tab-obs"]')).toHaveAttribute("aria-selected", "true");
       await expect(page.locator('[data-testid="stream-preview"]')).toHaveCount(1);
 
       const measure = () =>
@@ -847,16 +857,20 @@ test.describe("the Phone tab on a community org (V426)", () => {
     }
   });
 
-  /** The row's stream panel, open on its default OBS tab. */
+  /** The fixture page's stream panel, open — on its default Phone tab (spec §3.1, T9b). */
   async function openPanel(page: Page): Promise<void> {
-    await page.goto(`/o/${community.orgSlug}/c/${community.compSlug}/d/${community.divSlug}?tab=fixtures`);
-    await expect(page.locator('[data-testid="run-sheet"]'), "the fixtures tab rendered no run sheet").toHaveCount(1);
-    // The sheet opens on "Today" and the seed does not schedule for today (the
-    // live-preview test's own premise above).
-    await page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]').click();
-    const toggle = page.locator('[data-testid="fixture-stream-toggle"]');
-    await expect(toggle, "community holds streaming.overlay (V426), so the row offers the panel").toHaveCount(1);
-    await toggle.click();
+    await openFixture(page, community);
+    const control = streamControl(page);
+    await expect(control, "community holds streaming.overlay (V426), so the fixture page offers Stream").toHaveCount(1);
+    await control.click();
+    await expect(page.locator('[data-testid="stream-tab-phone"]'), "the panel opens on its Phone tab").toHaveAttribute("aria-selected", "true");
+  }
+
+  /** …then the OBS overlay tab, the second — one tap away. */
+  async function openObsTab(page: Page): Promise<void> {
+    await openPanel(page);
+    await page.locator('[data-testid="stream-tab-obs"]').click();
+    await expect(page.locator('[data-testid="stream-tab-obs"]')).toHaveAttribute("aria-selected", "true");
   }
 
   async function openPhoneTab(page: Page): Promise<void> {
@@ -956,7 +970,7 @@ test.describe("the Phone tab on a community org (V426)", () => {
     try {
       await signInAs(page, community.ownerEmail);
       await page.setViewportSize({ width: 1280, height: 900 });
-      await openPanel(page);
+      await openObsTab(page);
 
       // Copy, as the organiser does — the button, not just the value it would copy.
       const origin = new URL(page.url()).origin;

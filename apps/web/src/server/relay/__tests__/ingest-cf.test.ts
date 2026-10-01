@@ -10,12 +10,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT } from "../ingest-cf";
+import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT, type ErrorReporter } from "../ingest-cf";
+import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "@/lib/stream-session-view";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
-import type { ProviderCallRecord } from "../ports";
+import type { IngestState, OutputState, ProviderCallRecord } from "../ports";
 import {
-  CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
+  CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT,
 } from "../config";
 
 type Call = { url: string; init: RequestInit };
@@ -247,9 +248,10 @@ describe("CloudflareIngest", () => {
     expect(await ingest.outputState("in_okout")).toBe("ok");
     expect(await ingest.outputState("in_noout")).toBe("unknown");
     expect(await ingest.outputState("in_pending")).toBe("unknown");
-    // N-2: and the two envelope guards, so no branch is covered only by another.
-    expect(await ingest.outputState("in_noresult")).toBe("unknown");
-    expect(await ingest.outputState("in_failed")).toBe("unknown");
+    // N-2: and the two envelope guards, so no branch is covered only by another. m-2 (B5 re-review 2): each is NOT
+    // READ — `null` — never the non-ok word `unknown`, which the poll would record and the D3 hold would count.
+    expect(await ingest.outputState("in_noresult")).toBeNull();
+    expect(await ingest.outputState("in_failed")).toBeNull();
   });
 
   it("C1: removeOutput DELETEs live_inputs/{input}/outputs/{output} — Cloudflare's \"Delete an output\" — with no body; 200 `{}` and 404 both resolve (the removal is idempotent), a 5xx throws with the token redacted; every call recorded", async () => {
@@ -499,10 +501,288 @@ describe("CloudflareIngest", () => {
   });
 });
 
+// T4 (spec §5.6 D3, §5.7). Cloudflare's OpenAPI (fetched 2026-09-30, MCP search over spec.paths, GET
+// /accounts/{account_id}/stream/live_inputs/{live_input_identifier}/outputs) documents NO status on an output — only
+// enabled, streamKey, uid, url — so the words below are the plan's rule ("error → rejected; every output connected →
+// ok; any connecting/reconnecting → connecting; else unknown"), not a declared enum.
+describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
+  let states: string[] = [];
+  const port = new FakeRecorder();
+  // m-2: the injected reporter (drivers.ts passes captureError — drivers.test.ts pins that wiring).
+  const reported = vi.fn<ErrorReporter>();
+  const adapter = new CloudflareIngest({
+    fetchImpl: recorder((c) => {
+      if (c.init.method === "GET" && /\/outputs$/.test(c.url))
+        return { status: 200, body: { success: true, result: states.map((s, i) => ({ uid: `out_${i}`, enabled: true, status: { current: { state: s } } })) } };
+      return cfReply(c);
+    }).fetchImpl,
+    accountId: "acct", token: "tok", recorder: port, reportError: reported,
+  });
+  const stubOutputs = (s: string[]) => { states = s; };
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it("outputState (D3, round-1 regression): 'connecting' and 'reconnecting' are CONNECTING, never ok — staging's panel said Live while YouTube received nothing", async () => {
+    const cases: [string[], OutputState][] = [
+      [["connected"], "ok"],
+      [["connecting"], "connecting"],
+      [["reconnecting"], "connecting"],
+      [["connected", "connecting"], "connecting"],
+      [["connected", "error"], "rejected"],
+      [[], "unknown"],
+      [["some-future-word"], "unknown"],
+      [["connected", "some-future-word"], "unknown"],
+    ];
+    let checked = 0;
+    for (const [s, want] of cases) {
+      stubOutputs(s);
+      expect(await adapter.outputState("in_abc", { sessionId: "sess-1" }), s.join(",")).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  // m-2 (B5 re-review 2 §4a): a FAILED read is not evidence. Every way Cloudflare can answer without a usable result —
+  // a failed envelope however healthy its body looks, a success with no result, a 5xx whose body is not JSON, a 429 —
+  // is NOT READ (`null`), never `unknown`: the poll records `unknown` and the D3 hold counts it toward the key box.
+  it("m-2: a failed outputs read is NOT READ — null, never unknown — for a failed envelope, a missing result, a non-JSON 5xx and a 429; a successful read of the same output is still a word", async () => {
+    const replies: Record<string, Reply> = {
+      in_failedenv: { status: 200, body: { success: false, errors: [{ code: 10001 }], result: [{ uid: "o", status: { current: { state: "connecting" } } }] } },
+      in_noresult2: { status: 200, body: { success: true } },
+      in_5xx: { status: 503, body: "upstream connect error" },
+      in_429: { status: 429, body: { success: false, errors: [{ code: 10000, message: "rate limited" }] } },
+      in_read: { status: 200, body: { success: true, result: [{ uid: "o", status: { current: { state: "connecting" } } }] } },
+    };
+    const cf = new CloudflareIngest({
+      fetchImpl: recorder((c) => replies[/\/live_inputs\/([^/]+)\/outputs$/.exec(c.url)![1]!]!).fetchImpl,
+      accountId: "acct", token: "tok",
+    });
+    let checked = 0;
+    for (const id of ["in_failedenv", "in_noresult2", "in_5xx", "in_429"]) {
+      expect(await cf.outputState(id, { sessionId: "sess-m2" }), id).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(await cf.outputState("in_read", { sessionId: "sess-m2" }), "the positive twin: a read that succeeded").toBe("connecting");
+  });
+
+  // m-2 (B5 re-review 2 §4b): the vocabulary is observed, not documented. An unseen word still reads `unknown` — never
+  // a healthy destination — and is REPORTED with the raw word, once per session.
+  it("m-2: an unseen output word reads unknown AND is reported (captureError, injected) with the raw word — once per session; a second session reports again; a no-session call keys on its input; the seen words never report", async () => {
+    reported.mockClear();
+    const reports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_state");
+    let checked = 0;
+    // The four words the adapter maps on purpose (staging check B, plus `error`), alone and together: no report.
+    for (const s of [["connected"], ["connecting"], ["reconnecting"], ["error"], ["connected", "connecting", "reconnecting", "error"], []]) {
+      stubOutputs(s);
+      await adapter.outputState("in_abc", { sessionId: "sess-seen" });
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(reports(), "a seen word is never reported").toHaveLength(0);
+    stubOutputs(["connected", "reconnected"]);
+    expect(await adapter.outputState("in_abc", { sessionId: "sess-a" }), "still unknown, never ok").toBe("unknown");
+    expect(reports()).toHaveLength(1);
+    expect(reports()[0]![1]).toMatchObject({ route: "relay.output_state", extra: { sessionId: "sess-a", inputUid: "in_abc", words: ["reconnected"] } });
+    // The same session, every 5 s poll after: no second report — not even for a second unseen word.
+    for (let i = 0; i < 3; i++) await adapter.outputState("in_abc", { sessionId: "sess-a" });
+    stubOutputs(["streaming"]);
+    expect(await adapter.outputState("in_abc", { sessionId: "sess-a" })).toBe("unknown");
+    expect(reports(), "once per session").toHaveLength(1);
+    // A second session is its own report.
+    expect(await adapter.outputState("in_abc", { sessionId: "sess-b" })).toBe("unknown");
+    expect(reports()).toHaveLength(2);
+    expect(reports()[1]![1]).toMatchObject({ extra: { sessionId: "sess-b", words: ["streaming"] } });
+    // No session: keyed on the input, once.
+    await adapter.outputState("in_xyz");
+    await adapter.outputState("in_xyz");
+    expect(reports()).toHaveLength(3);
+    expect(reports()[2]![1]).toMatchObject({ extra: { sessionId: null, inputUid: "in_xyz" } });
+  });
+
+  it("the four per-session calls record their session id on the provider-call row (spec §5.7) — and a call with no meta records null", async () => {
+    stubOutputs(["connected"]);
+    let checked = 0;
+    for (const [op, run] of [
+      ["inputStatus", () => adapter.inputStatus("in_abc", { sessionId: "sess-9" })],
+      ["addOutput", () => adapter.addOutput("in_abc", { url: "rtmp://a.rtmp.youtube.com/live2", streamKey: "k" }, { sessionId: "sess-9" })],
+      ["outputState", () => adapter.outputState("in_abc", { sessionId: "sess-9" })],
+      ["removeOutput", () => adapter.removeOutput("in_abc", "out_1", { sessionId: "sess-9" })],
+    ] as const) {
+      await run();
+      await flush();
+      expect(port.calls.at(-1), op).toMatchObject({ operation: op, sessionId: "sess-9" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    await adapter.outputState("in_abc");
+    await flush();
+    expect(port.calls.at(-1), "no meta: the row says so").toMatchObject({ operation: "outputState", sessionId: null });
+  });
+});
+
 // Task 3 review G1. Task 10's DB tests drive the FAKE; if the fake's recorded
 // path shapes or subject ids drift from the real adapter's, those tests prove
 // the fake and nothing else. Compared through the REAL pathTemplate (the same
 // function telemetry.ts uses), per operation, so either side drifting reds.
+// G-1 (B5 re-review 3; controller ruling 2026-10-01): `inputStatus` maps Cloudflare's WHOLE documented live-input
+// vocabulary explicitly — the OpenAPI enum the outputState comment quotes (fetched 2026-09-30): connected, reconnected,
+// reconnecting, client_disconnect, ttl_exceeded, failed_to_connect, failed_to_reconnect, new_configuration_accepted —
+// plus `disconnected`, which is not in that enum but is what R0 MEASURED on an idle input (the `in_rtmps` fixture above).
+// A returning phone that reads `reconnected` used to be `unknown`: the chain said No signal over a phone that was
+// sending, and the I-2a clamp (to_state = 'connected') never fired. Every expected value is the ruling, one row per word.
+describe("G-1: inputStatus maps every documented Cloudflare input word — and reports an unseen one, once per session", () => {
+  let word: string | undefined = "connected";
+  const reported = vi.fn<ErrorReporter>();
+  const cf = new CloudflareIngest({
+    fetchImpl: recorder(() => ({
+      status: 200,
+      body: { success: true, result: { uid: "in_g1", status: { current: { ingestProtocol: "srt", state: word, reason: "r", statusEnteredAt: null, statusLastSeen: null } } } },
+    })).fetchImpl,
+    accountId: "acct", token: "tok", reportError: reported,
+  });
+  const inputReports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.input_state");
+
+  it("one row per word: connected/reconnected → connected; reconnecting, client_disconnect, ttl_exceeded, failed_to_connect, failed_to_reconnect (and the measured disconnected) → disconnected; new_configuration_accepted → null (G-a: no evidence, carried by the caller — never unknown); none of them reported", async () => {
+    const rows: [string, IngestState | null][] = [
+      ["connected", "connected"],
+      ["reconnected", "connected"],
+      ["reconnecting", "disconnected"],
+      ["client_disconnect", "disconnected"],
+      ["ttl_exceeded", "disconnected"],
+      ["failed_to_connect", "disconnected"],
+      ["failed_to_reconnect", "disconnected"],
+      ["new_configuration_accepted", null],   // G-a (controller ruling 2026-10-01): says nothing about video
+      ["disconnected", "disconnected"],   // R0-measured, not in the documented enum
+    ];
+    reported.mockClear();
+    let checked = 0;
+    for (const [w, want] of rows) {
+      word = w;
+      expect((await cf.inputStatus("in_g1", { sessionId: "sess-g1-known" })).state, w).toBe(want);
+      checked++;
+    }
+    expect(checked, "the documented eight plus the measured disconnected").toBe(9);
+    expect(rows.filter(([, s]) => s === "connected").length, "the phone-is-sending words").toBe(2);
+    expect(rows.filter(([, s]) => s === null).map(([w]) => w), "G-a: the one no-evidence word").toEqual(["new_configuration_accepted"]);
+    expect(rows.filter(([, s]) => s === "unknown"), "G-a: no documented word reads as unknown (No signal)").toHaveLength(0);
+    expect(inputReports(), "a known word is never reported").toHaveLength(0);
+  });
+
+  it("an unseen input word reads unknown AND is reported with the raw word — once per session; a second session reports again; a no-session call keys on its input", async () => {
+    reported.mockClear();
+    word = "streaming_somehow";
+    expect((await cf.inputStatus("in_g1", { sessionId: "sess-g1-a" })).state, "never connected").toBe("unknown");
+    expect(inputReports()).toHaveLength(1);
+    expect(inputReports()[0]![1]).toMatchObject({ route: "relay.input_state", extra: { sessionId: "sess-g1-a", inputUid: "in_g1", word: "streaming_somehow" } });
+    for (let i = 0; i < 3; i++) await cf.inputStatus("in_g1", { sessionId: "sess-g1-a" });
+    expect(inputReports(), "once per session, not once per 5 s poll").toHaveLength(1);
+    await cf.inputStatus("in_g1", { sessionId: "sess-g1-b" });
+    expect(inputReports()).toHaveLength(2);
+    await cf.inputStatus("in_g1");
+    await cf.inputStatus("in_g1");
+    expect(inputReports()).toHaveLength(3);
+    expect(inputReports()[2]![1]).toMatchObject({ extra: { sessionId: null, inputUid: "in_g1" } });
+    // A missing word (a status with no state) is not a word: unknown, nothing reported.
+    reported.mockClear();
+    word = undefined;
+    expect((await cf.inputStatus("in_g1", { sessionId: "sess-g1-none" })).state).toBe("unknown");
+    expect(inputReports()).toHaveLength(0);
+  });
+});
+
+// m-c (B5 re-review 3; controller ruling 2026-10-01): since round 2 a failed outputs read is NOT READ (null) and the
+// poll records nothing — so a read that fails for the rest of a stream leaves D3 blind with nothing said anywhere. The
+// adapter reports it, through the same injected reporter, once per session, after OUTPUT_READ_FAILURES_BEFORE_REPORT
+// CONSECUTIVE failures (config.ts says why that number). Expected values come from the declarations, never the adapter:
+// the number of failed polls that spans D3's hold is the hold over the poll interval.
+describe("m-c: a PERSISTENT failed outputs read is reported once per session, after N consecutive failures", () => {
+  it("N is the number of organiser polls that spans D3's 30 s hold", () => {
+    expect(OUTPUT_READ_FAILURES_BEFORE_REPORT).toBe(OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS);
+    expect(OUTPUT_READ_FAILURES_BEFORE_REPORT).toBe(6);
+  });
+
+  it("N-1 failures say nothing; the Nth says it once with the HTTP status; more say nothing; a success resets the run; a second session reports again", async () => {
+    const N = OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS;
+    let ok = false;
+    const reported = vi.fn<ErrorReporter>();
+    const cf = new CloudflareIngest({
+      fetchImpl: recorder(() => ok
+        ? { status: 200, body: { success: true, result: [{ uid: "o", status: { current: { state: "connected" } } }] } }
+        : { status: 429, body: { success: false, errors: [{ code: 10000, message: "rate limited" }] } }).fetchImpl,
+      accountId: "acct", token: "tok", reportError: reported,
+    });
+    const failures = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_read_failed");
+    const poll = (sessionId: string | null = "sess-mc") => cf.outputState("in_mc", sessionId ? { sessionId } : {});
+    // N-1 failures, a success, N-1 more: never N in a row, so nothing.
+    for (let i = 0; i < N - 1; i++) expect(await poll()).toBeNull();
+    ok = true;
+    expect(await poll(), "PREMISE: the read can succeed").toBe("ok");
+    ok = false;
+    for (let i = 0; i < N - 1; i++) await poll();
+    expect(failures(), "a success resets the run").toHaveLength(0);
+    await poll();   // the Nth in a row
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0]![1]).toMatchObject({ extra: { sessionId: "sess-mc", inputUid: "in_mc", consecutive: N, httpStatus: 429, errorCode: 10000 } });
+    for (let i = 0; i < 2 * N; i++) await poll();
+    expect(failures(), "once per session, however long it lasts").toHaveLength(1);
+    // …even across a recovery and a second run in the same session.
+    ok = true;
+    await poll();
+    ok = false;
+    for (let i = 0; i < N; i++) await poll();
+    expect(failures(), "still once for this session").toHaveLength(1);
+    for (let i = 0; i < N; i++) await poll("sess-mc-2");
+    expect(failures(), "a second session is its own report").toHaveLength(2);
+    for (let i = 0; i < N; i++) await poll(null);
+    expect(failures(), "no session: keyed on the input").toHaveLength(3);
+  });
+});
+
+// m-1 (B5 re-review 4, mutant MN4): "once per session" is once per KIND per session. The three reports — an unseen input
+// word, an unseen output word, an outputs read that keeps failing — are different facts, so an early one must never use
+// up the session's only report slot. With the kind dropped from the key, the unseen-word report early in a stream
+// silenced the later "read keeps failing" report m-c exists for, and no test had two kinds in one session.
+describe("m-1: each KIND of report is once per session — an early unseen word never silences a later failing read", () => {
+  it("one session: an unseen input word, then N failed outputs reads, then an unseen output word — three reports, three routes", async () => {
+    const N = OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS;
+    let outputs: "unseen" | "fail" = "fail";
+    const reported = vi.fn<ErrorReporter>();
+    const cf = new CloudflareIngest({
+      fetchImpl: recorder((c) => {
+        if (c.url.endsWith("/outputs")) {
+          return outputs === "unseen"
+            ? { status: 200, body: { success: true, result: [{ uid: "o", status: { current: { state: "dialling_sideways" } } }] } }
+            : { status: 503, body: { success: false, errors: [{ code: 10001, message: "unavailable" }] } };
+        }
+        return { status: 200, body: { success: true, result: { uid: "in_m1", status: { current: { ingestProtocol: "srt", state: "streaming_somehow", reason: null } } } } };
+      }).fetchImpl,
+      accountId: "acct", token: "tok", reportError: reported,
+    });
+    const meta = { sessionId: "sess-m1" };
+    const routes = () => reported.mock.calls.map(([, ctx]) => ctx?.route);
+
+    expect((await cf.inputStatus("in_m1", meta)).state, "PREMISE: the input word is unseen").toBe("unknown");
+    expect(routes(), "the input-word report").toEqual(["relay.input_state"]);
+    let failed = 0;
+    for (let i = 0; i < N; i++) {
+      expect(await cf.outputState("in_m1", meta)).toBeNull();
+      failed++;
+    }
+    expect(failed, "PREMISE: N consecutive failed reads ran").toBe(N);
+    expect(routes(), "the failing read still reports after an unseen word in the same session (MN4)").toEqual(["relay.input_state", "relay.output_read_failed"]);
+    outputs = "unseen";
+    expect(await cf.outputState("in_m1", meta), "PREMISE: the output word is unseen").toBe("unknown");
+    expect(routes(), "the output-word report is a third slot").toEqual(["relay.input_state", "relay.output_read_failed", "relay.output_state"]);
+    expect(new Set(routes()).size, "three distinct routes").toBe(3);
+    // And each slot is still once: more of every kind in the same session adds nothing.
+    await cf.inputStatus("in_m1", meta);
+    await cf.outputState("in_m1", meta);
+    outputs = "fail";
+    for (let i = 0; i < N; i++) await cf.outputState("in_m1", meta);
+    expect(reported, "still one per kind").toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
   type Shape = { operation: string; method: string; template: string; idCount: number; subject: string };
 

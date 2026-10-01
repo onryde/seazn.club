@@ -965,9 +965,11 @@ describe("the console, the run sheet and the public page", () => {
 
   it("every link a run-sheet row renders goes to the fixture console, so the identity link is a true fallback for a Set-time row", () => {
     const row = src(`${V2}/desk/run-sheet-row.tsx`);
-    const hrefs = [...row.matchAll(/href=\{([^}]+)\}/g)].map((m) => m[1]);
-    expect(hrefs.length).toBe(2);
-    expect(new Set(hrefs)).toEqual(new Set(["href"]));
+    const hrefs = [...row.matchAll(/href=\{(`[^`]*`|[^}]+)\}/g)].map((m) => m[1]);
+    // The identity link, the run-sheet action link, and the stream chip, which
+    // opens the same console with its Stream panel up (`?stream=open`).
+    expect(hrefs).toEqual(["href", "`${href}?stream=open`", "href"]);
+    for (const h of hrefs) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
     expect(src(`${V2}/stages-panel.tsx`)).toContain("hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}");
     // set_time is the one row action that is a <button>, not a link.
     expect(row).toMatch(/<button\s+type="button"\s+data-row-action="set_time"/);

@@ -28,14 +28,7 @@ import { courtDisplayName } from "@/components/v2/board/types";
 import { courtOptionsFor, type Venue } from "@/components/v2/shared/court-multi-picker";
 import { canEditFixtureTime, fixtureRowAction, hasAssignedScorer, type RowAction } from "@/lib/fixture-row-action";
 import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
-// Stream Overlay W1 (task 6). ONE import; the row owns only the open state and
-// two mount points, because the toggle belongs beside the time cell and the
-// panel spans the row beneath it — one component cannot be in both places.
-import {
-  FixtureStreamPanel,
-  FixtureStreamToggle,
-  type StreamPanelContext,
-} from "@/components/v2/fixture-stream-panel";
+import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, outcomeText, VOID_STATUSES } from "@/components/v2/stages-panel";
 import type { PatchFixture } from "@/server/api-v1/schemas";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
@@ -116,7 +109,7 @@ export function RunSheetRow({
   boardSlotOptions,
   onRescheduled,
   stageName,
-  stream,
+  streamState,
   feedLabels,
 }: {
   fixture: RunSheetFixture;
@@ -158,13 +151,12 @@ export function RunSheetRow({
    *  blocks never pass it — a day header/bracket section already identifies
    *  its stage. */
   stageName?: string | null;
-  /** Stream Overlay W1 — the per-PAGE half of the stream panel, threaded from
-   *  the division page on the `embeds.enabled` precedent (`<EmbedSnippet
-   *  entitled={await hasFeature(...)}/>`, page.tsx). Optional so every caller
-   *  that never carried it keeps working, exactly as `venues` does; absent is
-   *  read as NOT entitled, so an un-threaded caller shows no panel rather than
-   *  a broken one. */
-  stream?: StreamPanelContext;
+  /** Spec 2026-09-30 §2 (T6) — this fixture's stream session as a person reads it, when one is up (`openStreamStates`,
+   *  read by the division page for the PAGE-level organiser). The row shows a chip linking to the fixture page with
+   *  `?stream=open`: the division's path to Stop. Deliberately NOT gated on this row's `canEdit`, which is `editable`
+   *  (false on a billing-frozen page) — the chip replaced the frozen page's stop probes, so it must show there. The
+   *  organiser gate is the page's: a viewer is never handed a state. */
+  streamState?: HoldState;
   /** Feeder labels for seats no result has filled yet, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts), the SAME builder and the
    *  SAME `{key, params}` vocabulary the schedule board reads.
@@ -187,9 +179,6 @@ export function RunSheetRow({
   const msg = useMsg();
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  // Owned HERE, not in the panel: the toggle and the expander mount in two
-  // different places in this row's composition (see the import's note).
-  const [streamOpen, setStreamOpen] = useState(false);
   // The typed value. Seeded EMPTY here and re-seeded from the STORED instant
   // every time the editor opens — `toggleEditor` below is the authority, and
   // its doc carries the whole argument. Nothing else may set this from
@@ -425,13 +414,6 @@ export function RunSheetRow({
               ? msg("runsheet.action.setTime")
               : msg("runsheet.action.view");
 
-  // Stream Overlay W1, owner Q6 ("Agree"): offered at EVERY fixture status —
-  // a club pastes the replay link after the final whistle — so this is NOT
-  // `canEditFixtureTime`, which hides the time cell's editor by status. ONE
-  // authority for the gate, read by both mount points below; not entitled
-  // means no panel at all, never an upsell (ruling 5 — that is R1's).
-  const showStream = canEdit && stream !== undefined && stream.entitled;
-
   return (
     <li data-fixture-no={fixture.fixture_no} className="px-4 py-2">
       {/* Same two-tier responsive shape `FixtureLine` used (fix-ui audit
@@ -454,7 +436,7 @@ export function RunSheetRow({
           stack (`hidden md:block` on the meta and sub-line paragraphs);
           `max-md` below shows only the `md:hidden` combined line instead. */}
       <div className="flex min-w-0 flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:gap-3">
-        <div className="flex min-w-0 items-center gap-3 md:contents">
+        <div data-row-line="1" className="flex min-w-0 items-center gap-3 md:contents">
           {/* Time spine cell — mono/tabular so the column lines up; an
               em-dash for a row with no time at all (the unscheduled group).
               Fix round 5 (owner ruling): when the time is EDITABLE the cell
@@ -482,20 +464,17 @@ export function RunSheetRow({
               title={msg("schedule.editTime")}
               aria-expanded={editing}
               onClick={toggleEditor}
-              className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500"
+              className="-my-1 flex min-h-11 w-14 shrink-0 items-center font-mono text-sm tabular-nums text-slate-600 underline decoration-slate-300 decoration-dotted underline-offset-4 hover:text-purple-700 hover:decoration-purple-500 md:order-first"
             >
               <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" />
             </button>
           ) : (
-            <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600">
+            <span className="w-14 shrink-0 font-mono text-sm tabular-nums text-slate-600 md:order-first">
               {fixture.scheduled_at ? <ClientTime value={fixture.scheduled_at} tz={tz} mode="time" hourCycle="h23" /> : "—"}
               {fixture.status === "in_play" && (
                 <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" />
               )}
             </span>
-          )}
-          {showStream && (
-            <FixtureStreamToggle open={streamOpen} onToggle={() => setStreamOpen((v) => !v)} fixtureId={fixture.id} />
           )}
           <div className="min-w-0 flex-1">
             {/* Task 9: desktop-only now — `phoneLineTwo` below carries this
@@ -542,11 +521,37 @@ export function RunSheetRow({
             `md:hidden` paragraph below simply renders `display:none` there
             and takes no space. `min-w-0` down to the truncated paragraph,
             same discipline the entrant column above already carries. */}
-        <div className="flex min-w-0 items-center justify-between gap-2 md:contents">
+        {/* B3 re-review N-1: `max-md:flex-wrap` — at 320 the French waiting chip ("En attente du téléphone") plus the
+            action pass line 2 by 16 px; the action wraps under the chip instead of squeezing past the row's edge. */}
+        <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 max-md:flex-wrap md:contents">
           <p className="min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden">{phoneLineTwo}</p>
+          {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
+              chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
+              status: a stream outlives the whistle. 44 px tall on phones (the tap floor).
+              B3 fix round 1 (owner decision, option a): on phones it sits on THIS line, beside the row action, so
+              line 1 carries the entrant names in full. One DOM, no twin — at ≥768 both line wrappers are
+              `md:contents`, and `md:order-first` here and on the time cell puts it back between the time and the
+              names, the desktop row exactly as it was. */}
+          {streamState && (
+            <Link
+              href={`${href}?stream=open`}
+              data-testid="run-sheet-stream-chip"
+              data-state={streamState}
+              // Minor 11 (B3 fix round 1): several rows can carry a "Live" link — the name says WHICH match, its
+              // visible words first (label in name).
+              aria-label={msg(streamState === "live" ? "runsheet.stream.liveName" : "runsheet.stream.waitingName", {
+                match: `${home} ${msg("schedule.vs")} ${away}`,
+              })}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 hover:bg-slate-50 max-md:min-h-11 md:order-first"
+            >
+              <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full ${streamState === "live" ? "bg-red-600" : "bg-amber-500"}`} />
+              {msg(streamState === "live" ? "runsheet.stream.live" : "runsheet.stream.waiting")}
+            </Link>
+          )}
           {/* The ONE action — a plain link for every kind except `set_time`,
-              which toggles the inline editor below (≥44px either way). */}
-          <div className="flex flex-wrap items-center gap-2 md:contents">
+              which toggles the inline editor below (≥44px either way). `max-md:ml-auto`: when line 2 wraps (N-1)
+              the action keeps the right edge it has on one line. */}
+          <div className="flex flex-wrap items-center gap-2 max-md:ml-auto md:contents">
             {action.kind === "set_time" ? (
               <button
                 type="button"
@@ -718,14 +723,6 @@ export function RunSheetRow({
             )}
           </div>
         </div>
-      )}
-      {showStream && streamOpen && (
-        <FixtureStreamPanel
-          fixture={fixture}
-          entrantNames={entrantNames}
-          tz={tz}
-          stream={stream}
-        />
       )}
     </li>
   );
