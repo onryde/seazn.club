@@ -22,9 +22,18 @@ export function seaznQrLayout(n: number): { n: number; total: number; icon: numb
   return { n, total: n + 2 * SEAZN_QR_QUIET_MODULES, icon, k, k0: (n - k) / 2 };
 }
 
-/** The symbol as an SVG string, pure. `logoHref: null` draws it with no icon and no knock-out (QRCode's own symbol). */
-export function seaznQrSvg(text: string, opts: { size: number; logoHref: string | null }): string {
-  const qr = QRCode.create(text, { errorCorrectionLevel: SEAZN_QR_ERROR_CORRECTION });
+/** A Seazn QR as the page paints it: the SVG data URL, and the symbol's edge in modules WITH its quiet zone — the
+ *  number every painted size is snapped to (`snapQrSize`, B6 fix round 1 ruling I-2). */
+export type SeaznQr = { src: string; modules: number };
+
+const encode = (text: string) => QRCode.create(text, { errorCorrectionLevel: SEAZN_QR_ERROR_CORRECTION });
+
+/** The symbol's edge in modules, quiet zone included — what `renderSeaznQr` reports as `modules`, without drawing. */
+export function seaznQrModules(text: string): number {
+  return seaznQrLayout(encode(text).modules.size).total;
+}
+
+function drawSvg(qr: QRCode.QRCode, opts: { logoHref: string | null; size?: number }): string {
   const n = qr.modules.size;
   const L = seaznQrLayout(n);
   const q = SEAZN_QR_QUIET_MODULES;
@@ -43,15 +52,35 @@ export function seaznQrSvg(text: string, opts: { size: number; logoHref: string 
   const at = q + (n - L.icon) / 2;
   const logo =
     opts.logoHref === null ? "" : `<image href="${opts.logoHref}" x="${at}" y="${at}" width="${L.icon}" height="${L.icon}"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${L.total} ${L.total}" width="${opts.size}" height="${opts.size}" shape-rendering="crispEdges"><rect width="${L.total}" height="${L.total}" fill="#fff"/><path d="${d}" fill="${INK}"/>${logo}</svg>`;
+  const size = opts.size ?? L.total;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${L.total} ${L.total}" width="${size}" height="${size}" shape-rendering="crispEdges"><rect width="${L.total}" height="${L.total}" fill="#fff"/><path d="${d}" fill="${INK}"/>${logo}</svg>`;
 }
+
+/** The symbol as an SVG string, pure. `logoHref: null` draws it with no icon and no knock-out (QRCode's own symbol).
+ *  Its intrinsic size is one px per module (`size` overrides it — a test rasterises at the painted size); the page
+ *  paints it at a snapped size, so the SVG scales and is never a raster to keep crisp. */
+export function seaznQrSvg(text: string, opts: { logoHref: string | null; size?: number }): string {
+  return drawSvg(encode(text), opts);
+}
+
+/** How long a QR waits for the icon before it paints without it (review m-8): the QR is the point, the logo dressing. */
+export const SEAZN_QR_LOGO_TIMEOUT_MS = 2000;
 
 let logoOnce: Promise<string | null> | null = null;
 /** The icon as a data URL — an SVG shown through <img> may not fetch external images, so it is embedded. Fetched once
- *  per page; a failed fetch renders the QR without the icon (it decodes the same) rather than no QR, and the next
- *  render tries the fetch again. */
+ *  per page; a failed fetch, or one that has not answered within the timeout (aborted then), renders the QR without the
+ *  icon (it decodes the same) rather than no QR, and the next render tries the fetch again. */
 function logoDataUrl(): Promise<string | null> {
-  logoOnce ??= fetch(SEAZN_QR_LOGO_PATH)
+  if (logoOnce) return logoOnce;
+  const abort = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => {
+      abort.abort();
+      rej(new Error("logo fetch timed out"));
+    }, SEAZN_QR_LOGO_TIMEOUT_MS);
+  });
+  const load = fetch(SEAZN_QR_LOGO_PATH, { signal: abort.signal })
     .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
     .then(
       (b) =>
@@ -61,16 +90,21 @@ function logoDataUrl(): Promise<string | null> {
           fr.onerror = () => rej(fr.error);
           fr.readAsDataURL(b);
         }),
-    )
+    );
+  load.catch(() => {}); // the race below reports it; a late rejection after the timeout must not go unhandled
+  logoOnce = Promise.race([load, timedOut])
     .catch(() => {
       logoOnce = null;
       return null;
-    });
+    })
+    .finally(() => clearTimeout(timer));
   return logoOnce;
 }
 
-/** The Seazn QR for `text` as an SVG data URL, `size` CSS px square (it scales; pass the largest size it paints at). */
-export async function renderSeaznQr(text: string, opts: { size: number }): Promise<string> {
-  const svg = seaznQrSvg(text, { size: opts.size, logoHref: await logoDataUrl() });
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+/** The Seazn QR for `text`: the SVG data URL and its module count. The page decides the painted size (`SeaznQrImage`
+ *  snaps it to whole device px per module); the SVG scales to it. */
+export async function renderSeaznQr(text: string): Promise<SeaznQr> {
+  const qr = encode(text);
+  const svg = drawSvg(qr, { logoHref: await logoDataUrl() });
+  return { src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, modules: seaznQrLayout(qr.modules.size).total };
 }

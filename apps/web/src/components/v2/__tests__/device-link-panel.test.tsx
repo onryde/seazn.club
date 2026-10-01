@@ -15,6 +15,8 @@
 // The `apiV1` double keeps the REAL `ApiV1Error` class (the panel branches on
 // `instanceof`; a lookalike makes that silently false). Every POST URL is
 // recorded; the GET that `refresh()` issues on mount answers the active link.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
@@ -64,10 +66,15 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   };
 });
 
-// The Seazn QR helper (T10, D7) is doubled so its INPUT — the pad URL and the size — is what the test reads; the symbol
-// itself (EC H, the logo, a decode) is `src/lib/__tests__/seazn-qr.test.ts`'s.
+// The Seazn QR helper (T10, D7) is doubled so its INPUT — the pad URL — is what the test reads; the symbol itself (EC H,
+// the logo, a decode at every painted size) is `src/lib/__tests__/seazn-qr.test.ts`'s, and the painted size the shared
+// component's (B6 fix round 1).
+const DLINK_SYMBOL = { src: "data:image/svg+xml;charset=utf-8,DLINK", modules: 57 };
 const seaznQr = vi.hoisted(() => ({
-  renderSeaznQr: vi.fn<(text: string, opts: { size: number }) => Promise<string>>(async () => "data:image/svg+xml;charset=utf-8,DLINK"),
+  renderSeaznQr: vi.fn<(text: string) => Promise<{ src: string; modules: number }>>(async () => ({
+    src: "data:image/svg+xml;charset=utf-8,DLINK",
+    modules: 57,
+  })),
 }));
 vi.mock("@/lib/seazn-qr", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/seazn-qr")>()),
@@ -286,14 +293,16 @@ describe("device-link panel — what it says about a sealed link (null expiry)",
     expect(url, "the pad URL paragraph carries its hook").toBeDefined();
     expect(textOf(url!)).toContain(`${ORIGIN}/score/dl_sealed_secret`);
     // T10: the QR is the Seazn QR (D7) of exactly the pad URL the text shows, painted through the shared component.
-    expect(seaznQr.renderSeaznQr).toHaveBeenCalledWith(`${ORIGIN}/score/dl_sealed_secret`, { size: 280 });
+    expect(seaznQr.renderSeaznQr.mock.calls[0], "the pad URL, and nothing else: the helper takes no size").toEqual([`${ORIGIN}/score/dl_sealed_secret`]);
     const qr = dlinkQr(island.tree());
     expect(qr, "the QR renders through SeaznQrImage").toBeDefined();
-    expect(propsOf(qr!).src).toBe("data:image/svg+xml;charset=utf-8,DLINK");
+    expect(propsOf(qr!).qr, "the symbol the helper drew, with its module count").toEqual(DLINK_SYMBOL);
     expect(propsOf(qr!).alt).toBe(t("dlink.alt"));
-    // The raster is never smaller than the box that paints it (`w-N` is N × 4 CSS px).
-    const painted = 4 * Number(/\bw-(\d+)\b/.exec(String(propsOf(qr!).className))![1]);
-    expect(280, "the symbol is drawn at least as large as it is painted").toBeGreaterThanOrEqual(painted);
+    // The cap is the panel's declared one (review m-10: read, never a literal here) and holds whole px per module for
+    // a real pad URL (v8: 57 modules with the quiet zone) — four of them.
+    const cap = Number(/const DLINK_QR_MAX_PX = (\d+);/.exec(readFileSync(resolve(import.meta.dirname, "../device-link-panel.tsx"), "utf8"))![1]);
+    expect(propsOf(qr!).maxSize).toBe(cap);
+    expect(Math.floor(cap / 57), "at least three px per module").toBeGreaterThanOrEqual(3);
     expect(island.tree().find((el) => el.type === "img"), "no bare img bypasses the component").toBeUndefined();
     expect(island.text()).toContain(t("dlink.sameQr"));
     expect(island.text()).not.toMatch(/19(69|70)/);

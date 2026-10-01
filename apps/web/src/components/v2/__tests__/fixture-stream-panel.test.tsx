@@ -59,8 +59,9 @@ import {
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
 import { DestinationWarning, SignalChain } from "@/components/v2/stream-signal-chain";
-import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
-import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES } from "@/lib/seazn-qr";
+import QRCode from "qrcode";
+import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
+import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES, type SeaznQr } from "@/lib/seazn-qr";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { chainFor } from "@/lib/stream-chain";
 import {
@@ -141,12 +142,14 @@ vi.mock("@/lib/billing-checkout-client", () => ({
 const confirmMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
 
-// The Seazn QR helper is doubled so its INPUT (the payload and the size) is what the test reads (T10: the panel no
-// longer calls `qrcode` itself — `lib/seazn-qr` owns the EC level and the logo; its own test decodes the symbol).
+// The Seazn QR helper is doubled so its INPUT (the payload) is what the test reads (T10: the panel no longer calls
+// `qrcode` itself — `lib/seazn-qr` owns the EC level and the logo; its own test decodes the symbol). The painted size
+// is the shared component's (B6 fix round 1), so the helper takes no size at all.
 const seaznQr = vi.hoisted(() => ({
-  renderSeaznQr: vi.fn<(text: string, opts: { size: number }) => Promise<string>>(
-    async (text) => `data:image/svg+xml;charset=utf-8,len${text.length}`,
-  ),
+  renderSeaznQr: vi.fn<(text: string) => Promise<{ src: string; modules: number }>>(async (text) => ({
+    src: `data:image/svg+xml;charset=utf-8,len${text.length}`,
+    modules: 113,
+  })),
 }));
 vi.mock("@/lib/seazn-qr", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/seazn-qr")>()),
@@ -250,7 +253,8 @@ const SHEET_PATH = join(
   "../../../../../..",
   "docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md",
 );
-/** §8a's `QR size` row's cap — the `N` of its `min(Npx, available)` rule (amended 2026-09-30 to ≥ 320, spec §7). */
+/** §8a's `QR size` row's cap — the `N` of its `min(Npx, available)` rule (amended 2026-09-30 to ≥ 320, spec §7; 2026-10-01
+ *  to 363, so desktop keeps ≥ 320 at a whole number of px per module). */
 const sheetQrCap = (): number => {
   const row = readFileSync(SHEET_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"));
   if (!row) throw new Error("§8a lost its QR size row");
@@ -931,7 +935,7 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
 const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
-  selectedTargetId: null, qrDataUrl: null, now: NOW, copied: false, showBuy: false,
+  selectedTargetId: null, qrImage: null, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
   onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onTileIntent: () => {},
@@ -987,7 +991,7 @@ function bodyStates(): [string, ReactElement[]][] {
     ["idle, Buy more opened", body({ view: null, balance: 2, showBuy: true, checkoutError: "owner" })],
     ["idle, the destination in use", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder: IN_USE_HOLDER } })],
     ["provisioning", body({ view: session({ state: "provisioning", qr: null }), balance: 2 })],
-    ["warming, the QR", body({ view: session(), balance: 2, qrDataUrl: "data:image/png;base64,AAAA" })],
+    ["warming, the QR", body({ view: session(), balance: 2, qrImage: { src: "data:image/png;base64,AAAA", modules: 113 } })],
     ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", qr: null, fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
     ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z", qr: null }), balance: 1 })],
     ["ended", body({ view: session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
@@ -1154,18 +1158,19 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
   it("warming: the QR image (a real alt), the paste code equal to the payload (a real name), the caption, Cancel — one centred column at the QR box's own width", () => {
     const v = session();
-    const tree = body({ view: v, balance: 2, qrDataUrl: "data:image/png;base64,AAAA" });
+    const symbol: SeaznQr = { src: "data:image/png;base64,AAAA", modules: 113 };
+    const tree = body({ view: v, balance: 2, qrImage: symbol });
     // T10: the QR is a <SeaznQrImage> element (renderIsland does not expand it): find it by type and `testId` prop,
     // never by data-testid, and pin its props. The width is the sheet's rule, read from the row.
     const qrEl = qrImageOf(tree, "stream-qr");
     expect(qrEl, "the Waiting state renders the stream QR through SeaznQrImage").toBeDefined();
     expect(byTestId(tree, "stream-qr"), "no bare img bypasses the component").toBeUndefined();
-    expect(propsOf(qrEl!).src).toBe("data:image/png;base64,AAAA");
+    expect(propsOf(qrEl!).qr, "the symbol the panel encoded, whole").toBe(symbol);
     expect(propsOf(qrEl!).alt).toBe(m("stream.phone.qr.alt"));
     expect(propsOf(qrEl!).sensitive, "D10a: the capture credentials never reach a replay").toBe(true);
     const cap = sheetQrCap();
     expect(cap).toBeGreaterThanOrEqual(320); // spec §7's floor on desktop
-    expect(String(propsOf(qrEl!).className)).toContain(`w-[min(${cap}px,100%)]`);
+    expect(propsOf(qrEl!).maxSize, "the sheet's cap; the component snaps inside it").toBe(cap);
     const field = byTestId(tree, "stream-qr-text")!;
     // D10a: the paste code IS the payload — the text carries the replay block as well as the image.
     expect(String(attr(field, "className")).split(/\s+/), "the paste code is ph-no-capture").toContain("ph-no-capture");
@@ -1176,6 +1181,10 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const box = byTestId(tree, "stream-qr-box")!;
     const width = String(attr(box, "className")).match(/(^|\s)(max-w-\[\d+px\])(\s|$)/)?.[2];
     expect(width, "the QR box has no max width").toBeDefined();
+    // The box holds the cap exactly: the cap + its `p-3` (12) twice + its 1-px border twice, so the box is never the
+    // thing that snaps the QR down a scale on desktop.
+    expect(Number(/\d+/.exec(width!)![0]), "the box's max width is the cap plus its chrome").toBe(cap + 2 * (12 + 1));
+    expect(String(attr(box, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["p-3", "border"]));
     expect(String(attr(byTestId(tree, "stream-qr-field")!, "className")).split(/\s+/)).toContain(width);
     expect(String(attr(byTestId(tree, "stream-qr-column")!, "className"))).toMatch(/(^|\s)items-center(\s|$)/);
     expect(byTestId(tree, "stream-cancel")).toBeDefined();
@@ -1187,14 +1196,23 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 
   it("warming before the encoder answers: a placeholder the QR's size, and the paste code is ALREADY there (§8a: always rendered)", () => {
-    const tree = body({ view: session(), balance: 2, qrDataUrl: null });
+    const v = session();
+    const tree = body({ view: v, balance: 2, qrImage: null });
     expect(qrImageOf(tree, "stream-qr"), "no QR before the encoder answers").toBeUndefined();
     expect(byTestId(tree, "stream-qr")).toBeUndefined();
-    // The placeholder holds the QR's own width, so the box does not jump when the symbol lands.
+    // The placeholder holds the QR's own snapped square and caption line, so the box does not jump when the symbol
+    // lands (review m-7): the same cap, and the module count of THIS payload — QRCode's own matrix plus the quiet zone.
     const box = byTestId(tree, "stream-qr-box")!;
-    const placeholder = walk(propsOf(box).children as ReactElement).find((el) => el.type === "div" && propsOf(el)["aria-hidden"]);
+    const placeholder = walk(propsOf(box).children as ReactElement).find((el) => el.type === SeaznQrPlaceholder);
     expect(placeholder, "the placeholder renders").toBeDefined();
-    expect(String(attr(placeholder!, "className"))).toContain(`w-[min(${sheetQrCap()}px,100%)]`);
+    expect(propsOf(placeholder!).maxSize).toBe(sheetQrCap());
+    const modules = QRCode.create(qrText(v.qr!), { errorCorrectionLevel: "H" }).modules.size + 2 * 4;
+    expect(propsOf(placeholder!).modules).toBe(modules);
+    // No payload yet (provisioning before the credentials exist): the box's own square, unsnapped.
+    const early = byTestId(body({ view: session({ qr: null }), balance: 2, qrImage: null }), "stream-qr-box");
+    expect(early, "premise: the waiting box shows before the credentials do").toBeDefined();
+    const ph = walk(propsOf(early!).children as ReactElement).find((el) => el.type === SeaznQrPlaceholder);
+    expect(propsOf(ph!).modules).toBeNull();
     expect(byTestId(tree, "stream-qr-text")).toBeDefined();
   });
 
@@ -2109,11 +2127,10 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(reveals(), "polls are not reveals").toBe(1);
     // The QR is encoded CLIENT-side from the payload itself, through the Seazn QR helper (T10, D7) — ONCE per payload
     // (m10): every poll is a fresh object off the wire, and an effect keyed on the object re-encoded the same symbol on
-    // each. Its size is TWICE §8a's painted cap, so the symbol stays crisp on a 2× screen (the SVG scales; the box, not
-    // this number, decides the painted size).
-    expect(seaznQr.renderSeaznQr).toHaveBeenCalledWith(qrText(QR), { size: 2 * sheetQrCap() });
+    // each. It is an SVG: the shared component, not this call, decides the painted size.
+    expect(seaznQr.renderSeaznQr.mock.calls[0]).toEqual([qrText(QR)]);
     expect(seaznQr.renderSeaznQr, "the same payload was re-encoded per poll").toHaveBeenCalledTimes(1);
-    expect(bodyOf(island).qrDataUrl).toBe(`data:image/svg+xml;charset=utf-8,len${qrText(QR).length}`);
+    expect(bodyOf(island).qrImage).toEqual({ src: `data:image/svg+xml;charset=utf-8,len${qrText(QR).length}`, modules: 113 });
     const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     bodyOf(island).onCopy();
@@ -2125,17 +2142,17 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     // previous session's symbol under the new session's paste code.
     const QR2: CaptureQrV1 = { ...QR, sid: "7d1e2f3a-4b5c-4d6e-8f70-819203a4b5c6" };
     expect(qrText(QR2), "premise: the two payloads differ").not.toBe(qrText(QR));
-    let answer: (url: string) => void = () => {};
-    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise<string>((resolve) => { answer = resolve; }));
+    let answer: (qr: SeaznQr) => void = () => {};
+    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise<SeaznQr>((resolve) => { answer = resolve; }));
     s.current = session({ id: "s2", qr: QR2 });
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
     await settle();
     expect(reveals(), "a new session's QR is a new disclosure").toBe(3);
-    expect(seaznQr.renderSeaznQr).toHaveBeenLastCalledWith(qrText(QR2), { size: 2 * sheetQrCap() });
-    expect(bodyOf(island).qrDataUrl, "s1's symbol was painted over s2's payload").toBeNull();
-    answer("data:image/png;base64,S2");
+    expect(seaznQr.renderSeaznQr).toHaveBeenLastCalledWith(qrText(QR2));
+    expect(bodyOf(island).qrImage, "s1's symbol was painted over s2's payload").toBeNull();
+    answer({ src: "data:image/png;base64,S2", modules: 113 });
     await settle();
-    expect(bodyOf(island).qrDataUrl).toBe("data:image/png;base64,S2");
+    expect(bodyOf(island).qrImage).toEqual({ src: "data:image/png;base64,S2", modules: 113 });
   });
 
   it("m5: a clipboard that REFUSES is neither a reveal nor 'Copied'", async () => {

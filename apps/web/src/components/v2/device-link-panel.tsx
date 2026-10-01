@@ -16,9 +16,13 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
 import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
-import { renderSeaznQr } from "@/lib/seazn-qr";
+import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import { officialLabelKey } from "@/lib/official-label";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+
+/** The Remote scoring QR's cap, CSS px: four px per module for today's 71-byte pad URL (v8, 57 modules with the quiet
+ *  zone: 228). The painted size is the frame snapped to whole device px per module (B6 fix round 1, ruling I-2). */
+const DLINK_QR_MAX_PX = 240;
 
 interface ActiveLink {
   id: string;
@@ -51,7 +55,7 @@ export function DeviceLinkPanel({
 }) {
   const msg = useMsg();
   const [active, setActive] = useState<ActiveLink | null>(null);
-  const [minted, setMinted] = useState<{ secret: string; qr: string; expires_at: string | null } | null>(null);
+  const [minted, setMinted] = useState<{ secret: string; qr: SeaznQr; expires_at: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [paywall, setPaywall] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -93,7 +97,7 @@ export function DeviceLinkPanel({
 
   async function showLink(link: ActiveLink & { secret: string }) {
     const url = `${window.location.origin}/score/${link.secret}`;
-    const qr = await renderSeaznQr(url, { size: 280 });
+    const qr = await renderSeaznQr(url);
     setMinted({ secret: link.secret, qr, expires_at: link.expires_at });
   }
 
@@ -242,7 +246,7 @@ export function DeviceLinkPanel({
               outright (no children, no src). The QR's class is the shared
               component's, applied because it is `sensitive` — on the inline
               image and on the tap-to-enlarge overlay (D10). */}
-          <SeaznQrImage testId="dlink-qr" sensitive src={minted.qr} alt={msg("dlink.alt")} className="mx-auto h-56 w-56" />
+          <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={DLINK_QR_MAX_PX} />
           <p
             data-testid="device-link-url"
             className="ph-no-capture break-all rounded bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500"

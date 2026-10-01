@@ -43,7 +43,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import { DestinationWarning, SignalChain } from "./stream-signal-chain";
-import { SeaznQrImage } from "./seazn-qr-image";
+import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
 import type { MessageKey } from "@/lib/messages";
@@ -52,7 +52,7 @@ import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
 import { chainFor } from "@/lib/stream-chain";
-import { renderSeaznQr } from "@/lib/seazn-qr";
+import { renderSeaznQr, seaznQrModules, type SeaznQr } from "@/lib/seazn-qr";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
 } from "@/lib/stream-credit-packs";
@@ -675,10 +675,14 @@ export function FixtureStreamPanel({
 // every state is a function of its props). Destinations are managed in Directory → Streaming (T8, D1): the tab only
 // PICKS one, and links there.
 
-/** §8a's QR box (amended 2026-09-30, spec §7): 320 CSS px of symbol + its `p-3` twice + its 1-px border twice. The
- *  paste-code field takes the SAME class, which is what "the QR box's own width, not the card's" means — two elements
- *  that cannot drift apart. The symbol's EC level, quiet zone and logo are `lib/seazn-qr`'s (§8a's `QR encoding` row). */
-const QR_COLUMN_W = "w-full max-w-[346px]";
+/** §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling I-2): 3 × 121 CSS px — three px per module for every
+ *  capture payload up to v24 (121 modules with the quiet zone), so desktop stays ≥ 320 (spec §7) at a whole scale.
+ *  The painted size is the box snapped to whole device px per module: 339 for today's v22 payload. */
+const STREAM_QR_MAX_PX = 363;
+/** §8a's QR box: the cap + its `p-3` twice + its 1-px border twice. The paste-code field takes the SAME class, which is
+ *  what "the QR box's own width, not the card's" means — two elements that cannot drift apart. The symbol's EC level,
+ *  quiet zone and logo are `lib/seazn-qr`'s (§8a's `QR encoding` row). */
+const QR_COLUMN_W = "w-full max-w-[389px]";
 
 /** The org's destinations as the picker knows them (spec §3.3): a failed read is an ERROR with Retry, never "none" —
  *  "none" told an organiser with five saved destinations to go and add one. */
@@ -794,7 +798,7 @@ export function PhoneTab({
   // m2: the server refused a create for want of credits — the page's balance is stale, so this tab reads 0 until the
   // next page load (a checkout return is one).
   const [noCredits, setNoCredits] = useState(false);
-  const [qrImage, setQrImage] = useState<{ text: string; url: string } | null>(null);
+  const [qrImage, setQrImage] = useState<{ text: string; qr: SeaznQr } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showBuy, setShowBuy] = useState(false);
   // N2: one Checkout Session per sheet. Held from the tap until the sheet closes or the attempt is refused — a ref, so a
@@ -897,10 +901,10 @@ export function PhoneTab({
       void read(true).catch(() => {});
     }
     let cancelled = false;
-    // Twice §8a's 320 CSS px, so the symbol stays crisp on a 2× screen (the SVG scales; the box decides the painted size).
-    void renderSeaznQr(qrPayload, { size: 640 })
-      .then((url) => {
-        if (!cancelled) setQrImage({ text: qrPayload, url });
+    // An SVG: it scales, and the box decides the painted size (snapped to whole device px per module, §8a).
+    void renderSeaznQr(qrPayload)
+      .then((qr) => {
+        if (!cancelled) setQrImage({ text: qrPayload, qr });
       })
       .catch(() => {
         // the paste code below the box is always rendered (§8a), so a failed encode still leaves a way in
@@ -911,7 +915,7 @@ export function PhoneTab({
   }, [qrPayload, sessionId, read]);
   // Only the image of THIS payload: until the encoder answers for a new one, the box is the placeholder, never the
   // previous session's symbol under the new session's paste code.
-  const qrDataUrl = qrImage && qrImage.text === qrPayload ? qrImage.url : null;
+  const qrSymbol = qrImage && qrImage.text === qrPayload ? qrImage.qr : null;
 
   // C1: with a session, the projection's `balance` is the fresher number. With NO session there is no projection at
   // all, so the server-resolved one is the only source — unless the server has since refused for want of credits (m2).
@@ -1028,7 +1032,7 @@ export function PhoneTab({
         createError={createError}
         checkoutError={checkoutError}
         selectedTargetId={selectedTargetId}
-        qrDataUrl={qrDataUrl}
+        qrImage={qrSymbol}
         now={session.now}
         copied={copied}
         showBuy={showBuy}
@@ -1115,7 +1119,8 @@ export interface PhoneTabBodyProps {
   createError: CreateError | null;
   checkoutError: CheckoutError | null;
   selectedTargetId: string | null;
-  qrDataUrl: string | null;
+  /** The stream QR, once the browser has encoded it for THIS payload (never the previous session's). */
+  qrImage: SeaznQr | null;
   now: Date;
   copied: boolean;
   showBuy: boolean;
@@ -1517,21 +1522,19 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         // §8a: ONE CENTRED COLUMN — the QR box, then the paste code at the box's own width, the caption and Cancel.
         <div data-testid="stream-qr-column" className="mt-3 flex flex-col items-center gap-2 text-center">
           <div data-testid="stream-qr-box" className={`${QR_COLUMN_W} rounded-lg border border-purple-100 bg-white p-3`}>
-            {p.qrDataUrl ? (
+            {p.qrImage ? (
               // A data: URL encoded in the browser, never in page HTML — through the shared Seazn QR (D7, D10): tap to
               // enlarge, and `sensitive` because it paints the capture credentials (D10a).
               <SeaznQrImage
                 testId="stream-qr"
                 sensitive
-                src={p.qrDataUrl}
+                qr={p.qrImage}
                 alt={msg("stream.phone.qr.alt")}
-                className="mx-auto block aspect-square h-auto w-[min(320px,100%)]"
+                maxSize={STREAM_QR_MAX_PX}
               />
             ) : (
-              <div
-                aria-hidden
-                className="mx-auto aspect-square w-[min(320px,100%)] animate-pulse rounded bg-slate-100 motion-reduce:animate-none"
-              />
+              // The QR's own square and caption line, so the box keeps its size when the symbol lands (review m-7).
+              <SeaznQrPlaceholder maxSize={STREAM_QR_MAX_PX} modules={p.view?.qr ? seaznQrModules(qrText(p.view.qr)) : null} />
             )}
           </div>
           {p.view?.qr && (
