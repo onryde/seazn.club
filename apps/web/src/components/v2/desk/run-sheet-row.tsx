@@ -521,7 +521,9 @@ export function RunSheetRow({
             `md:hidden` paragraph below simply renders `display:none` there
             and takes no space. `min-w-0` down to the truncated paragraph,
             same discipline the entrant column above already carries. */}
-        <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 md:contents">
+        {/* B3 re-review N-1: `max-md:flex-wrap` — at 320 the French waiting chip ("En attente du téléphone") plus the
+            action pass line 2 by 16 px; the action wraps under the chip instead of squeezing past the row's edge. */}
+        <div data-row-line="2" className="flex min-w-0 items-center justify-between gap-2 max-md:flex-wrap md:contents">
           <p className="min-w-0 flex-1 truncate text-xs text-slate-500 md:hidden">{phoneLineTwo}</p>
           {/* Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; a session that is up shows HERE as a
               chip — "● Live" or "● Waiting for phone" — linking to that page with the panel open. At every fixture
@@ -547,8 +549,9 @@ export function RunSheetRow({
             </Link>
           )}
           {/* The ONE action — a plain link for every kind except `set_time`,
-              which toggles the inline editor below (≥44px either way). */}
-          <div className="flex flex-wrap items-center gap-2 md:contents">
+              which toggles the inline editor below (≥44px either way). `max-md:ml-auto`: when line 2 wraps (N-1)
+              the action keeps the right edge it has on one line. */}
+          <div className="flex flex-wrap items-center gap-2 max-md:ml-auto md:contents">
             {action.kind === "set_time" ? (
               <button
                 type="button"
