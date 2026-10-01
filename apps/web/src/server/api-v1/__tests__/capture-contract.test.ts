@@ -195,7 +195,7 @@ type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
   "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 30 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 32 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 35 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
 };
 
@@ -323,7 +323,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 30 + 32 + 18);
+    expect(total).toBe(12 + 30 + 35 + 18);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
   });
 
@@ -453,6 +453,36 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const beat = fixture("capture-beat.v1", "beat-valid");
     expect(String(beat.at)).toMatch(/Z$/);
     expect(parses(S.CaptureBeat, beat)).toBe(true);
+    // RFC 3339 `date-time` (the file's `format`) requires seconds: a minute-only value is refused by the twin AND by
+    // the file with formats asserted. Before this pin zod admitted it while the vendored file refused it.
+    const fileAdmits = fileValidator();
+    const noSeconds = fixture("capture-beat.v1", "beat-invalid-at-no-seconds");
+    expect(noSeconds.at).toBe("2026-10-01T13:40Z");
+    expect(without(noSeconds, "at"), "premise: differs from beat-valid in `at` alone").toEqual(without(beat, "at"));
+    expect(parses(S.CaptureBeat, noSeconds), "the twin refuses a minute-only at").toBe(false);
+    expect(fileAdmits(BEAT, "", noSeconds), "the file refuses a minute-only at").toBe(false);
+    // …while fractional seconds stay ADMITTED on both sides (RFC 3339 time-secfrac is optional, any length): the
+    // vendored millisecond fixtures, with Z and with an offset, each differ from beat-valid in `at` alone.
+    let fractions = 0;
+    const millis: [name: string, at: string][] = [
+      ["beat-valid-at-millis-z", "2026-10-01T13:40:00.123Z"], ["beat-valid-at-millis-offset", "2026-10-01T14:40:00.123+01:00"],
+    ];
+    for (const [name, at] of millis) {
+      const f = fixture("capture-beat.v1", name);
+      expect(f.at, `${name}: premise`).toBe(at);
+      expect(without(f, "at"), `${name}: premise — only at differs`).toEqual(without(beat, "at"));
+      expect(parses(S.CaptureBeat, f), `twin: ${name}`).toBe(true);
+      expect(fileAdmits(BEAT, "", f), `file: ${name}`).toBe(true);
+      fractions++;
+    }
+    expect(fractions).toBe(2);
+    let admitted = 0;
+    for (const at of ["2026-10-01T13:40:00Z", "2026-10-01T13:40:00.5Z", "2026-10-01T13:40:00.123456789Z", "2026-10-01T15:30:00+05:30"]) {
+      expect(parses(S.CaptureBeat, { ...beat, at }), `twin: ${at}`).toBe(true);
+      expect(fileAdmits(BEAT, "", { ...beat, at }), `file: ${at}`).toBe(true);
+      admitted++;
+    }
+    expect(admitted).toBe(4);
   });
 
   it("strictness survives .extend()/.partial(): each answer branch refuses its one extra key, and parses without it", () => {

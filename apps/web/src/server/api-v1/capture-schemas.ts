@@ -82,6 +82,13 @@ export type CaptureSession = z.infer<typeof CaptureSession>;
 export const CaptureDescriptor = z.discriminatedUnion("state", [CaptureWaiting, Warming, Live, Ending, Completed, Failed]);
 export type CaptureDescriptor = z.infer<typeof CaptureDescriptor>;
 
+/** The beat's `at`. R5 (final): any offset accepted; the server normalises to UTC; the phone sends Z. RFC 3339
+ *  `date-time` (the published file's `format`) REQUIRES seconds, a fraction of any length optional; zod's iso.datetime
+ *  without a precision also admits a minute-only `HH:MM`, and `precision` cannot say "seconds, any fraction". So a
+ *  refine closes exactly that gap. A refine is not exported to JSON Schema, so the contract bytes do not move. */
+const HAS_SECONDS = /T\d{2}:\d{2}:\d{2}/;
+const BeatAt = z.iso.datetime({ offset: true }).refine((s) => HAS_SECONDS.test(s), { message: "RFC 3339 date-time requires seconds" });
+
 export const CaptureBeat = z.strictObject({
   code: Code,
   slot: z.number().int().min(0),
@@ -89,7 +96,7 @@ export const CaptureBeat = z.strictObject({
   claim: z.enum(["new", "resume"]).nullable(),
   device: z.strictObject({ model: z.string().min(1).max(80) }).nullable(),
   sid: z.uuid().nullable(),
-  at: z.iso.datetime({ offset: true }),   // R5 (final): any offset accepted; the server normalises to UTC; the phone sends Z
+  at: BeatAt,
   state: CapturePhoneState,
   cause: CaptureCause.nullable(),
   notReady: CaptureNotReady.nullable(),
