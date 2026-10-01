@@ -11,6 +11,7 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, oneAtATime, runQueue, sharedTurns } from "../lib/workers.ts";
+import { deferred, handClock } from "./hand-clock.ts";
 
 /** A deadline no task in these tests comes near: they settle in microtasks. */
 const ROOMY_MS = 60_000;
@@ -112,22 +113,69 @@ describe("runQueue — an abort stops the queue (the run's environment refusals)
   });
 });
 
-describe("runQueue — rule 10: interleaved completions, crashes, aborts and worker counts", () => {
+// Fix round 4 (ruling T12-R5): the run's turns trip the moment a deadline
+// fires, but the timed-out case reaches `crashed` (which aborts the queue)
+// only after it has closed its DB handles — real I/O. A lane that freed up in
+// between took the next item. `halted` is the queue's abort flag read from
+// the trip itself. Transitions, empty case first: a halt that never answers
+// (nothing changes); a halt raised while items are in flight (no lane takes
+// another, the in-flight finish, the queue rejects with the halt); a halt
+// raised after the last item was taken (nothing left to take, and the queue
+// still rejects — a halted run never reads as a finished one).
+describe("runQueue — a halt stops the queue before an abort reaches it (T12-R5)", () => {
+  it("empty case first: a halt that never answers changes nothing — every item runs once, in plan order, and it was asked before each take", async () => {
+    let asked = 0;
+    const out = await runQueue([0, 1, 2, 3], 2, async () => null, async (_w, x) => { await yields(x); return x; }, () => -1, () => { asked++; return null; });
+    expect(out).toEqual([0, 1, 2, 3]);
+    expect(asked).toBeGreaterThanOrEqual(4);
+  });
+  it("once it answers, no lane takes another item: the item in flight finishes, and runQueue rejects with the halt's answer", async () => {
+    const started: number[] = [];
+    const finished: number[] = [];
+    const trip = new Error("the run's turns tripped");
+    const halt: { now: Error | null } = { now: null };
+    const p = runQueue([0, 1, 2, 3, 4, 5], 2, async () => null, async (_w, x, i) => {
+      started.push(i);
+      // Raised while item 0 is still in flight, before either lane takes again.
+      if (i === 1) halt.now = trip;
+      await yields(i === 0 ? 6 : 1);
+      finished.push(i);
+      return x;
+    }, () => -1, () => halt.now);
+    await expect(p).rejects.toBe(trip);
+    expect(started).toEqual([0, 1]);
+    expect(finished).toEqual([1, 0]);
+  });
+  it("a halt raised after the last item was taken leaves nothing to stop, and the queue still rejects with it", async () => {
+    const trip = new Error("tripped at the end");
+    const halt: { now: Error | null } = { now: null };
+    const ran: number[] = [];
+    const p = runQueue([0, 1], 2, async () => null, async (_w, x, i) => { ran.push(i); if (i === 1) halt.now = trip; await yields(2); return x; }, () => -1, () => halt.now);
+    await expect(p).rejects.toBe(trip);
+    expect(ran).toEqual([0, 1]);
+  });
+});
+
+describe("runQueue — rule 10: interleaved completions, crashes, aborts, halts and worker counts", () => {
   // One generated run: n items, w workers, each item a number of yields (its
-  // completion order), a subset that throw, and optionally one whose crash
-  // aborts. Invariants after EVERY step (each item start and finish), and on
-  // the outcome. Reach counts below prove each shape was exercised.
+  // completion order), a subset that throw, optionally one whose crash
+  // aborts, and optionally one that raises the halt mid-item (fix round 4,
+  // T12-R5: the run's turns tripped while it was in flight). Invariants after
+  // EVERY step (each item start and finish), and on the outcome. Reach counts
+  // below prove each shape was exercised.
   const shape = fc.record({
     items: fc.array(fc.record({ yields: fc.nat({ max: 8 }), fails: fc.boolean() }), { minLength: 0, maxLength: 20 }),
     workers: fc.integer({ min: 1, max: MAX_WORKERS }),
     abortAt: fc.option(fc.nat({ max: 19 }), { nil: null }),
+    haltAt: fc.option(fc.nat({ max: 19 }), { nil: null, freq: 2 }),
   });
 
-  it("results come back in plan order, every item runs exactly once, crashes map through crashed, and an abort stops the queue — reach counted", async () => {
-    const reach = { runs: 0, empty: 0, items: 0, crashes: 0, aborts: 0, outOfOrder: 0, concurrent: 0, fewerItemsThanWorkers: 0 };
-    await fc.assert(fc.asyncProperty(shape, async ({ items, workers, abortAt }) => {
+  it("results come back in plan order, every item runs exactly once, crashes map through crashed, and an abort or a halt stops the queue — reach counted", async () => {
+    const reach = { runs: 0, empty: 0, items: 0, crashes: 0, aborts: 0, halts: 0, haltsThatStoppedATake: 0, outOfOrder: 0, concurrent: 0, fewerItemsThanWorkers: 0 };
+    await fc.assert(fc.asyncProperty(shape, async ({ items, workers, abortAt, haltAt }) => {
       const n = items.length;
       const abortIndex = abortAt !== null && abortAt < n && items[abortAt]!.fails ? abortAt : null;
+      const haltIndex = haltAt !== null && haltAt < n ? haltAt : null;
       const runs = new Array<number>(n).fill(0);
       const crashedAt = new Array<number>(n).fill(0);
       const finishOrder: number[] = [];
@@ -136,7 +184,10 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
       let maxActive = 0;
       let abortRaised = false;
       let startedAfterAbort = 0;
+      let haltRaised = false;
+      let startedAfterHalt = 0;
       const abortError = new Error("abort");
+      const haltError = new Error("halt");
       const step = (): void => {
         // After every step: never more items in flight than workers, and never an item run twice.
         expect(active).toBeLessThanOrEqual(workers);
@@ -144,11 +195,13 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
       };
       const outcome = await runQueue(items, workers, async (w) => { opened.push(w); return w; }, async (_w, item, i) => {
         if (abortRaised) startedAfterAbort++;
+        if (haltRaised) startedAfterHalt++;
         runs[i]!++;
         active++;
         maxActive = Math.max(maxActive, active);
         step();
         await yields(item.yields);
+        if (i === haltIndex) haltRaised = true;
         active--;
         finishOrder.push(i);
         step();
@@ -160,14 +213,16 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
         expect(item).toBe(items[i]);
         if (i === abortIndex) { abortRaised = true; throw abortError; }
         return `crashed ${i}`;
-      }).then((r) => ({ ok: true as const, r }), (e: unknown) => ({ ok: false as const, e }));
+      }, () => (haltRaised ? haltError : null)).then((r) => ({ ok: true as const, r }), (e: unknown) => ({ ok: false as const, e }));
 
       // Never more workers opened than the bound or the items, and each opened once.
       expect(opened.length).toBeLessThanOrEqual(Math.min(workers, n));
       expect(new Set(opened).size).toBe(opened.length);
       expect(active).toBe(0); // every started item finished before runQueue settled
       expect(startedAfterAbort).toBe(0);
-      if (abortIndex === null) {
+      // T12-R5: no item starts once the halt is raised, whichever lane frees up next.
+      expect(startedAfterHalt).toBe(0);
+      if (!abortRaised && !haltRaised) {
         expect(outcome.ok).toBe(true);
         if (!outcome.ok) return false;
         expect(opened.length).toBe(Math.min(workers, n));
@@ -180,11 +235,16 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
       } else {
         expect(outcome.ok).toBe(false);
         if (outcome.ok) return false;
-        expect(outcome.e).toBe(abortError);
+        // Whichever stopped the queue is what it rejects with (both raised: either).
+        expect(abortRaised && haltRaised ? [abortError, haltError] : [abortRaised ? abortError : haltError]).toContain(outcome.e);
         // An abort never re-runs an item, and never runs the aborting one twice.
         expect(runs.every((r) => r <= 1)).toBe(true);
-        expect(runs[abortIndex]).toBe(1);
-        reach.aborts++;
+        if (abortRaised) { expect(runs[abortIndex!]).toBe(1); reach.aborts++; }
+        if (haltRaised) {
+          reach.halts++;
+          // The shape that matters: items were left, and only the halt kept them from starting.
+          if (!abortRaised && runs.some((r) => r === 0)) reach.haltsThatStoppedATake++;
+        }
       }
       reach.runs++;
       reach.items += n;
@@ -195,6 +255,7 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
       return true;
     }), { numRuns: 300, seed: Number(process.env.MATRIX_FC_SEED ?? 20261001) });
     // Anti-vacuity: every shape the property claims to cover was reached.
+    console.info(`runQueue sweep: ${JSON.stringify(reach)}`);
     expect(reach.runs).toBe(300);
     for (const [k, v] of Object.entries(reach)) expect(v, `reach.${k}`).toBeGreaterThan(0);
   });
@@ -334,18 +395,55 @@ describe("sharedTurns / oneAtATime — m-2 + T12-R3: a task past its deadline fa
     // A second family is untouched: each run gets its own.
     expect(await sharedTurns(1_000).lock("other run")(async () => "free")).toBe("free");
   });
+  // Fix round 4: the clock seam itself. Transitions, empty case first: a turn
+  // that settles (one deadline set, at the family's ms, then cleared); a turn
+  // that hangs (its deadline is the one live timer, and firing it trips the
+  // family by name); a task queued behind it (refused, and it sets no timer).
+  it("fix round 4: a family's deadlines run on the clock it is given — set at its deadline when a turn begins, cleared when the task settles, and firing one by hand trips the family with no wall time passing", async () => {
+    const hc = handClock();
+    const turns = sharedTurns(1_000, hc.clock);
+    const lock = turns.lock("staff window");
+    expect(await lock(async () => "ok")).toBe("ok");
+    expect(hc.timers.map((t) => t.ms)).toEqual([1_000]);
+    expect(hc.live()).toEqual([]);
+    const began = deferred();
+    const hung = lock(() => { began.resolve(); return never<string>(); }).catch((e: unknown) => e);
+    let queuedRan = false;
+    const queued = lock(async () => { queuedRan = true; return "never admitted"; }).catch((e: unknown) => e);
+    await began.promise;
+    expect(hc.live().map((t) => t.ms)).toEqual([1_000]);
+    expect(turns.tripped()).toBeNull();
+    hc.fireTheOne();
+    const e = await hung;
+    expect(e).toBeInstanceOf(TurnDeadlineExceeded);
+    expect(e).toMatchObject({ label: "staff window", ms: 1_000 });
+    expect(turns.tripped()).toBe(e);
+    expect(await queued).toBeInstanceOf(TurnsClosed);
+    expect(queuedRan).toBe(false);
+    expect(hc.timers).toHaveLength(2);
+    expect(hc.live()).toEqual([]);
+  });
+  // Fix round 4: the deadline is fired by hand once the hung turn has begun,
+  // so no 40ms timer decides anything (the order here was already FIFO and
+  // microtask-only; now the trip is too).
   it("on three workers sharing one lock, a hung turn closes it: no task queued behind it or called after it runs, each is refused by name, and the queue aborts on the first", async () => {
-    const turns = sharedTurns(40);
+    const hc = handClock();
+    const turns = sharedTurns(40, hc.clock);
     const lock = turns.lock("staff window");
     const items = [0, 1, 2, 3, 4, 5, 6];
     const HUNG = 2;
     const ran: number[] = [];
     const refusedItems: number[] = [];
-    const err = await runQueue(
+    const hungBegan = deferred();
+    const queue = runQueue(
       items, 3, async (n) => n,
-      async (_w, item) => lock(async () => { if (item === HUNG) return never<string>(); ran.push(item); await yields(2); return `done ${item}`; }),
+      async (_w, item) => lock(async () => { if (item === HUNG) { hungBegan.resolve(); return never<string>(); } ran.push(item); await yields(2); return `done ${item}`; }),
       (item, _i, e) => { if (e instanceof TurnsClosed) refusedItems.push(item); throw e; },
     ).catch((e: unknown) => e);
+    await hungBegan.promise;
+    expect(turns.tripped()).toBeNull();
+    hc.fireTheOne();
+    const err = await queue;
     // The first error to reach the queue is the deadline or a refusal it caused; either names the hung turn.
     const named = err instanceof TurnsClosed ? err.tripped : err;
     expect(named).toBeInstanceOf(TurnDeadlineExceeded);

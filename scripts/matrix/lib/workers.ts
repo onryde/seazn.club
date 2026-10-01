@@ -12,6 +12,16 @@
 // is left running behind the rejection, so the caller may release what the
 // workers share (the DB handle, the browser) as soon as it settles.
 //
+// `halted` (fix round 4, ruling T12-R5) is the abort flag read from outside:
+// it is asked before every item is taken, and once it answers (non-null) no
+// worker takes another — the queue aborts with that answer, exactly as if
+// `crashed` had thrown it. The run asks whether its shared turns tripped,
+// which is recorded the moment a deadline fires: an abort that waits for the
+// timed-out item's own `crashed` arrives only after that item has closed its
+// DB handles (real I/O), and a worker that freed up in between took the next
+// item. A queue halted before it settles rejects even when nothing was left
+// to take: a halted run never reads as a finished one.
+//
 // MAX_WORKERS is the local-env bound: the prod DB budget note is 60
 // connections, and each worker's cases open their requests serially. The
 // next wave may raise it inside a shard.
@@ -32,16 +42,24 @@ export async function runQueue<W, T, R>(
   open: (n: number) => Promise<W>,
   run: (w: W, item: T, index: number) => Promise<R>,
   crashed: (item: T, index: number, error: unknown) => R,
+  halted: () => unknown = () => null,
 ): Promise<R[]> {
   if (!Number.isInteger(workers) || workers < 1 || workers > MAX_WORKERS) throw new WorkersOutOfRange(workers);
   const out = new Array<R>(items.length);
   // A holder, not two `let`s: both are written inside the lanes, and a `let`
   // assigned only in a closure narrows to its initial value out here.
   const q: { next: number; abort: { error: unknown } | null } = { next: 0, abort: null };
+  const halt = (): boolean => {
+    const h = halted();
+    if (h === null || h === undefined) return false;
+    q.abort ??= { error: h };
+    return true;
+  };
   const lane = async (n: number): Promise<void> => {
     try {
       const w = await open(n);
       while (q.abort === null && q.next < items.length) {
+        if (halt()) break;
         const i = q.next++;
         try { out[i] = await run(w, items[i], i); } catch (e) { out[i] = crashed(items[i], i, e); }
       }
@@ -50,6 +68,7 @@ export async function runQueue<W, T, R>(
     }
   };
   await Promise.all(Array.from({ length: Math.min(workers, items.length) }, (_, n) => lane(n)));
+  if (q.abort === null) halt();
   if (q.abort !== null) throw q.abort.error;
   return out;
 }
@@ -83,6 +102,21 @@ export class TurnsClosed extends Error {
   }
 }
 
+/** The clock a family's deadlines run on (fix round 4, re-review 1 I-1):
+ *  the platform's timers unless a test drives its own, so an abort test
+ *  fires the deadline by hand instead of racing it. */
+export interface TurnClock {
+  setTimeout(fire: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+/** The platform's timers, looked up at each call — so a test that fakes the
+ *  global timers (vi.useFakeTimers) still drives a family built without a clock. */
+export const PLATFORM_CLOCK: TurnClock = {
+  setTimeout: (fire, ms) => setTimeout(fire, ms),
+  clearTimeout: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>); },
+};
+
 /** The run's shared turns: one deadline, any number of locks. */
 export interface SharedTurns {
   readonly deadlineMs: number;
@@ -106,7 +140,7 @@ export interface SharedTurns {
  *  its turns times out, every lock in the family refuses each task whose turn
  *  has not begun (TurnsClosed), and the task never runs. A turn already
  *  running on another lock was admitted first: it finishes. */
-export function sharedTurns(deadlineMs: number): SharedTurns {
+export function sharedTurns(deadlineMs: number, clock: TurnClock = PLATFORM_CLOCK): SharedTurns {
   if (!Number.isInteger(deadlineMs) || deadlineMs < 1) throw new RangeError(`sharedTurns: the deadline must be a positive whole number of ms, got ${deadlineMs}`);
   // A holder, not a `let`: it is written inside a timer callback.
   const family: { trip: TurnDeadlineExceeded | null } = { trip: null };
@@ -117,9 +151,9 @@ export function sharedTurns(deadlineMs: number): SharedTurns {
         // Fail closed: no turn is admitted after the family tripped.
         if (family.trip !== null) throw new TurnsClosed(label, family.trip);
         // The clock starts when the task's turn does, never when it queued.
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timer: unknown;
         const deadline = new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
+          timer = clock.setTimeout(() => {
             const e = new TurnDeadlineExceeded(label, deadlineMs);
             // Tripped BEFORE the caller hears of it, so nothing queued slips in.
             family.trip ??= e;
@@ -128,7 +162,7 @@ export function sharedTurns(deadlineMs: number): SharedTurns {
         });
         // `then(task)` turns a synchronous throw into this task's rejection; a
         // settled task clears its timer, so none outlives the run.
-        return Promise.race([Promise.resolve().then(task), deadline]).finally(() => { clearTimeout(timer); });
+        return Promise.race([Promise.resolve().then(task), deadline]).finally(() => { clock.clearTimeout(timer); });
       });
       // The chain waits for this task to SETTLE, never to succeed: a rejection
       // must not stall every task queued behind it.

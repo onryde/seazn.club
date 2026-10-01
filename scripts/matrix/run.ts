@@ -130,7 +130,7 @@ import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkCellFilter, checkSliceFil
 import { W1_DRIVING_SET, w1DrivingPlanner } from "./lib/w1-driving-set.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
-import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, runQueue, sharedTurns, type SharedTurns } from "./lib/workers.ts";
+import { MAX_WORKERS, PLATFORM_CLOCK, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, runQueue, sharedTurns, type SharedTurns, type TurnClock } from "./lib/workers.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -926,7 +926,13 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       }
     };
     try {
-      cases.push(...await runQueue(items, cli.workers, open, runOne, crashed));
+      // T12-R5: the queue's abort flag is the trip itself, recorded the moment
+      // a deadline fires. The timed-out case's own abort reaches the queue only
+      // after realDeps has closed its DB handles (real I/O); a lane that freed
+      // up in between took the next item, inserted its org and switched its
+      // session before the window refused it — and "no later case started"
+      // was false. From the trip on, no lane takes another item.
+      cases.push(...await runQueue(items, cli.workers, open, runOne, crashed, () => turns.tripped()));
     } catch (e) {
       // T12-R3: a turn timeout aborts the run but keeps the cases that
       // finished, in plan order, and names the holder. A turn error that names
@@ -1098,7 +1104,9 @@ export const TURN_REQUESTS = 2;
  *  request. */
 export const TURN_DEADLINE_MS = TURN_REQUESTS * REQUEST_TIMEOUT_MS;
 
-export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TURN_DEADLINE_MS): RunDeps {
+/** `clock` (fix round 4): the deadline's timers — the platform's, unless a
+ *  test fires them by hand. */
+export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TURN_DEADLINE_MS, clock: TurnClock = PLATFORM_CLOCK): RunDeps {
   // W1-driving T11, found live (w1drv-t11-w3): provisionPlan's entitlement
   // bust flips the case org's owner — the run's ONE owner, whichever worker
   // seeds the org — to staff for two admin calls, then back. Two workers'
@@ -1109,7 +1117,7 @@ export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TU
   // deadline, its request may still land in the next holder's window, so the
   // turns close and the run aborts naming that case (execute) — no red is
   // filed against it, and no further turn is admitted.
-  const turns = sharedTurns(turnDeadlineMs);
+  const turns = sharedTurns(turnDeadlineMs, clock);
   const ownerStaffWindow = turns.lock("case-org provision (the owner's staff window)");
   return {
     env: process.env,

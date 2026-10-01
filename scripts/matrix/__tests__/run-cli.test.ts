@@ -28,6 +28,7 @@ import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
 import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, sharedTurns } from "../lib/workers.ts";
+import { deferred, handClock } from "./hand-clock.ts";
 import { W1_DRIVING_SET } from "../lib/w1-driving-set.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -1287,16 +1288,25 @@ describe("realDeps wiring (Task 7 M3)", () => {
   // provision's window, as that case's 401. So the turns fail closed: the
   // provision queued behind it is refused by name and never reaches the admin
   // route. (Round 1's "the other provision then runs and succeeds" is gone.)
-  it("a case-org provision that hangs inside the staff window rejects by name at the deadline, and the provision queued behind it is refused (TurnsClosed) without reaching the admin route", async () => {
+  // Fix round 4: the 150ms deadline used to decide whether the second
+  // provision was queued behind the hung one or arrived after the trip. It is
+  // now fired by hand the moment the second is called, before its org switch
+  // can answer, so the second always reaches the window AFTER the trip. (The
+  // queued-behind refusal is workers.test.ts', on the same lock code.)
+  it("a case-org provision that hangs inside the staff window rejects by name at the deadline, and a provision that reaches the window after the trip is refused (TurnsClosed) without reaching the admin route", async () => {
     const lb = await provisionLoopback((o) => o === "o-m-h-1");
     try {
-      const real = realDeps(lb.f, 150);
+      const hc = handClock();
+      const real = realDeps(lb.f, 150, hc.clock);
       expect(real.turns?.deadlineMs).toBe(150);
       const ctx = { base: lb.base, session: { cookies: {} }, userId: "u1", plan: "pro" };
       const first = real.prepareCaseOrg(ctx, { name: "Matrix h 1", slug: "m-h-1" }).catch((e: unknown) => e);
       await lb.hungArrived;
-      // Queued behind the hung window, before the deadline trips it.
+      // Called while the window is held; it reaches the window only after its org switch answers.
       const second = real.prepareCaseOrg(ctx, { name: "Matrix h 2", slug: "m-h-2" }).catch((e: unknown) => e);
+      expect(real.turns?.tripped()).toBeNull();
+      expect(hc.live().map((t) => t.ms)).toEqual([150]);
+      hc.fireTheOne();
       const e1 = await first;
       expect(e1).toBeInstanceOf(TurnDeadlineExceeded);
       expect(e1).toMatchObject({ label: "case-org provision (the owner's staff window)", ms: 150 });
@@ -1306,6 +1316,11 @@ describe("realDeps wiring (Task 7 M3)", () => {
       expect(real.turns?.tripped()).toBe(e1);
       expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-h-1/entitlement-override"]);
       expect(lb.answered).toEqual([]);
+      // The second did reach the window: its org was switched to before the refusal.
+      expect(lb.switched).toEqual(["o-m-h-1", "o-m-h-2"]);
+      // The refused provision set no deadline of its own, and none is left live.
+      expect(hc.timers).toHaveLength(1);
+      expect(hc.live()).toEqual([]);
     } finally {
       await lb.close();
     }
@@ -2304,44 +2319,77 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
   // answers closes the run's turns at the deadline and aborts the run by name.
   // The results say why — worker 1's sign-in, no case — and keep every case
   // that finished; nothing is recorded against the timeout.
+  // Fix round 4: the 40ms deadline used to fire whenever it fired, so the
+  // split between kept, in-flight and never-started cases was whatever the
+  // clock made it (on an idle box worker 0 could finish all seven first,
+  // leaving "no case starts after the trip" nothing to witness). The deadline
+  // is now fired by hand while worker 0 is mid-scenario on its third case.
   it("a workers' sign-in that never answers aborts the run by name at the turn deadline (exit 3): results.json names worker 1's sign-in, keeps the cases that finished, and no case starts after the trip", async () => {
     const io = capture();
-    const turns = sharedTurns(40);
+    const hc = handClock();
+    const turns = sharedTurns(40, hc.clock);
     let n = 0;
     const late: string[] = [];
-    const d = workerDeps({ turns });
+    const stall = deferred();
+    const stallEntered = deferred();
+    const stalledPastTrip: boolean[] = [];
+    class Stalls extends FakeLeagueDriver {
+      override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
+        stallEntered.resolve();
+        await stall.promise;
+        stalledPastTrip.push(turns.tripped() !== null);
+        return super.createCompetition(i);
+      }
+    }
+    // Worker 0's third case stalls mid-scenario until the test lets it go.
+    const d = workerDeps({ turns, driverFor: (_b, _s, orgId) => (orgId === "org-m-wkh-3" ? new Stalls(orgId) : new FakeLeagueDriver(orgId)) });
     const signIn = d.signIn;
     // The first sign-in is worker 0's (before the owner proofs, outside the turns); the second is worker 1's turn.
     d.signIn = async (b, e) => (++n === 2 ? new Promise<Session>(() => {}) : signIn(b, e));
     const prepare = d.prepareCaseOrg;
     d.prepareCaseOrg = async (ctx, i) => { if (turns.tripped() !== null) late.push(i.slug); return prepare(ctx, i); };
     const dir = dirFor();
-    expect(await runSlice(d, ["--workers", "3", "--run-id", "wkh", "--report-dir", dir])).toBe(EXIT.ABORTED);
+    const run = runSlice(d, ["--workers", "3", "--run-id", "wkh", "--report-dir", dir]);
+    await stallEntered.promise;
+    // The one live deadline is worker 1's sign-in turn (worker 2's is queued behind it and has not begun).
+    expect(turns.tripped()).toBeNull();
+    hc.fireTheOne();
+    stall.resolve();
+    expect(await run).toBe(EXIT.ABORTED);
+    expect(stalledPastTrip).toEqual([true]);
     expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: workers' sign-in: held its turn past the 40ms deadline \(worker 1's sign-in\)/);
     const r = runIn(dir, "wkh");
-    expect(r.aborted).toMatchObject({ turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 1 });
-    // Worker 0 ran alone, in plan order: the cases it finished before the trip are kept as evidence, any it
-    // finished during the abort (T12-R4) are listed after them for a re-run — together, every case it started.
-    const kept = r.cases.map((c) => c.caseId);
-    expect([...kept, ...r.aborted!.inFlight]).toEqual(planIds.slice(0, d.orgs.length));
-    expect(r.aborted!.inFlight.length).toBeLessThanOrEqual(1);
+    // Worker 0 ran alone, in plan order: the two cases it finished before the trip are evidence; the third,
+    // mid-scenario at the trip, finished during the abort (T12-R4) and is listed for a re-run.
+    expect(r.aborted).toEqual({ turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 1, inFlight: [planIds[2]] });
+    expect(r.cases.map((c) => c.caseId)).toEqual(planIds.slice(0, 2));
     expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
+    // No case started after the trip: exactly the three it had begun ever had an org.
+    expect(d.orgs.map((o) => o.slug)).toEqual(["m-wkh-1", "m-wkh-2", "m-wkh-3"]);
     expect(late).toEqual([]);
+    expect(hc.live()).toEqual([]);
     expect(readFileSync(join(dir, "wkh", "MATRIX.md"), "utf8")).toContain("> **Run aborted** — `workers' sign-in` held its turn past the 40ms deadline (worker 1's sign-in).");
     expect(d.order.at(-1)).toBe("dispose");
   });
   // Ruling T12-R3, through the REAL provision wiring (realDeps' staff window
   // on a loopback server) and the real runner: one worker, so the plan order
   // is the run order and "no later item starts" is an exact count.
+  // Fix round 4: the deadline is fired by hand once case 3's admin call hangs.
+  // A real 100ms deadline could also time out cases 1 or 2's own provisions
+  // (two loopback calls each) on a loaded machine, naming the wrong case.
   it("T12-R3: a never-resolving provision turn aborts the run by name (exit 3) — the cases before it keep their results, the case it held gets none, and no later item starts", async () => {
     const io = capture();
     const inserted: string[] = [];
     const lb = await provisionLoopback((o) => o === "o-m-wkp-3", (slug) => { inserted.push(slug); });
     try {
-      const real = realDeps(lb.f, 100);
+      const hc = handClock();
+      const real = realDeps(lb.f, 100, hc.clock);
       const d = workerDeps({ prepareCaseOrg: real.prepareCaseOrg, turns: real.turns });
       const dir = dirFor();
-      expect(await runSlice(d, ["--workers", "1", "--base", lb.base, "--run-id", "wkp", "--report-dir", dir])).toBe(EXIT.ABORTED);
+      const run = runSlice(d, ["--workers", "1", "--base", lb.base, "--run-id", "wkp", "--report-dir", dir]);
+      await lb.hungArrived;
+      hc.fireTheOne();
+      expect(await run).toBe(EXIT.ABORTED);
       expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision \(the owner's staff window\): held its turn past the 100ms deadline \(case league\|/);
       const r = runIn(dir, "wkp");
       expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[2], worker: null, inFlight: [] });
@@ -2350,37 +2398,66 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
       expect(inserted).toEqual(["m-wkp-1", "m-wkp-2", "m-wkp-3"]);
       expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-wkp-3/entitlement-override"]);
       expect(readFileSync(join(dir, "wkp", "MATRIX.md"), "utf8")).toContain(`(case \`${planIds[2]}\`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 2 case(s) that finished before the trip.`);
+      // Three provision turns began (cases 1–3), and the hung one was the only deadline that ever fired.
+      expect(hc.timers).toHaveLength(3);
+      expect(hc.live()).toEqual([]);
     } finally {
       await lb.close();
     }
   });
-  // T12-R3 + fix round 3 (ruling T12-R4), on three workers. Case 0's driver
-  // stalls 300ms, so it is still mid-scenario when the turns trip. Case 3's
-  // org insert is held 50ms, so cases 1 and 2 provision and finish before its
-  // provision even starts — and then hangs (100ms deadline). Case 0 finishes
-  // during the abort: a late answer from case 3's turn could have landed on
-  // it, so it is listed for a re-run and is NOT evidence. Cases 1 and 2,
-  // completed before the trip, stay as evidence.
+  // T12-R3 + fix round 3 (ruling T12-R4), on three workers, ordered by
+  // latches (fix round 4, re-review 1 I-1: the 300/50/100ms timers raced in
+  // both directions under load). Nothing here waits on wall time:
+  //   - case 0's driver stalls mid-scenario on a deferred the test resolves
+  //     only AFTER it fires the trip, so case 0 is in flight at the trip;
+  //   - case 3's org insert waits until cases 0, 1 and 2 are all past their
+  //     provisions (their drivers built), so case 3's hung admin call is the
+  //     only turn in the window when it hangs;
+  //   - every later org insert waits for that hung call, so it queues behind it;
+  //   - the deadline is fired by hand, once, after case 3's call hung and case
+  //     4's org was inserted — and case 4 is taken only by a lane that FINISHED
+  //     its case, with the other two lanes held by cases 0 and 3, so cases 1 and
+  //     2 have both finished before the trip.
+  // Case 0 finishes during the abort: a late answer from case 3's turn could
+  // have landed on it, so it is listed for a re-run and is NOT evidence.
+  // Cases 1 and 2, completed before the trip, stay as evidence.
   it("T12-R3/R4 on three workers: the timed-out case is named with no result, a case mid-scenario at the trip finishes but is listed in-flight and excluded from evidence, cases completed before the trip are kept, and no case org is created after the trip", async () => {
     const io = capture();
+    const hc = handClock();
     const holder: { real: RunDeps | null } = { real: null };
+    const tripped = (): boolean => (holder.real?.turns?.tripped() ?? null) !== null;
+    const inserted: string[] = [];
     const late: string[] = [];
-    const lb = await provisionLoopback((o) => o === "o-m-wkq-4", (slug) => { if ((holder.real?.turns?.tripped() ?? null) !== null) late.push(slug); }, (slug) => (slug === "m-wkq-4" ? 50 : 0));
+    const hungSeen = deferred();
+    const earlierPastProvision = deferred();
+    const fifthInserted = deferred();
+    const stall = deferred();
+    const stallEntered = deferred();
+    const pastProvision = new Set<string>();
+    const lb = await provisionLoopback(
+      (o) => { if (o !== "o-m-wkq-4") return false; hungSeen.resolve(); return true; },
+      (slug) => { inserted.push(slug); if (tripped()) late.push(slug); if (slug === "m-wkq-5") fifthInserted.resolve(); },
+      (slug) => (slug === "m-wkq-4" ? earlierPastProvision.promise : ["m-wkq-1", "m-wkq-2", "m-wkq-3"].includes(slug) ? undefined : hungSeen.promise),
+    );
     class Stalls extends FakeLeagueDriver {
       stalledPastTrip: boolean | null = null;
       override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
-        await new Promise((r) => setTimeout(r, 300));
-        this.stalledPastTrip = (holder.real?.turns?.tripped() ?? null) !== null;
+        stallEntered.resolve();
+        await stall.promise;
+        this.stalledPastTrip = tripped();
         return super.createCompetition(i);
       }
     }
     const stalls: Stalls[] = [];
     try {
-      const real = realDeps(lb.f, 100);
+      const real = realDeps(lb.f, 100, hc.clock);
       holder.real = real;
       const d = workerDeps({
         prepareCaseOrg: real.prepareCaseOrg, turns: real.turns,
-        driverFor: (b, s, orgId) => {
+        driverFor: (_b, _s, orgId) => {
+          // runCase builds a case's driver only once its org is provisioned.
+          pastProvision.add(orgId);
+          if (["o-m-wkq-1", "o-m-wkq-2", "o-m-wkq-3"].every((o) => pastProvision.has(o))) earlierPastProvision.resolve();
           if (orgId !== "o-m-wkq-1") return new FakeLeagueDriver(orgId);
           const slow = new Stalls(orgId);
           stalls.push(slow);
@@ -2388,36 +2465,131 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
         },
       });
       const dir = dirFor();
-      expect(await runSlice(d, ["--workers", "3", "--base", lb.base, "--run-id", "wkq", "--report-dir", dir])).toBe(EXIT.ABORTED);
+      const run = runSlice(d, ["--workers", "3", "--base", lb.base, "--run-id", "wkq", "--report-dir", dir]);
+      await Promise.all([stallEntered.promise, hungSeen.promise, fifthInserted.promise]);
+      expect(tripped()).toBe(false);
+      // The one live deadline is case 3's provision turn: cases 0–2's were cleared, case 4's has not begun.
+      hc.fireTheOne();
+      expect(tripped()).toBe(true);
+      stall.resolve();
+      expect(await run).toBe(EXIT.ABORTED);
       expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision .*; 1 finished during the abort and are listed for a re-run, not kept as evidence/);
       const r = runIn(dir, "wkq");
       // The witness: case 0 really was mid-scenario when the turns tripped.
       expect(stalls.map((x) => x.stalledPastTrip)).toEqual([true]);
       expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[3], worker: null, inFlight: [planIds[0]] });
+      // In-flight (case 0) and the holder (case 3) are not evidence; cases 1 and 2, completed before the trip, are.
       const kept = r.cases.map((c) => c.caseId);
-      // In-flight and the holder are not evidence; the cases completed before the trip are.
-      expect(kept).not.toContain(planIds[0]);
-      expect(kept).not.toContain(planIds[3]);
-      expect(kept).toEqual(expect.arrayContaining([planIds[1], planIds[2]]));
-      expect(kept).toEqual(planIds.filter((id) => kept.includes(id)));
+      expect(kept).toEqual([planIds[1], planIds[2]]);
       expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
+      // No case org after the trip: case 4's was inserted before it (then refused at the window), and cases 5–6 never started.
       expect(late).toEqual([]);
+      expect([...inserted].sort()).toEqual(["m-wkq-1", "m-wkq-2", "m-wkq-3", "m-wkq-4", "m-wkq-5"]);
+      expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-wkq-4/entitlement-override"]);
+      expect(hc.live()).toEqual([]);
       // MATRIX.md: case 0 only under the banner, never in the grid or the counts.
       const md = readFileSync(join(dir, "wkq", "MATRIX.md"), "utf8");
       expect(md.split("\n").filter((l) => l.includes(planIds[0]!))).toEqual([`> Finished during abort — re-run (not evidence: a late answer from the timed-out turn could have landed on them): \`${planIds[0]}\`.`]);
-      expect(md).toContain(`the grid shows the ${kept.length} case(s) that finished before the trip.`);
+      expect(md).toContain("the grid shows the 2 case(s) that finished before the trip.");
     } finally {
       await lb.close();
     }
   });
+  // Fix round 4 (ruling T12-R5). The trip is recorded the moment the deadline
+  // fires, but the timed-out case reaches `crashed` (the queue's abort) only
+  // after realDeps has closed its DB handles — real I/O. A lane that freed up
+  // in that window used to take the next item: insert its org and switch its
+  // session before the window refused it, so the banner's "no later case
+  // started" was false. Reached here by latches: case 1's provision hangs and
+  // is timed out by hand, its handles' closing is HELD, and only then does case
+  // 0 (mid-scenario at the trip) finish and free its lane. The lane's next step
+  // is microtask-only (the fake driver does no I/O), so one macrotask turn is
+  // room for it to take an item; the closing is released only after that.
+  it("T12-R5: a lane that frees up while the timed-out case is still closing its DB handles takes no new item — no org is inserted, no session switched, and no case starts after the trip", async () => {
+    const io = capture();
+    const hc = handClock();
+    const holder: { real: RunDeps | null } = { real: null };
+    const tripped = (): boolean => (holder.real?.turns?.tripped() ?? null) !== null;
+    const inserted: string[] = [];
+    const late: string[] = [];
+    const hungSeen = deferred();
+    const casePastProvision = deferred();
+    const closing = deferred();
+    const releaseClosing = deferred();
+    const stall = deferred();
+    const stallEntered = deferred();
+    const lb = await provisionLoopback(
+      (o) => { if (o !== "o-m-wkw-2") return false; hungSeen.resolve(); return true; },
+      (slug) => { inserted.push(slug); if (tripped()) late.push(slug); },
+      // Case 1's insert waits for case 0 to be past its provision, so case 1's hung call holds the window alone.
+      (slug) => (slug === "m-wkw-2" ? casePastProvision.promise : undefined),
+      // Every DB handle closed after the trip is held — the timed-out case's first: that is the window.
+      () => { if (!tripped()) return undefined; closing.resolve(); return releaseClosing.promise; },
+    );
+    class Stalls extends FakeLeagueDriver {
+      override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
+        stallEntered.resolve();
+        await stall.promise;
+        return super.createCompetition(i);
+      }
+    }
+    try {
+      const real = realDeps(lb.f, 100, hc.clock);
+      holder.real = real;
+      const d = workerDeps({
+        prepareCaseOrg: real.prepareCaseOrg, turns: real.turns,
+        driverFor: (_b, _s, orgId) => {
+          if (orgId !== "o-m-wkw-1") return new FakeLeagueDriver(orgId);
+          casePastProvision.resolve();
+          return new Stalls(orgId);
+        },
+      });
+      const dir = dirFor();
+      const run = runSlice(d, ["--workers", "2", "--base", lb.base, "--run-id", "wkw", "--report-dir", dir]);
+      await Promise.all([stallEntered.promise, hungSeen.promise]);
+      hc.fireTheOne();
+      // Case 1 is now in the window: its turn timed out, and it is closing its handles.
+      await closing.promise;
+      // Case 0 finishes inside the window; its lane is free and the queue has items left.
+      stall.resolve();
+      await new Promise<void>((r) => { setImmediate(r); });
+      const outInWindow = io.out();
+      const insertedInWindow = [...inserted];
+      const switchedInWindow = [...lb.switched];
+      releaseClosing.resolve();
+      expect(await run).toBe(EXIT.ABORTED);
+      // The window was reached: case 0's progress line was written before the closing was released.
+      expect(outInWindow).toContain(`[1/7] ${planIds[0]} → `);
+      expect(outInWindow).toContain("(finished during abort — re-run; not evidence)");
+      // …and in it the free lane took nothing: no org inserted, no session switched.
+      expect(insertedInWindow).toEqual(["m-wkw-1", "m-wkw-2"]);
+      expect(switchedInWindow).toEqual(["o-m-wkw-1", "o-m-wkw-2"]);
+      expect(inserted).toEqual(["m-wkw-1", "m-wkw-2"]);
+      expect(lb.switched).toEqual(["o-m-wkw-1", "o-m-wkw-2"]);
+      expect(late).toEqual([]);
+      const r = runIn(dir, "wkw");
+      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[1], worker: null, inFlight: [planIds[0]] });
+      expect(r.cases).toEqual([]);
+      expect(io.err()).toMatch(/no later case started — results\.json keeps the 0 case\(s\) that finished before the trip as evidence; 1 finished during the abort/);
+      expect(hc.live()).toEqual([]);
+    } finally {
+      releaseClosing.resolve();
+      await lb.close();
+    }
+  });
+  // Fix round 4: the deadline is fired by hand once the canary's admin call hangs.
   it("T12-R3: an aborted canary run is an abort (exit 3, named), never a canary verdict on a case that has no result", async () => {
     const io = capture();
     const lb = await provisionLoopback(() => true);
     try {
-      const real = realDeps(lb.f, 60);
+      const hc = handClock();
+      const real = realDeps(lb.f, 60, hc.clock);
       const d = workerDeps({ planCases: undefined, prepareCaseOrg: real.prepareCaseOrg, turns: real.turns });
       const dir = dirFor();
-      expect(await runSlice(d, ["--canary", "M1", "--base", lb.base, "--run-id", "wkc", "--report-dir", dir])).toBe(EXIT.ABORTED);
+      const run = runSlice(d, ["--canary", "M1", "--base", lb.base, "--run-id", "wkc", "--report-dir", dir]);
+      await lb.hungArrived;
+      hc.fireTheOne();
+      expect(await run).toBe(EXIT.ABORTED);
       expect(io.out()).not.toMatch(/canary M1:/);
       expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision \(the owner's staff window\): held its turn past the 60ms deadline \(case league\|generic\|/);
       const r = runIn(dir, "wkc");
@@ -2573,12 +2745,21 @@ describe("runSlice — --only on a catalogue cell outside the slice, and --set w
  *  seeding — the org switch, and the entitlement bust's admin calls (401
  *  unless the owner is staff at that moment) — with fake DB handles behind
  *  it. An admin POST for an org `hang` picks is never answered. Org ids are
- *  `o-<slug>`; `onInsert` sees each case org as it is created, and
- *  `insertDelayMs` can hold one insert back (fix round 3's ordering). */
-async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (slug: string) => void = () => {}, insertDelayMs: (slug: string) => number = () => 0) {
+ *  `o-<slug>`; `switched` lists every org the session was switched to.
+ *  Fix round 4: no timer orders anything here. `insertGate` can hold a case
+ *  org's insert on a promise the test settles; `onInsert` sees each org as it
+ *  is created (after its gate); `disposeGate` can hold a case's DB handles
+ *  closing (both of them — realDeps closes the pair together). */
+async function provisionLoopback(
+  hang: (orgId: string) => boolean,
+  onInsert: (slug: string) => void = () => {},
+  insertGate: (slug: string) => Promise<void> | undefined = () => undefined,
+  disposeGate: () => Promise<void> | undefined = () => undefined,
+) {
   const staff = { on: false };
   const answered: string[] = [];
   const hung: string[] = [];
+  const switched: string[] = [];
   let arrived: () => void = () => {};
   const hungArrived = new Promise<void>((r) => { arrived = r; });
   const server = createServer((req, res) => {
@@ -2589,7 +2770,11 @@ async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (sl
         res.writeHead(status, { "content-type": "application/json", ...(cookie === undefined ? {} : { "set-cookie": cookie }) });
         res.end(JSON.stringify(v));
       };
-      if (req.method === "POST" && req.url === "/api/orgs/active") return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${(JSON.parse(body) as { org_id: string }).org_id}; Path=/`);
+      if (req.method === "POST" && req.url === "/api/orgs/active") {
+        const orgId = (JSON.parse(body) as { org_id: string }).org_id;
+        switched.push(orgId);
+        return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${orgId}; Path=/`);
+      }
       const m = /^\/api\/admin\/orgs\/([^/]+)\/entitlement-override$/.exec(req.url ?? "");
       if (m !== null) {
         if (req.method === "POST" && hang(m[1]!)) { hung.push(`${req.method} ${req.url}`); arrived(); return; } // never answered
@@ -2604,9 +2789,9 @@ async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (sl
   const m: MatrixSql = {
     userIdForEmail: async () => "u1",
     insertCaseOrg: async (i) => {
+      const gate = insertGate(i.slug);
+      if (gate !== undefined) await gate;
       onInsert(i.slug);
-      const ms = insertDelayMs(i.slug);
-      if (ms > 0) await new Promise((r) => setTimeout(r, ms));
       return { orgId: `o-${i.slug}`, orgSlug: i.slug };
     },
     listPlanKeys: async () => [],
@@ -2621,10 +2806,11 @@ async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (sl
     createSubscriptionForOrg: async () => {},
     setOwnerStaff: async (_o: string, on: boolean) => { staff.on = on; },
   };
-  const f: DbFactories = { matrixSql: () => ({ sql: m, dispose: async () => {} }), planSql: () => ({ sql: p as never, dispose: async () => {} }) };
+  const dispose = async (): Promise<void> => { const gate = disposeGate(); if (gate !== undefined) await gate; };
+  const f: DbFactories = { matrixSql: () => ({ sql: m, dispose }), planSql: () => ({ sql: p as never, dispose }) };
   const close = async (): Promise<void> => {
     server.closeAllConnections();
     await new Promise<void>((r) => { server.close(() => { r(); }); });
   };
-  return { base: `http://127.0.0.1:${port}`, f, answered, hung, hungArrived, close };
+  return { base: `http://127.0.0.1:${port}`, f, answered, hung, switched, hungArrived, close };
 }
