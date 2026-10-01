@@ -559,7 +559,7 @@ type PollSample = { ingest_state: string | null; output_state: string | null; sa
  *  every read 429s — so no poll could observe warming → live, and the D3 box went silent.
  *
  *  The mechanism is a CONDITIONAL WRITE (V428): a poll claims the read by stamping `ingest_polled_at`, and only when the
- *  previous claim is at least STREAM_POLL_MS old. Postgres re-checks the WHERE of a concurrent UPDATE against the row
+ *  previous claim is at least POLL_CLAIM_WINDOW_MS old. Postgres re-checks the WHERE of a concurrent UPDATE against the row
  *  the winner committed, so two polls racing on one session claim it ONCE: the loser gets no row back and reads nothing.
  *  Not an advisory lock: the lock would have to be held across the two Cloudflare calls, which carry no timeout, so a
  *  slow provider would pin a pooled connection per session. A claim also coalesces the reads that FAIL (a 429 or a 5xx
@@ -568,10 +568,18 @@ async function claimIngestPoll(sessionId: string, now: Date): Promise<boolean> {
   const claimed = await sql<{ id: string }[]>`
     update fixture_stream_sessions set ingest_polled_at = ${now}
      where id = ${sessionId}
-       and (ingest_polled_at is null or ingest_polled_at <= ${new Date(now.getTime() - STREAM_POLL_MS)})
+       and (ingest_polled_at is null or ingest_polled_at <= ${new Date(now.getTime() - POLL_CLAIM_WINDOW_MS)})
     returning id`;
   return claimed.length === 1;
 }
+
+/** I-1 window (controller ruling 2026-10-01: "under 5 s" meant coalescing CONCURRENT viewers, not a hard number). A lone
+ *  tab polls on STREAM_POLL_MS by setInterval, so its next request lands about one interval after its own claim, give or
+ *  take timer and network jitter; with the window AT the interval, a request even 1 ms early was served the previous
+ *  reading and the lone viewer's Cloudflare cadence halved to 10 s. A second of allowance keeps every on-cadence poll a
+ *  read while polls from other tabs inside it still coalesce. */
+const POLL_JITTER_ALLOWANCE_MS = 1_000;
+const POLL_CLAIM_WINDOW_MS = STREAM_POLL_MS - POLL_JITTER_ALLOWANCE_MS;
 
 /** I-1: how old the latest poll sample may be for a poll that did NOT claim the read to answer from it — one poll
  *  interval behind the claim it deferred to (whose own sample may still be in flight). Older than that is not this

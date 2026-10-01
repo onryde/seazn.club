@@ -4805,11 +4805,14 @@ describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's prev
 
 // I-1 (final review; controller ruling 2026-10-01): every open organiser tab polls `current` every STREAM_POLL_MS, and
 // each poll read Cloudflare twice (inputStatus + outputState). A poll now CLAIMS the interval's read with a conditional
-// write (V428 `ingest_polled_at`); a poll that finds a claim younger than STREAM_POLL_MS reads nothing and answers from
-// the latest poll sample. The interval is the lib's own constant, never a number typed here. Single-sport: the poll has
-// no sport branch (stream sessions are sport-blind).
-describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewers and processes — one claimed read per session per STREAM_POLL_MS", () => {
+// write (V428 `ingest_polled_at`); a poll that finds a claim younger than the claim WINDOW reads nothing and answers from
+// the latest poll sample. The window is the controller's ruling (2026-10-01): the lib's STREAM_POLL_MS less a 1 s jitter
+// allowance, so a lone tab on its own cadence reads every time while concurrent tabs coalesce — derived here from the
+// lib's constant and the ruled allowance, never imported from the code under test. Single-sport: the poll has no sport
+// branch (stream sessions are sport-blind).
+describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewers and processes — one claimed read per session per claim window", () => {
   type Rig = Awaited<ReturnType<typeof rig>>;
+  const WINDOW = STREAM_POLL_MS - 1_000;   // controller ruling 2026-10-01: STREAM_POLL_MS less a 1 s jitter allowance
   /** Another PROCESS polling the same provider account: its own deps and adapter object, the same fake state. */
   const elsewhere = (r: Rig): SessionDeps => ({ ...r.deps, drivers: { ...r.deps.drivers, ingest: Object.create(r.ingest) as FakeIngest } });
   const readsOf = (r: Rig) => {
@@ -4857,7 +4860,30 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     }
   });
 
-  it("the interval, in sequence: a poll 1 ms short of STREAM_POLL_MS after the claim reads nothing and answers from the sample; a poll at exactly STREAM_POLL_MS reads again; a second call after that reads nothing", async () => {
+  it("a LONE viewer on the tab's own STREAM_POLL_MS cadence reads Cloudflare on EVERY poll, even when each request lands a few ms EARLY (timer and network jitter) — coalescing is for concurrent viewers, never a halved cadence", async () => {
+    const r = await rig({ credits: 1 });
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live, and that poll claimed").toBe("live");
+    const reads = readsOf(r);
+    try {
+      const EARLY_MS = [1, 3, 17, 42, 9, 250, 25, 999];   // how early each request lands against the 5 s cadence
+      let checked = 0;
+      for (const early of EARLY_MS) {
+        const before = reads.count();
+        r.tick(STREAM_POLL_MS - early);
+        const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(reads.count() - before, `a poll ${early} ms early still reads (inputStatus + outputState)`).toBe(2);
+        expect(v.ingest?.state).toBe("connected");
+        checked++;
+      }
+      expect(checked, "every jittered poll ran").toBe(EARLY_MS.length);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("the window, in sequence: a poll 1 ms short of the claim window reads nothing and answers from the sample; a poll at exactly the window reads again; a second call after that reads nothing", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     r.tick(3000);
@@ -4865,18 +4891,18 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     try {
       expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
       expect(reads.count()).toBe(2);
-      r.tick(STREAM_POLL_MS - 1);
+      r.tick(WINDOW - 1);
       const before = await counts(sessionId);
       const served = (await currentSession(r.auth, r.fixtureId, elsewhere(r)))!;
-      expect(reads.count(), "inside the interval: no call").toBe(2);
+      expect(reads.count(), "inside the window: no call").toBe(2);
       expect(served.ingest?.state, "answered from the sample").toBe("connected");
       expect(await counts(sessionId), "a coalesced poll records nothing").toEqual(before);
       r.tick(1);
       expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state).toBe("connected");
-      expect(reads.count(), "at exactly STREAM_POLL_MS after the claim: read again").toBe(4);
+      expect(reads.count(), "at exactly the window after the claim: read again").toBe(4);
       expect((await counts(sessionId)).samples).toBe(before.samples + 1);
       await currentSession(r.auth, r.fixtureId, r.deps);
-      expect(reads.count(), "the second call of that interval: nothing").toBe(4);
+      expect(reads.count(), "the second call of that window: nothing").toBe(4);
     } finally {
       reads.restore();
     }
@@ -4885,6 +4911,7 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
   it("the D3 hold and its clock are unchanged by coalescing: a served poll keeps the read's `since`, its elapsedMs runs on THIS response's clock, and the box arrives at exactly OUTPUT_WARNING_AFTER_MS whether that poll READ or was SERVED", async () => {
     const P = STREAM_POLL_MS, HOLD = OUTPUT_WARNING_AFTER_MS;
     expect(HOLD % P, "PREMISE: the hold is a whole number of poll intervals (both the lib's own constants)").toBe(0);
+    expect(P / 2 < WINDOW && WINDOW <= P, "PREMISE: half an interval is inside the window, a whole one is not").toBe(true);
     let checked = 0;
     for (const landingReads of [true, false]) {
       const r = await rig({ credits: 1, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomUUID()}` });
@@ -4892,12 +4919,15 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
       r.tick(3000);
       expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live (that poll claimed at live+0)").toBe("live");
       const tLive = r.deps.now();
-      // Polls every P from live, either ON the claim grid (claims at P, 2P, …: the hold lands on a claim) or half an
-      // interval off it (the first poll at P/2 is served, then claims at 3P/2, 5P/2, …: the hold lands between claims).
-      const first = landingReads ? P : P / 2;
+      // ON the claim grid: a poll every P from live, each one a read, the last AT the hold. HALF an interval off it: the
+      // first poll at P/2 is served, then claims at 3P/2, 5P/2, …, and the polls at HOLD − 1 and HOLD are both served
+      // (P/2 − 1 and P/2 after the last claim, inside the window).
       const times: number[] = [];
-      for (let t = first; t < HOLD; t += P) times.push(t);
-      times.push(HOLD - 1, HOLD);
+      if (landingReads) for (let t = P; t <= HOLD; t += P) times.push(t);
+      else {
+        for (let t = P / 2; t < HOLD; t += P) times.push(t);
+        times.push(HOLD - 1, HOLD);
+      }
       const reads = readsOf(r);
       try {
         let at = 0;
@@ -4908,11 +4938,11 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
           const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
           expect(v.output, `t=${t}`).toEqual({ state: "connecting", since: tLive.toISOString(), elapsedMs: t });
           expect(d3Warning(v), `t=${t}`).toBe(t >= HOLD ? "destination" : null);
-          if (t === HOLD) expect(reads.count() > callsBefore, `the poll AT the hold ${landingReads ? "read" : "was served"}`).toBe(landingReads);
-          if (t === HOLD - 1) expect(reads.count(), "1 ms short of the hold: served in both walks").toBe(callsBefore);
+          if (landingReads) expect(reads.count() - callsBefore, `t=${t}: on the cadence, every poll reads`).toBe(2);
+          else if (t >= HOLD - 1) expect(reads.count(), `t=${t}: served`).toBe(callsBefore);
         }
-        // Anti-vacuity: on the grid, P..HOLD−P is HOLD/P − 1 polls; off it, P/2..HOLD−P/2 is HOLD/P; plus the two at the hold.
-        expect(times.length, "the walk crossed the whole hold").toBe(landingReads ? HOLD / P + 1 : HOLD / P + 2);
+        // Anti-vacuity: on the grid P..HOLD is HOLD/P polls; off it, P/2..HOLD−P/2 is HOLD/P, plus the two at the hold.
+        expect(times.length, "the walk crossed the whole hold").toBe(landingReads ? HOLD / P : HOLD / P + 2);
         checked++;
       } finally {
         reads.restore();
@@ -4972,7 +5002,7 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     }
   });
 
-  it("a claimed read that FAILS still holds the interval (a 429 storm is coalesced too): one call and one report for two polls inside the interval; the poll after it reads again", async () => {
+  it("a claimed read that FAILS still holds the window (a 429 storm is coalesced too): one call and one report for two polls inside the window; the poll after it reads again", async () => {
     const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     r.tick(3000);
@@ -4982,14 +5012,14 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
       sentry.captureError.mockClear();
       const first = (await currentSession(r.auth, r.fixtureId, r.deps))!;
       expect(first.ingest, "PREMISE: a failed read answers without the ingest (N1)").toBeNull();
-      r.tick(STREAM_POLL_MS - 1);
+      r.tick(WINDOW - 1);
       const second = (await currentSession(r.auth, r.fixtureId, elsewhere(r)))!;
       expect(second.ingest).toBeNull();
-      expect(down, "one call for the interval").toHaveBeenCalledTimes(1);
-      expect(sentry.captureError, "one report for the interval").toHaveBeenCalledTimes(1);
+      expect(down, "one call for the window").toHaveBeenCalledTimes(1);
+      expect(sentry.captureError, "one report for the window").toHaveBeenCalledTimes(1);
       r.tick(1);
       down.mockRestore();
-      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "the next interval's read succeeds and goes live").toBe("live");
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "the next window's read succeeds and goes live").toBe("live");
     } finally {
       down.mockRestore();
     }
