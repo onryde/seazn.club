@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seazn.club/contracts/capture-qr.v2.json",
   "title": "Seazn capture QR payload, v2",
-  "description": "What the organiser's panel encodes in the stream QR, and the paste code's exact text (capture QR v2 spec 2026-10-01 §6.2, W3): exactly these four keys, in the order v, code, slot, tok. The QR never carries credentials: the phone fetches them with the tok (§6.3.1). Supersedes capture-qr.v1.json, removed (W4, §6.13). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "description": "What the organiser's panel encodes in the stream QR, and the paste code's exact text (capture QR v2 spec 2026-10-01 §6.2, W3). The panel sends exactly four keys, in the order v, code, slot, tok; exp is capture's optional field (A1, §1.2), which this server never sends. No other key is admitted. The QR never carries credentials: the phone fetches them with the tok (§6.3.1). Supersedes capture-qr.v1.json, removed (W4, §6.13). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
   "type": "object",
   "properties": {
     "v": {
@@ -25,6 +25,12 @@
       "description": "The bearer secret: 16 random bytes as base64url, 22 characters (§6.1). It authorises pairing and POST start, and travels only as `Authorization: Bearer`, never in a body, a URL or a log (§10.1).",
       "type": "string",
       "pattern": "^[A-Za-z0-9_-]{22}$"
+    },
+    "exp": {
+      "description": "Optional: when the QR expires, in epoch SECONDS (v1's unit), an integer of at least 0 (capture's A1, §1.2). Absent means the server decides. This server never sends it (§6.2), so a phone must accept a QR without it; null is not admitted.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
     }
   },
   "required": [

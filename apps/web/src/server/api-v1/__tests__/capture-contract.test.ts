@@ -4,10 +4,14 @@
 // twins (server/api-v1/capture-schemas.ts, and CaptureQrV2 in lib/capture-qr.ts) mirror them. This file pins:
 //   * each contract's sha256 — a change is a deliberate bump that moves the constant in the same commit;
 //   * structural parity, file ↔ z.toJSONSchema(twin), per union branch matched by `state`;
-//   * every hand-written fixture: `valid*` parses, `invalid-*` / `tampered*` / `wrong-version` is refused;
+//   * every hand-written fixture: `valid*` parses, `invalid-*` / `tampered*` / `wrong-version` is refused — by the zod
+//     twin AND by the published JSON bytes under ajv (draft 2020-12, formats asserted), so the vendored file is proven
+//     behaviourally, not only structurally;
+//   * every enum, typed here from the spec's literal lists (§6.3.1–§6.3.4), against the file and the twin;
 //   * the per-state field matrices (R5 final, A21), TYPED HERE FROM THE SPEC'S TEXT (§6.3.1, §17.5) — the rulebook,
 //     never read off the twin — run against BOTH the twin (through the fixtures) and the JSON file (structurally);
-//   * optional-versus-null, `at`'s offset, strictness surviving .extend()/.partial(), W21's hosts, QR v2, and 409.
+//   * optional-versus-null, `at`'s offset, strictness surviving .extend()/.partial(), W21's hosts, QR v2 (with
+//     capture's optional `exp`, which this server never sends), and 409.
 // Every sweep counts what it checked, and the counts are pinned: a skipped cell, branch or fixture fails the run.
 //
 // Pure — no DB. One "sport" on purpose: the contract reads no sport (the capture surface is sport-agnostic).
@@ -16,6 +20,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
+import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 import * as CS from "../capture-schemas";
 import * as S from "../schemas";
 import { CaptureQrV2, captureQrV2Text, parseCaptureQrV2 } from "@/lib/capture-qr";
@@ -35,7 +41,7 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
 /** `shasum -a 256 docs/contracts/<file>`. A contract change is a DELIBERATE bump: it moves its constant here in the
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
-  "capture-qr.v2.json": "1eca6c684ede6fa1b3cbf7063ad5c3eb0294e7c7247fd3adcfb762dd8a029a21",
+  "capture-qr.v2.json": "3292e33f84b693e5def6048012f6653ca7e31e1573fda3901da4fe67a62c5d43",
   "capture-descriptor.v1.json": "3052101953e6998969749455a10b7343621e6b1c37908457c3520477b8a38612",
   "capture-beat.v1.json": "acaeb033927340fd9782894d99f821d848f52bcf32266b592a0730a6ba9f818f",
   "capture-start.v1.json": "d48f45fee7d1a73da22da83f3406bcaeb6a0b1f1c734278313de294f9215b2ea",
@@ -89,6 +95,39 @@ const WIRE_END_REASONS = ["stopped", "auto_stopped", "no_inbound_timeout", "targ
 /** §6.1: "12 characters of lowercase Crockford base32" — Crockford's alphabet drops i, l, o and u. */
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
 
+/** §6.3.2's body, word for word: the beat request's closed vocabularies (the `| null` is the field's, not a value). */
+const SPEC_BEAT = {
+  claim: ["new", "resume"],
+  state: ["paired", "arming", "armed", "connecting", "publishing", "degraded", "reconnecting", "ended"],
+  cause: ["organiser", "automatic", "operator", "rejoin"],
+  notReady: ["camera", "sound", "network", "held"],
+  startFailed: ["not-found", "cred-host", "config", "start-error"],
+  mode: ["automatic", "operator"],
+  transport: ["srt", "rtmps"],
+  delivery: ["ok", "stalled", "unknown"],
+  endReason: ["operator-stopped"],
+};
+/** §6.3.3 / §6.3.4: `startedBy?: "organiser" | "automatic" | "operator"`, on go-live and on 409 already_live. */
+const SPEC_STARTED_BY = ["organiser", "automatic", "operator"];
+/** §6.3.3's answer `state`. */
+const SPEC_ANSWER_STATES = ["waiting", "go-live", "live", "over", "replaced", "taken"];
+/** §6.3.1's descriptor: `state` across the waiting and session shapes, `preferred`, `scoreUpdates`. */
+const SPEC_DESCRIPTOR = {
+  state: ["waiting", "warming", "live", "ending", "completed", "failed"],
+  preferred: ["srt", "rtmps"],
+  scoreUpdates: ["realtime", "polled"],
+};
+/** §6.3.1 and §6.3.4 name eight refusal words with their statuses. The bare `422` and `429` got their words in the T1
+ *  brief (`invalid`, `rate_limited`): coined there, so the OG1 hand-off note asks capture to confirm them (review G-2).
+ *  `503` is ALWAYS `unavailable` — a cause such as an unexpected ingest host goes in `message` or the log, never in
+ *  `code` (review G-1). */
+const SPEC_REFUSALS: Record<string, number> = {
+  already_live: 409, replaced: 409, no_destination: 409, no_credit: 402, not_entitled: 403, unavailable: 503,
+  code_ended: 401, not_a_stream_code: 404, invalid: 422, rate_limited: 429,
+};
+/** §6.3.1's statuses for GET codes/{code}: 401, 404, 422, 429, 503 — never 409, 402, 403 (no start runs there). */
+const SPEC_DESCRIPTOR_REFUSALS = ["code_ended", "not_a_stream_code", "invalid", "rate_limited", "unavailable"];
+
 // ---------------------------------------------------------------------------------------------------------------
 // Structural helpers.
 // ---------------------------------------------------------------------------------------------------------------
@@ -135,6 +174,13 @@ function nodesAt(node: unknown, path: string[]): Json[] {
   const next = props?.[path[0]!];
   return [...viaUnions, ...(next === undefined ? [] : nodesAt(next, path.slice(1)))];
 }
+/** A node's closed values, sorted: its `enum`, its `const`, or its anyOf/oneOf members' — `null` dropped (whether a
+ *  field admits null is the optional-versus-null test's question). A node that closes nothing yields []. */
+function enumOf(node: Json): string[] {
+  const own = node.enum !== undefined ? (node.enum as unknown[]) : node.const !== undefined ? [node.const] : [];
+  const members = [...((node.anyOf as Json[] | undefined) ?? []), ...((node.oneOf as Json[] | undefined) ?? [])].flatMap(enumOf);
+  return [...own, ...members].filter((v) => v !== null).map(String).sort();
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file → twin map, and the fixture directories' routing.
@@ -143,13 +189,28 @@ const QR = "capture-qr.v2.json", DESCRIPTOR = "capture-descriptor.v1.json", BEAT
 /** Each file's `$defs`, exactly. */
 const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"] };
 
-/** Per directory: [file prefix, twin], first match wins; and the exact fixture count (never 0). */
-const DIRS: Record<string, { routes: [string, Twin][]; count: number }> = {
-  "capture-qr.v2": { routes: [["", CaptureQrV2]], count: 6 },
-  "capture-descriptor.v1": { routes: [["refusal-", S.CaptureRefusal], ["", S.CaptureDescriptor]], count: 27 },
-  "capture-beat.v1": { routes: [["beat-", S.CaptureBeat], ["answer-", S.CaptureBeatAnswer]], count: 28 },
-  "capture-start.v1": { routes: [["request-", S.CaptureStartBody], ["ok-", S.CaptureStartOk], ["", S.CaptureRefusal]], count: 18 },
+/** Per directory: its contract file; [file prefix, twin, the shape's pointer in that file], first match wins; and the
+ *  exact fixture count (never 0). */
+type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$defs/answer" | "#/$defs/ok"];
+const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
+  "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
+  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 30 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 32 },
+  "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
 };
+
+/** The published bytes as a validator sees them: ajv 2020-12, strict, formats ASSERTED (uuid, uri, date-time) — the
+ *  stricter of the two readings a vendoring repo may take, so a fixture the file admits only with formats off fails. */
+function fileValidator(): (file: string, pointer: string, value: unknown) => boolean {
+  const ajv = new Ajv2020({ strict: true, allErrors: true });
+  addFormats(ajv);
+  for (const file of Object.keys(SHA256)) ajv.addSchema(JSON.parse(contractText(file)) as Json);
+  return (file, pointer, value) => {
+    const validate = ajv.getSchema(`https://seazn.club/contracts/${file}${pointer}`);
+    expect(validate, `${file}${pointer}: ajv resolves the shape`).toBeDefined();
+    return validate!(value) as boolean;
+  };
+}
 
 describe("capture contracts (docs/contracts/capture-*.json)", () => {
   it("each of the four contracts is checksummed (the cross-repo drift gate)", () => {
@@ -237,27 +298,94 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     }
   });
 
-  it("fixtures: every valid* parses with its twin, every invalid-* / tampered* / wrong-version is refused — counted per directory", () => {
-    let total = 0;
-    for (const [dir, { routes, count }] of Object.entries(DIRS)) {
+  it("fixtures: every valid* is admitted, every invalid-* / tampered* / wrong-version is refused — by the twin AND by the published file under ajv, counted per directory", () => {
+    const fileAdmits = fileValidator();
+    let total = 0, byFile = 0;
+    for (const [dir, { file, routes, count }] of Object.entries(DIRS)) {
       const names = readdirSync(resolve(FIXTURES, dir)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
       let checked = 0;
       for (const name of names) {
         const route = routes.find(([prefix]) => name.startsWith(prefix));
         expect(route, `${dir}/${name}: no twin routes this fixture`).toBeDefined();
-        const [prefix, twin] = route!;
+        const [prefix, twin, pointer] = route!;
         const kind = name.slice(prefix.length);
         const value = fixture(dir, name);
-        if (/^valid(-.+)?$/.test(kind)) expect(parses(twin, value), `${dir}/${name} must parse`).toBe(true);
-        else if (/^(invalid-.+|tampered(-.+)?|wrong-version)$/.test(kind)) expect(parses(twin, value), `${dir}/${name} must be refused`).toBe(false);
+        let admitted: boolean;
+        if (/^valid(-.+)?$/.test(kind)) admitted = true;
+        else if (/^(invalid-.+|tampered(-.+)?|wrong-version)$/.test(kind)) admitted = false;
         else expect.fail(`${dir}/${name}: neither valid* nor invalid-*/tampered*/wrong-version`);
+        expect(parses(twin, value), `${dir}/${name}: the twin ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
+        expect(fileAdmits(file, pointer, value), `${dir}/${name}: ${file}${pointer} ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
+        byFile++;
         checked++;
       }
       expect(checked, `${dir}: fixtures checked`).toBeGreaterThan(0);
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(6 + 27 + 28 + 18);
+    expect(total).toBe(12 + 30 + 32 + 18);
+    expect(byFile, "fixtures checked against the published bytes").toBe(total);
+  });
+
+  it("enums: every closed vocabulary in the files and the twins is the spec's literal list (§6.3.1–§6.3.4)", () => {
+    const beat = rootOf(contract(BEAT)), answer = defOf(contract(BEAT), "answer"), desc = rootOf(contract(DESCRIPTOR));
+    // [what, the file's shape, the twin, property, the spec's list, nodes expected, union the nodes' values?]
+    const owed: [string, Json, Twin, string, string[], number, boolean][] = [
+      ...Object.entries(SPEC_BEAT).map(([prop, list]): [string, Json, Twin, string, string[], number, boolean] =>
+        [`beat ${prop}`, beat, S.CaptureBeat, prop, list, 1, false]),
+      ["answer state", answer, S.CaptureBeatAnswer, "state", SPEC_ANSWER_STATES, 6, true],
+      ["answer startedBy (go-live only)", answer, S.CaptureBeatAnswer, "startedBy", SPEC_STARTED_BY, 1, false],
+      ["descriptor state", desc, S.CaptureDescriptor, "state", SPEC_DESCRIPTOR.state, 6, true],
+      ["descriptor preferred (5 session states)", desc, S.CaptureDescriptor, "preferred", SPEC_DESCRIPTOR.preferred, 5, false],
+      ["descriptor scoreUpdates (5 session states)", desc, S.CaptureDescriptor, "scoreUpdates", SPEC_DESCRIPTOR.scoreUpdates, 5, false],
+      ...[START, DESCRIPTOR].flatMap((file): [string, Json, Twin, string, string[], number, boolean][] => [
+        [`${file} refusal code`, defOf(contract(file), "refusal"), S.CaptureRefusal, "code", Object.keys(SPEC_REFUSALS), 2, true],
+        [`${file} refusal startedBy (already_live only)`, defOf(contract(file), "refusal"), S.CaptureRefusal, "startedBy", SPEC_STARTED_BY, 1, false],
+      ]),
+    ];
+    let nodes = 0;
+    for (const [what, fileShape, twin, prop, list, expectedNodes, union] of owed) {
+      for (const [side, shape] of [["file", fileShape], ["twin", zodJson(twin, "output")]] as const) {
+        const found = nodesAt(shape, [prop]).map(enumOf);
+        expect(found, `${what} (${side}): nodes`).toHaveLength(expectedNodes);
+        if (union) expect([...new Set(found.flat())].sort(), `${what} (${side})`).toEqual([...list].sort());
+        else for (const values of found) expect(values, `${what} (${side})`).toEqual([...list].sort());
+        nodes += found.length;
+      }
+    }
+    // 9 beat + answer 6 + 1 + descriptor 6 + 5 + 5 + refusal (2 + 1) × 2 files = 38 nodes, each on the file and the twin.
+    expect(nodes).toBe(38 * 2);
+    // The exported enum twins later tasks import, by their own options.
+    const exported: [string, z.ZodEnum, string[]][] = [
+      ["CapturePhoneState", CS.CapturePhoneState, SPEC_BEAT.state], ["CaptureCause", CS.CaptureCause, SPEC_BEAT.cause],
+      ["CaptureNotReady", CS.CaptureNotReady, SPEC_BEAT.notReady], ["CaptureStartFailed", CS.CaptureStartFailed, SPEC_BEAT.startFailed],
+      ["CaptureStartedBy", CS.CaptureStartedBy, SPEC_STARTED_BY], ["CaptureRefusalCode", CS.CaptureRefusalCode, Object.keys(SPEC_REFUSALS)],
+    ];
+    for (const [name, twin, list] of exported) expect([...twin.options].sort(), name).toEqual([...list].sort());
+    expect(exported).toHaveLength(6);
+  });
+
+  it("M-3: a takeover (resume), a stop, and both pre-flight failures each have a valid beat request", () => {
+    const shapes: [name: string, premise: (b: Json) => boolean][] = [
+      ["beat-valid-resume", (b) => b.claim === "resume" && typeof b.sid === "string"],
+      ["beat-valid-stopped", (b) => b.sid === null && typeof b.stopped === "string"],
+      ["beat-valid-not-ready", (b) => SPEC_BEAT.notReady.includes(b.notReady as string) && b.state === "paired"],
+      ["beat-valid-start-failed", (b) => SPEC_BEAT.startFailed.includes(b.startFailed as string) && b.state === "paired"],
+    ];
+    const fileAdmits = fileValidator();
+    let checked = 0;
+    for (const [name, premise] of shapes) {
+      const b = fixture("capture-beat.v1", name);
+      expect(premise(b), `${name}: premise`).toBe(true);
+      expect(parses(S.CaptureBeat, b), name).toBe(true);
+      expect(fileAdmits(BEAT, "", b), name).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // …and between them and the rest, `transport: "rtmps"` and `claim: "resume"` are shown at least once.
+    const all = readdirSync(resolve(FIXTURES, "capture-beat.v1")).filter((f) => /^beat-valid.*\.json$/.test(f)).map((f) => fixture("capture-beat.v1", f.slice(0, -5)));
+    expect(all.some((b) => b.transport === "rtmps"), "a valid beat on rtmps").toBe(true);
+    expect(all.some((b) => b.claim === "resume"), "a valid resume claim").toBe(true);
   });
 
   it("R5/A21 beat answer: each state admits only its own fields — 6 states × 10 fields against the twin AND the file", () => {
@@ -370,6 +498,48 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     for (const node of rtmpsUrls) expect(node.description, "cred.rtmps.url").toContain("live.*");
   });
 
+  it("QR v2 `exp` (capture's A1, §1.2): optional, an integer ≥ 0 of epoch SECONDS; admitted when present, never sent by this server", () => {
+    const dir = "capture-qr.v2";
+    const valid = fixture(dir, "valid");
+    expect("exp" in valid, "premise: the plain fixture carries no exp").toBe(false);
+    const withExp = fixture(dir, "valid-exp");
+    // v1's precedent: 2100-01-01T00:00:00Z in SECONDS (a milliseconds value would be ~1000× this).
+    expect(withExp.exp).toBe(4102444800);
+    expect(without(withExp, "exp"), "premise: valid-exp is valid plus exp").toEqual(valid);
+    expect(parseCaptureQrV2(withExp)).toEqual({ ok: true, payload: withExp });
+    // The boundary the ruling names: 0 is admitted.
+    const zero = fixture(dir, "valid-exp-zero");
+    expect(zero.exp).toBe(0);
+    expect(parseCaptureQrV2(zero)).toEqual({ ok: true, payload: zero });
+    // Each refusal differs from valid-exp in `exp` alone, and parseCaptureQrV2 calls it invalid (not wrong_version).
+    const refused: [name: string, exp: unknown][] = [
+      ["invalid-exp-string", "4102444800"], ["invalid-exp-negative", -1], ["invalid-exp-float", 4102444800.5], ["invalid-null-exp", null],
+    ];
+    let checked = 0;
+    for (const [name, exp] of refused) {
+      const f = fixture(dir, name);
+      expect(f.exp, `${name}: premise`).toStrictEqual(exp);
+      expect(without(f, "exp"), `${name}: premise — only exp differs`).toEqual(valid);
+      expect(parseCaptureQrV2(f), name).toEqual({ ok: false, reason: "invalid" });
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The file: five properties, four required; `exp` an integer with minimum 0, null not admitted.
+    const file = contract(QR);
+    expect(Object.keys(file.properties as Json).sort()).toEqual(["code", "exp", "slot", "tok", "v"]);
+    expect([...(file.required as string[])].sort()).toEqual(["code", "slot", "tok", "v"]);
+    expect(file.additionalProperties).toBe(false);
+    const exp = (file.properties as Record<string, Json>).exp!;
+    expect(exp.type).toBe("integer");
+    expect(exp.minimum).toBe(0);
+    expect(exp.anyOf, "exp is not `| null`").toBeUndefined();
+    // We never send it (§1.2 A1's web consequence, §6.2): handed a payload that carries exp, the text drops it.
+    const text = captureQrV2Text(withExp as CaptureQrV2);
+    expect(Object.keys(JSON.parse(text) as Json)).toEqual(["v", "code", "slot", "tok"]);
+    expect(text).not.toContain("exp");
+    expect(parseCaptureQrV2(JSON.parse(text))).toEqual({ ok: true, payload: valid });
+  });
+
   it("QR v2: valid parses; tampered (a fifth key, cred) and wrong-version (v 1) refuse with their reasons; the text is exactly four keys", () => {
     const dir = "capture-qr.v2";
     const valid = fixture(dir, "valid");
@@ -387,11 +557,6 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // Handed a wider object, the text still carries the four keys only (a structural type admits extras).
     const wide = { ...valid, cred: tampered.cred } as unknown as CaptureQrV2;
     expect(Object.keys(JSON.parse(captureQrV2Text(wide)) as Json)).toEqual(["v", "code", "slot", "tok"]);
-    // The contract file says the same: four properties, all required, nothing else.
-    const file = contract(QR);
-    expect(Object.keys(file.properties as Json).sort()).toEqual(["code", "slot", "tok", "v"]);
-    expect([...(file.required as string[])].sort()).toEqual(["code", "slot", "tok", "v"]);
-    expect(file.additionalProperties).toBe(false);
     // The empty case: nothing that is not an object throws or parses.
     for (const input of [undefined, null, {}, [], "", 1, true, { v: 2 }]) {
       expect(parseCaptureQrV2(input), JSON.stringify(input) ?? "undefined").toEqual({ ok: false, reason: "invalid" });
@@ -448,12 +613,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(parses(S.CaptureRefusal, live)).toBe(true);
     expect(parses(S.CaptureRefusal, without(live, "startedBy")), "already_live without startedBy").toBe(false);
     expect(parses(S.CaptureRefusal, without(live, "sid")), "already_live without sid").toBe(false);
-    // The codes come from the contract FILE (the cross-repo authority), not the twin.
-    const branches = defOf(contract(START), "refusal").anyOf as Json[];
-    const codes = branches.flatMap((b) => {
-      const c = (b.properties as Record<string, Json>).code!;
-      return c.const !== undefined ? [c.const as string] : (c.enum as string[]);
-    });
+    // The codes come from the spec's table (SPEC_REFUSALS), never the twin or the file; the enums test pins the files.
+    const codes = Object.keys(SPEC_REFUSALS);
     expect(codes).toHaveLength(10);
     let checked = 0;
     for (const code of codes) {
@@ -467,6 +628,25 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       checked++;
     }
     expect(checked).toBe(10);
+  });
+
+  it("descriptor refusals (§6.3.1, §6.14 one fixture per refusal per file): 401, 404, 422, 429 and 503 each have a vendored fixture; 503 is `unavailable`", () => {
+    const fileAdmits = fileValidator();
+    let checked = 0;
+    for (const code of SPEC_DESCRIPTOR_REFUSALS) {
+      const f = fixture("capture-descriptor.v1", `refusal-valid-${code}`);
+      expect(f.code).toBe(code);
+      expect(Object.keys(f).sort(), code).toEqual(["code", "message"]);
+      expect(parses(S.CaptureRefusal, f), code).toBe(true);
+      expect(fileAdmits(DESCRIPTOR, "#/$defs/refusal", f), code).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    expect([...SPEC_DESCRIPTOR_REFUSALS].map((c) => SPEC_REFUSALS[c]).sort()).toEqual([401, 404, 422, 429, 503]);
+    expect(SPEC_REFUSALS.unavailable).toBe(503);
+    // The descriptor directory carries no start-only refusal (409, 402, 403 cannot come from GET).
+    const present = readdirSync(resolve(FIXTURES, "capture-descriptor.v1")).filter((f) => f.startsWith("refusal-valid-"));
+    expect(present.map((f) => f.slice("refusal-valid-".length, -5)).sort()).toEqual([...SPEC_DESCRIPTOR_REFUSALS].sort());
   });
 });
 

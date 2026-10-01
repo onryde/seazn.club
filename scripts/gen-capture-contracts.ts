@@ -62,12 +62,13 @@ const contracts: Contract[] = [
     title: "Seazn capture QR payload, v2",
     root: {
       twin: CaptureQrV2,
-      description: `What the organiser's panel encodes in the stream QR, and the paste code's exact text (${SPEC} §6.2, W3): exactly these four keys, in the order v, code, slot, tok. The QR never carries credentials: the phone fetches them with the tok (§6.3.1). Supersedes capture-qr.v1.json, removed (W4, §6.13). ${PINNED_BY}`,
+      description: `What the organiser's panel encodes in the stream QR, and the paste code's exact text (${SPEC} §6.2, W3). The panel sends exactly four keys, in the order v, code, slot, tok; exp is capture's optional field (A1, §1.2), which this server never sends. No other key is admitted. The QR never carries credentials: the phone fetches them with the tok (§6.3.1). Supersedes capture-qr.v1.json, removed (W4, §6.13). ${PINNED_BY}`,
       props: {
         v: "The payload version (§6.2). A phone that reads any other value says \"update the app\", never \"bad QR\".",
         code: "The fixture's stable stream code: 12 characters of lowercase Crockford base32 (§6.1, W1). An identifier, not a secret, and the only path segment of the phone API (§6.3, §10.1).",
         slot: "The camera slot, 0 in PR-1. The phone sends it back as ?slot= and in every beat (§6.3.1).",
         tok: "The bearer secret: 16 random bytes as base64url, 22 characters (§6.1). It authorises pairing and POST start, and travels only as `Authorization: Bearer`, never in a body, a URL or a log (§10.1).",
+        exp: "Optional: when the QR expires, in epoch SECONDS (v1's unit), an integer of at least 0 (capture's A1, §1.2). Absent means the server decides. This server never sends it (§6.2), so a phone must accept a QR without it; null is not admitted.",
       },
     },
   },
