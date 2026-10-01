@@ -56,6 +56,13 @@ export interface DivisionSetup {
    *  squad order): what ensureLineups builds each lineup from. Empty for a
    *  non-team or rosterless division; never an individual's persons. */
   rosters: ReadonlyMap<string, readonly EntrantMember[]>;
+  /** W1-driving Task 5: on an americano row (personsNeeded), division entrant
+   *  → its person ids as entrantMembers answered them — one for an
+   *  individual, the whole roster for a team. Empty on any other row. Kept
+   *  apart from `rosters` (plan review 1 I-1), so nothing that reads rosters
+   *  ever sees an individual. Read by the americano loop (Task 8), M1's
+   *  pair-entrant target (D14) and I10 (Task 9). */
+  persons: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface ParityObs {
@@ -130,13 +137,34 @@ const BYE_PHANTOM = "__bye__";
  *  rosters and PUTs lineups (W1-driving Task 4). */
 export interface SetUpOptions { readonly rosterlessTeams?: boolean }
 
+/** W1-driving Task 5: the product plays the PERSONS behind an americano
+ *  stage's entrants (stages.ts americanoGen: one linked person per entrant, at
+ *  least 4, else STAGE_NOT_READY). Americano and mexicano are one stage kind;
+ *  the stage's mode decides. */
+export function personsNeeded(bodies: readonly StagePostBody[]): boolean {
+  return bodies.some((b) => b.kind === "americano");
+}
+
 export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
   // Every deferral fires before the first driver call.
   if (FORMAT_LATER.has(ctx.spec.row)) throw new ScenarioUnsupported(DRIVING_WAVE, `${ctx.spec.row}: challenge/rotation driving lands in ${DRIVING_WAVE}`);
+  return buildDivision(ctx, rec, entrantCount, o);
+}
+
+/** setUpDivision past the format deferral. Exported so Task 5's americano
+ *  persons are proven on the real setup path while FORMAT_LATER still holds
+ *  the americano rows; Task 8 deletes FORMAT_LATER, and the americano loop
+ *  then reaches this through setUpDivision. */
+export async function buildDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
+  // Every deferral and refusal fires before the first driver call.
   const bodies = stagesForRow(ctx.spec.row);
   if (bodies.length > 1) throw new ScenarioUnsupported(DRIVING_WAVE, "multi-stage rows need seed-proposal handling");
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
   const rosterless = o.rosterlessTeams === true;
+  const persons = personsNeeded(bodies);
+  // No case drives a pair kind (no sport defaults to one; only a cfg entrants
+  // override makes one), and the harness has no pair members to post.
+  if (persons && kind === "pair") throw new Error(`scenario: ${ctx.spec.row} on a pair-kind division — americano plays one person per entrant (stages.ts americanoGen) and the harness posts no pair members`);
   const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
   const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
   // The override crosses the wire as the division's config, as the editor sends it.
@@ -145,25 +173,38 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   await ctx.driver.postStages(division.id, bodies);
   const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
   // Task 4 (fold-in beneath ruling 49): a team entrant carries the catalog's
-  // full roster (D2); an entrant with none carries no `members` key at all,
-  // so an individual's add is byte for byte what it was.
+  // full roster (D2). Task 5: on an americano row an individual carries one
+  // linked person, named as the entrant. Any other entrant carries no
+  // `members` key at all, so its add is byte for byte what it was.
   const seated = kind === "team" && !rosterless;
-  const membersOf = (seed: number): readonly MemberInput[] | undefined => (seated ? rosterMembers(ctx.spec.sport, ctx.cfg, seed) : undefined);
+  const linked = persons && kind === "individual";
+  const membersOf = (e: { displayName: string; seed: number }): readonly MemberInput[] | undefined => {
+    if (seated) return rosterMembers(ctx.spec.sport, ctx.cfg, e.seed);
+    if (linked) return [{ fullName: e.displayName, squadNumber: 1, isCaptain: true }];
+    return undefined;
+  };
   const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => {
-    const members = membersOf(e.seed);
+    const members = membersOf(e);
     return { ...e, kind, ...(members !== undefined ? { members } : {}) };
   }));
-  // The rosters are the PRODUCT's person ids, read back for every entrant it
+  // The members are the PRODUCT's person ids, read back for every entrant it
   // answered — never the inputs. A roster that is not the full declared size
-  // would play short, so it is refused by name. (An entrant the product never
-  // stored is life-built-as-posted's red, not this guard's.)
+  // would play short, and an americano individual with no person is no
+  // player, so each is refused by name. (An entrant the product never stored
+  // is life-built-as-posted's red, not this guard's.)
   const rosters = new Map<string, readonly EntrantMember[]>();
-  const size = seated ? rosterSize(ctx.spec.sport, ctx.cfg) : 0;
-  if (seated) {
+  const personsOf = new Map<string, readonly string[]>();
+  const size = seated ? rosterSize(ctx.spec.sport, ctx.cfg) : linked ? 1 : 0;
+  if (size > 0) {
     for (const e of entrants) {
       const stored = await ctx.driver.entrantMembers(e.id);
-      if (stored.length !== size) throw new Error(`scenario: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} roster member(s), ${size} posted — a short roster would play short`);
-      rosters.set(e.id, stored);
+      if (stored.length !== size) {
+        throw new Error(seated
+          ? `scenario: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} roster member(s), ${size} posted — a short roster would play short`
+          : `scenario: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} linked person(s), ${size} posted — americano plays the person behind each entrant (stages.ts americanoGen)`);
+      }
+      if (seated) rosters.set(e.id, stored);
+      if (persons) personsOf.set(e.id, stored.map((m) => m.person_id));
     }
   }
   await ctx.driver.start(division.id);
@@ -181,7 +222,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   rec.notes.push(`stage ${stage.kind} status after start: ${stage.status}`);
   return {
     competition, division, stage, entrants, built,
-    kind, entrantIds: new Set(entrants.map((e) => e.id)), rosterless, rosters,
+    kind, entrantIds: new Set(entrants.map((e) => e.id)), rosterless, rosters, persons: personsOf,
     seedOf: (id) => seeds.get(id) ?? Number.MAX_SAFE_INTEGER,
     idOfSeed: (seed) => {
       const e = entrants.find((x) => x.seed === seed);

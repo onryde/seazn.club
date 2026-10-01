@@ -7,7 +7,7 @@ import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { describe, expect, it } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
 import { RULES, decide } from "../lib/applicability.ts";
-import { SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
 import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
@@ -18,7 +18,7 @@ import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  DRIVING_WAVE, LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, playStage, setUpDivision, snapshot,
+  DRIVING_WAVE, LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, buildDivision, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
   type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -1347,6 +1347,121 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     const callers = sources.filter((p) => /\bassertLineup\(/.test(read(p)));
     expect(callers).toEqual(["packages/engine/src/sport/catalog.ts"]);
     expect(read("packages/engine/src/sport/catalog.ts").match(/\bassertLineup\(/g)).toHaveLength(1);
+  });
+});
+
+// --- W1-driving Task 5: linked persons for americano/mexicano individuals (fold-in beneath ruling 49) ---
+/** Takes an americano stage (the fake league refuses every kind but its own)
+ *  and keeps the addEntrants payload exactly as posted. */
+class AmericanoFake extends FakeLeagueDriver {
+  readonly posted: EntrantInput[] = [];
+  override acceptsStage(kind: string): boolean { return kind === "americano"; }
+  override addEntrants(d: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
+    this.posted.push(...es);
+    return super.addEntrants(d, es);
+  }
+}
+/** The brief's field: americano needs at least 4 players (stages.ts americanoGen STAGE_NOT_READY). */
+const AMERICANO_ENTRANTS = 8;
+/** The rows the brief names: americano and mexicano are one stage kind, and the row's mode decides. */
+const AMERICANO_ROWS = ["americano", "mexicano"] as const;
+const builtOn = (driver: FakeLeagueDriver, row: Row, sport: string) =>
+  buildDivision(ctxFor(driver, "LIFECYCLE", { row, sport, variant: offlineBuilderDefault(sport) }), new Recorder(), AMERICANO_ENTRANTS);
+
+describe("linked persons for americano and mexicano individuals (W1-driving Task 5, fold-in beneath ruling 49)", () => {
+  it("empty case first: no stage bodies need no persons; across every catalogue row, exactly the two americano rows do", () => {
+    expect(personsNeeded([])).toBe(false);
+    const needing = ROW_KEYS.filter((r) => personsNeeded(stagesForRow(r)));
+    expect(ROW_KEYS.length, "rows checked").toBeGreaterThan(AMERICANO_ROWS.length);
+    expect(needing).toEqual([...AMERICANO_ROWS]);
+  });
+
+  it("a non-americano individual row is unchanged: no members key, no member read, both maps empty", async () => {
+    const driver = new FakeLeagueDriver();
+    const setup = await setUpDivision(ctxFor(driver, "LIFECYCLE", { sport: "badminton", variant: offlineBuilderDefault("badminton") }), new Recorder(), AMERICANO_ENTRANTS);
+    expect(setup.entrants).toHaveLength(AMERICANO_ENTRANTS);
+    expect(driver.calls.filter((c) => c === "entrantMembers")).toEqual([]);
+    expect(driver.memberCount()).toBe(0);
+    expect(setup.persons.size).toBe(0);
+    expect(setup.rosters.size).toBe(0);
+  });
+
+  it("a non-americano team row seats rosters (Task 4) and still maps no persons — persons is the americano rows' map alone", async () => {
+    const setup = await setUpDivision(ctxFor(new FakeLeagueDriver(), "LIFECYCLE", { sport: "football", variant: offlineBuilderDefault("football") }), new Recorder(), AMERICANO_ENTRANTS);
+    expect(setup.rosters.size).toBe(AMERICANO_ENTRANTS);
+    expect(setup.persons.size).toBe(0);
+  });
+
+  it.each(AMERICANO_ROWS)("%s, every sport at its builder default: an individual carries exactly one linked person, a team its full roster, and persons holds the product's ids — counted", async (row) => {
+    let individuals = 0;
+    let teams = 0;
+    for (const sport of SPORT_KEYS) {
+      const driver = new AmericanoFake();
+      const setup = await builtOn(driver, row, sport);
+      const label = `${row}|${sport}`;
+      expect(driver.posted, label).toHaveLength(AMERICANO_ENTRANTS);
+      expect(setup.persons.size, `${label}: persons per entrant`).toBe(AMERICANO_ENTRANTS);
+      for (const e of setup.entrants) {
+        // The product's ids, as entrantMembers answers them — never the inputs.
+        const stored = (await driver.entrantMembers(e.id)).map((m) => m.person_id);
+        expect(setup.persons.get(e.id), `${label} ${e.id}`).toEqual(stored);
+      }
+      if (entrantKindFor(sport, resolveSportCfg(sport, offlineBuilderDefault(sport))) === "team") {
+        teams++;
+        const size = rosterSize(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)));
+        expect(driver.posted.map((p) => p.members?.length), label).toEqual(Array.from({ length: AMERICANO_ENTRANTS }, () => size));
+        expect(setup.rosters.size, `${label}: full rosters`).toBe(AMERICANO_ENTRANTS);
+        for (const e of setup.entrants) expect(setup.persons.get(e.id), `${label} ${e.id}: the whole roster`).toEqual(setup.rosters.get(e.id)!.map((m) => m.person_id));
+      } else {
+        individuals++;
+        // The brief's member: one synthetic person with the entrant's own name.
+        expect(driver.posted.map((p) => p.members), label).toEqual(Array.from({ length: AMERICANO_ENTRANTS }, (_, i) => [{ fullName: `Matrix Player ${i + 1}`, squadNumber: 1, isCaptain: true }]));
+        expect(setup.rosters.size, `${label}: an individual is never a roster`).toBe(0);
+        const ids = [...setup.persons.values()];
+        expect(ids.every((p) => p.length === 1), `${label}: one person each`).toBe(true);
+        expect(new Set(ids.flat()).size, `${label}: distinct persons`).toBe(AMERICANO_ENTRANTS);
+      }
+    }
+    expect(individuals, "individual sports checked").toBeGreaterThan(0);
+    expect(teams, "team sports checked").toBeGreaterThan(0);
+    expect(individuals + teams).toBe(SPORT_KEYS.length);
+  });
+
+  it("the posted mode rides the stage body: americano and mexicano post the same stage kind with their own mode", async () => {
+    const modes: string[] = [];
+    for (const row of AMERICANO_ROWS) {
+      const setup = await builtOn(new AmericanoFake(), row, "badminton");
+      expect(setup.built.posted.stages.map((s) => s.kind)).toEqual(["americano"]);
+      modes.push(String((setup.built.posted.stages[0]!.config as { mode?: unknown }).mode));
+    }
+    expect(modes).toEqual([...AMERICANO_ROWS]);
+  });
+
+  it("persons guard: an individual the product stores with no linked person is refused by name before the division starts", async () => {
+    class DropsAPerson extends AmericanoFake {
+      override entrantMembers(id: string) { return super.entrantMembers(id).then((ms) => (id === "e3" ? [] : ms)); }
+    }
+    const driver = new DropsAPerson();
+    await expect(builtOn(driver, "americano", "badminton"))
+      .rejects.toThrow("scenario: entrant e3 (seed 3) reads back 0 linked person(s), 1 posted — americano plays the person behind each entrant (stages.ts americanoGen)");
+    expect(driver.calls).not.toContain("start");
+  });
+
+  it("a pair-kind division on an americano row is refused by name before any driver call — the harness defines no pair members", async () => {
+    const driver = new AmericanoFake();
+    const base = ctxFor(driver, "LIFECYCLE", { row: "americano", sport: "badminton", variant: offlineBuilderDefault("badminton") });
+    const ctx: ScenarioContext = { ...base, cfg: { ...(base.cfg as Record<string, unknown>), entrants: { kinds: ["pair"] } } };
+    expect(entrantKindFor("badminton", ctx.cfg)).toBe("pair");
+    await expect(buildDivision(ctx, new Recorder(), AMERICANO_ENTRANTS))
+      .rejects.toThrow("scenario: americano on a pair-kind division — americano plays one person per entrant (stages.ts americanoGen) and the harness posts no pair members");
+    expect(driver.calls).toEqual([]);
+  });
+
+  it.each(AMERICANO_ROWS)("%s through setUpDivision is still the format deferral, before any driver call, until the americano loop lands", async (row) => {
+    const driver = new AmericanoFake();
+    await expect(setUpDivision(ctxFor(driver, "LIFECYCLE", { row, sport: "badminton", variant: offlineBuilderDefault("badminton") }), new Recorder(), AMERICANO_ENTRANTS))
+      .rejects.toBeInstanceOf(ScenarioUnsupported);
+    expect(driver.calls).toEqual([]);
   });
 });
 
