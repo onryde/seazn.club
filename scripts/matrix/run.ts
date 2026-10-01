@@ -111,7 +111,7 @@ import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
 import { routeTo } from "./lib/routing.ts";
 import {
-  API_ONLY_BROWSER_SET, LAYER_PLANNERS, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, widthSweepPlanner,
+  API_ONLY_BROWSER_SET, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type PlannedLayerCase,
 } from "./lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
@@ -279,6 +279,9 @@ export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.fre
   // W1-driving Task 12 (ruling 48): every catalogue cell × the four scripts,
   // plus cricket's test cases — and it takes --only / --scenario.
   [W1_DRIVING_SET]: w1DrivingPlanner,
+  // W1-driving Task 13 (ruling 47): one L1 cell per capability, plus the two
+  // template-only cells through their gallery cards — layered, at 1280.
+  [W1_DRIVING_L1_SET]: w1DrivingL1Planner,
 });
 
 export class UnknownSet extends Error {

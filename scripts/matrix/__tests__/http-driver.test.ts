@@ -94,7 +94,9 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
       ["org", { comp: { org_id: "org-2" } }, OrgMismatch],
       ["degraded, with the note", { comp: { visibility: "private" }, answer: { visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 } } }, VisibilityDegraded],
       ["private, no note", { comp: { visibility: "private" } }, VisibilityDegraded],
-      ["two divisions", { answer: { divisions: [{ id: "d9", stages: [] }, { id: "d8", stages: [] }] } }, DriverMisuse],
+      // The first division's stages are the ones the product lists, so only
+      // the one-division refusal can catch it (the stage-id guard cannot).
+      ["two divisions", { answer: { divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }, { id: "d8", stages: [{ id: "s2", fixtureCount: 0 }] }] } }, DriverMisuse],
       ["other stages", { stages: [{ id: "s7", seq: 1, kind: "group", config: {}, status: "pending" }] }, DriverMisuse],
     ];
     let refused = 0;
@@ -104,6 +106,10 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
       refused++;
     }
     expect(refused).toBe(cases.length);
+    // Two divisions are refused by their count, before anything is read back.
+    const two = fake(replies({ answer: { divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }, { id: "d8", stages: [] }] } }));
+    await expect(drv(two.t).createFromTemplate("box-league", { name: "M", endsOn: "2030-12-31" })).rejects.toThrow(/built 2 division\(s\)/);
+    expect(two.calls.filter((c) => c.method !== "POST")).toEqual([]);
   });
 
   it("readBackTemplate alone (the browser path's read-back) makes no POST", async () => {

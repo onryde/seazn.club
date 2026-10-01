@@ -53,7 +53,7 @@ export const m1Walkover: Scenario = {
   canaryCheck: "m1-walkover-recorded",
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "M1"));
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "M1", ctx.spec.template));
     const seed1 = setup.idOfSeed(1);
     let target: Target | null = null;
     const targetOf = TARGET_OF[targetFamily(setup.stage.kind)];

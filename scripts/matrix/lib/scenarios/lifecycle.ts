@@ -17,7 +17,7 @@ export const lifecycle: Scenario = {
   canaryCheck: null,
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "LIFECYCLE"));
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "LIFECYCLE", ctx.spec.template));
     // W1-driving T6: the lock probe keeps its place — after stage 1's play,
     // before its /complete (playDivision asks every reached stage to complete,
     // so the hook always runs; a missing probe is a harness bug, named).

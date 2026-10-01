@@ -204,7 +204,7 @@ export const r4Withdrawal: Scenario = {
   canaryCheck: "r4-cascade-consistent",
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "R4"));
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "R4", ctx.spec.template));
     const seed3 = setup.idOfSeed(3);
     const family = familyOf(setup.stage.kind);
     let withdrawal: WithdrawalObs | null = null;

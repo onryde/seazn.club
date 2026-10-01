@@ -36,6 +36,20 @@ export function inSquadOrder(members: readonly EntrantMember[]): EntrantMember[]
 export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
 export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
+/** POST /api/v1/competitions/from-template's answer (api-v1/schemas.ts
+ *  FromTemplateResult, W1-driving Task 13): ids and the APPLIED visibility —
+ *  no org id, no sport, no stage kind, so the caller reads those back. */
+export interface FromTemplateAnswer {
+  competitionId: string;
+  slug: string;
+  visibility: string;
+  public_quota_degraded?: unknown;
+  divisions: { id: string; stages: { id: string; fixtureCount: number }[] }[];
+  templateKey: string;
+  templateVersion: number;
+}
+/** What one template instantiation built, read back from the product. */
+export interface FromTemplateOut { readonly competition: CompetitionRef; readonly division: DivisionRef; readonly stages: readonly StageRef[] }
 /** `kind` (W1-driving Task 8): the product serves it (entrants.ts COLS) and
  *  lists EVERY entrant of the division, the `pair` entrants an americano
  *  stage mints included (entrants.ts listEntrants has no kind filter).
@@ -122,6 +136,10 @@ export interface StagesProbe { status: number; code: string | null; featureKey: 
 
 export interface OrganiserDriver {
   createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef>;
+  /** W1-driving Task 13 (ruling 47): ONE organiser act builds a catalog
+   *  template's competition, division and stages — and no entrant
+   *  (usecases/templates.ts). The answer is the product's, read back. */
+  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut>;
   createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef>;
   getDivision(divisionId: string): Promise<DivisionRef>;
   postStages(divisionId: string, stages: readonly StagePostBody[]): Promise<StageRef[]>;

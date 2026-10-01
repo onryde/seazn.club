@@ -8,8 +8,10 @@
 //
 // What it records beside the scenario's own checks (checks()):
 //  - organiser-ui-path: the builder built the division (pass), or no organiser
-//    control builds this row (fail, naming the owning wave — D7), or only a
-//    catalog template does (abstain, → W1-driving);
+//    control builds this row (fail, naming the owning wave — D7). A
+//    template-only cell has no such check: its case carries the template, and
+//    the gallery card builds competition, division and stages in one act
+//    (createFromTemplate, W1-driving Task 13, ruling 47);
 //  - builder-posted-as-harness: what the builder posted against the harness's
 //    own bodies for the row, path by path;
 //  - ui-standings-match / ui-public-standings-match / ui-champion-shown: the
@@ -28,10 +30,10 @@
 // Every wait is derived from the product's constants (AGENTS class 20;
 // browser-budget.test.ts scans this file for a flat timeout).
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
-import { API_ONLY_UI_WAVE, TEMPLATE_DRIVING, apiOnlyUiPath } from "../api-only-ui.ts";
+import { API_ONLY_UI_WAVE, apiOnlyUiPath } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
-import { createCompetitionUi } from "../browser/pages/competition.ts";
+import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/competition.ts";
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
@@ -54,7 +56,7 @@ import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from ".
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -68,6 +70,7 @@ export type Replay = typeof replayEvents;
 /** The page objects the driver clicks through; injectable so its tests need no browser. */
 export interface BrowserPages {
   readonly createCompetitionUi: typeof createCompetitionUi;
+  readonly createFromTemplateUi: typeof createFromTemplateUi;
   readonly createDivisionUi: typeof createDivisionUi;
   readonly addEntrantsUi: typeof addEntrantsUi;
   readonly withdrawUi: typeof withdrawUi;
@@ -81,13 +84,14 @@ export interface BrowserPages {
   readonly readPublicUi: typeof readPublicUi;
 }
 export const REAL_PAGES: BrowserPages = Object.freeze({
-  createCompetitionUi, createDivisionUi, addEntrantsUi, withdrawUi, startUi, generateUi,
+  createCompetitionUi, createFromTemplateUi, createDivisionUi, addEntrantsUi, withdrawUi, startUi, generateUi,
   completeStageUi, openFixtureUi, forfeitUi, finalizeUi, readStandingsUi, readPublicUi,
 });
 
-/** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger)
- *  and the roster filler the entrants tab cannot do (HttpDriver.setMembers). */
-export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger" | "setMembers">;
+/** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger),
+ *  the roster filler the entrants tab cannot do (HttpDriver.setMembers) and the
+ *  read-back of what a template card built (HttpDriver.readBackTemplate). */
+export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger" | "setMembers" | "readBackTemplate">;
 
 export interface Clock { now(): number; sleep(ms: number): Promise<void> }
 const REAL_CLOCK: Clock = { now: () => Date.now(), sleep: (ms) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }) };
@@ -358,7 +362,26 @@ export class BrowserDriver implements OrganiserDriver {
     throw new DriverMisuse(`browser: fixture ${fixtureId} is in no division this driver built — the run sheet cannot find its row`);
   }
 
+  /** The cell's catalog template when the case is on one of the two
+   *  template-only cells (api-only-ui.ts), else null. */
+  #templateReaching(): string | null {
+    const row = this.#spec.row;
+    if (!isApiOnly(row)) return null;
+    const path = apiOnlyUiPath(row, this.#spec.sport);
+    return path.reachable ? path.template : null;
+  }
+
   async createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef> {
+    // W1-driving Task 13: a template case's competition is its card's, and a
+    // template-only cell without its template has no right organiser act (the
+    // blank wizard + builder cannot build the row). Refused before anything lands.
+    if (this.#spec.template !== undefined) {
+      throw new DriverMisuse(`browser: case ${this.#spec.caseId} carries catalog template ${this.#spec.template} — its competition is created by its card (createFromTemplate), never the blank wizard`);
+    }
+    const reaching = this.#templateReaching();
+    if (reaching !== null) {
+      throw new DriverMisuse(`browser: ${this.#spec.row}|${this.#spec.sport} is built through catalog template ${reaching} — plan the case with that template (CaseSpec.template, --set w1-driving-l1) so it sets up through the card`);
+    }
     if (!this.#wants("createCompetition")) {
       this.#ledger.record("createCompetition", "http");
       const ref = await this.#write(() => this.#http.createCompetition(input));
@@ -375,17 +398,50 @@ export class BrowserDriver implements OrganiserDriver {
     return { id: c.id, slug: c.slug, orgId: c.org_id };
   }
 
+  /** W1-driving Task 13 (ruling 47): the template case's ONE organiser act —
+   *  the gallery card builds the competition, the division and its stages,
+   *  so createCompetition AND createDivision are recorded on the path it took
+   *  (the browser while either still owes its turn, else over http), and no
+   *  stage is ever posted. The product's answer is read back over http (org,
+   *  visibility, division, stages — HttpDriver.readBackTemplate); only what
+   *  held is registered for the page objects. */
+  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+    if (this.#spec.template !== key) {
+      throw new DriverMisuse(`browser: case ${this.#spec.caseId} carries template ${this.#spec.template ?? "none"}; createFromTemplate(${key}) would build another shape under its name`);
+    }
+    let out: FromTemplateOut;
+    if (this.#wants("createCompetition") || this.#wants("createDivision")) {
+      this.#ledger.record("createCompetition", "browser");
+      this.#ledger.record("createDivision", "browser");
+      const answer = await this.#write(() => this.#ui((p) => p.createFromTemplateUi(this.#ctx, key, input)));
+      out = await this.#http.readBackTemplate(answer);
+    } else {
+      this.#ledger.record("createCompetition", "http");
+      this.#ledger.record("createDivision", "http");
+      out = await this.#write(() => this.#http.createFromTemplate(key, input));
+    }
+    this.#competitions.set(out.competition.id, out.competition.slug);
+    this.#register(out.division.id, out.competition.slug, out.division.slug);
+    for (const s of out.stages) this.#stageDivision.set(s.id, out.division.id);
+    return out;
+  }
+
   /** D7: an API-only row has no organiser control; the text names who owns it
    *  (api-only-ui.ts, the one authority the layer planner reads too). Answers
-   *  the row's route, which the mixed ledger's exemption carries. */
+   *  the row's route, which the mixed ledger's exemption carries. A
+   *  template-only cell never gets here by a planned path (createCompetition
+   *  refuses it without its template, and a template case's division is its
+   *  card's), so reaching it is refused by name. */
   #judgeApiOnlyPath(row: ApiOnlyRowKey): Route {
     const path = apiOnlyUiPath(row, this.#spec.sport);
-    const text = `${path.reason} → ${path.wave}`;
+    if (path.reachable) {
+      throw new DriverMisuse(`browser: ${row}|${this.#spec.sport} is ${path.reason} — its division is the card's (createFromTemplate), never a createDivision`);
+    }
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
-      this.#checks.push(path.template === null ? assertion("organiser-ui-path", [{ ok: false, note: text }]) : assertion("organiser-ui-path", [], text));
+      this.#checks.push(assertion("organiser-ui-path", [{ ok: false, note: `${path.reason} → ${path.wave}` }]));
     }
-    return path.template === null ? API_ONLY_UI_WAVE[row] : TEMPLATE_DRIVING;
+    return API_ONLY_UI_WAVE[row];
   }
 
   async createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
@@ -394,8 +450,10 @@ export class BrowserDriver implements OrganiserDriver {
     const row = this.#spec.row;
     const apiOnly = isApiOnly(row);
     if (apiOnly || !this.#wants("createDivision")) {
+      // Judged first: a refused path records no invocation.
+      const route = apiOnly ? this.#judgeApiOnlyPath(row) : null;
       this.#ledger.record("createDivision", "http");
-      if (apiOnly) this.#ledger.exempt("createDivision", this.#judgeApiOnlyPath(row));
+      if (route !== null) this.#ledger.exempt("createDivision", route);
       const ref = await this.#write(() => this.#http.createDivision(competitionId, input));
       this.#register(ref.id, compSlug, ref.slug);
       return ref;

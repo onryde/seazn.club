@@ -165,20 +165,20 @@ export class FakeLeagueDriver implements OrganiserDriver {
   #instantiate(key: string): FromTemplateAnswer {
     const raw0 = rawCatalogTemplate(key);
     const raw = this.templateOverride === null ? raw0 : this.templateOverride(raw0);
-    const d = raw.divisions[0]!;
+    const d = raw.divisions[0];
     if (raw.divisions.length !== 1 || d.stages.length !== 1) throw new Error(`fake: league only — the league fake instantiates a one-division, one-stage template (${key} has ${raw.divisions.length} division(s), ${d.stages.length} stage(s))`);
     this.sport = d.sportKey;
     this.variant = d.variantKey;
     this.cfg = resolveSportCfg(d.sportKey, d.variantKey, {});
     this.divisionConfig = { ...(resolveSportCfg(d.sportKey, d.variantKey, {}) as Record<string, unknown>) };
-    const st = d.stages[0]!;
+    const st = d.stages[0];
     this.stage = { id: "s1", seq: 1, kind: st.kind, config: templateStageConfig(st), status: "pending" };
     return { competitionId: "c1", slug: `tmpl-${key}`, visibility: "public", divisions: [{ id: "d1", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: key, templateVersion: raw.version };
   }
   #readBack(a: FromTemplateAnswer): FromTemplateOut {
     return {
       competition: { id: a.competitionId, slug: a.slug, orgId: this.orgId },
-      division: { id: a.divisions[0]!.id, slug: "d", sportKey: this.sport, variantKey: this.variant, config: { ...this.divisionConfig } },
+      division: { id: a.divisions[0].id, slug: "d", sportKey: this.sport, variantKey: this.variant, config: { ...this.divisionConfig } },
       stages: this.stage === null ? [] : [{ ...this.stage }],
     };
   }

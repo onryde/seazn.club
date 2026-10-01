@@ -15,7 +15,7 @@ import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -41,6 +41,13 @@ export interface HttpDriverOptions {
  *  awaited: it may still land, which is why a timed-out /complete is recorded
  *  as an unknown outcome (completeStage). */
 export const REQUEST_TIMEOUT_MS = 60_000;
+
+/** The visibility a template create applies when none is asked
+ *  (schemas.ts CreateFromTemplate `visibility: Visibility.default("public")`,
+ *  pinned by http-driver.test.ts). The gallery sends none, so neither does
+ *  createFromTemplate: both paths build the same competition, and anything
+ *  else applied is the public-dashboard cap's degrade (W1-driving Task 13). */
+export const TEMPLATE_VISIBILITY = "public";
 
 const toDivisionRef = (d: { id: string; slug: string; sport_key: string; variant_key: string; config: Record<string, unknown> | null }): DivisionRef =>
   ({ id: d.id, slug: d.slug, sportKey: d.sport_key, variantKey: d.variant_key, config: d.config ?? {} });
@@ -104,6 +111,36 @@ export class HttpDriver implements OrganiserDriver {
     // object, never `true`, so the row is the one authority read here.
     if (c.visibility !== "unlisted") throw new VisibilityDegraded(c.slug);
     return { id: c.id, slug: c.slug, orgId: c.org_id };
+  }
+
+  /** W1-driving Task 13: the card's POST, then the read-back. The body is the
+   *  gallery's (template-gallery.tsx submit) less its optional version guard
+   *  and start date: no visibility, so the product's default applies. */
+  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+    const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", { template_key: key, name: input.name, ends_on: input.endsOn });
+    return this.readBackTemplate(answer);
+  }
+
+  /** What a template create built, read back — the answer carries ids only
+   *  (FromTemplateResult). The browser path's read-back too (BrowserDriver).
+   *  Refused by name: a competition outside the case org (RF4, as
+   *  createCompetition), an applied visibility other than the default (the
+   *  row is the one authority, as createCompetition reads it), a template
+   *  with other than one division, and stages that are not the ones the
+   *  create answered. */
+  async readBackTemplate(answer: FromTemplateAnswer): Promise<FromTemplateOut> {
+    if (answer.divisions.length !== 1) throw new DriverMisuse(`driver: template ${answer.templateKey} built ${answer.divisions.length} division(s); a case drives exactly one`);
+    const c = await this.#call<{ id: string; slug: string; org_id: string; visibility: string }>(`/api/v1/competitions/${answer.competitionId}`);
+    if (c.org_id !== this.#expectedOrgId) throw new OrgMismatch(this.#expectedOrgId, c.org_id);
+    if (c.visibility !== TEMPLATE_VISIBILITY) throw new VisibilityDegraded(c.slug);
+    const created = answer.divisions[0];
+    const division = await this.getDivision(created.id);
+    const stages = [...await this.listStages(division.id)].sort((a, b) => a.seq - b.seq);
+    const asked = created.stages.map((s) => s.id);
+    if (JSON.stringify(stages.map((s) => s.id)) !== JSON.stringify(asked)) {
+      throw new DriverMisuse(`driver: division ${division.id} lists stages ${stages.map((s) => s.id).join(", ") || "none"}; template ${answer.templateKey} answered ${asked.join(", ") || "none"}`);
+    }
+    return { competition: { id: c.id, slug: c.slug, orgId: c.org_id }, division, stages };
   }
 
   async createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {

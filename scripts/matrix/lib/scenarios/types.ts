@@ -17,6 +17,10 @@ export interface CaseSpec {
   caseId: string; row: RowKey; sport: string; variant: string; scenario: ScenarioKey; canary: boolean;
   deny?: readonly string[];
   overrides?: Readonly<Record<string, unknown>>;
+  /** W1-driving Task 13 (ruling 47, D11): the catalog template whose gallery
+   *  card builds this case's division (lib/templates.ts) — set by the planner
+   *  on the two template-only cells, absent everywhere else. */
+  template?: string;
 }
 
 /** `denied`: the feature keys prepareCaseOrg actually denied the case org

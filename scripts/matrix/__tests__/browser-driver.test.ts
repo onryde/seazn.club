@@ -1315,7 +1315,7 @@ describe("BrowserDriver — the template card path (W1-driving Task 13)", () => 
   it("setUpDivision on the template case: the card, never postStages, the template's own 16 entrants, and life-built-as-posted judged against the catalog JSON", async () => {
     const http = new FakeHttp(ORG);
     const s = boxSpec();
-    const { driver, pageCalls } = make({ http, spec: s, pages: { ...cardOn(http), addEntrantsUi: async (_c, w, es) => (await http.addEntrants(w.divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))) } });
+    const { driver, pageCalls } = make({ http, spec: s, pages: { ...cardOn(http), addEntrantsUi: async (_c, w, es) => (await http.addEntrants(w.divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))).map((r, i) => ({ ...r, kind: es[i]!.kind })) } });
     const ctx = { driver, spec: s, orgSlug: ORG_SLUG, cfg: resolveSportCfg(s.sport, s.variant), tag: "t13", denied: [] };
     const setup = await setUpDivision(ctx, new Recorder(), fieldSizeFor(s.row, "LIFECYCLE", s.template));
     expect(pageCalls.filter((c) => c === "createFromTemplateUi" || c === "createCompetitionUi" || c === "createDivisionUi")).toEqual(["createFromTemplateUi"]);

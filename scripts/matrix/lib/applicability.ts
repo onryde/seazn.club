@@ -8,6 +8,7 @@ import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
 import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
+import { isLonePagePlayoff } from "./field-size.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
 import { foldStream } from "./fold.ts";
 import { routeTo, type Route } from "./routing.ts";
@@ -150,8 +151,9 @@ const not = (p: Predicate): Predicate => (f) => !p(f);
 const hasKind = (...kinds: readonly string[]): Predicate => (f) => f.stages.some((s) => kinds.includes(s.kind));
 const multiStage: Predicate = (f) => f.stages.length > 1;
 /** A single page-playoff stage: the engine's fixed 4-seat shape (generatePagePlayoff:
- *  exactly 4 entrants), so no odd field can enter it (W1-driving Task 2). */
-const onlyPagePlayoff: Predicate = (f) => f.stages.length === 1 && f.stages[0].kind === "page_playoff";
+ *  exactly 4 entrants), so no odd field can enter it (W1-driving Task 2). The
+ *  one predicate field-size.ts seeds 4 by (carry m2-1, W1-driving Task 13). */
+const onlyPagePlayoff: Predicate = (f) => isLonePagePlayoff(f.stages);
 const entrant = (...kinds: string[]): Predicate => (f) => f.entrantKinds.some((k) => kinds.includes(k));
 
 /** Text-pinned copy of the product's points-table kinds

@@ -2041,6 +2041,21 @@ describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
     expect(driver.calls).not.toContain("postStages");
   });
 
+  it("each scenario that seeds a field passes the case's template to fieldSizeFor (D11): LIFECYCLE, M1 and R4 add the template's 16; F1 is refused before any call", async () => {
+    let checked = 0;
+    for (const scenario of ["LIFECYCLE", "M1", "R4"] as const) {
+      class StopsAtStart extends FakeLeagueDriver { override start(): never { throw new Error("stop: setup reached start"); } }
+      const driver = new StopsAtStart();
+      await expect(SCENARIOS[scenario].run(boxCtx(driver, { scenario, caseId: `group_only|badminton|short|${scenario}` })), scenario).rejects.toThrow("stop: setup reached start");
+      expect(driver.entrants.length, scenario).toBe(box.divisions[0]!.entrantCount);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    const f1 = new FakeLeagueDriver();
+    await expect(SCENARIOS.F1.run(boxCtx(f1, { scenario: "F1" }))).rejects.toThrow(/box-league/);
+    expect(f1.calls).toEqual([]);
+  });
+
   it("guards, before any driver call: a spec whose sport or variant is not the template's, an entrant kind the template does not seed, a template that does not build the row", async () => {
     const shapes: [string, Partial<CaseSpec>, unknown, RegExp][] = [
       ["variant", { variant: "bwf", caseId: "group_only|badminton|bwf|LIFECYCLE" }, undefined, /box-league.*short/],

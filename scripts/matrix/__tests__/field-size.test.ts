@@ -6,7 +6,7 @@
 import { generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
-import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
+import { NoFieldSize, fieldSizeFor, isLonePagePlayoff } from "../lib/field-size.ts";
 import { templateField } from "../lib/templates.ts";
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
@@ -47,6 +47,22 @@ describe("fieldSizeFor", () => {
     for (const row of fixed) expect(fieldSizeFor(row, "LIFECYCLE"), row).toBe(accepted);
     // The witness: today that is page_playoff_only alone (the name is the catalogue's answer, not field-size.ts's key).
     expect(fixed).toEqual(["page_playoff_only"]);
+  });
+  it("m2-1: isLonePagePlayoff — empty first (no stage is no page playoff, and no crash), then exactly the catalogue's verdict on every row", () => {
+    expect(isLonePagePlayoff([])).toBe(false);
+    // The predicate's contract is a LONE stage (W1-driving Task 2's F1 drop):
+    // a page playoff with a stage after it is not one. No catalogue row has
+    // that shape today, so this is the only case that tells the two apart.
+    expect(isLonePagePlayoff([{ kind: "page_playoff" }, { kind: "knockout" }])).toBe(false);
+    expect(isLonePagePlayoff([{ kind: "page_playoff" }])).toBe(true);
+    let checked = 0;
+    for (const row of ROW_KEYS) {
+      const b = stagesForRow(row);
+      expect(isLonePagePlayoff(b), row).toBe(b.length === 1 && b[0]!.kind === "page_playoff");
+      checked++;
+    }
+    expect(checked).toBe(ROW_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
   });
   it("every other row keeps 8 / 7, and the engine's stepladder takes the 8 (a differing case: 8 ≠ 4)", () => {
     let checked = 0;

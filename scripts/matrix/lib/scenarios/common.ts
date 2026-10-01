@@ -4,6 +4,7 @@
 // reachability from supportsDraws.
 import { EngineError, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
+import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
   RefusedCall, SEEDING_FAILED_AFTER_COMMIT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
 } from "../driver/types.ts";
@@ -154,14 +155,13 @@ export class Recorder {
   }
 }
 
-/** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
- *  americano / mexicano, multi-stage seeding (team rosters landed in
- *  W1-driving Task 4) — is its own wave. W1-driving Task 8 drove the last of
- *  the formats, so no deferral site names it any more (PF-10 keeps both).
- *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
-export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth deferred from the first slice (ruling 28)");
-/** The deferral sites' wave argument (the Q-A guard reads it by value). */
-export const DRIVING_WAVE = DRIVING_ROUTE.wave;
+/** W1-driving Task 13: the end date a template case's competition is
+ *  created with. Synthetic and far past any run (the product requires one,
+ *  schemas.ts CreateFromTemplate `ends_on`), and the same day the builder
+ *  path's createCompetition sends (http-driver.ts), so both create paths end
+ *  on one day. Ruling 28's DRIVING_ROUTE / DRIVING_WAVE are gone: no route
+ *  names the driving wave any more (scenario-catalogue.test.ts). */
+export const TEMPLATE_ENDS_ON = "2030-12-31";
 /** T12-R1: the product's withdraw-first guard (divisions.ts:857-871) refuses
  *  an entrants model that drops a kind an ACTIVE entrant holds, and an
  *  americano or mexicano stage MINTS pair entrants (stages.ts pairEntrantsFor)
@@ -194,19 +194,33 @@ export function personsNeeded(bodies: readonly StagePostBody[]): boolean {
  *  `buildDivision` is folded back in here). */
 export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
   // Every refusal fires before the first driver call.
-  const bodies = stagesForRow(ctx.spec.row);
+  const template = ctx.spec.template;
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
+  // W1-driving Task 13 (ruling 47, D11): a template case's stages are the
+  // catalog's, built by the product in the same act as its competition and
+  // division; the case "posts" exactly that shape, so life-built-as-posted
+  // judges the build against the catalog JSON.
+  const bodies = template === undefined ? stagesForRow(ctx.spec.row) : templateCase(ctx, kind, template);
   const rosterless = o.rosterlessTeams === true;
   const persons = personsNeeded(bodies);
   // No case drives a pair kind (no sport defaults to one; only a cfg entrants
   // override makes one), and the harness has no pair members to post.
   if (persons && kind === "pair") throw new Error(`scenario: ${ctx.spec.row} on a pair-kind division — americano plays one person per entrant (stages.ts americanoGen) and the harness posts no pair members`);
-  const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
-  const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
-  // The override crosses the wire as the division's config, as the editor sends it.
+  // The override crosses the wire as the division's config, as the editor
+  // sends it; a template case carries none (the card takes no rule).
   const config: Record<string, unknown> = { ...(ctx.spec.overrides ?? {}) };
-  const division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config });
-  await ctx.driver.postStages(division.id, bodies);
+  let competition: CompetitionRef;
+  let division: DivisionRef;
+  if (template !== undefined) {
+    // ONE organiser act: the card. It creates no entrant (templates.ts:351-366),
+    // and its stages are never posted.
+    ({ competition, division } = await ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON }));
+  } else {
+    const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
+    competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
+    division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config });
+    await ctx.driver.postStages(division.id, bodies);
+  }
   const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
   // Task 4 (fold-in beneath ruling 49): a team entrant carries the catalog's
   // full roster (D2). Task 5: on an americano row an individual carries one
@@ -266,6 +280,22 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
       return e.id;
     },
   };
+}
+
+/** A template case's guards and bodies (W1-driving Task 13), before any
+ *  driver call: the template must build the case's row (templateRow, which
+ *  also refuses a drifted catalog), the case must run on the template's own
+ *  sport and variant (its cfg was resolved for them), and the case's entrant
+ *  kind must be the one the template seeds. */
+function templateCase(ctx: ScenarioContext, kind: EntrantKind, key: string): StagePostBody[] {
+  const builds = templateRow(key);
+  if (builds !== ctx.spec.row) throw new Error(`scenario: catalog template ${key} builds ${builds}, not ${ctx.spec.row} (case ${ctx.spec.caseId})`);
+  const t = templateField(key);
+  if (t.sport !== ctx.spec.sport || t.variant !== ctx.spec.variant) {
+    throw new Error(`scenario: catalog template ${key} builds ${t.sport}/${t.variant}; case ${ctx.spec.caseId} runs ${ctx.spec.sport}/${ctx.spec.variant} — its cfg would score another variant`);
+  }
+  if (t.entrantKind !== kind) throw new Error(`scenario: catalog template ${key} seeds ${t.entrantKind} entrants; case ${ctx.spec.caseId}'s cfg plays ${kind}`);
+  return templateBodies(key);
 }
 
 /** The product's text for each engine lineup issue (fixtures.ts

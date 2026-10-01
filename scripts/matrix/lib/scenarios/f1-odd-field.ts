@@ -49,7 +49,7 @@ export const f1OddField: Scenario = {
   canaryCheck: "f1-round-size",
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "F1"));
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "F1", ctx.spec.template));
     const plays = await playDivision(ctx, rec, setup);
     const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
     const s = observed.stages[0];
