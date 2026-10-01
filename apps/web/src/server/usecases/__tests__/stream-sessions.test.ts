@@ -4735,16 +4735,15 @@ describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's prev
     expect(await consumesOf(sessionId)).toBe(1);
   });
 
-  it("EXPIRY, the differential pair: past the warming timeout a no-evidence read with nothing to carry HOLDS the timeout (still warming, no no_inbound_timeout); with a previous poll that read `disconnected` the carried word lets it expire", async () => {
-    // Nothing to carry: held, exactly as an unreadable ingest is (N1).
-    const held = await rig({ credits: 1, connectAfterMs: NEVER_MS });
-    const a = await createSession(held.auth, held.fixtureId, body(held.target.id), held.deps);
-    held.tick(PAST_WARMING_MS);
-    const cur = (await currentSession(held.auth, held.fixtureId, noEvidence(held)))!;
-    expect(cur).toMatchObject({ state: "warming", failReason: null, ingest: null });
-    expect(await held.row(a.sessionId)).toMatchObject({ state: "warming", fail_reason: null });
-    // The sequence: the next REAL read says disconnected, and the timeout fires on that evidence.
-    expect((await currentSession(held.auth, held.fixtureId, held.deps))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+  it("EXPIRY (M-4, final review): past the warming timeout a no-evidence read with NOTHING to carry is read as `unknown`, so the timeout runs normally (failed no_inbound_timeout, no consume) — never an unbounded hold; a carried `disconnected` expires the same way; the differential: a carried `connected` takes it LIVE instead", async () => {
+    // Nothing to carry: `unknown`, so the warming timeout fires on schedule (before M-4 it was held until the wall clock).
+    const bare = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const a = await createSession(bare.auth, bare.fixtureId, body(bare.target.id), bare.deps);
+    expect(await lastPollWord(a.sessionId), "PREMISE: no poll sample exists to carry").toBeUndefined();
+    bare.tick(PAST_WARMING_MS);
+    expect((await currentSession(bare.auth, bare.fixtureId, noEvidence(bare)))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+    expect(await bare.row(a.sessionId)).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+    expect(await consumesOf(a.sessionId), "a timed-out warming session consumed nothing").toBe(0);
 
     // A previous poll that read `disconnected`: carried, so the expiry has its evidence.
     const prior = await rig({ credits: 1, connectAfterMs: NEVER_MS });
@@ -4754,6 +4753,18 @@ describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's prev
     expect(await lastPollWord(b.sessionId)).toBe("disconnected");
     prior.tick(PAST_WARMING_MS);
     expect((await currentSession(prior.auth, prior.fixtureId, noEvidence(prior)))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+
+    // The differential: the SAME no-evidence read with a carried `connected` is not a timeout — the expiry's
+    // observation takes it live (one consume). Seated directly: a real `connected` poll would already have gone live.
+    const sending = await rig({ credits: 1, connectAfterMs: NEVER_MS });
+    const c = await createSession(sending.auth, sending.fixtureId, body(sending.target.id), sending.deps);
+    await sql`insert into fixture_stream_samples (session_id, sampled_at, source, ingest_state, output_state, raw)
+              values (${c.sessionId}, now(), 'poll', 'connected', 'unknown', '{}'::jsonb)`;
+    sending.tick(PAST_WARMING_MS);
+    const went = (await currentSession(sending.auth, sending.fixtureId, noEvidence(sending)))!;
+    expect(went.state, "a carried connected is evidence of video: live, not timed out").toBe("live");
+    expect(went.failReason).toBeNull();
+    expect(await consumesOf(c.sessionId)).toBe(1);
   });
 
   it("NO evidence on EITHER read (the input word says nothing about video AND the outputs read failed): the phone still shows its carried word, and the poll records nothing (m-2)", async () => {

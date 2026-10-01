@@ -530,11 +530,11 @@ async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): 
     reportIngestReadFailure(err, { sessionId, orgId: row.org_id, inputUid: inputId, site: "expiry" });
     return true;
   }
-  // G-a: a read with no evidence carries the previous poll's word. With nothing to carry the ingest is unseen, so it is
-  // held exactly as a failed read is (N1): a warming timeout's "no inbound video" must not be decided on a word that
-  // says nothing about video, over a phone that may be sending.
-  const phone = status.state ?? carriedIngest(await latestPollSample(sessionId));
-  if (phone === null) return true;
+  // G-a: a read with no evidence carries the previous poll's word. M-4 (final review; controller ruling): with NOTHING
+  // to carry it reads as `unknown`, so the warming timeout runs normally. It was held like a failed read (N1), and since
+  // a no-evidence read records nothing there was never anything to carry: a session whose every read said
+  // `new_configuration_accepted` held its destination and fixture to the wall clock (5 h), not the 10-min warming window.
+  const phone = status.state ?? carriedIngest(await latestPollSample(sessionId)) ?? "unknown";
   if (phone !== "connected") return false;
   await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${sessionId}`;
   await apply(sessionId, connectIfWarming, deps);
