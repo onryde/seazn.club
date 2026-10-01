@@ -690,7 +690,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         if (action === "unpair") {
           setError(msg("schedule.error.unpairFailed"));
         } else {
-          const classified = classifyActError(err, msg, locale);
+          // The stage list lets an early Generate on a waiting stage name
+          // both stages (generatePreconditionMessage).
+          const classified = classifyActError(err, msg, locale, (id) => stages.find((s) => s.id === id)?.name);
           if (classified.tone === "warning") setWarning(classified.text);
           else setError(classified.text);
           if (classified.refresh) router.refresh();
@@ -795,10 +797,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           banner: "Générer les matchs" did nothing because the entrants can't
           fill the configured groups yet, not because it was already done. */}
       {warning && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">{warning}</p>
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="schedule-warning">
+          {warning}
+        </p>
       )}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-testid="schedule-error">
+          {error}
+        </p>
       )}
 
       {/* Print (item 8). The tz caption that used to sit beside this moved
@@ -1346,11 +1352,27 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     ONCE, division-wide, in the `<RunSheet>` mounted below the
                     stage loop (Competition Desk W2, Task 4, steps 5+6). This
                     card keeps only the "no fixtures generated yet" message. */}
-                {stageFixtures.length === 0 && (
-                  <p className="px-4 py-4 text-sm text-slate-500">
-                    {canEdit ? msg("schedule.noFixtures.can") : msg("schedule.noFixtures.view")}
-                  </p>
-                )}
+                {/* An `on_complete` progression stage (what "Add stage"
+                    creates) gets no fixtures until the stage before it
+                    completes, so "generate them when entrants are
+                    registered" was wrong advice there — it names the stage
+                    it is waiting on instead (owner-approved "Option 1,
+                    wording only"). Every other empty stage keeps today's
+                    copy. */}
+                {stageFixtures.length === 0 && (() => {
+                  const waitingOn = progressionWaitSource(stage, stages);
+                  return (
+                    <p className="px-4 py-4 text-sm text-slate-500" data-testid="stage-no-fixtures">
+                      {waitingOn
+                        ? msg(canEdit ? "schedule.noFixtures.awaitingCan" : "schedule.noFixtures.awaitingView", {
+                            stage: waitingOn.name,
+                          })
+                        : canEdit
+                          ? msg("schedule.noFixtures.can")
+                          : msg("schedule.noFixtures.view")}
+                    </p>
+                  );
+                })()}
 
                 {/* Fix round 1 — a non-editing viewer gets no StageRail at all
                     (it returns null outright for !canEdit), so their read-only
@@ -1514,6 +1536,33 @@ export function addStageProgression(topN: number) {
     placement: "rank_order" as const,
     timing: "on_complete" as const,
   };
+}
+
+/**
+ * The stage an `on_complete` progression stage is still waiting on, or null.
+ *
+ * Mirrors the server's own refusal exactly (stages.ts generateStageFixtures'
+ * pre-flight → STAGE_NOT_READY `previous_stage_incomplete`): a progression
+ * whose timing is `on_complete`, not yet seeded (`config.qualified` absent),
+ * whose IMMEDIATELY previous stage by seq is not complete. That stage is also
+ * the one whose completion seeds and generates this one (seedNextStage), so it
+ * is the stage the empty card names. Null whenever the server would NOT refuse
+ * Generate — no progression, `setup` timing, already seeded, no earlier stage,
+ * or that stage already complete — so the card keeps today's copy there.
+ * Exported pure, for the same no-DOM reason as `addStageProgression`.
+ */
+export function progressionWaitSource<S extends { seq: number; status: string }>(
+  stage: { seq: number; config: Record<string, unknown>; progression: Record<string, unknown> | null },
+  stages: readonly S[],
+): S | null {
+  if (stage.progression?.timing !== "on_complete") return null;
+  if (Array.isArray(stage.config.qualified)) return null;
+  let previous: S | null = null;
+  for (const s of stages) {
+    if (s.seq < stage.seq && (previous === null || s.seq > previous.seq)) previous = s;
+  }
+  if (previous === null || previous.status === "complete") return null;
+  return previous;
 }
 
 export function AddStageForm({
@@ -1759,6 +1808,7 @@ export function classifyActError(
   err: unknown,
   msg: Msg,
   locale: Locale,
+  stageName?: StageNameLookup,
 ): { tone: "warning" | "error"; text: string; refresh: boolean } {
   // F3 ultrareview finding 4 — the completion COMMITTED in its own
   // transaction; only the next stage's seed proposal failed afterwards
@@ -1785,7 +1835,7 @@ export function classifyActError(
   ) {
     return { tone: "warning", text: msg("schedule.pairing.error.roundOneOnly"), refresh: true };
   }
-  const precondition = generatePreconditionMessage(err, msg);
+  const precondition = generatePreconditionMessage(err, msg, stageName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
   // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English
   // regardless of locale for every SEEDING_* code this panel can raise
@@ -1814,8 +1864,31 @@ export function undoRefusalMessage(err: unknown, msg: Msg): string {
   return err instanceof Error ? err.message : msg("schedule.error.undoFailed");
 }
 
-export function generatePreconditionMessage(err: unknown, msg: Msg): string | null {
+/** Stage id → its name on this board, or undefined when the board does not
+ *  hold that stage. */
+export type StageNameLookup = (stageId: string) => string | undefined;
+
+export function generatePreconditionMessage(
+  err: unknown,
+  msg: Msg,
+  stageName?: StageNameLookup,
+): string | null {
   if (!(err instanceof ApiV1Error) || err.code !== "STAGE_NOT_READY") return null;
+  // An `on_complete` progression stage pressed Generate before its source
+  // stage completed (the stage "Add stage" creates — see
+  // progressionWaitSource). Was the server's English sentence in a red
+  // banner; now an amber notice naming both stages. The ids come from the
+  // envelope (api-v1/http.ts) and the names from this board. A board that
+  // cannot name one of them is stale (it renders every stage of the
+  // division), so that case says the same thing without the names — still
+  // amber, still never the wire text.
+  if (err.extra.reason === "previous_stage_incomplete") {
+    const source = stageName?.(String(err.extra.previousStageId ?? ""));
+    const stage = stageName?.(String(err.extra.stageId ?? ""));
+    return source && stage
+      ? msg("schedule.error.previousStageIncomplete", { source, stage })
+      : msg("schedule.error.previousStageIncompleteUnnamed");
+  }
   if (err.extra.reason === "group_too_few_entrants") {
     const groups = Number(err.extra.groups ?? 1);
     return groups > 1

@@ -9290,6 +9290,26 @@ async function publicQualificationStandingsSuite(): Promise<void> {
     ]),
   );
   const swissId = stages.find((s) => s.seq === 1)!.id;
+  // An early Generate on the on_complete Finals (the Swiss has not completed)
+  // is refused, and the envelope names BOTH stages under a reason — the desk
+  // turns that into an amber notice naming them, instead of this English
+  // message in a red banner. Refused in the pre-flight, so nothing is written.
+  const finalsId = stages.find((s) => s.seq === 2)!.id;
+  const early = await v1(free, `/api/v1/stages/${finalsId}/generate`, "POST");
+  const earlyErr = (early.json.error ?? {}) as {
+    code?: string;
+    reason?: unknown;
+    stageId?: unknown;
+    previousStageId?: unknown;
+  };
+  check(
+    `add-stage wait: an early Generate on an on_complete stage is 422 previous_stage_incomplete naming both stages (status=${early.status}, reason=${String(earlyErr.reason)})`,
+    early.status === 422 &&
+      earlyErr.code === "STAGE_NOT_READY" &&
+      earlyErr.reason === "previous_stage_incomplete" &&
+      earlyErr.stageId === finalsId &&
+      earlyErr.previousStageId === swissId,
+  );
   await v1(free, `/api/v1/divisions/${swissDiv.id}/entrants`, "POST", field("Swiss"));
   await v1(free, `/api/v1/divisions/${swissDiv.id}/start`, "POST");
   await v1(free, `/api/v1/stages/${swissId}/generate`, "POST");

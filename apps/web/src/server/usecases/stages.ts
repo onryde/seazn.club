@@ -2275,7 +2275,9 @@ async function generateStageFixturesWrite(
         throw new EngineError(
           "STAGE_NOT_READY",
           "this stage draws its entrants from the previous stage's final table — complete the previous stage first",
-          { stageId, previousStageId: pre.prev.id },
+          // `reason` is what the v1 envelope forwards on (api-v1/http.ts), so
+          // the desk can name both stages in an amber notice.
+          { stageId, previousStageId: pre.prev.id, reason: "previous_stage_incomplete" },
         );
       }
       await seedNextStage(auth, pre.prev.id);

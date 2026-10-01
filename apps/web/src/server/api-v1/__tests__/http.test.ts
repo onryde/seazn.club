@@ -186,6 +186,48 @@ describe("v1 envelope", () => {
     expect(err.stranded).toBe(2);
   });
 
+  // An `on_complete` progression stage pressed Generate before its source
+  // stage finished (stages.ts generateStageFixtures' pre-flight). The desk
+  // names BOTH stages in an amber notice, so the two ids have to reach the
+  // JSON body — on the thrown EngineError alone they never left the server,
+  // and the organiser got the raw English `message` in a red banner.
+  it("STAGE_NOT_READY reason=previous_stage_incomplete forwards stageId/previousStageId", async () => {
+    const res = await v1(async () => {
+      throw new EngineError(
+        "STAGE_NOT_READY",
+        "this stage draws its entrants from the previous stage's final table — complete the previous stage first",
+        { stageId: "s2", previousStageId: "s1", reason: "previous_stage_incomplete" },
+      );
+    });
+    expect(res.status).toBe(422);
+    const json = await body(res);
+    expect(json.error).toEqual({
+      code: "STAGE_NOT_READY",
+      message:
+        "this stage draws its entrants from the previous stage's final table — complete the previous stage first",
+      reason: "previous_stage_incomplete",
+      stageId: "s2",
+      previousStageId: "s1",
+    });
+  });
+
+  // The empty case of the block above: every OTHER STAGE_NOT_READY (Swiss
+  // round guards, "need at least 2 active entrants", departed qualifiers…)
+  // carries no reason and must keep forwarding nothing but code + message —
+  // not even an id that happens to sit on its `.data`.
+  it("STAGE_NOT_READY without a known reason forwards only code + message", async () => {
+    const res = await v1(async () => {
+      throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", {
+        stageId: "s9",
+        previousStageId: "s8",
+        entrants: 1,
+      });
+    });
+    expect(res.status).toBe(422);
+    const json = await body(res);
+    expect(json.error).toEqual({ code: "STAGE_NOT_READY", message: "need at least 2 active entrants to generate" });
+  });
+
   it("maps PaymentRequiredError → 402 with code PAYMENT_REQUIRED and feature_key", async () => {
     // G5 (bench B03 product-gaps, 2026-09-02): PaymentRequiredError extends
     // HttpError, and its dedicated branch in http.ts sits ABOVE the generic

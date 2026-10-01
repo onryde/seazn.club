@@ -209,6 +209,17 @@ async function v1Inner<T>(
           stranded: d.stranded,
         };
       }
+      // An `on_complete` progression stage whose source stage has not
+      // finished (stages.ts generateStageFixtures' pre-flight). The desk names
+      // both stages in an amber notice instead of showing this English
+      // `message` in a red banner, so it needs both ids on the wire.
+      if (
+        err.code === "STAGE_NOT_READY" &&
+        (err.data as { reason?: unknown } | undefined)?.reason === "previous_stage_incomplete"
+      ) {
+        const d = err.data as { stageId: string; previousStageId: string };
+        extra = { reason: "previous_stage_incomplete", stageId: d.stageId, previousStageId: d.previousStageId };
+      }
       return errorResponse(requestId, status, err.code, err.message, extra);
     }
     if (err instanceof PaymentRequiredError) {
