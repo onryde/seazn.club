@@ -387,24 +387,35 @@ describe("results v3 — the plan that produced a run (W1c Task 14 carry 6)", ()
 });
 
 // W1-driving Task 11 (ruling 46): a run on N > 1 workers says so in its header.
-// Every v3 file written before the field — all the committed v3 evidence —
-// ran on one sign-in, so the field is optional to read, and absent means one.
+// A v3 file written before the field ran on one sign-in, so the field is
+// optional to read, and absent means one. CI-R1: committed v3 evidence now
+// holds both kinds (T15's runs carry the header), so each is held to its own
+// rule and counted.
 describe("results v3 — the run's worker count (W1-driving T11, ruling 46)", () => {
   it("empty case first: a v3 run with no workers field (every run before T11, and every --workers 1 run) parses, and carries none", () => {
     const old = parseResults(V3_RUN);
     expect(old.schemaVersion).toBe(3);
     expect("workers" in old).toBe(false);
   });
-  it("every committed v3 results.json still parses — none carries the field", () => {
-    let v3Files = 0;
+  it("every committed v3 results.json parses: one with no workers header carries no workers, and one with it carries that header's positive integer — at least one file of each kind", () => {
+    let without = 0;
+    let withHeader = 0;
     for (const f of COMMITTED_RESULTS) {
-      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number };
+      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number; workers?: unknown };
       if (raw.schemaVersion !== 3) continue;
       const parsed = parseResults(raw);
-      expect("workers" in parsed, f).toBe(false);
-      v3Files++;
+      if (!("workers" in raw)) {
+        expect("workers" in parsed, `${f}: no header, yet parsed with workers`).toBe(false);
+        without++;
+        continue;
+      }
+      expect(Number.isInteger(raw.workers) && (raw.workers as number) > 0, `${f}: workers header ${JSON.stringify(raw.workers)} is not a positive integer`).toBe(true);
+      expect(parsed.workers, f).toBe(raw.workers);
+      withHeader++;
     }
-    expect(v3Files, "committed v3 results files read").toBeGreaterThan(0);
+    expect(without, "committed v3 results files with no workers header").toBeGreaterThan(0);
+    expect(withHeader, "committed v3 results files with a workers header").toBeGreaterThan(0);
+    console.info(`CI-R1: ${without} committed v3 results.json without a workers header, ${withHeader} with one`);
   });
   it("a worker count in 1..MAX_WORKERS parses and round-trips through writeResults unchanged", () => {
     let checked = 0;
