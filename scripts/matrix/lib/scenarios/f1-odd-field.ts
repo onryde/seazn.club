@@ -18,8 +18,10 @@
 // size the engine's own generator opens with over the field: a stepladder
 // opens with ONE game, a knockout or a double elim with one board per
 // two-sided line of the next power of two. floor(n/2) on every round redded
-// all 22 stepladder and double-elim F1 cases.
-import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
+// all 22 stepladder and double-elim F1 cases. The generators are
+// terminal-finals.ts's table, called with the stage's config (T15-R8 m-4);
+// a field the engine refuses is a named abstain, never a throw (m-3).
+import { EngineError } from "@seazn/engine/core";
 import { fieldSizeFor } from "../field-size.ts";
 import type { CompleteObs, ObservedFixture } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
@@ -27,6 +29,7 @@ import { advanceSeededAsDeclared } from "./advance.ts";
 import { americanoRoundSize } from "./americano-loop.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
+import { BRACKET_OF } from "./terminal-finals.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -51,25 +54,28 @@ export function ladderSweep(kind: string, seeded: readonly string[], steps: read
   ]);
 }
 
-/** T15: the bracket kinds' generators, the engine's own (the product's Start
- *  draws these shapes; terminal-finals.ts reads the same generators). */
-const BRACKET_GENERATORS: Readonly<Record<string, (entrants: string[]) => GeneratedBracket>> = Object.freeze({
-  knockout: (entrants) => generateSingleElim({ entrants }),
-  double_elim: (entrants) => generateDoubleElim({ entrants }),
-  stepladder: (entrants) => generateStepladder({ entrants }),
-  page_playoff: (entrants) => generatePagePlayoff({ entrants }),
-});
+/** A bracket's opening round: the boards it seats, or the engine's refusal to lay the field out at all. */
+export type FirstRound = { readonly boards: number } | { readonly refused: string };
 
-/** The boards a bracket's first round seats over a field of `n`: the
- *  engine's round-0 fixtures with BOTH sides concrete (a bye line is one
- *  awarded side). null on a kind with no bracket generator — every round of
- *  those is judged instead. Only the field's size shapes the count. */
-export function bracketFirstRound(kind: string, n: number): number | null {
-  const generate = BRACKET_GENERATORS[kind];
+/** The boards a bracket's first round seats over `field`: the engine's
+ *  round-0 fixtures with BOTH sides concrete (a bye line is one awarded
+ *  side), drawn by terminal-finals.ts's BRACKET_OF with the stage's config
+ *  as the product's Start passes it. null on a kind with no bracket
+ *  generator — every round of those is judged instead. A field or config
+ *  the engine refuses (a page playoff of anything but 4) is `refused`, named:
+ *  the product's Start refuses it too, so there is no first round to judge. */
+export function bracketFirstRound(kind: string, field: readonly string[], config: Record<string, unknown>): FirstRound | null {
+  const generate = BRACKET_OF[kind];
   if (generate === undefined) return null;
-  const fixtures = generate(Array.from({ length: n }, (_, i) => `e${i + 1}`)).fixtures;
+  let fixtures;
+  try {
+    fixtures = generate(field, config).fixtures;
+  } catch (e) {
+    if (!EngineError.is(e)) throw e;
+    return { refused: `${kind}: the engine refuses to lay out a field of ${field.length} (${e.code}: ${e.message}) — the product's own Start refuses it too, so there is no first round to judge` };
+  }
   const first = Math.min(...fixtures.map((f) => f.round));
-  return fixtures.filter((f) => f.round === first && f.home !== undefined && f.away !== undefined).length;
+  return { boards: fixtures.filter((f) => f.round === first && f.home !== undefined && f.away !== undefined).length };
 }
 
 export const f1OddField: Scenario = {
@@ -88,8 +94,9 @@ export const f1OddField: Scenario = {
     // A bracket (T15): the engine's opening round over the field; the canary ALSO expects one more board.
     const americano = setup.stage.kind === "americano";
     const courts = americano ? americanoRoundSize(setup.stage.config, n) : null;
-    const opening = bracketFirstRound(setup.stage.kind, n);
-    const right = americano ? courts ?? 0 : opening ?? Math.floor(n / 2);
+    const opening = bracketFirstRound(setup.stage.kind, s.field, setup.stage.config);
+    const boards = opening !== null && "boards" in opening ? opening.boards : null;
+    const right = americano ? courts ?? 0 : boards ?? Math.floor(n / 2);
     const wrong = americano || opening !== null ? right + 1 : Math.ceil(n / 2);
     const rounds = [...new Set(s.fixtures.map((f) => f.roundNo ?? 0))].sort((a, b) => a - b);
     // A bracket's later rounds hold winners (and losers) of earlier ones, so just its first round.
@@ -100,6 +107,7 @@ export const f1OddField: Scenario = {
     const seated = seatsEntrant(s);
     const sizeAbstain = ladder ? "ladder: a ladder declares no rounds (ruling T7-R1); F1 judges the challenge sweep instead (f1-ladder-sweep)"
       : americano && courts === null ? "americano: the stage declares no courtCount, so the engine's round size hangs on the live player count (stages.ts:757-758)"
+      : opening !== null && "refused" in opening ? opening.refused
       : null;
     return {
       observed,

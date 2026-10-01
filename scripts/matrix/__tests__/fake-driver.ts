@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
-import { generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
+import { generateDoubleElim, generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
@@ -625,8 +625,16 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  same way: Start builds the ENGINE's own generateStepladder shape (sl-g0 the
  *  two lowest seeds, then one game per round up to the top seed; its round r
  *  is round_no r + 1, as the product's rows read). stepladder IS a
- *  bracket-walkover kind, so its withdraw stays the table fake's. */
-export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean; readonly stepladder?: boolean }
+ *  bracket-walkover kind, so its withdraw stays the table fake's.
+ *
+ *  `doubleElim: true` (T15-R8 m-7) makes it a single double_elim stage the
+ *  same way, on generateDoubleElim (no bracketReset): a bye line is a
+ *  one-sided forfeited AWARD row whose winner is fed forward, as the
+ *  knockout's are; a slot fed by a bye line's LOSER never fills, so a
+ *  fixture whose other slot is filled is awarded through (the product's
+ *  bye award at generation, stages.ts:2614+). Two such dead slots on one
+ *  fixture are out of this fake's scope and thrown by name. */
+export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean; readonly stepladder?: boolean; readonly doubleElim?: boolean }
 type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** fixture id → the next round's fixture and slot its winner fills. */
@@ -635,25 +643,31 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   readonly loserFeeds = new Map<string, { to: string; slot: Slot }>();
   readonly pagePlayoff: boolean;
   readonly stepladder: boolean;
+  readonly doubleElim: boolean;
+  /** `<row id>:<slot>`: a slot fed by a bye line's loser, which never fills (doubleElim). */
+  readonly deadSlots = new Set<string>();
   /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
   readonly extIds = new Map<string, string>();
   constructor(opts: FakeKnockoutOptions = {}, orgId = "org-fake") {
     super(orgId);
     this.pagePlayoff = opts.pagePlayoff === true;
     this.stepladder = !this.pagePlayoff && opts.stepladder === true;
+    this.doubleElim = !this.pagePlayoff && !this.stepladder && opts.doubleElim === true;
   }
-  override acceptsStage(kind: string): boolean { return kind === (this.pagePlayoff ? "page_playoff" : this.stepladder ? "stepladder" : "knockout"); }
-  override refuseStages(): never { throw new Error(this.pagePlayoff ? "fake: page playoff only" : this.stepladder ? "fake: stepladder only" : "fake: knockout only"); }
+  /** The single stage kind this fake plays. */
+  get bracketKind(): string { return this.pagePlayoff ? "page_playoff" : this.stepladder ? "stepladder" : this.doubleElim ? "double_elim" : "knockout"; }
+  override acceptsStage(kind: string): boolean { return kind === this.bracketKind; }
+  override refuseStages(): never { throw new Error(`fake: ${this.bracketKind.replace("_", " ")} only`); }
   override expungesEarly(): boolean { return false; }
   /** Whether a finished fixture's winner goes on — a test seam for a product
    *  that drops one. */
   carriesForward(_f: FakeFixture): boolean { return true; }
-  /** Start on the engine's own bracket shape (a page playoff or a stepladder). */
+  /** Start on the engine's own bracket shape (a page playoff, a stepladder or a double elim). */
   startEngineBracket(): StartOut {
     let bracket: GeneratedBracket;
     try {
       const opts = { entrants: this.entrants.map((e) => e.id), seeds: new Map(this.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER])) };
-      bracket = this.pagePlayoff ? generatePagePlayoff(opts) : generateStepladder(opts);
+      bracket = this.pagePlayoff ? generatePagePlayoff(opts) : this.doubleElim ? generateDoubleElim(opts) : generateStepladder(opts);
     } catch (e) {
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
@@ -661,20 +675,31 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     // Each row carries the engine's id and final flag, as the product's rows do
     // (stages.ts bracketToGen `extKey: f.id`; fixtures.ts listDivisionFixtures
     // serves ext_key and is_final) — I2 reads a page playoff's champion off them.
-    for (const g of bracket.fixtures) this.extIds.set(g.id, this.seat(g.round + 1, g.home ?? null, g.away ?? null, { ext_key: g.id, is_final: g.isFinal === true }).id);
+    for (const g of bracket.fixtures) {
+      const tags = { ext_key: g.id, is_final: g.isFinal === true };
+      const row = g.award !== undefined
+        ? this.seat(g.round + 1, g.award, null, { ...tags, status: "forfeited", outcome: { kind: "award", winner: g.award } })
+        : this.seat(g.round + 1, g.home ?? null, g.away ?? null, tags);
+      this.extIds.set(g.id, row.id);
+    }
+    const awards = new Set(bracket.fixtures.filter((g) => g.award !== undefined).map((g) => g.id));
     for (const g of bracket.fixtures) {
       for (const [ref, slot] of [[g.homeFrom, "home_entrant_id"], [g.awayFrom, "away_entrant_id"]] as const) {
         if (ref === undefined) continue;
+        if (ref.side === "loser" && awards.has(ref.fixtureId)) { this.deadSlots.add(`${this.extIds.get(g.id)!}:${slot}`); continue; }
         (ref.side === "winner" ? this.feeds : this.loserFeeds).set(this.extIds.get(ref.fixtureId)!, { to: this.extIds.get(g.id)!, slot });
       }
     }
+    const bothDead = this.fixtures.find((x) => this.deadSlots.has(`${x.id}:home_entrant_id`) && this.deadSlots.has(`${x.id}:away_entrant_id`));
+    if (bothDead !== undefined) throw new Error(`fake: ${bothDead.id} has two dead slots (adjacent bye lines) — outside this fake`);
+    for (const f of this.fixtures.filter((x) => x.status === "forfeited")) this.feed(f);
     this.stage!.status = "active";
     return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
   }
   override start(): Promise<StartOut> {
     return settle(() => {
       this.log("start");
-      if (this.pagePlayoff || this.stepladder) return this.startEngineBracket();
+      if (this.pagePlayoff || this.stepladder || this.doubleElim) return this.startEngineBracket();
       const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
       let order = [1, 2];
       while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
@@ -697,9 +722,18 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     const to = this.feeds.get(f.id);
     const lo = this.loserFeeds.get(f.id);
     if (typeof w !== "string" || (to === undefined && lo === undefined) || !this.carriesForward(f)) return;
-    if (to !== undefined) Object.assign(this.fixtures.find((x) => x.id === to.to)!, { [to.slot]: w });
+    if (to !== undefined) this.fill(to.to, to.slot, w);
     const loser = w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id;
-    if (lo !== undefined && loser !== null) Object.assign(this.fixtures.find((x) => x.id === lo.to)!, { [lo.slot]: loser });
+    if (lo !== undefined && loser !== null) this.fill(lo.to, lo.slot, loser);
+  }
+  /** Fill a slot; a fixture whose OTHER slot is dead (a bye line's loser) is awarded through and fed on. */
+  fill(id: string, slot: Slot, entrant: string): void {
+    const target = this.fixtures.find((x) => x.id === id)!;
+    Object.assign(target, { [slot]: entrant });
+    const other: Slot = slot === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id";
+    if (!this.deadSlots.has(`${id}:${other}`)) return;
+    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner: entrant } });
+    this.feed(target);
   }
   override async withdraw(entrantId: string): Promise<WithdrawOut> {
     if (!this.pagePlayoff) return super.withdraw(entrantId);

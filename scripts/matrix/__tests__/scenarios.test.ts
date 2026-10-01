@@ -9,7 +9,7 @@ import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
 import { RULES, decide } from "../lib/applicability.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
-import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire } from "../lib/driver/types.ts";
+import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { isTerminal, winnerOf, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
@@ -25,7 +25,7 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { bracketFirstRound } from "../lib/scenarios/f1-odd-field.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
-import { terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
+import { BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
@@ -1835,6 +1835,7 @@ describe("m-1: brackets on the knockout fake (M1's progression, F1's first round
 // a size neither bracket declares. The expected values below are the
 // RULEBOOK's, typed from the format, never read off the code under test.
 describe("T15: F1 judges a bracket's FIRST round, at the size its format opens with", () => {
+  // One sport (generic) per case here: a bracket's shape is the engine generator's, over field size alone — the generators take no sport.
   it("stepladder_only F1: 7 entrants — round 1 is ONE game, the two lowest seeds; only round 1 is inspected, and the canary's one-more goes red", async () => {
     const r = await runOn(new FakeKnockoutDriver({ stepladder: true }), "F1", { row: "stepladder_only" });
     const s = r.out.observed.stages[0]!;
@@ -1849,16 +1850,56 @@ describe("T15: F1 judges a bracket's FIRST round, at the size its format opens w
     expect(failed(canary.checks)).toEqual(["f1-round-size"]);
     expect(canary.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ checked: 2, evidence: [`${CANARY_MARK}round 1: 1 seated, expected 2`] });
   });
+  it("double_elim F1 (T15-R8 m-7): 7 entrants — round 1 is the winners bracket's 3 boards beside one bye line; only round 1 is inspected, and the canary's one-more goes red", async () => {
+    const r = await runOn(new FakeKnockoutDriver({ doubleElim: true }), "F1", { row: "double_elim" });
+    const s = r.out.observed.stages[0]!;
+    expect(s.field).toHaveLength(7);
+    // The oracle is the fake's own rows: round 1 holds 3 two-sided boards and the bye line (one side, no away).
+    const round1 = r.driver.fixtures.filter((f) => f.round_no === 1);
+    expect(round1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)).toHaveLength(3);
+    expect(round1.filter((f) => f.away_entrant_id === null)).toHaveLength(1);
+    // Later rounds (the losers bracket, the grand final) seat fewer — judging them at floor(7/2) is the red this removes.
+    expect([...new Set(s.fixtures.map((f) => f.roundNo))].length).toBeGreaterThan(3);
+    expect(r.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+    const canary = await runOn(new FakeKnockoutDriver({ doubleElim: true }), "F1", { row: "double_elim", canary: true });
+    expect(failed(canary.checks)).toEqual(["f1-round-size"]);
+    expect(canary.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ checked: 2, evidence: [`${CANARY_MARK}round 1: 3 seated, expected 4`] });
+    // The fake's own scope guard: 5 entrants put two bye lines side by side, so one losers-bracket game has no feed at all — thrown by name.
+    const five = new FakeKnockoutDriver({ doubleElim: true });
+    five.stage = { id: "s1", kind: "double_elim", config: {}, status: "pending" } as unknown as StageRef;
+    five.entrants = Array.from({ length: 5 }, (_, i) => ({ id: `e${i + 1}`, display_name: `E${i + 1}`, seed: i + 1, status: "registered" }));
+    expect(() => five.startEngineBracket()).toThrow(/^fake: \S+ has two dead slots \(adjacent bye lines\) — outside this fake$/);
+  });
   it("the opening size per bracket kind, an odd and an even field — and null on every kind whose rounds are all judged", () => {
+    const field = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+    const boards = (kind: string, n: number) => bracketFirstRound(kind, field(n), {});
     // knockout: the next power of two, a bye per missing entrant — 7 → 3 boards, 5 → 1 (floor(5/2) = 2 would be wrong), 8 → 4.
-    expect([7, 5, 8].map((n) => bracketFirstRound("knockout", n))).toEqual([3, 1, 4]);
+    expect([7, 5, 8].map((n) => boards("knockout", n))).toEqual([{ boards: 3 }, { boards: 1 }, { boards: 4 }]);
     // double elim: its first round is its winners bracket's — a knockout's.
-    expect([7, 5, 8].map((n) => bracketFirstRound("double_elim", n))).toEqual([3, 1, 4]);
+    expect([7, 5, 8].map((n) => boards("double_elim", n))).toEqual([{ boards: 3 }, { boards: 1 }, { boards: 4 }]);
     // stepladder: one game, the two lowest seeds, at any size.
-    expect([7, 4, 2].map((n) => bracketFirstRound("stepladder", n))).toEqual([1, 1, 1]);
+    expect([7, 4, 2].map((n) => boards("stepladder", n))).toEqual([{ boards: 1 }, { boards: 1 }, { boards: 1 }]);
     // page playoff: 1 v 2 and 3 v 4, a field of 4 only.
-    expect(bracketFirstRound("page_playoff", 4)).toBe(2);
-    for (const kind of ["league", "group", "swiss", "americano", "ladder"]) expect(bracketFirstRound(kind, 7), kind).toBeNull();
+    expect(boards("page_playoff", 4)).toEqual({ boards: 2 });
+    for (const kind of ["league", "group", "swiss", "americano", "ladder"]) expect(boards(kind, 7), kind).toBeNull();
+  });
+  it("T15-R8 m-3: a field the engine refuses to lay out (a page playoff of 7) is a named refusal, never a throw that costs the case", () => {
+    const out = bracketFirstRound("page_playoff", Array.from({ length: 7 }, (_, i) => `e${i + 1}`), {});
+    expect(out).not.toBeNull();
+    expect(out !== null && "refused" in out ? out.refused : null).toMatch(/^page_playoff: the engine refuses to lay out a field of 7 \(CONFIG_INVALID: .+\) — the product's own Start refuses it too, so there is no first round to judge$/);
+  });
+  it("T15-R8 m-4: the knockout's config reaches its generator, as the product's Start passes it (stages.ts:1648-1657)", () => {
+    const six = Array.from({ length: 6 }, (_, i) => `e${i + 1}`);
+    expect(bracketFirstRound("knockout", six, {})).toEqual({ boards: 2 });
+    // byes to two named entrants: the same count, from the config's own recipients.
+    expect(bracketFirstRound("knockout", six, { byes: ["e5", "e6"] })).toEqual({ boards: 2 });
+    // A slot map the engine refuses (two byes paired) changes the answer — proof the config was passed, not dropped.
+    const refused = bracketFirstRound("knockout", six, { slotOrder: [1, 2, 3, 4, 5, 6, null, null] });
+    expect(refused !== null && "refused" in refused ? refused.refused : null).toMatch(/^knockout: the engine refuses to lay out a field of 6 \(CONFIG_INVALID: a round-0 pairing cannot be two byes\)/);
+    // One table: the snapshot's terminal finals read the same generators.
+    expect(Object.keys(BRACKET_OF).sort()).toEqual(["double_elim", "knockout", "page_playoff", "stepladder"]);
+    for (const kind of STRUCTURAL_FINAL_KINDS) expect(BRACKET_OF[kind], kind).toBeDefined();
   });
 });
 
@@ -1869,6 +1910,7 @@ describe("T15: F1 judges a bracket's FIRST round, at the size its format opens w
 // records for seed 1 IS the final, and no later round exists to go on to.
 // What "goes on" means after the final is the title: rank 1.
 describe("T15: M1 on a bracket whose walkover is the terminal final", () => {
+  // One sport (generic): where seed 1 first plays on a stepladder is the generator's shape, which no sport changes.
   it("stepladder_only M1: seed 1's one game is the final; the walkover makes seed 1 champion, and m1-winner-progresses judges rank 1", async () => {
     const r = await runOn(new FakeKnockoutDriver({ stepladder: true }), "M1", { row: "stepladder_only" });
     const s = r.out.observed.stages[0]!;
