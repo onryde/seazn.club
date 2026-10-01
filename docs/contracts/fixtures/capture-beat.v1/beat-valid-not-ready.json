@@ -7,7 +7,7 @@
   "sid": null,
   "at": "2026-10-01T13:58:02Z",
   "state": "paired",
-  "cause": "organiser",
+  "cause": null,
   "notReady": "camera",
   "startFailed": null,
   "stopped": null,

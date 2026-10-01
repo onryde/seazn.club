@@ -128,6 +128,17 @@ const SPEC_REFUSALS: Record<string, number> = {
 /** §6.3.1's statuses for GET codes/{code}: 401, 404, 422, 429, 503 — never 409, 402, 403 (no start runs there). */
 const SPEC_DESCRIPTOR_REFUSALS = ["code_ended", "not_a_stream_code", "invalid", "rate_limited", "unavailable"];
 
+/** D16 (capture's field-by-field check, 2026-10-01): cross-field rules the server enforces in the twin. A refine is not
+ *  exported to JSON Schema and the published bytes stay frozen, so ajv ADMITS each of these fixtures; only the twin
+ *  refuses them (a 422). Each names its valid sibling, from which it differs in `field` alone. */
+const ZOD_ONLY: Record<string, { sibling: string; field: string; file: string; twin: Twin; rule: string }> = {
+  "capture-beat.v1/beat-invalid-cause-without-sid": { sibling: "beat-valid", field: "cause", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "cause rides only while a broadcast is held (sid non-null)" },
+  "capture-beat.v1/beat-invalid-endReason-not-ended": { sibling: "beat-valid-publishing", field: "endReason", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "endReason only with state ended (§6.3.2)" },
+  "capture-beat.v1/beat-invalid-stopped-with-sid": { sibling: "beat-valid-publishing", field: "stopped", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "stopped only while sid is null (§6.3.2, RR3)" },
+  "capture-beat.v1/beat-invalid-claim-with-rejoin": { sibling: "beat-valid-resume", field: "cause", file: "capture-beat.v1.json", twin: S.CaptureBeat, rule: "a claim never rides with cause rejoin" },
+  "capture-descriptor.v1/invalid-srt-null-preferred-srt": { sibling: "valid-live-srt-null", field: "preferred", file: "capture-descriptor.v1.json", twin: S.CaptureDescriptor, rule: "cred.srt null ⇒ preferred rtmps (§6.4, A18)" },
+};
+
 // ---------------------------------------------------------------------------------------------------------------
 // Structural helpers.
 // ---------------------------------------------------------------------------------------------------------------
@@ -194,8 +205,8 @@ const DEFS: Record<string, string[]> = { [QR]: [], [DESCRIPTOR]: ["refusal"], [B
 type Route = [prefix: string, twin: Twin, pointer: "" | "#/$defs/refusal" | "#/$defs/answer" | "#/$defs/ok"];
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
-  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 30 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 35 },
+  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 31 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 40 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
 };
 
@@ -300,7 +311,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
 
   it("fixtures: every valid* is admitted, every invalid-* / tampered* / wrong-version is refused — by the twin AND by the published file under ajv, counted per directory", () => {
     const fileAdmits = fileValidator();
-    let total = 0, byFile = 0;
+    let total = 0, byFile = 0, zodOnlySeen = 0;
     for (const [dir, { file, routes, count }] of Object.entries(DIRS)) {
       const names = readdirSync(resolve(FIXTURES, dir)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5)).sort();
       let checked = 0;
@@ -315,7 +326,14 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         else if (/^(invalid-.+|tampered(-.+)?|wrong-version)$/.test(kind)) admitted = false;
         else expect.fail(`${dir}/${name}: neither valid* nor invalid-*/tampered*/wrong-version`);
         expect(parses(twin, value), `${dir}/${name}: the twin ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
-        expect(fileAdmits(file, pointer, value), `${dir}/${name}: ${file}${pointer} ${admitted ? "admits" : "refuses"} it`).toBe(admitted);
+        // A ZOD_ONLY fixture breaks a rule the file states in prose only: ajv ADMITS it, and only the twin refuses it.
+        const zodOnly = `${dir}/${name}` in ZOD_ONLY;
+        if (zodOnly) {
+          expect(admitted, `${dir}/${name}: a ZOD_ONLY fixture is a refusal`).toBe(false);
+          zodOnlySeen++;
+        }
+        const fileVerdict = zodOnly ? true : admitted;
+        expect(fileAdmits(file, pointer, value), `${dir}/${name}: ${file}${pointer} ${fileVerdict ? "admits" : "refuses"} it`).toBe(fileVerdict);
         byFile++;
         checked++;
       }
@@ -323,8 +341,35 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 30 + 35 + 18);
+    expect(total).toBe(12 + 31 + 40 + 18);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
+    // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
+    expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
+    expect(zodOnlySeen).toBe(5);
+  });
+
+  it("D16 cross-field rules (zod-only): each ZOD_ONLY fixture differs from a valid sibling in ONE field, and the twin refuses it on that field alone", () => {
+    const fileAdmits = fileValidator();
+    let checked = 0;
+    for (const [key, { sibling, field, file, twin }] of Object.entries(ZOD_ONLY)) {
+      const [dir, name] = key.split("/") as [string, string];
+      const bad = fixture(dir, name), good = fixture(dir, sibling);
+      const differing = [...new Set([...Object.keys(bad), ...Object.keys(good)])].filter((k) => JSON.stringify(bad[k]) !== JSON.stringify(good[k]));
+      expect(differing, `${key}: premise — differs from ${sibling} in ${field} alone`).toEqual([field]);
+      expect(parses(twin, good), `${key}: premise — ${sibling} parses`).toBe(true);
+      expect(fileAdmits(file, "", good), `${key}: premise — the file admits ${sibling}`).toBe(true);
+      const result = twin.safeParse(bad);
+      expect(result.success, `${key}: the twin refuses it`).toBe(false);
+      // Exactly one issue, raised on the rule's own field: the refusal is the refine, not some other guard.
+      expect(result.error?.issues.map((i) => i.path.join(".")), key).toEqual([field]);
+      expect(fileAdmits(file, "", bad), `${key}: the file states this rule in prose only, so ajv admits it`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(5);
+    // CaptureSession (the session-only union later tasks import) carries the same A18 rule as the descriptor.
+    const srtNull = fixture("capture-descriptor.v1", "valid-live-srt-null");
+    expect(parses(S.CaptureSession, srtNull), "session: srt null with rtmps").toBe(true);
+    expect(S.CaptureSession.safeParse(fixture("capture-descriptor.v1", "invalid-srt-null-preferred-srt")).error?.issues.map((i) => i.path.join(".")), "session: srt null with srt").toEqual(["preferred"]);
   });
 
   it("enums: every closed vocabulary in the files and the twins is the spec's literal list (§6.3.1–§6.3.4)", () => {
@@ -367,10 +412,14 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
 
   it("M-3: a takeover (resume), a stop, and both pre-flight failures each have a valid beat request", () => {
     const shapes: [name: string, premise: (b: Json) => boolean][] = [
-      ["beat-valid-resume", (b) => b.claim === "resume" && typeof b.sid === "string"],
+      // G0-d at Arming: the GET answered the session shape with no cred ("open, not current"), so the phone claims
+      // `resume` naming the open sid it resumes. A claim rides only until the pairing's first 2xx, so never with a
+      // rejoin (which follows a 2xx `live`), and the phone is not yet publishing.
+      ["beat-valid-resume", (b) => b.claim === "resume" && typeof b.sid === "string" && b.state === "arming" && b.cause === null && b.transport === null],
       ["beat-valid-stopped", (b) => b.sid === null && typeof b.stopped === "string"],
-      ["beat-valid-not-ready", (b) => SPEC_BEAT.notReady.includes(b.notReady as string) && b.state === "paired"],
-      ["beat-valid-start-failed", (b) => SPEC_BEAT.startFailed.includes(b.startFailed as string) && b.state === "paired"],
+      // A pre-flight failure holds no broadcast (no sid), so it carries no `cause` (D12/D13: cause rides only with a sid).
+      ["beat-valid-not-ready", (b) => SPEC_BEAT.notReady.includes(b.notReady as string) && b.state === "paired" && b.sid === null && b.cause === null],
+      ["beat-valid-start-failed", (b) => SPEC_BEAT.startFailed.includes(b.startFailed as string) && b.state === "paired" && b.sid === null && b.cause === null],
     ];
     const fileAdmits = fileValidator();
     let checked = 0;
@@ -461,6 +510,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(without(noSeconds, "at"), "premise: differs from beat-valid in `at` alone").toEqual(without(beat, "at"));
     expect(parses(S.CaptureBeat, noSeconds), "the twin refuses a minute-only at").toBe(false);
     expect(fileAdmits(BEAT, "", noSeconds), "the file refuses a minute-only at").toBe(false);
+    // D11, capture's own probe value, on zod 4.4.3.
+    expect(parses(S.CaptureBeat, { ...beat, at: "2026-10-01T12:34Z" }), "twin: 12:34Z").toBe(false);
+    expect(fileAdmits(BEAT, "", { ...beat, at: "2026-10-01T12:34Z" }), "file: 12:34Z").toBe(false);
     // …while fractional seconds stay ADMITTED on both sides (RFC 3339 time-secfrac is optional, any length): the
     // vendored millisecond fixtures, with Z and with an offset, each differ from beat-valid in `at` alone.
     let fractions = 0;

@@ -77,9 +77,14 @@ const Ending = z.strictObject({ state: z.literal("ending"), ...SessionFields, cr
 const Completed = z.strictObject({ state: z.literal("completed"), ...SessionFields, endReason: CaptureEndReason });
 const Failed = z.strictObject({ state: z.literal("failed"), ...SessionFields, endReason: CaptureEndReason });
 
-export const CaptureSession = z.discriminatedUnion("state", [Warming, Live, Ending, Completed, Failed]);
+/** D16, §6.4 / A18 (G0-c): `preferred` never names a null shape, so a `cred` whose `srt` is null rides with "rtmps".
+ *  The published file states this in prose; a refine is not exported to JSON Schema, so the server enforces it here. */
+const preferredNamesAShape = (v: { state: string; preferred?: string; cred?: CaptureCred }): boolean => v.cred?.srt !== null || v.preferred === "rtmps";
+const PREFERRED_RULE = { path: ["preferred"], message: "cred.srt is null, so preferred must be \"rtmps\" (§6.4, A18)" };
+
+export const CaptureSession = z.discriminatedUnion("state", [Warming, Live, Ending, Completed, Failed]).refine(preferredNamesAShape, PREFERRED_RULE);
 export type CaptureSession = z.infer<typeof CaptureSession>;
-export const CaptureDescriptor = z.discriminatedUnion("state", [CaptureWaiting, Warming, Live, Ending, Completed, Failed]);
+export const CaptureDescriptor = z.discriminatedUnion("state", [CaptureWaiting, Warming, Live, Ending, Completed, Failed]).refine(preferredNamesAShape, PREFERRED_RULE);
 export type CaptureDescriptor = z.infer<typeof CaptureDescriptor>;
 
 /** The beat's `at`. R5 (final): any offset accepted; the server normalises to UTC; the phone sends Z. RFC 3339
@@ -116,7 +121,15 @@ export const CaptureBeat = z.strictObject({
   dataUsedMB: z.number().min(0).max(1_000_000).nullable(),
   appVersion: z.string().min(1).max(40),
   endReason: z.literal("operator-stopped").optional(),
-});
+})
+  // D16 (capture's field-by-field check, 2026-10-01): the cross-field rules. The published file stays byte-frozen and
+  // a refine is not exported to JSON Schema, so ajv admits a breach and the server refuses it (422). Each rule raises
+  // one issue on its own field; capture-contract.test.ts's ZOD_ONLY list holds one fixture per rule.
+  .refine((b) => b.cause === null || b.sid !== null, { path: ["cause"], message: "cause rides only while a broadcast is held (a sid)" })
+  .refine((b) => b.endReason === undefined || b.state === "ended", { path: ["endReason"], message: "endReason only with state \"ended\" (§6.3.2)" })
+  .refine((b) => b.stopped === null || b.sid === null, { path: ["stopped"], message: "stopped only while sid is null (§6.3.2, capture RR3)" })
+  // A claim rides only until the pairing's first 2xx; a rejoin follows a 2xx `live`. The two never meet.
+  .refine((b) => b.claim === null || b.cause !== "rejoin", { path: ["cause"], message: "a claim never rides with cause \"rejoin\"" });
 export type CaptureBeat = z.infer<typeof CaptureBeat>;
 
 /** R5 (final, capture agreed 2026-10-01): the beat answer is a discriminated union on `state`.
