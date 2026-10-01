@@ -1,0 +1,1180 @@
+{
+  "script": "scripts/matrix/draw-counts.ts",
+  "harness": [
+    "666099834"
+  ],
+  "runs": [
+    "w1drv-p1-double-elim-boardgame",
+    "w1drv-p1-group-group-ko-boardgame",
+    "w1drv-p1-group-playoffs-boardgame",
+    "w1drv-p1-group-playoffs-generic",
+    "w1drv-p1-group-stepladder-boardgame",
+    "w1drv-p1-groups-ko-boardgame",
+    "w1drv-p1-knockout-boardgame",
+    "w1drv-p1-knockout-third-place-boardgame",
+    "w1drv-p1-ko-plate-boardgame",
+    "w1drv-p1-league-ko-boardgame",
+    "w1drv-p1-page-playoff-only-boardgame",
+    "w1drv-p1-page-playoff-only-generic",
+    "w1drv-p1-qualifying-main-boardgame",
+    "w1drv-p1-stepladder-only-boardgame",
+    "w1drv-p1-swiss-knockout-boardgame",
+    "w1drv-p1-swiss-playoff-boardgame",
+    "w1drv-p1-swiss-playoff-generic"
+  ],
+  "checked": 66,
+  "bracketKinds": [
+    "knockout",
+    "double_elim",
+    "stepladder",
+    "page_playoff"
+  ],
+  "cases": {
+    "double_elim|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-double-elim-boardgame",
+      "drawn": 2,
+      "bracketDrawn": 2,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "double_elim",
+          "fixtures": 14,
+          "drawn": 2
+        }
+      ]
+    },
+    "double_elim|boardgame|blitz|M1": {
+      "run": "w1drv-p1-double-elim-boardgame",
+      "drawn": 2,
+      "bracketDrawn": 2,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "double_elim",
+          "fixtures": 14,
+          "drawn": 2
+        }
+      ]
+    },
+    "double_elim|boardgame|blitz|R4": {
+      "run": "w1drv-p1-double-elim-boardgame",
+      "drawn": 2,
+      "bracketDrawn": 2,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "double_elim",
+          "fixtures": 14,
+          "drawn": 2
+        }
+      ]
+    },
+    "double_elim|boardgame|blitz|F1": {
+      "run": "w1drv-p1-double-elim-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "double_elim",
+          "fixtures": 14,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_group_ko|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-group-group-ko-boardgame",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 4,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 4
+        },
+        {
+          "seq": 3,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_group_ko|boardgame|blitz|M1": {
+      "run": "w1drv-p1-group-group-ko-boardgame",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 4,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 4
+        },
+        {
+          "seq": 3,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_group_ko|boardgame|blitz|R4": {
+      "run": "w1drv-p1-group-group-ko-boardgame",
+      "drawn": 5,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 4,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 3
+        },
+        {
+          "seq": 3,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_group_ko|boardgame|blitz|F1": {
+      "run": "w1drv-p1-group-group-ko-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 0,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 3,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 0
+        },
+        {
+          "seq": 3,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "group_playoffs|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-group-playoffs-boardgame",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|boardgame|blitz|M1": {
+      "run": "w1drv-p1-group-playoffs-boardgame",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|boardgame|blitz|R4": {
+      "run": "w1drv-p1-group-playoffs-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|boardgame|blitz|F1": {
+      "run": "w1drv-p1-group-playoffs-boardgame",
+      "drawn": 8,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 21,
+          "drawn": 7
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|generic|score|LIFECYCLE": {
+      "run": "w1drv-p1-group-playoffs-generic",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|generic|score|M1": {
+      "run": "w1drv-p1-group-playoffs-generic",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|generic|score|R4": {
+      "run": "w1drv-p1-group-playoffs-generic",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_playoffs|generic|score|F1": {
+      "run": "w1drv-p1-group-playoffs-generic",
+      "drawn": 8,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 21,
+          "drawn": 7
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_stepladder|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-group-stepladder-boardgame",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "stepladder",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_stepladder|boardgame|blitz|M1": {
+      "run": "w1drv-p1-group-stepladder-boardgame",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "stepladder",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_stepladder|boardgame|blitz|R4": {
+      "run": "w1drv-p1-group-stepladder-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "stepladder",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "group_stepladder|boardgame|blitz|F1": {
+      "run": "w1drv-p1-group-stepladder-boardgame",
+      "drawn": 8,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 21,
+          "drawn": 7
+        },
+        {
+          "seq": 2,
+          "kind": "stepladder",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "groups_ko|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-groups-ko-boardgame",
+      "drawn": 5,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 4
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "groups_ko|boardgame|blitz|M1": {
+      "run": "w1drv-p1-groups-ko-boardgame",
+      "drawn": 5,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 4
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "groups_ko|boardgame|blitz|R4": {
+      "run": "w1drv-p1-groups-ko-boardgame",
+      "drawn": 4,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 12,
+          "drawn": 3
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "groups_ko|boardgame|blitz|F1": {
+      "run": "w1drv-p1-groups-ko-boardgame",
+      "drawn": 4,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "group",
+          "fixtures": 9,
+          "drawn": 3
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-knockout-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout|boardgame|blitz|M1": {
+      "run": "w1drv-p1-knockout-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout|boardgame|blitz|R4": {
+      "run": "w1drv-p1-knockout-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout|boardgame|blitz|F1": {
+      "run": "w1drv-p1-knockout-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout_third_place|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-knockout-third-place-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 8,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout_third_place|boardgame|blitz|M1": {
+      "run": "w1drv-p1-knockout-third-place-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 8,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout_third_place|boardgame|blitz|R4": {
+      "run": "w1drv-p1-knockout-third-place-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 8,
+          "drawn": 1
+        }
+      ]
+    },
+    "knockout_third_place|boardgame|blitz|F1": {
+      "run": "w1drv-p1-knockout-third-place-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 8,
+          "drawn": 1
+        }
+      ]
+    },
+    "ko_plate|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-ko-plate-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "ko_plate|boardgame|blitz|M1": {
+      "run": "w1drv-p1-ko-plate-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "ko_plate|boardgame|blitz|R4": {
+      "run": "w1drv-p1-ko-plate-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "ko_plate|boardgame|blitz|F1": {
+      "run": "w1drv-p1-ko-plate-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "league_ko|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-league-ko-boardgame",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "league_ko|boardgame|blitz|M1": {
+      "run": "w1drv-p1-league-ko-boardgame",
+      "drawn": 10,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 9
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "league_ko|boardgame|blitz|R4": {
+      "run": "w1drv-p1-league-ko-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 28,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "league_ko|boardgame|blitz|F1": {
+      "run": "w1drv-p1-league-ko-boardgame",
+      "drawn": 8,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "league",
+          "fixtures": 21,
+          "drawn": 7
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "page_playoff_only|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-page-playoff-only-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "page_playoff_only|boardgame|blitz|M1": {
+      "run": "w1drv-p1-page-playoff-only-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "page_playoff_only|boardgame|blitz|R4": {
+      "run": "w1drv-p1-page-playoff-only-boardgame",
+      "drawn": 0,
+      "bracketDrawn": 0,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 0
+        }
+      ]
+    },
+    "page_playoff_only|generic|score|LIFECYCLE": {
+      "run": "w1drv-p1-page-playoff-only-generic",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "page_playoff_only|generic|score|M1": {
+      "run": "w1drv-p1-page-playoff-only-generic",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "page_playoff_only|generic|score|R4": {
+      "run": "w1drv-p1-page-playoff-only-generic",
+      "drawn": 0,
+      "bracketDrawn": 0,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 0
+        }
+      ]
+    },
+    "qualifying_main|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-qualifying-main-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "qualifying_main|boardgame|blitz|M1": {
+      "run": "w1drv-p1-qualifying-main-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "qualifying_main|boardgame|blitz|R4": {
+      "run": "w1drv-p1-qualifying-main-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "qualifying_main|boardgame|blitz|F1": {
+      "run": "w1drv-p1-qualifying-main-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "knockout",
+          "fixtures": 7,
+          "drawn": 1
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 0
+        }
+      ]
+    },
+    "stepladder_only|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-stepladder-only-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "stepladder",
+          "fixtures": 7,
+          "drawn": 1
+        }
+      ]
+    },
+    "stepladder_only|boardgame|blitz|M1": {
+      "run": "w1drv-p1-stepladder-only-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "stepladder",
+          "fixtures": 7,
+          "drawn": 1
+        }
+      ]
+    },
+    "stepladder_only|boardgame|blitz|R4": {
+      "run": "w1drv-p1-stepladder-only-boardgame",
+      "drawn": 0,
+      "bracketDrawn": 0,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "stepladder",
+          "fixtures": 7,
+          "drawn": 0
+        }
+      ]
+    },
+    "stepladder_only|boardgame|blitz|F1": {
+      "run": "w1drv-p1-stepladder-only-boardgame",
+      "drawn": 1,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "stepladder",
+          "fixtures": 6,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_knockout|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-swiss-knockout-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_knockout|boardgame|blitz|M1": {
+      "run": "w1drv-p1-swiss-knockout-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_knockout|boardgame|blitz|R4": {
+      "run": "w1drv-p1-swiss-knockout-boardgame",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 5
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_knockout|boardgame|blitz|F1": {
+      "run": "w1drv-p1-swiss-knockout-boardgame",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 5
+        },
+        {
+          "seq": 2,
+          "kind": "knockout",
+          "fixtures": 3,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|boardgame|blitz|LIFECYCLE": {
+      "run": "w1drv-p1-swiss-playoff-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|boardgame|blitz|M1": {
+      "run": "w1drv-p1-swiss-playoff-boardgame",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|boardgame|blitz|R4": {
+      "run": "w1drv-p1-swiss-playoff-boardgame",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 5
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|boardgame|blitz|F1": {
+      "run": "w1drv-p1-swiss-playoff-boardgame",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 5
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|generic|score|LIFECYCLE": {
+      "run": "w1drv-p1-swiss-playoff-generic",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|generic|score|M1": {
+      "run": "w1drv-p1-swiss-playoff-generic",
+      "drawn": 7,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 6
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|generic|score|R4": {
+      "run": "w1drv-p1-swiss-playoff-generic",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 5
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    },
+    "swiss_playoff|generic|score|F1": {
+      "run": "w1drv-p1-swiss-playoff-generic",
+      "drawn": 6,
+      "bracketDrawn": 1,
+      "stages": [
+        {
+          "seq": 1,
+          "kind": "swiss",
+          "fixtures": 20,
+          "drawn": 5
+        },
+        {
+          "seq": 2,
+          "kind": "page_playoff",
+          "fixtures": 4,
+          "drawn": 1
+        }
+      ]
+    }
+  }
+}
