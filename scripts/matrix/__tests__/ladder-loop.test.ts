@@ -181,13 +181,58 @@ describe("ladderSchedule and playLadder — D8 (ruling 52)", () => {
     expect(state).toBe("works");
   });
 
-  it("no challenge played is red, never drained: a fake that refuses every challenge leaves exit refused_challenge, life-loop-bounded fails, the refusal is noted, and the stage does not complete (I9 itself is Task 9's)", async () => {
+  it("no challenge played is red, never drained: a fake that refuses every challenge leaves exit refused_challenge, life-loop-bounded fails, the refusal is noted, and the stage does not complete (so I9 abstains)", async () => {
     const { out, checks } = await runOn(new FakeLadderDriver({ refuseAll: "LADDER_CHALLENGE_OUT_OF_RANGE" }), "LIFECYCLE", { row: "ladder" });
     expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
     expect(out.observed.stages[0]!.exit).toBe("refused_challenge");
     expect(out.notes).toContain("ladder step 1: challenge refused 422 LADDER_CHALLENGE_OUT_OF_RANGE");
-    // I9 lands in Task 9; until then the stage's /complete answers not-complete over zero fixtures.
+    // The stage's /complete answers not-complete over zero fixtures, so I9 (Task 9) has no completed ladder to judge.
     expect(out.observed.stages[0]!.complete).toMatchObject({ completed: false });
+    expect(checks.find((c) => c.id === "I9-ladder-order-is-the-field")).toMatchObject({ verdict: "abstain", checked: 0 });
+  });
+
+  describe("I9 on the real snapshot (W1-driving Task 9)", () => {
+    const I9 = "I9-ladder-order-is-the-field";
+    it("LIFECYCLE: I9 passes over every entrant, and the order it compares is the LIVE one the product holds — not the setup-time config copy", async () => {
+      const driver = new FakeLadderDriver();
+      const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "ladder" });
+      const s = out.observed.stages[0]!;
+      // The fake's own order (D8's rule applied to the seeds), independent of I9 and of the snapshot.
+      expect(driver.ladderOrder()).toEqual(swapRule(driver.entrantsBySeed()));
+      expect(s.config.ladder_order).toEqual(driver.ladderOrder());
+      expect(s.complete?.finalRanks).toEqual(driver.ladderOrder());
+      expect(checks.find((c) => c.id === I9)).toMatchObject({ verdict: "pass", checked: driver.entrants.length });
+    });
+    it("a product whose stored ladder_order and finalRanks disagree reds I9 naming both", async () => {
+      class OrderDrifts extends FakeLadderDriver {
+        override async listStages() {
+          const refs = await super.listStages();
+          return refs.map((r) => (Array.isArray(r.config.ladder_order) ? { ...r, config: { ...r.config, ladder_order: [...(r.config.ladder_order as string[])].reverse() } } : r));
+        }
+      }
+      const driver = new OrderDrifts();
+      const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "ladder" });
+      const c = checks.find((x) => x.id === I9)!;
+      expect(c.verdict).toBe("fail");
+      expect(c.evidence).toContain(`stage seq 1: finalRanks differ from ladder_order: ${out.observed.stages[0]!.complete!.finalRanks!.join(",")} vs ${[...driver.ladderOrder()].reverse().join(",")}`);
+    });
+    it("T7 carry r1-b: finalRanks with a duplicate in place of one entrant, or a foreign id in place of one, reds I9 although its length is right", async () => {
+      const wrong = (edit: (ranks: string[]) => string[]) => class extends FakeLadderDriver {
+        override async completeStage() {
+          const out = await super.completeStage();
+          return { ...out, events: out.events.map((e) => (e.finalRanks === undefined ? e : { ...e, finalRanks: edit(e.finalRanks) })) };
+        }
+      };
+      const dup = await runOn(new (wrong((r) => [r[0]!, r[0]!, ...r.slice(2)]))(), "LIFECYCLE", { row: "ladder" });
+      const second = dup.out.observed.stages[0]!.config.ladder_order as string[];
+      const d = dup.checks.find((x) => x.id === I9)!;
+      expect(d.verdict).toBe("fail");
+      expect(d.evidence).toEqual(expect.arrayContaining([`${second[0]} ranked 2×`, `${second[1]} not ranked`]));
+      const foreign = await runOn(new (wrong((r) => ["stranger", ...r.slice(1)]))(), "LIFECYCLE", { row: "ladder" });
+      const f = foreign.checks.find((x) => x.id === I9)!;
+      expect(f.verdict).toBe("fail");
+      expect(f.evidence).toEqual(expect.arrayContaining(["stranger ranked but not in the field", `${(foreign.out.observed.stages[0]!.config.ladder_order as string[])[0]} not ranked`]));
+    });
   });
 
   it("a second sport, the registry swept: every sport plays the same sweep to the same rule order, and a draw is posted on the first non-climbing step exactly where the engine declares draws on a ladder", async () => {

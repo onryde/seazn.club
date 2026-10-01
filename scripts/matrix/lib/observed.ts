@@ -88,6 +88,13 @@ export interface ObservedStage {
    *  every division entrant, as the setup read them (one per individual).
    *  Absent on every other kind. */
   persons?: Record<string, readonly string[]>;
+  /** W1-driving Task 9 (ruling 45): on a double elim, stepladder or page
+   *  playoff, the ext_keys of its terminal finals in engine order (gf before
+   *  gf-reset) — the engine generator's own isFinal fixtures for the bracket
+   *  the product laid out (scenarios/terminal-finals.ts). An engine-derived
+   *  expectation carried as data, like ObservedFixture.declared, so I2 stays
+   *  type-only. Absent on every other kind. */
+  terminalFinals?: readonly string[];
 }
 
 export interface FixtureSnap { id: string; status: string; outcome: ObservedOutcome | null }

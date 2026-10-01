@@ -570,7 +570,10 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
     }
-    for (const g of bracket.fixtures) this.extIds.set(g.id, this.seat(g.round + 1, g.home ?? null, g.away ?? null).id);
+    // Each row carries the engine's id and final flag, as the product's rows do
+    // (stages.ts bracketToGen `extKey: f.id`; fixtures.ts listDivisionFixtures
+    // serves ext_key and is_final) — I2 reads a page playoff's champion off them.
+    for (const g of bracket.fixtures) this.extIds.set(g.id, this.seat(g.round + 1, g.home ?? null, g.away ?? null, { ext_key: g.id, is_final: g.isFinal === true }).id);
     for (const g of bracket.fixtures) {
       for (const [ref, slot] of [[g.homeFrom, "home_entrant_id"], [g.awayFrom, "away_entrant_id"]] as const) {
         if (ref === undefined) continue;

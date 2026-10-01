@@ -2,7 +2,7 @@
 // the harness did and saw into an ObservedRun. Expected values are derived
 // (R9): points from the module's standingsDelta over the folded stream, draw
 // reachability from supportsDraws.
-import type { MatchOutcome, StageCtx, StageKind } from "@seazn/engine/core";
+import { EngineError, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import {
   RefusedCall, SEEDING_FAILED_AFTER_COMMIT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
@@ -22,6 +22,7 @@ import { confirmAdvance, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
+import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
 import type { ScenarioContext } from "./types.ts";
 
 /** Final review I-2: what the harness POSTED beside what the product says it
@@ -690,6 +691,47 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   return { home: seatedHome ? won.points : 0, away: seatedHome ? 0 : won.points, forOutcome: f.outcome };
 }
 
+/** W1-driving Task 9: a ladder's `ladder_order` is written by the product at
+ *  the first challenge and on every decided swap (stages.ts:5538-5551,
+ *  scoring.ts:774-786); the StageRef a play carries is the setup-time copy,
+ *  which predates both. I9 compares finalRanks with the order the product
+ *  holds NOW, so it is read once, for the ladder stages only — every other
+ *  kind keeps the copy it was played with (a config edit probe must not leak
+ *  into abstainOnStageConfig). A ladder the product lists without an order
+ *  keeps none, and I9 says so by name. */
+async function liveLadderOrders(ctx: ScenarioContext, setup: DivisionSetup, plays: readonly StagePlay[]): Promise<Map<string, unknown>> {
+  const out = new Map<string, unknown>();
+  if (!plays.some((p) => p.stage.kind === "ladder")) return out;
+  for (const s of await ctx.driver.listStages(setup.division.id)) {
+    const order: unknown = s.config.ladder_order;
+    if (s.kind === "ladder" && Array.isArray(order) && plays.some((p) => p.stage.id === s.id)) out.set(s.id, [...(order as readonly unknown[])]);
+  }
+  return out;
+}
+
+/** W1-driving Task 9 (ruling 45): the terminal final keys of a structural
+ *  bracket, sized as the product laid it out. A root stage is Start's over
+ *  its field; a setup-timing later stage was generated over its DECLARED
+ *  slots (stages.ts generateProgressionSetupFixtures), and a withdrawn
+ *  qualifier's seat stays empty (FP-2), so the seeded field can be smaller
+ *  than the bracket. The ids are placeholders: only the size shapes the keys.
+ *  null off the structural kinds, and for a stage with no field observed. A
+ *  size the engine refuses to lay out (a page playoff of anything but 4) has
+ *  no keys: the product's own generator refuses it too, so such a stage never
+ *  completes, and if one ever did I2 names the missing keys — never a throw
+ *  that would cost the case every other observation. */
+function terminalFinalsOf(stage: StageRef, play: StagePlay): readonly string[] | null {
+  if (!STRUCTURAL_FINAL_KINDS.includes(stage.kind) || play.field === null) return null;
+  const size = Math.max(play.field.length, play.advance?.declared ?? 0);
+  const slots = [...play.field, ...Array.from({ length: size - play.field.length }, (_, k) => `vacant:${k}`)];
+  try {
+    return terminalFinalKeys(stage.kind, slots, stage.config);
+  } catch (e) {
+    if (EngineError.is(e)) return [];
+    throw e;
+  }
+}
+
 /** One ObservedStage per play (W1-driving Task 6), each on its OWN rows,
  *  tables, generates, pair rounds and exit. The root's field is the
  *  division's entrants ("division"); a later stage's is the entrants the
@@ -698,9 +740,11 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
 export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, plays: readonly StagePlay[], extra: { configEdit: ConfigEditObs | null; withdrawal: WithdrawalObs | null }): Promise<ObservedRun> {
   if (plays.length === 0) throw new Error("scenario: snapshot of a division with no stage played — a run observes at least its root stage");
   const all = await ctx.driver.listFixtures(setup.division.id);
+  const live = await liveLadderOrders(ctx, setup, plays);
   const stages: ObservedStage[] = [];
   for (const [i, play] of plays.entries()) {
     const stage = play.stage;
+    const config = live.has(stage.id) ? { ...stage.config, ladder_order: live.get(stage.id) } : stage.config;
     const rows = all.filter((f) => f.stage_id === stage.id);
     const fixtures: ObservedFixture[] = rows.map((f) => {
       const base = { ...toFixture(f), declared: null };
@@ -717,11 +761,13 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
     // W1-driving Task 8: an americano stage carries its persons — the pair
     // entrants recordPersons read, beside the division entrants' own (Task 5).
     const pairs = rec.stagePersons.get(stage.id);
+    const finals = terminalFinalsOf(stage, play);
     stages.push({
-      id: stage.id, seq: stage.seq, kind: stage.kind, config: stage.config,
+      id: stage.id, seq: stage.seq, kind: stage.kind, config,
       field: [...(play.field ?? [])], fieldSource: i === 0 ? "division" : "seeded", fixtures, standings,
       generates: track.generates, pairRounds: track.pairRounds, complete: play.complete, exit: track.exit,
       ...(pairs !== undefined ? { persons: { ...Object.fromEntries(setup.persons), ...pairs } } : {}),
+      ...(finals !== null ? { terminalFinals: finals } : {}),
     });
   }
   return {

@@ -84,6 +84,19 @@ function sliceFunction(src: string, name: string): string {
   }
   throw new Error(`test: ${name} never closes`);
 }
+/** The fake's oracle (W1-driving Task 9): how many seats of round `r` hold
+ *  `person`, a seat holding them twice counting two — from its own member
+ *  rows, never from I10. */
+const seatsHolding = (driver: FakeAmericanoDriver, r: number, person: string): number =>
+  driver.fixturesOfRound(r).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null)
+    .reduce((n, s) => n + driver.membersOf(s).filter((x) => x === person).length, 0);
+/** I10's evidence for a round's repeats, built from the fake's rows. */
+const i10RepeatEvidence = (driver: FakeAmericanoDriver, dup: { round_no: number; repeats: Map<string, string[]> }): string[] =>
+  [...dup.repeats.keys()].map((p) => `round ${dup.round_no}: ${p} seated ${seatsHolding(driver, dup.round_no, p)}×`);
+/** …and for every round the fake seated. */
+const i10AllRepeats = (driver: FakeAmericanoDriver): string[] =>
+  [...new Set(driver.rows().map((f) => f.round_no ?? 0))].sort((a, b) => a - b)
+    .flatMap((r) => i10RepeatEvidence(driver, { round_no: r, repeats: driver.repeatsIn(r) }));
 
 describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   it("empty case first: before Start the fake holds no fixture and no pair entrant; modeOf answers null off an americano stage and the posted mode on one", () => {
@@ -239,13 +252,19 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect([...linked].filter((p) => !played.has(p))).toEqual([]);
   });
 
-  it("I10 does not exist until Task 9: no invariant judges a round's persons yet (pointer — Task 9 Step 1 replaces this)", async () => {
+  it("I10 (Task 9) judges a round's persons: this case seats a person twice in round 2, and I10 reds naming that round and that person, as the fake's own rows show them", async () => {
+    // Badminton, as the pinned R4 seed-ordered case below: on generic, round
+    // 2's plan is a self-pair and the generate is refused (500), so no round
+    // 2 exists to carry a repeat (Task 8's pointer test claimed one there; it
+    // asserted only that no I10 check existed, so the claim was never read).
     const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons: true });
-    const { checks } = await runOn(driver, "R4", { row: "mexicano" });
-    // Task 9 Step 1: this case seats a person twice in round 2 (the duplicate
-    // signature below); I10-americano-seats-each-person-once is created then
-    // and reds on it. Until then no check id starts with I10.
-    expect(checks.filter((c) => c.id.startsWith("I10"))).toEqual([]);
+    const { checks } = await runOn(driver, "R4", { row: "mexicano", sport: "badminton" });
+    const dup = driver.firstDuplicate();
+    expect(dup.round_no).toBe(2);
+    expect(dup.repeats.size).toBeGreaterThan(0);
+    const c = check(checks, "I10-americano-seats-each-person-once");
+    expect(c.verdict).toBe("fail");
+    for (const e of i10RepeatEvidence(driver, dup)) expect(c.evidence).toContain(e);
   });
 
   it("fast-check (rule 10, m-2): playMexicano ITSELF over any per-round schedule of forfeit / void / withdraw, either sport, either person-id order, product or corrected player set — its exit and every note agree with the fake's own rows", async () => {
@@ -392,14 +411,15 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(dup.repeats.get(person!), `${person} repeats in round 2`).toBeDefined();
     expect(seats!.split(" and ")).toEqual(dup.repeats.get(person!));
     expect(notes[0]!.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).toBe(true);
-    // The FULL failing set (review 2 m-8), re-derived: no check sees the
-    // duplicate yet (I10 is Task 9's). Round 3's plan then pairs a pair
-    // entrant's person with their own individual entry (the same false
-    // premise, one round later), the generate is the entrant_members 500, and
-    // the run ends there: an unnamed 5xx generate (I4, I8) and the loop exit.
-    // Round 1-2 are all decided, so the stage completes (FP-5 asks once).
+    // The FULL failing set (review 2 m-8), re-derived: I10 (Task 9) reds the
+    // duplicate itself, naming round 2 and the person. Round 3's plan then
+    // pairs a pair entrant's person with their own individual entry (the same
+    // false premise, one round later), the generate is the entrant_members
+    // 500, and the run ends there: an unnamed 5xx generate (I4, I8) and the
+    // loop exit. Round 1-2 are all decided, so the stage completes (FP-5 asks once).
     expect(driver.selfPairsIn(3)).toBeGreaterThan(0);
-    expect(failing(checks)).toEqual(["I4-nothing-ends-stuck", "I8-generate-named", "life-loop-bounded"]);
+    expect(failing(checks)).toEqual(["I10-americano-seats-each-person-once", "I4-nothing-ends-stuck", "I8-generate-named", "life-loop-bounded"]);
+    expect([...check(checks, "I10-americano-seats-each-person-once").evidence].sort()).toEqual(i10RepeatEvidence(driver, dup).sort());
   });
 
   it("mexicano self-pair (review 3 I-2; Step 0: the entrant_members PK answers 500): round 2 refused, signature written, full failing set pinned", async () => {
@@ -581,11 +601,20 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(driver.roundsGenerated()).toContain(2);
     expect(seatedAfter(driver, 1, driver.personOfSeed(3))).toBe(true);
     expect(out.notes.filter((n) => n.startsWith(`r4-withdrawn-player-kept-playing: ${driver.personOfSeed(3)} still seated in`) && n.endsWith(`→ ${KEPT_PLAYING_ROUTE.wave}`)).length).toBe(1);
-    // The round-2 duplicate is here too (false premise 17), named; no check sees it until Task 9's I10.
+    // The round-2 duplicate is here too (false premise 17), named, and I10 (Task 9) reds on it.
     const dup = driver.firstDuplicate();
     expect(out.notes.some((n) => [...dup.repeats.keys()].some((p) => n.startsWith(`mexicano-pair-entrants-counted-as-players: round ${dup.round_no} seats ${p} twice`)))).toBe(true);
-    // Full failing set at Task 8 (review 3 I-2; Task 9 Step 1 adds "I10-americano-seats-each-person-once"):
-    expect(failing(checks)).toEqual(["r4-policy-reported"]);
+    // Full failing set (review 3 I-2; Task 9 Step 1 adds I10):
+    expect(failing(checks)).toEqual(["I10-americano-seats-each-person-once", "r4-policy-reported"]);
+    // I10 judges EVERY round, and the product-shaped fake repeats in each one
+    // after the first (rounds 2–7 here), so its evidence is every round's
+    // repeats as the fake's own rows show them — led by round 2's.
+    const i10 = check(checks, "I10-americano-seats-each-person-once");
+    const all = i10AllRepeats(driver);
+    expect(all.length).toBeGreaterThan(i10RepeatEvidence(driver, dup).length); // more than round 2: the differing case
+    expect(all.length).toBeLessThanOrEqual(12);                                 // evidence keeps 12: the whole list is compared
+    expect([...i10.evidence].sort()).toEqual([...all].sort());
+    expect(i10RepeatEvidence(driver, dup)).toContain(i10.reason);
   });
 
   it("mexicano R4 WITHOUT the second leg (dropWithdrawnFromPlan; review 3 m-4): round 2 exists, no signature", async () => {
@@ -693,6 +722,10 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(b.out.observed.stages[0]!.exit).toBe("drained");
     expect(check(b.checks, "life-stage-completed").verdict).toBe("pass");
     expect(b.out.notes.some((n) => n.startsWith("americano generated on team entrants"))).toBe(false);
+    // I10 (Task 9) judges the real rounds: one item per person per round, per field person, per seated pair.
+    const i10b = check(b.checks, "I10-americano-seats-each-person-once");
+    expect(i10b.verdict).toBe("pass");
+    expect(i10b.checked).toBeGreaterThan(bad.entrants.length);
     const foot = new FakeAmericanoDriver({ mode: "americano" });
     const f = await runOn(foot, "LIFECYCLE", { row: "americano", sport: "football" });
     expect(foot.calls.filter((c) => c === "putLineup").length).toBe(0);
@@ -706,6 +739,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // Team americano GENERATES: life-lineups-put abstains by name, never fails on zero items.
     const lineups = check(f.checks, "life-lineups-put");
     expect([lineups.verdict, lineups.reason]).toEqual(["abstain", "an americano stage seats product-minted pair entrants, which carry no lineup"]);
+    // I10 judges a team by the ENTRANT (one member seated is enough): it passes although most roster members never sit.
+    expect(check(f.checks, "I10-americano-seats-each-person-once").verdict).toBe("pass");
     expect(failing(f.checks)).toEqual([]);
   });
 
@@ -788,6 +823,10 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
       const drawn = check(checks, "f1-everyone-drawn");
       expect(drawn.verdict).toBe("fail");
       expect(drawn.evidence.map((x) => x.split(" ")[0]).sort()).toEqual([...never].sort());
+      // I10 (Task 9) names the same three, by their persons (PF-8: seated in 0 fixtures).
+      const i10 = check(checks, "I10-americano-seats-each-person-once");
+      expect(i10.verdict, sport).toBe("fail");
+      expect(i10.evidence.filter((x) => / never played$/.test(x)).sort(), sport).toEqual(never.map((e) => `${driver.membersOf(e)[0]} never played`).sort());
     }
   });
 

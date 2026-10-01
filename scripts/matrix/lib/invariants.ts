@@ -96,9 +96,27 @@ function poolsOf(s: ObservedStage): Map<string, Set<string>> {
   return pools;
 }
 
+/** The product's code for a /complete that COMMITTED and then failed to seed
+ *  the next stage (usecases/stages.ts progressCompletedStage). The driver
+ *  layer owns the constant (driver/types.ts SEEDING_FAILED_AFTER_COMMIT);
+ *  this module is type-only (PF7), so the literal is repeated here and
+ *  invariants.test.ts builds its stage from the driver's constant — a rename
+ *  there reds the abstain test. */
+const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
+/** A stage finishStage recorded complete although its finalRanks were never
+ *  read: the 409 above (W1-driving T6, m-7). */
+const seedingFailed = (s: ObservedStage): boolean =>
+  s.complete !== null && s.complete.finalRanks === null && s.complete.code === SEEDING_FAILED_AFTER_COMMIT;
+
+/** I2 on knockout: exactly one unbeaten entrant, and it is rank 1. On the
+ *  other three bracket kinds (owner ruling 45, W1-driving Task 9) the
+ *  champion is STRUCTURAL: rank 1 is the winner of the terminal final — the
+ *  last of the stage's terminalFinals (engine order: gf before gf-reset)
+ *  that a decided fixture carries — and no order beyond rank 1 is asserted.
+ *  A double elim's or page playoff's champion may have lost a game. */
 const I2: InvariantSpec = {
   id: "I2-bracket-one-champion-ranks-permutation",
-  description: "a completed bracket ranks every entrant once and its rank 1 is the one unbeaten entrant",
+  description: "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
   stageKinds: ["knockout", "double_elim", "stepladder", "page_playoff"],
   abstainOn: ["shared_place_declared", "cut_short"],
   abstainOnStageConfig: [],
@@ -107,9 +125,13 @@ const I2: InvariantSpec = {
   check(stages) {
     const fails: string[] = [];
     let checked = 0;
+    const unread: string[] = [];
     for (const s of stages) {
       const unobserved = divisionWideLaterStage(s);
       if (unobserved !== null) { fails.push(unobserved); continue; }
+      // T6 carry: every entrant would red "not ranked" on top of the real
+      // seeding failure, which the advance check owns. Skipped by name.
+      if (seedingFailed(s)) { unread.push(`stage seq ${s.seq}`); continue; }
       const ranks = s.complete?.finalRanks ?? [];
       const counts = new Map<string, number>();
       for (const id of ranks) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -131,8 +153,19 @@ const I2: InvariantSpec = {
         if (unbeaten.length !== 1) fails.push(`${unbeaten.length} unbeaten entrants: ${unbeaten.join(",")}`);
         else if (ranks[0] !== unbeaten[0]) fails.push(`rank 1 is ${ranks[0] ?? "nobody"}, unbeaten is ${unbeaten[0]}`);
       }
+      if (s.kind !== "knockout" && s.field.length > 0) {
+        checked++;
+        const keys = s.terminalFinals ?? [];
+        if (keys.length === 0) { fails.push(`stage seq ${s.seq}: ${s.kind} carries no terminal final keys — the champion cannot be read`); continue; }
+        const played = keys.map((k) => s.fixtures.find((f) => f.extKey === k)).filter((f): f is ObservedFixture => f !== undefined && winnerOf(f.outcome) !== null);
+        const terminal = played.at(-1);
+        if (terminal === undefined) fails.push(`no decided fixture carries a terminal final key (${keys.join(" / ")})`);
+        else if (ranks[0] !== winnerOf(terminal.outcome)) fails.push(`rank 1 is ${ranks[0] ?? "nobody"}, the ${terminal.extKey} winner is ${winnerOf(terminal.outcome)}`);
+      }
     }
-    return result(fails, checked);
+    const why = `completed, but /complete answered 409 ${SEEDING_FAILED_AFTER_COMMIT} — its finalRanks were never read`;
+    if (unread.length > 0 && checked === 0 && fails.length === 0) return ABSTAIN(`${unread.join(", ")} ${why} (the advance check owns the seeding failure)`);
+    return result(fails, checked, unread.length > 0 ? [`skipped ${unread.join(", ")}: ${why}`] : []);
   },
 };
 
@@ -356,7 +389,113 @@ const I8: InvariantSpec = {
   },
 };
 
-export const INVARIANTS: readonly InvariantSpec[] = Object.freeze([I1, I2, I3, I4, I5, I6, I7, I8]);
+/** finalRanks against the ids it must rank exactly once (the permutation
+ *  items I2 also writes): one checked item per id in `must`; an id in `may`
+ *  is also allowed once or not at all; anything else ranked is `outside`. */
+function rankItems(ranks: readonly string[], must: readonly string[], may: ReadonlySet<string>, outside: string, fails: string[]): number {
+  const counts = new Map<string, number>();
+  for (const id of ranks) counts.set(id, (counts.get(id) ?? 0) + 1);
+  for (const e of must) {
+    const c = counts.get(e) ?? 0;
+    if (c === 1 || (c === 0 && may.has(e))) continue;
+    fails.push(`${e} ${c === 0 ? "not ranked" : `ranked ${c}×`}`);
+  }
+  for (const id of counts.keys()) if (!must.includes(id)) fails.push(`${id} ranked but ${outside}`);
+  return must.length;
+}
+
+/** W1-driving Task 9. The product's ladder finalRanks is the RAW
+ *  config.ladder_order (engine-db/competition.ts:606): written at the first
+ *  challenge, swapped on every decided climb, never pruned — so a withdrawn
+ *  entrant may keep its rung (ruling 53, a W7 question, not a red here) or a
+ *  pruning product may drop it. Every other entrant is ranked exactly once
+ *  (T7 carry r1-b: a permutation, not membership). `config.ladder_order` is
+ *  the product's live order, read by the snapshot. */
+const I9: InvariantSpec = {
+  id: "I9-ladder-order-is-the-field",
+  description: "a completed ladder ranks every active entrant exactly once and nothing outside the field, its finalRanks are its ladder_order, and at least one challenge was decided",
+  stageKinds: ["ladder"],
+  abstainOn: ["cut_short"],
+  abstainOnStageConfig: [],
+  requiresCompletedStage: true,
+  stepSafe: false, // it needs a completed ladder
+  check(stages, run) {
+    const fails: string[] = [];
+    let checked = 0;
+    const withdrawn = new Set(run.withdrawal === null ? [] : [run.withdrawal.entrantId]);
+    for (const s of stages) {
+      const unobserved = divisionWideLaterStage(s);
+      if (unobserved !== null) { fails.push(unobserved); continue; }
+      if (!s.fixtures.some((f) => twoSided(f) && f.outcome !== null && isTerminal(f.status))) fails.push(`stage seq ${s.seq}: no decided challenge on the ladder`);
+      const ranks = s.complete?.finalRanks ?? [];
+      checked += rankItems(ranks, s.field, withdrawn, "not in the field", fails);
+      const order = s.config.ladder_order;
+      if (!Array.isArray(order)) fails.push(`stage seq ${s.seq}: no ladder_order observed — finalRanks cannot be compared`);
+      else if (ranks.length !== order.length || ranks.some((id, i) => id !== order[i])) fails.push(`stage seq ${s.seq}: finalRanks differ from ladder_order: ${ranks.join(",")} vs ${order.join(",")}`);
+    }
+    return result(fails, checked);
+  },
+};
+
+/** W1-driving Task 9. Each americano round seats a person at most once (a
+ *  seat holding them twice counts two); every field entrant plays; and a
+ *  completed stage ranks its SIDES — the pair entrants the product minted,
+ *  folded as a league (engine-db/competition.ts:360-365, :399; Task 8 Step
+ *  0) — exactly once each. PF-8: "never played" is seated in 0 fixtures of
+ *  any status, and the rank items are skipped while no ranks were read. A
+ *  field entrant with one person is judged by that person; one with a roster
+ *  (a team sport) by the entrant, since the product seats one member per team
+ *  (false premise 10; Task 8's W7 note). */
+const I10: InvariantSpec = {
+  id: "I10-americano-seats-each-person-once",
+  description: "each americano round seats every person at most once, every field entrant plays, and a completed stage ranks each pair entrant it seated exactly once",
+  stageKinds: ["americano"],
+  abstainOn: ["cut_short"],
+  abstainOnStageConfig: [],
+  requiresCompletedStage: false, // the per-round check needs no completion
+  stepSafe: false, // "never played" holds only at the end of a run
+  check(stages) {
+    const fails: string[] = [];
+    let checked = 0;
+    for (const s of stages) {
+      const unobserved = divisionWideLaterStage(s);
+      if (unobserved !== null) { fails.push(unobserved); continue; }
+      const persons = s.persons;
+      if (persons === undefined) { fails.push(`stage seq ${s.seq}: no persons observed — who sat cannot be read`); continue; }
+      const seated = s.fixtures.filter((f) => f.home !== null || f.away !== null);
+      if (seated.length === 0) { fails.push(`stage seq ${s.seq}: no round seated anyone`); continue; }
+      const played = new Set<string>();
+      for (const r of [...new Set(seated.map((f) => f.roundNo ?? 0))].sort((a, b) => a - b)) {
+        const counts = new Map<string, number>();
+        for (const side of seated.filter((f) => (f.roundNo ?? 0) === r).flatMap((f) => [f.home, f.away])) {
+          if (side === null) continue;
+          const ps = persons[side];
+          if (ps === undefined) { fails.push(`round ${r}: ${side} has no observed persons`); continue; }
+          for (const p of ps) { counts.set(p, (counts.get(p) ?? 0) + 1); played.add(p); }
+        }
+        for (const [p, c] of counts) {
+          checked++;
+          if (c > 1) fails.push(`round ${r}: ${p} seated ${c}×`);
+        }
+      }
+      for (const e of s.field) {
+        checked++;
+        const ps = persons[e] ?? [];
+        if (ps.length === 0) fails.push(`${e}: no persons observed`);
+        else if (ps.length === 1) { if (!played.has(ps[0])) fails.push(`${ps[0]} never played`); }
+        else if (!ps.some((p) => played.has(p))) fails.push(`${e} never played`);
+      }
+      const ranks = s.complete?.finalRanks ?? null;
+      if (ranks !== null) {
+        const sides = [...new Set(seated.flatMap((f) => [f.home, f.away]).filter((e): e is string => e !== null))];
+        checked += rankItems(ranks, sides, new Set(), "not seated in this stage", fails);
+      }
+    }
+    return result(fails, checked);
+  },
+};
+
+export const INVARIANTS: readonly InvariantSpec[] = Object.freeze([I1, I2, I3, I4, I5, I6, I7, I8, I9, I10]);
 export const STEP_INVARIANTS: readonly InvariantSpec[] = Object.freeze(INVARIANTS.filter((s) => s.stepSafe));
 
 export function evaluateInvariant(spec: InvariantSpec, run: ObservedRun): InvariantResult {

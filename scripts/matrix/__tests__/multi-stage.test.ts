@@ -14,12 +14,13 @@ import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { DriverMisuse, RefusedCall } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun } from "../lib/observed.ts";
+import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun, type ObservedStage } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
 import { SEEDING_TIE_CODE, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
 import { Recorder, drawsDeclaredOnReached, ensureLineups, finishStage, playDivision, playStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
 import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
+import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -787,5 +788,99 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
     // …and a second call PUTs nothing more.
     await ensureLineups(h.ctx, h.rec, h.setup, seated);
     expect(d.trace.filter((c) => c.startsWith(`putLineup ${tbd.id} `))).toHaveLength(2);
+  });
+});
+
+// W1-driving Task 9 (ruling 45): a later stepladder or page playoff is judged
+// on the winner of its TERMINAL final. The keys are the snapshot's, derived
+// from the engine; the fake serves the engine's own is_final rows, so the two
+// meet only if the snapshot sized the bracket the way the product laid it out.
+describe("I2 structural on the later bracket stages the fake draws (W1-driving Task 9, ruling 45)", () => {
+  const I2 = "I2-bracket-one-champion-ranks-permutation";
+  const STRUCT_ROWS = FAKE_ROWS.filter((r) => stagesForRow(r).slice(1).some((b) => STRUCTURAL_FINAL_KINDS.includes(b.kind)));
+  const variantOf = (row: Row) => (bracketDrawDeclared(row, "generic", "score") ? "win_loss" : "score");
+  const servedFinals = (s: ObservedStage) => s.fixtures.filter((f) => f.isFinal === true).map((f) => f.extKey);
+  it("each row: the snapshot's terminal keys are the is_final rows the fake served, and I2 passes with rank 1 = that final's winner — counted", async () => {
+    let judged = 0;
+    for (const row of STRUCT_ROWS) {
+      const { out, checks } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row, variant: variantOf(row) });
+      for (const s of out.observed.stages) {
+        if (!STRUCTURAL_FINAL_KINDS.includes(s.kind)) { expect(s.terminalFinals, `${row} stage ${s.seq}`).toBeUndefined(); continue; }
+        const served = servedFinals(s);
+        expect(served.length, `${row} stage ${s.seq}`).toBeGreaterThan(0);
+        expect(s.terminalFinals, `${row} stage ${s.seq}`).toEqual(served);
+        const final = s.fixtures.find((f) => f.extKey === served.at(-1))!;
+        expect(winnerOf(final.outcome), `${row} stage ${s.seq}`).not.toBeNull();
+        expect(s.complete?.finalRanks?.[0], `${row} stage ${s.seq}`).toBe(winnerOf(final.outcome));
+        judged++;
+      }
+      expect(checks.find((c) => c.id === I2), row).toMatchObject({ verdict: "pass" });
+    }
+    expect(judged).toBe(STRUCT_ROWS.length);
+    expect(judged).toBeGreaterThan(0);
+    process.stdout.write(`I2 structural over the fake's later brackets: ${judged} stage(s) (${STRUCT_ROWS.join(", ")})\n`);
+  });
+  it("a product whose finalRanks put the terminal final's loser first reds I2, naming the final and its winner", async () => {
+    class LoserFirst extends FakeMultiStageDriver {
+      override async completeStage(stageId?: string) {
+        const out = await super.completeStage(stageId);
+        const kind = this.stages.find((s) => s.id === stageId)?.kind;
+        if (kind === undefined || !STRUCTURAL_FINAL_KINDS.includes(kind)) return out;
+        return { ...out, events: out.events.map((e) => (e.finalRanks === undefined ? e : { ...e, finalRanks: [e.finalRanks[1]!, e.finalRanks[0]!, ...e.finalRanks.slice(2)] })) };
+      }
+    }
+    let judged = 0;
+    for (const row of STRUCT_ROWS) {
+      const { out, checks } = await runOn(new LoserFirst(), "LIFECYCLE", { row, variant: variantOf(row) });
+      const s = out.observed.stages.find((x) => STRUCTURAL_FINAL_KINDS.includes(x.kind))!;
+      const key = servedFinals(s).at(-1)!;
+      const winner = winnerOf(s.fixtures.find((f) => f.extKey === key)!.outcome);
+      const c = checks.find((x) => x.id === I2)!;
+      expect(c.verdict, row).toBe("fail");
+      expect(c.evidence, row).toContain(`rank 1 is ${s.complete!.finalRanks![0]}, the ${key} winner is ${winner}`);
+      judged++;
+    }
+    expect(judged).toBe(STRUCT_ROWS.length);
+  });
+  it("FP-2: a qualifier withdrawn before /complete leaves a vacancy — the keys are the DECLARED bracket's, as the product laid it out at setup, never the smaller seeded field's", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "group_stepladder");
+    expect(h.stage2.kind).toBe("stepladder");
+    await h.step("generateLater");
+    await h.step("playStage1");
+    await h.step({ withdrawOne: 0 });
+    await h.step("complete");
+    await h.step("confirmLatest");
+    const a = h.lastAdvance!;
+    const declared = h.declared();
+    expect(a.seeded.length).toBe(declared - 1);
+    const plays: StagePlay[] = [
+      { stage: h.stage1, field: h.sourceField(), advance: null, complete: h.lastComplete },
+      { stage: h.stage2, field: a.seeded, advance: a, complete: null },
+    ];
+    const observed = await snapshot(h.ctx, h.rec, h.setup, plays, { configEdit: null, withdrawal: null });
+    const s2 = observed.stages[1]!;
+    const served = servedFinals(s2);
+    expect(s2.terminalFinals).toEqual(served);
+    // Derived from the engine at the declared size; the seeded size gives a different key (the differing case).
+    expect(served).toEqual(terminalFinalKeys("stepladder", Array.from({ length: declared }, (_, i) => `slot:${i}`), {}));
+    expect(terminalFinalKeys("stepladder", a.seeded, {})).not.toEqual(served);
+  });
+  it("a page playoff sized where the engine refuses to lay one out carries NO keys (I2 then names them missing) — the snapshot never throws the case away; the declared 4 carries the final's", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "group_playoffs", { variant: "win_loss" });
+    expect(h.stage2.kind).toBe("page_playoff");
+    for (const step of ["generateLater", "playStage1", "complete", "confirmLatest"] as const) await h.step(step);
+    const a = h.lastAdvance!;
+    const root: StagePlay = { stage: h.stage1, field: h.sourceField(), advance: null, complete: h.lastComplete };
+    const as = async (p: StagePlay) => (await snapshot(h.ctx, h.rec, h.setup, [root, p], { configEdit: null, withdrawal: null })).stages[1]!;
+    const real = await as({ stage: h.stage2, field: a.seeded, advance: a, complete: null });
+    expect(real.terminalFinals).toEqual(servedFinals(real));
+    expect(real.terminalFinals).toHaveLength(1);
+    const short = await as({ stage: h.stage2, field: a.seeded.slice(0, 3), advance: { ...a, declared: 3 }, complete: null });
+    expect(short.terminalFinals).toEqual([]);
+    // A stage that was never reached has no field, and so no keys at all.
+    const unreached = await as({ stage: h.stage2, field: null, advance: null, complete: null });
+    expect(unreached.terminalFinals).toBeUndefined();
   });
 });

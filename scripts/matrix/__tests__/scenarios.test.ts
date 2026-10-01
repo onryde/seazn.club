@@ -11,7 +11,7 @@ import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
 import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
+import { isTerminal, winnerOf, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
 import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
@@ -24,6 +24,7 @@ import {
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
+import { terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
@@ -1894,6 +1895,22 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     // A second, different row on the same scenario keeps the default 8 (the differing case).
     const league = await runOn(new FakeLeagueDriver(), "LIFECYCLE");
     expect(league.driver.entrants.length).toBe(8);
+  });
+  it("W1-driving Task 9 (ruling 45): LIFECYCLE on the page playoff — its rows carry the engine's ext keys, the snapshot's terminal key is the final's, and I2 judges rank 1 against that final's winner", async () => {
+    // win_loss: generic/score declares draws on a page playoff, which would stick it (multi-stage.test.ts pins that finding).
+    const driver = new FakeKnockoutDriver({ pagePlayoff: true });
+    const r = await runOn(driver, "LIFECYCLE", { ...ppRow, variant: "win_loss" });
+    const s = r.out.observed.stages[0]!;
+    const keys = terminalFinalKeys("page_playoff", s.field, {});
+    expect(keys).toHaveLength(1);
+    expect(s.terminalFinals).toEqual(keys);
+    // Every row carries its engine id; the final is the one the engine marks isFinal.
+    expect(s.fixtures.map((f) => f.extKey)).toEqual([...driver.extIds.keys()]);
+    const final = s.fixtures.find((f) => f.id === driver.extIds.get(keys[0]!))!;
+    expect(final).toMatchObject({ extKey: keys[0], isFinal: true, status: "decided" });
+    expect(s.fixtures.filter((f) => f.isFinal === true)).toHaveLength(1);
+    expect(s.complete?.finalRanks?.[0]).toBe(winnerOf(final.outcome));
+    expect(r.checks.find((c) => c.id === "I2-bracket-one-champion-ranks-permutation")).toMatchObject({ verdict: "pass", checked: ppField + 1 });
   });
   it("M1 and R4 seed the same 4 there", async () => {
     for (const k of ["M1", "R4"] as const) {
