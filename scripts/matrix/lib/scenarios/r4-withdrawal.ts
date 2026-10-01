@@ -350,14 +350,17 @@ export const r4Withdrawal: Scenario = {
     // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";
     const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
-    // Ruling 53: on a ladder the policy is the open-format rule over what was pending; the canary also judges the other one.
+    // Ruling 53: on every open-format kind (the abandon family — ladder, page playoff, americano; withdrawal.ts's last
+    // branch) the policy is the open-format rule over what was pending; the canary also judges the other one. Final
+    // review m-2: page_playoff took the fixed "not none" before. The forfeit family keeps it: the product's table and
+    // bracket branches never answer "none" for an entrant with fixtures in the stage.
     // T15-R6: on americano the same rule over what the withdrawn PLAYER had pending, or an abstain by name.
     const derived: AmericanoPolicyExpectation = kind === "americano"
       ? americanoPolicyExpectation(w, setup.persons.get(w.entrantId) ?? [], atWithdrawal, observed.stages[0])
       : { want: expectedPolicy(w.before), pending: w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length };
     const policyAbstain = "abstain" in derived ? derived.abstain : null;
     const policyItems: Item[] = "abstain" in derived ? []
-      : family === "ladder" || kind === "americano"
+      : walkoverModelFor(kind) === "abandon"
         ? withCanary(
           [{ ok: w.policy === derived.want, note: kind === "americano"
             ? `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending game(s) of ${(setup.persons.get(w.entrantId) ?? []).join("+")} at withdrawal, through any entrant; withdrawal.ts open-format rule)`

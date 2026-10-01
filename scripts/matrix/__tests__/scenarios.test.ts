@@ -11,7 +11,7 @@ import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
 import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire, type StageRef } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
-import { isTerminal, winnerOf, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
+import { isTerminal, PENDING_STATUSES, winnerOf, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
 import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
@@ -2062,6 +2062,43 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(s.fixtures.filter((f) => f.isFinal === true)).toHaveLength(1);
     expect(s.complete?.finalRanks?.[0]).toBe(winnerOf(final.outcome));
     expect(r.checks.find((c) => c.id === "I2-bracket-one-champion-ranks-permutation")).toMatchObject({ verdict: "pass", checked: ppField + 1 });
+  });
+  // Final review m-2: page_playoff is an open-format kind (the text pin above), so R4's expected policy is the
+  // open-format rule over what seed 3 had pending — ruling 53's derivation, as on a ladder or americano — and
+  // never the fixed "not none". The expectation is read from the rows before the withdrawal, not from the judge.
+  /** The engine's page playoff on a reseed: seed 3 meets seed 2 in pp-elim, so it is out after round 1 with nothing pending. */
+  class SeedThreeOutInRoundOne extends FakeKnockoutDriver {
+    override startEngineBracket() {
+      const real = new Map(this.entrants.map((e) => [e.id, e.seed]));
+      const laid: Record<number, number> = { 1: 1, 2: 3, 3: 4, 4: 2 };
+      for (const e of this.entrants) e.seed = laid[e.seed!] ?? e.seed;
+      try { return super.startEngineBracket(); } finally { for (const e of this.entrants) e.seed = real.get(e.id)!; }
+    }
+  }
+  /** The product answering a fixed policy: a walkover with nothing pending, and a none with something pending. */
+  class OutAnswersWalkover extends SeedThreeOutInRoundOne { override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "walkover" as const }; } }
+  class ThroughAnswersNone extends FakeKnockoutDriver { override async withdraw(id: string) { return { ...(await super.withdraw(id)), policy: "none" as const }; } }
+  const pending = (w: { before: readonly { status: string }[] }) => w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length;
+  const ppR4 = { ...ppRow, variant: "win_loss" } as const;
+  it("m-2, the empty case first: seed 3 out in round 1 holds nothing pending, so the open-format rule's answer is none — and the product's none passes r4-policy-reported (the fixed rule redded it)", async () => {
+    const r = await runOn(new SeedThreeOutInRoundOne({ pagePlayoff: true }), "R4", ppR4);
+    const w = r.out.observed.withdrawal!;
+    expect(w.before.length, "seed 3 played round 1").toBeGreaterThan(0);
+    expect(pending(w)).toBe(0);
+    expect(w.policy).toBe("none");
+    expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
+    // …and a walkover reported there is the misjudge the derivation catches.
+    const wrong = await runOn(new OutAnswersWalkover({ pagePlayoff: true }), "R4", ppR4);
+    expect(wrong.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy walkover, expected none (0 pending at withdrawal; withdrawal.ts open-format rule)"] });
+  });
+  it("m-2, the positive pair: seed 3 through to pp-q2 holds one pending fixture, so walkover is expected — the product's walkover passes and a none fails, naming the pending count", async () => {
+    const r = await runOn(new FakeKnockoutDriver({ pagePlayoff: true }), "R4", ppR4);
+    const w = r.out.observed.withdrawal!;
+    expect(pending(w)).toBe(1);
+    expect(w.policy).toBe("walkover");
+    expect(r.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
+    const none = await runOn(new ThroughAnswersNone({ pagePlayoff: true }), "R4", ppR4);
+    expect(none.checks.find((c) => c.id === "r4-policy-reported")).toMatchObject({ verdict: "fail", evidence: ["policy none, expected walkover (1 pending at withdrawal; withdrawal.ts open-format rule)"] });
   });
   it("M1 and R4 seed the same 4 there", async () => {
     for (const k of ["M1", "R4"] as const) {
