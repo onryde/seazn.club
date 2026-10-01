@@ -2319,10 +2319,12 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(await runSlice(d, ["--workers", "3", "--run-id", "wkh", "--report-dir", dir])).toBe(EXIT.ABORTED);
     expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: workers' sign-in: held its turn past the 40ms deadline \(worker 1's sign-in\)/);
     const r = runIn(dir, "wkh");
-    expect(r.aborted).toEqual({ turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 1 });
-    // Worker 0 ran alone, in plan order; every case it started finished and is kept, none as an error.
-    expect(r.cases.map((c) => c.caseId)).toEqual(planIds.slice(0, r.cases.length));
-    expect(r.cases.length).toBe(d.orgs.length);
+    expect(r.aborted).toMatchObject({ turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 1 });
+    // Worker 0 ran alone, in plan order: the cases it finished before the trip are kept as evidence, any it
+    // finished during the abort (T12-R4) are listed after them for a re-run — together, every case it started.
+    const kept = r.cases.map((c) => c.caseId);
+    expect([...kept, ...r.aborted!.inFlight]).toEqual(planIds.slice(0, d.orgs.length));
+    expect(r.aborted!.inFlight.length).toBeLessThanOrEqual(1);
     expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
     expect(late).toEqual([]);
     expect(readFileSync(join(dir, "wkh", "MATRIX.md"), "utf8")).toContain("> **Run aborted** — `workers' sign-in` held its turn past the 40ms deadline (worker 1's sign-in).");
@@ -2342,25 +2344,28 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
       expect(await runSlice(d, ["--workers", "1", "--base", lb.base, "--run-id", "wkp", "--report-dir", dir])).toBe(EXIT.ABORTED);
       expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision \(the owner's staff window\): held its turn past the 100ms deadline \(case league\|/);
       const r = runIn(dir, "wkp");
-      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[2], worker: null });
+      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[2], worker: null, inFlight: [] });
       expect(r.cases.map((c) => c.caseId)).toEqual(planIds.slice(0, 2));
       expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
       expect(inserted).toEqual(["m-wkp-1", "m-wkp-2", "m-wkp-3"]);
       expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-wkp-3/entitlement-override"]);
-      expect(readFileSync(join(dir, "wkp", "MATRIX.md"), "utf8")).toContain(`(case \`${planIds[2]}\`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 2 case(s) that finished.`);
+      expect(readFileSync(join(dir, "wkp", "MATRIX.md"), "utf8")).toContain(`(case \`${planIds[2]}\`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 2 case(s) that finished before the trip.`);
     } finally {
       await lb.close();
     }
   });
-  // Case 1's provision hangs; case 0 is still driving its scenario when the
-  // turns trip (its driver stalls past the deadline), so its worker reaches
-  // the queue's abort check only AFTER the trip — the path that keeps a
-  // mid-case worker from starting another case.
-  it("T12-R3 on three workers: the timed-out case is named and has no result, a case mid-scenario at the trip finishes and is kept, every kept case is error-free, and no case org is created after the trip", async () => {
+  // T12-R3 + fix round 3 (ruling T12-R4), on three workers. Case 0's driver
+  // stalls 300ms, so it is still mid-scenario when the turns trip. Case 3's
+  // org insert is held 50ms, so cases 1 and 2 provision and finish before its
+  // provision even starts — and then hangs (100ms deadline). Case 0 finishes
+  // during the abort: a late answer from case 3's turn could have landed on
+  // it, so it is listed for a re-run and is NOT evidence. Cases 1 and 2,
+  // completed before the trip, stay as evidence.
+  it("T12-R3/R4 on three workers: the timed-out case is named with no result, a case mid-scenario at the trip finishes but is listed in-flight and excluded from evidence, cases completed before the trip are kept, and no case org is created after the trip", async () => {
     const io = capture();
     const holder: { real: RunDeps | null } = { real: null };
     const late: string[] = [];
-    const lb = await provisionLoopback((o) => o === "o-m-wkq-2", (slug) => { if ((holder.real?.turns?.tripped() ?? null) !== null) late.push(slug); });
+    const lb = await provisionLoopback((o) => o === "o-m-wkq-4", (slug) => { if ((holder.real?.turns?.tripped() ?? null) !== null) late.push(slug); }, (slug) => (slug === "m-wkq-4" ? 50 : 0));
     class Stalls extends FakeLeagueDriver {
       stalledPastTrip: boolean | null = null;
       override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
@@ -2384,17 +2389,23 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
       });
       const dir = dirFor();
       expect(await runSlice(d, ["--workers", "3", "--base", lb.base, "--run-id", "wkq", "--report-dir", dir])).toBe(EXIT.ABORTED);
-      expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision/);
+      expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision .*; 1 finished during the abort and are listed for a re-run, not kept as evidence/);
       const r = runIn(dir, "wkq");
-      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[1], worker: null });
-      const kept = r.cases.map((c) => c.caseId);
-      expect(kept).not.toContain(planIds[1]);
-      expect(kept).toEqual(planIds.filter((id) => kept.includes(id)));
-      // The witness: case 0 was mid-scenario when the turns tripped, finished, and is kept.
+      // The witness: case 0 really was mid-scenario when the turns tripped.
       expect(stalls.map((x) => x.stalledPastTrip)).toEqual([true]);
-      expect(kept).toContain(planIds[0]);
+      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[3], worker: null, inFlight: [planIds[0]] });
+      const kept = r.cases.map((c) => c.caseId);
+      // In-flight and the holder are not evidence; the cases completed before the trip are.
+      expect(kept).not.toContain(planIds[0]);
+      expect(kept).not.toContain(planIds[3]);
+      expect(kept).toEqual(expect.arrayContaining([planIds[1], planIds[2]]));
+      expect(kept).toEqual(planIds.filter((id) => kept.includes(id)));
       expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
       expect(late).toEqual([]);
+      // MATRIX.md: case 0 only under the banner, never in the grid or the counts.
+      const md = readFileSync(join(dir, "wkq", "MATRIX.md"), "utf8");
+      expect(md.split("\n").filter((l) => l.includes(planIds[0]!))).toEqual([`> Finished during abort — re-run (not evidence: a late answer from the timed-out turn could have landed on them): \`${planIds[0]}\`.`]);
+      expect(md).toContain(`the grid shows the ${kept.length} case(s) that finished before the trip.`);
     } finally {
       await lb.close();
     }
@@ -2410,7 +2421,7 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
       expect(io.out()).not.toMatch(/canary M1:/);
       expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision \(the owner's staff window\): held its turn past the 60ms deadline \(case league\|generic\|/);
       const r = runIn(dir, "wkc");
-      expect(r.aborted).toMatchObject({ turn: "case-org provision (the owner's staff window)", deadlineMs: 60, worker: null });
+      expect(r.aborted).toMatchObject({ turn: "case-org provision (the owner's staff window)", deadlineMs: 60, worker: null, inFlight: [] });
       expect(r.aborted?.caseId).toMatch(/^league\|generic\|.*\|M1\|canary$/);
       expect(r.cases).toEqual([]);
     } finally {
@@ -2562,8 +2573,9 @@ describe("runSlice — --only on a catalogue cell outside the slice, and --set w
  *  seeding — the org switch, and the entitlement bust's admin calls (401
  *  unless the owner is staff at that moment) — with fake DB handles behind
  *  it. An admin POST for an org `hang` picks is never answered. Org ids are
- *  `o-<slug>`; `onInsert` sees each case org as it is created. */
-async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (slug: string) => void = () => {}) {
+ *  `o-<slug>`; `onInsert` sees each case org as it is created, and
+ *  `insertDelayMs` can hold one insert back (fix round 3's ordering). */
+async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (slug: string) => void = () => {}, insertDelayMs: (slug: string) => number = () => 0) {
   const staff = { on: false };
   const answered: string[] = [];
   const hung: string[] = [];
@@ -2591,7 +2603,12 @@ async function provisionLoopback(hang: (orgId: string) => boolean, onInsert: (sl
   const { port } = server.address() as AddressInfo;
   const m: MatrixSql = {
     userIdForEmail: async () => "u1",
-    insertCaseOrg: async (i) => { onInsert(i.slug); return { orgId: `o-${i.slug}`, orgSlug: i.slug }; },
+    insertCaseOrg: async (i) => {
+      onInsert(i.slug);
+      const ms = insertDelayMs(i.slug);
+      if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+      return { orgId: `o-${i.slug}`, orgSlug: i.slug };
+    },
     listPlanKeys: async () => [],
     variantKeysInBuilderOrder: async () => [],
     denyFeature: async () => {},

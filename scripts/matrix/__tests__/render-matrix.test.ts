@@ -227,13 +227,32 @@ describe("renderMatrix — an aborted run says so above the grid (W1-driving fix
     expect(banner(renderMatrix(v3({ cases: [k] })))).toBeUndefined();
   });
   it("a case's timed-out turn: the banner names the turn, the deadline, the case and how many cases the grid keeps — above the grid", () => {
-    const md = renderMatrix(v3({ cases: [k], aborted: { turn: "case-org provision (the owner's staff window)", deadlineMs: 120000, caseId: "league|generic|score|M1", worker: null } }));
-    expect(banner(md)).toBe("> **Run aborted** — `case-org provision (the owner's staff window)` held its turn past the 120000ms deadline (case `league|generic|score|M1`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 1 case(s) that finished.");
+    const md = renderMatrix(v3({ cases: [k], aborted: { turn: "case-org provision (the owner's staff window)", deadlineMs: 120000, caseId: "league|generic|score|M1", worker: null, inFlight: [] } }));
+    expect(banner(md)).toBe("> **Run aborted** — `case-org provision (the owner's staff window)` held its turn past the 120000ms deadline (case `league|generic|score|M1`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 1 case(s) that finished before the trip.");
     expect(md.indexOf("> **Run aborted**")).toBeLessThan(md.indexOf("| row"));
   });
+  // Fix round 3 (ruling T12-R4): a case still mid-scenario at the trip
+  // finishes, but a late answer from the timed-out turn could have landed on
+  // it — it is listed under the banner for a re-run, never shown as evidence.
+  it("cases that finished during the abort are listed under the banner as \"finished during abort — re-run\", and appear nowhere else on the page", () => {
+    const inFlight = ["league|generic|score|R4", "league|generic|score|F1"];
+    const md = renderMatrix(v3({ cases: [k], aborted: { turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: "league|generic|score|M1", worker: null, inFlight } }));
+    const below = lineStarting(md, "> Finished during abort — re-run");
+    expect(below).toBe("> Finished during abort — re-run (not evidence: a late answer from the timed-out turn could have landed on them): `league|generic|score|R4`, `league|generic|score|F1`.");
+    expect(md.indexOf("> **Run aborted**")).toBeLessThan(md.indexOf("> Finished during abort"));
+    expect(md.indexOf("> Finished during abort")).toBeLessThan(md.indexOf("| row"));
+    let seen = 0;
+    for (const id of inFlight) {
+      expect(md.split("\n").filter((l) => l.includes(id)), id).toEqual([below]);
+      seen++;
+    }
+    expect(seen).toBe(2);
+    // None listed: no such line.
+    expect(lineStarting(renderMatrix(v3({ cases: [k], aborted: { turn: "t", deadlineMs: 1, caseId: "league|generic|score|M1", worker: null, inFlight: [] } })), "> Finished during abort")).toBeUndefined();
+  });
   it("a worker's timed-out sign-in names the worker, and an aborted run with no finished case still says why above the empty banner", () => {
-    const md = renderMatrix(v3({ aborted: { turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 2 } }));
-    expect(banner(md)).toBe("> **Run aborted** — `workers' sign-in` held its turn past the 40ms deadline (worker 2's sign-in). No further turn was admitted and no later case started; the grid shows the 0 case(s) that finished.");
+    const md = renderMatrix(v3({ aborted: { turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 2, inFlight: [] } }));
+    expect(banner(md)).toBe("> **Run aborted** — `workers' sign-in` held its turn past the 40ms deadline (worker 2's sign-in). No further turn was admitted and no later case started; the grid shows the 0 case(s) that finished before the trip.");
     expect(md.indexOf("> **Run aborted**")).toBeLessThan(md.indexOf("**No cases run.**"));
   });
 });

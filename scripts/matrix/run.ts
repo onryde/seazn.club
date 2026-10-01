@@ -805,8 +805,9 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // T12-R3: the shared turn that outlived its deadline, and whose turn it was
   // (a case's, or a worker's sign-in), set where the timeout reaches its holder.
   const timedOut: { abort: RunAbort | null } = { abort: null };
-  // Every case that finished, by plan index: what an aborted run keeps.
-  const finished = new Map<number, CaseResult>();
+  // Every case that finished, by plan index, and whether it finished after
+  // the turns tripped (T12-R4: in flight at the abort, so not evidence).
+  const finished = new Map<number, { result: CaseResult; duringAbort: boolean }>();
   const db = await deps.openDb();
   try {
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
@@ -870,9 +871,15 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       }
       return opened.run;
     };
+    // m-2 + T12-R3: the run's shared turns (realDeps' staff window is on
+    // them; the sign-ins below take turns on them too).
+    const turns = deps.turns ?? sharedTurns(TURN_DEADLINE_MS);
     const progress = (i: number, result: CaseResult): CaseResult => {
-      say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}`);
-      finished.set(i, result);
+      // T12-R4: no case starts after the trip, so one finishing after it was
+      // mid-scenario at the abort — where the timed-out turn's late answer can land.
+      const duringAbort = turns.tripped() !== null;
+      say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}${duringAbort ? " (finished during abort — re-run; not evidence)" : ""}`);
+      finished.set(i, { result, duringAbort });
       return result;
     };
     // Today's loop body, on the worker's own session. A browser plan runs
@@ -895,7 +902,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       if (e instanceof BrowserOpenFailed) throw e.original;
       // T12-R3: this case held the turn that timed out. It is named in the
       // run's abort, never given a result: its request may still land.
-      if (e instanceof TurnDeadlineExceeded && item.kind === "driven") timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: item.spec.caseId, worker: null };
+      if (e instanceof TurnDeadlineExceeded && item.kind === "driven") timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: item.spec.caseId, worker: null, inFlight: [] };
       if (abortsRun(e) || item.kind === "planned") throw e;
       return progress(i, crashResult(item.spec, item.layer, item.width, e));
     };
@@ -907,7 +914,6 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // provision's staff window is on them too). A sign-in that never answers
     // closes them at the deadline; its open throws and the queue aborts, as
     // for any refused sign-in, naming the worker — never parking the others.
-    const turns = deps.turns ?? sharedTurns(TURN_DEADLINE_MS);
     const signInTurn = turns.lock("workers' sign-in");
     const open = async (n: number): Promise<Session> => {
       lanes.opened++;
@@ -915,7 +921,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       try {
         return await signInTurn(() => deps.signIn(base, owner));
       } catch (e) {
-        if (e instanceof TurnDeadlineExceeded) timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: null, worker: n };
+        if (e instanceof TurnDeadlineExceeded) timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: null, worker: n, inFlight: [] };
         throw e;
       }
     };
@@ -926,7 +932,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       // finished, in plan order, and names the holder. A turn error that names
       // no holder is filed against nothing: it aborts as before, writing nothing.
       if (!(e instanceof TurnDeadlineExceeded || e instanceof TurnsClosed) || timedOut.abort === null) throw e;
-      cases.push(...[...finished.entries()].sort(([a], [b]) => a - b).map(([, r]) => r));
+      // T12-R4: only the cases that finished BEFORE the trip are evidence; the
+      // ones that finished during the abort are listed for a re-run instead.
+      const inOrder = [...finished.entries()].sort(([a], [b]) => a - b).map(([, f]) => f);
+      cases.push(...inOrder.filter((f) => !f.duringAbort).map((f) => f.result));
+      timedOut.abort.inFlight = inOrder.filter((f) => f.duringAbort).map((f) => f.result.caseId);
     }
   } finally {
     // A failed close must not throw away the cases that already ran. The
@@ -968,7 +978,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   const a = timedOut.abort;
   if (a !== null) {
     const whose = a.caseId !== null ? `case ${a.caseId}` : `worker ${a.worker}'s sign-in`;
-    warn(`matrix: aborted — TurnDeadlineExceeded: ${a.turn}: held its turn past the ${a.deadlineMs}ms deadline (${whose}); its request was not aborted and may still land, so no further turn was admitted and no later case started — results.json keeps the ${cases.length} case(s) that finished`);
+    warn(`matrix: aborted — TurnDeadlineExceeded: ${a.turn}: held its turn past the ${a.deadlineMs}ms deadline (${whose}); its request was not aborted and may still land, so no further turn was admitted and no later case started — results.json keeps the ${cases.length} case(s) that finished before the trip as evidence; ${a.inFlight.length} finished during the abort and are listed for a re-run, not kept as evidence${a.inFlight.length === 0 ? "" : ` (${a.inFlight.join(", ")})`}`);
     return EXIT.ABORTED;
   }
   return cases.length === 0 ? EXIT.NO_SIGNAL : EXIT.OK;

@@ -437,8 +437,8 @@ describe("results v3 — the run's worker count (W1-driving T11, ruling 46)", ()
 // whose turn it was, or the worker whose sign-in it was. The case gets no red;
 // the cases that finished are kept. Absent on every run that was not aborted.
 describe("results v3 — an aborted run says why (W1-driving fix round 2, T12-R3)", () => {
-  const PROVISION = { turn: "case-org provision (the owner's staff window)", deadlineMs: 120_000, caseId: "league|generic|score|LIFECYCLE", worker: null };
-  const SIGN_IN = { turn: "workers' sign-in", deadlineMs: 120_000, caseId: null, worker: 2 };
+  const PROVISION = { turn: "case-org provision (the owner's staff window)", deadlineMs: 120_000, caseId: "league|generic|score|LIFECYCLE", worker: null, inFlight: ["league|badminton|bwf|M1"] };
+  const SIGN_IN = { turn: "workers' sign-in", deadlineMs: 120_000, caseId: null, worker: 2, inFlight: [] };
   it("empty case first: a run with no aborted field (every run that finished) parses, and carries none; no committed v3 file carries one", () => {
     expect("aborted" in parseResults(V3_RUN)).toBe(false);
     let v3Files = 0;
@@ -471,6 +471,11 @@ describe("results v3 — an aborted run says why (W1-driving fix round 2, T12-R3
       { ...SIGN_IN, worker: -1 },
       { ...SIGN_IN, worker: MAX_WORKERS },
       { ...PROVISION, why: "extra key" },
+      // Fix round 3 (T12-R4): the cases that finished during the abort are listed, once each, never the holder.
+      (({ inFlight: _i, ...rest }) => rest)(PROVISION),
+      { ...PROVISION, inFlight: ["league|badminton|bwf|M1", "league|badminton|bwf|M1"] },
+      { ...PROVISION, inFlight: [PROVISION.caseId] },
+      { ...PROVISION, inFlight: [""] },
     ];
     let checked = 0;
     for (const aborted of bad) {

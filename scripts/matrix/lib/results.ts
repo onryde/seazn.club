@@ -118,8 +118,10 @@ export interface RunResults {
    *  absent means one. */
   workers?: number;
   /** W1-driving fix round 2 (ruling T12-R3): written only when a shared turn
-   *  outlived its deadline and the run aborted. `cases` then holds the cases
-   *  that finished; the case whose turn it was is named here and gets no red. */
+   *  outlived its deadline and the run aborted. `cases` then holds only the
+   *  cases that finished BEFORE the trip — the evidence; the case whose turn it
+   *  was is named here and gets no red, and the cases that finished during the
+   *  abort are listed in `inFlight` (fix round 3, T12-R4), never in `cases`. */
   aborted?: RunAbort;
   cases: CaseResult[];
 }
@@ -133,6 +135,11 @@ export interface RunAbort {
   caseId: string | null;
   /** 0-based: worker 0 signs in before the queue, so a timed-out sign-in is 1..N-1. */
   worker: number | null;
+  /** Fix round 3 (T12-R4): the cases mid-scenario at the trip, which finished
+   *  during the abort. A late answer from the timed-out turn could have landed
+   *  on them, so they are NOT evidence: listed here for a re-run, in plan
+   *  order, and excluded from `cases` (so from the grid and every total). */
+  inFlight: string[];
 }
 
 /** What parseResults reads: committed v2 evidence, or a v3 run. */
@@ -207,7 +214,9 @@ export const RunResultsSchemaV3 = z.strictObject({
     deadlineMs: z.number().int().min(1),
     caseId: z.string().min(1).nullable(),
     worker: z.number().int().min(0).max(MAX_WORKERS - 1).nullable(),
-  }).refine((a) => (a.caseId === null) !== (a.worker === null), "an abort names the case whose turn it was or the worker whose sign-in it was — exactly one").optional(),
+    inFlight: z.array(z.string().min(1)),
+  }).refine((a) => (a.caseId === null) !== (a.worker === null), "an abort names the case whose turn it was or the worker whose sign-in it was — exactly one")
+    .refine((a) => new Set(a.inFlight).size === a.inFlight.length && (a.caseId === null || !a.inFlight.includes(a.caseId)), "an abort lists each in-flight case once, and never the case whose turn it was").optional(),
   cases: z.array(CaseSchemaV3),
 });
 

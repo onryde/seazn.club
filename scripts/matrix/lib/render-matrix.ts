@@ -45,8 +45,11 @@ const abortLine = (r: AnyRunResults): string[] => {
   if (r.schemaVersion !== 3 || r.aborted === undefined) return [];
   const a = r.aborted;
   const whose = a.caseId !== null ? `case \`${a.caseId}\`` : `worker ${a.worker}'s sign-in`;
-  const kept = a.caseId !== null ? `that case has no result, and the grid shows the ${r.cases.length} case(s) that finished` : `the grid shows the ${r.cases.length} case(s) that finished`;
-  return [`> **Run aborted** — \`${a.turn}\` held its turn past the ${a.deadlineMs}ms deadline (${whose}). No further turn was admitted and no later case started; ${kept}.`, ""];
+  const kept = a.caseId !== null ? `that case has no result, and the grid shows the ${r.cases.length} case(s) that finished before the trip` : `the grid shows the ${r.cases.length} case(s) that finished before the trip`;
+  // Fix round 3 (T12-R4): the cases that finished during the abort are named
+  // here and nowhere else — they are not in `cases`, so never a ✅ or ❌.
+  const reRun = a.inFlight.length === 0 ? [] : [`> Finished during abort — re-run (not evidence: a late answer from the timed-out turn could have landed on them): ${a.inFlight.map((id) => `\`${id}\``).join(", ")}.`, ""];
+  return [`> **Run aborted** — \`${a.turn}\` held its turn past the ${a.deadlineMs}ms deadline (${whose}). No further turn was admitted and no later case started; ${kept}.`, "", ...reRun];
 };
 
 const HEAD = (r: AnyRunResults) => [
