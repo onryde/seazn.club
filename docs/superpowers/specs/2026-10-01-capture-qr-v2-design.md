@@ -1,6 +1,7 @@
 # Capture QR v2: stable stream code, pairing, phone heartbeat, phone start — web-side design
 
-**Status:** design for owner review, 2026-10-01. Every ruling in §1 is the seazn.club owner's, given in conversation on
+**Status:** **approved by the owner, 2026-10-01** (at `137b9ec2b`, with rulings W18–W20); amended the same day for
+those rulings. Every ruling in §1 is the seazn.club owner's, given in conversation on
 2026-10-01. This file is now their record: the working log they came from
 (`2026-10-01-capture-qr-v2-brainstorm.md`) lives only in a session scratchpad and will not survive it.
 
@@ -42,7 +43,7 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W5 | **Pairing.** A scan makes the phone check in, and it sends `paired` beats before any session exists. The panel's Phone node then shows paired. **Go live is enabled only once a phone is paired.** A credit is spent only when video reaches Cloudflare. |
 | W6 | **The operator may start from the phone** (a 3 s hold, then `POST start`). It passes the same gates as the console: credits, a destination and entitlement. It needs a destination the organiser picked in advance (chosen when the QR is shown, and saved per fixture). Any refusal gives the phone a plain reason: `409 no_destination`, `402 no_credit`, `403 not_entitled`. `409 already_live` means the phone takes over the running broadcast. |
 | W7 | **Automatic mode** is an opt-in switch per fixture, **"Stream the match automatically"** (PR-2). Auto start fires from **any** scoring surface's match start, and only with a paired phone. It fires **once**, and never after an organiser Stop. **Auto stop** fires about **3 min after the result is saved**, under the same switch. A manual Go live and a manual Stop are always available. |
-| W8 | **Phone silent while live (Q1).** The panel only warns: "Phone not responding" plus the time since the phone was last heard. The stream keeps running, and Cloudflare's input signal stays the authority on whether video flows. Heartbeat silence never ends a live session. |
+| W8 | **Phone silent while live (Q1).** The panel only warns: "Phone not responding" plus the time since the phone was last heard. The stream keeps running, and Cloudflare's input signal stays the authority on whether video flows. Heartbeat silence never ends a live session. **Amended by W19:** silence **and** no video for 15 min ends it. |
 | W9 | **Phone health on the panel (Q2).** One compact line sits on the Phone node, for example "Phone · 78% charging · 2.4 Mbps · heard 4 s ago". It turns **amber, with a plain sentence**, when the battery is under 20% and not charging, when the phone is running hot, when delivery has stalled, or when the phone is not responding. Data used and the app version sit behind a tap. **Mockups at 320/768/1280 are owed before the build.** |
 | W10 | **Heartbeat storage (Q2b).** The latest beat overwrites one field on the session, so the session keeps the final beat. History keeps one beat per minute plus a row on every state change. **History is deleted after 1 day.** The final beat is never deleted. |
 | W11 | **Overlay on phone streams (Q3).** The descriptor's `overlayUrl` is filled only when the org has the `streaming.overlay` entitlement, and is `null` otherwise. It is **built server-side** from the environment's base URL, on the exact Seazn host, with the signed overlay key. |
@@ -51,6 +52,9 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W14 | **Playback host (Q5).** One Cloudflare account serves staging and production, through the customer subdomain `customer-vv7totdc7j19biah.cloudflarestream.com`. It is not a secret, so it is plain configuration, not a Fly secret. |
 | W15 | **Ingest hosts.** Credentials use `rtmps://live.seazn.club:443/live/` and `srt://live.seazn.club:778` in production, and `live.stg.seazn.club` on staging, with one environment setting per environment. **SRT on the custom host must be proven with ffmpeg on staging** before it is relied on. |
 | W16 | **Allow both** (answering mobile-s1): (1) operator start, as W6; (2) auto stop, as W7. |
+| W18 | **Overlay on every phone stream (O1, ruled YES 2026-10-01, on approving this spec at `137b9ec2b`).** The scorebug goes on phone streams for every plan. The rule stays the `streaming.overlay` entitlement (W11), so an override still switches it off for one org. |
+| W19 | **A live phone stream whose phone is gone ends (O2, ruled YES 2026-10-01).** After **15 min with no beat AND no video**, the session ends with endReason `phone_lost`. **Built in PR-1** (§6.8.5). |
+| W20 | **The SRT test is deferred (2026-10-01).** G0-h is no longer a publish gate. The schemas publish now with `cred.srt` nullable, and `STREAM_SRT_ENABLED` defaults to **false** (`srt: null`, `preferred: "rtmps"`) until SRT on `live.stg` is proven later, as a staging step, not a gate (S2b). |
 | W17 | **Answers sent to mobile-s1** (their owner approved them): `autoAllowed` sits in both waiting and session; there is one start endpoint, with `409 already_live` meaning take over; the heartbeat answer carries go-live and over; the server drives `pollSeconds`, 60 s and then 10 s from 30 min before the scheduled start; code names are neutral; the waiting answer carries the chosen destination's display name, or `null`; the panel shows the phone's mode. |
 
 ### 1.2 Capture's rulings we build against (their owner's; peer facts, not ours)
@@ -73,7 +77,7 @@ owner accepted the web-side consequences recorded in the log, and those conseque
 | A14 | A dead live phone may be taken over once there has been **no beat AND no video for 60 s**. The new phone rejoins the open broadcast, on the same credit. | §6.5, rule T4. |
 | A16 | Auto start fires once per match: at match start or on a late pairing, whichever comes first. | §7.2. |
 | A17 | The operator's Stop wins. The phone re-sends the stop on its next pairing. The server closes that sid even late, idempotently, and never a newer one. | §6.8. |
-| A18 | `cred.srt` may be null, with `preferred:"rtmps"`, **as a safety net only**. The target stays SRT on `live.seazn.club` / `live.stg.seazn.club`. With `srt` null the phone publishes RTMPS only, with no SRT→RTMPS fallback. | `STREAM_SRT_ENABLED` (§6.4). Its initial value is set by the staging ffmpeg SRT test (G0, S2). |
+| A18 | `cred.srt` may be null, with `preferred:"rtmps"`, **as a safety net only**. The target stays SRT on `live.seazn.club` / `live.stg.seazn.club`. With `srt` null the phone publishes RTMPS only, with no SRT→RTMPS fallback. | `STREAM_SRT_ENABLED` (§6.4) defaults to false (W20) until staging step S2b proves SRT on `live.stg`. |
 
 ---
 
@@ -153,13 +157,13 @@ shapes", "The answer table" and "Asks for the web side"), with our replies to it
 | 8 — beats and 410 | **Beats never answer 410.** A sid that has ended, named by a beat (its `sid` or its `stopped`), gets `200 {state:"over", sid, endReason}`. 410 is reserved to `GET code`. This server answers an ended broadcast on `GET` with the session shape in `completed` or `failed` (to the phone) or the waiting shape (to the scan), so **no route of ours sends 410** today. |
 | 9 — `POST start` carries `{phone}`; a phone that is not current gets `409 replaced` | Agreed as written. |
 | 10 — a warming broadcast whose phone has gone quiet is ended | **Required, agreed.** The new end reason `phone_lost` (not `stopped`), with no credit spent. §6.8.3 gives the exact clock. |
-| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** The target is SRT on `live.*`. The staging ffmpeg SRT test (S2) sets the initial `STREAM_SRT_ENABLED` (§6.4). |
+| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** The target is SRT on `live.*`. `STREAM_SRT_ENABLED` defaults to false (W20) until the later staging proof (S2b, not a gate). |
 
 ### 4.2 G0 — the publish gate
 
 **The schemas and fixtures in `docs/contracts/` are written and published only when capture has confirmed every item
-below in writing, and the staging SRT test has a result.** Each confirmation is recorded here with its date and
-capture's commit.
+below in writing.** Each confirmation is recorded here with its date and capture's commit. **G0 is closed
+(2026-10-01).** The schemas publish in PR-1's first task.
 
 | # | Item | Status |
 |---|---|---|
@@ -170,14 +174,15 @@ capture's commit.
 | G0-e | **`device: {model} \| null` on claim beats**, `Build.MODEL` only. PR-2 shows the paired phone's model and the takeover notice (§7.5). | **agreed**, `69ef359`, 2026-10-01 |
 | G0-f | **The end-reason value `failed`**, for a server-side end that is neither a stop nor a timeout (a credit running out at the live transition, a provider fault). Capture reads it "Stream ended by Seazn — ask the organiser". | **agreed**, `69ef359`, 2026-10-01 |
 | G0-g | **A claim and a stop are independent.** A claim refused while it carries `stopped` is answered `taken` or `replaced` by the claim rules, not `over X`. The stop is still applied, and that 2xx delivers it. | **agreed**, `69ef359`, 2026-10-01 |
-| G0-h | **The staging ffmpeg SRT test** on `srt://live.stg.seazn.club:778` (S2), run once our owner OKs it. Its result sets the initial `STREAM_SRT_ENABLED` (§6.4). | **the only open item** |
+| G0-h | **The staging SRT test** on `srt://live.stg.seazn.club:778`. | **deferred by the owner, 2026-10-01 (W20): not a gate.** The schemas publish with `cred.srt` nullable and `STREAM_SRT_ENABLED` false. The proof is staging step S2b. |
 
-- **PR-1 does not merge until G0 is closed.** Staging deploys from `main`, so G0 sits on the staging critical path.
-  The plan schedules the contract task last, and builds every server behaviour before it.
+- **The schemas are published first.** PR-1's first task writes them to `docs/contracts/` and removes v1, so
+  capture can vendor them while the server is built.
 - **G0 settles names and confirmations, not behaviour.** If capture's answer to any item changes behaviour (a state,
   a refusal, a status code), the change comes back to this file and to our owner. It is not absorbed in the plan.
-- **G0-h does not wait on PR-1.** The test needs only a Cloudflare input and the staging custom host, so it runs
-  against a hand-provisioned staging input before PR-1 merges. S2 repeats it through PR-1's own descriptor.
+- **The later SRT proof (S2b)** needs only a Cloudflare input and the staging custom host. A tooling fact for it:
+  `srt-live-transmit` refuses ports below 1024, so it cannot target `:778` directly and needs a local UDP relay
+  (a high local port forwarded to `live.stg.seazn.club:778`). ffmpeg built with libsrt can target `:778` itself.
 - **The six points from our diff against `69ef359` were agreed by capture** (folded at capture `5344d04`, feat/s1-plan-c) (2026-10-01): the refusal body
   `{code, message, ...extras}` (§4); no hint field, since a session shape without `cred` is the hint (§6.3.1); the
   session shape gains `pollSeconds`, `code`, `scheduledStart` and `destinationName` (§6.3.1); the phone always sends
@@ -320,7 +325,8 @@ unless a status is shown.
 | T23 | `stopped: X` on a paired beat (sid null) | X is still open, and **either** P is current after its claim is applied, **or** no current phone holds X (X's session phone is not the slot's current pairing) | `stop(operator_stopped)`, after the beat's claim is applied (ask 7) | `over X stopped` (or `taken` / `replaced` per G0-g) |
 | T24 | `stopped: X` | X has already ended (a newer sid may be open) | nothing: idempotent, and it never touches another sid | `over X` with X's endReason (T9) |
 | T24a | `stopped: X` from P that is **not current** after its claim (a refused claim, or no claim) | X is still open and **the current phone holds it** (A17 edge, agreed with capture) | nothing: the stop is ignored. Event `stop_ignored {held: true}`. | `taken` or `replaced` per §6.3.3; it **counts as delivered**, so P drops its stop record |
-| T25 | phone silent while live (W8) | slot `live` | nothing ends. The panel warns (PR-2). | — |
+| T25 | phone silent while live (W8) | slot `live`, and not every T25a conjunct holds | nothing ends. The panel warns (PR-2). | — |
+| T25a | live phone gone (W19, O2) | slot `live`: no beat ≥ 15 min AND a fresh Cloudflare read not connected AND no connected sample for ≥ 15 min | `stop(phone_lost)`. No refund, no further credit. | `over S phone_lost` (if the phone returns) |
 | T26 | Cloudflare input drops while live | — | nothing ends. The chain shows "No signal", as today. | `live S` |
 | T27 | destination rejects | warming or live | `failed(target_rejected)`, as today | `over S target_rejected` |
 | T28 | no credit at the live transition | — | `failed(no_credits)`, as today | `over S failed` (G0-f) |
@@ -551,7 +557,7 @@ treats that as success (capture's answer table).
 | `destinationName` | The pre-picked target's `label` (§6.7.3), or null when there is none or it is archived (T36). |
 | `heartbeatUrl`, `startUrl` | `${captureOrigin()}/api/v1/capture/codes/{code}/beats` and `…/start`. |
 | `cred.rtmps.url`, `cred.srt.url` | The stored Cloudflare values with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
-| `cred.srt` | Present while `STREAM_SRT_ENABLED` is on, which is the target. `null` while it is off: A18's safety net (§4.1). |
+| `cred.srt` | `null` while `STREAM_SRT_ENABLED` is off, its default (W20; A18's safety net). Present once S2b has proven SRT and the flag is turned on, which is the target. |
 | `cred.*` secrets | `readFirstInput` (secret-columns.ts), opened only inside this request. |
 | `preferred`, `latencyMs` | `preferred` is `QR_PREFERRED_DEFAULT` (`srt`) when SRT is enabled, otherwise `"rtmps"`. A guard ties the two: `preferred` never names a null shape. `latencyMs` is `SRT_LATENCY_MS` (2000), unchanged. |
 | `playbackUrl` | `https://${STREAM_PLAYBACK_HOST}/${ingest_input_uid}/manifest/video.m3u8`, a bare manifest with no query (W14). |
@@ -568,11 +574,11 @@ treats that as success (capture's answer table).
   that is not on its environment's ingest host, so serving it would only fail the start on the phone.
 - With `STREAM_INGEST_HOST` unset (local or CI), Cloudflare's values are served.
 - **SRT on `live.*` is the target; `srt: null` is A18's safety net only.**
-  - G0-h's ffmpeg SRT test on `srt://live.stg.seazn.club:778` sets the initial `STREAM_SRT_ENABLED`: on in
-    `fly.stg.toml` and `fly.toml` if it passed, off if it did not. It runs before the schemas are published.
+  - `STREAM_SRT_ENABLED` **defaults to false** (W20): unset means off, in code, so no environment serves SRT until
+    S2b proves it on `live.stg`. Then it is turned on in `fly.stg.toml`, and later in `fly.toml`.
   - With the flag off the descriptor carries `cred.srt: null` and `preferred: "rtmps"`. The phone publishes RTMPS
     only, with no SRT→RTMPS fallback, so a hold window ends the broadcast.
-  - Each value, and each later flip, is recorded in this file with its test evidence (S2).
+  - Each flip is recorded in this file with its S2b evidence.
 
 **`captureOrigin()`** is `OAUTH_BASE_URL || NEXT_PUBLIC_BASE_URL`. Both are set in `fly.toml` and `fly.stg.toml`. Only
 when neither is set (local or CI) does it fall back to `deps.appUrl`. It is **never header-derived** where the
@@ -586,7 +592,7 @@ environment sets it, and a regression test forges `X-Forwarded-Host` to prove it
 - **When it is filled:** only when `hasFeature(org, "streaming.overlay", competition)` is true. It is `null`
   otherwise.
 - **The OBS tab's client-built URL** (`fixture-stream-panel.tsx:366`) is out of scope and unchanged.
-- **Fact for the owner (§16 O1).** Since V426, `streaming.overlay` is true on every plan. Only an override switches it
+- **Ruled (W18, O1 YES).** Since V426, `streaming.overlay` is true on every plan. Only an override switches it
   off. So `overlayUrl` is in practice present for every org that can stream from a phone at all.
 
 ### 6.5 Pairing, takeover and rejoin
@@ -720,6 +726,27 @@ stopped` and waits on the same code.
 - **What it closes:** capture's "Stop before the first frame" gap, and the "second phone joins a stopped warming
   broadcast" gap.
 
+#### 6.8.5 A live phone stream whose phone is gone (W19, O2)
+
+- **The rule.** Every tick (§6.11) checks an open session in `live` (`first_ingest_at` is not null). It is ended with
+  `stop(phone_lost)` when **all three** hold:
+  1. **no beat** from the session's phone for `PHONE_LOST_LIVE_MINUTES` (15): `now − coalesce(phone_beat_at,
+     first_ingest_at) ≥ 15 min`;
+  2. a **fresh** `inputStatus` read (through `claimIngestPoll`) is not `connected`;
+  3. **no video** for 15 min: the latest poll sample that read `connected` (or `first_ingest_at`, if none) is
+     ≥ 15 min old.
+- **Both clocks, never one.** A phone whose beats are lost while it still pushes video is never ended (W8 stands for
+  that case), and neither is a phone that beats while Cloudflare reports no signal (the operator is reconnecting).
+  Each conjunct has its own test and its own mutant.
+- **The credit** was spent at live; nothing is refunded and nothing more is spent. The destination is released by
+  the same stop path as every other end.
+- **The phone**, if it comes back, hears `over S phone_lost` and reads capture's "Stream ended — this phone was
+  offline".
+- **The panel** reads "The phone and its video were gone for 15 minutes" (new copy, all four locales), told apart from
+  ask 10's line by `first_ingest_at`.
+- **When it fires.** At the first tick after the 15 min: at once while an organiser panel is open (its poll ticks),
+  otherwise at the next tick from any other driver (§6.11). See §16 for what that means without a panel.
+
 #### 6.8.4 End reasons — the DB and the wire
 
 The wire vocabulary is capture's five, plus `phone_lost` (ask 10) and `failed` (G0-f). Every DB reason maps to
@@ -730,7 +757,7 @@ exactly one wire value. A test sweeps the DB enums: the count of mapped reasons 
 | end `stopped` (organiser) | `stopped` | as today |
 | end `operator_stopped` | `stopped` (only the phone that stopped it ever names this sid, and it is already Ended) | "Stopped from the phone" |
 | end `auto_stopped` (written by PR-2) | `auto_stopped` | "Stopped automatically after the result" |
-| end `phone_lost` | `phone_lost` | "The phone stopped answering before the stream started" |
+| end `phone_lost` | `phone_lost` | before ingest (ask 10): "The phone stopped answering before the stream started"; after ingest (W19): "The phone and its video were gone for 15 minutes" |
 | end `max_duration` | `max_duration` | as today |
 | fail `no_inbound_timeout` | `no_inbound_timeout` | as today |
 | fail `target_rejected` | `target_rejected` | as today |
@@ -793,7 +820,8 @@ read). A phone-started or automatic session may have no organiser watching.
 2. the ingest read with `claimIngestPoll` coalescing (V428);
 3. `warming → live`;
 4. `target_rejected`;
-5. ask 10's end of a warming broadcast whose phone is lost (§6.8.3).
+5. ask 10's end of a warming broadcast whose phone is lost (§6.8.3);
+6. W19's end of a live broadcast whose phone and video are both gone for 15 min (§6.8.5).
 
 It is called from three places:
 
@@ -876,7 +904,7 @@ files are the cross-repo authority. The zod schemas mirror them, and parity is a
 |---|---|---|---|
 | `STREAM_INGEST_HOST` | `live.seazn.club` | `live.stg.seazn.club` | unset (Cloudflare's own hosts) |
 | `STREAM_PLAYBACK_HOST` | `customer-vv7totdc7j19biah.cloudflarestream.com` | same | the fake driver's value |
-| `STREAM_SRT_ENABLED` | set by G0-h's SRT test: on if it passed, off (A18's safety net) if not | the same, after staging has run on it | on (the fake driver) |
+| `STREAM_SRT_ENABLED` | unset (off, W20) until S2b passes, then on | unset (off) until staging has run on SRT | on (the fake driver) |
 | `RELAY_KEK` | existing Fly secret | existing | `.env` |
 
 - **A real-driver deployment without `STREAM_PLAYBACK_HOST`** answers a session GET with `503` (`playback_unconfigured`)
@@ -951,7 +979,7 @@ autoStopDue(session) =
 - **A reverted result** clears `finished_at` (T32), so an auto stop that has not yet fired is cancelled.
 - **Latency.** The tick is a beat (~10 s while held), an organiser poll, or the daily sweep. A phone that died after
   the result, with no panel open, is stopped at the sweep. The broadcast was already showing "No signal", and
-  W8/§16 O2 apply.
+  W19 (§6.8.5) and O3 (§16) apply.
 
 ### 7.4 The phone-health line (W9, W8)
 
@@ -1281,6 +1309,10 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
 - The tick: a phone beat advances `warming → live` with no organiser poll; coalescing (a beat and a poll in one
   interval → one provider read); ask 10 ends a warming session whose phone is lost; ask 10 **never** touches a
   session with `first_ingest_at`.
+- W19 (§6.8.5, T25a): a live session with no beat and no connected sample for 15 min, and a fresh read not
+  connected, ends `phone_lost` with no refund and no new consume; at 14 min 59 s on either clock it does not; a phone
+  that beats while the input is down, and one silent while the input is connected, are never ended; the expected
+  15 min comes from `PHONE_LOST_LIVE_MINUTES`, never a literal in the test.
 - Descriptor: every field from its source (§6.4); the `overlayUrl` entitlement both ways; `captureOrigin` ignores a
   forged `X-Forwarded-Host`; `cred` absent for every non-qualifying caller.
 - GET per latest session (§6.3.1): open → session shape, `cred` only to the current phone and **absent** (not null)
@@ -1316,7 +1348,10 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
 | T23: apply the hold check to the current phone too | the current phone's own late stop of X is ignored → red |
 | `phone_not_paired` gate removed | the organiser Go live with no phone → red |
 | pollSeconds near window off by one | T−30 boundary |
-| ask 10 without `first_ingest_at IS NULL` | a live session with a silent phone is ended → red (W8) |
+| ask 10 without `first_ingest_at IS NULL` | a live session with a silent phone is ended at 60 s → red (W8, W19's 15 min) |
+| W19: drop the beat conjunct | a beating phone with the input down 15 min is ended → red |
+| W19: drop the fresh-read conjunct / drop the connected-sample conjunct (two mutants) | a silent phone whose video still flows is ended → red |
+| W19: `>` for `≥`, or 14 for 15 | the boundary case at exactly 15 min → red |
 | ask 10 at a flat 60 s (drop the cadence term) | an organiser Go live on a 60 s-cadence phone is ended before the phone's next beat → red |
 | `preferred: "srt"` while `cred.srt` is null | the SRT-off descriptor case |
 | purge deletes the session's final beat | the purge case |
@@ -1348,7 +1383,8 @@ These run against the real use-cases with the fake drivers and an injected clock
 6. a code never answers 401 to its open session's phone;
 7. at most one consume per fixture per 24 h;
 8. `go-live` ⇒ no ingest yet, and `live` ⇒ ingest;
-9. a `stopped` from a phone that is not current never ends a sid the current phone holds (T24a).
+9. a `stopped` from a phone that is not current never ends a sid the current phone holds (T24a);
+10. a live session ends `phone_lost` only when no beat AND no connected sample for ≥ 15 min (T25a).
 
 **Pinned sequences, run beside the generated ones:**
 
@@ -1474,13 +1510,15 @@ verdicts** before the PR. The real-phone scan of the v2 QR (normal and enlarged)
 
 ## 12. Staging verification (PR-1, before production)
 
-Each step records the evidence (a command and its output, or a screenshot) in the PR. **S2 and S8 are gates.**
+Each step records the evidence (a command and its output, or a screenshot) in the PR. **S2 and S8 are gates.** S2b
+is not (W20).
 
 | # | Step |
 |---|---|
-| S1 | Deploy with `STREAM_INGEST_HOST=live.stg.seazn.club`, `STREAM_PLAYBACK_HOST` set and `STREAM_SRT_ENABLED` at G0-h's value. `GET` a session descriptor as the current phone. Confirm that `cred.rtmps.url` carries the staging host and `playbackUrl` the customer host. With SRT on: `cred.srt.url` is `srt://live.stg.seazn.club:778` and `preferred` is `"srt"`. With SRT off: `cred.srt` is `null` and `preferred` is `"rtmps"`. As a second phone, the same GET has no `cred`. |
-| S2 | **Gate (W15, G0-h).** SRT on `live.*` is the target. G0-h's ffmpeg SRT test runs first, before PR-1 merges, against a hand-provisioned staging input, once our owner OKs it; its result sets the initial `STREAM_SRT_ENABLED`. After deploy, repeat through PR-1's descriptor: publish with ffmpeg over **RTMPS** to `rtmps://live.stg.seazn.club:443/live/` with the stream key, and, with SRT on, over **SRT** to `srt://live.stg.seazn.club:778` with the streamid and passphrase. Each must reach `connected` (Cloudflare status read). The evidence is recorded in §6.4. A failed SRT run turns the flag off (A18's safety net: phones publish RTMPS only, with no fallback) until a rerun passes. |
-| S3 | Measure the SRT hold window (disconnect, then time until the manifest ends) against the declared 183 s. A difference beyond the slack changes the constant before production. |
+| S1 | Deploy with `STREAM_INGEST_HOST=live.stg.seazn.club`, `STREAM_PLAYBACK_HOST` set and `STREAM_SRT_ENABLED` unset (off, W20). `GET` a session descriptor as the current phone. Confirm that `cred.rtmps.url` carries the staging host, `playbackUrl` the customer host, `cred.srt` is `null` and `preferred` is `"rtmps"`. As a second phone, the same GET has no `cred`. |
+| S2 | **Gate (W15).** Publish with ffmpeg over **RTMPS** to the descriptor's `rtmps://live.stg.seazn.club:443/live/` and stream key. The input must reach `connected` (Cloudflare status read). |
+| S2b | **Not a gate (W20); run later.** Prove SRT on `srt://live.stg.seazn.club:778` with a staging input's streamid and passphrase: ffmpeg with libsrt directly, or `srt-live-transmit` through a local UDP relay (it refuses ports below 1024). The input must reach `connected`. A pass turns `STREAM_SRT_ENABLED` on in `fly.stg.toml`, then S1 is re-run with SRT on (`cred.srt.url` on `:778`, `preferred: "srt"`), and the evidence is recorded in §6.4. Production follows in its own deploy. |
+| S3 | With S2b: measure the SRT hold window (disconnect, then time until the manifest ends) against the declared 183 s. A difference beyond the slack changes the constant before production. |
 | S4 | `playbackUrl` returns a manifest while live. |
 | S5 | `curl -i` on all three phone routes through the public host: `Cache-Control: private, no-store`, and `cf-cache-status` not `HIT` across two requests. |
 | S6 | A native-shaped request (no `Origin`) to `POST …/beats` passes `proxy.ts`. The same request with a foreign `Origin` gets 403 (the existing guard, proven unchanged). |
@@ -1488,6 +1526,7 @@ Each step records the evidence (a command and its output, or a screenshot) in th
 | S8 | **Gate.** After one full run (pair, go live, stream, stop, late stop, reissue), search the Fly logs and Sentry for the tok, the stream key and the passphrase strings. **Zero hits.** |
 | S9 | A beat history row older than 24 h is gone after the next minute insert on its pairing, and the session's `phone_beat` is intact. |
 | S10 | Capture's plan D exit bar: a real phone on staging pairs, starts from the console **and** from the phone, streams a real match to YouTube, stops from each end, and takes over a dead phone (A14). Recorded with the device model. |
+| S11 | W19 on real Cloudflare: go live from a phone, then kill the app (no beats) and stop video. With the panel open, the session ends `phone_lost` at 15 min (± one poll). A second run with only the beats stopped and video flowing stays live past 15 min. |
 
 ---
 
@@ -1499,7 +1538,6 @@ Each step records the evidence (a command and its output, or a screenshot) in th
 - iOS (capture's own scope).
 - The OBS tab's client-built overlay URL, and the overlay's visibility rule for private competitions. The
   `overlayUrl` follows the overlay page's existing public gate.
-- An auto-end for a **live** session whose phone has vanished. W8 says warn only, and §16 O2 puts the question.
 - A fixture deleted while its broadcast is live keeps today's behaviour. The session is not ended by the deletion.
   The plan re-pins that every delete path (`history.ts:559`, `stages.ts:628`, `:1519`, `:3105`) deletes only
   unplayed fixtures, and records it.
@@ -1550,11 +1588,11 @@ These were not ruled in conversation. Each is decided here with its reason, and 
 | X2 | QR (a), credentials in the QR (recommended first, with a false "works on weak venue internet" reason) **vs** (b) | (b) wins (W3). The "4× smaller" claim was itself corrected in the log. |
 | X3 | "One code per stream SESSION; enc copy wiped at session end" (controller design) **vs** a stable per-fixture code | Per-fixture wins (W1). `tok_enc` is wiped at reissue or expiry instead (§8.1 check). |
 | X4 | The switch was named "Go live when the match starts" (start only) **vs** "Stream the match automatically" (start + stop) | The rename wins (W7). |
-| X5 | Q3 says overlay is "today: test org only" **vs** V426 making `streaming.overlay` true on every plan | The rule built is the entitlement (W11). The fact goes to the owner (§16 O1). |
+| X5 | Q3 says overlay is "today: test org only" **vs** V426 making `streaming.overlay` true on every plan | The rule built is the entitlement (W11). The owner ruled overlay on every plan (W18, O1 YES). |
 | X6 | The final-beat literal `operator-stopped` (kebab) **vs** the answer vocabulary `auto_stopped` (snake) | Not a contradiction: the phone's words are kebab-case and the server's snake_case (coordinator reply, 2026-10-01). We accept `operator-stopped` and store `operator_stopped`. |
 | X7 | `mode: auto` (brainstorm) **vs** `automatic` (capture amendment) | `automatic` (coordinator reply). |
 | X8 | A17 "phone treats 200\|410 as delivered" **vs** capture's ask 8 (may beats answer 410?) | Beats never answer 410. An ended sid named by a beat gets `200 over` (§4.1, G0-a). |
-| X9 | Q4 "our timeouts still end silent sessions" | **False for a live passthrough session.** Its only timeout is the 300-min wall clock (`expiry.ts` `evaluate`: no stale-beat arm for passthrough). It is true for warming (10 min). This is put to the owner as §16 O2, not silently fixed. |
+| X9 | Q4 "our timeouts still end silent sessions" | **False for a live passthrough session.** Its only timeout is the 300-min wall clock (`expiry.ts` `evaluate`: no stale-beat arm for passthrough). It is true for warming (10 min). Put to the owner as O2; ruled YES (W19): built in PR-1 (§6.8.5). |
 | X10 | Capture's amendment, Known gaps: "the credit was spent at the start" | False. The credit is consumed at the `live` transition (programme §5.2), so a broadcast ended by ask 10 costs nothing. **Agreed by capture** in `69ef359`: the credit is spent at the first ingest. |
 | X11 | Brainstorm ask-10 wording "over with stopped" (capture's draft) **vs** the coordinator's reply | `phone_lost` (coordinator reply, G0-b). |
 | X12 | Brainstorm "A17 late stop: 200/410" and the draft's "no-op answered 200" **vs** the coordinator's ask-8 reply | `200 over X` for an ended X (§6.3.3 row 2). |
@@ -1563,12 +1601,18 @@ These were not ruled in conversation. Each is decided here with its reason, and 
 
 ## 16. Open for owner
 
-1. **O1 — overlay on every phone stream (X5).** Since V426 every plan has `streaming.overlay`, so W11 puts the
-   scorebug on every phone stream, not just the test org's. **Recommendation:** keep it. It is the product's
-   differentiator, it costs nothing per stream, and the rule is still the entitlement, so an override switches it off
-   for one org.
-2. **O2 — a live phone that vanishes (X9).** Under W8 such a session stays live, holding its destination and showing
-   "No signal", until Stop, auto stop (PR-2, automatic mode only) or the 300-min wall clock. The credit is already
-   spent; the cost is a destination held and a misleading "Live" pill for up to 5 h. **Recommendation:** end it after
-   15 min with **no beat AND no Cloudflare video**, with the same `phone_lost` reason ask 10 uses. That means one
-   reason for "the phone is gone", and a wire value capture already reads. It is not built in either PR until ruled.
+**Closed (owner, 2026-10-01, on approving this spec at `137b9ec2b`):**
+
+1. **O1 — overlay on every phone stream: YES** (W18). Built as W11's entitlement rule; nothing changes in the design.
+2. **O2 — a live phone that vanishes: YES** (W19). It ends after 15 min with no beat AND no video, endReason
+   `phone_lost`, built in PR-1 (§6.8.5, T25a, S11).
+3. **The SRT test: DEFERRED** (W20). Not a publish gate; `STREAM_SRT_ENABLED` defaults to false; S2b proves SRT later.
+
+**Open:**
+
+1. **O3 — how prompt W19's 15 minutes is.** W19 fires at the first tick after 15 min (§6.11). With an organiser
+   panel open, that is within one poll. With no panel open, the session's phone gone, and no other caller, the next
+   tick is the **daily** relay sweep (its schedule lives in `seazn.club.workflow`), so the destination can stay held
+   for up to a day. **Recommendation:** ship PR-1 on the existing drivers, and give `tickSession` a 5-minute
+   driver through the Cloudflare Cron Triggers programme (its plan `aadf3348b`) rather than a GitHub `schedule:`,
+   which runs late and drops runs. Until then, the panel's open poll covers the case anyone can see.
