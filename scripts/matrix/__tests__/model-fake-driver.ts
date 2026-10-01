@@ -32,8 +32,18 @@
 // fault: only an entrant added while the stage already has fixtures makes the
 // next Generate seat every pair again (ruling C-1, superseding R-PF8's
 // post-Start add, which the roster lock makes impossible).
+//
+// W1-driving Task 14 (FP-T14-1): a single SWISS stage too, so the model's
+// Swiss bias is witnessed on a swiss-shaped product. Its rules are the
+// product's (stages.ts swissGen, swiss-shell.ts), each cited at its method,
+// and its pairings are the ENGINE's own pairRound (scheduling/swiss.ts) — the
+// one the product calls. The ledger, the fold, the withdrawal cascade and the
+// feeds stay the league path's: only Start, Generate, Rebuild and the
+// withdrawal policy branch on the stage kind. Not modelled: the implicit-bye
+// inference for a round a late entrant missed (only a pairing ORDER changes),
+// the rank_adjacent cascade rank, and chess colours.
 import { EngineError } from "@seazn/engine/core";
-import { generateRoundRobin } from "@seazn/engine/scheduling";
+import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
@@ -101,6 +111,14 @@ function statusFromFold(outcome: unknown, live: readonly LedgerEntry[]): string 
 
 const pairKey = (a: string, b: string) => (a < b ? `${a}~${b}` : `${b}~${a}`);
 
+/** stages.ts DECIDED: a swiss board the next round's gate counts as finished. */
+const SWISS_DECIDED = new Set(["decided", "finalized", "forfeited"]);
+/** fixture-results-sql.ts fixtureHasResultSql's status clause: what a rebuild refuses over (with evidence, or abandoned with an outcome). */
+const RESULT_STATUSES = new Set(["in_play", "decided", "finalized"]);
+const isAward = (outcome: unknown): boolean => (outcome as { kind?: unknown } | null)?.kind === "award";
+/** swiss-shell.ts isSwissBoardSeated: an award row, or both seats filled. */
+const swissSeated = (f: FakeFixture): boolean => isAward(f.outcome) || (f.home_entrant_id !== null && f.away_entrant_id !== null);
+
 export class ModelFakeDriver extends FakeLeagueDriver {
   readonly opts: ModelFakeOpts;
   /** fixture id → its ledger, every event the product accepted, in seq order. */
@@ -112,10 +130,19 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   #divisionStatus = "setup";
   /** source fixture id → the seat its winner fills (winner_to_fixture / winner_to_slot). */
   readonly feeds = new Map<string, { target: string; slot: 1 | 2 }>();
+  /** A swiss stage's bye shells (the product's `sw-r<n>-bye` ext_key). Reset per division. */
+  readonly byeShells = new Set<string>();
   constructor(opts: ModelFakeOpts = {}) {
     super("org-model");
     this.opts = opts;
   }
+  /** Task 14: a league stage, or a single swiss stage (FP-T14-1). */
+  override acceptsStage(kind: string): boolean { return kind === "league" || kind === "swiss"; }
+  override refuseStages(): never { throw new Error("fake: league or swiss only"); }
+  get #swiss(): boolean { return this.stage?.kind === "swiss"; }
+  /** withdrawal.ts: swiss NEVER expunges (owner ruling 2026-09-24) — every
+   *  paired board walks over; a league keeps the table rule. */
+  override expungesEarly(): boolean { return !this.#swiss; }
   /** One driver may serve every property run of a cell, as HttpDriver does: a
    *  new division starts empty. Fixture ids keep counting (minted). */
   override createDivision(c: string, i: Parameters<FakeLeagueDriver["createDivision"]>[1]): Promise<DivisionRef> {
@@ -123,6 +150,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     this.fixtures = [];
     this.ledgers.clear();
     this.feeds.clear();
+    this.byeShells.clear();
     this.stage = null;
     this.completed = false;
     this.#lateEntrant = false;
@@ -162,7 +190,9 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       this.log("start");
       if (this.stage === null) throw new Error("fake: start before postStages");
       const empty = this.fixtures.length === 0;
-      if (empty) for (const s of this.schedule()) this.seat(s.round, s.home, s.away);
+      // A swiss Start's generate is swissGen's first press: empty shells.
+      if (empty && this.#swiss) this.#mintSwissShells();
+      else if (empty) for (const s of this.schedule()) this.seat(s.round, s.home, s.away);
       this.stage.status = "active";
       this.#divisionStatus = "active";
       return { division_id: "d1", status: "active", started: true, generated: empty ? this.fixtures.length : 0 };
@@ -175,6 +205,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       // stages.ts: a pending stage goes active on its first generate, Start or not.
       if (this.stage.status === "pending") this.stage.status = "active";
       if (this.opts.emptyGenerate === true) return { created: 0, existing: 0, fixtures: [] };
+      if (this.#swiss) return this.#swissGenerate();
       const want = this.schedule();
       const need = new Map<string, number>();
       for (const s of want) need.set(pairKey(s.home, s.away), (need.get(pairKey(s.home, s.away)) ?? 0) + 1);
@@ -197,9 +228,15 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       return { created, existing: this.fixtures.length - created, fixtures: this.rows() };
     });
   }
-  override postStream(id: string, events: readonly StreamEvent[], _prefix = ""): Promise<PostedEvent[]> {
+  override postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     return Promise.resolve().then(() => {
-      this.log("postStream");
+      // PF-4: `calls` keeps the bare name; `trace` carries the fixture (Task
+      // 14). The withdrawal cascade below writes through this method with no
+      // idempotency prefix — the product's own write, which no organiser
+      // driver call makes — so its trace line says so: `postStream <f>` is
+      // the organiser's post, `postStream <f> by-product` the cascade's.
+      this.calls.push("postStream");
+      this.trace.push(prefix === "" ? `postStream ${id} by-product` : `postStream ${id}`);
       const f = this.fixtures.find((x) => x.id === id);
       if (f === undefined) throw new Error(`fake: no fixture ${id}`);
       if (f.home_entrant_id === null || f.away_entrant_id === null) throw new Error(`fake: fixture ${id} is not seated`);
@@ -310,6 +347,19 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   override rebuild(_stageId: string): Promise<void> {
     return Promise.resolve().then(() => {
       this.log("rebuild");
+      if (this.#swiss) {
+        // stages.ts rebuildStageFixtures: refused while any fixture holds a
+        // result (fixtureHasResultSql — a result status, an abandoned row with
+        // an outcome, or score events); a generation-time bye holds none. Then
+        // every fixture goes and the regenerate is swissGen's first press.
+        if (this.fixtures.some((f) => (this.ledgers.get(f.id) ?? []).length > 0 || RESULT_STATUSES.has(f.status) || (f.status === "abandoned" && f.outcome !== null))) {
+          throw new RefusedCall("POST", "/api/v1/stages/s1/rebuild", 409, "STAGE_HAS_RESULTS", "this stage has fixtures with a recorded result");
+        }
+        this.fixtures = [];
+        this.byeShells.clear();
+        this.#mintSwissShells();
+        return;
+      }
       if (this.fixtures.some((f) => (this.ledgers.get(f.id) ?? []).length > 0 || f.outcome !== null)) {
         throw new RefusedCall("POST", "/api/v1/stages/s1/rebuild", 409, "STAGE_HAS_RESULTS", "stage already has recorded results");
       }
@@ -326,6 +376,117 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       return out;
     });
   }
+  // --- Task 14: a single swiss stage (FP-T14-1) ------------------------------------------
+  /** swissGen's `entrants`: the ACTIVE field (withdrawn entrants sit out), in entrant order. */
+  #active(): string[] { return this.entrants.filter((e) => e.status !== "withdrawn").map((e) => e.id); }
+  #roundOf(r: number): FakeFixture[] { return this.fixtures.filter((f) => f.round_no === r); }
+  /** swiss-shell.ts swissBoardsForField. */
+  #shape(): { boards: number; bye: boolean } {
+    const n = this.#active().length;
+    return { boards: Math.floor(n / 2), bye: n % 2 === 1 };
+  }
+  #mintBoard(r: number): FakeFixture { return this.seat(r, null, null); }
+  #mintBye(r: number): FakeFixture {
+    const f = this.seat(r, null, null);
+    this.byeShells.add(f.id);
+    return f;
+  }
+  /** swissGen's first press (swiss-shell.ts planSwissShells): for every round
+   *  of config.rounds, a board shell per pair of the active field and a bye
+   *  shell on an odd one — nobody seated. Returns the rows minted. */
+  #mintSwissShells(): number {
+    const rounds = this.stage?.config.rounds;
+    // stages.ts swissGen: CONFIG_INVALID without a whole config.rounds >= 1.
+    if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("CONFIG_INVALID"), "CONFIG_INVALID", "swiss stage requires config.rounds >= 1");
+    const { boards, bye } = this.#shape();
+    const before = this.fixtures.length;
+    for (let r = 1; r <= rounds; r++) {
+      for (let b = 0; b < boards; b++) this.#mintBoard(r);
+      if (bye) this.#mintBye(r);
+    }
+    return this.fixtures.length - before;
+  }
+  /** swiss-shell.ts nextUnseatedSwissRound: the lowest round with an unseated row. */
+  #nextUnseated(): number | null {
+    const rounds = [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].sort((a, b) => a - b);
+    return rounds.find((r) => this.#roundOf(r).some((f) => !swissSeated(f))) ?? null;
+  }
+  /** stages.ts reconcileSwissRoundShells: round `r` reshaped to the active
+   *  field — surplus board shells dropped from the tail, a bye shell minted or
+   *  dropped. Only an unseated round with no recorded data reshapes; otherwise
+   *  the target round refuses (STAGE_NOT_READY) and a later one is skipped. */
+  #reconcile(r: number, onBlocked: "refuse" | "skip"): void {
+    const round = this.#roundOf(r);
+    const boards = round.filter((f) => !this.byeShells.has(f.id));
+    const byeRow = round.find((f) => this.byeShells.has(f.id));
+    const want = this.#shape();
+    if (boards.length === want.boards && (byeRow !== undefined) === want.bye) return;
+    const blocked = round.some(swissSeated) ? "swiss round is already partly seated — reconcile refused"
+      : round.some((f) => (this.ledgers.get(f.id) ?? []).length > 0) ? "swiss round has recorded match data — reconcile refused" : null;
+    if (blocked !== null) {
+      if (onBlocked === "skip") return;
+      throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("STAGE_NOT_READY"), "STAGE_NOT_READY", blocked);
+    }
+    const doomed = new Set([...boards.slice(want.boards), ...(byeRow !== undefined && !want.bye ? [byeRow] : [])].map((f) => f.id));
+    this.fixtures = this.fixtures.filter((f) => !doomed.has(f.id));
+    for (const id of doomed) this.byeShells.delete(id);
+    for (let b = boards.length; b < want.boards; b++) this.#mintBoard(r);
+    if (want.bye && byeRow === undefined) this.#mintBye(r);
+  }
+  /** stages.ts swissGen: the first press mints shells; each later press seats
+   *  the next unseated round onto its shells (an UPDATE: `created` stays 0),
+   *  refused STAGE_NOT_READY while the round before it has an undecided seated
+   *  board. Before Start every later unseated round is reshaped too (eager,
+   *  "skip"); after it only the target (lazy). The pairing is the engine's
+   *  pairRound over the active field — score from the results, rank the seed
+   *  order, history every pair already seated and every entrant a bye or an
+   *  award already went to (FIDE C.04.1(d)) — and a round it cannot pair
+   *  rematch-free seats only its bye, as the product does (W3's H1). */
+  #swissGenerate(): GenerateOut {
+    if (this.fixtures.length === 0) {
+      const created = this.#mintSwissShells();
+      return { created, existing: 0, fixtures: this.rows() };
+    }
+    const target = this.#nextUnseated();
+    if (target === null) return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
+    if (target > 1 && this.#roundOf(target - 1).some((f) => swissSeated(f) && !SWISS_DECIDED.has(f.status))) {
+      throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("STAGE_NOT_READY"), "STAGE_NOT_READY", "current swiss round has undecided fixtures");
+    }
+    this.#reconcile(target, "refuse");
+    if (this.#divisionStatus === "setup") {
+      for (const r of [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].filter((x) => x > target)) this.#reconcile(r, "skip");
+    }
+    const score = new Map(this.#active().map((id) => [id, 0]));
+    const played = new Set<string>();
+    const byes = new Set<string>();
+    for (const f of this.fixtures) {
+      const o = f.outcome as { kind?: string; winner?: string } | null | undefined;
+      if (f.home_entrant_id !== null && f.away_entrant_id !== null) played.add(swissPairKey(f.home_entrant_id, f.away_entrant_id));
+      if (o?.kind === "award" && o.winner !== undefined) byes.add(o.winner);
+      if ((o?.kind === "win" || o?.kind === "award") && o.winner !== undefined) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+      else if ((o?.kind === "draw" || o?.kind === "tie") && f.home_entrant_id !== null && f.away_entrant_id !== null) {
+        score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
+        score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
+      }
+    }
+    const standings: SwissStanding[] = this.#active().map((id, i) => ({ entrantId: id, score: score.get(id) ?? 0, rank: i + 1 }));
+    const cfg = this.stage?.config ?? {};
+    const round = pairRound(standings, { played, byes }, { chess: cfg.chess === true, ...(cfg.pairing === "rank_adjacent" ? { pairing: "rank_adjacent" as const } : {}) });
+    const shells = this.#roundOf(target);
+    const boards = shells.filter((f) => !this.byeShells.has(f.id));
+    round.pairings.forEach((p, i) => {
+      const shell = boards[i];
+      if (shell === undefined) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("CONFIG_INVALID"), "CONFIG_INVALID", "swiss shell count mismatch for pairing");
+      Object.assign(shell, { home_entrant_id: p.home, away_entrant_id: p.away, status: "scheduled", outcome: null });
+    });
+    if (round.bye !== undefined) {
+      const byeShell = shells.find((f) => this.byeShells.has(f.id));
+      if (byeShell === undefined) throw new RefusedCall("POST", "/api/v1/stages/s1/generate", engineHttpStatus("CONFIG_INVALID"), "CONFIG_INVALID", "swiss bye shell missing for pairing");
+      Object.assign(byeShell, { home_entrant_id: round.bye, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: round.bye } });
+    }
+    return { created: 0, existing: this.fixtures.length, fixtures: this.rows() };
+  }
+
   /** A test hook for stages.ts addFixture (PROMPT-66): an ad-hoc match on a
    *  running league — "a replay, a friendly, a manual tie-breaker or a missing
    *  match". Not a model command: COMMAND_KINDS has no AddMatch. */
