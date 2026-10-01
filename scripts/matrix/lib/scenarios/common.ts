@@ -22,7 +22,7 @@ import { START, type RequestedOutcome, type StreamEvent } from "../streams/types
 import { confirmAdvance, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
-import { lineupWarningLine, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
+import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
 import { rosterMembers, rosterSize } from "./rosters.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
 import type { ScenarioContext } from "./types.ts";
@@ -445,8 +445,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   if (retried > 0) rec.notes.push(`${f.id}: ${retried} event(s) landed on a SEQ_CONFLICT retry`);
   const productOutcome = toObservedOutcome(posted.at(-1)?.outcome ?? null);
   // T45-R1: a scored team fixture owes a lineup per division-entrant side
-  // (life-lineups-put holds every one of them to a PUT).
-  if (setup.kind === "team" && !setup.rosterless) rec.teamPosts.set(f.id, [home, away].filter((e) => setup.entrantIds.has(e)));
+  // (life-lineups-put holds every one of them to a PUT). A rosterless setup
+  // (PADPROOF, D3) owes none — the harness's own skip, kept here explicitly.
+  if (setup.kind === "team" && !setup.rosterless) rec.teamPosts.set(f.id, postedTeamSides(home, away, (e) => setup.entrantIds.has(e)));
   rec.events += now.length;
   rec.decided++;
   if (outcome.kind === "draw") rec.drawsPosted++;

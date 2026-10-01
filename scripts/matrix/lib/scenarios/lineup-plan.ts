@@ -118,6 +118,13 @@ export async function putOwedLineups(driver: Pick<OrganiserDriver, "putLineup">,
   }
 }
 
+/** The sides of a posted team fixture the lineup check holds to a PUT (final review m-4): its seated sides that are
+ *  division entrants, home then away — a product-minted pair side owes none. ONE filter for the harness (common.ts
+ *  decideFixture) and the model (commands.ts post); whether a division is team and not rosterless stays with each caller. */
+export function postedTeamSides(home: string | null, away: string | null, isEntrant: (entrantId: string) => boolean): string[] {
+  return [home, away].filter((e): e is string => e !== null && isEntrant(e));
+}
+
 /** The lineup check's items (assertions.ts lineupsPut, "life-lineups-put";
  *  the model's "model-lineups-put"): one per side of every team fixture the
  *  caller posted to, ok iff that side's lineup was PUT. */

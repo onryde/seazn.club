@@ -19,6 +19,7 @@ import { RefusedCall, type OrganiserDriver, type PostedEvent } from "../driver/t
 import { isNamedRefusal, isTerminal } from "../observed.ts";
 import { generateStream } from "../streams/index.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
+import { postedTeamSides } from "../scenarios/lineup-plan.ts";
 import { fenceBlocking } from "./fences.ts";
 import { liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 import {
@@ -220,7 +221,8 @@ async function post(m: ModelState, d: OrganiserDriver, f: FixtureModel, events: 
     f.ledger = null;
     throw e;
   }
-  if (m.kind === "team") m.teamPosts.set(f.id, [f.home, f.away].filter((e): e is string => e !== null && m.entrants.includes(e)));
+  // The model has no rosterless setup (that is PADPROOF's, D3): a team division is always owed its lineups.
+  if (m.kind === "team") m.teamPosts.set(f.id, postedTeamSides(f.home, f.away, (e) => m.entrants.includes(e)));
   if (out.length !== events.length) {
     f.ledger = null;
     throw new Error(`model: the driver answered ${out.length} events for ${events.length} posted to ${f.id}`);

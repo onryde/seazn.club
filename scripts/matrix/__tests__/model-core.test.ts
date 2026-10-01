@@ -34,6 +34,7 @@ import {
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
 import { NotAWave } from "../lib/routing.ts";
 import { Recorder, ensureLineups, type DivisionSetup } from "../lib/scenarios/common.ts";
+import { postedTeamSides } from "../lib/scenarios/lineup-plan.ts";
 import { SIDE_SIZE_FOUND, rosterMembers, rosterSize } from "../lib/scenarios/rosters.ts";
 import type { ScenarioContext } from "../lib/scenarios/types.ts";
 import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
@@ -2121,6 +2122,15 @@ describe("Task 14: the model's lineup twin and the harness's ensureLineups PUT t
 // W1-driving Task 14 fix round 1 (T14-R3, review m-8): the model's lineups go
 // through the harness's own planner (lineup-plan.ts), with the model's sinks.
 describe("Task 14 fix round 1: the model's sinks on the shared lineup planner", () => {
+  it("final review m-4: ONE posted-sides filter for the harness and the model — seated division entrants, home then away; the empty cases first", () => {
+    const entrants = new Set(["a", "b"]);
+    const isEntrant = (e: string) => entrants.has(e);
+    expect(postedTeamSides(null, null, isEntrant)).toEqual([]); // a TBD row owes nothing
+    expect(postedTeamSides("x8", "x9", isEntrant)).toEqual([]); // two product-minted sides owe nothing
+    expect(postedTeamSides("a", null, isEntrant)).toEqual(["a"]);
+    expect(postedTeamSides("a", "x9", isEntrant)).toEqual(["a"]); // a pair side dropped, the entrant kept
+    expect(postedTeamSides("b", "a", isEntrant)).toEqual(["b", "a"]); // home first, as the PUT order
+  });
   it("assumptions are guards: a product-minted pair side, which the harness skips on an americano stage, is a named refusal in the model — D6 keeps americano out of it", async () => {
     // single-sport: the guard is sport-blind (the planner reads the stage kind, not the sport).
     const { m, d } = await teamFresh();
