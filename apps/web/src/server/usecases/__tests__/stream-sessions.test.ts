@@ -5113,6 +5113,83 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     expect(checked).toBe(2);
   });
 
+  // B0 fix round 1, I-1 (review 2026-10-01): R-1 made the WRITE atomic, but the coalesced READER read its pair in two
+  // snapshots — the latest poll sample near the top, the ingest_status events for D3's `since` several statements later —
+  // so a reading poll whose commit landed between them served the OLD word timed by the NEW event. The reviewer's probe,
+  // as a test: the destination stopped receiving at +65 s; at +80 s poll A claims the read and is held inside outputState
+  // (it will read ok); coalesced poll B runs and is parked at its credits read by an ACCESS EXCLUSIVE lock on
+  // org_stream_credits — after its sample read; A is released and commits its pair; then the lock goes.
+  it("I-1 (fix round 1): a coalesced poll that straddles a reading poll's commit is served ONE snapshot — the old word with its own since, or the new pair — never the old word timed by the new event (the stream-key box flash)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const until = async (done: () => Promise<boolean> | boolean, what: string) => {
+      const deadline = Date.now() + 15_000;
+      while (!(await done())) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting: ${what}`);
+        await new Promise((res) => setTimeout(res, 20));
+      }
+    };
+    const creditWaiters = async () => (await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks where relation = 'org_stream_credits'::regclass and not granted`)[0]!.n;
+    let out: OutputState = "ok";
+    let hold: Promise<void> | null = null;
+    const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => { if (hold) await hold; return out; });
+    let releaseA = () => {};
+    let releaseLock = () => {};
+    let locker: Promise<unknown> | null = null;
+    type Answer = { v?: Awaited<ReturnType<typeof currentSession>>; e?: unknown };
+    let a: Promise<Answer> | null = null;
+    let b: Promise<Answer> | null = null;
+    try {
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live, the destination receiving").toBe("live");
+      const tLive = r.deps.now().getTime();
+      r.tick(65_000);
+      out = "connecting";
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "+65 s: it stops receiving").toEqual({ state: "connecting", since: iso(tLive + 65_000), elapsedMs: 0 });
+      r.tick(10_000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "+75 s: the sample B will be served").toEqual({ state: "connecting", since: iso(tLive + 65_000), elapsedMs: 10_000 });
+      const before = await counts(sessionId);
+      // +80 s: A claims the read and is held inside outputState.
+      r.tick(5_000);
+      out = "ok";
+      hold = new Promise<void>((res) => { releaseA = res; });
+      const readsBefore = outSpy.mock.calls.length;
+      a = currentSession(r.auth, r.fixtureId, r.deps).then((v) => ({ v }), (e: unknown) => ({ e }));
+      await until(() => outSpy.mock.calls.length > readsBefore, "A is inside outputState");
+      let lockTaken = () => {};
+      const taken = new Promise<void>((res) => { lockTaken = res; });
+      const gate = new Promise<void>((res) => { releaseLock = res; });
+      locker = sql.begin(async (tx) => { await tx`lock table org_stream_credits in access exclusive mode`; lockTaken(); await gate; });
+      await taken;
+      b = currentSession(r.auth, r.fixtureId, elsewhere(r)).then((v) => ({ v }), (e: unknown) => ({ e }));
+      await until(async () => (await creditWaiters()) >= 1, "B is parked at its credits read");
+      hold = null;
+      releaseA();
+      await until(async () => (await counts(sessionId)).events === before.events + 1, "A committed its sample and event");
+      releaseLock();
+      await locker;
+      const [ra, rb] = await Promise.all([a, b]);
+      expect(ra.e, "A completes").toBeUndefined();
+      expect(rb.e, "B completes").toBeUndefined();
+      expect(outSpy.mock.calls.length, "PREMISE: A read the destination, B was served").toBe(readsBefore + 1);
+      expect(ra.v!.output, "A: the new pair").toEqual({ state: "ok", since: iso(tLive + 80_000), elapsedMs: 0 });
+      const oldView = { state: "connecting", since: iso(tLive + 65_000), elapsedMs: 15_000 };
+      const newView = { state: "ok", since: iso(tLive + 80_000), elapsedMs: 0 };
+      expect([oldView, newView], `B: one consistent snapshot, either side of A's commit — served ${JSON.stringify(rb.v!.output)}`).toContainEqual(rb.v!.output);
+      expect(d3Warning(rb.v!), "no stream-key box from a straddled commit").toBeNull();
+    } finally {
+      hold = null;
+      releaseA();
+      releaseLock();
+      if (locker) await locker.catch(() => undefined);
+      if (a) await a;
+      if (b) await b;
+      outSpy.mockRestore();
+    }
+  });
+
   it("a claimed read that FAILS still holds the window (a 429 storm is coalesced too): one call and one report for two polls inside the window; the poll after it reads again", async () => {
     const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
