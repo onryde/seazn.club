@@ -4756,6 +4756,23 @@ describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's prev
     expect((await currentSession(prior.auth, prior.fixtureId, noEvidence(prior)))!).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
   });
 
+  it("NO evidence on EITHER read (the input word says nothing about video AND the outputs read failed): the phone still shows its carried word, and the poll records nothing (m-2)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state, "PREMISE: a real read saw the phone").toBe("connected");
+    const base = noEvidence(r);
+    const ingest = Object.assign(Object.create(base.drivers.ingest) as FakeIngest, { outputState: async () => null });
+    const blind: SessionDeps = { ...base, drivers: { ...base.drivers, ingest } };
+    r.tick(5_000);
+    const before = await counts(sessionId);
+    const cur = (await currentSession(r.auth, r.fixtureId, blind))!;
+    expect(cur.ingest?.state, "carried even though no outputs word came back").toBe("connected");
+    expect(phoneNoSignal(cur)).toBe(false);
+    expect(cur.state).toBe("live");
+    expect(await counts(sessionId), "an outputs read that failed records neither sample nor event").toEqual(before);
+  });
+
   it("the carry's guard: a latest poll sample whose word is not one of the port's three is not carried — the phone is unseen (ingest null), never that word", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
