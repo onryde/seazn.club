@@ -32,6 +32,17 @@ const workspaces = globs
   .flatMap((g) => { const d = g.slice(0, -2); return readdirSync(resolve(REPO, d)).map((n) => `${d}/${n}`); })
   .filter((w) => existsSync(resolve(REPO, w, "package.json")));
 
+/**
+ * Workspaces the Fly image deliberately does NOT build. `.dockerignore` lists them, so the
+ * Dockerfile never COPYs their manifest (apps/cron-worker: ruled A2 of the Cloudflare cron plan,
+ * because the builder stage never installs its devDependencies and `turbo run typecheck` inside the
+ * image would fail on it). Read from the file, never a list typed here.
+ */
+const dockerignored = new Set(
+  read(".dockerignore").split("\n").map((l) => l.trim().replace(/^\/|\/$/g, "")).filter((l) => l !== "" && !l.startsWith("#")),
+);
+const imageExempt = workspaces.filter((w) => dockerignored.has(w));
+
 type Manifest = { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; scripts?: Record<string, string> };
 
 describe("workspace wiring (trap 2: a new package is invisible to the root chains)", () => {
@@ -51,13 +62,25 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     expect(install).toBeGreaterThan(0);
     let judged = 0;
     for (const w of workspaces) {
+      if (imageExempt.includes(w)) continue; // judged by the exemption test below
       const at = docker.findIndex((l) => l.trim() === `COPY ${w}/package.json ${w}/`);
       expect(at, `${w}: no COPY line`).toBeGreaterThan(-1);
       expect(at, `${w}: COPY after install`).toBeLessThan(install);
       judged++;
     }
-    expect(judged).toBe(workspaces.length);
+    expect(judged + imageExempt.length).toBe(workspaces.length);
     expect(judged).toBeGreaterThan(2);
+  });
+  it("the ONLY workspace the Dockerfile may skip is one `.dockerignore` lists, and it must not be COPYed either", () => {
+    // Anti-vacuity and anti-widening: the exemption set is exactly the Cloudflare cron Worker. A second
+    // dockerignored workspace, or the Worker leaving `.dockerignore`, fails here and needs a conscious edit.
+    expect(imageExempt).toEqual(["apps/cron-worker"]);
+    const docker = read("Dockerfile");
+    for (const w of imageExempt) {
+      expect(dockerignored.has(w), `${w} is not a line of .dockerignore`).toBe(true);
+      // COPYing a path the build context excludes would fail the image build.
+      expect(docker, `${w}: dockerignored but COPYed`).not.toContain(`COPY ${w}/`);
+    }
   });
   it("every workspace with a lint/typecheck/test script is in the root chain of that name", () => {
     let judged = 0;
