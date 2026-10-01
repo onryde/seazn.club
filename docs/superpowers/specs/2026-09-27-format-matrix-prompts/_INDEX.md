@@ -834,19 +834,22 @@ The five decisions below are the owner's, made on 2026-10-01 and recorded by the
 ledger. Controller ruling T16-R4 numbered them. Quotation marks hold the owner's words where the ledger has them.
 Elsewhere the text is the controller's record.
 
-55. **Format templates stay in code** (2026-10-01). The stage-graph format templates stay in code, with no DB table.
-    The ledger records no quote, only the ruling: the cleanup (move the file out of `components/v2`, single-source
-    `TakeRuleSchema`) is owed after this wave and is outside W1-driving's scope.
+55. **Format templates stay in code** (2026-10-01). The owner, asked "should we hardcode like this, should driven from
+    db?" and given the controller's recommendation (stay in code; the matrix catalogue reads the file, so a DB list
+    would make case counts differ per environment): "apply rec". No DB table. The cleanup (move the file out of
+    `components/v2`, single-source `TakeRuleSchema`) is owed after this wave and is outside W1-driving's scope.
 56. **The matrix harness gets a boundary, not a separate repo** (2026-10-01). The controller's record (T16-R4): the
     harness moves to its own workspace package, behind an import guard, with its evidence moved out and a
-    `.dockerignore` entry. It is NOT a separate repo. The ledger holds no quote, so the scope and the timing are
-    the controller's to state in the cleanup's own brief.
+    `.dockerignore` entry. It is NOT a separate repo. The owner raised the concern ("I a thinking as we are making
+    bigger monolithic") and answered the recommendation with "Ok". The runtime image already excludes the harness
+    (`Dockerfile:88-105` copies only the standalone build). Timing: the same post-W1-driving cleanup as ruling 55.
 57. **The W9 stage delete stays with W9** (2026-10-01). The owner: "W9 is fine". A refused format change deletes the
     division's stages first: `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature`
     gates. This is read-derived: the controller read it on `main` `58e8103e3`, and no committed run drives it. It
     is not fixed now, and there is no separate PR.
-58. **No CI live-matrix proposal** (2026-10-01). The controller's record (T16-R4) is those words. The ledger holds no
-    quote and no further scope.
+58. **No CI live-matrix proposal** (2026-10-01). Offered a W1d proposal for a live matrix job in CI (sharded, judged
+    against the committed `results.json`, triggered on a `main` push or by hand), the owner: "no". Not logged as a
+    W1d item.
 59. **The W1-driving PR is raised after the reviews approve** (2026-10-01). The owner: "raise pr after review
     approve". Push `feat/format-matrix-w1-driving` and open the PR once Task 16's review and the final whole-branch
     review are approved, rebasing onto `main` first if it is behind, with a scoped re-verify. The merge is the
