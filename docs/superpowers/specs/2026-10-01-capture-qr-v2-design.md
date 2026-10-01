@@ -4,6 +4,9 @@
 those rulings. Every ruling in §1 is the seazn.club owner's, given in conversation on
 2026-10-01. This file is now their record: the working log they came from
 (`2026-10-01-capture-qr-v2-brainstorm.md`) lives only in a session scratchpad and will not survive it.
+**Plan-time amendments, 2026-10-01:** §17 records the PR-1 plan's pre-flight rulings that change text above. Those
+are the controller's rulings, plus one contract detail agreed with capture. They are **not** owner rulings, and §1
+does not gain them. Each changed line carries "(amended, §17.n)".
 
 **Branch:** `docs/capture-qr-v2-spec`, cut from `8ff43c8f0` (PR #908, the fixture-page stream panel, not yet merged).
 The build branches for PR-1 and PR-2 are cut from `main` after #908 merges.
@@ -78,7 +81,7 @@ owner accepted the web-side consequences recorded in the log, and those conseque
 | A10 | A paired phone that hears `live` for its code and slot rejoins with no tap. | Beat answer `live` (§6.3.3). |
 | A11 | A remote or automatic start runs the phone's pre-flight. A phone that is not ready stays paired and reports why. | `warmingDeadline` is re-anchored (§6.7). The beat carries `notReady`. The panel shows it in PR-2. |
 | A12 / A15 | An organiser Stop turns auto **start** off for that match. Auto **stop** still applies to a broadcast restarted by hand. | §7.2. |
-| A13 | Phone copy, and `destinationName` cut at about 24 characters on the phone. | We send the full label. |
+| A13 | Phone copy, and `destinationName` cut at about 24 characters on the phone. | We send the full label, up to the contract's maxima (amended, §17.6). |
 | A14 | A dead live phone may be taken over once there has been **no beat AND no video for 60 s**. The new phone rejoins the open broadcast, on the same credit. | §6.5, rule T4. |
 | A16 | Auto start fires once per match: at match start or on a late pairing, whichever comes first. | §7.2. |
 | A17 | The operator's Stop wins. The phone re-sends the stop on its next pairing. The server closes that sid even late, idempotently, and never a newer one. | §6.8. |
@@ -137,7 +140,8 @@ shapes", "The answer table" and "Asks for the web side"), with our replies to it
 - **Optional versus null.** A field written `x?` in the shapes is **omitted** when it does not apply, never sent as
   `null`. A field written `x | null` is **always present**. This matters because the two sides' parsers are strict:
   `scheduledStart` is `?` on the waiting and session shapes and `| null` on the beat answer (§6.4); `sid`,
-  `startedBy` and `endReason` on the beat answer, and `endReason` and `cred` on the session shape, are `?`.
+  `startedBy` and `endReason` on the beat answer, and `endReason` and `cred` on the session shape, are `?`. (Amended,
+  §17.5: the beat answer and the session shape are unions on `state`, which say per state what is present.)
 - **The body envelope** (agreed with capture, 2026-10-01). Every 2xx is the bare shape, never the house
   `{ok, data}` envelope. Every refusal is the bare object `{ code: "<word>", message, ...extras }`, for example
   `409 {code: "already_live", message, sid, startedBy}`, `409 {code: "replaced", message}`,
@@ -417,6 +421,8 @@ unknown there, so it answers 401.
 - Rate-limited (§10.4).
 
 The org is pinned with `withTenant` after resolution, which is the `resolveDeviceLinkToken` superuser-read pattern.
+(Amended, §17.1: the V430 tables use the V410 pattern, so the phone routes read them through the non-tenant `sql`
+throughout, and nothing runs under `withTenant`.)
 
 #### 6.3.1 `GET /api/v1/capture/codes/{code}?phone=<id>`
 
@@ -478,7 +484,7 @@ fields and its cadence from either shape.
 **Body** (strict; `422` on anything malformed, which the phone counts as a failed beat):
 
 ```
-{ code, slot, phone, claim: "new" | "resume" | null, device: { model } | null, sid: uuid | null, at: ISO-8601,
+{ code, slot, phone, claim: "new" | "resume" | null, device: { model } | null, sid: uuid | null, at: ISO-8601 (offset allowed; amended, §17.5),
   state: "paired" | "arming" | "armed" | "connecting" | "publishing" | "degraded" | "reconnecting" | "ended",
   cause: "organiser" | "automatic" | "operator" | "rejoin" | null, notReady: "camera" | "sound" | "network" | "held" | null,
   startFailed: "not-found" | "cred-host" | "config" | "start-error" | null, stopped: uuid | null,
@@ -532,7 +538,8 @@ fields and its cadence from either shape.
   still applied and is delivered by that 2xx. The operator's own `ended` beat (T21) is judged current, so it hears
   `over S stopped`.
 - The waiting fields and `pollSeconds` are on **every** 2xx answer (ask 1). `sid`, `startedBy` and `endReason` are
-  omitted where they do not apply, never `null`.
+  omitted where they do not apply, never `null`. (Amended, §17.5: the contract is a union on `state`; `startedBy` is
+  absent on `live`, and `replaced` and `taken` may carry `device`.)
 - **A beat never answers 410** (ask 8).
 - `401` means the code has ended. `422` and `429` are counted by the phone and change nothing.
 
@@ -557,12 +564,12 @@ treats that as success (capture's answer table).
 
 | Field | Source |
 |---|---|
-| `label` | "{side A} v {side B}". It falls back to "Match {n}" while a side is not yet known, **in the competition's locale** (W25), using the `breadcrumb.match` key. The tree has no per-competition locale: the competition's locale is its organisation's `organizations.default_locale` (V281), which the public league pages already read. Entrant names are user data, not translated. |
+| `label` | "{side A} v {side B}". It falls back to "Match {n}" while a side is not yet known, **in the competition's locale** (W25), using the `breadcrumb.match` key. The tree has no per-competition locale: the competition's locale is its organisation's `organizations.default_locale` (V281), which the public league pages already read. Entrant names are user data, not translated. Cut to the contract's maximum with one "…" (amended, §17.6). |
 | `venueTimezone` | Venue lane V305: division override → org timezone → UTC (the `checkin-token.ts` query). |
 | `scheduledStart` | `fixtures.scheduled_at`, as epoch seconds. With no `scheduled_at` it is **omitted** from the waiting shape (`scheduledStart?`) and `null` on the beat answer (`scheduledStart \| null`), per capture's shapes. |
 | `pollSeconds` | §6.9. |
 | `autoAllowed` | PR-1: always `false`. PR-2: the fixture's switch (§7.1). |
-| `destinationName` | The pre-picked target's `label` (§6.7.3), or null when there is none or it is archived (T36). |
+| `destinationName` | The pre-picked target's `label` (§6.7.3), or null when there is none or it is archived (T36). Cut to the contract's maximum with one "…" (amended, §17.6). |
 | `heartbeatUrl`, `startUrl` | `${captureOrigin()}/api/v1/capture/codes/{code}/beats` and `…/start`. |
 | `cred.rtmps.url` | The stored Cloudflare value with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
 | `cred.srt.url` | The stored Cloudflare value **unchanged**: `srt://live.cloudflare.com:778` (W21). It is never rewritten. |
@@ -867,7 +874,8 @@ It is called from four places:
   every org (`requested`, `provisioning`, `warming`, `live`, `ending`), each in its own try/catch, and answers
   `{ticked, ended}`. The Cloudflare cron Worker (`apps/cron-worker`) POSTs it from a row in its schedule table. That
   needs a second trigger, `*/5 * * * *`, beside the programme's hourly `17 * * * *`: four triggers per account across
-  stg and prod, under the Workers Free limit of five;
+  stg and prod, under the Workers Free limit of five. (Amended, §17.2: the Worker sends this job's failures to Sentry
+  at most once per UTC hour.)
 - the daily sweep, kept as a backstop.
 
 The coalescing claim guarantees one provider read per `STREAM_POLL_MS` however many callers tick, so a phone beating
@@ -925,7 +933,7 @@ unchanged.
 - `qr_issued_first_at` is dropped. It is superseded by the code's `first_shown_at`.
 - `credentials_revealed_first_at` and `credentials_reveal_count` are renamed `credentials_served_first_at` and
   `credentials_served_count`. Their meaning is now "a descriptor carrying `cred` was served". The organiser no longer
-  sees credentials at all.
+  sees credentials at all. (Amended, §17.3: they land with V430, with an interim meaning and a stg deploy window.)
 
 Every reader is re-pinned in the plan with `grep -a`. Known readers today are `stream-sessions.ts`, its test,
 `routes.test.ts` and `migration-shape.test.ts`.
@@ -1204,6 +1212,9 @@ create index on fixture_stream_phone_beats (recorded_at);
 - carries `org_id`, the `trg_set_org` trigger and RLS on the tenant (the V117 / V410 pattern);
 - is read by the phone routes through the superuser `sql` only to resolve the code, then under `withTenant`.
 
+(Amended, §17.1: the V410 pattern only. Enable plus force RLS, with no policy, no `trg_set_org` and no grant, and
+every access through the non-tenant `sql`.)
+
 The `migration-shape.test.ts` sweep gains the new tables, constraints and trigger.
 
 ### 8.2 V431 — PR-2 (`V431__auto_stream.sql`)
@@ -1302,7 +1313,7 @@ At the Cloudflare edge (adopted 2026-09-22), staging step S5 checks that `/api/v
   - `CAPTURE_FAIL_LIMIT`: 30 failed 401s per 60 s per IP, keyed through the existing `ipKey`;
   - `CAPTURE_START_LIMIT`: 6 per 60 s per `code`.
 - **Retry-After.** `HttpError` gains an optional `headers` field, and `handler()` and `v1()` set it. The limiter's 429
-  carries `Retry-After` = the window's remaining seconds (capture request c). Nothing in `apps/web` sets
+  carries `Retry-After` = the window's remaining seconds (capture request c; amended, §17.4). Nothing in `apps/web` sets
   `Retry-After` today. This is the first use, and a unit test pins it.
 - **The limiter is inert without Redis** (local and e2e). The 429 path is unit-tested through the existing test seam,
   and staging step S7 exercises it for real.
@@ -1345,7 +1356,8 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
   `shown_count`.
 - Reissue: the old code is served only to its session's phone (C3), and a new claim on the old code gets 401.
 - `finished_at` trigger: for every status pair (into, out of, within the finished set). A `forEachSport` sweep drives
-  each sport's own finishing events through `appendEvent` and asserts the stamp (rule 6: "another sport").
+  each sport's own finishing events through `appendEvent` and asserts the stamp (rule 6: "another sport"). (Amended,
+  §17.7: the sweep is over the status writers.)
 - Claims under concurrency: two phones claim at once with a gated transaction (the
   `registration-concurrency.test.ts` pattern). Exactly one current pairing.
 - The start path: the operator start passes each gate (§6.7.2), and the organiser start refuses `phone_not_paired`. A
@@ -1554,7 +1566,7 @@ verdicts** before the PR. The real-phone scan of the v2 QR (normal and enlarged)
    new mint). A reverted result clears `finished_at`. A deleted fixture cascades the code away (T35).
 4. **Another sport.** The only sport-dependent input is the fixture status. The `finished_at` trigger is swept over
    every sport with `forEachSport` (§11.1.2). Everything else is sport-agnostic, and each test states that reason in
-   one line.
+   one line. (Amended, §17.7: the sweep is over the status writers.)
 
 ---
 
@@ -1672,3 +1684,125 @@ These were not ruled in conversation. Each is decided here with its reason, and 
    is alive except the existing `maxDurationMinutes` cap (300).
 
 **Open:** none.
+
+---
+
+## 17. Plan-time amendments 2026-10-01
+
+The PR-1 plan's pre-flight review (2026-10-01) raised rulings. This section records only the ones that change text
+above. Each changed line carries an "(amended, §17.n)" marker. The plan
+(`docs/superpowers/plans/2026-10-01-capture-qr-v2-pr1.md`, "Pre-flight rulings and amendments") holds the full record.
+
+**Who ruled.** R1–R4, R6–R8 and R10 are the controller's plan-time rulings. They are **not** the seazn.club owner's,
+and §1.1 does not gain them. R5 is a contract detail agreed with capture on 2026-10-01. R9 is the owner's (see the
+close of this section).
+
+### 17.1 RLS on the V430 tables: the V410 pattern (R1)
+
+Amends §6.3's `withTenant` line and §8.1's "Every new table".
+
+- Each of the four new tables (`fixture_stream_codes`, `fixture_stream_settings`, `fixture_stream_pairings` and
+  `fixture_stream_phone_beats`) gets `enable row level security` and `force row level security`, exactly as V410 does
+  for the stream tables. They get **no policy, no `trg_set_org` trigger and no grant to `app_user`**.
+  `rls-static.test.ts` asserts that V410 "creates no policy and no grant", and now asserts the same of V430.
+- Every read and write of these tables, by the phone routes and the organiser routes alike, goes through the
+  non-tenant `sql`. The use-case writes `org_id` from the code row or the session row. Nothing runs under
+  `withTenant`.
+- Why not V117's tenant pattern (`trg_set_org`, a tenant policy and a grant): the phone routes carry no org session,
+  because the tok is their auth, and the stream tables would split across two RLS models.
+
+### 17.2 The cron Worker's Sentry throttle (R2, R6)
+
+Amends §6.11's `stream-tick` bullet.
+
+- A failing `*/5` job could send 288 Sentry events a day. A scheduled firing therefore sends a failure to Sentry
+  **only from the first `*/N` slot of each UTC hour**, keyed on the firing's `scheduledTime` (never the wall clock).
+  It is stateless: no KV and no counter.
+- Every other failing firing sends nothing, and its log line carries `sentryThrottled: true`, so the failure stays
+  visible in Workers logs.
+- The hourly trigger (`17 * * * *`) is never throttled.
+- **Manual runs are never throttled (R6).** A human asked for that run.
+- The cost: a failure that clears before the next `:00` slot reaches the logs only, and a persistent one reaches
+  Sentry up to 55 minutes late.
+
+### 17.3 The column drop and rename land with V430 (R3)
+
+Amends §6.13's "Changed columns".
+
+- The drop of `qr_issued_first_at` and the rename to `credentials_served_*` land in the same commit as V430, with
+  the live QR writer in `currentSession` and its test readers re-pointed in that commit.
+- **The interim meaning.** Until `?reveal=1` is removed later in PR-1, `credentials_served_*` also count organiser
+  reveals. From the descriptor GET onward, they also count descriptor serves. The spec's meaning ("a descriptor
+  carrying `cred` was served") holds from the v1 removal on.
+- **The stg deploy window.** Between Flyway applying V430 on stg and Fly stg serving PR-1's code, the old stg
+  server's QR writer fails on the missing columns. The window lasts for `stg.yml`'s Fly deploy after its migrate
+  step, and the PR body states it.
+
+### 17.4 Retry-After: the true remaining seconds (R4)
+
+Amends §10.4's Retry-After bullet.
+
+- `Retry-After` is the window's **true** remaining seconds, read from the counter key's TTL in the same Lua script as
+  the increment. It is an integer, rounded up, and **never below 1**.
+- The fail-closed 429 (Redis configured but unreachable) has no window to read, so it answers the **full**
+  window's seconds.
+- `v1()` merges `HttpError.headers` with its rate-limit headers, and neither replaces the other.
+
+### 17.5 The beat's `at`, and the beat answer and session shapes as unions (R5)
+
+Amends §4's "Optional versus null" bullet, §6.3.2's `at`, and §6.3.3's answer shape. Capture agreed this on
+2026-10-01.
+
+- **`at`** is ISO-8601 **with an offset allowed** (`z.iso.datetime({ offset: true })`). A value with no timezone is
+  still refused. The server normalises `at` to UTC before storing it. The phone sends `Z`.
+- **The beat answer is a discriminated union on `state`.** The common fields are `label`,
+  `scheduledStart: epoch-s | null`, `autoAllowed`, `destinationName: string | null`, `overlayUrl: string | null` and
+  `pollSeconds`.
+
+| `state` | `sid` | `startedBy` | `endReason` | `device: {model}` | common fields |
+|---|---|---|---|---|---|
+| `waiting` | absent | absent | absent | absent | required |
+| `go-live` | required | required | absent | absent | required |
+| `live` | required | **absent** | absent | absent | required |
+| `over` | required | absent | required (§6.8.4) | absent | required |
+| `replaced`, `taken` | absent | absent | absent | optional | optional |
+
+- Each branch is strict: a field from another state's branch (for example, `endReason` on `live`) is refused.
+- The contract makes the common fields optional on `replaced` and `taken`. **PR-1's server still sends them on every
+  2xx** (ask 1, §6.3.3, unchanged). The contract only stops requiring them there.
+- `device` is admitted on `replaced` and `taken` for the panel's use (G0-e, §7.5). The phone ignores it, and PR-1
+  never sends it.
+- `409 already_live` keeps `{code, message, sid, startedBy}`.
+- **The descriptor's session shape is also a union on `state`**, replacing §4's "`endReason` and `cred` on the
+  session shape are `?`":
+  - `endReason` is required on `ending`, `completed` and `failed`, and absent on `warming` and `live`;
+  - `cred` is optional on `warming`, `live` and `ending`, and absent on `completed` and `failed`.
+
+### 17.6 Label and destination lengths (R7)
+
+Amends §6.4's `label` and `destinationName` rows, and §1.2 A13's reply "We send the full label".
+
+- The descriptor builder cuts `label` ("{side A} v {side B}") to the contract's maximum of 200 characters, and
+  `destinationName` to its maximum of 80.
+- Each cut ends in one "…", inside the maximum, and never splits a surrogate pair.
+- A value within its maximum is sent whole. So A13's reply still holds for every label that fits the contract.
+- The same builder serves the descriptor and the beat answer, so the two never disagree.
+
+### 17.7 "Another sport" for `finished_at` (R8)
+
+Amends §11.1.2's `finished_at` bullet, and §11.3's question 4.
+
+- The `finished_at` trigger keys on `fixtures.status`, which no sport module writes. The "another sport" sweep
+  therefore runs over the **status writers** (score finalize, walkover or forfeit, abandon, cancel, and an admin
+  correction), each driven through its real use-case.
+- The sweep reports its count, and a count of 0 fails.
+- The test file carries a `// single-sport:` reason, so the single-sport audit stays flat.
+- There is no `forEachSport` sweep: the testkit has no per-sport finishing driver.
+
+**No spec text changes for these:**
+
+- **R9, the owner's ruling (2026-10-01).** The staging cost of the `*/5` trigger is accepted, including keeping the
+  stg machine awake. §6.11 already says what the trigger costs. The merge itself still needs its own owner OK.
+- **R10:** where CI sets the walkthrough tunables. That is plan-only.
+- **R11 (owed, controller):** the wire mapping for a `completed` session with no end reason. The plan recommends
+  `failed`. When it is ruled, it amends §6.8.4 here, as §17.8.
