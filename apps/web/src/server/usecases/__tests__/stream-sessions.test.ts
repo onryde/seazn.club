@@ -4995,3 +4995,33 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     }
   });
 });
+
+// M-3 (final review): the Directory lists destinations with an "In use" lock that disables Replace and Remove — the very
+// buttons whose routes tick a held target's expiry. The Directory ticks every holder of the org first (`targetId: null`).
+describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory's tick over every destination the org holds", () => {
+  it("expires every DUE holder of the org, leaves a holder that is not due, never touches another org's — and the list's lock follows; a second call is a no-op", async () => {
+    const r = await rig({ credits: 2, fixtures: 2, connectAfterMs: 24 * 60 * 60_000 });
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` });
+    const stuck = await createSession(r.auth, r.fixtureIds[0]!, body(r.target.id), r.deps);
+    const fresh = await createSession(r.auth, r.fixtureIds[1]!, body(second.id), r.deps);
+    const other = await rig({ credits: 1, connectAfterMs: 24 * 60 * 60_000 });
+    const foreign = await createSession(other.auth, other.fixtureId, body(other.target.id), other.deps);
+    // An abandoned Go live: warming past the timeout, read by nobody. Both orgs have one.
+    const due = new Date(r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000);
+    await sql`update fixture_stream_sessions set created_at = ${due} where id in ${sql([stuck.sessionId, foreign.sessionId])}`;
+    const held = async () => new Map((await listStreamTargets(r.auth, r.auth.orgId)).map((t) => [t.id, t.inUse !== null]));
+    expect(await held(), "PREMISE: both destinations show In use").toEqual(new Map([[r.target.id, true], [second.id, true]]));
+
+    await expireTargetHolders(r.auth.orgId, null, r.deps);
+    expect(await r.row(stuck.sessionId), "the due holder expired on the org-wide tick").toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+    expect((await r.row(fresh.sessionId)).state, "a holder that is not due is untouched").toBe("warming");
+    expect((await other.row(foreign.sessionId)).state, "another org's due holder is not this org's to tick").toBe("warming");
+    expect(await held(), "the lock is gone from the expired destination only").toEqual(new Map([[r.target.id, false], [second.id, true]]));
+
+    await expireTargetHolders(r.auth.orgId, null, r.deps);
+    expect((await r.row(fresh.sessionId)).state, "second call: still nothing due").toBe("warming");
+    // The empty case: an org with no holder at all.
+    const none = await rig({ credits: 1 });
+    await expect(expireTargetHolders(none.auth.orgId, null, none.deps)).resolves.toBeUndefined();
+  });
+});

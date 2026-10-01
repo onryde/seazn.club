@@ -66,14 +66,18 @@ beforeEach(() => {
 afterEach(() => setRelayDriversForTest(null));
 
 describe("Directory › Streaming tab — offered exactly when the fixture panel offers Go live (M-5)", () => {
-  it("OFFERED (both keys, a running relay): the tab is listed and renders the destinations", async () => {
+  it("OFFERED (both keys, a running relay): the tab is listed and renders the destinations — after ticking every holder's expiry, org-wide (M-3)", async () => {
     const html = await render("streaming");
     expect(html).toContain(STREAMING_LINK);
     expect(html).toContain(PANEL);
     expect(m.hasFeature.mock.calls.map((c) => [c[0], c[1], c[2]]), "the panel's two keys, org-wide (no competition)").toEqual([
       [ORG, "streaming.overlay", undefined], [ORG, "streaming.relay", undefined],
     ]);
+    expect(m.expireTargetHolders).toHaveBeenCalledTimes(1);
+    expect(m.expireTargetHolders).toHaveBeenCalledWith(ORG, null, { appUrl: "http://app.test", marker: "deps" });
     expect(m.listStreamTargets).toHaveBeenCalledTimes(1);
+    expect(m.expireTargetHolders.mock.invocationCallOrder[0]!, "the expiry runs BEFORE the list it unlocks")
+      .toBeLessThan(m.listStreamTargets.mock.invocationCallOrder[0]!);
   });
 
   it("NOT offered, for each of the three reasons the panel would not offer Go live: no tab link, `?tab=streaming` falls back to Players, and no destination is read or ticked", async () => {

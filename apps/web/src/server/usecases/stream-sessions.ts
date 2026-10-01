@@ -1697,7 +1697,12 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
 
 /** D2 — before Replace key or Remove reads "held", each current holder of the target gets its lazy expiry, the tick
  *  Go live's `targetHolderFor` already gives it: a session stuck past its deadline must not refuse a Remove forever.
- *  Outside any transaction (expiry may call the provider). Called by the stream-targets [targetId] route. */
-export async function expireTargetHolders(orgId: string, targetId: string, deps: SessionDeps): Promise<void> {
-  for (const h of await holderRows(sql, { orgId, targetId })) await applyExpiry(h.sessionId, deps);
+ *  Outside any transaction (expiry may call the provider). Called by the stream-targets [targetId] route.
+ *
+ *  M-3 (final review): `targetId: null` ticks every holder of the ORG's destinations — the Directory's Streaming tab,
+ *  before it lists them. Its "In use" lock disables exactly the Replace and Remove buttons whose routes tick a single
+ *  target, so an abandoned Go live otherwise kept the lock up until someone opened that match or the daily sweep ran.
+ *  A holder that is not due is untouched (applyExpiry reads it and finds nothing to do). */
+export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<void> {
+  for (const h of await holderRows(sql, targetId === null ? { orgId } : { orgId, targetId })) await applyExpiry(h.sessionId, deps);
 }

@@ -28,6 +28,8 @@ import { VenuesPanel } from "@/components/v2/venues-panel";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
 import { relayOffer } from "@/server/stream-panel-context";
+import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
+import { baseUrlFromHeaders } from "@/lib/base-url";
 
 const TABS = ["players", "clubs", "officials", "venues", "streaming"] as const;
 type Tab = (typeof TABS)[number];
@@ -269,6 +271,10 @@ async function VenuesTab({ ui }: { ui: Dict }) {
 // the API's projection, never a second query.
 async function StreamingTab({ ui, locale }: { ui: Dict; locale: string }) {
   const { auth, canEdit } = await requirePageAuth();
+  // M-3 (final review): every holder of the org's destinations gets its lazy expiry BEFORE the list is read. The list's
+  // "In use" lock disables Replace and Remove — the very buttons whose routes tick a held target — so an abandoned Go
+  // live otherwise kept the lock up until someone opened that match or the daily sweep ran. Nothing due: no change.
+  await expireTargetHolders(auth.orgId, null, defaultDeps(await baseUrlFromHeaders()));
   const targets = await listStreamTargets(auth, auth.orgId);
   return (
     <div className="space-y-4">
