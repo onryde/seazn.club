@@ -135,7 +135,7 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
 
 interface SliceCell { cell: string; row: RowKey; sport: string }
 interface Cli {
-  runId: string; reportDir: string; cells: SliceCell[]; runs: number; maxCommands: number; timeLimitMs: number;
+  runId: string; reportDir: string; cells: SliceCell[]; cellsGiven: boolean; runs: number; maxCommands: number; timeLimitMs: number;
   seed: number | undefined; path: string | undefined; replayPath: string | undefined; fences: boolean; regressions: boolean; base: string | undefined;
   root: string | undefined;
 }
@@ -197,7 +197,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
   return {
-    runId, reportDir: v["report-dir"] ?? "matrix-report", cells, runs, maxCommands, timeLimitMs,
+    runId, reportDir: v["report-dir"] ?? "matrix-report", cells, cellsGiven: v.cell !== undefined, runs, maxCommands, timeLimitMs,
     seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base, root: v.root,
   };
 }
@@ -327,13 +327,6 @@ function printStub(c: ModelCell, runId: string): void {
 export async function runModel(deps: ModelDeps, argv: string[]): Promise<number> {
   const cli = parseCli(argv);
   if ("usage" in cli) { warn(`model: ${cli.usage}\n${MODEL_USAGE}`); return EXIT.REFUSED; }
-  // D6: a row the model does not drive is refused by family, before anything
-  // is asked of the environment — never a cell that fails every run.
-  for (const c of cli.cells) {
-    let refused: Error | null;
-    try { refused = modelRowRefusal(c.row); } catch (e) { refused = e instanceof Error ? e : new Error(String(e)); }
-    if (refused !== null) { warn(`model: refused ${c.cell} — ${errText(refused)}`); return EXIT.REFUSED; }
-  }
   // The committed cases first: a file the loader refuses is refused before
   // anything else is asked of the environment (T15 fix round 2).
   let regressions: RegressionCase[];
@@ -341,6 +334,27 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     regressions = (deps.loadRegressions ?? loadRegressions)(cli.root);
     checkRegressionVariants(regressions);
   } catch (e) { warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
+  // T14-R2: with no --cell, a replay takes every cell a committed case names —
+  // T14 opened --cell to the grid, so a case may sit outside the slice, and a
+  // slice-only default would drop it unseen. Otherwise the cells given (or the slice).
+  let runCells: SliceCell[] = cli.cells;
+  if (cli.regressions && !cli.cellsGiven) {
+    runCells = [];
+    for (const cell of new Set(regressions.map((r) => r.cell))) {
+      const parts = GRID_CELLS.get(cell);
+      // checkRegressionVariants refused an off-grid cell above; reaching here without one is a harness fault.
+      if (parts === undefined) { warn(`model: regressions.json names cell '${cell}', which is not on the grid`); return EXIT.REFUSED; }
+      runCells.push({ cell, ...parts });
+    }
+  }
+  // D6: a row the model does not drive is refused by family, before anything
+  // is asked of the environment — never a cell that fails every run, never a
+  // committed case skipped unseen.
+  for (const c of runCells) {
+    let refused: Error | null;
+    try { refused = modelRowRefusal(c.row); } catch (e) { refused = e instanceof Error ? e : new Error(String(e)); }
+    if (refused !== null) { warn(`model: refused ${c.cell} — ${errText(refused)}`); return EXIT.REFUSED; }
+  }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("model: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
   // FB-1: the report is written with this base as LOCAL_BASE; one that is no URL is refused before anything runs.
@@ -352,7 +366,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   try { pf = await deps.preflight(base); } catch (e) { warn(`model: preflight: ${errText(e)}`); return EXIT.REFUSED; }
   if (!pf.ok) { for (const r of pf.refusals) warn(`preflight refused: ${r.reason} — ${r.detail}`); return EXIT.REFUSED; }
 
-  const chosen = new Map(cli.cells.map((c) => [c.cell, c]));
+  const chosen = new Map(runCells.map((c) => [c.cell, c]));
   const jobs: Job[] = cli.regressions
     ? regressions.flatMap((r) => {
       const c = chosen.get(r.cell);
@@ -361,7 +375,11 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
       // fences: ruling Q1 (replayFences).
       return c === undefined ? [] : [{ ...c, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, maxCommands: r.maxCommands, fences: replayFences(r), replay: r }];
     })
-    : cli.cells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, maxCommands: cli.maxCommands, fences: cli.fences, replay: null }));
+    : runCells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, maxCommands: cli.maxCommands, fences: cli.fences, replay: null }));
+  // T14-R2: a committed case on a cell the run did not take is a verdict, said
+  // aloud — printed here, counted in the summary, listed in the report.
+  const skipped = cli.regressions ? regressions.filter((r) => !chosen.has(r.cell)) : [];
+  for (const r of skipped) say(`  skipped ${r.id} ${r.cell} — not among the --cell cells (${[...chosen.keys()].join(", ")})`);
   if (jobs.length === 0) { warn("model: nothing to run — --regressions found no committed case on these cells"); return EXIT.NO_SIGNAL; }
 
   const cells: ModelCell[] = [];
@@ -416,7 +434,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   }
 
   // A replay has no run-wide bound: each cell records the one its case was found at (W1b carry b).
-  const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.regressions ? null : cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells };
+  const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.regressions ? null : cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells, skipped: skipped.map((r) => ({ id: r.id, cell: r.cell })) };
   // The secret scan reads the report BEFORE the base is scrubbed (FB-1).
   const secrets = stringsIn(out).flatMap((s) => findSecrets(s));
   if (secrets.length > 0) { warn(`model: ${new SecretInResults(secrets.length).message}`); return EXIT.ABORTED; }
@@ -430,7 +448,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   for (const c of cells) if (c.verdict === "new-failure") printStub(c, cli.runId);
   const tally = (v: Verdict) => cells.filter((c) => c.verdict === v).length;
   const abortedNew = cells.filter((c) => c.verdict === "aborted" && c.failure !== null && c.failure.known === null).length;
-  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted${abortedNew === 0 ? "" : ` (${abortedNew} with a NEW failure found before its timeout)`}, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
+  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted${abortedNew === 0 ? "" : ` (${abortedNew} with a NEW failure found before its timeout)`}, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT${cli.regressions ? `, ${skipped.length} committed case(s) skipped` : ""}`);
   if (cells.some((c) => c.verdict === "aborted")) return EXIT.ABORTED;
   return cells.some((c) => FAILING.includes(c.verdict)) ? EXIT.NO_SIGNAL : EXIT.OK;
 }

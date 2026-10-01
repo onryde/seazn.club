@@ -973,3 +973,61 @@ describe("model.ts --cell (W1-driving Task 14)", () => {
     expect(io.err()).not.toContain("usage: model.ts");
   });
 });
+
+// W1-driving Task 14 fix round 1 (T14-R2, review I-1): T14 widened --cell to
+// the grid, so a case can now be committed on a cell outside the slice. With
+// no --cell, --regressions replays every cell a committed case names (each
+// through the D6 refusal); with --cell, a case on another cell is skipped
+// ALOUD — printed, counted in the summary and listed in the report. Empty case
+// first: nothing committed and no --cell is still "nothing to run".
+describe("model.ts --regressions: which cells it replays (W1-driving Task 14 fix round 1, T14-R2)", () => {
+  const football = (id: string): RegressionCase => ({ ...openReg(id, I7), cell: "league|football", variant: "11-a-side" });
+  type Rep = { cells: { cell: string; replayOf: string | null }[]; skipped: { id: string; cell: string }[] };
+  it("empty case first: no committed case and no --cell — nothing to run, exit 1, before the DB", async () => {
+    const io = capture();
+    expect(await runModel(deps({ openDb: noDb(), regs: [] }), ["--run-id", "rd0", "--report-dir", reportDir(), "--regressions"])).toBe(1);
+    expect(io.err()).toMatch(/nothing to run/);
+  });
+  it("no --cell: a committed league|football case (outside the slice) is replayed beside a league|generic one, none skipped", async () => {
+    const io = capture();
+    const dir = reportDir();
+    const regs = [openReg("MB-001", I7), football("MB-006")];
+    // Both replay against a correct product: each is an open case that does not reproduce (exit 1) — a verdict, not a skip.
+    expect(await runModel(deps({ regs }), ["--run-id", "rd1", "--report-dir", dir, "--regressions"])).toBe(1);
+    const rep = JSON.parse(readFileSync(join(dir, "rd1", "model-report.json"), "utf8")) as Rep;
+    expect(rep.cells.map((c) => [c.cell, c.replayOf])).toEqual([[CELL, "MB-001"], ["league|football", "MB-006"]]);
+    expect(rep.skipped).toEqual([]);
+    expect(io.out()).toMatch(/NOT REPRODUCED MB-006/);
+    expect(io.out()).toContain("0 committed case(s) skipped");
+    expect(io.out()).not.toMatch(/skipped MB-/);
+  });
+  it("with --cell, a case on another cell is skipped aloud: printed by id, counted in the summary, listed in the report", async () => {
+    const io = capture();
+    const dir = reportDir();
+    expect(await runModel(deps({ regs: [openReg("MB-001", I7), football("MB-006")] }), ["--run-id", "rd2", "--report-dir", dir, "--regressions", "--cell", CELL])).toBe(1);
+    const rep = JSON.parse(readFileSync(join(dir, "rd2", "model-report.json"), "utf8")) as Rep;
+    expect(rep.cells.map((c) => c.replayOf)).toEqual(["MB-001"]);
+    expect(rep.skipped).toEqual([{ id: "MB-006", cell: "league|football" }]);
+    expect(io.out()).toContain(`skipped MB-006 league|football — not among the --cell cells (${CELL})`);
+    expect(io.out()).toContain("1 committed case(s) skipped");
+  });
+  it("with --cell and every case elsewhere: nothing to run (exit 1), each skipped case still named", async () => {
+    const io = capture();
+    expect(await runModel(deps({ openDb: noDb(), regs: [football("MB-006")] }), ["--run-id", "rd3", "--report-dir", reportDir(), "--regressions", "--cell", CELL])).toBe(1);
+    expect(io.err()).toMatch(/nothing to run/);
+    expect(io.out()).toContain("skipped MB-006 league|football");
+  });
+  it("no --cell: a committed case on a row the model does not drive is refused by family (exit 2) before the base, the preflight or the DB — never skipped", async () => {
+    const io = capture();
+    const touched: string[] = [];
+    const d = deps({
+      openDb: noDb(), env: {},
+      preflight: async () => { touched.push("preflight"); return { ok: true, refusals: [] }; },
+      regs: [openReg("MB-001", I7), { ...openReg("MB-007", I7), cell: "ladder|generic" }],
+    });
+    expect(await runModel(d, ["--run-id", "rd4", "--report-dir", reportDir(), "--regressions"])).toBe(2);
+    expect(touched).toEqual([]);
+    expect(io.err()).toContain("model: refused ladder|generic — ModelUnsupported:");
+    expect(io.err()).toContain("→ W7");
+  });
+});
