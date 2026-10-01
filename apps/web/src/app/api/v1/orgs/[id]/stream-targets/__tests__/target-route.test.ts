@@ -19,6 +19,9 @@ vi.mock("@/lib/auth", async (importOriginal) => {
     getActiveOrgId: async () => null,
   };
 });
+// The house Sentry helper, spied (stream-sessions.test.ts precedent): the door's tick reports a holder whose expiry throws.
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
@@ -175,6 +178,52 @@ describe.skipIf(!HAS_DB)("/api/v1/orgs/{id}/stream-targets/{targetId} — the ro
         select state, fail_reason from fixture_stream_sessions where id = ${sessionId}`;
       expect(row, method).toEqual({ state: "failed", fail_reason: "admission_timeout" });
       expect((await listStreamTargets(o.auth, o.auth.orgId)).map((t) => t.id), method).toEqual(method === "delete" ? [] : [o.target.id]);
+      doors++;
+    }
+    expect(doors).toBe(2);
+  });
+
+  // B0 fix round 1, m-1 (review 2026-10-01): the door's tick is per-holder best-effort (expireTargetHolders). A holder
+  // whose expiry THROWS is reported and the door goes on to its own "held" read — so Remove and Replace key answer the
+  // organiser's 409 TARGET_IN_USE (the panel's "Stop match N first"), never a 500. Here the stuck holder's state write is
+  // refused at the database (a trigger on ITS row only), so its expiry throws before anything commits and it still holds.
+  // The fault gone, the same door expires it and the write lands.
+  it("m-1: a STUCK holder whose expiry THROWS — DELETE and a key replace are 409 TARGET_IN_USE (never 500) with one tick report each; the fault gone, the same door expires it and answers 200", async () => {
+    let doors = 0;
+    for (const method of ["delete", "patch"] as const) {
+      const o = await organiser();
+      const go = () => (method === "delete" ? del(o.auth.orgId, o.target.id) : patch(o.auth.orgId, o.target.id, { streamKey: key() }));
+      const sessionId = await sessionOnTarget(o.auth.orgId, o.fixtureId, o.target.id, "requested");
+      await sql`update fixture_stream_sessions set created_at = now() - make_interval(secs => ${REQUESTED_TIMEOUT_SECONDS + 1}) where id = ${sessionId}`;
+      const fn = `m1_refuse_${randomBytes(4).toString("hex")}`;
+      await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+        begin
+          if new.id = '${sessionId}'::uuid and new.state is distinct from old.state then raise exception 'm-1: the holder expiry is refused'; end if;
+          return new;
+        end $$`);
+      await sql.unsafe(`create trigger ${fn} before update on fixture_stream_sessions for each row execute function ${fn}()`);
+      const tickReports = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string } | undefined)?.route === "relay.expire_target_holders");
+      sentry.captureError.mockClear();
+      try {
+        const res = await go();
+        expect(res.status, `${method}: the tick threw, the holder still holds`).toBe(409);
+        const error = ((await res.json()) as Envelope).error!;
+        expect(error.code, method).toBe("TARGET_IN_USE");
+        expect(error.holder, method).toMatchObject({ fixtureId: o.fixtureId, label: "Court 1", state: "waiting" });
+        expect(tickReports(), `${method}: the failed expiry is reported once`).toHaveLength(1);
+        expect(String(tickReports()[0]![0]), method).toMatch(/m-1: the holder expiry is refused/);
+        expect(tickReports()[0]![1], method).toMatchObject({ orgId: o.auth.orgId, extra: { sessionId, targetId: o.target.id } });
+        const [held] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sessionId}`;
+        expect(held!.state, `${method}: nothing committed`).toBe("requested");
+      } finally {
+        await sql.unsafe(`drop trigger if exists ${fn} on fixture_stream_sessions`);
+        await sql.unsafe(`drop function if exists ${fn}()`);
+      }
+      const after = await go();
+      expect(after.status, `${method}: the fault gone, the door expires the holder and the write lands`).toBe(200);
+      const [row] = await sql<{ state: string; fail_reason: string | null }[]>`select state, fail_reason from fixture_stream_sessions where id = ${sessionId}`;
+      expect(row, method).toEqual({ state: "failed", fail_reason: "admission_timeout" });
+      expect(tickReports(), `${method}: a clean tick reports nothing more`).toHaveLength(1);
       doors++;
     }
     expect(doors).toBe(2);
