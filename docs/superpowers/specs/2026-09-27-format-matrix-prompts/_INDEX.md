@@ -2056,7 +2056,10 @@ table as its output, byte for byte. To re-run it:
 
 - **P1 — bracket draw stall (62) → W2** (T15-R4; design §8 SC-O1/SC-O2).
   - The engine's `supportsDraws` lets boardgame draw on every bracket kind, and generic draw on a page playoff
-    (`generic.ts:650-653`). A drawn bracket fixture never advances, so the stage never completes.
+    (`generic.ts:650-653`). A drawn bracket fixture never advances.
+  - **Two shapes** (re-derived by script, final review m-1): a stall (55), where the stage never completes; and
+    completed over a drawn final (7), where the stage completes and only I2 fails ("bracket fixture ended draw" on
+    5; no decided fixture with the terminal final key on 2). TRIAGE names the seven.
   - **Confirmed** on all 62: each case has ≥ 1 drawn bracket fixture, read from its env's DB
     (`truth-runs/w1drv-l3-fr1/draw-counts.json`, runs `w1drv-p1-*`).
   - boardgame 52 on 14 rows; generic 10 (page_playoff_only 2, group_playoffs 4, swiss_playoff 4). This confirms
