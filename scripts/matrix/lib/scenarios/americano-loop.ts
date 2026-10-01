@@ -211,11 +211,21 @@ async function recordPersons(ctx: ScenarioContext, rec: Recorder, setup: Divisio
  *  person sat in an earlier pair is NOT — on an 8-player field every person
  *  does. A round with no repeat gets nothing. T15: live, one round repeated
  *  two persons and I10 named both while the note named only the first, so the
- *  coverage table (every repeated person named) could not cover the case. */
-export function notePairEntrantDuplicates(rec: Recorder, setup: Pick<DivisionSetup, "persons">, rows: readonly FixtureRow[], persons: Readonly<Record<string, readonly string[]>>): void {
+ *  coverage table (every repeated person named) could not cover the case.
+ *  T15-R8 G-4 (task-15-brief.md:39): the repeat is signed only when the person
+ *  is a member of an EARLIER pair entrant — a side not of the division,
+ *  seated in a lower round — which the note names: that is the mechanism
+ *  (false premise 17). A repeat with no such pair is some other defect, left
+ *  to normal triage. */
+export function notePairEntrantDuplicates(rec: Recorder, setup: Pick<DivisionSetup, "persons" | "entrantIds">, rows: readonly FixtureRow[], persons: Readonly<Record<string, readonly string[]>>): void {
   const of = (side: string): readonly string[] => persons[side] ?? setup.persons.get(side) ?? [];
   const rounds = [...new Set(rows.map((f) => f.round_no ?? 0))].filter((r) => r >= 2).sort((a, b) => a - b);
   const named = new Set<string>();
+  /** The first pair entrant seated before round `r` (round, then seat order) that holds `p`. */
+  const earlierPair = (r: number, p: string): string | undefined => [...rows].filter((x) => (x.round_no ?? 0) < r)
+    .sort((a, b) => (a.round_no ?? 0) - (b.round_no ?? 0))
+    .flatMap((f) => [f.home_entrant_id, f.away_entrant_id])
+    .find((side): side is string => side !== null && !setup.entrantIds.has(side) && of(side).includes(p));
   for (const r of rounds) {
     const seats = rows.filter((x) => (x.round_no ?? 0) === r).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null);
     const people = [...new Set(seats.flatMap(of))];
@@ -224,8 +234,10 @@ export function notePairEntrantDuplicates(rec: Recorder, setup: Pick<DivisionSet
       const holding = seats.filter((side) => of(side).includes(p));
       const self = holding.find((side) => of(side).filter((x) => x === p).length > 1);
       if (holding.length < 2 && self === undefined) continue;
+      const pair = earlierPair(r, p);
+      if (pair === undefined) continue;
       const where = self !== undefined ? `in ${self} with themselves` : `in ${holding.join(" and ")}`;
-      rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${r} seats ${p} twice, ${where} → ${PAIR_PLAYERS_ROUTE.wave}`);
+      rec.notes.push(`mexicano-pair-entrants-counted-as-players: round ${r} seats ${p} twice, ${where}; ${p} is a member of earlier pair entrant ${pair} → ${PAIR_PLAYERS_ROUTE.wave}`);
       named.add(p);
     }
   }

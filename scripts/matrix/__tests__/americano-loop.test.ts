@@ -266,7 +266,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   });
 
   it("fast-check (rule 10, m-2): playMexicano ITSELF over any per-round schedule of forfeit / void / withdraw, either sport, either person-id order, product or corrected player set — its exit and every note agree with the fake's own rows", async () => {
-    const reach = { runs: 0, round1Checks: 0, blockChecks: 0, dupSigned: 0, noDup: 0, stalledNonDecided: 0, refusedSigned: 0, drained: 0 };
+    const reach = { runs: 0, round1Checks: 0, blockChecks: 0, dupSigned: 0, noDup: 0, stalledNonDecided: 0, refusedSigned: 0, drained: 0, namedPersons: 0 };
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("generic", "badminton"),
       fc.boolean(),
@@ -311,6 +311,13 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
         const repeated = [...new Set(rows.map((f) => f.round_no ?? 0))].some((r) => r >= 2 && driver.repeatsIn(r).size > 0);
         expect(rec.notes.some((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ seats /.test(n)), `${label}: seating signature ⟺ an observed repeat`).toBe(repeated);
         if (repeated) reach.dupSigned++; else reach.noDup++;
+        // m-5 (T15-R8): the persons the signature NAMES are exactly the persons the fake's rows seat twice in some
+        // round ≥ 2 (what I10 reports seated 2×), each named once — the invariant H3 restored, pinned by the property.
+        const named = rec.notes.flatMap((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ seats (\S+) twice/.exec(n)?.[1] ?? []);
+        const seatedTwice = new Set([...new Set(rows.map((f) => f.round_no ?? 0))].filter((r) => r >= 2).flatMap((r) => [...driver.repeatsIn(r).keys()]));
+        expect(named.length, `${label}: each person named once`).toBe(new Set(named).size);
+        expect([...named].sort(), `${label}: named persons = the persons seated twice`).toEqual([...seatedTwice].sort());
+        reach.namedPersons += named.length;
         // T8-R1: the refused-form signature ⟺ a 5xx carrying the self-pair's cause.
         const last = rec.track(setup.stage.id).generates.at(-1);
         const pk = exit === "refused_generate" && last !== undefined && last.status >= 500 && SELF_PAIR_CAUSE.test(last.message ?? "");
@@ -330,6 +337,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(reach.refusedSigned, "runs refused on the self-pair").toBeGreaterThan(0);
     expect(reach.blockChecks, "runs judged against the wait").toBeGreaterThan(0);
     expect(reach.drained, "runs that played every round").toBeGreaterThan(0);
+    expect(reach.namedPersons, "persons named across the runs (m-5)").toBeGreaterThan(0);
   }, 120_000);
 
   it("the fake's mexicano wait and player set ARE the product's (text pins, review 1 I-3, review 2 I-3)", () => {
@@ -409,9 +417,14 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(dup.repeats.size).toBeGreaterThan(1);
     expect(notes.length).toBe(dup.repeats.size);
     for (const note of notes) {
-      const [, person, seats] = /^mexicano-pair-entrants-counted-as-players: round 2 seats (\S+) twice, in (.+) → W7$/.exec(note) ?? [];
+      const [, person, seats, again, pair] = /^mexicano-pair-entrants-counted-as-players: round 2 seats (\S+) twice, in (.+); (\S+) is a member of earlier pair entrant (\S+) → W7$/.exec(note) ?? [];
       expect(dup.repeats.get(person!), `${person} repeats in round 2`).toBeDefined();
       expect(seats!.split(" and ")).toEqual(dup.repeats.get(person!));
+      // G-4: the named earlier pair is a round-1 pair entrant holding the person (the fake's own rows).
+      expect(again).toBe(person);
+      expect(driver.membersOf(pair!), `${pair} holds ${person}`).toContain(person);
+      expect(driver.fixturesOfRound(1).some((x) => x.home_entrant_id === pair || x.away_entrant_id === pair), `${pair} sat in round 1`).toBe(true);
+      expect(driver.entrants.some((e) => e.id === pair), `${pair} is a pair entrant, not the division's`).toBe(false);
       expect(note.endsWith(`→ ${PAIR_PLAYERS_ROUTE.wave}`)).toBe(true);
     }
     // The FULL failing set (review 2 m-8), re-derived: I10 (Task 9) reds the
@@ -901,34 +914,66 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(driver.pairEntrantIds().length).toBeGreaterThan(0);
   });
 
-  it("notePairEntrantDuplicates (T8-R3, m-1): once per stage, only from round 2, only on an OBSERVED repeat in that round's seating — round-1 membership is no evidence", () => {
-    const setup = { persons: new Map([["e1", ["p1"]], ["e2", ["p2"]], ["e3", ["p3"]], ["e4", ["p4"]], ["e5", ["p5"]]]) };
+  it("notePairEntrantDuplicates (T8-R3, m-1; T15-R8 G-4): once per person, only from round 2, only on an OBSERVED repeat in that round's seating of a person an EARLIER pair entrant holds — and that pair named", () => {
+    const setup = { persons: new Map([["e1", ["p1"]], ["e2", ["p2"]], ["e3", ["p3"]], ["e4", ["p4"]], ["e5", ["p5"]]]), entrantIds: new Set(["e1", "e2", "e3", "e4", "e5"]) };
     const f = (round: number, home: string, away: string) => ({ id: `${home}-${away}`, round_no: round, home_entrant_id: home, away_entrant_id: away }) as FixtureRow;
-    const persons = { pe1: ["p1", "p2"], pe2: ["p3", "p4"], pe3: ["p1", "p5"], pe4: ["p2", "p3"], pe5: ["p4", "p5"], pe6: ["p6", "p6"] };
+    const persons = { pe1: ["p1", "p2"], pe2: ["p3", "p4"], pe3: ["p1", "p5"], pe4: ["p2", "p3"], pe5: ["p4", "p5"], pe6: ["p6", "p6"], pe7: ["p5", "p6"] };
+    const W = PAIR_PLAYERS_ROUTE.wave;
     const run = (rows: FixtureRow[]) => { const rec = new Recorder(); notePairEntrantDuplicates(rec, setup, rows, persons); return rec.notes; };
     expect(run([])).toEqual([]);
     // Round 1 alone may never carry it (only individuals exist before round 2).
     expect(run([f(1, "pe1", "pe3")])).toEqual([]);
-    // Round 2 seats p1 in two seats (pe3 and pe1): the repeat is the evidence.
-    expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe3 and pe1 → ${PAIR_PLAYERS_ROUTE.wave}`]);
-    // A person in one seat with themselves is a repeat too.
-    expect(run([f(1, "pe1", "pe2"), f(2, "pe6", "pe5")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p6 twice, in pe6 with themselves → ${PAIR_PLAYERS_ROUTE.wave}`]);
+    // Round 2 seats p1 in two seats (pe3 and pe1), and round 1's pe1 holds p1: signed, the earlier pair named.
+    expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe3 and pe1; p1 is a member of earlier pair entrant pe1 → ${W}`]);
+    // A person in one seat with themselves is a repeat too — signed when an earlier pair (pe7) holds them…
+    expect(run([f(1, "pe7", "pe2"), f(2, "pe6", "pe5")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p6 twice, in pe6 with themselves; p6 is a member of earlier pair entrant pe7 → ${W}`]);
+    // …and NOT when no earlier pair entrant holds them (G-4, task-15-brief.md:39): that repeat is not this mechanism.
+    expect(run([f(1, "pe1", "pe2"), f(2, "pe6", "pe5")])).toEqual([]);
     // Evidence FALSE: every round-2 person but p5 sat in a round-1 pair (pe1,
     // pe2 hold p1-p4), yet round 2 (pe3: p1+p5, pe4: p2+p3) seats nobody twice
     // — no signature. Round-1 membership is no evidence.
     expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe4")])).toEqual([]);
-    // A repeat with no earlier pair at all is still observed, still signed (the repeat is the evidence).
-    expect(run([f(1, "e1", "e2"), f(2, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe3 and pe1 → ${PAIR_PLAYERS_ROUTE.wave}`]);
+    // G-4: a repeat with no earlier PAIR entrant (round 1 seated the division's own e1, e2) is observed but NOT signed —
+    // the signature is the mechanism (a pair entrant counted as a player, false premise 17), and this is not it.
+    expect(run([f(1, "e1", "e2"), f(2, "pe3", "pe1")])).toEqual([]);
+    // The SAME repeat, one round on, once an earlier round has seated pe1: signed in the round it first qualifies.
+    expect(run([f(1, "e1", "e2"), f(2, "pe3", "pe1"), f(3, "pe3", "pe1")])).toEqual([`mexicano-pair-entrants-counted-as-players: round 3 seats p1 twice, in pe3 and pe1; p1 is a member of earlier pair entrant pe3 → ${W}`]);
     // Once per PERSON per stage, however many rounds repeat them (T15: live,
     // round 2 repeated two persons and I10 named both, but the note named only
     // the first — the coverage table needs every repeated person named).
     expect(run([f(1, "pe1", "pe2"), f(2, "pe3", "pe1"), f(3, "pe3", "pe1")]).length).toBe(1);
     // Two persons repeated in one round: each named once, in the round it first repeats.
     expect(run([f(1, "pe1", "pe2"), f(2, "pe1", "pe3"), f(2, "pe4", "pe2"), f(3, "pe4", "pe2")])).toEqual([
-      `mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe1 and pe3 → ${PAIR_PLAYERS_ROUTE.wave}`,
-      `mexicano-pair-entrants-counted-as-players: round 2 seats p2 twice, in pe1 and pe4 → ${PAIR_PLAYERS_ROUTE.wave}`,
-      `mexicano-pair-entrants-counted-as-players: round 2 seats p3 twice, in pe4 and pe2 → ${PAIR_PLAYERS_ROUTE.wave}`,
+      `mexicano-pair-entrants-counted-as-players: round 2 seats p1 twice, in pe1 and pe3; p1 is a member of earlier pair entrant pe1 → ${W}`,
+      `mexicano-pair-entrants-counted-as-players: round 2 seats p2 twice, in pe1 and pe4; p2 is a member of earlier pair entrant pe1 → ${W}`,
+      `mexicano-pair-entrants-counted-as-players: round 2 seats p3 twice, in pe4 and pe2; p3 is a member of earlier pair entrant pe2 → ${W}`,
     ]);
+  });
+  it("G-5 (T15-R8): every exit path records persons ONCE, so a repeated person's signature is written once per case", async () => {
+    // notePairEntrantDuplicates dedupes within ONE call; this pins that each exit of playMexicano makes exactly one
+    // (recordPersons is the only reader of the minted pe* sides, so one read per side = one call). "cap" is not
+    // reachable on this fake (a generate past config.rounds creates nothing), so it is named, not swept.
+    const shapes = [
+      { exit: "refused_generate", opts: { mode: "mexicano" as const }, sport: "badminton" },
+      { exit: "stalled_rounds", opts: { mode: "mexicano" as const, stallAfter: 2 }, sport: "badminton" },
+      { exit: "drained", opts: { mode: "mexicano" as const, individualsOnly: true }, sport: "badminton" },
+    ];
+    let sides = 0;
+    let signed = 0;
+    for (const sh of shapes) {
+      const driver = new FakeAmericanoDriver(sh.opts);
+      const { out } = await runOn(driver, "LIFECYCLE", { row: "mexicano", sport: sh.sport });
+      expect(out.observed.stages[0]!.exit, sh.exit).toBe(sh.exit);
+      const reads = new Map<string, number>();
+      for (const t of driver.trace.filter((x) => x.startsWith("entrantMembers pe"))) reads.set(t, (reads.get(t) ?? 0) + 1);
+      expect(reads.size, `${sh.exit}: pair sides read`).toBeGreaterThan(0);
+      for (const [t, n] of reads) { expect(n, `${sh.exit}: ${t}`).toBe(1); sides++; }
+      const named = out.notes.flatMap((n) => /^mexicano-pair-entrants-counted-as-players: round \d+ seats (\S+) twice/.exec(n)?.[1] ?? []);
+      expect(named.length, `${sh.exit}: no person named twice`).toBe(new Set(named).size);
+      signed += named.length;
+    }
+    expect(sides, "pair sides checked").toBeGreaterThan(0);
+    expect(signed, "repeats signed across the exit paths (refused and stalled each carry round 2's)").toBeGreaterThan(0);
   });
 });
 
