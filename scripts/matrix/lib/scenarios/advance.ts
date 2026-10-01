@@ -32,10 +32,34 @@ export function takesOf(body: StagePostBody): TakeRule[] {
   return sources.flatMap((s) => [...s.take]);
 }
 
+/** Final review m-5: the source's pool ids disagree with its posted body. */
+export class SourcePoolsDisagree extends Error {
+  constructor(seq: number, declared: number, field: number, expected: number, named: number) {
+    super(`advance: stage ${seq}'s posted body declares ${declared} pool(s) over a field of ${field}, so its fixtures name ${expected} pool id(s) — they name ${named}; no take is computed off a guess`);
+    this.name = "SourcePoolsDisagree";
+  }
+}
+
+/** Final review m-5: the SOURCE stage's pool count, from its posted body as
+ *  the product reads it — a group's pools.count, else 1 (stages.ts poolCount;
+ *  sourceShapeOf: an ungrouped source is one implicit pool) — held against
+ *  the pool ids its fixtures name. The product seats one pool with no pool id;
+ *  on N > 1 a pool has fixtures only when the seeded snake gives it two or
+ *  more of the field (a lone seed plays nobody). Any other count is refused
+ *  by name, never read as one pool. */
+export function sourcePoolCount(source: StagePostBody, fieldSize: number, namedPools: ReadonlySet<string>): number {
+  const raw = source.kind === "group" ? (source.config.pools as { count?: unknown } | undefined)?.count : undefined;
+  const declared = typeof raw === "number" ? raw : 1;
+  const sizes = Array.from({ length: declared }, (_, i) => Math.floor(fieldSize / declared) + (i < fieldSize % declared ? 1 : 0));
+  const expected = declared === 1 ? 0 : sizes.filter((n) => n >= 2).length;
+  if (!Number.isInteger(declared) || declared < 1 || namedPools.size !== expected) throw new SourcePoolsDisagree(source.seq, declared, fieldSize, expected, namedPools.size);
+  return declared;
+}
+
 /** How many entrants the body's progression declares it takes. `sourcePools`
- *  is the SOURCE stage's observed pool count (its fixtures' distinct non-null
- *  pool ids, or 1). bestNth adds its count once, never per pool (engine
- *  expandTake). */
+ *  is the SOURCE stage's pool count (sourcePoolCount: its posted body's,
+ *  checked against its fixtures). bestNth adds its count once, never per pool
+ *  (engine expandTake). */
 export function declaredTake(body: StagePostBody, sourcePools: number): number {
   let n = 0;
   for (const t of takesOf(body)) {
@@ -99,7 +123,7 @@ export interface AdvanceObs {
 }
 
 /** `body`: the TARGET stage's posted body; `sourcePools`: the source stage's
- *  observed pool count (declaredTake). */
+ *  pool count (sourcePoolCount; declaredTake). */
 export async function confirmAdvance(ctx: ScenarioContext, rec: Recorder, target: StageRef, proposal: SeedProposalRef, body: StagePostBody, sourcePools: number): Promise<AdvanceObs> {
   const declared = declaredTake(body, sourcePools);
   const takes = takesOf(body);

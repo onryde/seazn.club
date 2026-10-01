@@ -19,7 +19,7 @@ import {
 import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
 import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
-import { confirmAdvance, type AdvanceObs } from "./advance.ts";
+import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
@@ -587,7 +587,14 @@ export async function playDivision(
       // m-11: by seq, as builtAsPosted pairs them — never by array position.
       const body = setup.built.posted.stages.find((b) => b.seq === stage.seq);
       if (body === undefined) throw new Error(`scenario: stage ${stage.seq} has no posted body — ${setup.built.posted.stages.length} posted, ${setup.stages.length} built`);
-      const pools = new Set((await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id && f.pool_id !== null).map((f) => f.pool_id)).size || 1;
+      // Final review m-5: the source's pool count is its posted body's, checked against the pool ids its fixtures name
+      // over the field it was generated on (stage 1's entrants; a later stage's confirmed slots — no byes in a table).
+      const prevBody = setup.built.posted.stages.find((b) => b.seq === prev.stage.seq);
+      if (prevBody === undefined) throw new Error(`scenario: stage ${prev.stage.seq} has no posted body — ${setup.built.posted.stages.length} posted, ${setup.stages.length} built`);
+      const sourceField = i === 1 ? setup.entrants.length : prev.advance?.filled;
+      if (sourceField === undefined) throw new Error(`scenario: stage ${prev.stage.seq} was reached with no advance to size its field`);
+      const named = new Set((await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id && f.pool_id !== null).map((f) => f.pool_id!));
+      const pools = sourcePoolCount(prevBody, sourceField, named);
       advance = await confirmAdvance(ctx, rec, stage, proposal, body, pools);
       field = advance.seeded;
       if (advance.status !== 200) {

@@ -11,12 +11,12 @@ import type { StageKind } from "@seazn/engine/core";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { DriverMisuse, RefusedCall } from "../lib/driver/types.ts";
+import { DriverMisuse, RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun, type ObservedStage } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
-import { SEEDING_TIE_CODE, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
+import { SEEDING_TIE_CODE, SourcePoolsDisagree, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake, sourcePoolCount, takesOf, withdrawnQualifiers, type AdvanceObs } from "../lib/scenarios/advance.ts";
 import { Recorder, drawsDeclaredOnReached, ensureLineups, finishStage, playDivision, playStage, recordGenerate, setUpDivision, snapshot, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
 import { lineupsPut } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -98,6 +98,39 @@ describe("Step 0 — the product's multi-stage shape, pinned", () => {
     expect(stages).toMatch(/if \(progression\.timing === "setup"\) return \{ seeded: true as const \};/);
     // A departed qualifier is filtered, not closed up (FP-2).
     expect(stages).toMatch(/const computedQualifiers = resolvedQualifiers\.filter\(\(q\) => !departed\.has\(q\.entrantId\)\);/);
+  });
+});
+
+// Final review m-5: the source stage's pool count — declaredTake's topNPerGroup multiplier — is the posted body's, as
+// the product reads it (stages.ts poolCount: a group's pools.count, else 1; sourceShapeOf: an ungrouped source is one
+// implicit pool). It was the fixtures' distinct pool ids `|| 1`, so a group whose fixtures carried none read as one pool.
+describe("sourcePoolCount — the source's pools, from its posted body (final review m-5)", () => {
+  const src = (kind: string, config: Record<string, unknown>) => ({ kind, name: "s", config, seq: 1, progression: null }) as never;
+  const ids = (n: number) => new Set(Array.from({ length: n }, (_, i) => `pool-${i}`));
+  it("empty cases first: an ungrouped source, a count-1 group and a group with no pools key name no pool id, and each is one pool", () => {
+    expect(sourcePoolCount(src("league", {}), 8, ids(0))).toBe(1);
+    expect(sourcePoolCount(src("group", { pools: { count: 1 } }), 8, ids(0))).toBe(1);
+    expect(sourcePoolCount(src("group", {}), 8, ids(0))).toBe(1);
+  });
+  it("a group's count is its body's: 8 in 4 pools name 4 — and 7 in 4 name 3 (a lone seed's pool has no fixture), still 4 pools: the right answer differs from the old observed count", () => {
+    expect(sourcePoolCount(src("group", { pools: { count: 4 } }), 8, ids(4))).toBe(4);
+    expect(sourcePoolCount(src("group", { pools: { count: 4 } }), 7, ids(3))).toBe(4);
+    expect(sourcePoolCount(src("group", { pools: { count: 2 } }), 5, ids(2))).toBe(2);
+  });
+  it("any other pool-id count is refused by name: a 4-pool group whose fixtures name none (the old silent one pool), an ungrouped source naming pools, too many, and a lone pool that names one", () => {
+    expect(() => sourcePoolCount(src("group", { pools: { count: 4 } }), 8, ids(0))).toThrow(SourcePoolsDisagree);
+    expect(() => sourcePoolCount(src("group", { pools: { count: 4 } }), 8, ids(0))).toThrow("advance: stage 1's posted body declares 4 pool(s) over a field of 8, so its fixtures name 4 pool id(s) — they name 0; no take is computed off a guess");
+    expect(() => sourcePoolCount(src("league", {}), 8, ids(2))).toThrow(SourcePoolsDisagree);
+    expect(() => sourcePoolCount(src("group", { pools: { count: 2 } }), 8, ids(3))).toThrow(SourcePoolsDisagree);
+    expect(() => sourcePoolCount(src("group", { pools: { count: 4 } }), 7, ids(4))).toThrow(SourcePoolsDisagree);
+  });
+  it("through playDivision: groups_ko whose product lists its group fixtures with no pool id refuses at the advance, by name — the positive pair plays through", async () => {
+    class PoolsUnlisted extends FakeMultiStageDriver {
+      override async listFixtures(): Promise<FixtureRow[]> { return (await super.listFixtures()).map((f) => ({ ...f, pool_id: null })); }
+    }
+    await expect(runOn(new PoolsUnlisted(), "LIFECYCLE", { row: "groups_ko" })).rejects.toThrow(/^advance: stage 1's posted body declares \d+ pool\(s\) over a field of \d+, so its fixtures name \d+ pool id\(s\) — they name 0/);
+    const ok = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "groups_ko" });
+    expect(ok.out.observed.stages[1]!.fixtures.length).toBeGreaterThan(0);
   });
 });
 
