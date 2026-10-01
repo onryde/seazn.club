@@ -53,3 +53,20 @@ export async function runQueue<W, T, R>(
   if (q.abort !== null) throw q.abort.error;
   return out;
 }
+
+/** A lock for a resource every worker shares (found live, T11 Step 7): the
+ *  case-org provision's entitlement bust flips the run's ONE owner to staff
+ *  for two admin calls and back, so a second worker's demotion inside the
+ *  first's window made the admin route answer 401. Tasks run one at a time,
+ *  in call order; a task's rejection reaches its own caller only, and the
+ *  next task still runs. One lock per run: each call makes a fresh one. */
+export function oneAtATime(): <T>(task: () => Promise<T>) => Promise<T> {
+  let tail: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const mine = tail.then(task);
+    // The chain waits for this task to SETTLE, never to succeed: a rejection
+    // must not stall every task queued behind it.
+    tail = mine.then(() => undefined, () => undefined);
+    return mine;
+  };
+}

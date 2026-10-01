@@ -124,7 +124,7 @@ import { resolveSportCfg } from "./lib/sport-cfg.ts";
 import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
-import { MAX_WORKERS, WorkersOutOfRange, runQueue } from "./lib/workers.ts";
+import { MAX_WORKERS, WorkersOutOfRange, oneAtATime, runQueue } from "./lib/workers.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -1001,6 +1001,13 @@ export function describeCommit(git: (args: string[]) => string): string {
 }
 
 export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
+  // W1-driving T11, found live (w1drv-t11-w3): provisionPlan's entitlement
+  // bust flips the case org's owner — the run's ONE owner, whichever worker
+  // seeds the org — to staff for two admin calls, then back. Two workers'
+  // windows overlapped, one's demotion landed between the other's calls, and
+  // the admin route answered 401 "Staff access required". The owner's staff
+  // flag is per USER, not per session, so the provisions take turns.
+  const ownerStaffWindow = oneAtATime();
   return {
     env: process.env,
     // harnessCommit and openDb do no async work. Each body runs inside a
@@ -1040,7 +1047,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
       try {
         return await prepareCaseOrg({
           sql: m.sql, transport: { raw }, base: ctx.base, session: ctx.session, userId: ctx.userId, plan: ctx.plan,
-          provision: (orgId, plan) => provisionPlan({ base: ctx.base, orgId, plan, ownerSession: ctx.session, sql: p.sql }),
+          provision: (orgId, plan) => ownerStaffWindow(() => provisionPlan({ base: ctx.base, orgId, plan, ownerSession: ctx.session, sql: p.sql })),
         }, input);
       } finally { await closeHandles(m, p); }
     },

@@ -1247,6 +1247,68 @@ describe("realDeps wiring (Task 7 M3)", () => {
     }
   });
 
+  // W1-driving T11, found live (w1drv-t11-w3, knockout|badminton|bwf|M1):
+  // the provision's entitlement bust flips the run's ONE owner to staff for
+  // two admin calls and back (bench plan.ts bustOrgEntitlements). Two workers
+  // share that owner, so one's demotion landed between the other's two calls
+  // and the admin route answered 401 "Staff access required". The loopback
+  // server here answers exactly that whenever the owner is not staff at the
+  // moment of the call, and stalls each POST so two windows WOULD overlap.
+  it("two workers' case orgs provisioned at once on ONE realDeps never overlap the owner's staff window (the live 401)", async () => {
+    let staff = false;
+    const events: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+      req.on("end", () => {
+        const reply = (status: number, v: unknown, cookie?: string) => {
+          res.writeHead(status, { "content-type": "application/json", ...(cookie === undefined ? {} : { "set-cookie": cookie }) });
+          res.end(JSON.stringify(v));
+        };
+        if (req.method === "POST" && req.url === "/api/orgs/active") return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${(JSON.parse(body) as { org_id: string }).org_id}; Path=/`);
+        if (req.url?.endsWith("/entitlement-override")) {
+          const answer = () => { events.push(`${req.method} ${req.url} staff=${String(staff)}`); return staff ? reply(200, { ok: true, data: {} }) : reply(401, { ok: false, error: "Staff access required" }); };
+          if (req.method === "POST") { setTimeout(answer, 25); return; }
+          return answer();
+        }
+        return reply(404, { ok: false, error: "not found" });
+      });
+    });
+    await new Promise<void>((r) => { server.listen(0, "127.0.0.1", r); });
+    try {
+      const { port } = server.address() as AddressInfo;
+      let n = 0;
+      const m: MatrixSql = {
+        userIdForEmail: async () => "u1",
+        insertCaseOrg: async (i) => ({ orgId: `o${++n}`, orgSlug: i.slug }),
+        listPlanKeys: async () => [],
+        variantKeysInBuilderOrder: async () => [],
+        denyFeature: async () => {},
+        planGrants: async () => [],
+        planLimit: async () => null,
+      };
+      // ONE owner behind both orgs: setOwnerStaff flips the same user, as the real SQL does.
+      const p = {
+        getOrgSubscriptionId: async () => "sub",
+        updateSubscriptionPlan: async () => {},
+        createSubscriptionForOrg: async () => {},
+        setOwnerStaff: async (o: string, on: boolean) => { staff = on; events.push(`staff ${o} ${String(on)}`); },
+      };
+      const f: DbFactories = { matrixSql: () => ({ sql: m, dispose: async () => {} }), planSql: () => ({ sql: p as never, dispose: async () => {} }) };
+      const base = `http://127.0.0.1:${port}`;
+      const real = realDeps(f);
+      const both = await Promise.allSettled([1, 2].map((k) => real.prepareCaseOrg({ base, session: { cookies: {} }, userId: "u1", plan: "pro" }, { name: `Matrix r ${k}`, slug: `m-r-${k}` })));
+      expect(both.map((s) => s.status), JSON.stringify(both.map((s) => (s.status === "rejected" ? String(s.reason) : "ok")))).toEqual(["fulfilled", "fulfilled"]);
+      // Each window opens and closes before the next opens: true, (POST, DELETE), false — twice, never nested.
+      const staffOnly = events.filter((e) => e.startsWith("staff ")).map((e) => e.split(" ")[2]);
+      expect(staffOnly).toEqual(["true", "false", "true", "false"]);
+      expect(events.filter((e) => e.includes("entitlement-override")).every((e) => e.endsWith("staff=true"))).toBe(true);
+      expect(events.filter((e) => e.includes("entitlement-override"))).toHaveLength(4);
+    } finally {
+      await new Promise<void>((r) => { server.close(() => { r(); }); });
+    }
+  });
+
   it("a case's org seeding: a throwing dispose neither leaks the other handle nor masks an in-flight DataDirMismatch", async () => {
     capture();
     const { f, log } = fakeDb({ mThrows: true, insert: new DataDirMismatch("/tmp/pg", "/var/other") });

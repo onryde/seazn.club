@@ -10,7 +10,7 @@
 //   a second call on the same inputs → the same answer (no state carried over).
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { MAX_WORKERS, WorkersOutOfRange, runQueue } from "../lib/workers.ts";
+import { MAX_WORKERS, WorkersOutOfRange, oneAtATime, runQueue } from "../lib/workers.ts";
 
 /** Yields to the microtask queue `n` times: an interleaving the property picks, deterministic per seed. */
 async function yields(n: number): Promise<void> {
@@ -194,5 +194,63 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts and wor
     // Anti-vacuity: every shape the property claims to cover was reached.
     expect(reach.runs).toBe(300);
     for (const [k, v] of Object.entries(reach)) expect(v, `reach.${k}`).toBeGreaterThan(0);
+  });
+});
+
+// Found live at T11 Step 7 (w1drv-t11-w3): the case-org provision's
+// entitlement bust flips the run's ONE owner to staff for two admin calls and
+// back (scripts/bench/lib/plan.ts bustOrgEntitlements). Workers share that
+// owner, so one worker's demotion landed inside another's window and the
+// admin route answered 401 "Staff access required". oneAtATime is the lock
+// that keeps those windows apart. Transitions, empty case first: never
+// called; called while idle; called while busy (queued, FIFO); a task that
+// rejects (its caller sees it, the next still runs); called again after it drained.
+describe("oneAtATime — a run-wide lock for a resource the workers share", () => {
+  it("empty case first: an idle lock (nothing queued) starts the first task at once and hands back its answer", async () => {
+    const lock = oneAtATime();
+    let started = false;
+    const p = lock(async () => { started = true; return "first"; });
+    await yields(2);
+    expect(started).toBe(true);
+    expect(await p).toBe("first");
+  });
+  it("concurrent tasks never overlap, run in call order, and each caller gets its own task's answer", async () => {
+    const lock = oneAtATime();
+    let active = 0;
+    let maxActive = 0;
+    const order: number[] = [];
+    const task = (n: number, wait: number) => async () => {
+      active++;
+      maxActive = Math.max(maxActive, active);
+      order.push(n);
+      await yields(wait);
+      active--;
+      return n * 10;
+    };
+    // The first waits longest: without the lock the others would start (and finish) inside it.
+    const out = await Promise.all([lock(task(1, 9)), lock(task(2, 1)), lock(task(3, 4))]);
+    expect(out).toEqual([10, 20, 30]);
+    expect(order).toEqual([1, 2, 3]);
+    expect(maxActive).toBe(1);
+  });
+  it("a task that rejects rejects ITS caller only; the next queued task still runs, and the lock is free afterwards", async () => {
+    const lock = oneAtATime();
+    const boom = new Error("bust refused");
+    const ran: string[] = [];
+    const first = lock(async () => { ran.push("a"); await yields(2); throw boom; });
+    const second = lock(async () => { ran.push("b"); return "b"; });
+    await expect(first).rejects.toBe(boom);
+    expect(await second).toBe("b");
+    expect(await lock(async () => { ran.push("c"); return "c"; })).toBe("c");
+    expect(ran).toEqual(["a", "b", "c"]);
+  });
+  it("two locks are independent: each run gets its own", async () => {
+    const a = oneAtATime();
+    const b = oneAtATime();
+    let active = 0;
+    let maxActive = 0;
+    const task = async () => { active++; maxActive = Math.max(maxActive, active); await yields(3); active--; };
+    await Promise.all([a(task), b(task)]);
+    expect(maxActive).toBe(2);
   });
 });
