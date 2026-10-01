@@ -49,6 +49,8 @@ export interface TriageRow {
   /** The wave cell, e.g. "W2 (T15-R4; T6-R1 had W4)". */
   readonly wave: string;
   readonly rule: string;
+  /** The "bracket draws (P1)" cell, e.g. "1 (draw-counts.json)", or "—". */
+  readonly draws: string;
 }
 
 /** The part of a committed results.json the table reads. */
@@ -92,6 +94,7 @@ export function triageRows(md: string): TriageRow[] {
       finalClass: c[5] ?? "",
       wave: c[6] ?? "",
       rule: c[7] ?? "",
+      draws: (c[8] ?? "").replace(/\s*\|\s*$/, "").trim(),
     };
   });
 }

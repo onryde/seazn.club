@@ -30,7 +30,7 @@ const loadCommitted = (run: string): RunLike => parseResults(JSON.parse(readFile
 
 const SHA = "abcdef012";
 const tri = (n: number, caseId: string, finalClass: string, wave: string, rule = "P9 a rule (detail)", judged = `run-a @ ${SHA}`): TriageRow =>
-  ({ n, caseId, judged, finalClass, wave, rule });
+  ({ n, caseId, judged, finalClass, wave, rule, draws: "—" });
 const kase = (caseId: string, state: string, failing: string[], reason = "a reason") =>
   ({ caseId, state, reason, checks: [...failing.map((id) => ({ id, verdict: "fail" })), { id: "passes", verdict: "pass" }] });
 const run = (cases: RunLike["cases"], harnessCommit = SHA): RunLike => ({ harnessCommit, cases });
@@ -95,6 +95,56 @@ describe("findings-table (T16-R4 m-6)", () => {
     expect(f.rows.length).toBe(product);
     expect(renderFindings(f.rows)).toBe(committedTable());
     console.info(`findings table: ${f.rows.length} product rows of ${rows.length}, ${f.files} results files, ${JSON.stringify(f.byWave)}`);
+  });
+
+  // Final review I-2 (FINAL-R1): TRIAGE's NON-product claims, bound to the
+  // committed files they rest on — _INDEX's "+ 30 harness reds now ✅, 0 unfit,
+  // 0 unclassified" and P1's ≥1-draw precondition. Each counts what it checked.
+  const L3 = (): RunLike => loadCommitted("w1drv-l3");
+  it("I-2: exactly one TRIAGE row per ❌ in w1drv-l3/results.json — none missing, duplicated or extra — numbered 1..n", () => {
+    const rows = triageRows(readFileSync(TRIAGE, "utf8"));
+    const reds = L3().cases.filter((c) => c.state === "red").map((c) => c.caseId).sort();
+    expect(reds.length, "w1drv-l3 holds no ❌ — the binding would be vacuous").toBeGreaterThan(0);
+    const named = rows.map((r) => r.caseId).sort();
+    expect(named.filter((id, i) => named[i - 1] === id), "a case has two TRIAGE rows").toEqual([]);
+    expect(reds.filter((id) => !named.includes(id)), "a ❌ with no TRIAGE row").toEqual([]);
+    expect(named.filter((id) => !reds.includes(id)), "a TRIAGE row for a case that is not ❌ in w1drv-l3").toEqual([]);
+    expect(rows.map((r) => r.n)).toEqual(rows.map((_, i) => i + 1));
+    console.info(`I-2: ${rows.length} TRIAGE rows = ${reds.length} ❌ in w1drv-l3`);
+  });
+  it("I-2: each harness row (final class ✅ works) is ✅ on the run it names, at the harness it names", () => {
+    const rows = triageRows(readFileSync(TRIAGE, "utf8")).filter((r) => r.finalClass !== "product");
+    expect(rows.length, "no harness row — the binding would be vacuous").toBeGreaterThan(0);
+    let checked = 0;
+    for (const r of rows) {
+      expect(r.finalClass, `row ${r.n}: a final class that is neither product nor ✅ works`).toBe("✅ works");
+      const m = /^([\w-]+(?:\/[\w-]+)?) @ ([0-9a-f]{9})$/.exec(r.judged);
+      expect(m, `row ${r.n}: judged-on not parsed: ${r.judged}`).not.toBeNull();
+      const res = loadCommitted(m![1]!);
+      expect(res.harnessCommit, `row ${r.n}: ${m![1]}`).toBe(m![2]);
+      expect(res.cases.find((c) => c.caseId === r.caseId)?.state, `row ${r.n}: ${r.caseId} on ${m![1]}`).toBe("works");
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    console.info(`I-2: ${checked} harness rows, each ✅ on its named run`);
+  });
+  it("I-2: the P1 draw column equals w1drv-l3-fr1/draw-counts.json — each P1 row's bracket draws, ≥ 1, counted on its judged run; every other row reads —", () => {
+    const rows = triageRows(readFileSync(TRIAGE, "utf8"));
+    const dc = JSON.parse(readFileSync(join(TRUTH_RUNS, "w1drv-l3-fr1/draw-counts.json"), "utf8")) as { cases: Record<string, { run: string; bracketDrawn: number }> };
+    const p1 = rows.filter((r) => r.rule.startsWith("P1"));
+    expect(p1.length, "no P1 row — the binding would be vacuous").toBeGreaterThan(0);
+    let checked = 0;
+    for (const r of rows) {
+      if (!r.rule.startsWith("P1")) { expect(r.draws, `row ${r.n}: a draw count on a row that is not P1`).toBe("—"); continue; }
+      const counted = dc.cases[r.caseId];
+      expect(counted, `row ${r.n}: ${r.caseId} is not in draw-counts.json`).toBeDefined();
+      expect(r.draws, `row ${r.n}`).toBe(`${counted!.bracketDrawn} (draw-counts.json)`);
+      expect(counted!.bracketDrawn, `row ${r.n}: P1 needs ≥ 1 drawn bracket fixture`).toBeGreaterThan(0);
+      expect(r.judged.startsWith(`w1drv-l3-fr1/${counted!.run} @ `), `row ${r.n}: counted on ${counted!.run}, judged on ${r.judged}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(p1.length);
+    console.info(`I-2: ${checked} P1 rows, each draw count equal to draw-counts.json`);
   });
 
   it("the CLI: 0 writes the table (twice, identically); 2 is usage; 3 an unreadable TRIAGE; 1 a refusal, with nothing written", () => {
