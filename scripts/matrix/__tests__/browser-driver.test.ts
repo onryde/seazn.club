@@ -18,13 +18,17 @@ import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
-import { API_ONLY_UI_WAVE, TEMPLATE_DRIVING } from "../lib/api-only-ui.ts";
+import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { fieldSizeFor } from "../lib/field-size.ts";
+import { builtAsPosted } from "../lib/scenarios/assertions.ts";
+import { Recorder, TEMPLATE_ENDS_ON, setUpDivision } from "../lib/scenarios/common.ts";
+import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
@@ -81,6 +85,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
   const args: Record<string, unknown[][]> = {};
   const base: BrowserPages = {
     createCompetitionUi: async (_c, input) => ({ id: "c1", org_id: ORG, name: input.name, slug: PRODUCT_COMP_SLUG, visibility: "unlisted", status: "draft" }),
+    createFromTemplateUi: async () => { throw new Error("fake pages: createFromTemplateUi was not given (the test drives no card)"); },
     createDivisionUi: async (_c, _slug, compId, input) => ({
       division: { id: "d1", competition_id: compId, name: input.name, slug: PRODUCT_DIV_SLUG, sport_key: input.sportKey, variant_key: input.variantKey, config: {}, status: "draft" },
       stages: builtFrom(input.row),
@@ -118,7 +123,7 @@ type Stub = HttpSide & { calls: string[] };
 const HTTP_METHODS = [
   "createCompetition", "createDivision", "getDivision", "postStages", "listStages", "addEntrants", "listEntrants", "start", "generate",
   "listFixtures", "fixtureState", "postStream", "forfeit", "withdraw", "completeStage", "rebuild", "standings", "publicStandings",
-  "patchDivisionConfig", "replaceStagesProbe", "ledger", "entrantMembers", "putLineup", "setMembers",
+  "patchDivisionConfig", "replaceStagesProbe", "ledger", "entrantMembers", "putLineup", "setMembers", "createFromTemplate", "readBackTemplate",
 ] as const;
 /** An http side that answers only what it was given and refuses the rest by name. */
 function stubHttp(over: Partial<Record<(typeof HTTP_METHODS)[number], (...a: never[]) => Promise<unknown>>>): Stub {
@@ -499,12 +504,12 @@ function templateOnlyCells(): Record<string, string> {
 }
 
 describe("BrowserDriver — API-only rows (D7)", () => {
-  it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, the two template-only cells abstain, and coverage exempts createDivision", async () => {
+  it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, and coverage exempts createDivision — while the two template-only cells are refused by name unless the case carries its template (Task 13)", async () => {
     const scopes = designScopes();
     const cells = templateOnlyCells();
     expect(cells).toEqual({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
     let checked = 0;
-    let abstained = 0;
+    let refused = 0;
     for (const row of API_ONLY_ROWS) {
       const wave = waveFor(row, scopes);
       for (const sport of SPORT_KEYS) {
@@ -513,21 +518,28 @@ describe("BrowserDriver — API-only rows (D7)", () => {
           return { id: "d9", slug: "d-api", sportKey: i.sportKey, variantKey: i.variantKey, config: {} };
         } });
         const { driver, pageCalls } = make({ http, spec: spec(row, sport) });
+        const tmpl = cells[`${row}|${sport}`];
+        if (tmpl !== undefined) {
+          // Ruling 47: the cell IS reachable — through its card, which only a case
+          // carrying the template drives. Without it no organiser act is right, so
+          // nothing is created, in the browser or over http.
+          const e = await built(driver, spec(row, sport)).catch((x: unknown) => x);
+          expect(e, `${row}|${sport}`).toBeInstanceOf(DriverMisuse);
+          expect((e as Error).message).toContain(`catalog template ${tmpl}`);
+          expect([pageCalls, http.calls], `${row}|${sport}`).toEqual([[], []]);
+          expect(driver.checks().filter((c) => c.id === "organiser-ui-path"), `${row}|${sport}`).toEqual([]);
+          refused++;
+          checked++;
+          continue;
+        }
         const b = await built(driver, spec(row, sport));
         expect(b.divSlug).toBe("d-api");
         expect(pageCalls, `${row}|${sport}`).toEqual(["createCompetitionUi"]);
         expect(http.calls, `${row}|${sport}`).toEqual(["createDivision"]);
-        const ui = only(driver, "organiser-ui-path");
-        const tmpl = cells[`${row}|${sport}`];
-        if (tmpl === undefined) {
-          expect(ui, `${row}|${sport}`).toMatchObject({ verdict: "fail", checked: 1, evidence: [`no organiser control builds ${row} → ${wave}`] });
-        } else {
-          expect(ui, `${row}|${sport}`).toMatchObject({ verdict: "abstain", checked: 0, reason: `reachable only through catalog template ${tmpl}; driving it → W1-driving` });
-          abstained++;
-        }
-        // The exemption is the row's route (api-only-ui.ts): design §8's wave for the row, or ruling 47's W1-driving on a template cell.
-        const route = tmpl === undefined ? API_ONLY_UI_WAVE[row] : TEMPLATE_DRIVING;
-        expect(route.wave, `${row}|${sport}`).toBe(tmpl === undefined ? wave : "W1-driving");
+        expect(only(driver, "organiser-ui-path"), `${row}|${sport}`).toMatchObject({ verdict: "fail", checked: 1, evidence: [`no organiser control builds ${row} → ${wave}`] });
+        // The exemption is the row's route (api-only-ui.ts): design §8's wave for the row.
+        const route = API_ONLY_UI_WAVE[row];
+        expect(route.wave, `${row}|${sport}`).toBe(wave);
         expect(only(driver, "mixed-driver-coverage"), `${row}|${sport}`).toMatchObject({ verdict: "pass", checked: 2, evidence: [`createDivision: exempt — → ${route.wave}: ${route.why}`] });
         // The http-built division is the one every later page object acts in.
         const bs = await driver.postStages("d9", stagesForRow(row)).catch((e: unknown) => e);
@@ -538,7 +550,7 @@ describe("BrowserDriver — API-only rows (D7)", () => {
     }
     expect(checked).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length);
     expect(checked).toBeGreaterThan(0);
-    expect(abstained).toBe(Object.keys(cells).length);
+    expect(refused).toBe(Object.keys(cells).length);
   });
 
   it("the §8 lookup has teeth: W4's scope names the knockout family's shapes and not the group's", () => {
@@ -1257,5 +1269,131 @@ describe("BrowserDriver — the roster seam is setup filler (ruling 47, W1-drivi
     expect((e as Error).message).toMatch(/Matrix Team 1/);
     expect(http.calls).not.toContain("setMembers");
     expect(driver.fillers).toEqual({});
+  });
+});
+
+// W1-driving Task 13 (ruling 47, D11): the two template-only cells are built
+// through their gallery card — ONE organiser act creates the competition, the
+// division and its stages, so both creation types run in the browser and no
+// stage body is ever posted. The fake product's instantiation reads the
+// catalog JSON itself (fake-driver.ts), never through lib/templates.ts.
+describe("BrowserDriver — the template card path (W1-driving Task 13)", () => {
+  const CATALOG = resolve(REPO, "apps/web/src/server/templates/catalog");
+  const rawStages = (key: string) => (JSON.parse(readFileSync(join(CATALOG, `${key}.json`), "utf8")) as { divisions: { stages: { kind: string; groups?: number }[] }[] }).divisions[0]!.stages;
+  const boxSpec = () => spec("group_only", "badminton", { variant: "short", template: "box-league", caseId: "group_only|badminton|short|LIFECYCLE" });
+  /** The card, as the fake product answers it: the product instantiates, the page hands back its answer. */
+  const cardOn = (http: FakeHttp, over: Partial<FromTemplateAnswer> = {}): Partial<BrowserPages> => ({
+    createFromTemplateUi: async (_c, key) => ({ ...http.instantiateTemplate(key), ...over }),
+  });
+  const input = { name: "Matrix group_only|badminton|short|LIFECYCLE", endsOn: TEMPLATE_ENDS_ON };
+
+  it("empty case first: a case with no template never drives a card — createFromTemplate is refused by name, nothing is created", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, spec: spec("league") });
+    await expect(driver.createFromTemplate("box-league", input)).rejects.toBeInstanceOf(DriverMisuse);
+    expect([pageCalls, http.calls]).toEqual([[], []]);
+  });
+
+  it("a template case calls createFromTemplateUi(\"box-league\"), records createCompetition AND createDivision as browser actions, never posts a stage, and has no organiser-ui-path check", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls, pageArgs } = make({ http, spec: boxSpec(), pages: cardOn(http) });
+    const out = await driver.createFromTemplate("box-league", input);
+    expect(pageCalls).toEqual(["createFromTemplateUi"]);
+    expect(pageArgs.createFromTemplateUi![0]!.slice(1)).toEqual(["box-league", input]);
+    // The read-back is the http side's; the HTTP create never ran, and no stage was posted anywhere.
+    expect(http.calls).toEqual(["instantiateTemplate", "readBackTemplate"]);
+    expect({ sport: out.division.sportKey, variant: out.division.variantKey, kinds: out.stages.map((s) => s.kind) }).toEqual({ sport: "badminton", variant: "short", kinds: rawStages("box-league").map((s) => s.kind) });
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 2, evidence: [] });
+    expect(driver.checks().filter((c) => c.id === "organiser-ui-path")).toEqual([]);
+    // The division the card built is the one every later page object acts in.
+    await driver.addEntrants(out.division.id, [{ displayName: "Matrix Player 1", seed: 1, kind: "individual" }]);
+    expect(pageArgs.addEntrantsUi![0]![1]).toEqual({ compSlug: out.competition.slug, divSlug: out.division.slug, divisionId: out.division.id });
+    await driver.postStages(out.division.id, stagesForRow("group_only")).catch(() => undefined);
+    expect(http.calls.filter((c) => c === "postStages")).toEqual(["postStages"]); // only the explicit call above, over http
+  });
+
+  it("setUpDivision on the template case: the card, never postStages, the template's own 16 entrants, and life-built-as-posted judged against the catalog JSON", async () => {
+    const http = new FakeHttp(ORG);
+    const s = boxSpec();
+    const { driver, pageCalls } = make({ http, spec: s, pages: { ...cardOn(http), addEntrantsUi: async (_c, w, es) => (await http.addEntrants(w.divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))) } });
+    const ctx = { driver, spec: s, orgSlug: ORG_SLUG, cfg: resolveSportCfg(s.sport, s.variant), tag: "t13", denied: [] };
+    const setup = await setUpDivision(ctx, new Recorder(), fieldSizeFor(s.row, "LIFECYCLE", s.template));
+    expect(pageCalls.filter((c) => c === "createFromTemplateUi" || c === "createCompetitionUi" || c === "createDivisionUi")).toEqual(["createFromTemplateUi"]);
+    expect(http.calls).not.toContain("postStages");
+    expect(http.calls).not.toContain("createCompetition");
+    expect(http.calls).not.toContain("createDivision");
+    // D11: the template's own field, read here from the catalog JSON.
+    const field = (JSON.parse(readFileSync(join(CATALOG, "box-league.json"), "utf8")) as { divisions: { entrantCount: number }[] }).divisions[0]!.entrantCount;
+    expect(setup.entrants.length).toBe(field);
+    expect(setup.built.posted.entrants.length).toBe(field);
+    // What was "posted" is the catalog's shape: sport, variant and every stage's kind and config.
+    expect({ sport: setup.built.posted.sport, variant: setup.built.posted.variant, config: setup.built.posted.config }).toEqual({ sport: "badminton", variant: "short", config: {} });
+    expect(setup.built.posted.stages.map((b) => ({ seq: b.seq, kind: b.kind, config: b.config }))).toEqual(rawStages("box-league").map((st, i) => ({ seq: i + 1, kind: st.kind, config: { pools: { count: st.groups } } })));
+    // Judged with no fixture observed (the fake Start seats none): every item but the seating holds.
+    const verdict = builtAsPosted(setup.built, { stages: [] } as never);
+    expect(verdict.checked).toBeGreaterThan(field);
+    expect(verdict.evidence.filter((e) => !/is seated in no fixture/.test(e))).toEqual([]);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass" });
+  });
+
+  it("the sequence: a second card in the same case goes over http (both types used their browser turn), recorded as http", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, spec: boxSpec(), pages: cardOn(http) });
+    await driver.createFromTemplate("box-league", input);
+    await driver.createFromTemplate("box-league", input);
+    expect(pageCalls).toEqual(["createFromTemplateUi"]);
+    expect(http.calls).toEqual(["instantiateTemplate", "readBackTemplate", "createFromTemplate"]);
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("guards, each by name: another template than the case's, a plain createCompetition on a template case, a createDivision after the card", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, spec: boxSpec(), pages: cardOn(http) });
+    await expect(driver.createFromTemplate("t20-super8", input)).rejects.toThrow(/carries template box-league/);
+    await expect(driver.createCompetition({ name: "x", slug: "x" })).rejects.toThrow(/created by its card/);
+    expect(pageCalls).toEqual([]);
+    const out = await driver.createFromTemplate("box-league", input);
+    const e = await driver.createDivision(out.competition.id, { name: "x", slug: "d", sportKey: "badminton", variantKey: "short" }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(DriverMisuse);
+    expect((e as Error).message).toContain("built through catalog template box-league");
+    expect(http.calls.filter((c) => c === "createDivision")).toEqual([]);
+  });
+
+  it("the read-back's refusals pass through and register nothing: a competition in another org, a degraded visibility", async () => {
+    for (const [what, err] of [["org", new OrgMismatch(ORG, "org-other")], ["visibility", new VisibilityDegraded("tmpl-box-league")]] as const) {
+      const http = new FakeHttp(ORG);
+      http.readBackTemplate = async () => { http.log("readBackTemplate"); throw err; };
+      const { driver } = make({ http, spec: boxSpec(), pages: cardOn(http) });
+      await expect(driver.createFromTemplate("box-league", input), what).rejects.toBe(err);
+      const add = await driver.addEntrants("d1", [{ displayName: "Matrix Player 1", seed: 1, kind: "individual" }]).catch((x: unknown) => x);
+      expect(add, what).toBeInstanceOf(DriverMisuse);
+    }
+  });
+
+  it("the setup filler on the template path goes to HTTP and is counted as filler: setMembers, putLineup, confirmSeedProposal, challenge, americanoView — no page object, coverage untouched", async () => {
+    const http = new FakeHttp(ORG);
+    const row = (e: { displayName: string; seed: number; kind: "individual" | "team" | "pair" }, i: number) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind });
+    const { driver, pageCalls } = make({ http, spec: boxSpec(), pages: { ...cardOn(http), addEntrantsUi: async (_c, _w, es) => es.map((e, i) => row({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind }, i)) } });
+    http.setMembers = async () => { http.log("setMembers"); return []; };
+    http.putLineup = async () => { http.log("putLineup"); return { checked: true, warnings: [] }; };
+    http.confirmSeedProposal = async () => { http.log("confirmSeedProposal"); return { proposalId: "p", filled: 0, fixtures: [] }; };
+    http.challenge = async () => { http.log("challenge"); return { fixture_id: "f", ladder_order: [] }; };
+    http.americanoView = async () => { http.log("americanoView"); return { mode: "americano", rounds: [], leaderboard: [] }; };
+    const out = await driver.createFromTemplate("box-league", input);
+    // setMembers rides on a browser add with members (the roster seam, D2).
+    await driver.addEntrants(out.division.id, [{ displayName: "Matrix Team 1", seed: 1, kind: "team", members: [{ fullName: "P", squadNumber: 1, isCaptain: true }] }]);
+    const coverage = only(driver, "mixed-driver-coverage");
+    const pages = pageCalls.length;
+    await driver.putLineup("f1", "e1", [{ person_id: "p", slot: "starting", roles: [] }]);
+    await driver.confirmSeedProposal(out.stages[0]!.id, { proposalId: "p" });
+    await driver.challenge(out.stages[0]!.id, "e2", "e1");
+    await driver.americanoView(out.stages[0]!.id);
+    expect(driver.fillers).toEqual({ setMembers: 1, putLineup: 1, confirmSeedProposal: 1, challenge: 1, americanoView: 1 });
+    expect(http.calls.filter((c) => ["setMembers", "putLineup", "confirmSeedProposal", "challenge", "americanoView"].includes(c))).toEqual(["setMembers", "putLineup", "confirmSeedProposal", "challenge", "americanoView"]);
+    // No filler reached a page object: the only browser acts are the card and the add.
+    expect(pageCalls).toEqual(["createFromTemplateUi", "addEntrantsUi"]);
+    expect(pageCalls.length).toBe(pages);
+    expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
+    expect(coverage).toMatchObject({ verdict: "pass", checked: 3, evidence: [] });
   });
 });

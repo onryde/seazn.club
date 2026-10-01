@@ -3,12 +3,13 @@
 // reds HERE, by name, not as a timeout mid-run. The product is read as TEXT —
 // nothing is imported from apps/web (R3) — and expected values come from the
 // product's text and the bench's own constants, never from selectors.ts.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
-import { MissingLabel, DATA, NAME, PAD_PINS, TESTID, UnreadableLiteral, UnrenderableName, literalText, renderedName, templateLabel } from "../lib/browser/selectors.ts";
+import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, literalText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
+import { UnknownTemplate } from "../lib/templates.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -60,7 +61,7 @@ describe("selectors are pinned to the product's text", () => {
       if (tag !== undefined && !d.needle.includes(`<${tag} `)) out.push(`${k}: element ${tag} not in needle ${d.needle}`);
       return out;
     });
-    expect(Object.keys(DATA).length).toBe(12);
+    expect(Object.keys(DATA).length).toBe(13);
     expect(wrong).toEqual([]);
   });
 
@@ -131,10 +132,12 @@ describe("selectors are pinned to the product's text", () => {
       if (n.text !== `${before}${ui[n.dictKey]}${after}`) out.push(`${k}: text ${JSON.stringify(n.text)} is not ${JSON.stringify(`${before}${ui[n.dictKey]}${after}`)}`);
       return out;
     });
-    expect(decorated).toBe(1);
+    // W1-driving Task 13: the template sheet's Ends on is the same decorated label (template-gallery.tsx:458).
+    expect(decorated).toBe(2);
     expect(wrong).toEqual([]);
     // Witness, read off competition-wizard.tsx:244 and en "comp.wizard.endsOn": "Ends on" today.
     expect(NAME.endsOn.text).toBe("Ends on *");
+    expect(NAME.templateEndsOn.text).toBe("Ends on *");
   });
 
   it("a dictionary name its component decorates must declare it: no plain dictKey pin whose key the file renders inside a template", () => {
@@ -187,5 +190,36 @@ describe("selectors are pinned to the product's text", () => {
 
   it("templateLabel refuses a row the dictionary has no label for, by name", () => {
     expect(() => templateLabel("no_such_row" as TemplateRowKey)).toThrow(MissingLabel);
+  });
+});
+
+// W1-driving Task 13: the gallery composes each card's testid from the
+// template's key (template-gallery.tsx:242). Pinned as the product's own
+// composition — the prefix is read out of the needle, never typed — and every
+// catalog key composes a testid the gallery renders.
+describe("the template card's composed testid (W1-driving Task 13)", () => {
+  const CATALOG = "apps/web/src/server/templates/catalog";
+  it("the composition is in the gallery, verbatim, and the prefix is the needle's own", () => {
+    expect(TEMPLATE_CARD.file).toBe("apps/web/src/components/v2/template-gallery.tsx");
+    expect(src(TEMPLATE_CARD.file)).toContain(TEMPLATE_CARD.needle);
+    const prefix = /^data-testid=\{`([\w-]+)\$\{template\.key\}`\}$/.exec(TEMPLATE_CARD.needle)?.[1];
+    expect(prefix).toBe("template-card-");
+    // Anchored on `="`-free JSX: the gallery passes the key, and the card is a button.
+    expect(src(TEMPLATE_CARD.file)).toMatch(/<button\s+type="button"\s+onClick=\{onSelect\}\s+data-testid=\{`template-card-\$\{template\.key\}`\}/);
+  });
+  it("every catalog template's key composes its card testid; an unknown or unsafe key is refused by name", () => {
+    const keys = readdirSync(resolve(REPO, CATALOG)).filter((f) => f.endsWith(".json")).map((f) => (JSON.parse(src(`${CATALOG}/${f}`)) as { key: string }).key);
+    expect(keys.length).toBeGreaterThan(0);
+    const prefix = /`([\w-]+)\$\{/.exec(TEMPLATE_CARD.needle)![1]!;
+    for (const key of keys) expect(templateCardTestid(key), key).toBe(`${prefix}${key}`);
+    for (const bad of ["", "no-such-template", "box-league\"]", "../box-league"]) expect(() => templateCardTestid(bad), JSON.stringify(bad)).toThrow(UnknownTemplate);
+  });
+  it("the detail sheet's CTA, its form and its two fields are the product's", () => {
+    expect(TESTID.templateDetailSubmit).toMatchObject({ id: "template-detail-submit", file: "apps/web/src/components/v2/template-gallery.tsx" });
+    expect(DATA.templateDetailForm).toMatchObject({ selector: 'form[id="template-detail-form"]', file: "apps/web/src/components/v2/template-gallery.tsx" });
+    // The CTA submits THAT form (the button sits in the modal's footer, outside it).
+    expect(src(TESTID.templateDetailSubmit.file)).toContain('form="template-detail-form"');
+    expect(NAME.templateName).toMatchObject({ dictKey: "comp.wizard.name.label", file: "apps/web/src/components/v2/template-gallery.tsx" });
+    expect(NAME.templateName.text).toBe(enUi()["comp.wizard.name.label"]);
   });
 });

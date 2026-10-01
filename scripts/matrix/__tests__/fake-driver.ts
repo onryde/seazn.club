@@ -9,6 +9,9 @@
 // playStage (per-round generate, pair rounds, byes) is witnessed DB-free, and
 // FakeKnockoutDriver does the same for a bracket (M1's progression, F1's
 // first-round-only rule).
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import { generatePagePlayoff, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
@@ -21,12 +24,32 @@ import type { StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { wireCodeFor } from "./product-text.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
+
+/** A catalog template as the product's JSON spells it (server/templates/catalog). */
+export interface RawCatalogTemplate {
+  key: string;
+  version: number;
+  divisions: { sportKey: string; variantKey: string; entrantKind: string; entrantCount: number; stages: { kind: string; groups?: number; points?: unknown; config?: Record<string, unknown>; progression?: unknown }[] }[];
+}
+const CATALOG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/templates/catalog");
+/** The catalog file, read here as text — never through lib/templates.ts. */
+export function rawCatalogTemplate(key: string): RawCatalogTemplate {
+  return JSON.parse(readFileSync(join(CATALOG_DIR, `${key}.json`), "utf8")) as RawCatalogTemplate;
+}
+/** usecases/templates.ts effectiveStageConfig (text-pinned by templates.test.ts). */
+function templateStageConfig(st: RawCatalogTemplate["divisions"][number]["stages"][number]): Record<string, unknown> {
+  const cfg: Record<string, unknown> = {};
+  if (st.kind === "group" && st.groups !== undefined) cfg.pools = { count: st.groups };
+  if (st.points !== undefined) cfg.points = st.points;
+  Object.assign(cfg, st.config ?? {});
+  return cfg;
+}
 
 /** Key-sorted JSON, the product's canonicalJson comparison (divisions.ts:852-855). */
 function canonical(v: unknown): string {
@@ -128,6 +151,48 @@ export class FakeLeagueDriver implements OrganiserDriver {
     });
   }
   listStages(): Promise<StageRef[]> { return settle(() => { this.log("listStages"); return this.stage ? [{ ...this.stage }] : []; }); }
+
+  // --- W1-driving Task 13: the product's from-template -------------------------------------------------
+  // usecases/templates.ts createFromTemplate (pinned at 32e942711): one
+  // competition, its catalog division (sport, variant, the parsed preset), the
+  // stage rows at seq si + 1 with effectiveStageConfig's config and the
+  // progression verbatim, and NO entrant (templates.ts:351-366). The league
+  // fake holds one stage, so a multi-stage template is refused by name.
+  /** Every createFromTemplate the HTTP path made, as asked. */
+  readonly templateCalls: { key: string; input: { name: string; endsOn: string } }[] = [];
+  /** A test's edit of the catalog JSON before the fake instantiates it. */
+  templateOverride: ((raw: RawCatalogTemplate) => RawCatalogTemplate) | null = null;
+  #instantiate(key: string): FromTemplateAnswer {
+    const raw0 = rawCatalogTemplate(key);
+    const raw = this.templateOverride === null ? raw0 : this.templateOverride(raw0);
+    const d = raw.divisions[0]!;
+    if (raw.divisions.length !== 1 || d.stages.length !== 1) throw new Error(`fake: league only — the league fake instantiates a one-division, one-stage template (${key} has ${raw.divisions.length} division(s), ${d.stages.length} stage(s))`);
+    this.sport = d.sportKey;
+    this.variant = d.variantKey;
+    this.cfg = resolveSportCfg(d.sportKey, d.variantKey, {});
+    this.divisionConfig = { ...(resolveSportCfg(d.sportKey, d.variantKey, {}) as Record<string, unknown>) };
+    const st = d.stages[0]!;
+    this.stage = { id: "s1", seq: 1, kind: st.kind, config: templateStageConfig(st), status: "pending" };
+    return { competitionId: "c1", slug: `tmpl-${key}`, visibility: "public", divisions: [{ id: "d1", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: key, templateVersion: raw.version };
+  }
+  #readBack(a: FromTemplateAnswer): FromTemplateOut {
+    return {
+      competition: { id: a.competitionId, slug: a.slug, orgId: this.orgId },
+      division: { id: a.divisions[0]!.id, slug: "d", sportKey: this.sport, variantKey: this.variant, config: { ...this.divisionConfig } },
+      stages: this.stage === null ? [] : [{ ...this.stage }],
+    };
+  }
+  /** The card's product side (what the gallery's POST does), for the browser tests' fake page. */
+  instantiateTemplate(key: string): FromTemplateAnswer { this.log("instantiateTemplate", key); return this.#instantiate(key); }
+  /** HttpDriver.readBackTemplate's product side. */
+  readBackTemplate(a: FromTemplateAnswer): Promise<FromTemplateOut> { return settle(() => { this.log("readBackTemplate"); return this.#readBack(a); }); }
+  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+    return settle(() => {
+      this.log("createFromTemplate", key);
+      this.templateCalls.push({ key, input: { ...input } });
+      return this.#readBack(this.#instantiate(key));
+    });
+  }
   /** entrant id → its stored roster, in the product's order; person ids `p-<entrant>-<m>`. */
   members = new Map<string, EntrantMember[]>();
   /** `<fixture>|<entrant>` → the lineup last PUT (fixtures.ts putLineup replaces it whole). */

@@ -3,7 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
-import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
 import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
@@ -51,6 +51,66 @@ describe("HttpDriver — org pinning (Review Focus 4)", () => {
   it("the happy path returns the ref", async () => {
     const { t } = fake([() => ok(created(), 201)]);
     expect(await drv(t).createCompetition({ name: "M", slug: "m-1" })).toEqual({ id: "c1", slug: "m-1", orgId: "org-1" });
+  });
+});
+
+// W1-driving Task 13: POST /competitions/from-template answers FromTemplateResult
+// (api-v1/schemas.ts:1205-1226) — ids and the applied visibility, no org id and
+// no sport — so the driver reads the competition, division and stages back.
+describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
+  const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const answer = (over: Record<string, unknown> = {}) => ({ competitionId: "c9", slug: "box-league", visibility: "public", divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over });
+  const division = { id: "d9", slug: "main", sport_key: "badminton", variant_key: "short", config: { bestOf: 3 } };
+  const comp = (over: Record<string, unknown> = {}) => ({ id: "c9", slug: "box-league", org_id: "org-1", visibility: "public", ...over });
+  const replies = (o: { answer?: Record<string, unknown>; comp?: Record<string, unknown>; stages?: unknown[] } = {}) => [
+    (c: Call) => (c.method === "POST" && c.path === "/api/v1/competitions/from-template" ? ok(answer(o.answer), 201) : undefined),
+    (c: Call) => (c.path === "/api/v1/competitions/c9" ? ok(comp(o.comp)) : undefined),
+    (c: Call) => (c.path === "/api/v1/divisions/d9" ? ok(division) : undefined),
+    (c: Call) => (c.path === "/api/v1/divisions/d9/stages" ? ok(o.stages ?? [{ id: "s1", seq: 1, kind: "group", config: { pools: { count: 4 } }, status: "pending" }]) : undefined),
+  ];
+
+  it("the visibility it expects is the product's default for an omitted one (schemas.ts CreateFromTemplate)", () => {
+    const text = readFileSync(resolve(REPO_ROOT, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
+    const block = text.slice(text.indexOf("export const CreateFromTemplate"), text.indexOf("export type CreateFromTemplate"));
+    expect(block).toContain(`visibility: Visibility.default("${TEMPLATE_VISIBILITY}")`);
+  });
+
+  it("POSTs {template_key, name, ends_on} — no visibility, as the gallery sends none — then reads the competition, division and stages back", async () => {
+    const { t, calls } = fake(replies());
+    const out = await drv(t).createFromTemplate("box-league", { name: "Matrix x", endsOn: "2030-12-31" });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "POST /api/v1/competitions/from-template", "GET /api/v1/competitions/c9", "GET /api/v1/divisions/d9", "GET /api/v1/divisions/d9/stages",
+    ]);
+    expect(calls[0]!.body).toEqual({ template_key: "box-league", name: "Matrix x", ends_on: "2030-12-31" });
+    expect(out).toEqual({
+      competition: { id: "c9", slug: "box-league", orgId: "org-1" },
+      division: { id: "d9", slug: "main", sportKey: "badminton", variantKey: "short", config: { bestOf: 3 } },
+      stages: [{ id: "s1", seq: 1, kind: "group", config: { pools: { count: 4 } }, status: "pending" }],
+    });
+  });
+
+  it("refuses, by name: a competition in another org, an applied visibility other than the default (note or not), a template with other than one division, stages that are not the ones it created", async () => {
+    const cases: [string, Parameters<typeof replies>[0], new (...a: never[]) => Error][] = [
+      ["org", { comp: { org_id: "org-2" } }, OrgMismatch],
+      ["degraded, with the note", { comp: { visibility: "private" }, answer: { visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 } } }, VisibilityDegraded],
+      ["private, no note", { comp: { visibility: "private" } }, VisibilityDegraded],
+      ["two divisions", { answer: { divisions: [{ id: "d9", stages: [] }, { id: "d8", stages: [] }] } }, DriverMisuse],
+      ["other stages", { stages: [{ id: "s7", seq: 1, kind: "group", config: {}, status: "pending" }] }, DriverMisuse],
+    ];
+    let refused = 0;
+    for (const [what, o, cls] of cases) {
+      const { t } = fake(replies(o));
+      await expect(drv(t).createFromTemplate("box-league", { name: "M", endsOn: "2030-12-31" }), what).rejects.toBeInstanceOf(cls);
+      refused++;
+    }
+    expect(refused).toBe(cases.length);
+  });
+
+  it("readBackTemplate alone (the browser path's read-back) makes no POST", async () => {
+    const { t, calls } = fake(replies());
+    const out = await drv(t).readBackTemplate(answer() as never);
+    expect(posts(calls)).toEqual([]);
+    expect(out.stages.map((s) => s.id)).toEqual(["s1"]);
   });
 });
 

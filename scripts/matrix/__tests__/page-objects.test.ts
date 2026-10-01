@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { NoProductResponse } from "../lib/browser/respond.ts";
-import { COMPETITION_ENDS_ON } from "../lib/browser/pages/competition.ts";
+import { COMPETITION_ENDS_ON, createFromTemplateUi } from "../lib/browser/pages/competition.ts";
 import { FORFEIT_SIDE_TESTID_PREFIX, FORFEIT_TESTID, PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, TAP_WAIT_TIMEOUT_MS } from "../../bench/lib/drivers/scorer.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import {
@@ -30,7 +30,7 @@ import { PUBLIC_STANDINGS_TAB, championFrom, publicPanelSelector, publicTabSelec
 import { ALL_FILTER, fixtureLinkSelector, fixtureRowSelector, showAllFixtures } from "../lib/browser/pages/run-sheet.ts";
 import { GeneratedWithoutFixtureNumbers, newestCreatedFixtureNo, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
-import { DATA, NAME, TESTID, templateLabel } from "../lib/browser/selectors.ts";
+import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -1067,5 +1067,113 @@ describe("the run sheet, pictured once it shows every fixture (Task 14 carry 2)"
     const v = visual(s.evidence);
     expect([v.verdict, v.checked]).toEqual(["fail", 2]);
     expect(v.evidence.map((e) => e.split(" (sha256")[0])).toEqual(["run-sheet-all: identical to run-sheet-all-before"]);
+  });
+});
+
+// W1-driving Task 13 (ruling 47): the template card. The walk is the
+// product's own (template-gallery.tsx, Step 0): /o/<org>/c/new → the card →
+// the detail sheet's form (name, Ends on) → "Use this template", which POSTs
+// /api/v1/competitions/from-template; a created competition router.push()es
+// to its page, a degraded one opens the degrade modal and stays on /c/new.
+describe("createFromTemplateUi: the card, the sheet, the product's answer", () => {
+  const BASE = "http://localhost:3999";
+  interface Resp { request(): { method(): string }; url(): string; status(): number; json(): Promise<unknown> }
+  interface Loc { d: string; [k: string]: unknown }
+  const answer = (over: Record<string, unknown> = {}) => ({
+    competitionId: "comp-1", slug: "box-league-1", visibility: "public", divisions: [{ id: "div-1", stages: [{ id: "st-1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over,
+  });
+  function galleryPage(o: { degraded?: boolean } = {}) {
+    const log: string[] = [];
+    let screen = 0;
+    let url = "about:blank";
+    type W = { pred: (r: Resp) => boolean; resolve: (r: Resp) => void; timer: ReturnType<typeof setTimeout> };
+    const waiters: W[] = [];
+    const emit = (r: Resp) => { for (const w of [...waiters]) if (w.pred(r)) { clearTimeout(w.timer); waiters.splice(waiters.indexOf(w), 1); w.resolve(r); } };
+    const resp = (path: string, data: unknown): Resp => ({ request: () => ({ method: () => "POST" }), url: () => `${BASE}${path}`, status: () => 201, json: () => Promise.resolve({ ok: true, data }) });
+    const act = (line: string) => { log.push(line); screen++; };
+    const loc = (d: string): Loc => ({
+      d,
+      getByLabel: (t: string, n: { exact: boolean }) => loc(`${d} label:${t}${n.exact ? "" : " (inexact)"}`),
+      fill: async (v: string) => act(`fill ${d} = ${v}`),
+      waitFor: async () => undefined,
+      first: () => loc(d),
+      elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
+      click: async () => {
+        act(`click ${d}`);
+        if (d !== `testid:${TESTID.templateDetailSubmit.id}`) return;
+        const data = answer(o.degraded ? { visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 } } : {});
+        emit(resp("/api/v1/competitions/from-template", data));
+        if (!o.degraded) url = `${BASE}${paths.competition("org", "box-league-1")}`;
+      },
+    });
+    const page = {
+      goto: async (u: string) => { log.push(`goto ${new URL(u).pathname}`); url = u; },
+      url: () => url,
+      request: { post: async () => ({ ok: () => true, status: () => 200 }) },
+      getByTestId: (id: string) => loc(`testid:${id}`),
+      getByLabel: (t: string) => loc(`page label:${t}`),
+      locator: (sel: string) => loc(sel),
+      waitForResponse: (pred: (r: Resp) => boolean, t: { timeout: number }): Promise<Resp> => new Promise((resolveW, reject) => {
+        const w: W = { pred, resolve: resolveW, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); const e = new Error("Timeout"); e.name = "TimeoutError"; reject(e); }, t.timeout) };
+        waiters.push(w);
+      }),
+      waitForURL: async (pred: (u: URL) => boolean) => { log.push("waitForURL"); if (!pred(new URL(url))) throw new Error(`fake: never landed (at ${url})`); },
+      waitForFunction: async (fn: (a: unknown) => unknown, arg: { els: { d: string }[] }) => {
+        const v = fn(arg);
+        log.push(`${String(v)} ${arg.els.map((e) => e.d).join(",")}`);
+        return { jsonValue: async () => v, dispose: async () => undefined };
+      },
+      evaluate: async () => ({ scrollWidth: 1280, clientWidth: 1280 }),
+      screenshot: async () => new TextEncoder().encode(`screen ${screen}`),
+    };
+    const files = new Map<string, Uint8Array>();
+    const fs: EvidenceFs = {
+      mkdir: () => undefined,
+      writeFile: (p, data) => { log.push(`shot ${p.split("/").pop()!.replace(/\.png$/, "")}`); files.set(p, data); },
+      readFile: (p) => { const f = files.get(p); if (f === undefined) throw new Error(`ENOENT ${p}`); return f; },
+    };
+    const evidence = new Evidence("/r", "case-1", fs);
+    const ctx = { page: page as unknown as PageCtx["page"], base: BASE, orgSlug: "org", holdMs: 3000, evidence };
+    return { log, ctx, evidence };
+  }
+  const INPUT = { name: "Matrix group_only|badminton|short|LIFECYCLE", endsOn: "2030-12-31" };
+  const form = DATA.templateDetailForm.selector;
+  const card = `testid:${templateCardTestid("box-league")}`;
+  const visual = (ev: Evidence) => ev.checks().find((c) => c.id === "visual-evidence")!;
+
+  it("the walk: /c/new, the card once hydrated, the sheet's name and Ends on (scoped to its form), pictured, then Use this template — answered by the product, landed on the competition", async () => {
+    const g = galleryPage();
+    const out = await createFromTemplateUi(g.ctx, "box-league", INPUT);
+    expect(out).toEqual(answer());
+    expect(g.log).toEqual([
+      `goto ${paths.competitionNew("org")}`,
+      `hydrated ${card}`,
+      `click ${card}`,
+      `fill ${form} label:${NAME.templateName.text} = ${INPUT.name}`,
+      `fill ${form} label:${NAME.templateEndsOn.text} = ${INPUT.endsOn}`,
+      "shot 01-competition-from-template-before",
+      `click testid:${TESTID.templateDetailSubmit.id}`,
+      "waitForURL",
+      "shot 01-competition-from-template",
+    ]);
+    // The names are the product's: "Name", and the decorated "Ends on *".
+    expect([NAME.templateName.text, NAME.templateEndsOn.text]).toEqual(["Name", "Ends on *"]);
+    expect(visual(g.evidence)).toMatchObject({ verdict: "pass", checked: 2 });
+  });
+
+  it("a degraded create stays on /c/new behind the degrade modal: the answer comes back WITHOUT a wait for a landing that never comes, pictured", async () => {
+    const g = galleryPage({ degraded: true });
+    const out = await createFromTemplateUi(g.ctx, "box-league", INPUT);
+    expect(out).toMatchObject({ visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max" } });
+    expect(g.log).not.toContain("waitForURL");
+    expect(g.log.at(-1)).toBe("shot 01-competition-from-template-degraded");
+  });
+
+  it("an unsafe or unknown template key is refused by name before any navigation", async () => {
+    const g = galleryPage();
+    for (const key of ["", "box league", "box-league\"]", "no-such-template"]) {
+      await expect(createFromTemplateUi(g.ctx, key, INPUT), JSON.stringify(key)).rejects.toThrow();
+    }
+    expect(g.log).toEqual([]);
   });
 });

@@ -18,7 +18,7 @@ import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  DRIVING_WAVE, LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
+  LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, TEMPLATE_ENDS_ON, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
   type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
@@ -1049,12 +1049,9 @@ describe("1b: a stage whose fixtures are ALL finished must complete — in EVERY
 });
 
 describe("deferrals are named", () => {
-  it("the driving wave is the one ruling 28 (Q-A) names in the programme index", () => {
-    const index = readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md"), "utf8");
-    const named = /^28\. \*\*Q-A — W1a's deferred driving work becomes a "([\w-]+)" wave/m.exec(index)?.[1];
-    expect(named).toBeDefined();
-    expect(DRIVING_WAVE).toBe(named);
-  });
+  // W1-driving Task 13: ruling 28's DRIVING_WAVE pin is deleted with the
+  // constant — no deferral names the driving wave any more (the Q-A guard in
+  // scenario-catalogue.test.ts reads the shipped harness for it).
   // W1-driving Task 8: the last format deferral (americano/mexicano) is
   // deleted — both rows are DRIVEN (americano-loop.ts) and reach the driver.
   it.each(["americano", "mexicano"] as const)("W1-driving Task 8: %s is no longer deferred — it reaches the driver (and the league fake refuses its stage by name)", async (row) => {
@@ -1993,5 +1990,71 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(r.out.observed.stages[0]!.complete).toMatchObject({ status: 200, code: null, completed: false });
     // W1-driving Task 7 (false premise 16): the open-format cascade is judged by the abandon model, not the forfeit one.
     expect(r.checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");
+  });
+});
+
+// W1-driving Task 13 (ruling 47, D11): a case carrying a catalog template sets
+// up through ONE organiser act, createFromTemplate — the product builds the
+// competition, the division and its stages, so no stage body is posted. What
+// the case "posted" is the catalog's shape, read here from the JSON.
+describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
+  const CATALOG = resolve(REPO, "apps/web/src/server/templates/catalog");
+  const box = JSON.parse(readFileSync(resolve(CATALOG, "box-league.json"), "utf8")) as { divisions: { sportKey: string; variantKey: string; entrantCount: number; stages: { kind: string; groups: number }[] }[] };
+  const boxCtx = (driver: FakeLeagueDriver, over: Partial<CaseSpec> = {}, cfg?: unknown): ScenarioContext => {
+    const spec: CaseSpec = { caseId: "group_only|badminton|short|LIFECYCLE", row: "group_only", sport: "badminton", variant: "short", scenario: "LIFECYCLE", canary: false, template: "box-league", ...over };
+    return { driver, spec, orgSlug: "o", cfg: cfg ?? resolveSportCfg(spec.sport, spec.variant), tag: "t", denied: [] };
+  };
+
+  it("empty case first: a case without a template takes the builder path, exactly as before (createCompetition → createDivision → postStages)", async () => {
+    const driver = new FakeLeagueDriver();
+    await setUpDivision(ctxFor(driver, "LIFECYCLE"), new Recorder(), 2);
+    expect(driver.calls.slice(0, 3)).toEqual(["createCompetition", "createDivision", "postStages"]);
+    expect(driver.calls).not.toContain("createFromTemplate");
+  });
+
+  it("a template case: createFromTemplate (name and the synthetic end date), then entrants, start and the read-back — never createCompetition, createDivision or postStages", async () => {
+    const driver = new FakeLeagueDriver();
+    const ctx = boxCtx(driver);
+    const setup = await setUpDivision(ctx, new Recorder(), box.divisions[0]!.entrantCount);
+    expect(driver.calls).toEqual(["createFromTemplate", "addEntrants", "start", "listStages", "getDivision", "listEntrants"]);
+    expect(driver.templateCalls).toEqual([{ key: "box-league", input: { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON } }]);
+    // The synthetic date is a real ISO day the product's z.iso.date() takes, far past any run.
+    expect(TEMPLATE_ENDS_ON).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(Date.parse(TEMPLATE_ENDS_ON)).toBeGreaterThan(Date.parse("2026-12-31"));
+    const d = box.divisions[0]!;
+    expect({ sport: setup.built.posted.sport, variant: setup.built.posted.variant }).toEqual({ sport: d.sportKey, variant: d.variantKey });
+    expect(setup.built.posted.stages.map((b) => ({ seq: b.seq, kind: b.kind, config: b.config }))).toEqual(d.stages.map((st, i) => ({ seq: i + 1, kind: st.kind, config: { pools: { count: st.groups } } })));
+    expect(setup.entrants.length).toBe(d.entrantCount);
+    expect(setup.stages.map((s) => s.kind)).toEqual(d.stages.map((s) => s.kind));
+    expect(setup.competition.orgId).toBe(driver.orgId);
+  });
+
+  it("a team template seats full rosters, read back per entrant, as the builder path does (D2)", async () => {
+    // The league fake holds one stage, so the team case is a one-stage template the test writes:
+    // the product's own t20-super8 division, its first stage alone.
+    const driver = new FakeLeagueDriver();
+    driver.templateOverride = (raw) => ({ ...raw, divisions: [{ ...raw.divisions[0]!, stages: [raw.divisions[0]!.stages[0]!] }] });
+    const ctx = boxCtx(driver, { caseId: "group_group_ko|cricket|t20|LIFECYCLE", row: "group_group_ko", sport: "cricket", variant: "t20", template: "t20-super8" });
+    const setup = await setUpDivision(ctx, new Recorder(), 4);
+    expect(driver.calls.filter((c) => c === "entrantMembers")).toHaveLength(4);
+    expect(setup.rosters.size).toBe(4);
+    expect(driver.calls).not.toContain("postStages");
+  });
+
+  it("guards, before any driver call: a spec whose sport or variant is not the template's, an entrant kind the template does not seed, a template that does not build the row", async () => {
+    const shapes: [string, Partial<CaseSpec>, unknown, RegExp][] = [
+      ["variant", { variant: "bwf", caseId: "group_only|badminton|bwf|LIFECYCLE" }, undefined, /box-league.*short/],
+      ["sport", { sport: "tennis" }, resolveSportCfg("tennis", "tour"), /box-league.*badminton/],
+      ["kind", {}, { ...resolveSportCfg("badminton", "short") as object, entrants: { kinds: ["team"] } }, /box-league seeds individual/],
+      ["row", { row: "group_group_ko" }, undefined, /box-league builds group_only/],
+    ];
+    let refused = 0;
+    for (const [what, over, cfg, msg] of shapes) {
+      const driver = new FakeLeagueDriver();
+      await expect(setUpDivision(boxCtx(driver, over, cfg), new Recorder(), 16), what).rejects.toThrow(msg);
+      expect(driver.calls, what).toEqual([]);
+      refused++;
+    }
+    expect(refused).toBe(shapes.length);
   });
 });

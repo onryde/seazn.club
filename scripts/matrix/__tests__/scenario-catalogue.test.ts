@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url";
 import type * as TS from "typescript";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
@@ -558,8 +557,9 @@ const WAVE_TOKEN = /\bW\d+[a-z]?\b|W1-driving/;
 interface RouteScan { sites: number; waves: string[]; unread: string[] }
 /** Every route in `src`, read from the TypeScript AST (so a comment is never a
  *  site). Two constructs name a wave: `routeTo(<wave>, …)` and a `new` of a
- *  deferral class. Either is read when its wave argument is a literal or
- *  DRIVING_WAVE; any other argument is unread. A deferral class's declaration,
+ *  deferral class. Either is read when its wave argument is a literal; any
+ *  other argument — DRIVING_WAVE included, since W1-driving Task 13 deleted
+ *  it — is unread. A deferral class's declaration,
  *  a plain import/re-export, `instanceof` and a type position construct
  *  nothing, and neither does routeTo's own declaration or a plain import. ANY
  *  other use — a subclass (its wave hides in `super(`), an `as` alias, a value
@@ -582,8 +582,7 @@ function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
   }
   const waveOf = (arg: TS.Expression | undefined): string | null => {
     if (arg === undefined) return null;
-    if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) return arg.text;
-    return ts.isIdentifier(arg) && arg.text === "DRIVING_WAVE" ? DRIVING_WAVE : null;
+    return ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg) ? arg.text : null;
   };
   /** The literals that ARE a route's wave argument: never strays. */
   const declared = new Set<TS.Node>();
@@ -664,9 +663,10 @@ describe("Q-A guard — the route reader", () => {
   it("empty case first: an empty source reads no route and nothing unread", () => {
     expect(scanRoutes("")).toEqual({ sites: 0, waves: [], unread: [] });
   });
-  it("reads a literal wave, DRIVING_WAVE by value, RowBuildDeferred's second argument, and a namespaced class", () => {
+  it("reads a literal wave, RowBuildDeferred's second argument, and a namespaced class — and, DRIVING_WAVE being gone (Task 13), an identifier wave is unread", () => {
     expect(scanRoutes(`throw new ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
-    expect(scanRoutes(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`)).toEqual({ sites: 1, waves: [DRIVING_WAVE], unread: [] });
+    const gone = scanRoutes(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`);
+    expect([gone.sites, gone.waves, gone.unread.length]).toEqual([1, [], 1]);
     expect(scanRoutes(`throw new RowBuildDeferred("ladder", "W7");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
     expect(scanRoutes(`import * as T from "./types.ts";\nthrow new T.ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
   });
@@ -807,5 +807,22 @@ describe("Q-A guard — a route never names a finished wave (ruling 28)", () => 
     expect(owing.length).toBeGreaterThan(0);
     const { read, waves } = judgeRoutes(scans, jsonRoutes, rows, owing);
     console.info(`Q-A guard: ${read} routes read (${read - jsonRoutes.length} in ${modules.length} modules, ${jsonRoutes.length} in counts.json); waves ${waves.join(", ")}`);
+  });
+});
+
+// W1-driving Task 13: the last W1-driving routes are retired (DRIVING_ROUTE /
+// DRIVING_WAVE, TEMPLATE_DRIVING). FP-1: one is NOT this task's — Task 14
+// owns lib/model/state.ts's MODEL_ROSTERS (PF-3) — so the guard names that
+// one site by file: Task 14 deleting it reds this test, and the expectation
+// becomes [] there. Reuses scanRoutes, so a comment citing the wave is never
+// a site (a raw text grep would read it).
+describe("Q-A guard — no route names W1-driving (W1-driving Task 13)", () => {
+  it("no route names W1-driving anywhere in the shipped harness — but Task 14's model rosters (FP-1)", () => {
+    const root = resolve(REPO, "scripts/matrix");
+    const scans = shipped(root).map((f) => ({ file: f.slice(root.length + 1), scan: scanRoutes(readFileSync(f, "utf8"), f) }));
+    expect(scans.reduce((n, s) => n + s.scan.sites, 0)).toBeGreaterThan(0);
+    expect(scans.flatMap((s) => s.scan.unread)).toEqual([]);
+    const naming = scans.flatMap((s) => s.scan.waves.filter((w) => w === "W1-driving").map(() => s.file));
+    expect(naming).toEqual(["lib/model/state.ts"]);
   });
 });

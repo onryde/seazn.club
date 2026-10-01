@@ -10,10 +10,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, cellId, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import {
-  API_ONLY_BROWSER_SET, L1_WIDTH, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, UnknownL2Atom, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, identityOf, l1Planner, l2Planner,
-  layerCaseId, layerOfWidth, planL1, planL2, widthSweepPlanner, type LayerCase,
+  API_ONLY_BROWSER_SET, L1_WIDTH, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
+  layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
 import { NotApiOnlyRow, apiOnlyUiPath } from "../lib/api-only-ui.ts";
+import { templateField } from "../lib/templates.ts";
 import { loadL2Pairs, parseL2Pairs, type L2Run } from "../lib/pairs.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
@@ -323,20 +324,27 @@ describe("the layered sets", () => {
     for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => apiOnlyBrowserPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });
 
-  it("the two API-only cells a catalog template reaches abstain to W1-driving (D7), not to the row's wave; the text the browser driver prints is the same fact", () => {
+  it("W1-driving Task 13: the two API-only cells a catalog template reaches are REACHABLE through its card — no wave owes them; every other API-only cell still names its row's wave", () => {
     const cells: [ApiOnlyRowKey, string, string][] = [["group_only", "badminton", "box-league"], ["group_group_ko", "cricket", "t20-super8"]];
     for (const [row, sport, template] of cells) {
-      expect(apiOnlyUiPath(row, sport)).toEqual({ wave: "W1-driving", template, reason: `reachable only through catalog template ${template}; driving it` });
+      expect(apiOnlyUiPath(row, sport)).toEqual({ reachable: true, wave: null, template, reason: `built through catalog template ${template} (template-card-${template})` });
     }
-    expect(apiOnlyUiPath("group_only", "generic")).toEqual({ wave: "W5", template: null, reason: "no organiser control builds group_only" });
+    expect(apiOnlyUiPath("group_only", "generic")).toEqual({ reachable: false, wave: "W5", template: null, reason: "no organiser control builds group_only" });
     // A row the builder does build is refused by name, never answered `undefined` (strip-types runs no tsc).
     for (const row of ["league", "toString", "__proto__"]) expect(() => apiOnlyUiPath(row as ApiOnlyRowKey, "generic"), row).toThrow(NotApiOnlyRow);
+  });
+
+  it("guard: a 🚫 is never planned for a cell a template reaches — apiOnlyNoPath refuses it by name (the api-only set plans generic only, so only this reaches it)", () => {
+    expect(apiOnlyNoPath("group_only", "generic")).toEqual({ wave: "W5", reason: "no organiser control builds group_only" });
+    expect(() => apiOnlyNoPath("group_only", "badminton")).toThrow(TemplateReachable);
+    expect(() => apiOnlyNoPath("group_group_ko", "cricket")).toThrow(/t20-super8/);
   });
 
   it("every layered case's result id is unique within its plan", () => {
     const plans: [string, LayerCase[]][] = [
       ["L1", planL1(v)], ["L2", planL2(committed, SLICE_CELLS)],
       ["sweep", widthSweepPlanner({}).layered(v)], ["api-only", apiOnlyBrowserPlanner({}).layered(v)],
+      ["w1-driving-l1", w1DrivingL1Planner({}).layered(v)],
     ];
     let checked = 0;
     for (const [name, cases] of plans) {
@@ -345,5 +353,55 @@ describe("the layered sets", () => {
       checked += cases.length;
     }
     console.info(`layers: ${checked} result ids checked for uniqueness over ${plans.length} plans`);
+  });
+});
+
+// W1-driving Task 13 (ruling 47, D11, D13): one L1 cell per capability the
+// wave added, plus the two template cells through their cards, at 1280. The
+// cells are the brief's; a template cell's variant is the template's own
+// (read from the catalog JSON), never the builder default.
+describe("--set w1-driving-l1", () => {
+  const variantFor = v;
+  it("the w1-driving-l1 set: one cell per capability plus the two template cells, all at 1280, driven", () => {
+    const cases = planW1DrivingL1(variantFor);
+    expect(cases.map((c) => [identityOf(c).caseId.split("|").slice(0, 2).join("|"), c.width])).toEqual([
+      ["league|football", 1280], ["groups_ko|badminton", 1280], ["ladder|generic", 1280], ["americano|badminton", 1280],
+      ["mexicano|generic", 1280], ["group_only|badminton", 1280], ["group_group_ko|cricket", 1280],
+    ]);
+    expect(cases.every((c) => c.spec !== null)).toBe(true);
+    expect(cases.filter((c) => c.spec?.template !== undefined).map((c) => c.spec!.template)).toEqual(["box-league", "t20-super8"]);
+  });
+
+  it("every case is a driven LIFECYCLE at L1; a template case runs on the template's own sport and variant, every other on variantFor", () => {
+    const cases = planW1DrivingL1(variantFor);
+    let checked = 0;
+    for (const c of cases) {
+      const s = c.spec!;
+      expect({ layer: c.layer, width: c.width, noPath: c.noPath, notRun: c.notRun, run: c.run }).toEqual({ layer: "L1", width: L1_WIDTH, noPath: null, notRun: null, run: null });
+      expect([s.scenario, s.canary], s.caseId).toEqual(["LIFECYCLE", false]);
+      const variant = s.template === undefined ? variantFor(s.sport) : templateField(s.template).variant;
+      if (s.template !== undefined) expect(s.sport, s.caseId).toBe(templateField(s.template).sport);
+      expect(s.variant, s.caseId).toBe(variant);
+      expect(s.caseId).toBe(`${s.row}|${s.sport}|${variant}|LIFECYCLE`);
+      checked++;
+    }
+    expect(checked).toBe(7);
+    // A differing case: box-league plays badminton's "short", which is not what variantFor answers.
+    expect(cases.find((c) => c.spec!.template === "box-league")!.spec!.variant).not.toBe(variantFor("badminton"));
+  });
+
+  it("D13: no case reaches cricket's two-innings streams (its pad adapter has no route for them; W1d)", () => {
+    const cricket = planW1DrivingL1(variantFor).filter((c) => c.spec!.sport === "cricket");
+    expect(cricket.length).toBeGreaterThan(0);
+    for (const c of cricket) expect(c.spec!.variant, c.spec!.caseId).not.toBe("test");
+  });
+
+  it("the planner: L1 at 1280 only, its sports are its cases' sports, and it takes no filter", () => {
+    const p = w1DrivingL1Planner({ set: W1_DRIVING_L1_SET });
+    const cases = p.layered(variantFor);
+    expect({ layer: p.layer, acceptsWidth: p.acceptsWidth, deniesFeatures: p.deniesFeatures, label: p.label }).toEqual({ layer: "L1", acceptsWidth: L1_WIDTH, deniesFeatures: false, label: `--set ${W1_DRIVING_L1_SET}` });
+    expect([...p.sports].sort()).toEqual([...new Set(cases.map((c) => c.spec!.sport))].sort());
+    expect(W1_DRIVING_L1_SET).toBe("w1-driving-l1");
+    for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => w1DrivingL1Planner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });
 });

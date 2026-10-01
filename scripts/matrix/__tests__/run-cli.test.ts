@@ -16,7 +16,7 @@ import { REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
-import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
+import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
 import { PAD_SPORTS } from "../lib/pad-sports.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
@@ -221,7 +221,7 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET})`);
   });
   // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
   it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
@@ -2113,6 +2113,24 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
   // Review m-6: the plan behind 7 of W1c Task 14's committed runs. Its own row:
   // the set plans every pad sport, so the DB must hand each one the order the
   // catalogue assumes (the table's fake knows generic and badminton only).
+  // W1-driving Task 13: the w1-driving-l1 set, through the real producer. It
+  // plans four sports, so the DB hands each the order the catalogue assumes.
+  it("the w1-driving-l1 set: results.json names it, and it plans its seven cases at 1280", async () => {
+    capture();
+    const dir = dirFor();
+    const base = deps();
+    const d = deps({
+      openBrowserRun: async () => fakeBrowserRun().run,
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+    });
+    expect(await runSlice(d, ["--set", W1_DRIVING_L1_SET, "--driver", "browser", "--run-id", "p1", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
+    expect(raw.plan).toBe(`--set ${W1_DRIVING_L1_SET}`);
+    expect(raw.cases.map((c) => c.caseId.split("|").slice(0, 2).join("|"))).toEqual([
+      "league|football", "groups_ko|badminton", "ladder|generic", "americano|badminton", "mexicano|generic", "group_only|badminton", "group_group_ko|cricket",
+    ]);
+    expect(raw.cases.every((c) => c.caseId.endsWith("@1280"))).toBe(true);
+  });
   it("the pad-proof set: results.json names it", async () => {
     capture();
     const dir = dirFor();
