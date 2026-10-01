@@ -46,7 +46,7 @@ Every ❌ is on one line there. The classes are exclusive:
   - `e51bf3699`: the mexicano duplicate signature.
 
   Their cells were re-run under [`../w1drv-l3-rerun`](../w1drv-l3-rerun): every case of `stepladder_only`, `double_elim` and `mexicano` on 11 sports, 33 runs. **30 of these cases now work.** The other 30 are still red for a product reason and are re-triaged in TRIAGE.md.
-- **product: 134.** With the 30 above, **164 product reds** remain, each judged on its latest committed run (T15 fix round 1 added [`../w1drv-l3-fr1`](../w1drv-l3-fr1): americano/mexicano R4 at the derived policy, the 17 P1 cells, and the P1 draw counts read from that env's DB):
+- **product: 134.** With the 30 above, **164 product reds** remain, each judged on its latest committed run (T15 fix round 1 added [`../w1drv-l3-fr1`](../w1drv-l3-fr1): americano/mexicano R4 at the derived policy, the 17 P1 cells, and the P1 draw counts read from that env's DB; fix round 2 added [`../w1drv-l3-fr2`](../w1drv-l3-fr2): americano/mexicano R4 again, with T15-R9's `r4-not-seated-later`, which moved no total):
   - **W4: 94.** The bracket-draw stall (62), the ko_plate seeding 409 (10), the page-playoff R4 dead final (11) and the stepladder withdraw refusal (11).
   - **W7: 56.** The coverage table (44) and mexicano consequences outside it (12).
   - **W5: 11.** group_group_ko F1, seed 1 alone in a pool.
@@ -65,9 +65,9 @@ The full table is in TRIAGE.md. Its verdicts:
 | group_group_ko F1 | **confirmed 11/11** |
 | team-sport americano/mexicano note | **confirmed on all 42 cases of the 10 cells** |
 | mexicano M1 stall | **confirmed 11/11**, with full set `[life-loop-bounded]` |
-| self-pair 500 | **confirmed on 30 cases** |
-| round-2 duplicate | **confirmed on 29 cases** |
-| R4 kept-playing | **confirmed** on americano 11/11, covering the derived policy red. On mexicano it is 4/11 where the second leg is seen, and note-only there: the derived policy passes. |
+| self-pair 500 | **confirmed on 32 cases** |
+| round-2 duplicate | **confirmed on 32 cases** |
+| R4 kept-playing | **confirmed** on americano 11/11, covering `r4-not-seated-later` and the derived policy red. On mexicano it is 3/11 where the second leg is seen, covering `r4-not-seated-later` (T15-R9); the derived policy passes there. |
 | page_playoff_only R4 | **confirmed 11/11** |
 | ladder R4 | **confirmed**: no red, and a W7 note on each of the 11 cases |
 | double-elim `gf-reset` | **not confirmed (0)**. No row sets `bracketReset`. |

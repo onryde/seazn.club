@@ -1,0 +1,279 @@
+{
+  "schemaVersion": 3,
+  "runId": "w1drv-fr2-r4-mexicano-cricket",
+  "harnessCommit": "817bf53d6",
+  "startedAt": "2026-10-01T17:00:33.827Z",
+  "finishedAt": "2026-10-01T17:00:34.477Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L3",
+  "driver": "http",
+  "plan": "--set w1-driving --only mexicano|cricket --scenario R4",
+  "cases": [
+    {
+      "caseId": "mexicano|cricket|t20|R4",
+      "row": "mexicano",
+      "sport": "cricket",
+      "variant": "t20",
+      "scenario": "R4",
+      "canary": false,
+      "state": "red",
+      "reason": "I4-nothing-ends-stuck: stage 1: generate answered 500 INTERNAL — not a named refusal; I8-generate-named: stage 1: generate → 500 INTERNAL; I10-americano-seats-each-person-once: round 2: 66038593-5acc-4fa4-913e-af34d1aacb01 seated 2×; life-loop-bounded: play loop exited refused_generate",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 7,
+          "reason": "stage 1: generate answered 500 INTERNAL — not a named refusal",
+          "evidence": [
+            "stage 1: generate answered 500 INTERNAL — not a named refusal"
+          ]
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "stage 1: generate → 500 INTERNAL",
+          "evidence": [
+            "stage 1: generate → 500 INTERNAL"
+          ]
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "fail",
+          "checked": 29,
+          "reason": "round 2: 66038593-5acc-4fa4-913e-af34d1aacb01 seated 2×",
+          "evidence": [
+            "round 2: 66038593-5acc-4fa4-913e-af34d1aacb01 seated 2×",
+            "round 2: 715d6009-3e83-4d08-a03d-b0a8699e0a2a seated 2×"
+          ]
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 25,
+          "reason": "25 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 4,
+          "reason": "4 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "second leg unseen: f785a2a9-35b5-44c8-add4-7f22f82e9d9f+f1d74e28-8bb2-4f37-a21d-11b4ad005991+fc387498-c1ae-410a-859b-9549b9ed4838+cf74ad81-c30e-4dd0-a53a-05fb1796ffce+bd47177e-8a50-4a0d-bb08-445193128777+6964d39d-9587-4422-9b05-bcd745be575b+9d41c73b-bb2e-4abf-baec-8bcd5754beb7+b812f4ff-1752-4f6a-b515-e7e4023d73ef+7309ca8a-d87f-4243-b086-310eed2f06ee+d9e1f343-2bef-4755-8acf-452b83a2880a+0dc57e6f-e025-4610-9057-897b80c5b24d+afe6c905-5ac7-4c4a-84e1-6971cda40d20+5970fd39-1b01-4b9a-b682-a5e11639b7a3+c8b40340-e0f1-4809-afb7-1155529aa820+f8e0d57a-9e65-459a-ad33-53c3c60308e7 is seated in no fixture after round 1, so what the withdrawal left cannot be judged (T15-R6)",
+          "evidence": []
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-challenged-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "ladder only: challenges exist on ladder stages alone",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-seated-later",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 2,
+          "reason": "play loop exited refused_generate",
+          "evidence": [
+            "play loop exited refused_generate"
+          ]
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "an americano stage seats product-minted pair entrants, which carry no lineup",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 55,
+        "fixtures": 4,
+        "events": 12
+      },
+      "durationMs": 590,
+      "notes": [
+        "stage americano status after start: active",
+        "lineups: stage ab2aeac0-9f25-401f-bbdb-986a3eab4478 seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side",
+        "mexicano-pair-entrants-counted-as-players: round 3 generate refused 500 INTERNAL (entrant_members_pkey: a person paired with themselves) after rounds 1–2 created pair entrants e31aa521-9f69-450d-93ff-1c80bd7f85ed, dc31797f-d9c2-433e-8001-a4277e6171d7, 338da1f6-ecb8-441c-a680-532b71a9556d, 8043a80f-e7a6-40ef-aa3f-bd80504801ee, ef8b00c1-11ab-4de0-a27f-50c67f09e550, 47ded010-cf17-42a6-9fbc-f22a120fd7de, 3d7222d5-67fe-4ee0-af4e-95d050ed3608 → W7",
+        "mexicano-pair-entrants-counted-as-players: round 2 seats 66038593-5acc-4fa4-913e-af34d1aacb01 twice, in ef8b00c1-11ab-4de0-a27f-50c67f09e550 and dc31797f-d9c2-433e-8001-a4277e6171d7; 66038593-5acc-4fa4-913e-af34d1aacb01 is a member of earlier pair entrant dc31797f-d9c2-433e-8001-a4277e6171d7 → W7",
+        "mexicano-pair-entrants-counted-as-players: round 2 seats 715d6009-3e83-4d08-a03d-b0a8699e0a2a twice, in 47ded010-cf17-42a6-9fbc-f22a120fd7de and 3d7222d5-67fe-4ee0-af4e-95d050ed3608; 715d6009-3e83-4d08-a03d-b0a8699e0a2a is a member of earlier pair entrant e31aa521-9f69-450d-93ff-1c80bd7f85ed → W7",
+        "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10): 3c137c67-9cb0-4105-9238-134837314bbd→715d6009-3e83-4d08-a03d-b0a8699e0a2a, 7018e838-983d-4092-8761-51faa8637037→77f3643a-5f1a-40c9-8658-7d114883de51, da16b3ff-6068-42df-8346-b0b9a8b7fa66→f8e0d57a-9e65-459a-ad33-53c3c60308e7, 4e3d91a5-13ce-4ba1-ad15-8426ffad6502→0ca40327-a675-4065-acd2-6f3b17637e26, b47947a0-dcc1-40aa-9ab5-bfdbb5b0b037→2da73701-cfb0-4db1-abeb-9a55a5175655, 3d826f37-2e6a-45e0-a2fc-7c91169af01a→66038593-5acc-4fa4-913e-af34d1aacb01, 96918dbf-42a6-4f51-ab9a-d508a5c71857→d9a3d6bc-b8d9-4580-a9a1-d242971d3b9d, c9572f46-d0fb-4d1d-84a3-04aca3089a95→c60aadbf-fbf5-4ff8-b561-5eb9b42658bc",
+        "lineups: 0 PUT across 4 team fixture(s) scored"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    }
+  ]
+}
