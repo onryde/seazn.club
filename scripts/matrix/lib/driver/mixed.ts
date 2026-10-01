@@ -24,6 +24,12 @@ function assertType(a: string): asserts a is ActionType {
   if (!DECLARED.has(a)) throw new Error(`mixed: '${a}' is not an action type (declared: ${ACTION_TYPES.join(", ")})`);
 }
 
+/** Ruling 47: setup filler — HTTP by design in every layer, never an organiser
+ *  action type (no browser turn is owed), recorded so a report shows it ran. */
+export const FILLER = ["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView"] as const;
+export type FillerName = (typeof FILLER)[number];
+const FILLERS: ReadonlySet<string> = new Set(FILLER);
+
 /** O-1 (W1c Task 8 review): action types whose browser turn is used up only
  *  once a browser call CREATED something — the value names that path for
  *  coverage's note. A case's first generate follows Start, which for a league
@@ -39,6 +45,21 @@ interface Tally { browser: number; http: number; exempt: string | null; answered
 
 export class MixedLedger {
   readonly #tally = new Map<ActionType, Tally>();
+  readonly #filler = new Map<FillerName, number>();
+
+  /** One setup-filler call (ruling 47). Counted beside the organiser actions,
+   *  never among them: coverage and the browser policy do not read it. A name
+   *  outside FILLER — an organiser action type included — is refused by name
+   *  (strip-types runs untyped callers). */
+  filler(name: FillerName): void {
+    if (!FILLERS.has(name)) throw new Error(`mixed: '${String(name)}' is not setup filler (declared: ${FILLER.join(", ")})`);
+    this.#filler.set(name, (this.#filler.get(name) ?? 0) + 1);
+  }
+
+  /** The filler calls counted so far, by name ({} before any). */
+  fillers(): Readonly<Partial<Record<FillerName, number>>> {
+    return Object.freeze(Object.fromEntries(this.#filler));
+  }
 
   #of(a: ActionType): Tally {
     let t = this.#tally.get(a);

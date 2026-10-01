@@ -13,9 +13,9 @@ import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
-  DriverMisuse, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, retryKey,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  DriverMisuse, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
+  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type FixtureStateOut, type GenerateOut, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -125,14 +125,46 @@ export class HttpDriver implements OrganiserDriver {
     return this.#call(`/api/v1/divisions/${divisionId}/stages`);
   }
 
-  async addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+  /** D2: an input's members ride inline as `new_person` members (schemas.ts
+   *  NewPersonMemberInput), in order; an input without them sends no
+   *  `members` key at all, so an individual's body is unchanged. */
+  async addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]> {
     const out = await this.#call<EntrantRow | EntrantRow[]>(`/api/v1/divisions/${divisionId}/entrants`, "POST",
-      entrants.map((e) => ({ kind: e.kind, display_name: e.displayName, seed: e.seed })));
+      entrants.map((e) => ({
+        kind: e.kind, display_name: e.displayName, seed: e.seed,
+        ...(e.members !== undefined ? { members: e.members.map((m) => ({ new_person: { full_name: m.fullName }, squad_number: m.squadNumber, is_captain: m.isCaptain })) } : {}),
+      })));
     return Array.isArray(out) ? out : [out];
   }
 
   async listEntrants(divisionId: string): Promise<EntrantRow[]> {
     return this.#call(`/api/v1/divisions/${divisionId}/entrants`);
+  }
+
+  async entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    const e = await this.#call<{ members?: readonly EntrantMember[] }>(`/api/v1/entrants/${entrantId}`);
+    return inSquadOrder(e.members ?? []);
+  }
+
+  async putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void> {
+    await this.#call<unknown>(`/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", { slots });
+  }
+
+  /** The browser's roster filler (ruling 47): the entrants tab adds by name
+   *  only, so each member is created as a person (POST /persons) and the
+   *  entrant's roster is then set in ONE PATCH naming them (schemas.ts
+   *  PatchEntrant `members`, a full replacement). Answers the stored roster.
+   *  An empty roster is refused before any call: its PATCH would CLEAR the
+   *  entrant's roster, never seed one. A refused person stops before the
+   *  PATCH, so no roster is half-set. */
+  async setMembers(entrantId: string, members: readonly MemberInput[]): Promise<EntrantMember[]> {
+    if (members.length === 0) throw new DriverMisuse(`driver: setMembers for entrant ${entrantId} with no members — a PATCH of [] would clear its roster, not seed it`);
+    const ids: string[] = [];
+    for (const m of members) ids.push((await this.#call<{ id: string }>("/api/v1/persons", "POST", { full_name: m.fullName })).id);
+    const e = await this.#call<{ members?: readonly EntrantMember[] }>(`/api/v1/entrants/${entrantId}`, "PATCH", {
+      members: members.map((m, i) => ({ person_id: ids[i], squad_number: m.squadNumber, is_captain: m.isCaptain })),
+    });
+    return inSquadOrder(e.members ?? []);
   }
 
   async start(divisionId: string): Promise<StartOut> {

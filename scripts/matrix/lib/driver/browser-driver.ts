@@ -50,11 +50,11 @@ import { assertion, type Item } from "../scenarios/assertions.ts";
 import type { CaseSpec } from "../scenarios/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import type { HttpDriver } from "./http-driver.ts";
-import { MixedLedger, type ActionType, type PadPolicy } from "./mixed.ts";
+import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from "./mixed.ts";
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type FixtureStateOut, type GenerateOut, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -85,8 +85,9 @@ export const REAL_PAGES: BrowserPages = Object.freeze({
   completeStageUi, openFixtureUi, forfeitUi, finalizeUi, readStandingsUi, readPublicUi,
 });
 
-/** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger). */
-export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger">;
+/** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger)
+ *  and the roster filler the entrants tab cannot do (HttpDriver.setMembers). */
+export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger" | "setMembers">;
 
 export interface Clock { now(): number; sleep(ms: number): Promise<void> }
 const REAL_CLOCK: Clock = { now: () => Date.now(), sleep: (ms) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }) };
@@ -440,7 +441,11 @@ export class BrowserDriver implements OrganiserDriver {
     return out;
   }
 
-  async addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+  /** The http path sends members inline (HttpDriver.addEntrants). The
+   *  browser path adds each entrant by name through the entrants tab, so the
+   *  type keeps its browser coverage, then seeds every roster it was given as
+   *  HTTP filler (D2, ruling 47). */
+  async addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]> {
     // M-6: an empty add has no organiser act to drive — no click, no ledger row;
     // the API answers it as it would any other caller.
     if (entrants.length === 0) return this.#http.addEntrants(divisionId, entrants);
@@ -450,10 +455,46 @@ export class BrowserDriver implements OrganiserDriver {
     }
     const where = this.#whereOf(divisionId);
     this.#ledger.record("addEntrants", "browser");
-    return this.#write(() => this.#ui((p) => p.addEntrantsUi(this.#ctx, where, entrants.map((e) => ({ displayName: e.displayName, seed: e.seed, kind: e.kind })))));
+    const rows = await this.#write(() => this.#ui((p) => p.addEntrantsUi(this.#ctx, where, entrants.map((e) => ({ displayName: e.displayName, seed: e.seed, kind: e.kind })))));
+    await this.#seedRosters(entrants, rows);
+    return rows;
+  }
+
+  /** Each input with members gets its roster over HTTP (setMembers: persons,
+   *  then one PATCH), counted as filler. The tab answers one row per input,
+   *  in order, each as typed (entrants.ts addEntrantsUi) — that pairing is
+   *  what puts a roster on the right entrant, so a row that does not line up
+   *  is refused by name before any roster is seeded. */
+  async #seedRosters(inputs: readonly EntrantInput[], rows: readonly EntrantRow[]): Promise<void> {
+    if (!inputs.some((e) => (e.members?.length ?? 0) > 0)) return;
+    if (rows.length !== inputs.length || inputs.some((e, i) => rows[i]?.display_name !== e.displayName)) {
+      throw new DriverMisuse(`browser: the entrants tab answered ${rows.map((r) => r.display_name).join(", ") || "no entrant"} for ${inputs.map((e) => e.displayName).join(", ")} — a roster would land on the wrong entrant`);
+    }
+    for (const [i, e] of inputs.entries()) {
+      const members = e.members;
+      if (members === undefined || members.length === 0) continue;
+      const id = rows[i].id;
+      this.#ledger.filler("setMembers");
+      await this.#write(() => this.#http.setMembers(id, members));
+    }
   }
 
   listEntrants(divisionId: string): Promise<EntrantRow[]> { return this.#http.listEntrants(divisionId); }
+
+  /** Filler (ruling 47): a read, always HTTP. */
+  entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    this.#ledger.filler("entrantMembers");
+    return this.#http.entrantMembers(entrantId);
+  }
+
+  /** Filler (ruling 47): always HTTP, and a write. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void> {
+    this.#ledger.filler("putLineup");
+    return this.#write(() => this.#http.putLineup(fixtureId, entrantId, slots));
+  }
+
+  /** The setup filler this driver ran, by name (mixed.ts FILLER). */
+  get fillers(): Readonly<Partial<Record<FillerName, number>>> { return this.#ledger.fillers(); }
 
   async start(divisionId: string): Promise<StartOut> {
     if (!this.#wants("start")) {

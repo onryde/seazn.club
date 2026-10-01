@@ -11,6 +11,28 @@ import { mapStrings, redact } from "../redact.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
 export type EntrantKind = "individual" | "pair" | "team";
+/** One roster member as the harness writes it (D2): a synthetic person
+ *  ("Matrix Player <entrant>.<m>", R14a), created by name — inline on the
+ *  create (schemas.ts NewPersonMemberInput) or as filler (persons, then the
+ *  entrant's PATCH). */
+export interface MemberInput { readonly fullName: string; readonly squadNumber: number; readonly isCaptain: boolean }
+/** An entrant to add. `members` absent: no roster, and no `members` key on
+ *  the wire (an individual's body, byte for byte). */
+export interface EntrantInput { readonly displayName: string; readonly seed: number; readonly kind: EntrantKind; readonly members?: readonly MemberInput[] }
+/** A stored roster member, trimmed to what the harness reads (entrants.ts
+ *  withMembers serves more: name, dob, gender, roles). */
+export interface EntrantMember { readonly person_id: string; readonly squad_number: number | null; readonly is_captain: boolean }
+/** One lineup slot on the wire (schemas.ts LineupSlotInput). */
+export interface LineupSlotWire { readonly person_id: string; readonly slot: "starting" | "bench"; readonly position_key?: string; readonly order_no?: number; readonly roles?: readonly string[] }
+
+/** A roster in the product's order — squad number, nulls last (entrants.ts
+ *  withMembers `order by em.squad_number nulls last`) — each member trimmed to
+ *  an EntrantMember. The one authority for that order: HttpDriver, the fakes
+ *  and the lineup builder all read it. */
+export function inSquadOrder(members: readonly EntrantMember[]): EntrantMember[] {
+  const key = (m: EntrantMember) => m.squad_number ?? Number.POSITIVE_INFINITY;
+  return [...members].sort((a, b) => key(a) - key(b)).map((m) => ({ person_id: m.person_id, squad_number: m.squad_number, is_captain: m.is_captain }));
+}
 export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
 export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
@@ -68,10 +90,20 @@ export interface OrganiserDriver {
   getDivision(divisionId: string): Promise<DivisionRef>;
   postStages(divisionId: string, stages: readonly StagePostBody[]): Promise<StageRef[]>;
   listStages(divisionId: string): Promise<StageRef[]>;
-  addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]>;
+  /** An input's `members` ride inline on the create over HTTP; the browser
+   *  adds by name and seeds them as filler (D2, ruling 47). */
+  addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]>;
   /** The division's stored entrants (GET, ordered by seed) — the read-back
    *  life-built-as-posted compares with what was posted (final review I-2). */
   listEntrants(divisionId: string): Promise<EntrantRow[]>;
+  /** The entrant's stored roster (GET /entrants/:id → members), in squad
+   *  order (inSquadOrder); [] for an entrant with none. */
+  entrantMembers(entrantId: string): Promise<EntrantMember[]>;
+  /** Replaces the entrant's lineup for the fixture (PUT
+   *  /fixtures/:id/lineups/:entrantId). The product takes it only while the
+   *  fixture is `scheduled` and only of the entrant's own members
+   *  (fixtures.ts putLineup); a refusal throws RefusedCall. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void>;
   start(divisionId: string): Promise<StartOut>;
   generate(stageId: string): Promise<GenerateOut>;
   listFixtures(divisionId: string): Promise<FixtureRow[]>;

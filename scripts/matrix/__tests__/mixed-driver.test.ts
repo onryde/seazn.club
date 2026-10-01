@@ -8,7 +8,7 @@
 // browser → the same type again → a type only ever routed to http → an
 // exemption. Each is tested, in that order, below.
 import { describe, expect, it } from "vitest";
-import { ACTION_TYPES, CREATE_PATHS, MixedLedger, type ActionType } from "../lib/driver/mixed.ts";
+import { ACTION_TYPES, CREATE_PATHS, FILLER, MixedLedger, type ActionType, type FillerName } from "../lib/driver/mixed.ts";
 import { routeTo, type Route } from "../lib/routing.ts";
 
 /** A route as a caller hands it to exempt (lib/routing.ts). */
@@ -212,5 +212,53 @@ describe("MixedLedger", () => {
 
   it("ACTION_TYPES is the plan's list, in its order", () => {
     expect([...ACTION_TYPES]).toEqual(["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"]);
+  });
+});
+
+// Ruling 47 (W1-driving Task 3): setup filler is HTTP by design in every
+// layer. The ledger counts it so a report can show it ran, and it is never an
+// organiser action type, so no browser turn is owed and coverage is untouched.
+// Transitions: no filler (the empty case) → a filler call → the same again →
+// a name outside FILLER.
+describe("MixedLedger — setup filler (ruling 47)", () => {
+  it("empty case first: a fresh ledger has counted no filler", () => {
+    expect(new MixedLedger().fillers()).toEqual({});
+  });
+
+  it("FILLER is the plan's list, in its order, and shares no name with an organiser action type", () => {
+    expect([...FILLER]).toEqual(["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView"]);
+    expect(FILLER.filter((f) => (ACTION_TYPES as readonly string[]).includes(f))).toEqual([]);
+  });
+
+  it("filler counts each call by name, a second call adding to the first", () => {
+    const l = new MixedLedger();
+    l.filler("setMembers");
+    l.filler("setMembers");
+    l.filler("putLineup");
+    expect(l.fillers()).toEqual({ setMembers: 2, putLineup: 1 });
+  });
+
+  it("a name outside FILLER is refused by name — an organiser action type too (strip-types runs untyped callers)", () => {
+    const l = new MixedLedger();
+    for (const bad of ["postEvent", "addEntrants", "score", ""]) expect(() => l.filler(bad as FillerName), bad).toThrow(/not setup filler/);
+    expect(l.fillers()).toEqual({});
+  });
+
+  it("filler leaves coverage and the browser policy exactly as they were — it is never an organiser action", () => {
+    const with_ = new MixedLedger();
+    const without = new MixedLedger();
+    for (const l of [with_, without]) {
+      l.record("createCompetition", "browser");
+      l.record("addEntrants", "browser");
+      l.record("addEntrants", "http");
+    }
+    for (const f of FILLER) with_.filler(f);
+    expect(with_.fillers()).toEqual(Object.fromEntries(FILLER.map((f) => [f, 1])));
+    expect(with_.coverage()).toEqual(without.coverage());
+    for (const a of ACTION_TYPES) expect(with_.wantsBrowser(a, "first"), a).toBe(without.wantsBrowser(a, "first"));
+    // And on a ledger with filler only, coverage is still the vacuous empty case.
+    const only = new MixedLedger();
+    only.filler("putLineup");
+    expect(only.coverage()).toMatchObject({ verdict: "fail", checked: 0 });
   });
 });

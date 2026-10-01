@@ -3,7 +3,7 @@ import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
 import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { nextMatchStartedText } from "./product-text.ts";
+import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
 function fake(replies: ((c: Call) => RawResult | undefined)[]): { t: Transport; calls: Call[] } {
@@ -551,5 +551,107 @@ describe("HttpDriver — finalize and the fixture ledger (W1c Task 6)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// The roster seam (W1-driving Task 3, D2). Transitions, the empty case first:
+// an entrant with no members (no `members` key at all, byte for byte); members
+// inline on the create; the stored roster read back; a lineup PUT; a second
+// PUT; a refused PUT; the browser's filler path (persons, then one PATCH).
+describe("HttpDriver — rosters and lineups (W1-driving Task 3)", () => {
+  const roster = [
+    { fullName: "Matrix Player 1.1", squadNumber: 1, isCaptain: true },
+    { fullName: "Matrix Player 1.2", squadNumber: 2, isCaptain: false },
+  ];
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, display_name: `Matrix Team ${i + 1}`, seed: i + 1, status: "registered" }));
+
+  it("empty case first: an entrant without members posts NO members key — the individual body, byte for byte", async () => {
+    const { t, calls } = fake([() => ok(rows(1), 201)]);
+    await drv(t).addEntrants("d1", [{ displayName: "Matrix Player 1", seed: 1, kind: "individual" }]);
+    expect(JSON.stringify(calls[0]!.body)).toBe('[{"kind":"individual","display_name":"Matrix Player 1","seed":1}]');
+  });
+
+  it("members ride inline on the create: one new_person per member, in order, with squad number and captaincy", async () => {
+    const { t, calls } = fake([() => ok(rows(2), 201)]);
+    await drv(t).addEntrants("d1", [
+      { displayName: "Matrix Team 1", seed: 1, kind: "team", members: roster },
+      { displayName: "Matrix Team 2", seed: 2, kind: "team" },
+    ]);
+    expect(calls.map((c) => [c.method, c.path])).toEqual([["POST", "/api/v1/divisions/d1/entrants"]]);
+    expect(JSON.stringify(calls[0]!.body)).toBe(JSON.stringify([
+      { kind: "team", display_name: "Matrix Team 1", seed: 1, members: [
+        { new_person: { full_name: "Matrix Player 1.1" }, squad_number: 1, is_captain: true },
+        { new_person: { full_name: "Matrix Player 1.2" }, squad_number: 2, is_captain: false },
+      ] },
+      { kind: "team", display_name: "Matrix Team 2", seed: 2 },
+    ]));
+  });
+
+  it("entrantMembers GETs the entrant and answers its members trimmed to what the harness reads, in squad order (nulls last, as the product orders them)", async () => {
+    const served = [
+      { person_id: "p3", full_name: "Matrix Player 1.3", dob: null, gender: null, squad_number: null, default_position_key: null, is_captain: false, roles: [] },
+      { person_id: "p2", full_name: "Matrix Player 1.2", dob: null, gender: null, squad_number: 2, default_position_key: null, is_captain: false, roles: [] },
+      { person_id: "p1", full_name: "Matrix Player 1.1", dob: null, gender: null, squad_number: 1, default_position_key: null, is_captain: true, roles: [] },
+    ];
+    const { t, calls } = fake([(c) => (c.method === "GET" && c.path === "/api/v1/entrants/e1" ? ok({ ...rows(1)[0], members: served }) : undefined)]);
+    expect(await drv(t).entrantMembers("e1")).toEqual([
+      { person_id: "p1", squad_number: 1, is_captain: true },
+      { person_id: "p2", squad_number: 2, is_captain: false },
+      { person_id: "p3", squad_number: null, is_captain: false },
+    ]);
+    expect(calls).toEqual([{ path: "/api/v1/entrants/e1", method: "GET", body: undefined, cookies: 1 }]);
+  });
+
+  it("entrantMembers on an entrant with no roster answers [] (empty case)", async () => {
+    const { t } = fake([() => ok({ ...rows(1)[0], members: [] })]);
+    expect(await drv(t).entrantMembers("e1")).toEqual([]);
+  });
+
+  it("putLineup PUTs {slots} to the fixture's lineup for that entrant; a second PUT is a second call, never short-circuited", async () => {
+    const slots = [{ person_id: "p1", slot: "starting" as const, order_no: 1, position_key: "GK", roles: [] }, { person_id: "p2", slot: "bench" as const, order_no: 2, roles: [] }];
+    const { t, calls } = fake([(c) => (c.method === "PUT" ? ok({ fixture_id: "f1", entrant_id: "e1", slots: [] }) : undefined)]);
+    const d = drv(t);
+    await d.putLineup("f1", "e1", slots);
+    await d.putLineup("f1", "e1", slots.slice(0, 1));
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ["PUT", "/api/v1/fixtures/f1/lineups/e1", { slots }],
+      ["PUT", "/api/v1/fixtures/f1/lineups/e1", { slots: slots.slice(0, 1) }],
+    ]);
+  });
+
+  it("a refused PUT — the product's 422 (a codeless HttpError reaches the wire as http.ts's code) or a 409 — is RefusedCall with that status and code", async () => {
+    const code422 = wireCodeFor(422);
+    for (const [status, code] of [[422, code422], [409, wireCodeFor(409)]] as const) {
+      const { t } = fake([() => err(status, code)]);
+      const e = await drv(t).putLineup("f1", "e1", [{ person_id: "p9", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(RefusedCall);
+      expect([(e as RefusedCall).status, (e as RefusedCall).code, (e as RefusedCall).method, (e as RefusedCall).path]).toEqual([status, code, "PUT", "/api/v1/fixtures/f1/lineups/e1"]);
+    }
+  });
+
+  it("setMembers (the browser's filler): one POST /persons per member, in order, then ONE PATCH of the entrant naming the persons the product made; answers the stored roster", async () => {
+    let n = 0;
+    const { t, calls } = fake([
+      (c) => (c.method === "POST" && c.path === "/api/v1/persons" ? ok({ id: `person-${++n}`, full_name: (c.body as { full_name: string }).full_name }, 201) : undefined),
+      (c) => (c.method === "PATCH" && c.path === "/api/v1/entrants/e1"
+        ? ok({ ...rows(1)[0], members: (c.body as { members: { person_id: string; squad_number: number; is_captain: boolean }[] }).members.map((m) => ({ ...m, full_name: "x", roles: [] })) })
+        : undefined),
+    ]);
+    const out = await drv(t).setMembers("e1", roster);
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ["POST", "/api/v1/persons", { full_name: "Matrix Player 1.1" }],
+      ["POST", "/api/v1/persons", { full_name: "Matrix Player 1.2" }],
+      ["PATCH", "/api/v1/entrants/e1", { members: [{ person_id: "person-1", squad_number: 1, is_captain: true }, { person_id: "person-2", squad_number: 2, is_captain: false }] }],
+    ]);
+    expect(out).toEqual([{ person_id: "person-1", squad_number: 1, is_captain: true }, { person_id: "person-2", squad_number: 2, is_captain: false }]);
+  });
+
+  it("setMembers: an empty roster is refused before any call (a PATCH of [] would CLEAR the entrant's roster); a refused person stops before the PATCH", async () => {
+    const empty = fake([]);
+    await expect(drv(empty.t).setMembers("e1", [])).rejects.toBeInstanceOf(DriverMisuse);
+    expect(empty.calls).toEqual([]);
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/persons" ? err(422, wireCodeFor(422)) : undefined)]);
+    await expect(drv(t).setMembers("e1", roster)).rejects.toBeInstanceOf(RefusedCall);
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
   });
 });

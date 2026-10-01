@@ -17,9 +17,9 @@ import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  RefusedCall, idempotencyKey,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  RefusedCall, idempotencyKey, inSquadOrder,
+  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type FixtureStateOut, type GenerateOut, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 
@@ -42,6 +42,9 @@ const PLAYED = new Set(["decided", "finalized", "forfeited"]);
 const PENDING = new Set(["scheduled", "in_play"]);
 // stages.ts:979 — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
+/** The fake's lineup refusal code — a fake's, not the product's (W1-driving
+ *  Task 3; Task 4 Step 0 pins the product's). */
+export const FAKE_LINEUP_REFUSAL = "LINEUP_INVALID";
 
 /** Runs `body` NOW and settles with what it returns, or REJECTS with what it
  *  throws — exactly what an `async` method with no `await` does, since a
@@ -99,14 +102,61 @@ export class FakeLeagueDriver implements OrganiserDriver {
     });
   }
   listStages(): Promise<StageRef[]> { return settle(() => { this.log("listStages"); return this.stage ? [{ ...this.stage }] : []; }); }
-  addEntrants(_d: string, es: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+  /** entrant id → its stored roster, in the product's order; person ids `p-<entrant>-<m>`. */
+  members = new Map<string, EntrantMember[]>();
+  /** `<fixture>|<entrant>` → the lineup last PUT (fixtures.ts putLineup replaces it whole). */
+  readonly lineups = new Map<string, LineupSlotWire[]>();
+  rosterOf(entrantId: string, ms: readonly MemberInput[]): EntrantMember[] {
+    return inSquadOrder(ms.map((m, k) => ({ person_id: `p-${entrantId}-${k + 1}`, squad_number: m.squadNumber, is_captain: m.isCaptain })));
+  }
+  addEntrants(_d: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
     return settle(() => {
       this.log("addEntrants");
       this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
+      // Inline members (schemas.ts CreateEntrant): stored with the entrant they came on.
+      this.members = new Map(es.flatMap((e, i) => (e.members === undefined ? [] : [[`e${i + 1}`, this.rosterOf(`e${i + 1}`, e.members)] as const])));
       return this.entrants.map((e) => ({ ...e }));
     });
   }
   listEntrants(): Promise<EntrantRow[]> { return settle(() => { this.log("listEntrants"); return this.entrants.map((e) => ({ ...e })); }); }
+  #entrant(method: string, entrantId: string): void {
+    // entrants.ts getEntrant / patchEntrant: an unknown entrant is a 404.
+    if (!this.entrants.some((e) => e.id === entrantId)) throw new RefusedCall(method, `/api/v1/entrants/${entrantId}`, 404, "NOT_FOUND", "entrant not found");
+  }
+  entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    return settle(() => {
+      this.log("entrantMembers");
+      this.#entrant("GET", entrantId);
+      return (this.members.get(entrantId) ?? []).map((m) => ({ ...m }));
+    });
+  }
+  /** HttpDriver.setMembers's product side: the persons, then the PATCH's full replacement. */
+  setMembers(entrantId: string, ms: readonly MemberInput[]): Promise<EntrantMember[]> {
+    return settle(() => {
+      this.log("setMembers");
+      if (ms.length === 0) throw new Error("fake: setMembers with no members (HttpDriver refuses it before any call)");
+      this.#entrant("PATCH", entrantId);
+      this.members.set(entrantId, this.rosterOf(entrantId, ms));
+      return (this.members.get(entrantId) ?? []).map((m) => ({ ...m }));
+    });
+  }
+  /** fixtures.ts putLineup, in its order: the entrant must be a side of the
+   *  fixture, the fixture `scheduled`, and every person the entrant's member;
+   *  then the lineup is replaced whole. The refusal CODE is the fake's own:
+   *  the product's HttpError carries none, and Task 4 Step 0 pins what reaches
+   *  the wire. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<void> {
+    return settle(() => {
+      this.log("putLineup");
+      const path = `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`;
+      const f = this.#f(fixtureId);
+      if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) throw new RefusedCall("PUT", path, 422, FAKE_LINEUP_REFUSAL, "entrant is not a side of this fixture");
+      if (f.status !== "scheduled") throw new RefusedCall("PUT", path, 422, FAKE_LINEUP_REFUSAL, `lineup is locked once a fixture is ${f.status}`);
+      const roster = new Set((this.members.get(entrantId) ?? []).map((m) => m.person_id));
+      if (slots.some((s) => !roster.has(s.person_id))) throw new RefusedCall("PUT", path, 422, FAKE_LINEUP_REFUSAL, "lineup contains a person who is not a member of the entrant");
+      this.lineups.set(`${fixtureId}|${entrantId}`, slots.map((s) => ({ ...s, ...(s.roles !== undefined ? { roles: [...s.roles] } : {}) })));
+    });
+  }
   /** Circle-method rounds over the entrant ids, "BYE" padding an odd field. */
   circle(): [string, string][][] {
     const ring = this.entrants.length % 2 === 0 ? this.entrants.map((e) => e.id) : [...this.entrants.map((e) => e.id), "BYE"];

@@ -17,6 +17,7 @@ import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
+import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE, TEMPLATE_DRIVING } from "../lib/api-only-ui.ts";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
@@ -117,7 +118,7 @@ type Stub = HttpSide & { calls: string[] };
 const HTTP_METHODS = [
   "createCompetition", "createDivision", "getDivision", "postStages", "listStages", "addEntrants", "listEntrants", "start", "generate",
   "listFixtures", "fixtureState", "postStream", "forfeit", "withdraw", "completeStage", "rebuild", "standings", "publicStandings",
-  "patchDivisionConfig", "replaceStagesProbe", "ledger",
+  "patchDivisionConfig", "replaceStagesProbe", "ledger", "entrantMembers", "putLineup", "setMembers",
 ] as const;
 /** An http side that answers only what it was given and refuses the rest by name. */
 function stubHttp(over: Partial<Record<(typeof HTTP_METHODS)[number], (...a: never[]) => Promise<unknown>>>): Stub {
@@ -1085,5 +1086,98 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
     expect(v).toMatchObject({ verdict: "pass", checked: 5 });
     expect(v.reason).toMatch(/2 must-differ pair\(s\) differ/);
     expect(v.evidence.map((e) => e.split(":")[0])).toEqual(["08-pad-before", "08-pad-sheet", "08-pad-scored", "08-pad-before-2", "08-pad-scored-2"]);
+  });
+});
+
+// Ruling 47 / D2 (W1-driving Task 3): the browser adds an entrant by name, so
+// addEntrants keeps its browser coverage, and seeds the roster as HTTP
+// filler. entrantMembers and putLineup are filler too. Transitions, the empty
+// case first: an add with no members → an add with members → a later add (the
+// http path, members inline) → the lineup calls.
+describe("BrowserDriver — the roster seam is setup filler (ruling 47, W1-driving Task 3)", () => {
+  const roster = (e: number) => [1, 2, 3].map((m) => ({ fullName: `Matrix Player ${e}.${m}`, squadNumber: m, isCaptain: m === 1 }));
+  const teams = (withMembers: readonly boolean[], from = 1) => withMembers.map((w, i) => ({ displayName: `Matrix Team ${from + i}`, seed: from + i, kind: "team" as const, ...(w ? { members: roster(from + i) } : {}) }));
+  /** The UI's add lands in the same fake product the http side reads, one row per input, as typed (entrants.ts addEntrantsUi). */
+  const uiAdd = async (http: FakeHttp, divisionId: string, es: readonly EntrantIn[]) =>
+    (await http.addEntrants(divisionId, es.map((e, i) => ({ displayName: e.displayName, seed: e.seed ?? i + 1, kind: e.kind })))).map((r, i) => ({ ...r, kind: es[i]!.kind }));
+  const uiAddsTo = (http: FakeHttp): Partial<BrowserPages> => ({ addEntrantsUi: async (_c, w, es) => uiAdd(http, w.divisionId, es) });
+
+  it("empty case first: a browser add without members seeds nothing — no setMembers, no filler", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver } = make({ http, pages: uiAddsTo(http) });
+    const b = await built(driver, spec("league"));
+    await driver.addEntrants(b.divId, teams([false, false]));
+    expect(http.calls).not.toContain("setMembers");
+    expect(driver.fillers).toEqual({});
+  });
+
+  it("a browser add with members: the page gets names only, then setMembers over HTTP for each entrant that has members — filler, while addEntrants counts as the browser run", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageArgs } = make({ http, pages: uiAddsTo(http) });
+    const b = await built(driver, spec("league"));
+    const out = await driver.addEntrants(b.divId, teams([true, false, true]));
+    expect(out.map((e) => e.display_name)).toEqual(["Matrix Team 1", "Matrix Team 2", "Matrix Team 3"]);
+    // The page object was handed display names, seeds and kinds — no members.
+    const handed = pageArgs.addEntrantsUi![0]![2] as Record<string, unknown>[];
+    expect(handed.map((e) => Object.keys(e).sort())).toEqual([["displayName", "kind", "seed"], ["displayName", "kind", "seed"], ["displayName", "kind", "seed"]]);
+    expect(http.calls.filter((c) => c === "setMembers")).toHaveLength(2);
+    expect(await http.entrantMembers("e1")).toEqual([1, 2, 3].map((m) => ({ person_id: `p-e1-${m}`, squad_number: m, is_captain: m === 1 })));
+    expect(await http.entrantMembers("e2")).toEqual([]);
+    expect((await http.entrantMembers("e3")).length).toBe(3);
+    expect(driver.fillers).toEqual({ setMembers: 2 });
+    expect(only(driver, "mixed-driver-coverage")).toMatchObject({ verdict: "pass", checked: 3 });
+  });
+
+  it("a later add takes the http path: members ride inline on the create, and no filler is counted for it", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, pages: uiAddsTo(http) });
+    const b = await built(driver, spec("league"));
+    await driver.addEntrants(b.divId, teams([true]));
+    await driver.addEntrants(b.divId, teams([true, true], 2));
+    expect(pageCalls.filter((c) => c === "addEntrantsUi")).toHaveLength(1);
+    expect(driver.fillers).toEqual({ setMembers: 1 });
+    // The fake re-ids a bulk add from e1: the http add stored both rosters itself.
+    expect((await http.entrantMembers("e1")).length).toBe(3);
+    expect((await http.entrantMembers("e2")).length).toBe(3);
+  });
+
+  it("entrantMembers and putLineup never touch the page: each reaches HTTP once, is counted as filler, and coverage is exactly what it was", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, pages: uiAddsTo(http) });
+    const b = await built(driver, spec("league"));
+    await driver.addEntrants(b.divId, teams([true, true]));
+    const f = http.seat(1, "e1", "e2");
+    const coverage = only(driver, "mixed-driver-coverage");
+    const pages = pageCalls.length;
+    const members = await driver.entrantMembers("e1");
+    await driver.putLineup(f.id, "e1", members.map((m, i) => ({ person_id: m.person_id, slot: "starting" as const, order_no: i + 1, roles: [] })));
+    expect(pageCalls.length).toBe(pages);
+    expect(http.calls.filter((c) => c === "entrantMembers" || c === "putLineup")).toEqual(["entrantMembers", "putLineup"]);
+    expect(http.lineups.get(`${f.id}|e1`)?.map((s) => s.person_id)).toEqual(["p-e1-1", "p-e1-2", "p-e1-3"]);
+    expect(driver.fillers).toEqual({ setMembers: 2, entrantMembers: 1, putLineup: 1 });
+    expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
+  });
+
+  it("a refused lineup is the product's RefusedCall, passed through, and still counted as the filler call it was", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver } = make({ http, pages: uiAddsTo(http) });
+    const b = await built(driver, spec("league"));
+    await driver.addEntrants(b.divId, teams([true, true]));
+    const f = http.seat(1, "e1", "e2");
+    const e = await driver.putLineup(f.id, "e1", [{ person_id: "p-e2-1", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).status).toBe(422);
+    expect(driver.fillers).toEqual({ setMembers: 2, putLineup: 1 });
+  });
+
+  it("guard: a UI answer that does not line up with the inputs is refused by name before any member is seeded", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver } = make({ http, pages: { addEntrantsUi: async (_c, w, es) => (await uiAdd(http, w.divisionId, es)).reverse() } });
+    const b = await built(driver, spec("league"));
+    const e = await driver.addEntrants(b.divId, teams([true, true])).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(DriverMisuse);
+    expect((e as Error).message).toMatch(/Matrix Team 1/);
+    expect(http.calls).not.toContain("setMembers");
+    expect(driver.fillers).toEqual({});
   });
 });
