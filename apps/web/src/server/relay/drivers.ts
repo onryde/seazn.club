@@ -4,6 +4,7 @@
 // "disabled" (R5, Task 14b): a pair that refuses every call — nothing faked,
 // nothing sent. Tests inject their own pair.
 import { sql } from "@/lib/db";
+import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 import { relayDriverMode } from "./config";
 import { FakeIngest, FakeRunner } from "./fakes";
@@ -117,7 +118,7 @@ export function relayDrivers(): RelayDrivers {
   const mode = relayDriverMode();
   instance =
     mode === "live"
-      ? { ingest: new CloudflareIngest({ recorder: dbRecorder }), runner: lazyRunner() }
+      ? { ingest: new CloudflareIngest({ recorder: dbRecorder, reportError: captureError }), runner: lazyRunner() }   // m-2: unseen output words reach Sentry
       : mode === "disabled"
         ? disabledRelayDrivers()
         : { ingest: new FakeIngest({ recorder: dbRecorder }), runner: new FakeRunner({ recorder: dbRecorder }) };

@@ -1362,21 +1362,26 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       const { status, output } = read;
       ingestState = { state: status.state, protocol: status.protocol };
       outputObserved = output;
-      // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed.
-      const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
-        select ingest_state, output_state from fixture_stream_samples where session_id = ${row.id} and source = 'poll' order by id desc limit 1`;
-      // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
-      // on the status read). It is the one field that says WHY an input is disconnected, so a poll
-      // sample without it records that something was wrong and drops the only explanation.
-      await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: status.state, outputState: output,
-        ingestReason: status.reason, sampledAt: deps.now(), raw: status });
-      if (!prev || prev.ingest_state !== status.state || prev.output_state !== output) {
-        const sid = row.id, orgId = row.org_id;
-        await sql.begin(async (tx) => {
-          await lockRow(tx, sid);
-          await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: status.state, occurredAt: deps.now(),
-            payload: { protocol: status.protocol, outputState: output, connected: status.state === "connected" } });
-        });
+      // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed — for a poll
+      // that READ. m-2 (B5 re-review 2): an outputs read that failed (`null`, ports.ts) is not evidence, so that poll
+      // records neither; as `unknown` it was a non-ok word that moved the D3 hold toward the key box. The phone's read
+      // still answers the projection and still drives warming → live below.
+      if (output !== null) {
+        const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
+          select ingest_state, output_state from fixture_stream_samples where session_id = ${row.id} and source = 'poll' order by id desc limit 1`;
+        // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
+        // on the status read). It is the one field that says WHY an input is disconnected, so a poll
+        // sample without it records that something was wrong and drops the only explanation.
+        await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: status.state, outputState: output,
+          ingestReason: status.reason, sampledAt: deps.now(), raw: status });
+        if (!prev || prev.ingest_state !== status.state || prev.output_state !== output) {
+          const sid = row.id, orgId = row.org_id;
+          await sql.begin(async (tx) => {
+            await lockRow(tx, sid);
+            await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: status.state, occurredAt: deps.now(),
+              payload: { protocol: status.protocol, outputState: output, connected: status.state === "connected" } });
+          });
+        }
       }
       if (status.state === "connected") {
         await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
@@ -1442,6 +1447,13 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // so an unclamped run would start the 30 s clock during warming and warn on the first live render (review #9). While
   // live, `since` is therefore "non-ok while live". `greatest` ignores a null `live_at` (not live yet). Null for
   // composed sessions and whenever this poll did not read the output.
+  // I-2a (controller ruling 2026-10-01, B5 re-review 2 §3): for a NON-ok word it is clamped to the phone's latest
+  // RECONNECT as well — an ingest_status event INTO `connected` from anything else. The mirror of the live clamp: the
+  // destination is not fed while the phone is silent either, so when the phone returns Cloudflare re-dials it, and a
+  // clock carried over from the drop put the stream-key box up at once over a key that was fine. A drop never moves it
+  // (the last connect predates the drop), so the phone box's timing is unchanged; the key box needs 30 s of the phone
+  // sending with the destination still not receiving. An `ok` word's since is not clamped: a phone that came back
+  // without the destination ever stopping never restarted its receiving.
   let output: StreamSessionCurrent["output"] = null;
   if (row.mode === "passthrough" && outputObserved !== null) {
     const [first] = await sql<{ since: Date | null }[]>`
@@ -1452,7 +1464,10 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
                                  where session_id = ${row.id} and type = 'ingest_status'
                                    and (coalesce(payload->>'outputState', '') = 'ok') <> ${outputObserved === "ok"}), 0)
           order by seq asc limit 1),
-        (select live_at from fixture_stream_sessions where id = ${row.id})
+        (select live_at from fixture_stream_sessions where id = ${row.id}),
+        (select max(occurred_at) from fixture_stream_events
+          where ${outputObserved !== "ok"} and session_id = ${row.id} and type = 'ingest_status'
+            and to_state = 'connected' and coalesce(from_state, '') <> 'connected')
       ) as since`;
     const since = new Date(first?.since ?? deps.now());
     // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.

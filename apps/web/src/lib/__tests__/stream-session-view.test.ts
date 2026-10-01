@@ -31,7 +31,7 @@ import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usec
 import {
   BEAT_STALE_SECONDS, CREATE_ERROR_CODES, OUTPUT_WARNING_AFTER_MS, CREATE_ERROR_KEYS, END_REASON_KEYS, FAIL_REASON_KEYS,
   INGEST_STATE_KEYS, STATE_PILL_KEYS, STREAM_POLL_MS, type CreateErrorCode, type PhoneTabState, type StreamSessionView,
-  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneTabState, qrText,
+  TARGET_REMOVED, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning, destinationWarning, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneTabState, qrText,
 } from "../stream-session-view";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -488,7 +488,7 @@ describe("D3 — the destination warning (spec §5.6)", () => {
 // destination not ok for OUTPUT_WARNING_AFTER_MS of server time — `destinationWarning`, pinned above). The PHONE decides
 // which: no signal from the phone → a box that points at the phone ("Seazn isn't getting video from the phone"), no
 // Directory link; the phone sending → the stream-key box. "No signal" is the Signal path's own word (§3.2): an ingest
-// read that is not `connected`. A NULL ingest (a failed provider read, N1) decides nothing, so it is not "no signal".
+// read that is not `connected`. A NULL ingest decides nothing (the N1 rule), so it is not "no signal".
 // Every expected value below is that ruling, transcribed — never read back from `d3Warning`.
 describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () => {
   type IngestWord = (typeof StreamIngest.shape.state.options)[number];
@@ -547,8 +547,25 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
     expect(checked).toBe(12);
   });
 
-  it("a null ingest (a failed read) is not no-signal: past the hold it is the key box, as before", () => {
+  // The chain's N1 rule: a null ingest decides nothing, so it is not no-signal. (The server never answers this shape — a
+  // failed read nulls ingest AND output together, stream-sessions.ts — so it is the rule's case, not a failed read's.)
+  it("the N1 rule: a null ingest beside an output is not no-signal — past the hold it is the key box", () => {
     expect(d3Warning(v("live", null, "connecting", W))).toBe("destination");
+  });
+
+  // n-1 (B5 re-review 2): `phoneNoSignal` is exported and its `state === "live"` check survived a mutant, because both
+  // of today's callers ask it only while live. Asked directly: no signal is a LIVE judgment, for every other state.
+  it("phoneNoSignal: only while live — a disconnected or unknown phone in any other state is not no-signal; live, it is; a connected or null ingest never is", () => {
+    let checked = 0;
+    for (const state of StreamSessionState.options) for (const ingest of StreamIngest.shape.state.options) {
+      const want = state === "live" && ingest !== "connected";   // the ruling: §3.2's "No signal" is a live row
+      expect(phoneNoSignal(v(state, ingest, null)), `${state} · ${ingest}`).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(StreamSessionState.options.length * StreamIngest.shape.state.options.length);
+    expect(phoneNoSignal(v("warming", "disconnected", null)), "warming with the phone not yet sending: not 'no signal'").toBe(false);
+    expect(phoneNoSignal(v("live", "disconnected", null)), "the positive twin").toBe(true);
+    expect(phoneNoSignal(v("live", null, "connecting")), "N1: a null ingest decides nothing").toBe(false);
   });
 
   it("the whole input space: every state × ingest (none included) × output (none included) × either side of the line", () => {
@@ -567,23 +584,30 @@ describe("I-1 — which D3 box: phone first (owner 2026-10-01, option a)", () =>
     expect(seen.destination, "key rows swept").toBeGreaterThan(0);
   });
 
-  it("the sequence: the phone drops → the box points at the phone; it returns while the destination still dials → the key box (the period never restarted); receiving → none", () => {
+  // I-2a (controller ruling 2026-10-01): the SERVER restarts the hold when the phone returns — `since` is clamped to the
+  // phone's latest reconnect, and that is pinned on the server's own clock in stream-sessions.test.ts ("I-2a SEQUENCE").
+  // These two feed `d3Warning` the elapsed the server answers at each step, so they are named for what they assert: the
+  // box the tab draws from the server's numbers. They do not, and cannot, witness the clock.
+  it("the box for each answer of a drop-and-return sequence, as the server times it: the phone silent past the hold → the phone box; back while the destination still dials, the hold restarted → none until 30 s after the return, then the key box; receiving → none", () => {
     const steps: [string, ReturnType<typeof v>, Box][] = [
       ["live, receiving", v("live", "connected", "ok", 0), null],
       ["the phone drops: inside the hold", v("live", "disconnected", "unknown", 5_000), null],
       ["30 s without the destination receiving, the phone still silent", v("live", "disconnected", "unknown", W), "phone"],
       ["still silent", v("live", "disconnected", "connecting", W + 10_000), "phone"],
-      ["the phone returns; the destination is still dialling", v("live", "connected", "connecting", W + 15_000), "destination"],
+      ["the phone returns; the server's hold restarts there", v("live", "connected", "connecting", 0), null],
+      ["29.999 s after the return, still dialling", v("live", "connected", "connecting", W - 1), null],
+      ["30 s after the return, still dialling", v("live", "connected", "connecting", W), "destination"],
       ["the destination receives", v("live", "connected", "ok", 0), null],
     ];
     const got = steps.map(([, view]) => d3Warning(view));
     expect(got).toEqual(steps.map(([, , box]) => box));
+    expect(steps).toHaveLength(8);
   });
 
-  it("…and a phone that returns INSIDE the hold: no box until the hold, then the key box", () => {
+  it("…and the answers for a phone that returns INSIDE the hold: none on the drop, none on the return (the hold restarted), none at return+29.999 s, the key box at return+30 s", () => {
     const got = [
       d3Warning(v("live", "disconnected", "unknown", 5_000)),
-      d3Warning(v("live", "connected", "connecting", 20_000)),
+      d3Warning(v("live", "connected", "connecting", 0)),
       d3Warning(v("live", "connected", "connecting", W - 1)),
       d3Warning(v("live", "connected", "connecting", W)),
     ];

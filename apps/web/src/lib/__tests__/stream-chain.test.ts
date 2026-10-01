@@ -110,6 +110,32 @@ describe("chainFor — spec §3.2, row by row", () => {
     expect(c.dest).toEqual(n("red", "live", "dot"));
   });
 
+  // The chain's "!" (controller ruling 2026-10-01, B5 re-review 2 n-2): in the phone-no-signal state the "!" sits on the
+  // PHONE node, not the destination — it follows the D3 box, which points at the phone there (I-1). The destination
+  // keeps its amber "Not receiving" and its amber dashes: it is still not receiving; it is just not the cause.
+  it("live, phone no signal, past the hold: the '!' sits on the PHONE node; the destination stays amber Not receiving with no mark — for EVERY non-ok word and every not-connected ingest word", () => {
+    const notOk = StreamOutput.shape.state.options.filter((o) => o !== "ok");
+    const silent = StreamIngest.shape.state.options.filter((i) => i !== "connected");
+    let checked = 0;
+    for (const i of silent) for (const o of notOk) {
+      const c = chainFor(v("live", i, o, W))!;
+      expect(c.phone, `${i} × ${o}`).toEqual(n("amber", "noSignal", "bang"));
+      expect(c.link1, `${i} × ${o}`).toBe("problem");
+      expect(c.seazn, `${i} × ${o}`).toEqual(n("amber", "waiting"));
+      expect(c.link2, `${i} × ${o}`).toBe("problem");
+      expect(c.dest, `${i} × ${o}: no "!" on the destination`).toEqual(n("amber", "notReceiving"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: silent ingest words × non-ok words").toBe(silent.length * notOk.length);
+    expect(checked).toBeGreaterThanOrEqual(2 * 3);
+  });
+
+  it("…under the hold the silent phone carries no '!' (there is no D3 box yet), and with the destination ok neither node does", () => {
+    expect(chainFor(v("live", "disconnected", "connecting", W - 1))!.phone).toEqual(n("amber", "noSignal"));
+    expect(chainFor(v("live", "disconnected", "connecting", W - 1))!.dest).toEqual(n("amber", "connecting"));
+    expect(chainFor(v("live", "disconnected", "ok", W * 3))!.phone).toEqual(n("amber", "noSignal"));
+  });
+
   it("live with NO ingest read (a failed provider read, N1) is NOT stale: nothing is decided on an unknown — the phone stays Connected", () => {
     expect(chainFor(v("live", null, "ok"))!.phone).toEqual(n("lime", "connected"));
   });
@@ -150,9 +176,13 @@ function specRow(state: State, ingest: IngestWord | null, output: OutputWord | n
       : output !== null && warned ? { link2: "problem", dest: n("amber", "notReceiving", "bang") }
         : { link2: "connecting", dest: n("amber", "connecting") };
   const stale = ingest !== null && ingest !== "connected";
-  return stale
-    ? { phone: n("amber", "noSignal"), link1: "problem", seazn: n("amber", "waiting"), ...half }
-    : { phone: n("lime", "connected"), link1: "flowing", seazn: n("lime", "receiving"), ...half };
+  if (!stale) return { phone: n("lime", "connected"), link1: "flowing", seazn: n("lime", "receiving"), ...half };
+  // The "!" follows the D3 box (ruling 2026-10-01): with the phone silent it sits on the phone, never the destination.
+  const bangOnPhone = half.dest.mark === "bang";
+  return {
+    phone: n("amber", "noSignal", bangOnPhone ? "bang" : null), link1: "problem", seazn: n("amber", "waiting"),
+    link2: half.link2, dest: bangOnPhone ? { ...half.dest, mark: null } : half.dest,
+  };
 }
 
 describe("chainFor — the whole input space against the table", () => {
@@ -162,6 +192,8 @@ describe("chainFor — the whole input space against the table", () => {
     const elapsed = [0, W - 1, W, W * 10];
     let checked = 0;
     let warnedRows = 0;
+    let phoneBangRows = 0;
+    let destBangRows = 0;
     for (const state of StreamSessionState.options) {
       for (const ingest of ingests) {
         for (const output of outputs) {
@@ -169,6 +201,8 @@ describe("chainFor — the whole input space against the table", () => {
             const expected = specRow(state, ingest, output, ms >= W);
             expect(chainFor(v(state, ingest, output, ms)), `${state} · ingest ${ingest} · output ${output} · ${ms} ms`).toEqual(expected);
             if (expected?.dest.word === "notReceiving") warnedRows++;
+            if (expected?.phone.mark === "bang") phoneBangRows++;
+            if (expected?.dest.mark === "bang") destBangRows++;
             checked++;
           }
         }
@@ -179,5 +213,7 @@ describe("chainFor — the whole input space against the table", () => {
     );
     expect(checked).toBeGreaterThanOrEqual(7 * 4 * 5 * 4);
     expect(warnedRows, "the D3 row really was reached by the sweep").toBeGreaterThan(0);
+    expect(phoneBangRows, "the '!' on the phone was reached by the sweep").toBeGreaterThan(0);
+    expect(destBangRows, "…and the '!' on the destination too").toBeGreaterThan(0);
   });
 });

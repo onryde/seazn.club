@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
-import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT } from "../ingest-cf";
+import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT, type ErrorReporter } from "../ingest-cf";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
 import type { OutputState, ProviderCallRecord } from "../ports";
@@ -247,9 +247,10 @@ describe("CloudflareIngest", () => {
     expect(await ingest.outputState("in_okout")).toBe("ok");
     expect(await ingest.outputState("in_noout")).toBe("unknown");
     expect(await ingest.outputState("in_pending")).toBe("unknown");
-    // N-2: and the two envelope guards, so no branch is covered only by another.
-    expect(await ingest.outputState("in_noresult")).toBe("unknown");
-    expect(await ingest.outputState("in_failed")).toBe("unknown");
+    // N-2: and the two envelope guards, so no branch is covered only by another. m-2 (B5 re-review 2): each is NOT
+    // READ — `null` — never the non-ok word `unknown`, which the poll would record and the D3 hold would count.
+    expect(await ingest.outputState("in_noresult")).toBeNull();
+    expect(await ingest.outputState("in_failed")).toBeNull();
   });
 
   it("C1: removeOutput DELETEs live_inputs/{input}/outputs/{output} — Cloudflare's \"Delete an output\" — with no body; 200 `{}` and 404 both resolve (the removal is idempotent), a 5xx throws with the token redacted; every call recorded", async () => {
@@ -506,13 +507,15 @@ describe("CloudflareIngest", () => {
 describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
   let states: string[] = [];
   const port = new FakeRecorder();
+  // m-2: the injected reporter (drivers.ts passes captureError — drivers.test.ts pins that wiring).
+  const reported = vi.fn<ErrorReporter>();
   const adapter = new CloudflareIngest({
     fetchImpl: recorder((c) => {
       if (c.init.method === "GET" && /\/outputs$/.test(c.url))
         return { status: 200, body: { success: true, result: states.map((s, i) => ({ uid: `out_${i}`, enabled: true, status: { current: { state: s } } })) } };
       return cfReply(c);
     }).fetchImpl,
-    accountId: "acct", token: "tok", recorder: port,
+    accountId: "acct", token: "tok", recorder: port, reportError: reported,
   });
   const stubOutputs = (s: string[]) => { states = s; };
   const flush = () => new Promise((r) => setImmediate(r));
@@ -535,6 +538,64 @@ describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
       checked++;
     }
     expect(checked).toBe(cases.length);
+  });
+
+  // m-2 (B5 re-review 2 §4a): a FAILED read is not evidence. Every way Cloudflare can answer without a usable result —
+  // a failed envelope however healthy its body looks, a success with no result, a 5xx whose body is not JSON, a 429 —
+  // is NOT READ (`null`), never `unknown`: the poll records `unknown` and the D3 hold counts it toward the key box.
+  it("m-2: a failed outputs read is NOT READ — null, never unknown — for a failed envelope, a missing result, a non-JSON 5xx and a 429; a successful read of the same output is still a word", async () => {
+    const replies: Record<string, Reply> = {
+      in_failedenv: { status: 200, body: { success: false, errors: [{ code: 10001 }], result: [{ uid: "o", status: { current: { state: "connecting" } } }] } },
+      in_noresult2: { status: 200, body: { success: true } },
+      in_5xx: { status: 503, body: "upstream connect error" },
+      in_429: { status: 429, body: { success: false, errors: [{ code: 10000, message: "rate limited" }] } },
+      in_read: { status: 200, body: { success: true, result: [{ uid: "o", status: { current: { state: "connecting" } } }] } },
+    };
+    const cf = new CloudflareIngest({
+      fetchImpl: recorder((c) => replies[/\/live_inputs\/([^/]+)\/outputs$/.exec(c.url)![1]!]!).fetchImpl,
+      accountId: "acct", token: "tok",
+    });
+    let checked = 0;
+    for (const id of ["in_failedenv", "in_noresult2", "in_5xx", "in_429"]) {
+      expect(await cf.outputState(id, { sessionId: "sess-m2" }), id).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(await cf.outputState("in_read", { sessionId: "sess-m2" }), "the positive twin: a read that succeeded").toBe("connecting");
+  });
+
+  // m-2 (B5 re-review 2 §4b): the vocabulary is observed, not documented. An unseen word still reads `unknown` — never
+  // a healthy destination — and is REPORTED with the raw word, once per session.
+  it("m-2: an unseen output word reads unknown AND is reported (captureError, injected) with the raw word — once per session; a second session reports again; a no-session call keys on its input; the seen words never report", async () => {
+    reported.mockClear();
+    const reports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_state");
+    let checked = 0;
+    // The four words the adapter maps on purpose (staging check B, plus `error`), alone and together: no report.
+    for (const s of [["connected"], ["connecting"], ["reconnecting"], ["error"], ["connected", "connecting", "reconnecting", "error"], []]) {
+      stubOutputs(s);
+      await adapter.outputState("in_abc", { sessionId: "sess-seen" });
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(reports(), "a seen word is never reported").toHaveLength(0);
+    stubOutputs(["connected", "reconnected"]);
+    expect(await adapter.outputState("in_abc", { sessionId: "sess-a" }), "still unknown, never ok").toBe("unknown");
+    expect(reports()).toHaveLength(1);
+    expect(reports()[0]![1]).toMatchObject({ route: "relay.output_state", extra: { sessionId: "sess-a", inputUid: "in_abc", words: ["reconnected"] } });
+    // The same session, every 5 s poll after: no second report — not even for a second unseen word.
+    for (let i = 0; i < 3; i++) await adapter.outputState("in_abc", { sessionId: "sess-a" });
+    stubOutputs(["streaming"]);
+    expect(await adapter.outputState("in_abc", { sessionId: "sess-a" })).toBe("unknown");
+    expect(reports(), "once per session").toHaveLength(1);
+    // A second session is its own report.
+    expect(await adapter.outputState("in_abc", { sessionId: "sess-b" })).toBe("unknown");
+    expect(reports()).toHaveLength(2);
+    expect(reports()[1]![1]).toMatchObject({ extra: { sessionId: "sess-b", words: ["streaming"] } });
+    // No session: keyed on the input, once.
+    await adapter.outputState("in_xyz");
+    await adapter.outputState("in_xyz");
+    expect(reports()).toHaveLength(3);
+    expect(reports()[2]![1]).toMatchObject({ extra: { sessionId: null, inputUid: "in_xyz" } });
   });
 
   it("the four per-session calls record their session id on the provider-call row (spec §5.7) — and a call with no meta records null", async () => {

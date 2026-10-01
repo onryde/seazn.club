@@ -1826,21 +1826,33 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
     expect(warnings(body({ view: live("ok", W * 3, silent), balance: 1 })), "silent phone but the destination ok: no box").toHaveLength(0);
     const warned = body({ view: live("connecting", W, silent), balance: 1 });
     expect(propsOf(byTestId(warned, "stream-stop")!).disabled, "the stream keeps running: Stop is there").toBeFalsy();
+    // The chain's "!" follows the box (ruling 2026-10-01): on the phone node, not the destination, through the body.
+    expect(chainOf(warned)?.chain).toMatchObject({ phone: { word: "noSignal", mark: "bang" }, dest: { word: "notReceiving", mark: null } });
+    expect(chainOf(body({ view: live("connecting", W), balance: 1 }))?.chain, "the phone sending: the '!' is the destination's")
+      .toMatchObject({ phone: { mark: null }, dest: { word: "notReceiving", mark: "bang" } });
   });
 
-  it("I-1 sequence through the body: drop → the phone box; back while the destination still dials → the key box; receiving → none", () => {
+  // I-2a (controller ruling 2026-10-01): the server restarts the hold when the phone returns (pinned on the server's
+  // clock in stream-sessions.test.ts). This feeds the body the elapsed the server answers at each step, so it asserts
+  // the box AND the "!" the body draws from them — not the clock.
+  it("I-1/I-2a: the box and the '!' through the body for each answer of a drop-and-return, as the server times it: drop → phone; back → none until 30 s after the return → key; receiving → none", () => {
     const silent = { ingest: { state: "disconnected" as const, protocol: null } };
-    const causes = [
+    const seen = [
       live("ok", 0),
       live("unknown", 5_000, silent),
       live("unknown", W, silent),
-      live("connecting", W + 15_000),
+      live("connecting", 0),
+      live("connecting", W - 1),
+      live("connecting", W),
       live("ok", 0),
     ].map((v) => {
-      const w = warnings(body({ view: v, balance: 1 }));
-      return w.length === 0 ? null : (propsOf(w[0]!).cause as string);
+      const b = body({ view: v, balance: 1 });
+      const w = warnings(b);
+      const c = chainOf(b)!.chain!;
+      const bang = c.phone.mark === "bang" ? "phone" : c.dest.mark === "bang" ? "dest" : null;
+      return [w.length === 0 ? null : (propsOf(w[0]!).cause as string), bang];
     });
-    expect(causes).toEqual([null, null, "phone", "destination", null]);
+    expect(seen).toEqual([[null, null], [null, null], ["phone", "phone"], [null, null], [null, null], ["destination", "dest"], [null, null]]);
   });
 
   it("in use (mockup state 5): an idle target_in_use refusal draws the destination node 'In use'; any other refusal does not", () => {

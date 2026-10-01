@@ -9,6 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeIngest, FakeRunner } from "../fakes";
 import { RelayDriversDisabled, disabledRelayDrivers, relayDrivers, relayUnavailable, setRelayDriversForTest } from "../drivers";
 
+// m-2: the live pair's report reaches Sentry (last describe); the provider-call recorder's DB write is stubbed out.
+const sentry = vi.hoisted(() => ({ captureError: vi.fn<(err: unknown, ctx?: { route?: string; extra?: Record<string, unknown> }) => void>() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
+vi.mock("../telemetry", () => ({ recordProviderCall: vi.fn(async () => undefined) }));
+
 afterEach(() => {
   vi.unstubAllEnvs();
   setRelayDriversForTest(null);
@@ -135,5 +140,34 @@ describe("N1 + m1: relayUnavailable() answers without constructing the drivers �
     }
     expect(checked).toBe(cells.length);
     expect(cells.some((c) => c.want) && cells.some((c) => !c.want), "both answers are reached").toBe(true);
+  });
+});
+
+// m-2 (B5 re-review 2 §4b): the Cloudflare adapter reports an output word it has never seen through an INJECTED reporter
+// (it imports no app module — fakes.ts imports it, and e2e specs import fakes.ts outside Next). The live pair must hand it
+// `captureError`, or the report is an inert seam that only the adapter's own unit test ever sees. Driven through
+// `relayDrivers()` itself, against a stubbed Cloudflare.
+describe("m-2: the live drivers wire the Cloudflare adapter's unseen-word report to captureError", () => {
+  it("live mode: an unseen output word reads unknown and reaches captureError with the raw word and the session", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RELAY_DRIVERS", "live");
+    vi.stubEnv("ENV_NAME", "prod");
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acct");
+    vi.stubEnv("CLOUDFLARE_STREAM_TOKEN", "tok");
+    const cf = vi.fn(async () =>
+      new Response(JSON.stringify({ success: true, result: [{ uid: "o", status: { current: { state: "reconnected" } } }] }), { status: 200 }));
+    vi.stubGlobal("fetch", cf);
+    sentry.captureError.mockClear();
+    try {
+      setRelayDriversForTest(null);
+      const { ingest } = relayDrivers();
+      expect(await ingest.outputState("in_wire", { sessionId: "sess-wire" })).toBe("unknown");
+      expect(cf, "PREMISE: the live adapter really asked (the stubbed) Cloudflare").toHaveBeenCalledTimes(1);
+      const reports = sentry.captureError.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_state");
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toMatchObject({ extra: { sessionId: "sess-wire", inputUid: "in_wire", words: ["reconnected"] } });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

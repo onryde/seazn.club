@@ -2207,16 +2207,37 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
     await expect(body.getByTestId("stream-stop")).toBeEnabled();
     await expect(streamControl(page), "the phone box is a D3 warning: amber").toHaveAttribute("data-dot", "amber");
+    // The chain's "!" follows the box (controller ruling 2026-10-01, B5 re-review 2 n-2): on the PHONE node; the
+    // destination is still amber "Not receiving", with no mark.
+    await expect(chain.locator('[data-node="phone"] [data-mark="bang"]'), "the '!' sits on the phone").toHaveCount(1);
+    await expect(chain.locator('[data-node="dest"] [data-mark]'), "no mark on the destination").toHaveCount(0);
+    await expect(chain).toHaveAttribute("data-dest", "notReceiving");
     await capture(scope, "live-no-signal");
     await shot(box, `I1-${width}-1-phone-box.png`);
-    // THE PHONE RETURNS while the destination still dials: the real projection again — the not-receiving period never
-    // restarted, so past the hold it is the stream-key box at once, with its way to Directory.
-    await page.unroute(CURRENT);
+    await shot(chain, `I1R2-${width}-1-chain-bang-on-phone.png`);
+    // THE PHONE RETURNS while the destination still dials. I-2a (controller ruling 2026-10-01): the server restarts the
+    // hold at the phone's reconnect, so its next answer is under the hold — no box, the destination back to dialling —
+    // and the key box waits 30 s more. The fake ingest cannot drop a connected phone, so the server never saw this drop
+    // and its own clock still runs from live: the return is that real projection with the elapsed the server answers
+    // after a reconnect (the server half is pinned on its clock in stream-sessions.test.ts, "I-2a SEQUENCE"). Registered
+    // OVER the drop's route (the last registered runs first), so no poll in between answers the unreshaped key box.
+    await reshape((v) => {
+      v.output = { ...(v.output as Record<string, unknown>), since: new Date().toISOString(), elapsedMs: 0 };
+    });
     await expect(chain).toHaveAttribute("data-phone", "connected", { timeout: POLL_WAIT_MS });
-    await expect(box).toHaveAttribute("data-cause", "destination");
+    await expect(box, "back, the hold restarted: no key box at once").toHaveCount(0);
+    await expect(chain).toHaveAttribute("data-dest", "connecting");
+    await expect(chain.locator("[data-mark]"), "no '!' anywhere under the hold").toHaveCount(0);
+    await shot(chain, `I1R2-${width}-2-chain-after-return.png`);
+    // 30 s on, the destination still not receiving with the phone sending: the server's own answer, past the hold.
+    await page.unroute(CURRENT);
+    await expect(box).toHaveAttribute("data-cause", "destination", { timeout: POLL_WAIT_MS });
     await expect(box).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));
     await expect(box.getByTestId("stream-output-open-directory")).toBeVisible();
+    await expect(chain.locator('[data-node="dest"] [data-mark="bang"]'), "the phone sending: the '!' is the destination's").toHaveCount(1);
+    await expect(chain.locator('[data-node="phone"] [data-mark]')).toHaveCount(0);
     await shot(box, `I1-${width}-2-key-box-after-return.png`);
+    await shot(chain, `I1R2-${width}-3-chain-bang-on-destination.png`);
     await reshape((v) => {
       // The real ending projection: the poll reads ingest and output only while warming or live (B5 review m-6).
       v.state = "ending";

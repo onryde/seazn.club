@@ -133,7 +133,7 @@ describe("SignalChain (spec §3.2)", () => {
   // never — the ring is `shrink-0`. The walkthrough measures the real box; this pins the classes it depends on.
   it("each node may shrink below its 64 px on a zoomed phone (min-w-0, never shrink-0); its 40 px ring may not", () => {
     const html = chainHtml(chainFor(liveOk)!);
-    const nodes = [...html.matchAll(/<div class="(flex w-16[^"]*)">/g)].map((m) => m[1]!);
+    const nodes = [...html.matchAll(/<div data-node="[a-z]+" class="(flex w-16[^"]*)">/g)].map((m) => m[1]!);
     expect(nodes, "three nodes").toHaveLength(3);
     for (const cls of nodes) {
       expect(cls.split(" "), cls).toContain("min-w-0");
@@ -156,14 +156,32 @@ describe("SignalChain (spec §3.2)", () => {
     expect(html).toMatch(/role="group"[^>]*aria-label="Signal path: phone Not connected, Seazn Ready, YouTube Not live"/);
   });
 
-  it("the live dot and the D3 '!' are marks on the destination ring, and only there", () => {
-    const live = chainHtml(chainFor(liveOk)!);
-    expect(live.match(/data-mark="dot"/g)?.length ?? 0).toBe(1);
-    expect(live).not.toMatch(/data-mark="bang"/);
-    const warned = chainHtml(chainFor(liveWarned)!);
-    expect(warned.match(/data-mark="bang"/g)?.length ?? 0).toBe(1);
-    expect(warned).not.toMatch(/data-mark="dot"/);
+  /** Each node's markup, keyed by its `data-node` — the mark is read off the node that DRAWS it, not off the page. */
+  const nodesOf = (html: string) => {
+    const parts = html.split(/(?=data-node=")/).slice(1);
+    return Object.fromEntries(parts.map((p) => [/^data-node="([a-z]+)"/.exec(p)![1]!, p]));
+  };
+
+  it("every node names itself (phone, seazn, dest), once, in chain order", () => {
+    expect(Object.keys(nodesOf(chainHtml(chainFor(liveOk)!)))).toEqual(["phone", "seazn", "dest"]);
+  });
+
+  it("the live dot and the D3 '!' are marks on the destination ring while the phone is sending, and only there", () => {
+    const live = nodesOf(chainHtml(chainFor(liveOk)!));
+    expect(live.dest!.match(/data-mark="dot"/g)?.length ?? 0).toBe(1);
+    expect(Object.values(live).join("")).not.toMatch(/data-mark="bang"/);
+    const warned = nodesOf(chainHtml(chainFor(liveWarned)!));
+    expect(warned.dest!.match(/data-mark="bang"/g)?.length ?? 0).toBe(1);
+    expect(warned.phone, "the phone is sending: no mark").not.toMatch(/data-mark=/);
+    expect(Object.values(warned).join("")).not.toMatch(/data-mark="dot"/);
     expect(chainHtml(chainFor(null)!)).not.toMatch(/data-mark=/);
+  });
+
+  it("the phone silent past the hold: the '!' is drawn on the PHONE ring, the destination ring has none (ruling 2026-10-01)", () => {
+    const silentWarned = nodesOf(chainHtml(chainFor(view("live", "disconnected", "connecting", W))!));
+    expect(silentWarned.phone!.match(/data-mark="bang"/g)?.length ?? 0).toBe(1);
+    expect(silentWarned.dest, "no '!' on the destination").not.toMatch(/data-mark=/);
+    expect(silentWarned.seazn).not.toMatch(/data-mark=/);
   });
 
   it("the words come from the dictionary in the viewer's locale — French at 320 is French, never English", () => {

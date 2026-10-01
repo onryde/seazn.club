@@ -72,12 +72,13 @@ const PlayIcon = () => (
   </svg>
 );
 
-function Node({ node, icon, name, wide }: { node: ChainNode; icon: ReactNode; name: ReactNode; wide?: boolean }) {
+function Node({ id, node, icon, name, wide }: { id: "phone" | "seazn" | "dest"; node: ChainNode; icon: ReactNode; name: ReactNode; wide?: boolean }) {
   const msg = useMsg();
   return (
     // `min-w-0`, not the mockup's `shrink-0`: at 125% zoom on a 320-px phone (a 256-px layout, A11) three fixed 64-px nodes
     // pass the viewport. Each keeps its 64 px wherever it fits and gives way below; its ring never does.
-    <div className={`flex w-16 min-w-0 flex-col items-center text-center ${wide ? "md:w-52" : "md:w-24"}`}>
+    // `data-node` names the node, so a test reads a mark off the node that draws it (the "!" moves with the cause).
+    <div data-node={id} className={`flex w-16 min-w-0 flex-col items-center text-center ${wide ? "md:w-52" : "md:w-24"}`}>
       <span
         data-tone={node.tone}
         className={`relative grid h-10 w-10 shrink-0 place-items-center rounded-full ${node.mark === "bang" ? BANG_RING : TONE_RING[node.tone]}`}
@@ -172,11 +173,12 @@ export function SignalChain({
         aria-label={msg("stream.chain.aria", { phone: word(chain.phone), seazn: word(chain.seazn), platform, dest: word(chain.dest) })}
       >
         <div className="flex items-start">
-          <Node node={chain.phone} icon={<PhoneIcon />} name={msg("stream.chain.phone")} />
+          <Node id="phone" node={chain.phone} icon={<PhoneIcon />} name={msg("stream.chain.phone")} />
           <Link style={chain.link1} />
-          <Node node={chain.seazn} icon={<SeaznIcon />} name={msg("stream.chain.seazn")} />
+          <Node id="seazn" node={chain.seazn} icon={<SeaznIcon />} name={msg("stream.chain.seazn")} />
           <Link style={chain.link2} />
           <Node
+            id="dest"
             node={chain.dest}
             icon={<PlayIcon />}
             wide

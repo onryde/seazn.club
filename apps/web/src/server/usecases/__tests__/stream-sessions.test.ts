@@ -26,7 +26,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { OUTPUT_WARNING_AFTER_MS, createErrorCode, destinationWarning } from "@/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, createErrorCode, d3Warning, destinationWarning } from "@/lib/stream-session-view";
 import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
@@ -3800,6 +3800,152 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
       const due = await pollAt(r, tLive, STOPPED + OUTPUT_WARNING_AFTER_MS, "connecting", set);
       expect(due.output).toEqual({ state: "connecting", since: iso(new Date(tLive + STOPPED)), elapsedMs: OUTPUT_WARNING_AFTER_MS });
       expect(destinationWarning(due), "stopped+30 s").toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // I-2a (controller ruling 2026-10-01, B5 re-review 2 §3): the destination is not fed while the phone is silent, so when
+  // the phone RETURNS Cloudflare has to re-dial it. The hold's clock therefore restarts at the phone's latest reconnect,
+  // exactly as it starts at live_at (review #9): `since` = the latest of (the not-receiving period's start, live_at, the
+  // last ingest reconnect). The PHONE box's timing is unchanged — during a drop the last connect predates it — and the
+  // KEY box needs 30 s of the phone sending with the destination still not receiving. Every instant below is live + an
+  // offset of the scenario's own and OUTPUT_WARNING_AFTER_MS; `d3Warning` reads the server's answer, the real consumer.
+  /** The fake's one scripted seam for the phone: `setState` on the session's live input (in-process only). */
+  const phoneOf = async (r: Rig, sessionId: string) => {
+    const [inp] = await sql<{ ingest_input_id: string }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId}`;
+    return (s: "connected" | "disconnected") => r.ingest.setState(inp!.ingest_input_id, s);
+  };
+
+  it("I-2a SEQUENCE on the server's clock: dialling from live, the phone drops at +5 s → the PHONE box at live+30 s; it returns at +50 s → no box at once nor at return+29.999 s, the KEY box at return+30 s; a second drop keeps the return's clock; a second return restarts it", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const phone = await phoneOf(r, sessionId);
+      const DROP = 5_000;
+      const BACK = 50_000;
+      phone("disconnected");
+      expect(d3Warning(await pollAt(r, tLive, DROP, "connecting", set)), "the drop, inside the hold").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, W - 1, "connecting", set)), "live+29.999 s").toBeNull();
+      const silent = await pollAt(r, tLive, W, "connecting", set);
+      expect(silent.ingest?.state, "PREMISE: the phone really is silent on the server's read").toBe("disconnected");
+      expect(silent.output, "the drop did not move the clock: since live").toEqual({ state: "connecting", since: iso(new Date(tLive)), elapsedMs: W });
+      expect(d3Warning(silent), "live+30 s, phone silent").toBe("phone");
+      // THE PHONE RETURNS while the destination still dials.
+      phone("connected");
+      const back = await pollAt(r, tLive, BACK, "connecting", set);
+      expect(back.ingest?.state, "PREMISE: the phone is back on the server's read").toBe("connected");
+      expect(back.output, "the hold restarts at the return").toEqual({ state: "connecting", since: iso(new Date(tLive + BACK)), elapsedMs: 0 });
+      expect(d3Warning(back), "no key box at once").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, BACK + W - 1, "connecting", set)), "return+29.999 s").toBeNull();
+      const due = await pollAt(r, tLive, BACK + W, "connecting", set);
+      expect(due.output).toEqual({ state: "connecting", since: iso(new Date(tLive + BACK)), elapsedMs: W });
+      expect(d3Warning(due), "return+30 s, the phone sending: the key box").toBe("destination");
+      // A SECOND drop keeps the return's clock (the last connect predates it): the box flips to the phone at once.
+      phone("disconnected");
+      const again = await pollAt(r, tLive, BACK + W + 5_000, "connecting", set);
+      expect(again.output!.since, "a drop never moves the clock").toBe(iso(new Date(tLive + BACK)));
+      expect(d3Warning(again), "second drop, past the hold since the return").toBe("phone");
+      // …and a SECOND return restarts it again.
+      phone("connected");
+      const RETURN2 = BACK + W + 10_000;
+      const back2 = await pollAt(r, tLive, RETURN2, "connecting", set);
+      expect(back2.output).toEqual({ state: "connecting", since: iso(new Date(tLive + RETURN2)), elapsedMs: 0 });
+      expect(d3Warning(back2), "second return: no box at once").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, RETURN2 + W, "connecting", set)), "second return+30 s").toBe("destination");
+      // The scenario really had its boundaries on record (Ruling 13): live, drop, return, drop, return.
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect(n).toBe(5);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("I-2a pair: a SHORT drop whose re-dial crosses 30 s from the stop — receiving, the phone drops at +10 s, the destination stops at +15 s, the phone returns at +25 s: no key box at +45 s (mid-re-dial), the key box at return+30 s; and an ok destination's since ignores the return", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "ok";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const phone = await phoneOf(r, sessionId);
+      // ok's own since, across a drop and a return that never stopped it receiving: the clamp is the HOLD's only.
+      expect((await pollAt(r, tLive, 2_000, "ok", set)).output).toEqual({ state: "ok", since: iso(new Date(tLive)), elapsedMs: 2_000 });
+      phone("disconnected");
+      expect((await pollAt(r, tLive, 4_000, "ok", set)).output!.since, "ok across a drop").toBe(iso(new Date(tLive)));
+      phone("connected");
+      expect((await pollAt(r, tLive, 6_000, "ok", set)).output!.since, "ok across a return: not clamped to it").toBe(iso(new Date(tLive)));
+      const STOP = 15_000;
+      const BACK = 25_000;
+      phone("disconnected");
+      expect(d3Warning(await pollAt(r, tLive, 10_000, "ok", set)), "dropped, still receiving").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, STOP, "connecting", set)), "the destination stops").toBeNull();
+      phone("connected");
+      expect((await pollAt(r, tLive, BACK, "connecting", set)).output, "the return restarts the hold").toEqual({ state: "connecting", since: iso(new Date(tLive + BACK)), elapsedMs: 0 });
+      const midRedial = await pollAt(r, tLive, STOP + W, "connecting", set);
+      expect(midRedial.output!.elapsedMs, "30 s from the stop is 20 s from the return").toBe(STOP + W - BACK);
+      expect(d3Warning(midRedial), "stop+30 s, mid-re-dial: no key box").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, BACK + W, "connecting", set)), "return+30 s").toBe("destination");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // m-2 (B5 re-review 2 §4a): a FAILED outputs read — Cloudflare's failed envelope, or no result — is not evidence. The
+  // port answers it with `null` (ports.ts), and the poll SKIPS it: no sample, no event, no output on the projection. It
+  // used to be read as `unknown`, a non-ok word, so six failed polls on a healthy stream put the key box on screen.
+  it("m-2: failed outputs reads on a receiving stream record nothing and move nothing — no `unknown` sample, no event, no output on the projection, the phone still read — and the hold starts at the destination's real stop, not the first failure", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState | null = "ok";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out as OutputState);
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const at = async (ms: number, w: OutputState | null) => {
+        r.tick(tLive + ms - r.deps.now().getTime());
+        out = w;
+        return (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      };
+      const counts = async () => {
+        const [s] = await sql<{ n: number; unknown: number }[]>`
+          select count(*)::int as n, count(*) filter (where output_state = 'unknown')::int as unknown
+            from fixture_stream_samples where session_id = ${sessionId} and source = 'poll'`;
+        const [e] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+        return { samples: s!.n, unknown: s!.unknown, events: e!.n };
+      };
+      expect((await at(5_000, "ok")).output!.state).toBe("ok");
+      const before = await counts();
+      expect(before.samples, "PREMISE: the receiving polls were sampled").toBeGreaterThan(0);
+      let failed = 0;
+      for (let ms = 10_000; ms <= 40_000; ms += 5_000) {
+        const v = await at(ms, null);
+        expect(v.output, `+${ms / 1000} s: no output read, no output answered`).toBeNull();
+        expect(v.ingest?.state, `+${ms / 1000} s: the phone's read still stands`).toBe("connected");
+        expect(d3Warning(v), `+${ms / 1000} s`).toBeNull();
+        failed++;
+      }
+      expect(failed, "the failing leg ran past the hold").toBe(7);
+      expect(await counts(), "nothing recorded for a read that failed").toEqual(before);
+      // Reads resume: the destination really is still receiving, and its since never moved.
+      expect((await at(45_000, "ok")).output).toEqual({ state: "ok", since: iso(new Date(tLive)), elapsedMs: 45_000 });
+      // …and when it really stops, the hold counts from THAT, not from the first failure (+10 s).
+      const STOP = 50_000;
+      await at(STOP - 2_000, null);
+      expect((await at(STOP, "connecting")).output).toEqual({ state: "connecting", since: iso(new Date(tLive + STOP)), elapsedMs: 0 });
+      expect(d3Warning(await at(STOP + W - 1, "connecting")), "stop+29.999 s").toBeNull();
+      expect(d3Warning(await at(STOP + W, "connecting")), "stop+30 s").toBe("destination");
+      expect((await counts()).unknown, "never an `unknown` sample").toBe(0);
     } finally {
       spy.mockRestore();
     }

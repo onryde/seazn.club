@@ -1,7 +1,7 @@
 // lib/stream-chain.ts — spec 2026-09-30 §3.2, the Signal-path table as ONE pure mapping. `SignalChain`
 // (components/v2/stream-signal-chain.tsx) draws it; the Stream button's dot reads the same session through
 // `streamButtonState` (T9b). No React, no clock: D3's 30 s are the SERVER's measure on the projection (M6).
-import { destinationWarning, phoneNoSignal, type StreamSessionView } from "@/lib/stream-session-view";
+import { d3Warning, destinationWarning, phoneNoSignal, type StreamSessionView } from "@/lib/stream-session-view";
 
 export type NodeTone = "slate" | "amber" | "lime" | "red";
 export type LinkStyle = "idle" | "connecting" | "flowing" | "problem";
@@ -50,6 +50,12 @@ export function chainFor(view: ChainView | null, opts: { destInUse?: boolean } =
     case "live": {
       const half = destinationHalf(view);
       if (phoneNoSignal(view)) {
+        // The "!" follows the D3 box (controller ruling 2026-10-01, B5 re-review 2 n-2): past the hold with the phone
+        // silent the box points at the phone (I-1), so the "!" sits on the PHONE node. The destination keeps its amber
+        // "Not receiving" and its dashes — it is still not receiving; it is not the cause.
+        if (d3Warning(view) === "phone") {
+          return { phone: node("amber", "noSignal", "bang"), link1: "problem", seazn: node("amber", "waiting"), link2: half.link2, dest: { ...half.dest, mark: null } };
+        }
         return { phone: node("amber", "noSignal"), link1: "problem", seazn: node("amber", "waiting"), ...half };
       }
       return { phone: node("lime", "connected"), link1: "flowing", seazn: node("lime", "receiving"), ...half };

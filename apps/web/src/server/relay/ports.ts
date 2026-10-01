@@ -71,7 +71,10 @@ export interface IngestProvider {
   createLiveInput(spec: IngestCreateSpec): Promise<IngestCredentials>;
   inputStatus(inputId: string, meta?: ProviderCallMeta): Promise<IngestStatus>;   // C5: the per-input GET
   addOutput(inputId: string, target: IngestTarget, meta?: ProviderCallMeta): Promise<string>; // passthrough only, exactly once; RETURNS the output's uid (Dg → sessions.output_uid). Output ERROR codes are dropped: the output object carries only uid, url, streamKey, enabled (API docs 2026-09-14)
-  outputState(inputId: string, meta?: ProviderCallMeta): Promise<OutputState>;   // target_rejected source; D3
+  /** target_rejected source; D3. `null` is "NOT READ" (B5 re-review 2, m-2): the provider answered, but with a failed
+   *  envelope or no result — not evidence about the destination, so the poll records nothing for it and decides nothing
+   *  on it. `unknown` stays the word for a read that SUCCEEDED and said nothing usable (no status yet, an unseen word). */
+  outputState(inputId: string, meta?: ProviderCallMeta): Promise<OutputState | null>;
   /** C1 (lane C final review): takes the passthrough output off its input, which is what stops Cloudflare simulcasting
    *  to the destination — the ONE teardown of a passthrough broadcast. Idempotent: an output already gone is success.
    *  Never `deleteInput` for this (the input carries the recording — C2). */
