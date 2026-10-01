@@ -40,11 +40,32 @@ export interface EntrantRow { id: string; display_name: string; seed: number | n
 /** `third_place` (W1b Task 10, T3 review G1): the product's row flag for a
  *  knockout's third-place match (usecases/fixtures.ts listDivisionFixtures
  *  selects it; the division fixtures route serves it). Optional: the fakes
- *  and older rows omit it, which reads as "not a third-place match". */
-export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean }
+ *  and older rows omit it, which reads as "not a third-place match".
+ *  `ext_key` / `is_final` (W1-driving Task 6): kept as the product serves them
+ *  (fixtures.ts listDivisionFixtures selects both) — a later stage's TBD row
+ *  is identified by its ext_key; absent from the fakes' single-stage rows. */
+export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean; ext_key?: string | null; is_final?: boolean }
 export interface GenerateOut { created: number; existing: number; fixtures: FixtureRow[] }
 export interface StartOut { division_id: string; status: string; started: boolean; generated: number }
-export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean }
+/** The next stage's DRAFT seed proposal a /complete minted
+ *  (usecases/stages.ts progressCompletedStage `seed_proposal`). There is no GET:
+ *  /complete's answer is the only place the harness learns its id. */
+export interface SeedProposalRef { readonly id: string; readonly status: string }
+export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
+/** A flagged seeding tie: the destination slots it spans and the tied
+ *  entrants, in the product's listed order (computeSeedProposal `ties`). */
+export interface SeedTie { readonly slots: readonly string[]; readonly entrantIds: readonly string[]; readonly reason: string }
+/** A recomputed draft (POST /stages/:id/seed-proposal → 201 `computed`). */
+export interface SeedProposalOut { readonly id: string; readonly status: string; readonly qualifiers: readonly { rank: number; entrantId: string; destinationSlot: string }[]; readonly ties: readonly SeedTie[] }
+/** confirmSeedProposal's answer: `filled` counts SLOTS (a bye seed owns two),
+ *  and `fixtures` is the WHOLE target stage (stages.ts, `where f.stage_id`). */
+export interface SeedConfirmOut { readonly proposalId: string; readonly filled: number; readonly fixtures: readonly FixtureRow[] }
+/** W1-driving T6 (FP-3): the 409 a /complete answers when the stage's
+ *  completion COMMITTED and only the next stage's seed proposal failed
+ *  (usecases/stages.ts progressCompletedStage). A repeat of that /complete
+ *  would re-run the progression, so the drivers record it as a completion.
+ *  Pinned against the product's text by http-driver.test.ts. */
+export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
 export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number }
 export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
@@ -116,6 +137,14 @@ export interface OrganiserDriver {
   forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
+  /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,
+   *  schemas.ts ConfirmSeedProposal): fills the stage's TBD rows through
+   *  fillSlot. A refusal (stale, already confirmed, an unresolved tie, a
+   *  withdrawn qualifier, nothing to fill) throws RefusedCall. */
+  confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut>;
+  /** Recomputes the stage's draft (POST /stages/:id/seed-proposal), marking
+   *  the previous draft stale. Throws RefusedCall on a refusal. */
+  recomputeSeedProposal(stageId: string): Promise<SeedProposalOut>;
   /** Replaces a root stage's fixtures wholesale (POST /stages/:id/rebuild).
    *  Throws RefusedCall on a refusal — 409 STAGE_HAS_RESULTS once any fixture
    *  carries a result (usecases/stages.ts rebuildStageFixtures). */

@@ -5,7 +5,7 @@ import type { PublicStandingsOut } from "../driver/types.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
-import type { BuiltReadback, Recorder } from "./common.ts";
+import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
 
 export interface Item { ok: boolean; note: string }
 
@@ -242,4 +242,21 @@ export function loopBounded(rec: Recorder, observed: ObservedRun): CheckResult {
     { ok: rec.exit === "drained", note: `play loop exited ${rec.exit ?? "never"}` },
     { ok: open.length === 0, note: `${open.length} fixture(s) left unfinished: ${open.slice(0, 8).map((f) => `${f.id} ${f.status}`).join(", ")}` },
   ]);
+}
+
+/** W1-driving T6 (T45-R1): every team fixture the harness scored had a
+ *  lineup PUT for each of its division-entrant sides before anything was
+ *  posted — the engine reads per-fixture lineups only (engine-db
+ *  loadLineupPair), so a side without one plays on the module default. One
+ *  item per scored side, counted. A non-team or rosterless division owes no
+ *  lineup (an abstain with its reason); a team division that scored nothing
+ *  is the vacuous fail. */
+export function lineupsPut(rec: Recorder, setup: Pick<DivisionSetup, "kind" | "rosterless">): CheckResult {
+  if (setup.kind !== "team") return assertion("life-lineups-put", [], `${setup.kind} entrants carry no lineup`);
+  if (setup.rosterless) return assertion("life-lineups-put", [], "rosterless team entrants (PADPROOF, D3) carry no lineup");
+  const items: Item[] = [...rec.teamPosts].flatMap(([fixtureId, sides]) => sides.map((side) => ({
+    ok: rec.lineupSides.get(fixtureId)?.has(side) === true,
+    note: `${fixtureId}: scored with no lineup PUT for side ${side}`,
+  })));
+  return assertion("life-lineups-put", items);
 }

@@ -1,7 +1,10 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
+import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
 
@@ -173,12 +176,55 @@ describe("HttpDriver — completeStage is never repeated after completion (desig
     expect((await d.completeStage("s1")).completed).toBe(true);
     expect(calls.length).toBe(2);
   });
+  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED came AFTER the completion committed, so a repeat is DriverMisuse with no HTTP", async () => {
+    const { t, calls } = fake([() => err(409, SEEDING_FAILED_AFTER_COMMIT)]);
+    const d = drv(t);
+    const e = await d.completeStage("s1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls.length).toBe(1);
+  });
+  it("W1-driving T6: completeStage passes the next stage's seed_proposal through unchanged", async () => {
+    const { t } = fake([() => ok({ completed: true, events: [], seed_proposal: { id: "sp-uuid", status: "draft" } })]);
+    expect(await drv(t).completeStage("s1")).toEqual({ completed: true, events: [], seed_proposal: { id: "sp-uuid", status: "draft" } });
+  });
   it("the guard is per stage: completing s1 does not block s2", async () => {
     const { t, calls } = fake([() => ok({ completed: true, events: [] })]);
     const d = drv(t);
     await d.completeStage("s1");
     await d.completeStage("s2");
     expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/complete", "/api/v1/stages/s2/complete"]);
+  });
+});
+
+describe("HttpDriver — the seed proposal (W1-driving T6, D1)", () => {
+  it("confirmSeedProposal POSTs the proposal id (and tiePicks) to the stage's confirm route and answers the product's fill", async () => {
+    const answer = { proposalId: "sp-1", filled: 4, fixtures: [{ id: "f1", stage_id: "s2", pool_id: null, round_no: 1, fixture_no: 1, home_entrant_id: "a", away_entrant_id: "b", status: "scheduled", outcome: null, ext_key: "se-r0-m0", is_final: false }] };
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s2/seed-proposal/confirm" ? ok(answer) : undefined)]);
+    const d = drv(t);
+    expect(await d.confirmSeedProposal("s2", { proposalId: "sp-1" })).toEqual(answer);
+    const picks = [{ slots: ["f1:home", "f1:away"], order: ["b", "a"] }];
+    await d.confirmSeedProposal("s2", { proposalId: "sp-1", tiePicks: picks });
+    expect(posts(calls).map((c) => c.body)).toEqual([{ proposalId: "sp-1" }, { proposalId: "sp-1", tiePicks: picks }]);
+  });
+  it("recomputeSeedProposal POSTs the seed-proposal route and maps the 201's computed slate onto the proposal", async () => {
+    const computed = { qualifiers: [{ rank: 1, source: { stageId: "s1", rank: 1 }, entrantId: "a", destinationSlot: "f1:home" }], ties: [{ slots: ["f1:home", "f2:home"], entrantIds: ["a", "c"], reason: "points" }], standingsHash: "h" };
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s2/seed-proposal" ? ok({ id: "sp-2", stageId: "s2", status: "draft", computed }, 201) : undefined)]);
+    const p = await drv(t).recomputeSeedProposal("s2");
+    expect(p).toEqual({ id: "sp-2", status: "draft", qualifiers: computed.qualifiers, ties: computed.ties });
+    expect(posts(calls).map((c) => [c.path, c.body])).toEqual([["/api/v1/stages/s2/seed-proposal", {}]]);
+  });
+  it("a refused confirm is the product's RefusedCall, its extra (the unresolved tie's slots and entrants) carried", async () => {
+    const { t } = fake([() => err(422, "SEEDING_TIE_UNRESOLVED", { slots: ["f1:home"], entrantIds: ["a", "c"] })]);
+    const e = await drv(t).confirmSeedProposal("s2", { proposalId: "sp-1" }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 422, code: "SEEDING_TIE_UNRESOLVED", extra: { slots: ["f1:home"], entrantIds: ["a", "c"] } });
+  });
+  it("SEEDING_FAILED_AFTER_COMMIT is the product's own code (usecases/stages.ts progressCompletedStage), read as text", () => {
+    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/server/usecases/stages.ts"), "utf8");
+    const m = /err instanceof Error \? err\.message : String\(err\),\s*"([A-Z_]+)"/.exec(text);
+    expect(m?.[1]).toBe(SEEDING_FAILED_AFTER_COMMIT);
   });
 });
 

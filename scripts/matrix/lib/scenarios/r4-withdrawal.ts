@@ -4,8 +4,9 @@
 // opposite policy.
 import { fieldSizeFor } from "../field-size.ts";
 import { isTerminal, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
-import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
-import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
+import { advanceSeededAsDeclared } from "./advance.ts";
+import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
+import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -73,7 +74,8 @@ export const r4Withdrawal: Scenario = {
     const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "R4"));
     const seed3 = setup.idOfSeed(3);
     let withdrawal: WithdrawalObs | null = null;
-    await playStage(ctx, rec, setup, {
+    // D12: the withdrawal hook runs on stage 1 only (playDivision).
+    const plays = await playDivision(ctx, rec, setup, {
       afterRound: async (round) => {
         if (round !== 1 || withdrawal !== null) return;
         const before = (await ctx.driver.listFixtures(setup.division.id))
@@ -86,15 +88,17 @@ export const r4Withdrawal: Scenario = {
         withdrawal = { entrantId: seed3, afterRound: 1, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedFinalized: out.skipped_finalized, before };
       },
     });
-    const complete = await finishStage(ctx, rec, setup);
-    const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal });
+    const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal });
     const w = withdrawal as WithdrawalObs | null;
     if (w === null) {
       return {
         observed,
         events: rec.events,
         notes: rec.notes,
-        assertions: [builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]), stageCompleted(observed), loopBounded(rec, observed)],
+        assertions: [
+          builtAsPosted(setup.built, observed), foldParity(rec), resultsAsPosted(rec, observed), assertion("r4-policy-reported", [{ ok: false, note: "round 1 never finished; nobody withdrew" }]),
+          stageCompleted(observed), loopBounded(rec, observed), advanceSeededAsDeclared(plays, rec.withdrawn), lineupsPut(rec, setup),
+        ],
       };
     }
     const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
@@ -120,6 +124,8 @@ export const r4Withdrawal: Scenario = {
           setup.stage.kind === "swiss" ? null : "not a swiss stage"),
         stageCompleted(observed),
         loopBounded(rec, observed),
+        advanceSeededAsDeclared(plays, rec.withdrawn),
+        lineupsPut(rec, setup),
       ],
     };
   },

@@ -2,8 +2,9 @@
 // floor(7/2) pairs with one sit-out. Canary: also expect ceil — the answer
 // that differs from the right one.
 import { fieldSizeFor } from "../field-size.ts";
-import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
-import { Recorder, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
+import { advanceSeededAsDeclared } from "./advance.ts";
+import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
+import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -17,9 +18,8 @@ export const f1OddField: Scenario = {
   async run(ctx) {
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "F1"));
-    await playStage(ctx, rec, setup);
-    const complete = await finishStage(ctx, rec, setup);
-    const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
+    const plays = await playDivision(ctx, rec, setup);
+    const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
     const s = observed.stages[0];
     const n = s.field.length;
     // floor(n/2) seated pairs per round, one bye; the canary ALSO expects ceil (m-1).
@@ -45,6 +45,8 @@ export const f1OddField: Scenario = {
         )),
         stageCompleted(observed),
         loopBounded(rec, observed),
+        advanceSeededAsDeclared(plays, rec.withdrawn),
+        lineupsPut(rec, setup),
       ],
     };
   },

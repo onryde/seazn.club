@@ -21,7 +21,7 @@ import {
   DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { wireCodeFor } from "./product-text.ts";
 
@@ -320,6 +320,22 @@ export class FakeLeagueDriver implements OrganiserDriver {
     return settle(() => {
       f.status = "abandoned";
       f.outcome = null;
+    });
+  }
+  /** W1-driving Task 6: a single stage has no later stage to seed. The
+   *  product refuses a recompute on a stage with no progression (422
+   *  SEEDING_RULES_MISSING, computeSeedProposal) and a confirm of a proposal
+   *  it never minted (404, codeless). FakeMultiStageDriver models the advance. */
+  recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
+    return settle(() => {
+      this.log("recomputeSeedProposal", stageId);
+      throw new RefusedCall("POST", `/api/v1/stages/${stageId}/seed-proposal`, 422, "SEEDING_RULES_MISSING", "this stage has no progression rules");
+    });
+  }
+  confirmSeedProposal(stageId: string, body: { proposalId: string }): Promise<SeedConfirmOut> {
+    return settle(() => {
+      this.log("confirmSeedProposal", stageId, body.proposalId);
+      throw new RefusedCall("POST", `/api/v1/stages/${stageId}/seed-proposal/confirm`, 404, wireCodeFor(404), "seed proposal not found");
     });
   }
   /** The table fake models no rebuild; refused by name (Task 13). */

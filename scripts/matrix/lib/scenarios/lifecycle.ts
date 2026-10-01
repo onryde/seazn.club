@@ -3,8 +3,10 @@
 import type { StageKind } from "@seazn/engine/core";
 import { fieldSizeFor } from "../field-size.ts";
 import { drawsAllowed } from "../sport-cfg.ts";
-import { builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted } from "./assertions.ts";
-import { Recorder, configProbe, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
+import type { ConfigEditObs } from "../observed.ts";
+import { advanceSeededAsDeclared } from "./advance.ts";
+import { builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, lineupsPut, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted } from "./assertions.ts";
+import { Recorder, configProbe, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -18,10 +20,14 @@ export const lifecycle: Scenario = {
   async run(ctx) {
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "LIFECYCLE"));
-    await playStage(ctx, rec, setup);
-    const configEdit = await configProbe(ctx, rec, setup);
-    const complete = await finishStage(ctx, rec, setup);
-    const observed = await snapshot(ctx, rec, setup, { complete, configEdit, withdrawal: null });
+    // W1-driving T6: the lock probe keeps its place — after stage 1's play,
+    // before its /complete (playDivision asks every reached stage to complete,
+    // so the hook always runs; a missing probe is a harness bug, named).
+    let probed: ConfigEditObs | null = null;
+    const plays = await playDivision(ctx, rec, setup, { beforeComplete: async () => { probed = await configProbe(ctx, rec, setup); } });
+    const configEdit = probed as ConfigEditObs | null;
+    if (configEdit === null) throw new Error("scenario: LIFECYCLE's config probe never ran — playDivision skipped stage 1's beforeComplete");
+    const observed = await snapshot(ctx, rec, setup, plays, { configEdit, withdrawal: null });
     const pub = await ctx.driver.publicStandings({ orgSlug: ctx.orgSlug, competitionSlug: setup.competition.slug, divisionSlug: setup.division.slug });
     const drawOk = drawsAllowed(ctx.spec.sport, ctx.cfg, setup.stage.kind as StageKind);
     return {
@@ -38,6 +44,8 @@ export const lifecycle: Scenario = {
         entrantsEditAccepted(configEdit),
         stageCompleted(observed),
         loopBounded(rec, observed),
+        advanceSeededAsDeclared(plays, rec.withdrawn),
+        lineupsPut(rec, setup),
       ],
     };
   },

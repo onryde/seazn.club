@@ -1,0 +1,510 @@
+// W1-driving Task 6: multi-stage driving. The later stages are generated right
+// after Start (TBD rows), stage N is played and completed ONCE, the proposal
+// that /complete returned is confirmed, and N+1 is played on. The fake
+// (fake-formats-driver.ts) proves the wiring only; Task 12 Step 7 owes the
+// first live cells.
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { expandTake } from "@seazn/engine/competition";
+import fc from "fast-check";
+import { describe, expect, it } from "vitest";
+import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { DriverMisuse, RefusedCall } from "../lib/driver/types.ts";
+import { fieldSizeFor } from "../lib/field-size.ts";
+import { evaluateInvariants } from "../lib/invariants.ts";
+import { toObservedOutcome, winnerOf } from "../lib/observed.ts";
+import { decideState } from "../lib/results.ts";
+import { SEEDING_TIE_CODE, UnknownTakeKind, advanceSeededAsDeclared, confirmAdvance, declaredTake } from "../lib/scenarios/advance.ts";
+import { Recorder, ensureLineups, finishStage, playStage, recordGenerate, setUpDivision, type DivisionSetup, type StagePlay } from "../lib/scenarios/common.ts";
+import { SCENARIOS } from "../lib/scenarios/index.ts";
+import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
+import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
+import { offlineBuilderDefault } from "../lib/variants.ts";
+import { FakeMultiStageDriver } from "./fake-formats-driver.ts";
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
+
+type Row = CaseSpec["row"];
+interface Opts { row: Row; sport?: string; variant?: string }
+function ctxFor(driver: FakeMultiStageDriver, scenario: ScenarioKey, opts: Opts): ScenarioContext {
+  const sport = opts.sport ?? "generic";
+  const variant = opts.variant ?? "score";
+  const spec: CaseSpec = { caseId: `${opts.row}|${sport}|${variant}|${scenario}`, row: opts.row, sport, variant, scenario, canary: false };
+  return { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] };
+}
+async function runOn(driver: FakeMultiStageDriver, scenario: ScenarioKey, opts: Opts) {
+  const out = await SCENARIOS[scenario].run(ctxFor(driver, scenario, opts));
+  const checks = [...evaluateInvariants(out.observed), ...out.assertions];
+  return { driver, out, checks, state: decideState({ checks, deferred: null, error: null }) };
+}
+const verdict = (checks: { id: string; verdict: string }[], id: string) => checks.find((c) => c.id === id)?.verdict;
+const failed = (checks: { id: string; verdict: string; reason?: string }[]) => checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason ?? ""}`);
+const body = (take: unknown[]) => ({ kind: "knockout", name: "x", config: {}, seq: 2, progression: { sources: [{ stage: "previous", take }], placement: "rank_order", timing: "setup" } }) as never;
+/** The multi-stage rows, derived from the catalogue. */
+const MULTI = ROW_KEYS.filter((r) => stagesForRow(r).length > 1);
+/** The rows the fake can draw: stage 1 a league or a group (fake-formats-driver.ts). */
+const FAKE_ROWS = MULTI.filter((r) => ["league", "group"].includes(stagesForRow(r)[0]!.kind));
+/** The bracket kinds: a line there needs a winner to feed on (stages.ts BRACKET_WALKOVER_KINDS plus the page playoff). */
+const BRACKET_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+/** A finding, not wiring (task report): the engine declares a draw reachable
+ *  on some bracket kinds (generic on page_playoff; boardgame on every kind),
+ *  so the default policy posts one and the bracket line feeds nobody. Derived
+ *  from the module's own supportsDraws, never a typed list. */
+const bracketDrawDeclared = (row: Row, sport: string, variant: string) =>
+  stagesForRow(row).slice(1).some((b) => BRACKET_KINDS.has(b.kind) && drawsAllowed(sport, resolveSportCfg(sport, variant), b.kind as never));
+
+describe("Step 0 — the product's multi-stage shape, pinned", () => {
+  it("every multi-stage row's later bodies are timing 'setup', and declaredTake answers for each — counted", () => {
+    let checked = 0;
+    for (const row of ROW_KEYS) {
+      const bodies = stagesForRow(row);
+      for (const b of bodies.slice(1)) {
+        expect(b.progression?.timing, `${row} seq ${b.seq}`).toBe("setup");
+        expect(declaredTake(b, 2), `${row} seq ${b.seq}`).toBeGreaterThan(0);
+        checked++;
+      }
+    }
+    const derived = ROW_KEYS.reduce((n, r) => n + stagesForRow(r).length - 1, 0);
+    expect(checked).toBe(derived);
+    // 8 two-stage rows + group_group_ko's two later stages; a new row moves `derived`, and this pin says so.
+    expect(derived).toBe(10);
+    expect(MULTI.length).toBe(9);
+  });
+  it("the codes the advance reads are the product's own (usecases/stages.ts), never invented", () => {
+    const stages = read("apps/web/src/server/usecases/stages.ts");
+    const tie = /"a flagged tie is not resolved[^"]*",\s*"([A-Z_]+)"/.exec(stages);
+    expect(tie?.[1]).toBe(SEEDING_TIE_CODE);
+    // The 409 a /complete answers when the stage committed and its next stage's seeding failed (:4239-4252).
+    expect(stages).toMatch(/throw new HttpError\(\s*409,\s*err instanceof Error \? err\.message : String\(err\),\s*"STAGE_COMPLETED_SEEDING_FAILED"/);
+    // Every later setup stage's generate short-circuits to the idempotent setup path (FP-1: it never refuses after the source completes).
+    expect(stages).toMatch(/if \(progression\.timing === "setup"\) return \{ seeded: true as const \};/);
+    // A departed qualifier is filtered, not closed up (FP-2).
+    expect(stages).toMatch(/const computedQualifiers = resolvedQualifiers\.filter\(\(q\) => !departed\.has\(q\.entrantId\)\);/);
+  });
+});
+
+describe("declaredTake — the take vocabulary", () => {
+  it("empty case first: a take kind the harness does not know is refused by name", () => {
+    expect(() => declaredTake(body([{ kind: "luckyLosers", n: 2 }]), 1)).toThrow(UnknownTakeKind);
+    expect(declaredTake({ kind: "knockout", name: "x", config: {}, seq: 1, progression: null } as never, 1)).toBe(0);
+  });
+  it("declaredTake reads the product's own take vocabulary: rankRange, topNPerGroup × pools, bestNth.count, roundLosers.count", () => {
+    expect(declaredTake(body([{ kind: "rankRange", from: 1, to: 4 }]), 1)).toBe(4);
+    expect(declaredTake(body([{ kind: "topNPerGroup", n: 2 }]), 4)).toBe(8);
+    expect(declaredTake(body([{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }]), 2)).toBe(6);
+    expect(declaredTake(body([{ kind: "roundLosers", round: 1, count: 4 }]), 1)).toBe(4);
+  });
+  it("declaredTake: bestNth adds its count ONCE, never per pool — the right answer differs from a naive per-pool count (plan review 1, m-7)", () => {
+    // 3 pools: top 2 per group = 6, plus the best 2 of the 3 thirds = 2 → 8. A per-pool bestNth reading gives 6 + 2×3 = 12.
+    const take = [{ kind: "topNPerGroup", n: 2 }, { kind: "bestNth", nth: 3, count: 2 }] as const;
+    const engineSlots = expandTake(take as never, { poolKeys: ["A", "B", "C"] }).flat().length; // the engine's own slot expansion
+    expect(engineSlots).toBe(8);
+    expect(declaredTake(body([...take]), 3)).toBe(engineSlots);
+  });
+  it("declaredTake's vocabulary is the product's take KINDS, read as text — counted; the engine's `picks` (no template uses it) is refused by name", () => {
+    const text = read("apps/web/src/components/v2/format-templates.ts");
+    const kinds = new Set([...text.matchAll(/take(?::\s*\[|\.push\()\s*\{\s*kind:\s*"([A-Za-z]+)"/g)].map((m) => m[1]!));
+    expect(kinds.size, "take kinds read from the templates").toBeGreaterThan(0);
+    expect([...kinds].sort()).toEqual(["bestNth", "rankRange", "roundLosers", "topNPerGroup"]);
+    const one: Record<string, unknown> = { rankRange: { from: 1, to: 2 }, topNPerGroup: { n: 1 }, bestNth: { nth: 2, count: 1 }, roundLosers: { round: 1, count: 1 } };
+    for (const k of kinds) expect(declaredTake(body([{ kind: k, ...(one[k] as object) }]), 2), k).toBeGreaterThan(0);
+    expect(() => declaredTake(body([{ kind: "picks", picks: [] }]), 1)).toThrow(/take kind 'picks'/);
+  });
+});
+
+describe("playDivision on the fake — the product sequence", () => {
+  it("league_ko: later stage generated after Start, before any play; stage 1 completed ONCE; the proposal /complete returned confirmed ONCE; stage 2 played", async () => {
+    const driver = new FakeMultiStageDriver();
+    const { out, checks, state } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    const s1 = driver.stageIdAt(1);
+    const stage2 = driver.stageIdAt(2);
+    const iStart = driver.trace.indexOf("start");
+    const iGen2 = driver.trace.indexOf(`generate ${stage2}`);
+    const iComplete1 = driver.trace.indexOf(`completeStage ${s1}`);
+    const iFirstPost = driver.trace.findIndex((c) => c.startsWith("postStream "));
+    expect(iStart).toBeGreaterThanOrEqual(0);
+    expect(iGen2).toBeGreaterThan(iStart);
+    expect(iGen2).toBeLessThan(iFirstPost);
+    expect(iGen2).toBeLessThan(iComplete1);
+    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(1);
+    expect(driver.trace.filter((c) => c === `completeStage ${stage2}`)).toHaveLength(1);
+    const confirms = driver.trace.filter((c) => c.startsWith(`confirmSeedProposal ${stage2}`));
+    expect(confirms).toEqual([`confirmSeedProposal ${stage2} ${driver.proposalIssuedFor(2)}`]);
+    expect(driver.trace.some((c) => c.startsWith("recomputeSeedProposal"))).toBe(false);
+    const [o1, o2] = out.observed.stages;
+    expect([o1!.fieldSource, o2!.fieldSource]).toEqual(["division", "seeded"]);
+    expect([...o2!.field].sort()).toEqual([...driver.seededInto(2)].sort());
+    expect(o2!.field.length).toBe(declaredTake(stagesForRow("league_ko")[1]!, 1));
+    expect([o1!.exit, o2!.exit]).toEqual(["drained", "drained"]);
+    expect(o2!.complete).toMatchObject({ status: 200, completed: true, seedProposal: null });
+    expect(o1!.complete?.seedProposal).toEqual({ id: driver.proposalIssuedFor(2), status: "draft" });
+    // Stage 2's generates are its own: the setup draw, then the play loop's.
+    expect(o2!.generates[0]).toMatchObject({ status: 200, created: 3 });
+    expect(o1!.generates.every((g) => g.created === 0)).toBe(true);
+    expect(verdict(checks, "advance-seeded-as-declared")).toBe("pass");
+    expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+  it("group_group_ko drives all three stages; each later stage is its own ObservedStage, seeded from the stage before it", async () => {
+    const driver = new FakeMultiStageDriver();
+    const { out, checks, state } = await runOn(driver, "LIFECYCLE", { row: "group_group_ko" });
+    expect(out.observed.stages.map((s) => [s.seq, s.fieldSource, s.exit])).toEqual([[1, "division", "drained"], [2, "seeded", "drained"], [3, "seeded", "drained"]]);
+    const bodies = stagesForRow("group_group_ko");
+    // The declared take, from the bodies and the SOURCE stage's observed pool count (4 pools, then 2).
+    expect(out.observed.stages[1]!.field.length).toBe(declaredTake(bodies[1]!, 4));
+    expect(out.observed.stages[2]!.field.length).toBe(declaredTake(bodies[2]!, 2));
+    for (const seq of [2, 3]) expect(driver.trace.filter((c) => c.startsWith(`confirmSeedProposal ${driver.stageIdAt(seq)} `)), `stage ${seq}`).toEqual([`confirmSeedProposal ${driver.stageIdAt(seq)} ${driver.proposalIssuedFor(seq)}`]);
+    for (const seq of [1, 2, 3]) expect(driver.trace.filter((c) => c === `completeStage ${driver.stageIdAt(seq)}`), `stage ${seq}`).toHaveLength(1);
+    expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+  it("every multi-stage row the fake draws plays LIFECYCLE through every stage — counted over the catalogue's rows", async () => {
+    expect(FAKE_ROWS.length).toBe(5); // league_ko, groups_ko, group_stepladder, group_playoffs, group_group_ko
+    // generic/score declares draws on page_playoff (generic.ts supportsDraws), so group_playoffs is judged on the
+    // variant without draws; the declared-draw bracket is the finding pinned below.
+    const variantOf = (row: Row) => (bracketDrawDeclared(row, "generic", "score") ? "win_loss" : "score");
+    expect(FAKE_ROWS.filter((r) => variantOf(r) === "win_loss")).toEqual(["group_playoffs"]);
+    let stages = 0;
+    for (const row of FAKE_ROWS) {
+      const { out, checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row, variant: variantOf(row) });
+      expect(out.observed.stages.length, row).toBe(stagesForRow(row).length);
+      for (const s of out.observed.stages.slice(1)) {
+        expect([s.fieldSource, s.exit, s.complete?.completed], `${row} stage ${s.seq}`).toEqual(["seeded", "drained", true]);
+        stages++;
+      }
+      expect(state, `${row}: ${failed(checks).join("; ")}`).toMatchObject({ state: "works" });
+    }
+    expect(stages).toBe(FAKE_ROWS.reduce((n, r) => n + stagesForRow(r).length - 1, 0));
+  });
+  it("every sport at its builder default plays league_ko LIFECYCLE through both stages — counted over the registry", async () => {
+    expect(SPORT_KEYS.length).toBeGreaterThan(0);
+    let judged = 0;
+    const declaredDraw: string[] = [];
+    for (const sport of SPORT_KEYS) {
+      const variant = offlineBuilderDefault(sport);
+      const { out, checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko", sport, variant });
+      expect(out.observed.stages.map((s) => s.fieldSource), sport).toEqual(["division", "seeded"]);
+      if (bracketDrawDeclared("league_ko", sport, variant)) {
+        // The finding stays VISIBLE (class 6): a stuck bracket reds, never reads works.
+        declaredDraw.push(sport);
+        expect(state.state, sport).toBe("red");
+        expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict, sport).toBe("fail");
+        continue;
+      }
+      expect(state, `${sport}: ${failed(checks).join("; ")}`).toMatchObject({ state: "works" });
+      judged++;
+    }
+    expect(judged).toBeGreaterThan(0);
+    expect(judged + declaredDraw.length).toBe(SPORT_KEYS.length);
+    process.stdout.write(`multi-stage registry sweep: ${judged} works, ${declaredDraw.length} declare a knockout draw (${declaredDraw.join(", ")})\n`);
+  });
+  it("…and generic/score's declared page_playoff draw sticks group_playoffs' stage 2, visibly red (the finding, routed in the task report)", async () => {
+    expect(bracketDrawDeclared("group_playoffs", "generic", "score")).toBe(true);
+    const { checks, state } = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "group_playoffs" });
+    expect(state.state).toBe("red");
+    expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
+  });
+  it("a tie on confirm: one recompute, tiePicks in the product's listed order, fact seeding_tie_picked", async () => {
+    const driver = new FakeMultiStageDriver({ tieAt: 2 });
+    const { out, checks, state } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    expect(driver.trace.filter((c) => c.startsWith("recomputeSeedProposal"))).toHaveLength(1);
+    expect(driver.tiesListed().length).toBe(1);
+    expect(driver.lastTiePicks()).toEqual(driver.tiesListed().map((t) => ({ slots: t.slots, order: t.entrantIds })));
+    expect(out.observed.facts).toContain("seeding_tie_picked");
+    // The first confirm used /complete's id and was refused; the second used the recompute's.
+    expect(driver.trace.filter((c) => c.startsWith("confirmSeedProposal "))).toEqual([
+      `confirmSeedProposal s2 ${driver.proposalIssuedFor(2)}`, `confirmSeedProposal s2 ${driver.confirmedProposalIds[0]}`,
+    ]);
+    expect(driver.confirmedProposalIds[0]).not.toBe(driver.proposalIssuedFor(2));
+    expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+  it("R4 withdraws seed 3 in stage 1; the withdrawn entrant is never seeded into stage 2", async () => {
+    const driver = new FakeMultiStageDriver();
+    const { out, checks } = await runOn(driver, "R4", { row: "league_ko" });
+    const withdrawn = out.observed.withdrawal!.entrantId;
+    expect(out.observed.stages[1]!.field.length).toBeGreaterThan(0);
+    expect(out.observed.stages[1]!.field).not.toContain(withdrawn);
+    expect(verdict(checks, "advance-seeded-as-declared")).toBe("pass");
+  });
+  it("…and a product that seeds the withdrawn entrant anyway reds advance-seeded-as-declared on its withdrawn item", async () => {
+    const driver = new FakeMultiStageDriver({ seedWithdrawn: true });
+    const { out, checks } = await runOn(driver, "R4", { row: "league_ko" });
+    const withdrawn = out.observed.withdrawal!.entrantId;
+    expect(out.observed.stages[1]!.field).toContain(withdrawn);
+    const c = checks.find((x) => x.id === "advance-seeded-as-declared")!;
+    expect(c.verdict).toBe("fail");
+    expect(c.evidence).toEqual(["stage 2: no withdrawn entrant seeded"]);
+  });
+  it("stage 1 not drained: asked to complete once (not ready, nothing committed); stage 2 is not_reached, never confirmed, and life-loop-bounded reds", async () => {
+    const driver = new FakeMultiStageDriver({ refuseGenerateOnStage1: true });
+    const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
+    expect(driver.trace.some((c) => c.startsWith("confirmSeedProposal"))).toBe(false);
+    expect(driver.trace.filter((c) => c.startsWith("completeStage"))).toEqual([`completeStage ${driver.stageIdAt(1)}`]);
+    expect(driver.commits).toEqual([]);
+    expect(out.observed.stages[0]!.complete).toMatchObject({ status: 200, completed: false, seedProposal: null });
+    expect(out.observed.stages[1]!.complete).toBeNull();
+    expect(out.observed.stages.map((s) => s.exit)).toEqual(["refused_generate", "not_reached"]);
+    expect(verdict(checks, "life-loop-bounded")).toBe("fail");
+    expect(verdict(checks, "advance-seeded-as-declared")).toBe("abstain");
+    expect(out.notes).toContain("stage 2: not reached (stage 1 completed=false, proposal none)");
+  });
+  it("a team sport on groups_ko plays both stages with a lineup per side on the later stage's fixtures too", async () => {
+    const football = offlineBuilderDefault("football");
+    expect(entrantKindFor("football", resolveSportCfg("football", football))).toBe("team");
+    const driver = new FakeMultiStageDriver();
+    const { out, checks, state } = await runOn(driver, "LIFECYCLE", { row: "groups_ko", sport: "football", variant: football });
+    const later = driver.fixturesOfStage(2).filter((f) => driver.decidedFixtureIds().includes(f.id));
+    // A 4-entrant single elimination decides 3 lines.
+    expect(later.length).toBe(3);
+    for (const f of later) expect(driver.trace.filter((c) => c.startsWith(`putLineup ${f.id} `)), f.id).toHaveLength(2);
+    const lineups = checks.find((c) => c.id === "life-lineups-put")!;
+    expect(lineups.verdict).toBe("pass");
+    // Every decided fixture of both stages, two sides each.
+    expect(lineups.checked).toBe(driver.decidedFixtureIds().length * 2);
+    expect(out.notes.some((n) => n === `lineups: ${driver.decidedFixtureIds().length * 2} PUT across ${driver.decidedFixtureIds().length} team fixture(s) scored`)).toBe(true);
+    expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+});
+
+/** The harness's own advance steps (recordGenerate, playStage, finishStage,
+ *  confirmAdvance) against the fake, one Recorder, one step at a time. A
+ *  named refusal is recorded, never thrown out. */
+type Step = "generateLater" | "playStage1" | "complete" | "confirmLatest" | "confirmStale" | "recompute" | { withdrawOne: number };
+class AdvanceHarness {
+  readonly issued: string[] = [];
+  readonly confirmed: string[] = [];
+  readonly before = new Set<string>();
+  readonly after = new Set<string>();
+  readonly refusals: string[] = [];
+  readonly d: FakeMultiStageDriver;
+  readonly ctx: ScenarioContext;
+  readonly rec: Recorder;
+  readonly setup: DivisionSetup;
+  constructor(d: FakeMultiStageDriver, ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup) {
+    this.d = d;
+    this.ctx = ctx;
+    this.rec = rec;
+    this.setup = setup;
+  }
+  static async open(d: FakeMultiStageDriver, row: Row, opts: { sport?: string; variant?: string } = {}): Promise<AdvanceHarness> {
+    const ctx = ctxFor(d, "LIFECYCLE", { row, ...opts });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, fieldSizeFor(row, "LIFECYCLE"));
+    return new AdvanceHarness(d, ctx, rec, setup);
+  }
+  get stage1() { return this.setup.stages[0]!; }
+  get stage2() { return this.setup.stages[1]!; }
+  declared(): number {
+    const pools = new Set(this.d.fixturesOfStage(1).filter((f) => f.pool_id !== null).map((f) => f.pool_id)).size || 1;
+    return declaredTake(this.setup.built.posted.stages[1]!, pools);
+  }
+  async confirm(id: string): Promise<void> {
+    const a = await confirmAdvance(this.ctx, this.rec, this.stage2, { id, status: "draft" }, this.declared());
+    // A tie's recompute is a proposal the product issued inside the advance.
+    if (a.tiePicked && a.proposalId !== null && !this.issued.includes(a.proposalId)) this.issued.push(a.proposalId);
+    if (a.status === 200) this.confirmed.push(a.proposalId!);
+    else this.refusals.push(`confirm ${a.status} ${a.code ?? ""}`);
+  }
+  async step(s: Step): Promise<void> {
+    if (typeof s === "object") {
+      const id = this.setup.idOfSeed(s.withdrawOne + 1);
+      try {
+        await this.ctx.driver.withdraw(id);
+        this.rec.withdrawn.add(id);
+        (this.confirmed.length > 0 ? this.after : this.before).add(id);
+      } catch (e) {
+        if (!(e instanceof RefusedCall)) throw e;
+        this.refusals.push(`withdraw ${e.status} ${e.code ?? ""}`);
+      }
+      return;
+    }
+    switch (s) {
+      case "generateLater": await recordGenerate(this.ctx, this.rec, this.stage2.id); return;
+      case "playStage1": await playStage(this.ctx, this.rec, this.setup, {}, this.stage1); return;
+      case "complete": {
+        try {
+          const c = await finishStage(this.ctx, this.rec, this.stage1.id);
+          if (c.seedProposal) this.issued.push(c.seedProposal.id);
+        } catch (e) {
+          if (!(e instanceof DriverMisuse)) throw e;
+          this.refusals.push("complete repeated: refused by the driver's guard");
+        }
+        return;
+      }
+      case "confirmLatest": {
+        const id = this.issued.at(-1);
+        if (id === undefined) { this.refusals.push("confirm: nothing issued yet"); return; }
+        await this.confirm(id);
+        return;
+      }
+      case "confirmStale": {
+        if (this.issued.length < 2) { this.refusals.push("confirm stale: no superseded proposal"); return; }
+        await this.confirm(this.issued[0]!);
+        return;
+      }
+      case "recompute": {
+        try {
+          this.issued.push((await this.ctx.driver.recomputeSeedProposal(this.stage2.id)).id);
+        } catch (e) {
+          if (!(e instanceof RefusedCall)) throw e;
+          this.refusals.push(`recompute ${e.status} ${e.code ?? ""}`);
+        }
+        return;
+      }
+    }
+  }
+  /** Committed completions of the stage (a not-ready /complete answers
+   *  `completed: false`, commits nothing and may be asked again). */
+  completesOf(seq: number): number { return this.d.commits.filter((id) => id === this.d.stageIdAt(seq)).length; }
+  confirmedIds(): string[] { return [...this.confirmed]; }
+  issuedIds(): string[] { return [...this.issued]; }
+  seeded(): string[] {
+    const out: string[] = [];
+    for (const f of this.d.fixturesOfStage(2)) for (const e of [f.home_entrant_id, f.away_entrant_id]) if (e !== null && !out.includes(e)) out.push(e);
+    return out;
+  }
+  sourceField(): string[] { return this.setup.entrants.map((e) => e.id); }
+  withdrawnBeforeConfirm(): Set<string> { return this.before; }
+  withdrawnAfterConfirm(): Set<string> { return this.after; }
+  stage2HasEntrants(): boolean { return this.seeded().length > 0; }
+}
+
+describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
+  it("fast-check: any order of organiser actions around an advance keeps the harness's advance invariants after every step", async () => {
+    // Plan review 2 I-2: weighted so the generate → play → complete → confirm path is reached; `playStage1` plays
+    // stage 1 to its loop exit in one step (a league of 8 needs 7 rounds, which single-round steps would rarely reach).
+    const cmd = fc.oneof(
+      { arbitrary: fc.constantFrom<Step>("generateLater", "playStage1", "complete", "confirmLatest", "confirmStale", "recompute"), weight: 5 },
+      { arbitrary: fc.nat({ max: 7 }).map((seedIdx): Step => ({ withdrawOne: seedIdx })), weight: 1 }, // review 1 I-5: withdrawal at any point
+    );
+    const tally = { runs: 0, confirmed: 0, withdrewBeforeConfirm: 0, withdrewAfterConfirm: 0 };
+    await fc.assert(fc.asyncProperty(fc.array(cmd, { minLength: 1, maxLength: 16, size: "max" }), async (steps) => {
+      const d = new FakeMultiStageDriver();
+      const h = await AdvanceHarness.open(d, "league_ko");
+      for (const s of steps) {
+        await h.step(s);
+        expect(h.completesOf(1)).toBeLessThanOrEqual(1); // /complete never repeated after it committed
+        expect(h.confirmedIds().every((id) => h.issuedIds().includes(id))).toBe(true);
+        // Review 2 I-2: judged against entrants withdrawn BEFORE the confirm that seeded them. An entrant seeded and
+        // withdrawn LATER stays seated in stage 2 (the product walks it over, withdrawal.ts:191-209).
+        expect(h.seeded().every((e) => h.sourceField().includes(e) && !h.withdrawnBeforeConfirm().has(e))).toBe(true);
+        expect(h.stage2HasEntrants()).toBe(h.confirmedIds().length > 0); // no seat filled without a confirm
+      }
+      tally.runs++;
+      if (h.confirmedIds().length > 0) tally.confirmed++;
+      if (h.withdrawnBeforeConfirm().size > 0 && h.confirmedIds().length > 0) tally.withdrewBeforeConfirm++;
+      if (h.withdrawnAfterConfirm().size > 0) tally.withdrewAfterConfirm++;
+      return true;
+    }), { numRuns: 200, seed: Number(process.env.MATRIX_FC_SEED ?? 20260930) });
+    // Anti-vacuity (TEST-STRATEGY rule 2), each counted over the 200 runs and pasted in the task report.
+    expect(tally.runs).toBe(200);
+    expect(tally.confirmed, "runs that reached a successful confirm").toBeGreaterThan(0);
+    expect(tally.withdrewBeforeConfirm, "runs where a withdrawal preceded a successful confirm").toBeGreaterThan(0);
+    expect(tally.withdrewAfterConfirm, "runs where a withdrawal followed a successful confirm").toBeGreaterThan(0);
+    process.stdout.write(`multi-stage fast-check tally (seed ${process.env.MATRIX_FC_SEED ?? 20260930}): ${JSON.stringify(tally)}\n`);
+  }, 120_000);
+  it("a withdrawal AFTER a confirm leaves the entrant seeded in stage 2, and stage 2 walks it over (review 2 I-2)", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    for (const s of ["generateLater", "playStage1", "complete", "confirmLatest"] as const) await h.step(s);
+    expect(h.confirmedIds()).toHaveLength(1);
+    const seededFirst = h.seeded()[0]!;
+    await h.step({ withdrawOne: d.seedOf(seededFirst) - 1 });
+    expect(h.withdrawnAfterConfirm().has(seededFirst)).toBe(true);
+    expect(h.seeded()).toContain(seededFirst); // still seated: the product does not unseat
+    const itsFixture = d.fixturesOfStage(2).find((f) => f.home_entrant_id === seededFirst || f.away_entrant_id === seededFirst)!;
+    expect(itsFixture.status).toBe("forfeited"); // knockout is in BRACKET_WALKOVER_KINDS: walked over
+    const opponent = itsFixture.home_entrant_id === seededFirst ? itsFixture.away_entrant_id : itsFixture.home_entrant_id;
+    expect(opponent).not.toBeNull();
+    expect(winnerOf(toObservedOutcome(itsFixture.outcome))).toBe(opponent);
+  });
+  it("FP-2: a would-be qualifier withdrawn before /complete is not seeded and her seat is left EMPTY — the bracket walks her opponent over", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    await h.step("generateLater");
+    await h.step("playStage1");
+    // Seed 1 wins every game it plays (defaultPolicy): the top of the table.
+    const top = h.setup.idOfSeed(1);
+    await h.step({ withdrawOne: 0 });
+    await h.step("complete");
+    await h.step("confirmLatest");
+    expect(h.confirmedIds()).toHaveLength(1);
+    const declared = h.declared();
+    expect(h.seeded()).not.toContain(top);
+    expect(h.seeded().length).toBe(declared - 1);
+    // Her seat is empty and its line is a walkover to the seated side — nobody was promoted into it.
+    const bye = d.fixturesOfStage(2).filter((f) => f.round_no === 1 && (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    expect(bye).toHaveLength(1);
+    expect(bye[0]!.status).toBe("forfeited");
+    expect(winnerOf(toObservedOutcome(bye[0]!.outcome))).toBe(bye[0]!.home_entrant_id ?? bye[0]!.away_entrant_id);
+    // The check takes the vacancy as the declared take less the withdrawn qualifier, never a pass on any count.
+    const plays: StagePlay[] = [
+      { stage: h.stage1, field: h.sourceField(), advance: null, complete: null },
+      { stage: h.stage2, field: h.seeded(), advance: { status: 200, code: null, proposalId: h.confirmedIds()[0]!, filled: declared - 1, seeded: h.seeded(), declared, tiePicked: false }, complete: null },
+    ];
+    expect(advanceSeededAsDeclared(plays, h.rec.withdrawn)).toMatchObject({ verdict: "pass", checked: 3 });
+    expect(advanceSeededAsDeclared(plays, new Set())).toMatchObject({ verdict: "fail", evidence: [`stage 2: seeded ${declared - 1}, declared ${declared}`] });
+  });
+  it("empty seed: every entrant withdrawn before /complete — the confirm is refused SEEDING_NOTHING_TO_FILL, recorded, and stage 2 seats nobody", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    await h.step("generateLater");
+    await h.step("playStage1");
+    for (let i = 0; i < h.setup.entrants.length; i++) await h.step({ withdrawOne: i });
+    await h.step("complete");
+    await h.step("confirmLatest");
+    expect(h.confirmedIds()).toEqual([]);
+    expect(h.refusals).toContain("confirm 422 SEEDING_NOTHING_TO_FILL");
+    expect(h.seeded()).toEqual([]);
+    expect(h.rec.notes).toContain("confirm on stage 2 refused 422 SEEDING_NOTHING_TO_FILL");
+  });
+  it("a stale proposal: after a recompute, confirming /complete's id is refused SEEDING_PROPOSAL_STALE, and the recompute's id confirms", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    for (const s of ["generateLater", "playStage1", "complete", "recompute", "confirmStale"] as const) await h.step(s);
+    expect(h.refusals).toEqual(["confirm 409 SEEDING_PROPOSAL_STALE"]);
+    expect(h.confirmedIds()).toEqual([]);
+    await h.step("confirmLatest");
+    expect(h.confirmedIds()).toEqual([h.issuedIds()[1]]);
+  });
+  it("a second /complete never reaches the product: the guard refuses it, the product saw one", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    for (const s of ["generateLater", "playStage1", "complete", "complete"] as const) await h.step(s);
+    expect(h.completesOf(1)).toBe(1);
+    expect(d.trace.filter((c) => c === `completeStage ${d.stageIdAt(1)}`)).toHaveLength(1);
+    expect(h.refusals).toEqual(["complete repeated: refused by the driver's guard"]);
+  });
+  it("FP-1: a /complete before the later stage's TBD rows exist commits the stage, answers 409 STAGE_COMPLETED_SEEDING_FAILED, and a recompute after generating recovers", async () => {
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko");
+    await h.step("playStage1");
+    const c = await finishStage(h.ctx, h.rec, h.stage1.id);
+    expect(c).toMatchObject({ status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: false, seedProposal: null });
+    await expect(finishStage(h.ctx, h.rec, h.stage1.id)).rejects.toBeInstanceOf(DriverMisuse);
+    await h.step("generateLater");
+    expect(h.rec.track(h.stage2.id).generates.at(-1)).toMatchObject({ status: 200, created: 3 });
+    await h.step("recompute");
+    await h.step("confirmLatest");
+    expect(h.confirmedIds()).toHaveLength(1);
+  });
+  it("T45-R2: a later-stage fixture first seen TBD gets its lineups once confirm seats it under the SAME id (the guard keys on fixture + side)", async () => {
+    const football = offlineBuilderDefault("football");
+    const d = new FakeMultiStageDriver();
+    const h = await AdvanceHarness.open(d, "league_ko", { sport: "football", variant: football });
+    await h.step("generateLater");
+    const tbd = d.fixturesOfStage(2).find((f) => f.round_no === 1)!;
+    expect([tbd.home_entrant_id, tbd.away_entrant_id]).toEqual([null, null]);
+    await ensureLineups(h.ctx, h.rec, h.setup, tbd);
+    expect(d.trace.filter((c) => c.startsWith(`putLineup ${tbd.id} `))).toEqual([]);
+    for (const s of ["playStage1", "complete", "confirmLatest"] as const) await h.step(s);
+    const seated = d.fixturesOfStage(2).find((f) => f.id === tbd.id)!;
+    expect(seated.home_entrant_id).not.toBeNull();
+    expect(seated.away_entrant_id).not.toBeNull();
+    await ensureLineups(h.ctx, h.rec, h.setup, seated);
+    expect(d.trace.filter((c) => c.startsWith(`putLineup ${tbd.id} `))).toEqual([`putLineup ${tbd.id} ${seated.home_entrant_id}`, `putLineup ${tbd.id} ${seated.away_entrant_id}`]);
+    // …and a second call PUTs nothing more.
+    await ensureLineups(h.ctx, h.rec, h.setup, seated);
+    expect(d.trace.filter((c) => c.startsWith(`putLineup ${tbd.id} `))).toHaveLength(2);
+  });
+});

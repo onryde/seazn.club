@@ -24,7 +24,7 @@ import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
 import { genericPad } from "../lib/pads/generic.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
@@ -316,6 +316,15 @@ describe("BrowserDriver — the mixed path", () => {
       await expect(unknown.driver.completeStage("s1"), thrown.message).rejects.toThrow(DriverMisuse);
       expect(unknown.http.calls).not.toContain("completeStage");
     }
+  });
+
+  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED followed a COMMITTED completion, so it is never repeated (over the page or http)", async () => {
+    const committed = league({ pages: { completeStageUi: async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, SEEDING_FAILED_AFTER_COMMIT, "no TBD rows"); } } });
+    await built(committed.driver, spec("league"));
+    await expect(committed.driver.completeStage("s1")).rejects.toThrow(RefusedCall);
+    await expect(committed.driver.completeStage("s1")).rejects.toThrow(DriverMisuse);
+    expect(committed.pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(1);
+    expect(committed.http.calls).not.toContain("completeStage");
   });
 
   it("guards: an action on a competition, division, stage, entrant or fixture this driver never built is refused by name before any page is touched, and is not recorded", async () => {
@@ -1164,6 +1173,28 @@ describe("BrowserDriver — the roster seam is setup filler (ruling 47, W1-drivi
     expect(http.calls.filter((c) => c === "entrantMembers" || c === "putLineup")).toEqual(["entrantMembers", "putLineup"]);
     expect(http.lineups.get(`${f.id}|e1`)?.map((s) => s.person_id)).toEqual(["p-e1-1", "p-e1-2", "p-e1-3"]);
     expect(driver.fillers).toEqual({ setMembers: 2, entrantMembers: 1, putLineup: 1 });
+    expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
+  });
+
+  it("W1-driving T6 (ruling 47): confirmSeedProposal and recomputeSeedProposal never touch the page — each reaches HTTP once, is counted as filler, and its answer or refusal passes through", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, pages: uiAddsTo(http) });
+    await built(driver, spec("league"));
+    const pages = pageCalls.length;
+    const coverage = only(driver, "mixed-driver-coverage");
+    const confirmed = { proposalId: "sp-2-1", filled: 4, fixtures: [] };
+    const proposal = { id: "sp-2-2", status: "draft", qualifiers: [], ties: [] };
+    const sent: unknown[] = [];
+    http.confirmSeedProposal = async (stageId, body) => { http.log("confirmSeedProposal"); sent.push([stageId, body]); return confirmed; };
+    http.recomputeSeedProposal = async (stageId) => { http.log("recomputeSeedProposal"); sent.push([stageId]); return proposal; };
+    expect(await driver.confirmSeedProposal("s2", { proposalId: "sp-2-1" })).toBe(confirmed);
+    expect(await driver.recomputeSeedProposal("s2")).toBe(proposal);
+    expect(sent).toEqual([["s2", { proposalId: "sp-2-1" }], ["s2"]]);
+    http.confirmSeedProposal = async () => { http.log("confirmSeedProposal"); throw new RefusedCall("POST", "/api/v1/stages/s2/seed-proposal/confirm", 409, "SEEDING_PROPOSAL_STALE", "stale"); };
+    await expect(driver.confirmSeedProposal("s2", { proposalId: "sp-2-1" })).rejects.toMatchObject({ code: "SEEDING_PROPOSAL_STALE" });
+    expect(pageCalls.length).toBe(pages);
+    expect(http.calls.filter((c) => c.endsWith("SeedProposal"))).toEqual(["confirmSeedProposal", "recomputeSeedProposal", "confirmSeedProposal"]);
+    expect(driver.fillers).toEqual({ confirmSeedProposal: 2, recomputeSeedProposal: 1 });
     expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
   });
 

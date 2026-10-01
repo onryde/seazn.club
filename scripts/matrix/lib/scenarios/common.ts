@@ -12,12 +12,13 @@ import { redact } from "../redact.ts";
 import { routeTo } from "../routing.ts";
 import {
   isTerminal, snap, toObservedOutcome,
-  type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type ObservedDeclared, type ObservedFixture,
+  type CaseFact, type CompleteObs, type ConfigEditObs, type GenerateObs, type LoopExit, type ObservedDeclared, type ObservedFixture,
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
 import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
 import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
+import { confirmAdvance, declaredTake, type AdvanceObs } from "./advance.ts";
 import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
 import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
 
@@ -38,7 +39,11 @@ export interface BuiltReadback {
 export interface DivisionSetup {
   competition: CompetitionRef;
   division: DivisionRef;
+  /** The root stage (stages[0]). */
   stage: StageRef;
+  /** W1-driving Task 6: every stage the product built, by seq. A later stage
+   *  is generated (TBD) right after start and seeded by the advance. */
+  stages: StageRef[];
   entrants: EntrantRow[];
   built: BuiltReadback;
   seedOf: (id: string) => number;
@@ -81,14 +86,23 @@ export interface ParityObs {
   request: RequestMatch | null;
 }
 
-/** Why playStage stopped (I-1). Only "drained" — generate answered and no
- *  seated fixture was left open, or the swiss budget was paired through — is a
- *  loop that ran to its end; life-loop-bounded reds every other exit, and a
- *  drained loop that still leaves a fixture open. */
-export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round";
+/** Why playStage stopped (observed.ts, where W1-driving Task 6 moved it so
+ *  each ObservedStage carries its own). */
+export type { LoopExit } from "../observed.ts";
+
+/** W1-driving Task 6: one stage's own loop record, so each later stage is
+ *  observed on what ITS loop did, not the run's. */
+export class StageTrack {
+  exit: LoopExit | null = null;
+  readonly generates: GenerateObs[] = [];
+  readonly pairRounds: PairRoundObs[] = [];
+}
 
 export class Recorder {
+  /** The run's exit: a single stage's own, or (playDivision) "drained" only
+   *  when every stage drained, else the first stage's that did not. */
   exit: LoopExit | null = null;
+  /** Run-wide, every stage's in call order (each stage's own is in `tracks`). */
   readonly generates: GenerateObs[] = [];
   readonly pairRounds: PairRoundObs[] = [];
   readonly declared = new Map<string, ObservedDeclared>();
@@ -105,14 +119,27 @@ export class Recorder {
    *  fixture it decides to be one. */
   readonly storedFixtures = new Set<string>();
   readonly notes: string[] = [];
-  /** W1-driving Task 4: the fixtures ensureLineups has PUT lineups on — once
-   *  per fixture, since a second PUT is a replacement nobody meant. */
-  readonly lineupFixtures = new Set<string>();
+  /** W1-driving Task 4: fixture → the sides ensureLineups has PUT a lineup
+   *  for — once per SIDE, since a second PUT is a replacement nobody meant.
+   *  Keyed on fixture AND side (W1-driving T6, T45-R2): confirm seats a later
+   *  stage's TBD row under the SAME id, so a row first met empty must still
+   *  get its lineups once seated. */
+  readonly lineupSides = new Map<string, Set<string>>();
+  /** W1-driving T6 (T45-R1): every team fixture the harness scored → its
+   *  division-entrant sides, which life-lineups-put holds to a PUT each. */
+  readonly teamPosts = new Map<string, string[]>();
   /** W1-driving Task 4: lineup PUTs made, one per division-entrant side. */
   lineupsPut = 0;
   drawsPosted = 0;
   decided = 0;
   events = 0;
+  /** W1-driving Task 6: stage id → its own loop record. */
+  readonly tracks = new Map<string, StageTrack>();
+  track(stageId: string): StageTrack {
+    let t = this.tracks.get(stageId);
+    if (t === undefined) { t = new StageTrack(); this.tracks.set(stageId, t); }
+    return t;
+  }
 }
 
 /** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
@@ -158,7 +185,6 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
 export async function buildDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
   // Every deferral and refusal fires before the first driver call.
   const bodies = stagesForRow(ctx.spec.row);
-  if (bodies.length > 1) throw new ScenarioUnsupported(DRIVING_WAVE, "multi-stage rows need seed-proposal handling");
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
   const rosterless = o.rosterlessTeams === true;
   const persons = personsNeeded(bodies);
@@ -208,7 +234,7 @@ export async function buildDivision(ctx: ScenarioContext, rec: Recorder, entrant
     }
   }
   await ctx.driver.start(division.id);
-  const stages = await ctx.driver.listStages(division.id);
+  const stages = [...await ctx.driver.listStages(division.id)].sort((a, b) => a.seq - b.seq);
   const stage = stages[0];
   if (stage === undefined) throw new Error(`scenario: division ${division.id} has no stage after start`);
   const built: BuiltReadback = {
@@ -221,7 +247,7 @@ export async function buildDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const seeds = new Map(entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER]));
   rec.notes.push(`stage ${stage.kind} status after start: ${stage.status}`);
   return {
-    competition, division, stage, entrants, built,
+    competition, division, stage, stages, entrants, built,
     kind, entrantIds: new Set(entrants.map((e) => e.id)), rosterless, rosters, persons: personsOf,
     seedOf: (id) => seeds.get(id) ?? Number.MAX_SAFE_INTEGER,
     idOfSeed: (seed) => {
@@ -301,8 +327,10 @@ function judgeLineupWarnings(ctx: ScenarioContext, rec: Recorder, fixtureId: str
 /** Fold-in beneath ruling 49: a team fixture's lineups are PUT while it is
  *  still scheduled, before the harness posts anything to it — members alone
  *  never reach the engine, which reads per-fixture lineups only (engine-db
- *  loadLineupPair). Once per fixture (rec.lineupFixtures), because a second
- *  PUT is a replacement the scenario never meant. `f.status` is the status
+ *  loadLineupPair). Once per fixture SIDE (rec.lineupSides), because a second
+ *  PUT is a replacement the scenario never meant — keyed on the side too
+ *  (T45-R2), since confirm seats a later stage's TBD row under the same id: a
+ *  side met empty gets its lineup once it is seated. `f.status` is the status
  *  the caller just read (decideFixture's fixtureState).
  *  Plan review 1 I-1: gated on TEAM kind AND the side being one of the
  *  division's own entrants. An americano/mexicano fixture seats ephemeral
@@ -314,14 +342,16 @@ function judgeLineupWarnings(ctx: ScenarioContext, rec: Recorder, fixtureId: str
  *  and is noted; its parity is already the unjudgeable item. */
 export async function ensureLineups(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow): Promise<void> {
   // D3: a PADPROOF rosterless setup scores team fixtures with no lineup (W1c D-T9-2), so it returns first.
-  if (setup.rosterless || setup.kind !== "team" || rec.lineupFixtures.has(f.id)) return;
+  if (setup.rosterless || setup.kind !== "team") return;
+  const done = rec.lineupSides.get(f.id) ?? new Set<string>();
+  const owed = [f.home_entrant_id, f.away_entrant_id].filter((side): side is string => side !== null && !done.has(side));
+  if (owed.length === 0) return;
   if (f.status !== "scheduled") {
     const note = `lineups: ${f.id} was ${f.status} when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`;
     if (!rec.notes.includes(note)) rec.notes.push(note);
     return;
   }
-  for (const side of [f.home_entrant_id, f.away_entrant_id]) {
-    if (side === null) continue;
+  for (const side of owed) {
     if (!setup.entrantIds.has(side)) {
       const note = `lineups: stage ${f.stage_id} seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side`;
       if (!rec.notes.includes(note)) rec.notes.push(note);
@@ -331,19 +361,23 @@ export async function ensureLineups(ctx: ScenarioContext, rec: Recorder, setup: 
     if (members === undefined) throw new Error(`scenario: fixture ${f.id} seats division entrant ${side}, which has no recorded roster`);
     const check = await ctx.driver.putLineup(f.id, side, lineupFor(ctx.spec.sport, ctx.cfg, members));
     rec.lineupsPut++;
+    done.add(side);
+    rec.lineupSides.set(f.id, done);
     judgeLineupWarnings(ctx, rec, f.id, side, check.warnings);
   }
-  rec.lineupFixtures.add(f.id);
 }
 
+/** Records each generate run-wide AND on the stage's own track (W1-driving
+ *  Task 6), so a later stage is judged on its own generates. */
 export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<FixtureRow[] | null> {
+  const push = (g: GenerateObs) => { rec.generates.push(g); rec.track(stageId).generates.push(g); };
   try {
     const g = await ctx.driver.generate(stageId);
-    rec.generates.push({ status: 200, code: null, total: g.fixtures.length, created: g.created });
+    push({ status: 200, code: null, total: g.fixtures.length, created: g.created });
     return g.fixtures;
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
-    rec.generates.push({ status: e.status, code: e.code, total: 0, created: 0 });
+    push({ status: e.status, code: e.code, total: 0, created: 0 });
     return null;
   }
 }
@@ -358,7 +392,9 @@ export function defaultPolicy(setup: DivisionSetup, f: FixtureRow, drawOk: boole
 const stageCtx = (kind: string, f: { pool_id: string | null; round_no: number | null }): StageCtx =>
   ({ kind: kind as StageKind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) });
 
-export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, outcome: RequestedOutcome): Promise<void> {
+/** `stage` (W1-driving Task 6): the stage `f` belongs to — its kind shapes
+ *  the stream, the request match and the declared points. */
+export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, outcome: RequestedOutcome, stage: StageRef = setup.stage): Promise<void> {
   const state = await ctx.driver.fixtureState(f.id);
   const home = f.home_entrant_id!;
   const away = f.away_entrant_id!;
@@ -375,7 +411,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // Task 4: a team fixture's lineups go in first, on the score branch and the
   // forfeit branch alike (M1's walkover comes through here).
   await ensureLineups(ctx, rec, setup, { ...f, status: state.status });
-  const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: setup.stage.kind as StageKind, home, away, outcome });
+  const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome });
   // What the driver actually sends: a forfeit on a fixture already under way
   // is the bare core.forfeit (http-driver.ts forfeit), so START only when the
   // fixture is still scheduled.
@@ -404,6 +440,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   const retried = posted.filter((p) => p.retried === true).length;
   if (retried > 0) rec.notes.push(`${f.id}: ${retried} event(s) landed on a SEQ_CONFLICT retry`);
   const productOutcome = toObservedOutcome(posted.at(-1)?.outcome ?? null);
+  // T45-R1: a scored team fixture owes a lineup per division-entrant side
+  // (life-lineups-put holds every one of them to a PUT).
+  if (setup.kind === "team" && !setup.rosterless) rec.teamPosts.set(f.id, [home, away].filter((e) => setup.entrantIds.has(e)));
   rec.events += now.length;
   rec.decided++;
   if (outcome.kind === "draw") rec.drawsPosted++;
@@ -415,21 +454,24 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   }
   const m = sportModule(ctx.spec.sport);
   const folded = foldStream(m, ctx.cfg, home, away, whole).outcome;
-  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: setup.stage.kind as StageKind, home, away, outcome }, folded);
+  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: stage.kind as StageKind, home, away, outcome }, folded);
   rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded), product: productOutcome, foreign: 0, finishedBefore: null, request });
-  const dp = declaredPoints(m, ctx.cfg, stageCtx(setup.stage.kind, f), home, away, whole);
+  const dp = declaredPoints(m, ctx.cfg, stageCtx(stage.kind, f), home, away, whole);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
 }
 
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;
 
-export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook } = {}): Promise<void> {
-  const stage = setup.stage;
+/** Plays one stage to its loop exit. `stage` (W1-driving Task 6) defaults to
+ *  the root; the exit lands on the stage's own track and on the run alike. */
+export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, hooks: { beforeRound?: RoundHook; afterRound?: RoundHook } = {}, stage: StageRef = setup.stage): Promise<void> {
+  const track = rec.track(stage.id);
+  const exit = (e: LoopExit) => { track.exit = e; rec.exit = e; };
   const drawOk = drawsAllowed(ctx.spec.sport, ctx.cfg, stage.kind as StageKind);
   const decideBatch = async (round: number, batch: FixtureRow[]) => {
     await hooks.beforeRound?.(round, batch);
     for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
-      await decideFixture(ctx, rec, setup, f, defaultPolicy(setup, f, drawOk, rec.decided));
+      await decideFixture(ctx, rec, setup, f, defaultPolicy(setup, f, drawOk, rec.decided), stage);
     }
     await hooks.afterRound?.(round, batch);
   };
@@ -438,29 +480,102 @@ export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: Divi
     for (let r = 1; r <= rounds; r++) {
       const fixtures = await recordGenerate(ctx, rec, stage.id);
       const batch = (fixtures ?? []).filter((f) => f.round_no === r && seatedOpen(f));
-      rec.pairRounds.push({ roundNo: r, seated: batch.length });
+      const pr = { roundNo: r, seated: batch.length };
+      rec.pairRounds.push(pr);
+      track.pairRounds.push(pr);
       if (batch.length === 0) { // I4 fails on the empty pair round
-        rec.exit = fixtures === null ? "refused_generate" : "empty_pair_round";
+        exit(fixtures === null ? "refused_generate" : "empty_pair_round");
         return;
       }
       await decideBatch(r, batch);
     }
-    rec.exit = "drained";
+    exit("drained");
     return;
   }
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const fixtures = await recordGenerate(ctx, rec, stage.id);
     // A named refusal is NOT "nothing left to play" (I-1): it stops the loop
     // with the stage unfinished, and life-loop-bounded says so.
-    if (fixtures === null) { rec.exit = "refused_generate"; return; }
+    if (fixtures === null) { exit("refused_generate"); return; }
     const open = fixtures.filter(seatedOpen);
-    if (open.length === 0) { rec.exit = "drained"; return; }
+    if (open.length === 0) { exit("drained"); return; }
     const round = Math.min(...open.map((f) => f.round_no ?? 0));
     await decideBatch(round, open.filter((f) => (f.round_no ?? 0) === round));
   }
-  rec.exit = "cap";
+  exit("cap");
   rec.facts.add("cut_short");
   rec.notes.push(`loop cap ${MAX_ITERATIONS} reached`);
+}
+
+/** One stage as the division played it: the stage, its field (the division's
+ *  entrants for the root, the entrants the advance seated for a later stage;
+ *  null before a stage was reached), the advance into it, and its /complete. */
+export interface StagePlay {
+  readonly stage: StageRef;
+  readonly field: readonly string[] | null;
+  readonly advance: AdvanceObs | null;
+  readonly complete: CompleteObs | null;
+}
+
+/** The run's exit is "drained" only if every stage drained; otherwise the
+ *  first stage's that did not. */
+const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => (exits.length === 0 ? null : exits.find((e) => e !== "drained") ?? "drained");
+
+/** W1-driving Task 6: every stage of the division, in the product's own
+ *  sequence. Each later "setup" stage gets its TBD rows right after start,
+ *  before any play (generate is idempotent; a /complete whose next stage has
+ *  no TBD rows commits and then answers 409 STAGE_COMPLETED_SEEDING_FAILED —
+ *  FP-1). Then per stage: play it, complete it ONCE, and confirm the draft
+ *  proposal that /complete returned on the next stage. The hooks run on stage
+ *  1 only (D12). A stage after one that did not complete, or whose advance
+ *  was refused, is recorded `not_reached`.
+ *  Every REACHED stage is asked to complete once its loop ends, drained or
+ *  not, as W1a's root always was (scenarios.test.ts "I-1": I4 judges the
+ *  answer; life-loop-bounded reds the early stop). That is still "once": a
+ *  stage that is not ready answers `completed: false` and commits nothing
+ *  (stages.ts completeStageIfReady), and the drivers refuse a repeat only
+ *  after a commit. */
+export async function playDivision(
+  ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
+  hooks: { beforeRound?: RoundHook; afterRound?: RoundHook; beforeComplete?: (stage: StageRef) => Promise<void> } = {},
+): Promise<StagePlay[]> {
+  for (const s of setup.stages.slice(1)) await recordGenerate(ctx, rec, s.id);
+  const plays: StagePlay[] = [];
+  for (const [i, stage] of setup.stages.entries()) {
+    let advance: AdvanceObs | null = null;
+    let field: readonly string[] | null = i === 0 ? setup.entrants.map((e) => e.id) : null;
+    if (i > 0) {
+      const prev = plays[i - 1];
+      const proposal = prev.complete?.seedProposal ?? null;
+      if (prev.complete?.completed !== true || proposal === null) {
+        rec.track(stage.id).exit = "not_reached";
+        const why = prev.complete === null ? "never completed" : `completed=${prev.complete.completed}, proposal ${proposal === null ? "none" : proposal.id}`;
+        rec.notes.push(`stage ${stage.seq}: not reached (stage ${prev.stage.seq} ${why})`);
+        plays.push({ stage, field: null, advance: null, complete: null });
+        continue;
+      }
+      const body = setup.built.posted.stages[i];
+      if (body === undefined) throw new Error(`scenario: stage ${stage.seq} has no posted body — ${setup.built.posted.stages.length} posted, ${setup.stages.length} built`);
+      const pools = new Set((await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === prev.stage.id && f.pool_id !== null).map((f) => f.pool_id)).size || 1;
+      advance = await confirmAdvance(ctx, rec, stage, proposal, declaredTake(body, pools));
+      field = advance.seeded;
+      if (advance.status !== 200) {
+        rec.track(stage.id).exit = "not_reached";
+        rec.notes.push(`stage ${stage.seq}: not reached (its seed advance was refused ${advance.status} ${advance.code ?? "(no code)"})`);
+        plays.push({ stage, field, advance, complete: null });
+        continue;
+      }
+    }
+    await playStage(ctx, rec, setup, i === 0 ? hooks : {}, stage); // D12: hooks on stage 1 only
+    if (i === 0) await hooks.beforeComplete?.(stage);
+    const complete = await finishStage(ctx, rec, stage.id);
+    plays.push({ stage, field, advance, complete });
+  }
+  rec.exit = worstExit(setup.stages.map((s) => rec.track(s.id).exit));
+  if (setup.kind === "team" && !setup.rosterless) {
+    rec.notes.push(`lineups: ${rec.lineupsPut} PUT across ${rec.teamPosts.size} team fixture(s) scored`);
+  }
+  return plays;
 }
 
 function toFixture(f: FixtureRow): Omit<ObservedFixture, "declared"> {
@@ -468,6 +583,9 @@ function toFixture(f: FixtureRow): Omit<ObservedFixture, "declared"> {
     id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome),
     // T3 review G1: only a row the product flags carries it.
     ...(f.third_place === true ? { thirdPlace: true } : {}),
+    // W1-driving Task 6: kept only where the source serves them.
+    ...(f.ext_key !== undefined ? { extKey: f.ext_key } : {}),
+    ...(f.is_final === true ? { isFinal: true } : {}),
   };
 }
 
@@ -492,16 +610,20 @@ export async function configProbe(ctx: ScenarioContext, rec: Recorder, setup: Di
 }
 
 /** A refused complete is recorded for I4 (which accepts a NAMED refusal) and
- *  noted; whether the stage was left unfinished is life-loop-bounded's call. */
-export async function finishStage(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup): Promise<CompleteObs> {
+ *  noted; whether the stage was left unfinished is life-loop-bounded's call.
+ *  W1-driving Task 6: takes the stage id (any stage), and carries the next
+ *  stage's draft proposal /complete minted — the only place its id is
+ *  served. A 409 STAGE_COMPLETED_SEEDING_FAILED is recorded as the refusal
+ *  it reads as (completed false); the driver never repeats it (FP-3). */
+export async function finishStage(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<CompleteObs> {
   try {
-    const c = await ctx.driver.completeStage(setup.stage.id);
+    const c = await ctx.driver.completeStage(stageId);
     const done = c.events.find((e) => e.type === "stage_completed");
-    return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null };
+    return { status: 200, code: null, completed: c.completed, finalRanks: done?.finalRanks ?? null, seedProposal: c.seed_proposal ?? null };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
     rec.notes.push(`complete refused ${e.status} ${e.code ?? "(no code)"}`);
-    return { status: e.status, code: e.code, completed: false, finalRanks: null };
+    return { status: e.status, code: e.code, completed: false, finalRanks: null, seedProposal: null };
   }
 }
 
@@ -525,30 +647,40 @@ export function byeDeclared(sport: string, cfg: unknown, stageKind: string, f: O
   return { home: seatedHome ? won.points : 0, away: seatedHome ? 0 : won.points, forOutcome: f.outcome };
 }
 
-export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, extra: { complete: CompleteObs; configEdit: ConfigEditObs | null; withdrawal: WithdrawalObs | null }): Promise<ObservedRun> {
-  const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === setup.stage.id);
-  const fixtures: ObservedFixture[] = rows.map((f) => {
-    const base = { ...toFixture(f), declared: null };
-    return { ...base, declared: rec.declared.get(f.id) ?? byeDeclared(ctx.spec.sport, ctx.cfg, setup.stage.kind, base) };
-  });
-  // One table per pool, each keeping its poolId (a merged table reds I1/I3).
-  const poolIds = [...new Set(rows.map((f) => f.pool_id))];
-  const standings: ObservedStage["standings"] = [];
-  for (const poolId of poolIds.length > 0 ? poolIds : [null]) {
-    const s = await ctx.driver.standings(setup.stage.id, poolId);
-    standings.push({ poolId, rows: s.rows.map((r) => ({ entrantId: r.entrantId, rank: r.rank, points: typeof r.points === "number" ? r.points : null })) });
+/** One ObservedStage per play (W1-driving Task 6), each on its OWN rows,
+ *  tables, generates, pair rounds and exit. The root's field is the
+ *  division's entrants ("division"); a later stage's is the entrants the
+ *  advance seated ("seeded") — I1 refuses a later stage judged on a
+ *  division-wide field (W1a carry 1). */
+export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, plays: readonly StagePlay[], extra: { configEdit: ConfigEditObs | null; withdrawal: WithdrawalObs | null }): Promise<ObservedRun> {
+  if (plays.length === 0) throw new Error("scenario: snapshot of a division with no stage played — a run observes at least its root stage");
+  const all = await ctx.driver.listFixtures(setup.division.id);
+  const stages: ObservedStage[] = [];
+  for (const [i, play] of plays.entries()) {
+    const stage = play.stage;
+    const rows = all.filter((f) => f.stage_id === stage.id);
+    const fixtures: ObservedFixture[] = rows.map((f) => {
+      const base = { ...toFixture(f), declared: null };
+      return { ...base, declared: rec.declared.get(f.id) ?? byeDeclared(ctx.spec.sport, ctx.cfg, stage.kind, base) };
+    });
+    // One table per pool, each keeping its poolId (a merged table reds I1/I3).
+    const poolIds = [...new Set(rows.map((f) => f.pool_id))];
+    const standings: ObservedStage["standings"] = [];
+    for (const poolId of poolIds.length > 0 ? poolIds : [null]) {
+      const s = await ctx.driver.standings(stage.id, poolId);
+      standings.push({ poolId, rows: s.rows.map((r) => ({ entrantId: r.entrantId, rank: r.rank, points: typeof r.points === "number" ? r.points : null })) });
+    }
+    const track = rec.track(stage.id);
+    stages.push({
+      id: stage.id, seq: stage.seq, kind: stage.kind, config: stage.config,
+      field: [...(play.field ?? [])], fieldSource: i === 0 ? "division" : "seeded", fixtures, standings,
+      generates: track.generates, pairRounds: track.pairRounds, complete: play.complete, exit: track.exit,
+    });
   }
   return {
     caseId: ctx.spec.caseId,
     facts: [...rec.facts],
-    stages: [{
-      id: setup.stage.id, seq: setup.stage.seq, kind: setup.stage.kind, config: setup.stage.config,
-      // W1a snapshots the single root stage only (multi-stage is deferred in
-      // setUpDivision), so the division's entrants ARE its field. A later
-      // stage snapshotted this way reds I1 by name (W1a carry 1).
-      field: setup.entrants.map((e) => e.id), fieldSource: "division", fixtures, standings,
-      generates: rec.generates, pairRounds: rec.pairRounds, complete: extra.complete,
-    }],
+    stages,
     withdrawal: extra.withdrawal,
     configEdit: extra.configEdit,
   };

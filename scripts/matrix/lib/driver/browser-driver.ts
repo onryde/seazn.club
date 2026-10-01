@@ -52,10 +52,10 @@ import type { StreamEvent } from "../streams/types.ts";
 import type { HttpDriver } from "./http-driver.ts";
 import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from "./mixed.ts";
 import {
-  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded,
+  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
 /** sport → pad adapter (pads/index.ts PAD_ADAPTERS). A sport without one is
@@ -494,6 +494,20 @@ export class BrowserDriver implements OrganiserDriver {
     return this.#write(() => this.#http.putLineup(fixtureId, entrantId, slots));
   }
 
+  /** Filler (ruling 47, W1-driving Task 6): the seed advance is always HTTP,
+   *  and a write; the product's answer or refusal passes through untouched. */
+  confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut> {
+    this.#ledger.filler("confirmSeedProposal");
+    return this.#write(() => this.#http.confirmSeedProposal(stageId, body));
+  }
+
+  /** Filler (ruling 47, W1-driving Task 6): a recompute is a write too (it
+   *  stales the previous draft). */
+  recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
+    this.#ledger.filler("recomputeSeedProposal");
+    return this.#write(() => this.#http.recomputeSeedProposal(stageId));
+  }
+
   /** The setup filler this driver ran, by name (mixed.ts FILLER). */
   get fillers(): Readonly<Partial<Record<FillerName, number>>> { return this.#ledger.fillers(); }
 
@@ -614,8 +628,9 @@ export class BrowserDriver implements OrganiserDriver {
       out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId)));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
-      // other ending may follow a committed completion, so it is never repeated.
-      if (!(e instanceof RefusedCall && e.status < 500)) this.#completed.add(stageId);
+      // other ending may follow a committed completion, so it is never repeated
+      // — and STAGE_COMPLETED_SEEDING_FAILED says it DID commit (W1-driving T6, FP-3).
+      if (!(e instanceof RefusedCall && e.status < 500 && e.code !== SEEDING_FAILED_AFTER_COMMIT)) this.#completed.add(stageId);
       throw e;
     }
     if (out.completed) {

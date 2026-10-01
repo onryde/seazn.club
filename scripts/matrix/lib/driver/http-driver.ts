@@ -13,10 +13,10 @@ import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
-  DriverMisuse, LineupUnchecked, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
+  DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -269,7 +269,10 @@ export class HttpDriver implements OrganiserDriver {
     // so a 5xx, or a request that never answered, may follow a committed
     // completion. Its outcome is unknown, and a repeat would re-run the
     // progression; it is recorded like a completion. A 4xx (a named refusal)
-    // committed nothing and stays retryable.
+    // committed nothing and stays retryable — except W1-driving T6's FP-3:
+    // 409 STAGE_COMPLETED_SEEDING_FAILED is the product saying the completion
+    // DID commit and only the next stage's seed proposal failed (:4239-4252),
+    // so it is recorded like a completion too.
     let r: RawResult;
     try {
       r = await this.#send(path, "POST", {});
@@ -278,9 +281,29 @@ export class HttpDriver implements OrganiserDriver {
       throw e;
     }
     if (r.status >= 500) this.#completed.add(stageId);
-    const out = this.#unwrap<CompleteOut>("POST", path, r);
+    let out: CompleteOut;
+    try {
+      out = this.#unwrap<CompleteOut>("POST", path, r);
+    } catch (e) {
+      if (e instanceof RefusedCall && e.code === SEEDING_FAILED_AFTER_COMMIT) this.#completed.add(stageId);
+      throw e;
+    }
     if (out.completed) this.#completed.add(stageId);
     return out;
+  }
+
+  /** W1-driving T6 (D1): the organiser's Confirm on the next stage's draft
+   *  (route seed-proposal/confirm, schemas.ts ConfirmSeedProposal). */
+  async confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut> {
+    return this.#call(`/api/v1/stages/${stageId}/seed-proposal/confirm`, "POST", body);
+  }
+
+  /** W1-driving T6 (D1): Recompute — a fresh draft, the previous one stale.
+   *  The route answers 201 with the slate under `computed`
+   *  (usecases/stages.ts computeSeedProposal). */
+  async recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
+    const p = await this.#call<{ id: string; status: string; computed: { qualifiers: SeedProposalOut["qualifiers"]; ties: SeedProposalOut["ties"] } }>(`/api/v1/stages/${stageId}/seed-proposal`, "POST", {});
+    return { id: p.id, status: p.status, qualifiers: p.computed.qualifiers, ties: p.computed.ties };
   }
 
   async rebuild(stageId: string): Promise<void> {

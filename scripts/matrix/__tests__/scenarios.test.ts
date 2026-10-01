@@ -414,10 +414,11 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
-    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded"]],
-    ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded"]],
-    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded"]],
-    ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded"]],
+    // W1-driving T6: every scenario judges the seed advance and (T45-R1) the lineups owed on team fixtures.
+    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
   ] as const)("%s", async (k, ids) => {
     expect((await runFake(k)).out.assertions.map((a) => a.id)).toEqual(ids);
   });
@@ -1001,17 +1002,6 @@ describe("deferrals are named", () => {
     expect(named).toBeDefined();
     expect(DRIVING_WAVE).toBe(named);
   });
-  // group_group_ko is the API-only multi-stage row Task 10's probe expects to
-  // read ⏳ W1-driving; league_ko is the template one. CaseSpec.row is RowKey
-  // (Task 9), so the API-only row needs no cast.
-  it.each(["league_ko", "group_group_ko"] as const)("%s (multi-stage) is ScenarioUnsupported(DRIVING_WAVE), not a crash, before any driver call", async (key) => {
-    const row: Row = key;
-    expect(stagesForRow(row).length).toBeGreaterThan(1);
-    const driver = new FakeLeagueDriver();
-    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toBeInstanceOf(ScenarioUnsupported);
-    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ wave: DRIVING_WAVE, message: expect.stringMatching(/multi-stage/) });
-    expect(driver.calls).toEqual([]);
-  });
   it.each(["ladder", "americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {
     const driver = new FakeLeagueDriver();
     await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: `${row}: challenge/rotation driving lands in ${DRIVING_WAVE}` });
@@ -1142,7 +1132,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     await ensureLineups(ctx, rec, setup, g);
     expect(putsOn(driver, g.id)).toHaveLength(2);
     expect(rec.lineupsPut).toBe(4);
-    expect([...rec.lineupFixtures]).toEqual([f!.id, g.id]);
+    expect([...rec.lineupSides.keys()]).toEqual([f!.id, g.id]);
   });
 
   it("ensureLineups: a side that is not a division entrant (a product-minted pair entrant) is skipped with one note per stage, never thrown", async () => {
@@ -1488,11 +1478,14 @@ describe("setup, generate and complete — refusals are recorded, crashes propag
     const ctx = ctxFor(driver, "LIFECYCLE");
     const setup = await setUpDivision(ctx, new Recorder(), 2);
     driver.completeStage = async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_INCOMPLETE", "open fixtures"); };
-    expect(await finishStage(ctx, new Recorder(), setup)).toEqual({ status: 409, code: "STAGE_INCOMPLETE", completed: false, finalRanks: null });
+    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 409, code: "STAGE_INCOMPLETE", completed: false, finalRanks: null, seedProposal: null });
     driver.completeStage = async () => ({ completed: true, events: [{ type: "stage_opened" }, { type: "stage_completed", finalRanks: ["e2", "e1"] }] });
-    expect(await finishStage(ctx, new Recorder(), setup)).toEqual({ status: 200, code: null, completed: true, finalRanks: ["e2", "e1"] });
+    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 200, code: null, completed: true, finalRanks: ["e2", "e1"], seedProposal: null });
+    // W1-driving T6: the next stage's draft proposal /complete minted rides on the observation.
+    driver.completeStage = async () => ({ completed: true, events: [], seed_proposal: { id: "sp-2-1", status: "draft" } });
+    expect(await finishStage(ctx, new Recorder(), setup.stage.id)).toEqual({ status: 200, code: null, completed: true, finalRanks: null, seedProposal: { id: "sp-2-1", status: "draft" } });
     driver.completeStage = async () => { throw new TypeError("boom"); };
-    await expect(finishStage(ctx, new Recorder(), setup)).rejects.toThrow("boom");
+    await expect(finishStage(ctx, new Recorder(), setup.stage.id)).rejects.toThrow("boom");
   });
 });
 
@@ -1626,8 +1619,8 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, 5);
     await playStage(ctx, rec, setup);
-    const complete = await finishStage(ctx, rec, setup);
-    const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
+    const complete = await finishStage(ctx, rec, setup.stage.id);
+    const observed = await snapshot(ctx, rec, setup, [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete }], { configEdit: null, withdrawal: null });
     const byes = observed.stages[0]!.fixtures.filter((f) => f.away === null);
     expect(new Set(byes.map((f) => f.home))).toEqual(new Set(setup.entrants.map((e) => e.id)));
     expect(byes.every((f) => f.declared !== null)).toBe(true);
@@ -1640,7 +1633,7 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, 4);
     driver.fixtures.forEach((f, i) => { f.pool_id = i % 2 === 0 ? "p1" : "p2"; });
-    const observed = await snapshot(ctx, rec, setup, { complete: { status: 200, code: null, completed: false, finalRanks: null }, configEdit: null, withdrawal: null });
+    const observed = await snapshot(ctx, rec, setup, [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete: { status: 200, code: null, completed: false, finalRanks: null, seedProposal: null } }], { configEdit: null, withdrawal: null });
     expect(observed.stages[0]!.standings.map((p) => p.poolId).sort()).toEqual(["p1", "p2"]);
     expect(driver.calls.filter((c) => c === "standings")).toHaveLength(2);
   });

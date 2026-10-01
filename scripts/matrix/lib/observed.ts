@@ -26,12 +26,29 @@ export interface ObservedFixture {
   declared: ObservedDeclared | null;
   /** The product flagged this row a knockout's third-place match (W1b Task 10). Absent otherwise. */
   thirdPlace?: boolean;
+  /** W1-driving Task 6: the row's ext_key as the product stored it (a later
+   *  stage's TBD rows are identified by it). Absent where the source has none. */
+  extKey?: string | null;
+  /** W1-driving Task 6: the product flagged this row its stage's final. */
+  isFinal?: boolean;
 }
 
 export interface StandingsRowObs { entrantId: string; rank: number; points: number | null }
 export interface GenerateObs { status: number; code: string | null; total: number; created: number }
 export interface PairRoundObs { roundNo: number; seated: number }
-export interface CompleteObs { status: number; code: string | null; completed: boolean; finalRanks: string[] | null }
+/** `seedProposal` (W1-driving Task 6): the next stage's draft proposal the
+ *  /complete minted (usecases/stages.ts progressCompletedStage) — null when
+ *  none was (the last stage, a refusal, a seeding failure). Optional so the
+ *  model's and the tests' literals that predate it still type. */
+export interface CompleteObs { status: number; code: string | null; completed: boolean; finalRanks: string[] | null; seedProposal?: { id: string; status: string } | null }
+
+/** Why a stage's play loop stopped (I-1). Only "drained" — generate answered
+ *  and no seated fixture was left open, or the swiss budget was paired
+ *  through — is a loop that ran to its end; life-loop-bounded reds every
+ *  other exit, and a drained loop that still leaves a fixture open.
+ *  "not_reached" (W1-driving Task 6): a later stage the run never got to play
+ *  — its source stage did not complete, or the seed advance was refused. */
+export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached";
 
 export interface ObservedStage {
   id: string;
@@ -50,6 +67,9 @@ export interface ObservedStage {
   generates: GenerateObs[];
   pairRounds: PairRoundObs[];
   complete: CompleteObs | null;
+  /** W1-driving Task 6 (PF-6): how this stage's play loop ended; null when it
+   *  never ran. Optional: the model (lib/model/state.ts) has no play loop. */
+  exit?: LoopExit | null;
 }
 
 export interface FixtureSnap { id: string; status: string; outcome: ObservedOutcome | null }
@@ -71,7 +91,9 @@ export interface ConfigEditObs {
   after: FixtureSnap[];
 }
 
-export type CaseFact = "withdrawn" | "expunged" | "voided" | "cut_short" | "late_entry" | "shared_place_declared";
+/** `seeding_tie_picked` (W1-driving Task 6): a confirm was refused on a
+ *  flagged tie, and the harness took the product's own listed order. */
+export type CaseFact = "withdrawn" | "expunged" | "voided" | "cut_short" | "late_entry" | "shared_place_declared" | "seeding_tie_picked";
 
 export interface ObservedRun {
   caseId: string;

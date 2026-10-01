@@ -2,8 +2,9 @@
 // seed 1 and, in a bracket, seed 1 goes on. Canary: ALSO expect the ABSENT side.
 import { fieldSizeFor } from "../field-size.ts";
 import { winnerOf } from "../observed.ts";
-import { assertion, builtAsPosted, foldParity, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
-import { Recorder, decideFixture, finishStage, playStage, setUpDivision, snapshot } from "./common.ts";
+import { advanceSeededAsDeclared } from "./advance.ts";
+import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
+import { Recorder, decideFixture, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -22,7 +23,8 @@ export const m1Walkover: Scenario = {
     const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "M1"));
     const seed1 = setup.idOfSeed(1);
     let target: Target | null = null;
-    await playStage(ctx, rec, setup, {
+    // D12: the walkover hook runs on stage 1 only (playDivision).
+    const plays = await playDivision(ctx, rec, setup, {
       beforeRound: async (round, batch) => {
         if (target !== null) return;
         const f = batch.find((x) => x.home_entrant_id === seed1 || x.away_entrant_id === seed1);
@@ -34,8 +36,7 @@ export const m1Walkover: Scenario = {
         await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: absentSide, reason: "walkover" });
       },
     });
-    const complete = await finishStage(ctx, rec, setup);
-    const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
+    const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
     const t = target as Target | null;
     const fx = t === null ? undefined : observed.stages[0].fixtures.find((f) => f.id === t.id);
     return {
@@ -56,6 +57,8 @@ export const m1Walkover: Scenario = {
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
         stageCompleted(observed),
         loopBounded(rec, observed),
+        advanceSeededAsDeclared(plays, rec.withdrawn),
+        lineupsPut(rec, setup),
       ],
     };
   },
