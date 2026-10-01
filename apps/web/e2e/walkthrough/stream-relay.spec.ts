@@ -974,25 +974,47 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
  *  so the warning holds from (live + 30 s) to (connect + RECOVER_MS): at least RECOVER_MS − 30 s − POLL_WAIT_MS of
  *  window, which is two whole polls — the warning is observed on screen, never inferred. */
 const RECOVER_MS = OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS + 2 * STREAM_POLL_MS;
-/** The one-poller witness's window, in poll periods (T9b brief: K = 4). */
-const POLLER_K = 4;
+/** An answer from `current` is on screen well inside a fifth of a poll (a render, not a network trip). */
+const RENDER_MS = STREAM_POLL_MS / 5;
+/** "Just before the line": the last two polls under OUTPUT_WARNING_AFTER_MS. */
+const NEAR_LINE_MS = OUTPUT_WARNING_AFTER_MS - 2 * STREAM_POLL_MS;
+/** One `current` answer as the page received it — the SERVER's own measure of the destination (M6). */
+interface CurrentAnswer { at: number; live: boolean; notOk: boolean; elapsedMs: number | null }
+/** Records every answer the page gets from this fixture's `current`, with the moment it landed. */
+function recordCurrentAnswers(page: Page, fixtureId: string): CurrentAnswer[] {
+  const answers: CurrentAnswer[] = [];
+  page.on("response", (r) => {
+    if (r.request().method() !== "GET" || !new URL(r.url()).pathname.endsWith(`/fixtures/${fixtureId}/stream-sessions/current`)) return;
+    void r
+      .json()
+      .then((j: { data?: { state?: string; output?: { state: string; elapsedMs: number } | null } | null }) => {
+        const v = j.data ?? null;
+        answers.push({
+          at: Date.now(),
+          live: v?.state === "live",
+          notOk: !!v?.output && v.output.state !== "ok",
+          elapsedMs: v?.output?.elapsedMs ?? null,
+        });
+      })
+      .catch(() => {});
+  });
+  return answers;
+}
+const atTheLine = (a: CurrentAnswer): boolean =>
+  a.live && a.notOk && a.elapsedMs !== null && a.elapsedMs >= OUTPUT_WARNING_AFTER_MS;
 for (const width of [320, 1280] as const) {
   test(`D3 @${width}: live, the destination Connecting → at 30 s (not before) the amber warning, still live, Stop enabled → receiving resumes and it clears → Stop`, async ({
     page,
   }) => {
-    const NAVS = 2; // openPhoneTab, then again while live (the one-poller witness)
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + RECOVER_MS + 4 * POLL_WAIT_MS + POLLER_K * STREAM_POLL_MS + NAVS * NAV_MS);
+    const NAVS = 1; // openPhoneTab
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + RECOVER_MS + 4 * POLL_WAIT_MS + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
-    // Spec §2 (T9b) — ONE `current` poller per fixture page: every browser GET of it, from the moment the page exists.
-    let currentGets = 0;
-    page.on("request", (r) => {
-      if (r.method() === "GET" && new URL(r.url()).pathname.endsWith("/stream-sessions/current")) currentGets++;
-    });
     const rig = await seedRelayRig(page);
     const target = await addTargetApi(page, rig.orgId, {
       label: `D3 ${width}`, kind: "youtube", streamKey: fakeRecoveringKey(RECOVER_MS, randomBytes(6).toString("hex")),
     });
     const f = rig.fixtures[0]!;
+    const answers = recordCurrentAnswers(page, f.id);
     const scope = await openPhoneTab(page, rig, f);
     const body = scope.locator("[data-phone-body]");
     const panel = scope.getByTestId("stream-panel");
@@ -1012,7 +1034,6 @@ for (const width of [320, 1280] as const) {
 
     // LIVE: the phone and Seazn lime, the destination still dialling — Connecting, no warning yet.
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
-    const liveAt = Date.now();
     await expect(chain).toHaveAttribute("data-phone", "connected");
     await expect(chain).toHaveAttribute("data-link1", "flowing");
     await expect(chain).toHaveAttribute("data-dest", "connecting");
@@ -1023,30 +1044,41 @@ for (const width of [320, 1280] as const) {
     await expect(control).toHaveAttribute("data-dot", "red");
     await shot(panel, `D3-${width}-1-connecting.png`);
 
-    // THE ONE-POLLER WITNESS (spec §2, review #21: the node harness renders no effects, so only a browser can count).
-    // The page is opened AGAIN with the session live — the organiser coming back to the match — so EVERY reader (the
-    // provider, both Stream twins, the Phone tab) mounts on a session that polls. A reader that mounted on an idle
-    // fixture never polls, whoever owns it: counted on the page that tapped Go live, a second poller is invisible
-    // (found by the mutant — `enabled: true` survived a window counted there). K periods see K GETs, give or take the
-    // window's edges; one extra poller per reader multiplies it. A measurement window, not a wait for a state.
-    await openPhoneTab(page, rig, f);
-    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
-    await expect(chain).toHaveAttribute("data-dest", "connecting");
-    await expect(control).toHaveAttribute("data-dot", "red");
-    const before = currentGets;
-    await page.waitForTimeout(POLLER_K * STREAM_POLL_MS);
-    const polled = currentGets - before;
-    test.info().annotations.push({ type: "one-poller", description: `${polled} GETs of current in ${POLLER_K} poll periods @${width}` });
-    expect(polled, "the session poll really ran").toBeGreaterThanOrEqual(POLLER_K - 1);
-    expect(polled, "ONE poller: a second one would double this").toBeLessThanOrEqual(POLLER_K + 1);
-
-    // AT THE LINE: the warning — polled, never slept. Its FIRST sighting is the bound: no earlier than one poll of
-    // rendering lag before 30 s from live (the server measures from live_at, which the pill can trail by one poll).
+    // THE 30 s LINE, both sides of it, on the SERVER's measure (M6: `output.elapsedMs` in each answer; the browser's
+    // clock decides nothing). The page may warn only on an answer AT or past the line. So, sampled every RENDER_MS
+    // until the first such answer lands: while every answer so far is under the line, the warning is ABSENT — and at
+    // least one sample must see the last polls under it (elapsed in [NEAR_LINE_MS, line)) already on screen, so the
+    // hold reaches the boundary instead of ending early. Then the first answer at the line puts it on screen within a
+    // poll. A lowered threshold warns on an under-the-line answer, and reds the hold (B5 review I-2).
+    const early: string[] = [];
+    let nearSamples = 0;
+    let samples = 0;
     await expect
-      .poll(() => warning.count(), { message: "the D3 warning never showed", timeout: OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS, intervals: [500] })
-      .toBe(1);
-    const sightedAfter = Date.now() - liveAt;
-    expect(sightedAfter, "the warning did not fire early").toBeGreaterThanOrEqual(OUTPUT_WARNING_AFTER_MS - POLL_WAIT_MS);
+      .poll(
+        async () => {
+          if (answers.some(atTheLine)) return true;
+          const now = Date.now();
+          const shown = await warning.count();
+          samples++;
+          if (shown > 0) {
+            // The answer that drew it may still be parsing on this side: give it a render's time before calling it early.
+            await page.waitForTimeout(RENDER_MS);
+            if (answers.some(atTheLine)) return true;
+            early.push(`on screen with every answer under the line (latest ${answers.at(-1)?.elapsedMs ?? "none"} ms)`);
+            return false;
+          }
+          const onScreen = answers.filter((x) => x.at <= now - RENDER_MS).at(-1);
+          if (onScreen?.live && onScreen.notOk && onScreen.elapsedMs !== null && onScreen.elapsedMs >= NEAR_LINE_MS) nearSamples++;
+          return false;
+        },
+        { message: "no answer reached the 30 s line", timeout: OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS, intervals: [RENDER_MS] },
+      )
+      .toBe(true);
+    const under = answers.filter((x) => x.live && !atTheLine(x)).map((x) => x.elapsedMs);
+    test.info().annotations.push({ type: "d3-line", description: `@${width}: ${samples} samples, ${nearSamples} near the line; live answers under it: ${JSON.stringify(under)}` });
+    expect(early, "the warning did not show before the 30 s line").toEqual([]);
+    expect(nearSamples, "the hold saw the last polls under the line ON SCREEN (zero would be a hold that ended early)").toBeGreaterThan(0);
+    await expect(warning, "the first answer at the line puts the warning on screen").toHaveCount(1, { timeout: POLL_WAIT_MS });
     await expect(warning).toBeVisible();
     await expect(warning).toHaveAttribute("role", "status");
     await expect(warning).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));
@@ -1088,6 +1120,47 @@ for (const width of [320, 1280] as const) {
     // §2: over — no dot, and the control is "Stream" again.
     await expect(control).not.toHaveAttribute("data-dot", /./);
     await expect(control).toHaveAccessibleName(en("stream.button"));
+  });
+}
+
+// ===========================================================================
+// A1b — ONE `current` poller per fixture page (spec §2, T9b), counted in the browser
+// ===========================================================================
+// Review #21: the node harness renders no effects, so only a browser can count. The page is opened ON a live session —
+// the organiser coming back to the match — so EVERY reader (the provider, both Stream twins, the Phone tab) mounts on a
+// session that polls: a reader that mounted on an idle fixture never polls, whoever owns it, so a second poller is
+// invisible on the page that tapped Go live (B5: the mutant `enabled: true` survived a window counted there).
+/** The witness's window, in poll periods (T9b brief: K = 4). */
+const POLLER_K = 4;
+for (const width of [320, 1280] as const) {
+  test(`A1b @${width}: a fixture page opened on a LIVE session runs ONE current poll — the Stream control, both twins and the Phone tab read it`, async ({
+    page,
+  }) => {
+    const NAVS = 2; // openFixture (the grant), openPhoneTab on the live session
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + POLLER_K * STREAM_POLL_MS + 3 * POLL_WAIT_MS + NAVS * NAV_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRelayRig(page);
+    const target = await addTargetApi(page, rig.orgId, { label: `A1b ${width}` });
+    const f = rig.fixtures[0]!;
+    await openFixture(page, rig, f); // the fixture page's read grants the month
+    await goLiveApi(page, f.id, target.id);
+    let currentGets = 0;
+    page.on("request", (r) => {
+      if (r.method() === "GET" && new URL(r.url()).pathname.endsWith(`/fixtures/${f.id}/stream-sessions/current`)) currentGets++;
+    });
+    const scope = await openPhoneTab(page, rig, f);
+    const body = scope.locator("[data-phone-body]");
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: POLL_WAIT_MS });
+    const control = streamControl(page);
+    await expect(control, "the Stream control reads the same session").toHaveAttribute("data-dot", "red");
+    // K periods see K GETs, give or take the window's edges; one extra poller per reader multiplies it. A measurement
+    // window, not a wait for a state.
+    const before = currentGets;
+    await page.waitForTimeout(POLLER_K * STREAM_POLL_MS);
+    const polled = currentGets - before;
+    test.info().annotations.push({ type: "one-poller", description: `${polled} GETs of current in ${POLLER_K} poll periods @${width}` });
+    expect(polled, "the session poll really ran").toBeGreaterThanOrEqual(POLLER_K - 1);
+    expect(polled, "ONE poller: a second one would double this").toBeLessThanOrEqual(POLLER_K + 1);
   });
 }
 
