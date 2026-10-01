@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "runId": "w1drv-t16fr1-model-de2",
+  "harnessCommit": "548f3825d",
+  "settings": {
+    "maxCommands": 30,
+    "timeLimitMs": 300000,
+    "regressions": false
+  },
+  "cells": [
+    {
+      "cell": "double_elim|generic",
+      "variant": "score",
+      "seed": -628333378,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "bias": null,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 18,
+          "accepted": 18,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 38,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 27,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 8,
+          "accepted": 8,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 19,
+          "accepted": 19,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 19,
+          "accepted": 19,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 15,
+          "accepted": 8,
+          "refused": 2,
+          "expected": 5,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 11,
+          "accepted": 8,
+          "refused": 1,
+          "expected": 2,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 26,
+          "accepted": 26,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 21,
+          "accepted": 7,
+          "refused": 14,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 21,
+          "accepted": 21,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 165,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 234,
+      "fenced": {
+        "ko-generate-after-roster-change": 11,
+        "ko-withdraw-waiting-on-tbd": 2
+      },
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 3
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 27,
+          "evidence": [
+            "AddEntrant(30,0): POST /api/v1/divisions/508e6841-6c2b-44aa-99e8-eb04b65eba83/entrants → 422 ERROR",
+            "AddEntrant(46,1): POST /api/v1/divisions/508e6841-6c2b-44aa-99e8-eb04b65eba83/entrants → 422 ERROR",
+            "AddEntrant(21,1): POST /api/v1/divisions/508e6841-6c2b-44aa-99e8-eb04b65eba83/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 145,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    }
+  ],
+  "skipped": []
+}
