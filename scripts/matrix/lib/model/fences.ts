@@ -9,8 +9,9 @@
 // another kind is still reported NEW rather than fenced away. W1-driving
 // (T15-R8 G-1, T16) widened the two bracket fences to the kinds MB-007,
 // MB-008 and MB-009 witness, and T16-R3 narrowed the generate fence to the
-// trigger branch each kind's case shows. Each list below is held to the
-// committed cases' finding commands by model-core.test.ts, never typed there.
+// trigger branch each kind's case shows; the live re-run that followed found
+// MB-010. Each list below is held to the committed cases' finding commands by
+// model-core.test.ts, never typed there.
 //
 // Imports only types from state.ts, which strip-types erases: no cycle at load.
 import { PENDING_STATUSES } from "../observed.ts";
@@ -29,13 +30,13 @@ export interface Fence { readonly id: string; readonly issue: string | null; rea
 const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder", "double_elim"]);
 /** ko-generate-after-roster-change's stage kinds, per trigger branch
  *  (T16-R3): after an ADDED entrant, knockout (MB-005) and double elim
- *  (MB-007, w1drv-model-m6); after a WITHDRAWAL, knockout only (MB-004). Both
- *  are generateStageFixtures' bye-award path, which reads the same
- *  BRACKET_WALKOVER_KINDS. Stepladder is in that list too, and double elim
- *  after a withdrawal, but no committed case shows either, so each still
- *  reports NEW. */
+ *  (MB-007, w1drv-model-m6); after a WITHDRAWAL, knockout (MB-004) and double
+ *  elim (MB-010, found by w1drv-t16fr1-model-de once T16-R3 lifted this
+ *  branch there). Both are generateStageFixtures' bye-award path, which reads
+ *  the same BRACKET_WALKOVER_KINDS. Stepladder is in that list too, but no
+ *  committed case shows it on either branch, so it still reports NEW. */
 const GENERATE_AFTER_ADDED_KINDS: readonly string[] = Object.freeze(["knockout", "double_elim"]);
-const GENERATE_AFTER_WITHDRAWN_KINDS: readonly string[] = Object.freeze(["knockout"]);
+const GENERATE_AFTER_WITHDRAWN_KINDS: readonly string[] = Object.freeze(["knockout", "double_elim"]);
 
 export const FENCES: readonly Fence[] = Object.freeze([
   {
@@ -71,10 +72,10 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "ko-generate-after-roster-change",
     issue: null,
     blocks: "Generate",
-    // MB-004/005 (knockout), MB-007 (double elim). stages.ts
+    // MB-004/005 (knockout), MB-007/010 (double elim). stages.ts
     // generateStageFixtures: a Generate over a bracket whose fixtures exist,
     // after the roster changed — an entrant added (MB-005, MB-007, before
-    // Start) or one withdrawn (MB-004, after) — 500s: the bye-award bulk
+    // Start) or one withdrawn (MB-004, MB-010, after) — 500s: the bye-award bulk
     // UPDATE would strand home_slot_label. Each branch only on the kinds its
     // cases show. An added entrant is lifted once an accepted Rebuild or
     // Generate re-seats the field (lateEntry); a withdrawal is never undone.

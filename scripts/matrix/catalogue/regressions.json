@@ -144,6 +144,24 @@
       "status": "open",
       "found": "2026-10-01",
       "runId": "w1drv-t16-model-g1"
+    },
+    {
+      "id": "MB-010",
+      "title": "double elim Generate after a withdrawal 500s: the bye-award bulk UPDATE would strand home_slot_label",
+      "issue": null,
+      "cell": "double_elim|generic",
+      "variant": "score",
+      "check": "model-refusal-named",
+      "seed": -798828420,
+      "path": "16:3:4:3:3:5:5:4:4",
+      "replayPath": "AAABABVY:qC",
+      "maxCommands": 30,
+      "fencesOn": true,
+      "fence": "ko-generate-after-roster-change",
+      "match": "would strand home_slot_label",
+      "status": "open",
+      "found": "2026-10-01",
+      "runId": "w1drv-t16fr1-model-de"
     }
   ]
 }
