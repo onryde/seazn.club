@@ -83,6 +83,17 @@ async function messageOf(p: Promise<unknown>): Promise<string> {
   throw new Error("expected the read to throw, and it returned");
 }
 
+// m-7 (final review): pure — outside the DB block, so a run with no DATABASE_URL still witnesses the floor.
+describe("keyHintOf (pure)", () => {
+  it("keyHintOf: null below KEY_HINT_MIN_LENGTH, the last KEY_HINT_CHARS characters at and above it", () => {
+    const short = "x".repeat(KEY_HINT_MIN_LENGTH - 1);
+    const exact = `${"y".repeat(KEY_HINT_MIN_LENGTH - KEY_HINT_CHARS)}abc`;
+    expect(keyHintOf(short)).toBeNull();
+    expect(keyHintOf(exact)).toBe(exact.slice(-KEY_HINT_CHARS));
+    expect(keyHintOf(exact)).toHaveLength(KEY_HINT_CHARS);
+  });
+});
+
 describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opened", () => {
   it("an input's SRT and RTMPS legs round-trip on the observed shape; streamId comes from the envelope, not the bare url", async () => {
     const r = await rig();
@@ -426,14 +437,6 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     const back = await put(orgId, d);
     expect(back).toMatchObject({ id: t.id, outcome: "restored" });
     expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id))).toEqual(d);
-  });
-
-  it("keyHintOf: null below KEY_HINT_MIN_LENGTH, the last KEY_HINT_CHARS characters at and above it", () => {
-    const short = "x".repeat(KEY_HINT_MIN_LENGTH - 1);
-    const exact = `${"y".repeat(KEY_HINT_MIN_LENGTH - KEY_HINT_CHARS)}abc`;
-    expect(keyHintOf(short)).toBeNull();
-    expect(keyHintOf(exact)).toBe(exact.slice(-KEY_HINT_CHARS));
-    expect(keyHintOf(exact)).toHaveLength(KEY_HINT_CHARS);
   });
 
   it("readKeyHints (Review Focus 1): each ACTIVE row's hint; an UNOPENABLE envelope reads null and never throws; archived rows are absent", async () => {
