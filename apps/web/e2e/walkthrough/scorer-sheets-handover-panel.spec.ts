@@ -37,7 +37,7 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { activeOrg, apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "../helpers";
 import { waitForHydration } from "../directory-kit";
-import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, installWakeLockStub, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
+import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, expectWholeModuleScale, installWakeLockStub, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
 
 const dict = (locale: "en" | "fr") =>
   JSON.parse(
@@ -177,12 +177,19 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   let wakeOpens = 0;
   for (const [w, h] of [[320, 568], [768, 1024], [1280, 800]] as const) {
     await page.setViewportSize({ width: w, height: h });
-    await shotQr(page, panel.getByTestId("dlink-qr"), `b6-dlink-qr-${w}-normal.png`);
+    // B6 fix round 1 (ruling I-2): the inline QR is a whole number of device px per module — at least three for the
+    // real 71-byte pad URL — and the crop is the PANEL around it (review m-6), which is what differs by width.
+    await expect(async () => {
+      await expectWholeModuleScale(page, panel.getByTestId("dlink-qr"), { what: `Remote scoring @ ${w}`, minPerModule: 3 });
+    }).toPass({ timeout: 5_000 });
+    await expectNoHorizontalScroll(page);
+    await shotQr(page, panel, `b6-dlink-qr-${w}-normal.png`);
     await panel.getByTestId("dlink-qr-enlarge").click();
     wakeOpens++;
     await expectQrEnlargedOpen(page, "dlink-qr", { sensitive: true });
     await expect.poll(() => wakeLockCounts(page), { message: "open holds the screen" }).toEqual({ requests: wakeOpens, releases: wakeOpens - 1 });
-    await shotQr(page, page.getByTestId("qr-enlarged-img"), `b6-dlink-qr-${w}-enlarged.png`);
+    // The whole overlay at each width (review m-6) — the QR, its caption and the ✕ together; 320 is the 320×568 one.
+    await shotQr(page, page.getByTestId("qr-enlarged"), `b6-dlink-qr-${w}-enlarged.png`, 0);
     await closeQrEnlarged(page, "dlink-qr", w === 320 ? "x" : w === 768 ? "tap" : "escape");
     await expect.poll(() => wakeLockCounts(page), { message: "close releases it" }).toEqual({ requests: wakeOpens, releases: wakeOpens });
     await expect(panel, `${w}: the hand-over panel is still open behind the QR`).toBeVisible();

@@ -38,7 +38,7 @@ import {
   setEntitlementOverrideSql,
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
-import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, installWakeLockStub, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
+import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, expectWholeModuleScale, installWakeLockStub, qrModulesOf, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
 import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
@@ -1678,6 +1678,11 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
     await streamSlot(); // this test's share of the deployment's stream capacity
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+    // The frame is measured once it exists (its ResizeObserver): wait for the snapped size before reading the boxes —
+    // §8a's rule over the sheet's 125 % `available`, for the symbol this page paints.
+    const modules125 = await qrModulesOf(body.getByTestId("stream-qr"));
+    const want125 = snappedQr(qrSizeRow().avail125, modules125, 1.25);
+    await expect.poll(async () => (await body.getByTestId("stream-qr").boundingBox())!.width).toBeCloseTo(want125, 1);
     const fit = await body.evaluate((b) => {
       const r = (id: string) => b.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
       const qr = r("stream-qr");
@@ -1692,9 +1697,16 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
     });
     expect(fit.vw, "the zoomed viewport").toBe(256);
     test.info().annotations.push({ type: "A11 qr", description: `${fit.qr.w} CSS px at 256 CSS px (320 @ 125 %)` });
-    expect(fit.qr.w, "the symbol is drawn at a scannable size").toBeGreaterThan(100);
-    // §8a's QR size row records this width (amended 2026-09-30, measured on the fixture page): read, never typed.
-    expect(Math.abs(fit.qr.w - qrSizeRow().at125), "the sheet's 320 @ 125 % fixture-page figure").toBeLessThanOrEqual(1);
+    // §8a's QR size row (amended 2026-10-01, measured on the fixture page): the box is the row's `available`, read
+    // never typed, and the symbol is a whole number of DEVICE px per module (ruling I-2). For the real v22 payload the
+    // 172 CSS px box (215 device px) holds ONE 113-module scale — the row's 90.4 — and the enlarged view below is the
+    // remedy; the fake driver's shorter payload holds two.
+    expect(Math.abs(fit.qr.w - want125), `the sheet's rule at 320 @ 125 % for ${modules125} modules`).toBeLessThanOrEqual(0.5);
+    // The box's own content (less its `p-3` and 1-px border, twice) is the row's 125 % `available`.
+    expect(Math.abs(fit.box.r - fit.box.l - 2 * (12 + 1) - qrSizeRow().avail125), "the sheet's 125 % available").toBeLessThanOrEqual(0.5);
+    test.info().annotations.push({ type: "A11 qr modules", description: `${modules125} modules → ${fit.qr.w} CSS px` });
+    const inline = await expectWholeModuleScale(page, body.getByTestId("stream-qr"), { what: "320 @ 125 %, inline" });
+    expect(inline.dpr, "PREMISE: the zoom is a 1.25 DPR").toBe(1.25);
     expect(Math.abs(fit.qr.w - fit.qr.h), "square").toBeLessThan(1);
     expect(fit.qr.l, "the QR starts inside its box").toBeGreaterThanOrEqual(fit.box.l - 0.5);
     expect(fit.qr.r, "the QR ends inside its box").toBeLessThanOrEqual(fit.box.r + 0.5);
@@ -1740,6 +1752,16 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
     }
     await shot(row.getByTestId("stream-panel"), "A11-320-at-125pct-qr.png");
     await page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), "A11-320-at-125pct-page.png") });
+    // The remedy at this zoom: one tap paints the symbol at TWO device px per module (the 224 CSS px room is 280 device
+    // px — two 113-module scales), with no Wake Lock stub in this context (the browser's own, or none).
+    await body.getByTestId("stream-qr-enlarge").click();
+    const big = await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
+    expect(big.perModule, "enlarged at 125 %: at least two device px per module").toBeGreaterThanOrEqual(2);
+    // Never smaller than inline. (For the real v22 payload it is twice inline — 180.8 against 90.4, the unit's row; the
+    // fake driver's shorter symbol already holds two device px per module inline, so here the two can be equal.)
+    expect(big.width, "enlarged is never smaller than inline").toBeGreaterThanOrEqual(inline.width);
+    await shotQr(page, page.getByTestId("qr-enlarged"), "b6r1-stream-qr-125pct-enlarged.png", 0);
+    await closeQrEnlarged(page, "stream-qr", "escape");
   } finally {
     try {
       await teardownStreams(); // before the context goes: the stop is made as this context's signed-in owner
@@ -1759,8 +1781,10 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
 
 /** The binding sheet itself (the same file `fixture-stream-panel.test.tsx` reads). */
 const THEMES_PATH = fileURLToPath(new URL("../../../../docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md", import.meta.url));
-/** §8a's `QR size` row: its `min(Npx, available)` cap and the fixture-page measurements it records. */
-function qrSizeRow(): { cap: number; at320: number; at125: number } {
+/** §8a's `QR size` row: its `min(Npx, available)` cap, the `available` box it records at 320 and at 320 @ 125 %, and
+ *  its painted figures for TODAY's real v22 payload (B6 fix round 1, ruling I-2). The walkthroughs run the fake ingest
+ *  driver, whose shorter credentials make a smaller symbol, so they apply the row's RULE to the symbol they see. */
+function qrSizeRow(): { cap: number; avail320: number; avail125: number; at1280: number } {
   const row = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"));
   if (!row) throw new Error("§8a lost its QR size row");
   const num = (re: RegExp, what: string): number => {
@@ -1770,10 +1794,14 @@ function qrSizeRow(): { cap: number; at320: number; at125: number } {
   };
   return {
     cap: num(/min\((\d+)px, available\)/, "min(Npx, available)"),
-    at320: num(/\*\*(\d+) CSS px at 320 \(fixture page\)\*\*/, "the 320 fixture-page figure"),
-    at125: num(/\*\*(\d+) CSS px at 320 @ 125 % zoom \(fixture page\)\*\*/, "the 125 % fixture-page figure"),
+    avail320: num(/of an `available` of \*\*(\d+)\*\* at 320 \(fixture page\)/, "the 320 available"),
+    avail125: num(/of an `available` of \*\*(\d+)\*\* at 320 @ 125 % zoom/, "the 125 % available"),
+    at1280: num(/\*\*([\d.]+) CSS px at 1280\*\*/, "the 1280 figure"),
   };
 }
+
+/** §8a's rule, in its own words: the largest whole number of device px per module inside the box, in CSS px. */
+const snappedQr = (box: number, modules: number, dpr: number): number => (modules * Math.floor((box * dpr) / modules)) / dpr;
 
 /**
  * Hold WAITING for as long as a case needs it, deterministically: the server flips warming → live only on a read of
@@ -1827,22 +1855,37 @@ test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fix
   // D10a: the paste code is the same payload as text, and carries the same replay block.
   await expect(body.getByTestId("stream-qr-text")).toHaveClass(/\bph-no-capture\b/);
 
-  // §8a (amended, spec §7): the painted width — the cap on desktop, the sheet's fixture-page figure on a phone.
+  // §8a (amended 2026-10-01, ruling I-2): the painted width — a whole number of device px per module, the largest that
+  // fits min(cap, the box) — is the sheet's figure at each width: the cap's scale on desktop (and at 768, where the
+  // column has room for it), its fixture-page figure on a phone.
+  const sheet = qrSizeRow();
+  expect(sheet.at1280, "spec §7: ≥ 320 CSS px on desktop, for the real v22 payload").toBeGreaterThanOrEqual(320);
+  expect(sheet.at1280, "the desktop figure fits the cap").toBeLessThanOrEqual(sheet.cap);
+  // The rule applied to the symbol THIS page paints (the fake driver's credentials are shorter than Cloudflare's).
+  const modules = await qrModulesOf(qr);
+  test.info().annotations.push({ type: "A14 qr modules", description: String(modules) });
   const painted: Record<number, number> = {};
-  for (const [w, h] of [[1280, 800], [768, 1024], [320, 568]] as const) {
+  const perModule: Record<number, number> = {};
+  const available: Record<number, number> = {};
+  const rows = [[1280, 800, snappedQr(sheet.cap, modules, 1)], [768, 1024, snappedQr(sheet.cap, modules, 1)], [320, 568, snappedQr(sheet.avail320, modules, 1)]] as const;
+  for (const [w, h, want] of rows) {
     await page.setViewportSize({ width: w, height: h });
     await qr.scrollIntoViewIfNeeded();
-    painted[w] = (await qr.boundingBox())!.width;
+    // The frame is re-measured after a resize (its ResizeObserver), so the width is polled, not read once.
+    await expect.poll(async () => (await qr.boundingBox())!.width, { message: `${w}: §8a's rule for ${modules} modules (${want})` }).toBeCloseTo(want, 1);
+    const m = await expectWholeModuleScale(page, qr, { what: `stream @ ${w}`, minPerModule: w === 320 ? 1 : 3 });
+    painted[w] = m.width;
+    perModule[w] = m.perModule;
+    // The box's own content (less its `p-3` and 1-px border, twice): the sheet's `available`. At 1280 and 768 it holds
+    // the whole cap — what lets the real v22 payload reach 339 there — and at 320 it is the row's figure.
+    const box = (await row.getByTestId("stream-qr-box").boundingBox())!.width - 2 * (12 + 1);
+    available[w] = box;
+    if (w === 320) expect(Math.abs(box - sheet.avail320), `320: the sheet's available (${sheet.avail320})`).toBeLessThanOrEqual(0.5);
+    else expect(box, `${w}: the box holds the cap (${sheet.cap})`).toBeGreaterThanOrEqual(sheet.cap - 0.5);
     await expectNoHorizontalScroll(page);
     await shotQr(page, row.getByTestId("stream-qr-box"), `b6-stream-qr-${w}-normal.png`);
   }
-  test.info().annotations.push({ type: "A14 painted", description: JSON.stringify(painted) });
-  const sheet = qrSizeRow();
-  expect(sheet.cap, "spec §7: ≥ 320 CSS px on desktop").toBeGreaterThanOrEqual(320);
-  expect(painted[1280], "1280: the symbol is the sheet's cap, ≥ 320 CSS px").toBeGreaterThanOrEqual(sheet.cap - 0.5);
-  expect(painted[1280]).toBeLessThanOrEqual(sheet.cap + 0.5);
-  expect(painted[768], "768: the cap, where the column has room for it").toBeGreaterThanOrEqual(sheet.cap - 0.5);
-  expect(Math.abs(painted[320]! - sheet.at320), `320: the sheet's fixture-page figure (${sheet.at320})`).toBeLessThanOrEqual(1);
+  test.info().annotations.push({ type: "A14 painted", description: JSON.stringify({ painted, perModule, available }) });
   expect(await expectTapTargets(body), "the enlarge trigger joins the QR state's controls at 320").toBeGreaterThan(1);
 
   // D10, in order. 320×568: one tap opens it; Esc closes it; the lock is held while open and released on close.
@@ -1858,7 +1901,7 @@ test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fix
   };
   await open();
   await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
-  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-stream-qr-320-enlarged.png");
+  await shotQr(page, page.getByTestId("qr-enlarged"), "b6-stream-qr-320-enlarged.png", 0);
   // ROTATE while open: the size re-derives from the new viewport, and the caption moves beside the QR.
   await page.setViewportSize({ width: 568, height: 320 });
   await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
@@ -1869,14 +1912,23 @@ test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fix
   await page.setViewportSize({ width: 768, height: 1024 });
   await open();
   await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
-  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-stream-qr-768-enlarged.png");
+  await shotQr(page, page.getByTestId("qr-enlarged"), "b6-stream-qr-768-enlarged.png", 0);
   await closeQrEnlarged(page, "stream-qr", "x");
   await closed();
   // 1280×800, closed by a tap on the QR itself ("any tap").
   await page.setViewportSize({ width: 1280, height: 800 });
   await open();
   await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
-  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-stream-qr-1280-enlarged.png");
+  await shotQr(page, page.getByTestId("qr-enlarged"), "b6-stream-qr-1280-enlarged.png", 0);
+  // Near-square while open (review m-2): a landscape 1024 × 960 and a square 800 × 800 (portrait to CSS) — D10's
+  // min(vw, vh) − 32 alone put the QR's left edge off screen at the first and the QR under the ✕ at the second.
+  for (const [w, h] of [[1024, 960], [800, 800]] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true, nearSquare: true });
+    await shotQr(page, page.getByTestId("qr-enlarged"), `b6r1-stream-qr-${w}x${h}-enlarged.png`, 0);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
   await closeQrEnlarged(page, "stream-qr", "tap");
   await closed();
   // The same helper end to end once more (open, check, Esc), as the other call sites run it.
@@ -1901,7 +1953,7 @@ test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fix
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
 });
 
-test("A15: the CHECK-IN QR on a scheduled fixture — minted by a tap, ph-no-capture on the QR, its enlarged view and its link text; ONE tap enlarges it at 320×568 (Esc), again (✕), again (a tap), at 768 and 1280 — with NO Wake Lock API — and the check-in dialog behind it stays open", async ({
+test("A15: the CHECK-IN QR on a scheduled fixture — minted by a tap, a REAL link at ≥ 3 px per module with no horizontal scroll at 320, ph-no-capture on the QR, its enlarged view and its link text; ONE tap enlarges it at 320×568 (Esc), again (✕), again (a tap), at 768 and 1280 — with NO Wake Lock API — and the check-in dialog is still open after each close", async ({
   page,
 }) => {
   const NAVS = 1; // openFixture
@@ -1924,17 +1976,37 @@ test("A15: the CHECK-IN QR on a scheduled fixture — minted by a tap, ph-no-cap
   await expect(page.getByTestId("checkin-qr")).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
   // D10a: the link text is the same bearer token as the QR.
   await expect(page.getByTestId("checkin-link")).toHaveClass(/\bph-no-capture\b/);
-  // The check-in QR is a fixed 176 px inside a fixed max-w-sm dialog, so a crop of the QR alone is pixel-identical at
-  // 320 and 768: the crop is the dialog with the page behind it, which is what differs by width (AGENTS.md class 10).
+  // I-1 (B6 fix round 1): the real check-in link (an HS256 JWT, ≈ 229 B) is a v16 symbol; at 320 it paints at a whole
+  // number of px per module, at least three, and the dialog still fits the screen.
+  const checkinQr = page.getByTestId("checkin-qr");
+  const at320 = await expectWholeModuleScale(page, checkinQr, { what: "check-in @ 320", minPerModule: 3 });
+  test.info().annotations.push({ type: "A15 check-in @ 320", description: JSON.stringify(at320) });
+  expect(at320.modules, "PREMISE: a real check-in link, not a toy — v16 or larger (89+ modules with the quiet zone)").toBeGreaterThanOrEqual(89);
+  // The dialog is `position: fixed`, and a fixed box's overflow never widens the page — so the page-scroll check alone
+  // cannot see a dialog wider than the screen (review m-5): the card and the QR are each checked inside the viewport.
+  const dialogFits = async (w: number) => {
+    let checked = 0;
+    for (const [name, loc] of [["dialog card", dialog.locator("> div")], ["check-in QR", checkinQr]] as const) {
+      const b = (await loc.boundingBox())!;
+      expect(b.x, `${w}: the ${name} starts inside the viewport`).toBeGreaterThanOrEqual(-0.5);
+      expect(b.x + b.width, `${w}: the ${name} ends inside the viewport`).toBeLessThanOrEqual(w + 0.5);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  };
+  await dialogFits(320);
+  await expectNoHorizontalScroll(page);
+  // The crop is the dialog with the page behind it, which is what differs by width (AGENTS.md class 10).
   await shotQr(page, dialog.locator("> div"), "b6-checkin-qr-320-normal.png", 24);
 
-  // 320×568: open → Esc; reopen → ✕; reopen → a tap. Each time the dialog behind it is still open (the overlay stops
-  // the tap that closed it from also reaching the dialog's backdrop).
+  // 320×568: open → Esc; reopen → ✕; reopen → a tap. After each close the dialog is still open — an OUTCOME: the
+  // dialog's own card also stops a tap from reaching its backdrop, so this does not prove the overlay's own
+  // stopPropagation; the unit model's mutant M13 (seazn-qr-image.test.tsx) is what kills a missing one.
   await expectQrEnlarges(page, "checkin-qr", { sensitive: true, close: "escape" });
   await expect(dialog, "Esc closed the QR, not the check-in dialog").toBeVisible();
   await page.getByTestId("checkin-qr-enlarge").click();
   await expectQrEnlargedOpen(page, "checkin-qr", { sensitive: true });
-  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-checkin-qr-320-enlarged.png");
+  await shotQr(page, page.getByTestId("qr-enlarged"), "b6-checkin-qr-320-enlarged.png", 0);
   await closeQrEnlarged(page, "checkin-qr", "x");
   await expect(dialog).toBeVisible();
   await expectQrEnlarges(page, "checkin-qr", { sensitive: true, close: "tap" });
@@ -1944,10 +2016,12 @@ test("A15: the CHECK-IN QR on a scheduled fixture — minted by a tap, ph-no-cap
   for (const [w, h] of [[768, 1024], [1280, 800]] as const) {
     await page.setViewportSize({ width: w, height: h });
     await expectNoHorizontalScroll(page);
+    await expectWholeModuleScale(page, checkinQr, { what: `check-in @ ${w}`, minPerModule: 3 });
+    await dialogFits(w);
     await shotQr(page, dialog.locator("> div"), `b6-checkin-qr-${w}-normal.png`, 24);
     await page.getByTestId("checkin-qr-enlarge").click();
     await expectQrEnlargedOpen(page, "checkin-qr", { sensitive: true });
-    await shotQr(page, page.getByTestId("qr-enlarged-img"), `b6-checkin-qr-${w}-enlarged.png`);
+    await shotQr(page, page.getByTestId("qr-enlarged"), `b6-checkin-qr-${w}-enlarged.png`, 0);
     await closeQrEnlarged(page, "checkin-qr", "escape");
     await expect(dialog).toBeVisible();
   }
