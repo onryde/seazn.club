@@ -5298,4 +5298,60 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
     expect(tickReports(), "a clean tick reports nothing").toHaveLength(1);
     expect(await held()).toEqual(new Map(targets.map((t) => [t.id, false])));
   });
+
+  // B0 fix round 1, m-2 (review 2026-10-01): `apply` COMMITS the decision before `runEffects`, so a tick can throw AFTER
+  // the holder is already terminal — an effect recordEffect rethrows. That holder no longer holds the destination; it is
+  // `expired`, not `failed`. The answer classifies by what COMMITTED (the row re-read), and the throw is still reported.
+  // Two LIVE holders on one tick, both past the wall clock (a live passthrough ends max_duration → completed, whose
+  // `fill_replay` — owed only to a session that went live — runs after commit): A's fill_replay is refused (its `ok`
+  // effect row, on A only), so A's tick throws with A completed; B's state write is refused (on B only), so B's tick
+  // throws with nothing committed — the positive pair.
+  it("m-2: a holder whose EFFECT throws after its expiry committed is `expired` (reported); one whose write throws before is `failed` (reported) — classified by what committed", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` });
+    const a = (await createSession(r.auth, r.fixtureIds[0]!, body(r.target.id), r.deps)).sessionId;
+    r.tick(1000);
+    const b = (await createSession(r.auth, r.fixtureIds[1]!, body(second.id), r.deps)).sessionId;
+    r.tick(3001);
+    for (const f of [r.fixtureIds[0]!, r.fixtureIds[1]!]) expect((await currentSession(r.auth, f, r.deps))!.state, "PREMISE: live").toBe("live");
+    r.tick((MAX_DURATION_MINUTES + 1) * 60_000);   // both past their wall clock
+    const tickReports = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.expire_target_holders");
+    const fx = `m2_effect_${randomBytes(4).toString("hex")}`;
+    const fw = `m2_write_${randomBytes(4).toString("hex")}`;
+    await sql.unsafe(`create function ${fx}() returns trigger language plpgsql as $$
+      begin
+        if new.session_id = '${a}'::uuid and new.kind = 'effect' and new.type = 'fill_replay' and new.result = 'ok' then raise exception 'm-2: A fill_replay is refused after commit'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger ${fx} before insert on fixture_stream_events for each row execute function ${fx}()`);
+    await sql.unsafe(`create function ${fw}() returns trigger language plpgsql as $$
+      begin
+        if new.id = '${b}'::uuid and new.state is distinct from old.state then raise exception 'm-2: B expiry write is refused'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger ${fw} before update on fixture_stream_sessions for each row execute function ${fw}()`);
+    sentry.captureError.mockClear();
+    try {
+      const result = await expireTargetHolders(r.auth.orgId, null, r.deps);
+      expect(await r.row(a), "A: its expiry committed before the effect threw").toMatchObject({ state: "completed", end_reason: "max_duration" });
+      const effects = await sql<{ type: string; result: string }[]>`
+        select type, result from fixture_stream_events where session_id = ${a} and kind = 'effect' and type = 'fill_replay' order by seq`;
+      expect(effects, "PREMISE: A's throw was its post-commit fill_replay").toEqual([{ type: "fill_replay", result: "failed" }]);
+      expect((await r.row(b)).state, "B: nothing committed").toBe("live");
+      expect(result, "A expired (terminal), B failed (still holding)").toEqual({ expired: [a], failed: [b] });
+      const reports = tickReports();
+      expect(reports.map(([err]) => String(err)), "both throws are reported, once each").toEqual([
+        expect.stringMatching(/m-2: A fill_replay is refused after commit/), expect.stringMatching(/m-2: B expiry write is refused/),
+      ]);
+      expect(reports.map(([, ctx]) => (ctx as { extra?: { sessionId?: string } }).extra?.sessionId)).toEqual([a, b]);
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fx} on fixture_stream_events`);
+      await sql.unsafe(`drop function if exists ${fx}()`);
+      await sql.unsafe(`drop trigger if exists ${fw} on fixture_stream_sessions`);
+      await sql.unsafe(`drop function if exists ${fw}()`);
+    }
+    // The second call, the faults gone: A is no holder any more (terminal), B expires.
+    expect(await expireTargetHolders(r.auth.orgId, null, r.deps)).toEqual({ expired: [b], failed: [] });
+    expect(tickReports(), "a clean tick reports nothing more").toHaveLength(2);
+  });
 });

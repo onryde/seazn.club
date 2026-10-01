@@ -1750,7 +1750,12 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
  *  rethrows, or the apply's own write — is reported (captureError, route relay.expire_target_holders) and the loop goes
  *  on; it used to end the loop, so every LATER holder kept its lock until the next load. The answer names what the
  *  tick did: `expired` — the holders it left no longer holding the destination (a terminal state); `failed` — the holders
- *  whose tick threw. A holder that was not due is in neither. */
+ *  whose tick threw and that STILL hold it. A holder that was not due is in neither.
+ *
+ *  B0 fix round 1 (m-2): a throw is classified by what COMMITTED, not by the throw. `apply` commits the decision before
+ *  `runEffects`, so an effect that throws after commit (a post-completion `fill_replay` recordEffect rethrows) leaves the
+ *  holder terminal — `expired`, and still reported. The row is re-read to tell; a re-read that itself fails says nothing
+ *  about what committed, so the holder stays `failed`. */
 export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<{ expired: string[]; failed: string[] }> {
   const expired: string[] = [];
   const failed: string[] = [];
@@ -1759,8 +1764,9 @@ export async function expireTargetHolders(orgId: string, targetId: string | null
       const after = await applyExpiry(h.sessionId, deps);
       if (after && isTerminal(after.state)) expired.push(h.sessionId);
     } catch (err) {
-      failed.push(h.sessionId);
       captureError(err, { orgId, route: "relay.expire_target_holders", extra: { sessionId: h.sessionId, targetId } });
+      const now = await readRow(h.sessionId).catch(() => null);
+      (now && isTerminal(now.state) ? expired : failed).push(h.sessionId);
     }
   }
   return { expired, failed };
