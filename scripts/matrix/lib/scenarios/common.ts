@@ -19,9 +19,10 @@ import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
 import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
 import { confirmAdvance, type AdvanceObs } from "./advance.ts";
+import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
-import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
+import type { ScenarioContext } from "./types.ts";
 
 /** Final review I-2: what the harness POSTED beside what the product says it
  *  built, read back after start rather than taken from the create/add
@@ -129,6 +130,11 @@ export class Recorder {
   /** W1-driving T6 (T45-R1): every team fixture the harness scored → its
    *  division-entrant sides, which life-lineups-put holds to a PUT each. */
   readonly teamPosts = new Map<string, string[]>();
+  /** W1-driving Task 8: an americano stage id → every entrant its fixtures
+   *  seat → that entrant's persons as entrantMembers answered (recordPersons);
+   *  snapshot writes it, with the division entrants' own, to
+   *  ObservedStage.persons. */
+  readonly stagePersons = new Map<string, Record<string, readonly string[]>>();
   /** W1-driving Task 7 (D8): every challenge playLadder issued, by its step —
    *  what r4-not-challenged-later reads (a challenge's product round_no is
    *  never relied on). */
@@ -149,15 +155,12 @@ export class Recorder {
 
 /** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
  *  americano / mexicano, multi-stage seeding (team rosters landed in
- *  W1-driving Task 4) — is its own wave.
+ *  W1-driving Task 4) — is its own wave. W1-driving Task 8 drove the last of
+ *  the formats, so no deferral site names it any more (PF-10 keeps both).
  *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
 export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth deferred from the first slice (ruling 28)");
-/** The deferral sites' wave argument (the Q-A guard reads it by value); kept
- *  until W1-driving deletes the last of them. */
+/** The deferral sites' wave argument (the Q-A guard reads it by value). */
 export const DRIVING_WAVE = DRIVING_ROUTE.wave;
-
-/** W1-driving Task 7 drives the ladder (ladder-loop.ts); Task 8 the rest. */
-const FORMAT_LATER = new Set(["americano", "mexicano"]);
 /** The non-swiss generate loop's hard cap; hitting it records `cut_short`. */
 export const MAX_ITERATIONS = 64;
 /** engine-db/competition.ts:79 — the seat a bye's award is scored against. */
@@ -178,18 +181,11 @@ export function personsNeeded(bodies: readonly StagePostBody[]): boolean {
   return bodies.some((b) => b.kind === "americano");
 }
 
+/** W1-driving Task 8: every catalogue row is driven — americano and mexicano
+ *  reach the driver like any other (FORMAT_LATER is gone, and Task 5's
+ *  `buildDivision` is folded back in here). */
 export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
-  // Every deferral fires before the first driver call.
-  if (FORMAT_LATER.has(ctx.spec.row)) throw new ScenarioUnsupported(DRIVING_WAVE, `${ctx.spec.row}: challenge/rotation driving lands in ${DRIVING_WAVE}`);
-  return buildDivision(ctx, rec, entrantCount, o);
-}
-
-/** setUpDivision past the format deferral. Exported so Task 5's americano
- *  persons are proven on the real setup path while FORMAT_LATER still holds
- *  the americano rows; Task 8 deletes FORMAT_LATER, and the americano loop
- *  then reaches this through setUpDivision. */
-export async function buildDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
-  // Every deferral and refusal fires before the first driver call.
+  // Every refusal fires before the first driver call.
   const bodies = stagesForRow(ctx.spec.row);
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
   const rosterless = o.rosterlessTeams === true;
@@ -342,7 +338,8 @@ function judgeLineupWarnings(ctx: ScenarioContext, rec: Recorder, fixtureId: str
  *  division's own entrants. An americano/mexicano fixture seats ephemeral
  *  PAIR entrants the product minted (stages.ts pairEntrantsFor), which are in
  *  no roster; such a side is skipped with a named note — once per stage
- *  (PF-5) — never thrown and never PUT. A DIVISION entrant with no recorded
+ *  (PF-5) — never PUT. A side outside the division on any OTHER stage kind
+ *  is thrown by name (T45-R3): nothing else mints entrants. A DIVISION entrant with no recorded
  *  roster is still a harness bug, named. A fixture already past scheduled
  *  (a foreign write started it) takes no PUT — the product would refuse it —
  *  and is noted; its parity is already the unjudgeable item. */
@@ -359,6 +356,11 @@ export async function ensureLineups(ctx: ScenarioContext, rec: Recorder, setup: 
   }
   for (const side of owed) {
     if (!setup.entrantIds.has(side)) {
+      // T45-R3: only an americano stage mints entrants of its own (pair
+      // entrants); a foreign side on any other kind is a harness or product
+      // fault, named — never skipped.
+      const kind = setup.stages.find((s) => s.id === f.stage_id)?.kind;
+      if (kind !== "americano") throw new Error(`scenario: fixture ${f.id} seats ${side}, which is not a division entrant, on ${kind === undefined ? `stage ${f.stage_id}, which the setup never built` : `a ${kind} stage`} — only an americano stage mints its own (pair) entrants`);
       const note = `lineups: stage ${f.stage_id} seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side`;
       if (!rec.notes.includes(note)) rec.notes.push(note);
       continue;
@@ -388,7 +390,7 @@ export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageI
   }
 }
 
-const seatedOpen = (f: FixtureRow) => f.home_entrant_id !== null && f.away_entrant_id !== null && !isTerminal(f.status);
+export const seatedOpen = (f: FixtureRow) => f.home_entrant_id !== null && f.away_entrant_id !== null && !isTerminal(f.status);
 
 export function defaultPolicy(setup: DivisionSetup, f: FixtureRow, drawOk: boolean, ordinal: number): RequestedOutcome {
   if (drawOk && ordinal % 3 === 2) return { kind: "draw" };
@@ -468,6 +470,18 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
 
 export type RoundHook = (round: number, batch: FixtureRow[]) => Promise<void>;
 
+/** One round's batch, decided in fixture order between the round hooks —
+ *  playStage's own, lifted to take the stage (W1-driving Task 8) so the
+ *  americano loops decide a round exactly as every other loop does. */
+export async function decideRound(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, stage: StageRef, round: number, batch: FixtureRow[], hooks: { beforeRound?: RoundHook; afterRound?: RoundHook }): Promise<void> {
+  const drawOk = stageDrawsOk(ctx, stage);
+  await hooks.beforeRound?.(round, batch);
+  for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
+    await decideFixture(ctx, rec, setup, f, defaultPolicy(setup, f, drawOk, rec.decided), stage);
+  }
+  await hooks.afterRound?.(round, batch);
+}
+
 /** T6-R3 (m-12): whether the engine declares a draw reachable on THIS
  *  stage's kind (supportsDraws, via drawsAllowed). Decided per stage — a
  *  later bracket never inherits the root's draws. */
@@ -487,16 +501,12 @@ export async function playStage(ctx: ScenarioContext, rec: Recorder, setup: Divi
   // W1-driving Task 7 (D8): a ladder generates nothing (stages.ts ladder gen
   // is []); it is driven through challenges.
   if (stage.kind === "ladder") return playLadder(ctx, rec, setup, stage, hooks);
+  // W1-driving Task 8 (D9): americano and mexicano are ONE stage kind; the
+  // stage's config.mode decides, read as the product reads it (stages.ts:756).
+  if (stage.kind === "americano") return stage.config.mode === "mexicano" ? playMexicano(ctx, rec, setup, stage, hooks) : playAmericano(ctx, rec, setup, stage, hooks);
   const track = rec.track(stage.id);
   const exit = (e: LoopExit) => { track.exit = e; rec.exit = e; };
-  const drawOk = stageDrawsOk(ctx, stage);
-  const decideBatch = async (round: number, batch: FixtureRow[]) => {
-    await hooks.beforeRound?.(round, batch);
-    for (const f of [...batch].sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0))) {
-      await decideFixture(ctx, rec, setup, f, defaultPolicy(setup, f, drawOk, rec.decided), stage);
-    }
-    await hooks.afterRound?.(round, batch);
-  };
+  const decideBatch = (round: number, batch: FixtureRow[]) => decideRound(ctx, rec, setup, stage, round, batch, hooks);
   if (stage.kind === "swiss") {
     const rounds = Number(stage.config.rounds);
     for (let r = 1; r <= rounds; r++) {
@@ -703,10 +713,14 @@ export async function snapshot(ctx: ScenarioContext, rec: Recorder, setup: Divis
       standings.push({ poolId, rows: s.rows.map((r) => ({ entrantId: r.entrantId, rank: r.rank, points: typeof r.points === "number" ? r.points : null })) });
     }
     const track = rec.track(stage.id);
+    // W1-driving Task 8: an americano stage carries its persons — the pair
+    // entrants recordPersons read, beside the division entrants' own (Task 5).
+    const pairs = rec.stagePersons.get(stage.id);
     stages.push({
       id: stage.id, seq: stage.seq, kind: stage.kind, config: stage.config,
       field: [...(play.field ?? [])], fieldSource: i === 0 ? "division" : "seeded", fixtures, standings,
       generates: track.generates, pairRounds: track.pairRounds, complete: play.complete, exit: track.exit,
+      ...(pairs !== undefined ? { persons: { ...Object.fromEntries(setup.persons), ...pairs } } : {}),
     });
   }
   return {

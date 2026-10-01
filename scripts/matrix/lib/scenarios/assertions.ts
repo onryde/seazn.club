@@ -1,8 +1,8 @@
 // Scenario assertions. Every one goes through `assertion`, so R25 holds for
 // them exactly as it does for the invariants: zero items checked is a FAIL,
 // and only a stated reason may abstain.
-import type { PublicStandingsOut } from "../driver/types.ts";
-import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun } from "../observed.ts";
+import type { PublicStandingsOut, StageRef } from "../driver/types.ts";
+import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type ConfigEditObs, type ObservedOutcome, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
@@ -35,6 +35,18 @@ function canonical(v: unknown): string {
   return JSON.stringify(v, (_k, x: unknown) => (x !== null && typeof x === "object" && !Array.isArray(x)
     ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
     : x)) ?? "undefined";
+}
+
+/** W1-driving Task 8: whether a stage's fixtures seat an entrant — directly,
+ *  or, on an americano stage (which seats the pair entrants it mints, never
+ *  the division's), through a person: one of the entrant's persons is a
+ *  member of some seated side (ObservedStage.persons). On every other kind
+ *  `persons` is absent and only a direct seat counts. */
+export function seatsEntrant(stage: Pick<ObservedStage, "fixtures" | "persons">): (entrantId: string) => boolean {
+  const sides = new Set(stage.fixtures.flatMap((f) => [f.home, f.away]).filter((e): e is string => e !== null));
+  const persons = stage.persons ?? {};
+  const seatedPersons = new Set([...sides].flatMap((e) => persons[e] ?? []));
+  return (entrantId) => sides.has(entrantId) || (persons[entrantId] ?? []).some((p) => seatedPersons.has(p));
 }
 
 /** Final review I-2: the product built what the harness POSTED. Every item is
@@ -81,14 +93,22 @@ export function builtAsPosted(built: BuiltReadback, observed: ObservedRun): Chec
       items.push({ ok: n === (asked ? 1 : 0), note: `stage ${body.seq}: posted ${asked ? "" : "no "}thirdPlace, built ${n} third-place fixture(s)` });
     }
   }
-  items.push({ ok: built.entrants.length === posted.entrants.length, note: `${built.entrants.length} entrant(s) stored, ${posted.entrants.length} posted` });
+  // W1-driving Task 8: Start's generate on an americano stage mints `pair`
+  // entrants (stages.ts pairEntrantsFor), and the entrant list carries them
+  // (entrants.ts listEntrants has no kind filter). They are the PRODUCT's,
+  // never posted (the harness refuses a pair-kind americano division), so they
+  // are neither counted as stored nor owed a seat. Only on an americano body:
+  // anywhere else a pair the harness never posted is an extra entrant.
+  const minted = posted.stages.some((b) => b.kind === "americano") ? built.entrants.filter((r) => r.kind === "pair") : [];
+  const stored = built.entrants.filter((r) => !minted.includes(r));
+  items.push({ ok: stored.length === posted.entrants.length, note: `${stored.length} entrant(s) stored, ${posted.entrants.length} posted${minted.length > 0 ? ` (${minted.length} product-minted pair entrant(s) aside)` : ""}` });
   items.push({ ok: built.echo.length === posted.entrants.length, note: `add answered ${built.echo.length} entrant(s), ${posted.entrants.length} posted` });
   for (const e of posted.entrants) {
-    const n = built.entrants.filter((r) => r.seed === e.seed && r.display_name === e.displayName).length;
+    const n = stored.filter((r) => r.seed === e.seed && r.display_name === e.displayName).length;
     items.push({ ok: n === 1, note: `posted seed ${e.seed} (${e.displayName}) stored ${n} time(s)` });
   }
-  const seated = new Set(observed.stages.flatMap((s) => s.fixtures.flatMap((f) => [f.home, f.away])));
-  for (const r of built.entrants) items.push({ ok: seated.has(r.id), note: `${r.id} (seed ${r.seed}) is seated in no fixture of the stage` });
+  const seats = observed.stages.map(seatsEntrant);
+  for (const r of stored) items.push({ ok: seats.some((seated) => seated(r.id)), note: `${r.id} (seed ${r.seed}) is seated in no fixture of the stage` });
   return assertion("life-built-as-posted", items);
 }
 
@@ -251,9 +271,15 @@ export function loopBounded(rec: Recorder, observed: ObservedRun): CheckResult {
  *  item per scored side, counted. A non-team or rosterless division owes no
  *  lineup (an abstain with its reason); a team division that scored nothing
  *  is the vacuous fail. */
-export function lineupsPut(rec: Recorder, setup: Pick<DivisionSetup, "kind" | "rosterless">): CheckResult {
+export function lineupsPut(rec: Recorder, setup: Pick<DivisionSetup, "kind" | "rosterless"> & { readonly stages?: readonly Pick<StageRef, "kind">[] }): CheckResult {
   if (setup.kind !== "team") return assertion("life-lineups-put", [], `${setup.kind} entrants carry no lineup`);
   if (setup.rosterless) return assertion("life-lineups-put", [], "rosterless team entrants (PADPROOF, D3) carry no lineup");
+  // W1-driving Task 8: an americano stage seats only the pair entrants it
+  // mints (stages.ts pairEntrantsFor), which carry no roster and take no
+  // lineup (ensureLineups skips them by name) — no item could exist.
+  if (setup.stages !== undefined && setup.stages.length > 0 && setup.stages.every((s) => s.kind === "americano")) {
+    return assertion("life-lineups-put", [], "an americano stage seats product-minted pair entrants, which carry no lineup");
+  }
   const items: Item[] = [...rec.teamPosts].flatMap(([fixtureId, sides]) => sides.map((side) => ({
     ok: rec.lineupSides.get(fixtureId)?.has(side) === true,
     note: `${fixtureId}: scored with no lineup PUT for side ${side}`,

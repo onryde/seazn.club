@@ -18,13 +18,13 @@ import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  DRIVING_WAVE, LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, buildDivision, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
+  DRIVING_WAVE, LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, personsNeeded, playStage, setUpDivision, snapshot,
   type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
-import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
+import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture } from "./fake-driver.ts";
@@ -144,6 +144,11 @@ describe("shared assertions — empty case first, then each way to go red", () =
     expect(bad({ entrants: [...rows, { ...rows[1]!, id: "c" }] })).toMatchObject({ verdict: "fail", evidence: ["3 entrant(s) stored, 2 posted", "posted seed 2 (Matrix Player 2) stored 2 time(s)", "c (seed 2) is seated in no fixture of the stage"] });
     expect(bad({ entrants: [rows[0]!, { ...rows[1]!, display_name: "Someone Else" }] })).toMatchObject({ verdict: "fail", evidence: ["posted seed 2 (Matrix Player 2) stored 0 time(s)"] });
     expect(bad({}, run([], [fx({ away: null, status: "forfeited", outcome: { kind: "award", winner: "a" } })]))).toMatchObject({ verdict: "fail", evidence: ["b (seed 2) is seated in no fixture of the stage"] });
+    // W1-driving Task 8: a stored `pair` entrant is set aside ONLY on an
+    // americano body (the product mints them there) — on any other body it is
+    // an entrant nobody posted.
+    const minted = { id: "pe1", display_name: "p1 / p2", seed: null, status: "registered", kind: "pair" };
+    expect(bad({ entrants: [...rows, minted] })).toMatchObject({ verdict: "fail", evidence: ["3 entrant(s) stored, 2 posted", "pe1 (seed null) is seated in no fixture of the stage"] });
   });
 
   it("resultsAsPosted (final review I-1): the STORED result of every finished fixture is the harness's fold, a bye, or the recorded cascade's — else it fails", () => {
@@ -1002,10 +1007,12 @@ describe("deferrals are named", () => {
     expect(named).toBeDefined();
     expect(DRIVING_WAVE).toBe(named);
   });
-  it.each(["americano", "mexicano"] as const)("%s is ScenarioUnsupported(DRIVING_WAVE) before any driver call", async (row) => {
+  // W1-driving Task 8: the last format deferral (americano/mexicano) is
+  // deleted — both rows are DRIVEN (americano-loop.ts) and reach the driver.
+  it.each(["americano", "mexicano"] as const)("W1-driving Task 8: %s is no longer deferred — it reaches the driver (and the league fake refuses its stage by name)", async (row) => {
     const driver = new FakeLeagueDriver();
-    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: `${row}: challenge/rotation driving lands in ${DRIVING_WAVE}` });
-    expect(driver.calls).toEqual([]);
+    await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toThrow("fake: league only");
+    expect(driver.calls).toEqual(["createCompetition", "createDivision", "postStages"]);
   });
   it("W1-driving Task 7: the ladder is no longer deferred — it reaches the driver (and the league fake refuses its stage by name)", async () => {
     const driver = new FakeLeagueDriver();
@@ -1140,9 +1147,13 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect([...rec.lineupSides.keys()]).toEqual([f!.id, g.id]);
   });
 
-  it("ensureLineups: a side that is not a division entrant (a product-minted pair entrant) is skipped with one note per stage, never thrown", async () => {
-    // Two fixtures of the stage seat a foreign side: still one note.
+  it("ensureLineups: on an americano stage a side that is not a division entrant (a product-minted pair entrant) is skipped with one note per stage, never thrown", async () => {
+    // Two fixtures of the stage seat a foreign side: still one note. W1-driving
+    // Task 8 (T45-R3): only an americano stage mints entrants, so the skip is
+    // gated on it — the same foreign side on any other kind is thrown by name
+    // (americano-loop.test.ts pins that refusal).
     class SeatsForeign extends FakeLeagueDriver {
+      override acceptsStage(kind: string): boolean { return kind === "americano"; }
       override start() {
         return super.start().then((o) => {
           this.fixtures[0]!.away_entrant_id = "pair-x";
@@ -1152,7 +1163,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
       }
     }
     const driver = new SeatsForeign();
-    const ctx = ctxFor(driver, "LIFECYCLE", { sport: "football", variant: football });
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "americano", sport: "football", variant: football });
     const rec = new Recorder();
     const setup = await setUpDivision(ctx, rec, 4);
     const [f1, f2] = driver.rows();
@@ -1361,7 +1372,7 @@ const AMERICANO_ENTRANTS = 8;
 /** The rows the brief names: americano and mexicano are one stage kind, and the row's mode decides. */
 const AMERICANO_ROWS = ["americano", "mexicano"] as const;
 const builtOn = (driver: FakeLeagueDriver, row: Row, sport: string) =>
-  buildDivision(ctxFor(driver, "LIFECYCLE", { row, sport, variant: offlineBuilderDefault(sport) }), new Recorder(), AMERICANO_ENTRANTS);
+  setUpDivision(ctxFor(driver, "LIFECYCLE", { row, sport, variant: offlineBuilderDefault(sport) }), new Recorder(), AMERICANO_ENTRANTS);
 
 describe("linked persons for americano and mexicano individuals (W1-driving Task 5, fold-in beneath ruling 49)", () => {
   it("empty case first: no stage bodies need no persons; across every catalogue row, exactly the two americano rows do", () => {
@@ -1447,16 +1458,22 @@ describe("linked persons for americano and mexicano individuals (W1-driving Task
     const base = ctxFor(driver, "LIFECYCLE", { row: "americano", sport: "badminton", variant: offlineBuilderDefault("badminton") });
     const ctx: ScenarioContext = { ...base, cfg: { ...(base.cfg as Record<string, unknown>), entrants: { kinds: ["pair"] } } };
     expect(entrantKindFor("badminton", ctx.cfg)).toBe("pair");
-    await expect(buildDivision(ctx, new Recorder(), AMERICANO_ENTRANTS))
+    await expect(setUpDivision(ctx, new Recorder(), AMERICANO_ENTRANTS))
       .rejects.toThrow("scenario: americano on a pair-kind division — americano plays one person per entrant (stages.ts americanoGen) and the harness posts no pair members");
     expect(driver.calls).toEqual([]);
   });
 
-  it.each(AMERICANO_ROWS)("%s through setUpDivision is still the format deferral, before any driver call, until the americano loop lands", async (row) => {
+  // W1-driving Task 8 (Task 5 carry): the deferral is gone — setUpDivision
+  // DRIVES both rows: the entrants are posted with their linked person, read
+  // back, and the division is started. americano-loop.test.ts proves the
+  // persons end to end through the real americano loop.
+  it.each(AMERICANO_ROWS)("%s through setUpDivision is DRIVEN: linked persons posted and read back, then started", async (row) => {
     const driver = new AmericanoFake();
-    await expect(setUpDivision(ctxFor(driver, "LIFECYCLE", { row, sport: "badminton", variant: offlineBuilderDefault("badminton") }), new Recorder(), AMERICANO_ENTRANTS))
-      .rejects.toBeInstanceOf(ScenarioUnsupported);
-    expect(driver.calls).toEqual([]);
+    const setup = await setUpDivision(ctxFor(driver, "LIFECYCLE", { row, sport: "badminton", variant: offlineBuilderDefault("badminton") }), new Recorder(), AMERICANO_ENTRANTS);
+    expect(driver.calls).toContain("start");
+    expect(driver.calls.filter((c) => c === "entrantMembers").length).toBe(AMERICANO_ENTRANTS);
+    expect(setup.persons.size).toBe(AMERICANO_ENTRANTS);
+    expect(setup.built.posted.stages.map((s) => [s.kind, (s.config as { mode?: unknown }).mode])).toEqual([["americano", row]]);
   });
 });
 

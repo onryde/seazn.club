@@ -10,10 +10,18 @@
 // (withdrawal.ts:213-217): the ladder's expected policy is DERIVED from what
 // was pending, never assumed. The open-format cascade ABANDONS pending
 // fixtures (false premise 16), so the cascade model is chosen by kind.
+//
+// W1-driving Task 8 (D14, ruling 51): on an americano stage (either mode)
+// seed 3 holds no fixture of its own — the pair entrants the product minted
+// do — so the product answers policy "none" and those pairs play on. That is
+// a PREDICTED product red: r4-policy-reported still reds, and the case
+// carries the signature r4-withdrawn-player-kept-playing (→ W7) only when
+// its second leg is SEEN — seed 3's person seated after the withdrawal round
+// through any entrant.
 import type { CheckResult } from "../results.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
-import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
+import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type ObservedStage, type WithdrawalObs } from "../observed.ts";
 import { routeTo } from "../routing.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
@@ -120,6 +128,23 @@ export function expectedPolicy(before: readonly FixtureSnap[]): "walkover" | "no
 /** Ruling 53: a withdrawn player's ladder finalRanks rung is a rulebook
  *  question, recorded as a note and never asserted either way. */
 const LADDER_RANKS_ROUTE = routeTo("W7", "a withdrawn player keeps a ladder finalRanks rung (the raw ladder_order) — ruling 53");
+/** Ruling 51: the americano withdrawal's predicted product red. */
+export const KEPT_PLAYING_ROUTE = routeTo("W7", "r4-withdrawn-player-kept-playing: an americano withdrawal touches only the entrant's own fixtures, and the pair entrants holding the person play on (ruling 51, D14)");
+
+/** Ruling 51 (D14): the r4-withdrawn-player-kept-playing note, or null. Its
+ *  legs: the product answered policy "none" with nothing of the entrant's
+ *  pending (before = []), AND seed 3's person is seated in a fixture after
+ *  the withdrawal round through ANY entrant — itself, or a pair entrant whose
+ *  members (the stage's observed `persons`) hold the person. Policy "none"
+ *  and an empty `before` are not enough on their own. */
+export function keptPlayingNote(w: Pick<WithdrawalObs, "entrantId" | "afterRound" | "policy" | "before">, mine: readonly string[], stage: Pick<ObservedStage, "fixtures" | "persons">): string | null {
+  if (w.policy !== "none" || w.before.length > 0 || mine.length === 0) return null;
+  const persons = stage.persons ?? {};
+  const holds = (side: string | null) => side !== null && (side === w.entrantId || (persons[side] ?? []).some((p) => mine.includes(p)));
+  const later = stage.fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && (holds(f.home) || holds(f.away)));
+  if (later.length === 0) return null;
+  return `r4-withdrawn-player-kept-playing: ${mine.join("+")} still seated in ${later.length} later fixture(s) — predicted product red → ${KEPT_PLAYING_ROUTE.wave}`;
+}
 
 export interface NotChallengedLaterInput {
   readonly kind: string;
@@ -214,6 +239,11 @@ export const r4Withdrawal: Scenario = {
     // Ruling 53 / review m-4: the W7 note is written AFTER the snapshot, from the finalRanks the product actually minted —
     // what was seen, never a finalRanks fact claimed at withdrawal time. Recorded, never asserted.
     if (family === "ladder") rec.notes.push(`${ladderRanksNote(observed.stages[0].complete, w.entrantId, heldAt)} — ${LADDER_RANKS_ROUTE.wave} rulebook question`);
+    // Ruling 51 (D14): an americano stage, either mode — the note only when its second leg is seen.
+    if (kind === "americano") {
+      const note = keptPlayingNote(w, setup.persons.get(w.entrantId) ?? [], observed.stages[0]);
+      if (note !== null) rec.notes.push(note);
+    }
     const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
     // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";

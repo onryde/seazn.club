@@ -35,17 +35,18 @@
 //    409 "entrant is already withdrawn", codeless on the wire.
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
 import { expandSources, placeDescriptors, resolveProgression, type PoolTable, type ProgressionSpec, type StandingsRow } from "@seazn/engine/competition";
-import { generatePagePlayoff, generateRoundRobin, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
+import { generateAmericano, generatePagePlayoff, generateRoundRobin, generateSingleElim, generateStepladder, pairMexicanoRound, type AmericanoRound, type GeneratedBracket } from "@seazn/engine/scheduling";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
-import { declaredPoints, lineupsFor } from "../lib/fold.ts";
+import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  DriverMisuse, RefusedCall,
-  type ChallengeOut, type CompleteOut, type FixtureRow, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
+  DriverMisuse, RefusedCall, inSquadOrder,
+  type AmericanoViewOut, type ChallengeOut, type CompleteOut, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
+import { isTerminal } from "../lib/observed.ts";
 import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
 import { departedStatusesText, ladderText, wireCodeFor } from "./product-text.ts";
 
@@ -804,5 +805,365 @@ export class FakeLadderDriver extends FakeLeagueDriver {
       this.completed = true;
       return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(this.#raw ?? [])] }] };
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FakeAmericanoDriver (W1-driving Task 8, D9): ONE americano stage, shaped like
+// the product's (usecases/stages.ts americanoGen :734-811 and pairEntrantsFor
+// :681-732, pinned at ebf7ec040; Task 8 Step 0 in task-8-report.md):
+//  - The stage is `{ kind: "americano", config: { mode, courtCount, rounds } }`.
+//    Mexicano is the SAME kind with config.mode "mexicano"
+//    (format-templates.ts:261); the product reads anything else as americano
+//    (:756). The fake stores the posted body, so it serves exactly that shape.
+//  - players: one person per ACTIVE entrant, in the active read's order —
+//    status registered/confirmed, NO kind filter, `order by seed nulls last,
+//    created_at, id` (:2290-2293). Each entrant's person is its LAST member
+//    row (:744-747: a Map over every row, no ORDER BY). An individual has one
+//    row, a team its whole roster (one arbitrary member, false premise 10),
+//    and from mexicano round 2 a pair entrant round 1 minted has two (false
+//    premise 17). The fake returns rows in storage order — a roster in squad
+//    order, a pair's two persons sorted ascending as :722-728 inserts them —
+//    so a pair reads as its HIGHER person id. Fewer than 4 players is 422
+//    STAGE_NOT_READY.
+//  - americano: the first generate (Start's, schedule.ts:3888) plans every
+//    round (generateAmericano). A later one plans again over the players of
+//    that moment and inserts only the fixtures whose ext_key is new (:2436).
+//  - mexicano: each generate plans ONE round (pairMexicanoRound, points then
+//    person id, americano.ts:93-95) — unless any fixture of the stage is not
+//    WAIT_UNLESS (:769: a forfeited walkover and a void both block, false
+//    premise 14), or `rounds` rounds exist (:770). A person's points: the
+//    folded state's score.home/away of each DECIDED fixture, credited to every
+//    member of that side (:774-783; null → 0, and only generic's fold carries
+//    a score).
+//  - Each planned team of two persons is the pair entrant holding exactly
+//    them (:694-703), else a new one minted `pe<n>` (kind pair, status
+//    registered, seed null). A team that is ONE person twice — a self-pair,
+//    which false premise 17 makes reachable — writes two member rows with the
+//    same key: the entrant_members primary key (V213:9) refuses the insert and
+//    the whole generate is a 500 INTERNAL with nothing written.
+//  - Complete (engine-db/competition.ts:39, :399, :575-583): a table stage
+//    folded as a league — not complete with no fixture or any open one; else
+//    finalRanks = the stage's SIDES (the pair entrants, :360-365) by points.
+//  - Withdraw (withdrawal.ts open-format branch): only the entrant's OWN
+//    fixtures are voided; an individual seats none here, so the policy is
+//    "none" and the pair entrants holding their person play on.
+//  - The entrant list carries every entrant, the minted pairs included
+//    (entrants.ts listEntrants has no kind filter), each with its `kind`.
+
+/** stages.ts:769 — the mexicano wait: a fixture in any other status blocks the next round. */
+export const WAIT_UNLESS = "decided";
+/** stages.ts:2290-2293 — the active read has no kind filter, so from mexicano
+ *  round 2 the pair entrants an earlier round minted are players too (false
+ *  premise 17). The fake's default IS that shape; `individualsOnly` models
+ *  the corrected product, and the default is derived from this constant. */
+export const FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT = true;
+/** stages.ts:2292 — the statuses the active read keeps. */
+const AMERICANO_ACTIVE = new Set(["registered", "confirmed"]);
+
+export interface FakeAmericanoOptions {
+  /** The mode the test means the harness to post; a body of the other mode is a test bug, thrown. */
+  readonly mode: "americano" | "mexicano";
+  /** From round 2 the active set holds the division's own entrants only (the
+   *  corrected product: no pair entrant counted as a player). */
+  readonly individualsOnly?: boolean;
+  /** Mexicano: once this many rounds exist, a generate creates nothing even
+   *  with every fixture decided — a product that stops early. */
+  readonly stallAfter?: number;
+  /** A product that DID drop a withdrawn player from what follows: americano
+   *  deletes every pending fixture seating a pair entrant that holds their
+   *  person; mexicano's later plans leave out the withdrawn individual AND
+   *  every pair entrant holding their person. */
+  readonly dropWithdrawnFromPlan?: boolean;
+  /** americanoView answers this mode whatever the stage's config says — a
+   *  product whose read model disagrees with its own generator. */
+  readonly viewMode?: "americano" | "mexicano";
+  /** Person ids sort in SEED order (e1's person first). The default is the
+   *  reverse (m-e, adversarial). The product's ids are UUIDs, so which order
+   *  holds live is chance — and with it whether a withdrawn player's person
+   *  is the row a round-1 pair is read as (stages.ts:744-747): a test that
+   *  needs one outcome names the order that gives it. */
+  readonly seedOrderedPersons?: boolean;
+}
+
+/** One minted pair entrant: its persons sorted, as stored. */
+interface PairEntrant { readonly id: string; readonly members: readonly [string, string] }
+
+export class FakeAmericanoDriver extends FakeLeagueDriver {
+  readonly opts: FakeAmericanoOptions;
+  readonly individualsOnly: boolean;
+  readonly #pairs: PairEntrant[] = [];
+  /** Round numbers in the order a generate (Start's included) created them. */
+  readonly #generated: number[] = [];
+  /** Round numbers in the order their last open fixture finished. */
+  readonly #decidedOrder: number[] = [];
+  /** round → the self-pairs its plan held (a refused plan included). */
+  readonly #selfPairs = new Map<number, number>();
+  /** Every generate's answer: created, or the refusal's status. */
+  readonly generates: { created: number | null; status: number }[] = [];
+  constructor(opts: FakeAmericanoOptions, orgId = "org-fake") {
+    super(orgId);
+    this.opts = opts;
+    this.individualsOnly = opts.individualsOnly ?? !FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT;
+  }
+  override acceptsStage(kind: string): boolean { return kind === "americano"; }
+  override refuseStages(): never { throw new Error("fake: americano only"); }
+  override postStages(d: string, stages: readonly StagePostBody[]): Promise<StageRef[]> {
+    return super.postStages(d, stages).then((out) => {
+      if (this.mode !== this.opts.mode) throw new Error(`fake: built for ${this.opts.mode}, posted a ${this.mode} stage`);
+      return out;
+    });
+  }
+  /** The product's reading of the stage's mode (stages.ts:756). */
+  get mode(): "americano" | "mexicano" { return this.stage?.config.mode === "mexicano" ? "mexicano" : "americano"; }
+  /** m-e (adversarial): by default person ids sort in REVERSE seed order —
+   *  entrant e1's person sorts last — so nothing can pass by reading a
+   *  person's place from its id or a seed from a person. */
+  override rosterOf(entrantId: string, ms: readonly MemberInput[]): EntrantMember[] {
+    const i = Number(entrantId.slice(1));
+    const rank = String(this.opts.seedOrderedPersons === true ? i : 100 - i).padStart(2, "0");
+    return inSquadOrder(ms.map((m, k) => ({ person_id: `p${rank}-${k + 1}`, squad_number: m.squadNumber, is_captain: m.isCaptain })));
+  }
+  #pair(id: string): PairEntrant | undefined { return this.#pairs.find((p) => p.id === id); }
+  /** An entrant's member rows in storage order (the order the product's read returns them here). */
+  #rows(entrantId: string): string[] {
+    const pair = this.#pair(entrantId);
+    if (pair !== undefined) return [...pair.members];
+    return (this.members.get(entrantId) ?? []).map((m) => m.person_id);
+  }
+  override entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    return settle(() => {
+      this.log("entrantMembers", entrantId);
+      const pair = this.#pair(entrantId);
+      if (pair !== undefined) return pair.members.map((person_id) => ({ person_id, squad_number: null, is_captain: false }));
+      if (!this.entrants.some((e) => e.id === entrantId)) throw new RefusedCall("GET", `/api/v1/entrants/${entrantId}`, 404, wireCodeFor(404), "entrant not found");
+      return (this.members.get(entrantId) ?? []).map((m) => ({ ...m }));
+    });
+  }
+  override listEntrants(): Promise<EntrantRow[]> {
+    return settle(() => {
+      this.log("listEntrants");
+      return [
+        ...this.entrants.map((e) => ({ ...e })),
+        ...this.#pairs.map((p) => ({ id: p.id, display_name: p.members.join(" / "), seed: null, status: "registered", kind: "pair" })),
+      ];
+    });
+  }
+  #withdrawnPersons(): Set<string> {
+    return new Set(this.entrants.filter((e) => e.status === "withdrawn").flatMap((e) => this.#rows(e.id)));
+  }
+  /** stages.ts:2290-2293 then :744-750: the players, one per active entrant. */
+  players(): string[] {
+    const individuals = this.entrants.filter((e) => AMERICANO_ACTIVE.has(e.status))
+      .sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER) || (a.id < b.id ? -1 : 1)).map((e) => e.id);
+    const gone = this.#withdrawnPersons();
+    const pairs = this.individualsOnly ? [] : this.#pairs
+      .filter((p) => this.opts.dropWithdrawnFromPlan !== true || !p.members.some((m) => gone.has(m)))
+      .map((p) => p.id);
+    return [...individuals, ...pairs].flatMap((id) => {
+      const rows = this.#rows(id);
+      return rows.length === 0 ? [] : [rows[rows.length - 1]];
+    });
+  }
+  #cfgNumber(key: "courtCount" | "rounds", fallback: number): number {
+    const v = this.stage!.config[key];
+    return typeof v === "number" ? v : fallback;
+  }
+  /** stages.ts:774-783: a person's points over the stage's DECIDED fixtures —
+   *  each member row of a side takes that side's score (the home score when
+   *  the row's entrant is the home side), a missing score counting nothing. */
+  personalPoints(): Map<string, number> {
+    const pts = new Map<string, number>();
+    for (const f of this.fixtures.filter((x) => x.status === "decided" && x.home_entrant_id !== null && x.away_entrant_id !== null)) {
+      const home = f.home_entrant_id!;
+      const away = f.away_entrant_id!;
+      const score = (foldStream(sportModule(this.sport), this.cfg, home, away, f.events).state as { score?: { home?: unknown; away?: unknown } | null }).score ?? null;
+      const of = (v: unknown): number => (typeof v === "number" ? v : 0);
+      const credit = (side: string, n: number) => { for (const p of this.#rows(side)) pts.set(p, (pts.get(p) ?? 0) + n); };
+      credit(home, of(score?.home));
+      if (away !== home) credit(away, of(score?.away));
+    }
+    return pts;
+  }
+  /** One plan, written whole or refused whole (the generate's transaction). */
+  #write(path: string, initial: boolean): number {
+    const players = this.players();
+    if (players.length < 4) throw new RefusedCall("POST", path, engineHttpStatus("STAGE_NOT_READY"), "STAGE_NOT_READY", "americano needs at least 4 individual players with linked persons");
+    const courtCount = this.#cfgNumber("courtCount", Math.max(1, Math.floor(players.length / 4)));
+    const rounds = this.#cfgNumber("rounds", Math.max(3, players.length - 1));
+    let planned: AmericanoRound[];
+    if (this.mode === "americano") {
+      planned = generateAmericano(players, { mode: "americano", courtCount, rounds });
+    } else {
+      const played = this.fixtures.length > 0 ? Math.max(...this.fixtures.map((f) => f.round_no ?? 0)) : 0;
+      if (this.fixtures.some((f) => f.status !== WAIT_UNLESS)) return 0;
+      if (played >= rounds) return 0;
+      if (!initial && this.opts.stallAfter !== undefined && played >= this.opts.stallAfter) return 0;
+      const pts = this.personalPoints();
+      planned = [pairMexicanoRound(players.map((p) => ({ playerId: p, points: pts.get(p) ?? 0 })), { courtCount }, played + 1)];
+    }
+    let selfPairs = 0;
+    for (const r of planned) {
+      const n = r.matches.flatMap((m) => [m.team1, m.team2]).filter(([a, b]) => a === b).length;
+      if (n > 0) this.#selfPairs.set(r.roundNo, (this.#selfPairs.get(r.roundNo) ?? 0) + n);
+      selfPairs += n;
+    }
+    // V213:9: two member rows for one entrant with the same person — the insert fails, the transaction with it.
+    if (selfPairs > 0) throw new RefusedCall("POST", path, 500, wireCodeFor(500), 'duplicate key value violates unique constraint "entrant_members_pkey"');
+    const idFor = (team: readonly [string, string]): string => {
+      const sorted = [...team].sort() as [string, string];
+      const found = this.#pairs.find((p) => p.members[0] === sorted[0] && p.members[1] === sorted[1]);
+      if (found !== undefined) return found.id;
+      const minted: PairEntrant = { id: `pe${this.#pairs.length + 1}`, members: sorted };
+      this.#pairs.push(minted);
+      return minted.id;
+    };
+    const keys = new Set(this.fixtures.map((f) => f.ext_key));
+    let created = 0;
+    for (const r of planned) {
+      let fresh = 0;
+      for (const m of r.matches) {
+        if (keys.has(m.id)) continue;
+        this.seat(m.roundNo, idFor(m.team1), idFor(m.team2), { ext_key: m.id });
+        fresh++;
+      }
+      if (fresh > 0) this.#generated.push(r.roundNo);
+      created += fresh;
+    }
+    return created;
+  }
+  override start(): Promise<StartOut> {
+    return settle(() => {
+      this.log("start");
+      const created = this.#write("/api/v1/divisions/d1/start", true);
+      this.stage!.status = "active";
+      return { division_id: "d1", status: "active", started: true, generated: created };
+    });
+  }
+  override generate(stageId = "s1"): Promise<GenerateOut> {
+    return settle(() => {
+      this.log("generate", stageId);
+      const existing = this.fixtures.length;
+      let created: number;
+      try {
+        created = this.#write(`/api/v1/stages/${stageId}/generate`, false);
+      } catch (e) {
+        if (e instanceof RefusedCall) this.generates.push({ created: null, status: e.status });
+        throw e;
+      }
+      this.generates.push({ created, status: 200 });
+      return { created, existing, fixtures: this.rows() };
+    });
+  }
+  override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
+    const out = await super.postStream(id, events, prefix);
+    this.#noteDecided(id);
+    return out;
+  }
+  /** Records a round the moment its last open fixture finishes. */
+  #noteDecided(id: string): void {
+    const round = this.fixtures.find((f) => f.id === id)?.round_no ?? null;
+    if (round === null || this.#decidedOrder.includes(round)) return;
+    const inRound = this.fixtures.filter((f) => f.round_no === round);
+    if (inRound.every((f) => isTerminal(f.status))) this.#decidedOrder.push(round);
+  }
+  override async withdraw(entrantId: string): Promise<WithdrawOut> {
+    this.log("withdraw", entrantId);
+    const path = `/api/v1/entrants/${entrantId}/withdraw`;
+    const e = this.entrants.find((x) => x.id === entrantId);
+    if (e === undefined) throw new RefusedCall("POST", path, 404, wireCodeFor(404), "entrant not found");
+    if (e.status === "withdrawn") throw new RefusedCall("POST", path, 409, wireCodeFor(409), "entrant is already withdrawn");
+    let voided = 0;
+    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+      await this.abandonFixture(f);
+      voided++;
+    }
+    e.status = "withdrawn";
+    if (this.opts.dropWithdrawnFromPlan === true && this.mode === "americano") {
+      const gone = this.#withdrawnPersons();
+      this.fixtures = this.fixtures.filter((f) => !(PENDING.has(f.status) && [f.home_entrant_id, f.away_entrant_id].some((s) => s !== null && this.#rows(s).some((p) => gone.has(p)))));
+    }
+    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
+  }
+  /** The table folds over the stage's SIDES (engine-db/competition.ts:360-365). */
+  override tableEntrants(): string[] {
+    return [...new Set(this.fixtures.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null))];
+  }
+  #ranked(): string[] {
+    const m = sportModule(this.sport);
+    const pts = new Map(this.tableEntrants().map((id) => [id, 0]));
+    for (const f of this.fixtures) {
+      if (f.outcome === null || f.home_entrant_id === null || f.away_entrant_id === null) continue;
+      const d = declaredPoints(m, this.cfg, { kind: "americano", ...(f.round_no ? { roundNo: f.round_no } : {}) }, f.home_entrant_id, f.away_entrant_id, f.events);
+      if (d === null) continue;
+      pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
+      pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
+    }
+    return [...pts].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).map(([id]) => id);
+  }
+  override completeStage(): Promise<CompleteOut> {
+    return settle(() => {
+      this.log("completeStage");
+      if (this.completed) return { completed: true, events: [] };
+      if (this.fixtures.length === 0 || this.fixtures.some((f) => !isTerminal(f.status))) return { completed: false, events: [] };
+      this.completed = true;
+      return { completed: true, events: [{ type: "stage_completed", finalRanks: this.#ranked() }] };
+    });
+  }
+  override americanoView(stageId: string): Promise<AmericanoViewOut> {
+    return settle(() => {
+      this.log("americanoView", stageId);
+      if (this.stage === null || this.stage.id !== stageId) throw new RefusedCall("GET", `/api/v1/stages/${stageId}/americano`, 404, wireCodeFor(404), "stage not found");
+      const rounds = [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].sort((a, b) => a - b).map((round_no) => ({
+        round_no,
+        matches: this.fixtures.filter((f) => (f.round_no ?? 0) === round_no).map((f) => ({ fixture_id: f.id, status: f.status, team1: { entrant_id: f.home_entrant_id ?? "" }, team2: { entrant_id: f.away_entrant_id ?? "" } })),
+      }));
+      const pts = this.personalPoints();
+      return { mode: this.opts.viewMode ?? this.mode, rounds, leaderboard: [...pts].map(([person_id, points]) => ({ person_id, points, games: 0 })) };
+    });
+  }
+  // --- the test oracle: the fake's OWN rows, never the harness's ---
+  stageIdAt(seq: number): string {
+    if (seq !== 1 || this.stage === null) throw new Error(`fake: one americano stage, no stage ${seq}`);
+    return this.stage.id;
+  }
+  stageAt(seq: number): StageRef {
+    if (seq !== 1 || this.stage === null) throw new Error(`fake: one americano stage, no stage ${seq}`);
+    return { ...this.stage, config: { ...this.stage.config } };
+  }
+  /** Rounds in the order each one's last open fixture finished. */
+  roundsDecided(): number[] { return [...this.#decidedOrder]; }
+  /** Rounds in the order a generate created them (Start's included). */
+  roundsGenerated(): number[] { return [...this.#generated]; }
+  fixturesOfRound(r: number): FixtureRow[] { return this.rows().filter((f) => f.round_no === r); }
+  fixturesAfterRound(r: number): FixtureRow[] { return this.rows().filter((f) => (f.round_no ?? 0) > r); }
+  /** The person the entrant holding `seed` plays as (its last member row). */
+  personOfSeed(seed: number): string {
+    const e = this.entrants.find((x) => x.seed === seed);
+    const rows = e === undefined ? [] : this.#rows(e.id);
+    if (rows.length === 0) throw new Error(`fake: no person for seed ${seed}`);
+    return rows[rows.length - 1];
+  }
+  /** An entrant's persons: a pair's two, a division entrant's member rows. */
+  membersOf(entrantId: string): string[] { return this.#rows(entrantId); }
+  pairEntrantIds(): string[] { return this.#pairs.map((p) => p.id); }
+  selfPairsIn(round: number): number { return this.#selfPairs.get(round) ?? 0; }
+  /** The first person a round ≥ 2 seats twice, with a pair entrant an EARLIER
+   *  round seated that holds them (the signature's evidence). */
+  firstDuplicate(): { round_no: number; person: string; viaPairEntrant: string } {
+    const rounds = [...new Set(this.fixtures.map((f) => f.round_no ?? 0))].filter((r) => r >= 2).sort((a, b) => a - b);
+    for (const r of rounds) {
+      const seen = new Map<string, number>();
+      for (const f of this.fixturesOfRound(r)) for (const side of [f.home_entrant_id, f.away_entrant_id]) {
+        if (side !== null) for (const p of this.#rows(side)) seen.set(p, (seen.get(p) ?? 0) + 1);
+      }
+      for (const [person, n] of seen) {
+        if (n < 2) continue;
+        const via = this.rows().find((f) => (f.round_no ?? 0) < r && [f.home_entrant_id, f.away_entrant_id].some((s) => s !== null && this.#pair(s) !== undefined && this.#rows(s).includes(person)));
+        const pair = via === undefined ? undefined : [via.home_entrant_id, via.away_entrant_id].find((s) => s !== null && this.#pair(s) !== undefined && this.#rows(s).includes(person));
+        if (pair !== undefined && pair !== null) return { round_no: r, person, viaPairEntrant: pair };
+      }
+    }
+    throw new Error("fake: no round seats a person twice with an earlier pair entrant to explain it");
   }
 }

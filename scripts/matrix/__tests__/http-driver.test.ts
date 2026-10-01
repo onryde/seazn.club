@@ -260,6 +260,27 @@ describe("HttpDriver — ladder challenges (W1-driving T7, D8)", () => {
   });
 });
 
+describe("HttpDriver — the americano view (W1-driving T8, D9)", () => {
+  const ROUTE = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/app/api/v1/stages/[id]/americano/route.ts");
+  const USECASE = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/server/usecases/americano.ts");
+  it("americanoView GETs the stage's americano route — the product exports GET there and nothing else — and passes the answer through untouched", async () => {
+    const route = readFileSync(ROUTE, "utf8");
+    expect([...route.matchAll(/export async function (\w+)\(/g)].map((m) => m[1])).toEqual(["GET"]);
+    const answer = { mode: "mexicano", rounds: [{ round_no: 1, matches: [] }], leaderboard: [{ person_id: "p1", points: 3, games: 1 }] };
+    const { t, calls } = fake([(c) => (c.method === "GET" && c.path === "/api/v1/stages/s1/americano" ? ok(answer) : undefined)]);
+    expect(await drv(t).americanoView("s1")).toEqual(answer);
+    expect(calls.map((c) => [c.method, c.path])).toEqual([["GET", "/api/v1/stages/s1/americano"]]);
+    expect(posts(calls)).toEqual([]);
+  });
+  it("a non-americano stage is the product's codeless 422 (usecases/americano.ts), a RefusedCall — never a silent empty view", async () => {
+    expect(readFileSync(USECASE, "utf8")).toContain('if (stage.kind !== "americano") throw new HttpError(422, "not an americano stage");');
+    const { t } = fake([() => err(422, wireCodeFor(422))]);
+    const e = await drv(t).americanoView("s9").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 422, code: wireCodeFor(422) });
+  });
+});
+
 describe("HttpDriver — reads and probes", () => {
   const ref = { orgSlug: "o", competitionSlug: "c", divisionSlug: "d" };
   it("public standings go out with NO cookies (anonymous) and the public path", async () => {

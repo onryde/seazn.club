@@ -36,7 +36,11 @@ export function inSquadOrder(members: readonly EntrantMember[]): EntrantMember[]
 export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
 export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
-export interface EntrantRow { id: string; display_name: string; seed: number | null; status: string }
+/** `kind` (W1-driving Task 8): the product serves it (entrants.ts COLS) and
+ *  lists EVERY entrant of the division, the `pair` entrants an americano
+ *  stage mints included (entrants.ts listEntrants has no kind filter).
+ *  Optional: the fakes' plain rows omit it, which reads as not a pair. */
+export interface EntrantRow { id: string; display_name: string; seed: number | null; status: string; kind?: string }
 /** `third_place` (W1b Task 10, T3 review G1): the product's row flag for a
  *  knockout's third-place match (usecases/fixtures.ts listDivisionFixtures
  *  selects it; the division fixtures route serves it). Optional: the fakes
@@ -72,6 +76,12 @@ export interface WithdrawOut { entrant_id: string; status: string; policy: "none
  *  as it stood when the challenge was ISSUED — before its result lands, and
  *  never pruned of a departed entrant. */
 export interface ChallengeOut { readonly fixture_id: string; readonly ladder_order: readonly string[] }
+/** W1-driving Task 8: the americano read model (GET /stages/:id/americano →
+ *  usecases/americano.ts americanoView). `mode` is the product's own reading
+ *  of the stage's config.mode (anything but "mexicano" reads "americano");
+ *  each match's team1/team2 are the fixture's home/away pair entrants. Only
+ *  the fields the harness reads are typed. */
+export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; readonly rounds: readonly { round_no: number; matches: readonly { fixture_id: string; status: string; team1: { entrant_id: string }; team2: { entrant_id: string } }[] }[]; readonly leaderboard: readonly { person_id: string; points: number; games: number }[] }
 export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
@@ -159,6 +169,10 @@ export interface OrganiserDriver {
    *  fixture, challenger home. A refusal (FOREIGN, WITHDRAWN, NOT_UPWARD,
    *  OUT_OF_RANGE, a non-ladder stage) throws RefusedCall. */
   challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut>;
+  /** The americano read model (GET /stages/:id/americano, W1-driving Task 8):
+   *  the rotation grid and the personal-points leaderboard. A stage of any
+   *  other kind is a codeless 422 ("not an americano stage") → RefusedCall. */
+  americanoView(stageId: string): Promise<AmericanoViewOut>;
   standings(stageId: string, poolId: string | null): Promise<StandingsOut>;
   publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut>;
   /** A probe: returns the refusal, never throws on 4xx. */

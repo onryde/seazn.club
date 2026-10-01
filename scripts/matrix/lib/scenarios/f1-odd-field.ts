@@ -6,11 +6,18 @@
 // declares no rounds, so f1-round-size abstains by name there; F1 instead
 // asserts the D8 sweep (W1-driving Task 7): n − 1 challenges over the
 // seeded field, and every seeded entrant holding a finalRanks rung.
+//
+// On americano/mexicano (W1-driving Task 8, T7-R1 carry) a round seats
+// pairs of PAIRS on courts: the size the engine declares comes from its own
+// planner over the field (americano.ts:50, min(floor(n/4), courtCount)),
+// never floor(n/2), and an entrant is drawn when its PERSON sits in a seated
+// pair entrant.
+import { generateAmericano, pairMexicanoRound } from "@seazn/engine/scheduling";
 import { fieldSizeFor } from "../field-size.ts";
 import type { CompleteObs, ObservedFixture } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
-import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
+import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -36,6 +43,21 @@ export function ladderSweep(kind: string, seeded: readonly string[], steps: read
   ]);
 }
 
+/** T7-R1 carry: the fixtures one americano/mexicano round seats over a field
+ *  of n, as the ENGINE declares it — its own planner run over n placeholder
+ *  players on the stage's courtCount (generateAmericano; mexicano's round
+ *  planner, pairMexicanoRound, quartets the same way). null when the stage
+ *  declares no courtCount: the product's default then hangs on the live
+ *  player count (stages.ts:757-758), and F1 abstains by name. */
+export function americanoRoundSize(config: Readonly<Record<string, unknown>>, n: number): number | null {
+  const courtCount = config.courtCount;
+  if (typeof courtCount !== "number") return null;
+  const players = Array.from({ length: n }, (_, i) => `player-${i + 1}`);
+  return config.mode === "mexicano"
+    ? pairMexicanoRound(players.map((playerId) => ({ playerId, points: 0 })), { courtCount }, 1).matches.length
+    : generateAmericano(players, { mode: "americano", courtCount, rounds: 1 })[0].matches.length;
+}
+
 export const f1OddField: Scenario = {
   key: "F1",
   entrantCount: ENTRANTS,
@@ -48,14 +70,21 @@ export const f1OddField: Scenario = {
     const s = observed.stages[0];
     const n = s.field.length;
     // floor(n/2) seated pairs per round, one bye; the canary ALSO expects ceil (m-1).
-    const right = Math.floor(n / 2);
-    const wrong = Math.ceil(n / 2);
+    // Americano: the engine's own round size; the canary ALSO expects one more court.
+    const americano = setup.stage.kind === "americano";
+    const courts = americano ? americanoRoundSize(setup.stage.config, n) : null;
+    const right = americano ? courts ?? 0 : Math.floor(n / 2);
+    const wrong = americano ? right + 1 : Math.ceil(n / 2);
     const rounds = [...new Set(s.fixtures.map((f) => f.roundNo ?? 0))].sort((a, b) => a - b);
     // A knockout's later rounds hold winners only, so just its first round.
     const inspected = setup.stage.kind === "knockout" ? rounds.slice(0, 1) : rounds;
     const seatedIn = (r: number) => s.fixtures.filter((f) => (f.roundNo ?? 0) === r && f.home !== null && f.away !== null).length;
     // T7-R1: a ladder declares no rounds — the round-size expectation has no source there (R9), so it abstains by name.
     const ladder = setup.stage.kind === "ladder";
+    const seated = seatsEntrant(s);
+    const sizeAbstain = ladder ? "ladder: a ladder declares no rounds (ruling T7-R1); F1 judges the challenge sweep instead (f1-ladder-sweep)"
+      : americano && courts === null ? "americano: the stage declares no courtCount, so the engine's round size hangs on the live player count (stages.ts:757-758)"
+      : null;
     return {
       observed,
       events: rec.events,
@@ -64,12 +93,12 @@ export const f1OddField: Scenario = {
         builtAsPosted(setup.built, observed),
         foldParity(rec),
         resultsAsPosted(rec, observed),
-        assertion("f1-everyone-drawn", s.field.map((e) => ({ ok: s.fixtures.some((f) => f.home === e || f.away === e), note: `${e} appears in no fixture` }))),
-        assertion("f1-round-size", ladder ? [] : withCanary(
-          inspected.map((r) => ({ ok: seatedIn(r) === right, note: `round ${r}: ${seatedIn(r)} seated, expected ${right}` })),
+        assertion("f1-everyone-drawn", s.field.map((e) => ({ ok: seated(e), note: `${e} appears in no fixture${americano ? " (its person sits in no seated pair entrant)" : ""}` }))),
+        assertion("f1-round-size", sizeAbstain !== null ? [] : withCanary(
+          inspected.map((r) => ({ ok: seatedIn(r) === right, note: `round ${r}: ${seatedIn(r)} seated, expected ${right}${americano ? " (the engine's round over the field)" : ""}` })),
           inspected.map((r) => ({ ok: seatedIn(r) === wrong, note: `round ${r}: ${seatedIn(r)} seated, expected ${wrong}` })),
           ctx.spec.canary,
-        ), ladder ? "ladder: a ladder declares no rounds (ruling T7-R1); F1 judges the challenge sweep instead (f1-ladder-sweep)" : null),
+        ), sizeAbstain),
         ladderSweep(setup.stage.kind, [...setup.entrants].sort((a, b) => setup.seedOf(a.id) - setup.seedOf(b.id)).map((e) => e.id), rec.ladderSteps, s.fixtures, s.complete),
         stageCompleted(observed),
         loopBounded(rec, observed),

@@ -1217,6 +1217,25 @@ describe("BrowserDriver — the roster seam is setup filler (ruling 47, W1-drivi
     expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
   });
 
+  it("W1-driving T8 (D9): the americano view never touches the page — it reaches HTTP once per call, is counted as filler, and its answer or refusal passes through", async () => {
+    const http = new FakeHttp(ORG);
+    const { driver, pageCalls } = make({ http, pages: uiAddsTo(http) });
+    await built(driver, spec("league"));
+    const pages = pageCalls.length;
+    const coverage = only(driver, "mixed-driver-coverage");
+    const answer = { mode: "americano" as const, rounds: [], leaderboard: [] };
+    const sent: string[] = [];
+    http.americanoView = async (stageId) => { http.log("americanoView", stageId); sent.push(stageId); return answer; };
+    expect(await driver.americanoView("s1")).toBe(answer);
+    expect(sent).toEqual(["s1"]);
+    http.americanoView = async () => { http.log("americanoView"); throw new RefusedCall("GET", "/api/v1/stages/s1/americano", 422, "VALIDATION", "not an americano stage"); };
+    await expect(driver.americanoView("s1")).rejects.toMatchObject({ status: 422 });
+    expect(pageCalls.length).toBe(pages);
+    expect(http.calls.filter((c) => c === "americanoView")).toEqual(["americanoView", "americanoView"]);
+    expect(driver.fillers).toEqual({ americanoView: 2 });
+    expect(only(driver, "mixed-driver-coverage")).toEqual(coverage);
+  });
+
   it("a refused lineup is the product's RefusedCall, passed through, and still counted as the filler call it was", async () => {
     const http = new FakeHttp(ORG);
     const { driver } = make({ http, pages: uiAddsTo(http) });

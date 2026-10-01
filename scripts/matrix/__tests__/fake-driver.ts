@@ -20,7 +20,7 @@ import type { StreamEvent } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type ChallengeOut, type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { wireCodeFor } from "./product-text.ts";
@@ -348,6 +348,16 @@ export class FakeLeagueDriver implements OrganiserDriver {
       throw new RefusedCall("POST", `/api/v1/stages/${stageId}/challenges`, 422, wireCodeFor(422), "challenges only exist on ladder stages");
     });
   }
+  /** W1-driving Task 8: the americano read model exists on americano stages
+   *  only — usecases/americano.ts americanoView throws a CODELESS 422, so the
+   *  wire code is http.ts's default for the status (read from the product).
+   *  FakeAmericanoDriver (fake-formats-driver.ts) models one. */
+  americanoView(stageId: string): Promise<AmericanoViewOut> {
+    return settle(() => {
+      this.log("americanoView", stageId);
+      throw new RefusedCall("GET", `/api/v1/stages/${stageId}/americano`, 422, wireCodeFor(422), "not an americano stage");
+    });
+  }
   /** The table fake models no rebuild; refused by name (Task 13). */
   rebuild(_stageId: string): Promise<void> {
     return settle(() => {
@@ -365,10 +375,13 @@ export class FakeLeagueDriver implements OrganiserDriver {
   /** The table the product folds: [home, away] deltas from standingsDelta over
    *  each result, and a one-sided award (bye) scored the way
    *  engine-db/competition.ts awardByeDelta does it. */
+  /** Who the table folds over: the division's entrants. An americano stage
+   *  folds over its SIDES instead (FakeAmericanoDriver). */
+  tableEntrants(): string[] { return this.entrants.map((e) => e.id); }
   standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return settle(() => {
       this.log("standings");
-      const pts = new Map(this.entrants.map((e) => [e.id, 0]));
+      const pts = new Map(this.tableEntrants().map((id) => [id, 0]));
       const m = sportModule(this.sport);
       const kind = this.stage!.kind as StageKind;
       for (const f of this.fixtures) {

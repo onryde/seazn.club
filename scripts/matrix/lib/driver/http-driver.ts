@@ -14,7 +14,7 @@ import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
-  type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
@@ -312,6 +312,13 @@ export class HttpDriver implements OrganiserDriver {
    *  refusal (LADDER_*, a non-ladder 422) is the product's RefusedCall. */
   async challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
     return this.#call(`/api/v1/stages/${stageId}/challenges`, "POST", { challenger_id: challengerId, opponent_id: opponentId });
+  }
+
+  /** W1-driving Task 8: the americano read model (route stages/[id]/americano
+   *  → usecases/americano.ts americanoView), answered as the product serves
+   *  it. A non-americano stage is the product's codeless 422 → RefusedCall. */
+  async americanoView(stageId: string): Promise<AmericanoViewOut> {
+    return this.#call(`/api/v1/stages/${stageId}/americano`);
   }
 
   async rebuild(stageId: string): Promise<void> {

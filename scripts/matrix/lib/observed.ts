@@ -50,8 +50,11 @@ export interface CompleteObs { status: number; code: string | null; completed: b
  *  — its source stage did not complete, or the seed advance was refused.
  *  "refused_challenge" (W1-driving Task 7, D8): a ladder whose challenge was
  *  refused, or whose field is too small to hold one — no challenge played is
- *  never "drained". */
-export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge";
+ *  never "drained".
+ *  "stalled_rounds" (W1-driving Task 8, D9): a mexicano whose generate
+ *  created nothing before the stage's config.rounds were played — the product
+ *  refusing to go on, never "drained" and never `cut_short`. */
+export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge" | "stalled_rounds";
 
 export interface ObservedStage {
   id: string;
@@ -73,6 +76,11 @@ export interface ObservedStage {
   /** W1-driving Task 6 (PF-6): how this stage's play loop ended; null when it
    *  never ran. Optional: the model (lib/model/state.ts) has no play loop. */
   exit?: LoopExit | null;
+  /** W1-driving Task 8: on an americano stage, entrant → its person ids — every
+   *  pair entrant its fixtures seat, as entrantMembers answered (two each), and
+   *  every division entrant, as the setup read them (one per individual).
+   *  Absent on every other kind. */
+  persons?: Record<string, readonly string[]>;
 }
 
 export interface FixtureSnap { id: string; status: string; outcome: ObservedOutcome | null }
