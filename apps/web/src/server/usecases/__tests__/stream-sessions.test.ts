@@ -17,7 +17,7 @@
 // because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -5000,6 +5000,117 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     } finally {
       reads.restore();
     }
+  });
+
+  // R-1 (re-review): a poll that READ writes a sample and — when the word changed — an ingest_status event. A coalesced
+  // poll (above) serves the latest poll sample's word and computes D3's `since` from those events, so a reader landing
+  // BETWEEN two separate commits was served the NEW word with no event behind it: `since` fell back to live_at and the
+  // stream-key box flashed for one poll. The two now commit together. Here the poll is HELD mid-write — a trigger on its
+  // ingest_status insert waits on an advisory lock this test holds — and the database is read exactly as a coalesced
+  // poll reads it (the latest poll sample; the ingest_status events), through the pool. A real coalesced currentSession
+  // cannot run at that instant: its expiry tick takes the session row lock the held poll owns.
+  it("R-1: a reader that looks while a poll is MID-WRITE never sees the new sample without its event — it is served the previous reading; once the poll commits it sees both, together", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    let out: OutputState = "ok";
+    const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const key = randomInt(1, 2 ** 31 - 1);
+    const fn = `r1_hold_${randomBytes(4).toString("hex")}`;
+    const holder = await sql.reserve();
+    let held = false;
+    let poll: Promise<{ v?: Awaited<ReturnType<typeof currentSession>>; e?: unknown }> | null = null;
+    const latestWord = async () => (await sql<{ word: string }[]>`
+      select output_state as word from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`)[0]?.word;
+    try {
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output?.state, "PREMISE: live, the destination receiving").toBe("ok");
+      const before = await counts(sessionId);
+      await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+        begin
+          if new.session_id = '${sessionId}'::uuid and new.type = 'ingest_status' then perform pg_advisory_xact_lock(${key}); end if;
+          return new;
+        end $$`);
+      await sql.unsafe(`create trigger ${fn} before insert on fixture_stream_events for each row execute function ${fn}()`);
+      await holder`select pg_advisory_lock(${key})`;
+      held = true;
+      out = "connecting";   // a CHANGED word: this poll owes a sample AND an event
+      r.tick(STREAM_POLL_MS);
+      poll = currentSession(r.auth, r.fixtureId, r.deps).then((v) => ({ v }), (e: unknown) => ({ e }));
+      // Wait until the poll is parked on its event insert — the instant the old code had already committed its sample.
+      const deadline = Date.now() + 15_000;
+      let waiting = 0;
+      while (waiting === 0 && Date.now() < deadline) {
+        [{ waiting }] = await sql<{ waiting: number }[]>`
+          select count(*)::int as waiting from pg_locks where locktype = 'advisory' and not granted and classid = 0 and objid = ${key}`;
+        if (waiting === 0) await new Promise((res) => setTimeout(res, 20));
+      }
+      expect(waiting, "PREMISE: the poll reached its event write and is held there").toBe(1);
+      expect(await latestWord(), "mid-write: the previous reading is still the one served").toBe("ok");
+      expect(await counts(sessionId), "mid-write: no half of the new reading is visible — never the sample without its event").toEqual(before);
+      await holder`select pg_advisory_unlock(${key})`;
+      held = false;
+      const done = await poll;
+      expect(done.e, "the held poll completes").toBeUndefined();
+      expect(done.v!.output?.state).toBe("connecting");
+      expect(await counts(sessionId), "after the commit: both, together").toEqual({ samples: before.samples + 1, events: before.events + 1 });
+      expect(await latestWord()).toBe("connecting");
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixture_stream_events
+         where session_id = ${sessionId} and type = 'ingest_status' and payload->>'outputState' = 'connecting'`;
+      expect(n, "the served word has its event").toBe(1);
+    } finally {
+      // Order matters: release the poll before dropping its trigger (a DROP waits on the held insert's table lock).
+      if (held) await holder`select pg_advisory_unlock(${key})`;
+      if (poll) await poll;
+      holder.release();
+      await sql.unsafe(`drop trigger if exists ${fn} on fixture_stream_events`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+      outSpy.mockRestore();
+    }
+  });
+
+  // R-1, the failure half: all-or-nothing in BOTH directions, so neither write order can be split back apart unseen —
+  // the event refused (the old order committed its sample first) and the sample refused (an event-first split would
+  // commit its event first).
+  it("R-1: the pair is all-or-nothing — when EITHER write is refused (the event, then the sample), the poll fails and neither row lands, the previous reading is still the one served, and the next window writes both", async () => {
+    let checked = 0;
+    for (const refused of ["fixture_stream_events", "fixture_stream_samples"] as const) {
+      const r = await rig({ credits: 1 });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      r.tick(3000);
+      let out: OutputState = "ok";
+      const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+      const fn = `r1_refuse_${randomBytes(4).toString("hex")}`;
+      const which = refused === "fixture_stream_events" ? "new.type = 'ingest_status'" : "new.source = 'poll'";
+      try {
+        expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output?.state, `${refused}: PREMISE: live, the destination receiving`).toBe("ok");
+        const before = await counts(sessionId);
+        await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+          begin
+            if new.session_id = '${sessionId}'::uuid and ${which} then raise exception 'R1: write refused'; end if;
+            return new;
+          end $$`);
+        await sql.unsafe(`create trigger ${fn} before insert on ${refused} for each row execute function ${fn}()`);
+        out = "connecting";   // a CHANGED word: this poll owes a sample AND an event
+        r.tick(STREAM_POLL_MS);
+        await expect(currentSession(r.auth, r.fixtureId, r.deps), `${refused}: the refused write fails the poll`).rejects.toThrow(/R1: write refused/);
+        expect(await counts(sessionId), `${refused} refused: neither row of the new reading landed`).toEqual(before);
+        const [{ word }] = await sql<{ word: string }[]>`
+          select output_state as word from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`;
+        expect(word, `${refused}: a coalesced reader is still served the word whose event exists`).toBe("ok");
+        await sql.unsafe(`drop trigger ${fn} on ${refused}`);
+        await sql.unsafe(`drop function ${fn}()`);
+        r.tick(STREAM_POLL_MS);
+        expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output?.state, `${refused}: the next window reads`).toBe("connecting");
+        expect(await counts(sessionId), `${refused}: and writes both`).toEqual({ samples: before.samples + 1, events: before.events + 1 });
+      } finally {
+        outSpy.mockRestore();
+        await sql.unsafe(`drop trigger if exists ${fn} on ${refused}`);
+        await sql.unsafe(`drop function if exists ${fn}()`);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("a claimed read that FAILS still holds the window (a 429 storm is coalesced too): one call and one report for two polls inside the window; the poll after it reads again", async () => {

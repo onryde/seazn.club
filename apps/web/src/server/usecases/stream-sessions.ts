@@ -1456,19 +1456,27 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       // still answers the projection and still drives warming → live below. G-a: a carried word is recorded as the
       // reading it carries (the raw status keeps the no-evidence read itself); an unseen phone records nothing.
       if (output !== null && phone !== null) {
-        // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
-        // on the status read). It is the one field that says WHY an input is disconnected, so a poll
-        // sample without it records that something was wrong and drops the only explanation.
-        await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: phone, outputState: output,
-          ingestReason: status.reason, sampledAt: deps.now(), raw: status });
-        if (!prev || prev.ingest_state !== phone || prev.output_state !== output) {
-          const sid = row.id, orgId = row.org_id;
-          await sql.begin(async (tx) => {
+        // R-1 (re-review): the sample and its event commit in ONE transaction. A coalesced poll serves the latest poll
+        // sample's word and computes D3's `since` from these events; as two commits, a reader landing between them was
+        // served the NEW word with no event behind it, `since` fell back to live_at, and the stream-key box flashed for
+        // one poll. Both Cloudflare reads are already done above: this transaction holds a connection for the row lock
+        // and the two inserts only, never across a provider call. Inside it the order is invisible to a reader; neither
+        // half alone is safe to serve (an event without its sample moves `since` under the previous word), so they must
+        // never be split — stream-sessions.test.ts "R-1" holds a poll mid-write and refuses each write in turn.
+        const changed = !prev || prev.ingest_state !== phone || prev.output_state !== output;
+        const sid = row.id, orgId = row.org_id;
+        await sql.begin(async (tx) => {
+          if (changed) {
             await lockRow(tx, sid);
             await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: phone, occurredAt: deps.now(),
               payload: { protocol: status.protocol, outputState: output, connected: phone === "connected" } });
-          });
-        }
+          }
+          // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
+          // on the status read). It is the one field that says WHY an input is disconnected, so a poll
+          // sample without it records that something was wrong and drops the only explanation.
+          await recordSample(tx, { sessionId: sid, source: "poll", ingestState: phone, outputState: output,
+            ingestReason: status.reason, sampledAt: deps.now(), raw: status });
+        });
       }
       if (phone === "connected") {
         await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
