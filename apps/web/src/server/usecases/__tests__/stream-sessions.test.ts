@@ -65,6 +65,16 @@ import {
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
 // each of its four sites (r2-m3).
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+// m-5 (B0 re-review): this file's pool connections carry an application_name of their OWN, so a test can tell its own
+// parked query from another suite's in pg_stat_activity — CI runs files in parallel against one database. postgres.js
+// reads PGAPPNAME once, when the pool is created (lazily, on the first query — after this hoisted line); the I-1
+// straddle test asserts the name actually landed. Put back in afterAll.
+const POOL_APP = vi.hoisted(() => {
+  const saved = process.env.PGAPPNAME;
+  const name = `stream-sessions.test ${globalThis.crypto.randomUUID().slice(0, 8)}`;
+  process.env.PGAPPNAME = name;
+  return { name, saved };
+});
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 // N4 (Task 14b re-review): apply's POOLED rate read, switchable so one test can make it throw. A pass-through otherwise —
@@ -92,6 +102,8 @@ beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
 afterAll(() => {
   if (savedKek === undefined) delete process.env.RELAY_KEK;
   else process.env.RELAY_KEK = savedKek;
+  if (POOL_APP.saved === undefined) delete process.env.PGAPPNAME;
+  else process.env.PGAPPNAME = POOL_APP.saved;
 });
 
 
@@ -5119,7 +5131,15 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
   // as a test: the destination stopped receiving at +65 s; at +80 s poll A claims the read and is held inside outputState
   // (it will read ok); coalesced poll B runs and is parked at its credits read by an ACCESS EXCLUSIVE lock on
   // org_stream_credits — after its sample read; A is released and commits its pair; then the lock goes.
-  it("I-1 (fix round 1): a coalesced poll that straddles a reading poll's commit is served ONE snapshot — the old word with its own since, or the new pair — never the old word timed by the new event (the stream-key box flash)", async () => {
+  //
+  // m-5 (B0 re-review): the park is witnessed on B's OWN query — this file's application_name (POOL_APP) AND the spend
+  // read's text — never "any waiter on org_stream_credits". CI runs files in parallel on one database, and another
+  // suite's credits read queued behind the lock satisfied the old witness before B had read anything; B then read after
+  // A's commit, and an either-view assertion passed with no straddle at all. That case is BUILT here: a decoy under a
+  // foreign application_name, running the spend read's own text, waits on the lock before B starts, and B starts late
+  // (B_LATE_MS) — slower than the foreign waiter, as on a loaded runner. Witnessed this way, B has read its sample before
+  // A was released, so its ONE right answer is the old view, pinned exactly.
+  it("I-1 (fix round 1): a coalesced poll that straddles a reading poll's commit is served the snapshot it read BEFORE the commit — the old word with its own since — never the old word timed by the new event (the stream-key box flash); B's park is witnessed on B's own query, not on another suite's waiter", async () => {
     const r = await rig({ credits: 1 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     r.tick(3000);
@@ -5131,8 +5151,17 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
         await new Promise((res) => setTimeout(res, 20));
       }
     };
-    const creditWaiters = async () => (await sql<{ n: number }[]>`
+    const SPEND_READ = "%as net from org_stream_credits%";   // the spend read's own text (stream-sessions.ts currentSession)
+    const FOREIGN_APP = "m5 another suite";
+    const B_LATE_MS = 750;
+    const anyWaiters = async () => (await sql<{ n: number }[]>`
       select count(*)::int as n from pg_locks where relation = 'org_stream_credits'::regclass and not granted`)[0]!.n;
+    const parkedAtSpend = async (app: string) => (await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks l join pg_stat_activity act on act.pid = l.pid
+       where l.relation = 'org_stream_credits'::regclass and not l.granted
+         and act.application_name = ${app} and act.query like ${SPEND_READ}`)[0]!.n;
+    const [{ app: ownApp }] = await sql<{ app: string }[]>`select current_setting('application_name') as app`;
+    expect(ownApp, "PREMISE: this file's pool carries its own application_name (PGAPPNAME, hoisted)").toBe(POOL_APP.name);
     let out: OutputState = "ok";
     let hold: Promise<void> | null = null;
     const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => { if (hold) await hold; return out; });
@@ -5142,6 +5171,8 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     type Answer = { v?: Awaited<ReturnType<typeof currentSession>>; e?: unknown };
     let a: Promise<Answer> | null = null;
     let b: Promise<Answer> | null = null;
+    const decoy = await sql.reserve();
+    let decoyRead: Promise<unknown> | null = null;
     try {
       expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live, the destination receiving").toBe("live");
       const tLive = r.deps.now().getTime();
@@ -5161,10 +5192,25 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
       let lockTaken = () => {};
       const taken = new Promise<void>((res) => { lockTaken = res; });
       const gate = new Promise<void>((res) => { releaseLock = res; });
-      locker = sql.begin(async (tx) => { await tx`lock table org_stream_credits in access exclusive mode`; lockTaken(); await gate; });
+      // Bounded: behind another suite's open transaction on the table, fail in 5 s rather than at the test timeout.
+      locker = sql.begin(async (tx) => {
+        await tx`set local lock_timeout = '5s'`;
+        await tx`lock table org_stream_credits in access exclusive mode`;
+        lockTaken();
+        await gate;
+      });
       await taken;
-      b = currentSession(r.auth, r.fixtureId, elsewhere(r)).then((v) => ({ v }), (e: unknown) => ({ e }));
-      await until(async () => (await creditWaiters()) >= 1, "B is parked at its credits read");
+      // The decoy: another suite's credits read, the spend read's own text under a foreign application_name.
+      await decoy`select set_config('application_name', ${FOREIGN_APP}, false)`;
+      decoyRead = decoy`select coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`.then(() => undefined);
+      await until(async () => (await parkedAtSpend(FOREIGN_APP)) === 1, "the decoy waits on the lock");
+      expect(await anyWaiters(), "PREMISE: a waiter the old witness would have taken for B").toBeGreaterThanOrEqual(1);
+      expect(await parkedAtSpend(ownApp), "PREMISE: and it is not B, who has not started").toBe(0);
+      b = new Promise<void>((res) => setTimeout(res, B_LATE_MS))
+        .then(() => currentSession(r.auth, r.fixtureId, elsewhere(r)))
+        .then((v) => ({ v }), (e: unknown) => ({ e }));
+      await until(async () => (await parkedAtSpend(ownApp)) >= 1, "B is parked at ITS spend read");
+      expect(await parkedAtSpend(ownApp), "B alone: A is still held inside outputState").toBe(1);
       hold = null;
       releaseA();
       await until(async () => (await counts(sessionId)).events === before.events + 1, "A committed its sample and event");
@@ -5175,15 +5221,16 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
       expect(rb.e, "B completes").toBeUndefined();
       expect(outSpy.mock.calls.length, "PREMISE: A read the destination, B was served").toBe(readsBefore + 1);
       expect(ra.v!.output, "A: the new pair").toEqual({ state: "ok", since: iso(tLive + 80_000), elapsedMs: 0 });
-      const oldView = { state: "connecting", since: iso(tLive + 65_000), elapsedMs: 15_000 };
-      const newView = { state: "ok", since: iso(tLive + 80_000), elapsedMs: 0 };
-      expect([oldView, newView], `B: one consistent snapshot, either side of A's commit — served ${JSON.stringify(rb.v!.output)}`).toContainEqual(rb.v!.output);
+      expect(rb.v!.output, "B: the snapshot it read before A's commit — the old word with its own since").toEqual({ state: "connecting", since: iso(tLive + 65_000), elapsedMs: 15_000 });
       expect(d3Warning(rb.v!), "no stream-key box from a straddled commit").toBeNull();
     } finally {
       hold = null;
       releaseA();
       releaseLock();
       if (locker) await locker.catch(() => undefined);
+      if (decoyRead) await decoyRead.catch(() => undefined);
+      await decoy`reset application_name`.catch(() => undefined);
+      decoy.release();
       if (a) await a;
       if (b) await b;
       outSpy.mockRestore();
