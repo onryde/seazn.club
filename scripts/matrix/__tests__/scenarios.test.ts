@@ -22,6 +22,7 @@ import {
   type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
+import { bracketFirstRound } from "../lib/scenarios/f1-odd-field.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
 import { terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
@@ -1825,6 +1826,39 @@ describe("m-1: brackets on the knockout fake (M1's progression, F1's first round
     expect(bye).toEqual([expect.objectContaining({ home: r.driver.entrants[0]!.id, status: "forfeited", outcome: { kind: "award", winner: r.driver.entrants[0]!.id } })]);
     const canary = await runOn(new FakeKnockoutDriver(), "F1", { row: "knockout", canary: true });
     expect(failed(canary.checks)).toEqual(["f1-round-size"]);
+  });
+});
+
+// W1-driving T15 (live w1drv-l3): every stepladder_only F1 case redded
+// "round 1: 1 seated, expected 3" and every double_elim F1 case "round 2: 2
+// seated, expected 3" — the harness judged each of their rounds at floor(7/2),
+// a size neither bracket declares. The expected values below are the
+// RULEBOOK's, typed from the format, never read off the code under test.
+describe("T15: F1 judges a bracket's FIRST round, at the size its format opens with", () => {
+  it("stepladder_only F1: 7 entrants — round 1 is ONE game, the two lowest seeds; only round 1 is inspected, and the canary's one-more goes red", async () => {
+    const r = await runOn(new FakeKnockoutDriver({ stepladder: true }), "F1", { row: "stepladder_only" });
+    const s = r.out.observed.stages[0]!;
+    const seed = (n: number) => r.driver.entrants.find((e) => e.seed === n)!.id;
+    expect(s.field).toHaveLength(7);
+    expect(s.fixtures.filter((f) => f.roundNo === 1)).toEqual([expect.objectContaining({ home: seed(6), away: seed(7) })]);
+    // Six rounds of one board each: judging any of them at floor(7/2) is the red this removes.
+    expect([...new Set(s.fixtures.map((f) => f.roundNo))]).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(r.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+    const canary = await runOn(new FakeKnockoutDriver({ stepladder: true }), "F1", { row: "stepladder_only", canary: true });
+    expect(failed(canary.checks)).toEqual(["f1-round-size"]);
+    expect(canary.checks.find((c) => c.id === "f1-round-size")).toMatchObject({ checked: 2, evidence: [`${CANARY_MARK}round 1: 1 seated, expected 2`] });
+  });
+  it("the opening size per bracket kind, an odd and an even field — and null on every kind whose rounds are all judged", () => {
+    // knockout: the next power of two, a bye per missing entrant — 7 → 3 boards, 5 → 1 (floor(5/2) = 2 would be wrong), 8 → 4.
+    expect([7, 5, 8].map((n) => bracketFirstRound("knockout", n))).toEqual([3, 1, 4]);
+    // double elim: its first round is its winners bracket's — a knockout's.
+    expect([7, 5, 8].map((n) => bracketFirstRound("double_elim", n))).toEqual([3, 1, 4]);
+    // stepladder: one game, the two lowest seeds, at any size.
+    expect([7, 4, 2].map((n) => bracketFirstRound("stepladder", n))).toEqual([1, 1, 1]);
+    // page playoff: 1 v 2 and 3 v 4, a field of 4 only.
+    expect(bracketFirstRound("page_playoff", 4)).toBe(2);
+    for (const kind of ["league", "group", "swiss", "americano", "ladder"]) expect(bracketFirstRound(kind, 7), kind).toBeNull();
   });
 });
 

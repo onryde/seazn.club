@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
-import { generatePagePlayoff, type GeneratedBracket } from "@seazn/engine/scheduling";
+import { generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
@@ -619,8 +619,14 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  (stages.ts BRACKET_WALKOVER_KINDS), so withdraw takes the product's
  *  open-format branch (withdrawal.ts:213-217): every pending fixture of the
  *  withdrawn entrant is voided (abandoned), nothing is forfeited, and the
- *  policy reads "walkover" once anything was voided, "none" otherwise. */
-export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean }
+ *  policy reads "walkover" once anything was voided, "none" otherwise.
+ *
+ *  `stepladder: true` (W1-driving T15) makes it a single stepladder stage the
+ *  same way: Start builds the ENGINE's own generateStepladder shape (sl-g0 the
+ *  two lowest seeds, then one game per round up to the top seed; its round r
+ *  is round_no r + 1, as the product's rows read). stepladder IS a
+ *  bracket-walkover kind, so its withdraw stays the table fake's. */
+export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean; readonly stepladder?: boolean }
 type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** fixture id → the next round's fixture and slot its winner fills. */
@@ -628,22 +634,26 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** fixture id → the fixture and slot its LOSER fills (a page playoff's pp-q1 → pp-q2). */
   readonly loserFeeds = new Map<string, { to: string; slot: Slot }>();
   readonly pagePlayoff: boolean;
+  readonly stepladder: boolean;
   /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
   readonly extIds = new Map<string, string>();
   constructor(opts: FakeKnockoutOptions = {}, orgId = "org-fake") {
     super(orgId);
     this.pagePlayoff = opts.pagePlayoff === true;
+    this.stepladder = !this.pagePlayoff && opts.stepladder === true;
   }
-  override acceptsStage(kind: string): boolean { return kind === (this.pagePlayoff ? "page_playoff" : "knockout"); }
-  override refuseStages(): never { throw new Error(this.pagePlayoff ? "fake: page playoff only" : "fake: knockout only"); }
+  override acceptsStage(kind: string): boolean { return kind === (this.pagePlayoff ? "page_playoff" : this.stepladder ? "stepladder" : "knockout"); }
+  override refuseStages(): never { throw new Error(this.pagePlayoff ? "fake: page playoff only" : this.stepladder ? "fake: stepladder only" : "fake: knockout only"); }
   override expungesEarly(): boolean { return false; }
   /** Whether a finished fixture's winner goes on — a test seam for a product
    *  that drops one. */
   carriesForward(_f: FakeFixture): boolean { return true; }
-  startPagePlayoff(): StartOut {
+  /** Start on the engine's own bracket shape (a page playoff or a stepladder). */
+  startEngineBracket(): StartOut {
     let bracket: GeneratedBracket;
     try {
-      bracket = generatePagePlayoff({ entrants: this.entrants.map((e) => e.id), seeds: new Map(this.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER])) });
+      const opts = { entrants: this.entrants.map((e) => e.id), seeds: new Map(this.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER])) };
+      bracket = this.pagePlayoff ? generatePagePlayoff(opts) : generateStepladder(opts);
     } catch (e) {
       if (!EngineError.is(e)) throw e;
       throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
@@ -664,7 +674,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   override start(): Promise<StartOut> {
     return settle(() => {
       this.log("start");
-      if (this.pagePlayoff) return this.startPagePlayoff();
+      if (this.pagePlayoff || this.stepladder) return this.startEngineBracket();
       const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
       let order = [1, 2];
       while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
