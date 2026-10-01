@@ -452,6 +452,29 @@ describe("regression cases (R29)", () => {
     expect(checked, "no replay read across the committed reports").toBeGreaterThan(0);
     console.info(`replay rule: ${checked} replays across ${reps.length} committed --regressions reports`);
   });
+  it("…and some committed --regressions report replays EVERY committed case as known: a case added to regressions.json owes a live replay (T15-R5, Task 16)", () => {
+    type Rep = { runId: string; settings: { regressions: boolean }; cells: { replayOf: string | null; verdict: string }[] };
+    const ids = loadRegressions().map((r) => r.id).sort();
+    expect(ids.length, "no committed case — the check would be vacuous").toBeGreaterThan(0);
+    const full: string[] = [];
+    let reports = 0;
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Rep;
+          if (!rep.settings.regressions) continue;
+          reports++;
+          const known = rep.cells.filter((c) => c.replayOf !== null && c.verdict === "known-failure").map((c) => c.replayOf!).sort();
+          if (JSON.stringify(known) === JSON.stringify(ids)) full.push(rep.runId);
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
+    expect(reports, "no committed --regressions report").toBeGreaterThan(0);
+    expect(full, `no committed --regressions report replays all ${ids.length} committed cases known (${ids.join(", ")}) across ${reports} report(s)`).not.toEqual([]);
+    console.info(`full replay: ${full.join(", ")} replay(s) all ${ids.length} committed cases known, of ${reports} --regressions report(s)`);
+  });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();
     expect(() => parseRegressions({ schemaVersion: 2, regressions: [base] })).toThrow();
