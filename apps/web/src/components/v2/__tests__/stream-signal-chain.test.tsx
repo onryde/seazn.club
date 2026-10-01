@@ -99,6 +99,22 @@ describe("SignalChain (spec §3.2)", () => {
     expect(html).toMatch(/data-testid="stream-chain-dest-label"[^>]*>To <span[^>]*>Club YouTube<\/span><\/p>/);
   });
 
+  // B5 review m-3: in Live the picker is gone, so the chain's destination node is the only place the panel names the
+  // destination at ≥768 — a truncated "YouTube · Riverside Badminto…" names nothing. The destination's name WRAPS there
+  // (never truncates, never overflows); the Phone and Seazn names are fixed short words and keep their one line.
+  it("m-3: the destination's name wraps in full at ≥768 — no truncate on it; Phone and Seazn keep theirs", () => {
+    const label = "Riverside Badminton Club — Saturday Senior League Channel";
+    const html = chainHtml(chainFor(null)!, { kind: "youtube", label });
+    const dest = /<span data-testid="stream-chain-dest-name" class="([^"]*)">/.exec(html);
+    expect(dest, "the destination's name element").not.toBeNull();
+    const cls = ` ${dest![1]} `;
+    expect(cls, "wraps at ≥768").toContain(" md:whitespace-normal ");
+    expect(cls, "…breaking a long word rather than overflowing").toContain(" md:[overflow-wrap:anywhere] ");
+    expect(html).toContain(`<span class="max-md:hidden">YouTube · ${label}</span>`);
+    const truncated = [...html.matchAll(/<span class="mt-2 max-w-full truncate[^"]*">([^<]*)<\/span>/g)].map((m) => m[1]);
+    expect(truncated, "Phone and Seazn: one line each").toEqual([messages["stream.chain.phone"], messages["stream.chain.seazn"]]);
+  });
+
   it("every destination kind the wire declares gets its platform name on the node (legacy kinds included)", () => {
     let checked = 0;
     for (const kind of StreamTargetKind.options) {

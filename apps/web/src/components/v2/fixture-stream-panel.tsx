@@ -701,9 +701,9 @@ type CheckoutError = "owner" | "unknown";
  * buying. Renders nothing at all without a session that is still up, so an unentitled org with nothing running sees
  * the gate alone.
  *
- * F1: also mounted by the division page itself, once per fixture still on air, when a BILLING freeze has taken the
- * whole stream panel away (the panel is gated on `editable`). Several can stack there, so each names its fixture
- * (`label`); inside a row's own panel the row already says which fixture it is, and no label is passed.
+ * F1 (spec 2026-09-30 §2): also mounted alone by the fixture page's stop-only mount, when a billing freeze or a
+ * switched-off overlay has taken the whole panel away. The page names its fixture, so no label is passed. `label` is
+ * left from the division page's probe stack, which T6 removed: nothing in production passes it (B5 review m-9).
  */
 export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?: string }) {
   const msg = useMsg();

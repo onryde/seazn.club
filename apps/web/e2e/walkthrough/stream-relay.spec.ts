@@ -437,7 +437,8 @@ async function confirmStop(page: Page, t: typeof en = en): Promise<void> {
   await expect(dialog).toHaveCount(0, { timeout: POLL_WAIT_MS });
 }
 
-const CONTROLS = "button, a[href], select, input:not([type=hidden]), textarea, [role=radio], [role=tab]";
+// `summary` (B5 review m-5): a disclosure's toggle is a control a person reaches like any other.
+const CONTROLS = "button, a[href], select, input:not([type=hidden]), textarea, summary, [role=radio], [role=tab]";
 
 /** Every visible control inside `scope`, in DOM order, as `testid` (or `tag:text`) — the set a person can reach.
  *  Compared across widths by membership, ORDER and repeats (AGENTS.md "verify with a control-set diff"). */
@@ -488,6 +489,7 @@ async function expectTapTargets(scope: Locator, min = 44): Promise<number> {
 async function shot(target: Locator, name: string): Promise<void> {
   await target.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), name) });
 }
+
 
 /** m:ss / h:mm:ss — the ended chip's format (_THEMES.md §8a), computed here from the DB's own instants. */
 function duration(startedAt: Date, endedAt: Date): string {
@@ -1133,11 +1135,11 @@ for (const width of [320, 1280] as const) {
 /** The witness's window, in poll periods (T9b brief: K = 4). */
 const POLLER_K = 4;
 for (const width of [320, 1280] as const) {
-  test(`A1b @${width}: a fixture page opened on a LIVE session runs ONE current poll — the Stream control, both twins and the Phone tab read it`, async ({
+  test(`A1b @${width}: a fixture page opened on a LIVE session runs ONE current poll — the Stream control, both twins and the Phone tab read it — and it stops when the stream ends`, async ({
     page,
   }) => {
     const NAVS = 2; // openFixture (the grant), openPhoneTab on the live session
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + POLLER_K * STREAM_POLL_MS + 3 * POLL_WAIT_MS + NAVS * NAV_MS);
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + 2 * POLLER_K * STREAM_POLL_MS + 5 * POLL_WAIT_MS + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
     const rig = await seedRelayRig(page);
     const target = await addTargetApi(page, rig.orgId, { label: `A1b ${width}` });
@@ -1161,6 +1163,18 @@ for (const width of [320, 1280] as const) {
     test.info().annotations.push({ type: "one-poller", description: `${polled} GETs of current in ${POLLER_K} poll periods @${width}` });
     expect(polled, "the session poll really ran").toBeGreaterThanOrEqual(POLLER_K - 1);
     expect(polled, "ONE poller: a second one would double this").toBeLessThanOrEqual(POLLER_K + 1);
+
+    // B5 review m-7: the page-scope poll STOPS when the session ends — the provider polls with the panel closed too, so a
+    // terminal session that kept polling would cost a read every period for as long as the page stays open.
+    await body.getByTestId("stream-stop").click();
+    await confirmStop(page);
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+    await expect(control, "over: no dot").not.toHaveAttribute("data-dot", /./);
+    const atEnd = currentGets;
+    await page.waitForTimeout(POLLER_K * STREAM_POLL_MS);
+    const after = currentGets - atEnd;
+    test.info().annotations.push({ type: "poll-stops", description: `${after} GETs of current in ${POLLER_K} poll periods after Stop @${width}` });
+    expect(after, "ended: the poll stopped (one read in flight at most)").toBeLessThanOrEqual(1);
   });
 }
 
@@ -1486,7 +1500,7 @@ for (const width of [320, 1280] as const) {
 // ===========================================================================
 // A9 — one control set, whatever the width
 // ===========================================================================
-test("A9: the Phone tab offers the SAME controls — membership, order and repeats — at 320 as at 1280, idle and live; Stream and Remote scoring are one open panel at a time, tapped at both widths", async ({ page }) => {
+test("A9: the Phone tab offers the SAME controls — membership, order and repeats — at 320 as at 1280, idle, waiting and live; Stream and Remote scoring are one open panel at a time, tapped at both widths", async ({ page }) => {
   const NAVS = 1; // openPhoneTab
   test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -1535,9 +1549,13 @@ test("A9: the Phone tab offers the SAME controls — membership, order and repea
   const idle = await compare("idle", 4);
   await streamSlot(); // this test's share of the deployment's stream capacity
   await body.getByTestId("stream-go-live").click();
+  // WAITING (B5 review m-5): the QR state is the third shape the tab takes; it lasts until the phone connects.
+  await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+  const waiting = await compare("waiting", 1);
+  await expect(body.getByTestId("stream-qr"), "the diff ran inside the waiting state").toBeVisible({ timeout: 1 });
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
   const live = await compare("live", 1);
-  test.info().annotations.push({ type: "A9", description: `compared ${idle} idle and ${live} live controls` });
+  test.info().annotations.push({ type: "A9", description: `compared ${idle} idle, ${waiting} waiting and ${live} live controls` });
   await body.getByTestId("stream-stop").click();
   await confirmStop(page);
   await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
@@ -1696,8 +1714,9 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
 // ===========================================================================
 // Driven through the product and the fake driver's own key prefixes (`connecting-` dials forever, `reject-` is refused)
 // and `page.route` for the load error. Two chain states the fake cannot reach from a browser — the phone's signal lost
-// while live (§3.2 "No signal") and `ending` (it lasts one read) — are the REAL projection of a live session with one
-// field changed on its way to the page: the page draws exactly what the server would send in that state.
+// while live (§3.2 "No signal") and `ending` (it lasts one read) — are the REAL projection of a live session changed on
+// its way to the page into what the server sends in that state: the ingest's state for no signal; for ending the state,
+// with ingest and output null (the poll reads both only while warming or live).
 // Each state: no horizontal scroll, AA contrast in the panel (axe, counted), a crop. 768 is the width the D3 case lacks.
 
 /** AA contrast inside the open Stream panel, by axe's own color-contrast rule. Returns how many nodes axe checked. */
@@ -1764,11 +1783,15 @@ for (const width of WIDTHS) {
       const panel = sel.closest('[data-testid="stream-panel"]')!.getBoundingClientRect();
       const r = sel.getBoundingClientRect();
       const chevron = sel.parentElement!.querySelector("svg")!.getBoundingClientRect();
-      return { inside: r.left >= panel.left - 0.5 && r.right <= panel.right + 0.5, chevronInside: chevron.right <= r.right && chevron.left >= r.left, padRight: parseFloat(getComputedStyle(sel).paddingRight), chevronW: chevron.width };
+      const css = getComputedStyle(sel);
+      // B5 review m-4: where the text box ENDS (the field's right edge less its border and padding), against where the
+      // chevron BEGINS — not the padding against the chevron's width, which `pr-5` would pass while overlapping it.
+      const textEnd = r.right - parseFloat(css.borderRightWidth) - parseFloat(css.paddingRight);
+      return { inside: r.left >= panel.left - 0.5 && r.right <= panel.right + 0.5, chevronInside: chevron.right <= r.right && chevron.left >= r.left, textEnd, chevronLeft: chevron.left };
     });
     expect(fit.inside, "the picker stays inside the panel").toBe(true);
     expect(fit.chevronInside, "the chevron sits inside the field").toBe(true);
-    expect(fit.padRight, "the text stops before the chevron").toBeGreaterThan(fit.chevronW);
+    expect(fit.textEnd, "the text stops before the chevron begins").toBeLessThanOrEqual(fit.chevronLeft + 0.5);
     await capture(scope, "ready-long-name");
 
     // 4. IN USE — another match holds the long-named destination; Go live here is refused on the picker.
@@ -1787,7 +1810,7 @@ for (const width of WIDTHS) {
       .poll(async () => (await sessionsOf({ fixtureId: fHold.id })).every((r) => r.state === "completed" || r.state === "failed"), { timeout: POLL_WAIT_MS })
       .toBe(true);
 
-    // 5–10. WAITING → LIVE CONNECTING → D3 → (no signal, ending: the real projection, one field changed) → ENDED.
+    // 5–10. WAITING → LIVE CONNECTING → D3 → (no signal, ending: the real projection, reshaped) → ENDED.
     scope = await openPhoneTab(page, rig, fD3);
     body = scope.locator("[data-phone-body]");
     const chain = body.getByTestId("stream-chain");
@@ -1822,7 +1845,10 @@ for (const width of WIDTHS) {
     await capture(scope, "live-no-signal");
     await page.unroute(CURRENT);
     await reshape((v) => {
+      // The real ending projection: the poll reads ingest and output only while warming or live (B5 review m-6).
       v.state = "ending";
+      v.ingest = null;
+      v.output = null;
     });
     await expect(chain).toHaveAttribute("data-dest", "ending", { timeout: POLL_WAIT_MS });
     await expect(body.getByTestId("stream-ending")).toBeVisible();
@@ -1844,6 +1870,14 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "live", { timeout: LIVE_WAIT_MS });
     await expect(body.getByTestId("stream-on-air")).toHaveText(en("stream.onAir"));
     await expect(streamControl(page)).toHaveAttribute("data-dot", "red");
+    if (width >= 768) {
+      // B5 review m-3: in Live the picker is gone — the chain's destination node names it, in full, at ≥768.
+      const destName = body.getByTestId("stream-chain-dest-name");
+      await expect(destName).toContainText(`· ${LONG_DEST}`);
+      const box = await destName.evaluate((el) => ({ sw: el.scrollWidth, cw: el.clientWidth }));
+      expect(box.cw, "premise: the name is laid out").toBeGreaterThan(0);
+      expect(box.sw, "the destination's name is not cut off").toBeLessThanOrEqual(box.cw);
+    }
     await capture(scope, "live-ok");
     await body.getByTestId("stream-stop").click();
     await confirmStop(page);

@@ -98,7 +98,18 @@ function Node({ node, icon, name, wide }: { node: ChainNode; icon: ReactNode; na
           </span>
         )}
       </span>
-      <span className="mt-2 max-w-full truncate text-xs font-semibold text-slate-800 md:text-sm">{name}</span>
+      {wide ? (
+        // B5 review m-3: the destination's name is the one the panel cannot spare at ≥768 (in Live the picker is gone),
+        // so it wraps there rather than truncating; below 768 it is the platform alone, and its label has its own line.
+        <span
+          data-testid="stream-chain-dest-name"
+          className="mt-2 max-w-full truncate text-xs font-semibold text-slate-800 md:whitespace-normal md:text-sm md:[overflow-wrap:anywhere]"
+        >
+          {name}
+        </span>
+      ) : (
+        <span className="mt-2 max-w-full truncate text-xs font-semibold text-slate-800 md:text-sm">{name}</span>
+      )}
       <span className={`mt-0.5 text-[11px] leading-tight md:text-xs ${TONE_WORD[node.tone]}`}>
         {node.word === "live" && (
           <span aria-hidden className="mr-1 inline-block h-1.5 w-1.5 -translate-y-px rounded-full bg-red-500" />
