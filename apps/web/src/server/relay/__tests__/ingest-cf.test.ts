@@ -11,11 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT, type ErrorReporter } from "../ingest-cf";
+import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "@/lib/stream-session-view";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
-import type { OutputState, ProviderCallRecord } from "../ports";
+import type { IngestState, OutputState, ProviderCallRecord } from "../ports";
 import {
-  CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS,
+  CLOUDFLARE_RETENTION_RANGE, DELETE_RECORDING_AFTER_DAYS, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, OUTPUT_READ_FAILURES_BEFORE_REPORT,
 } from "../config";
 
 type Call = { url: string; init: RequestInit };
@@ -623,6 +624,118 @@ describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
 // path shapes or subject ids drift from the real adapter's, those tests prove
 // the fake and nothing else. Compared through the REAL pathTemplate (the same
 // function telemetry.ts uses), per operation, so either side drifting reds.
+// G-1 (B5 re-review 3; controller ruling 2026-10-01): `inputStatus` maps Cloudflare's WHOLE documented live-input
+// vocabulary explicitly — the OpenAPI enum the outputState comment quotes (fetched 2026-09-30): connected, reconnected,
+// reconnecting, client_disconnect, ttl_exceeded, failed_to_connect, failed_to_reconnect, new_configuration_accepted —
+// plus `disconnected`, which is not in that enum but is what R0 MEASURED on an idle input (the `in_rtmps` fixture above).
+// A returning phone that reads `reconnected` used to be `unknown`: the chain said No signal over a phone that was
+// sending, and the I-2a clamp (to_state = 'connected') never fired. Every expected value is the ruling, one row per word.
+describe("G-1: inputStatus maps every documented Cloudflare input word — and reports an unseen one, once per session", () => {
+  let word: string | undefined = "connected";
+  const reported = vi.fn<ErrorReporter>();
+  const cf = new CloudflareIngest({
+    fetchImpl: recorder(() => ({
+      status: 200,
+      body: { success: true, result: { uid: "in_g1", status: { current: { ingestProtocol: "srt", state: word, reason: "r", statusEnteredAt: null, statusLastSeen: null } } } },
+    })).fetchImpl,
+    accountId: "acct", token: "tok", reportError: reported,
+  });
+  const inputReports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.input_state");
+
+  it("one row per word: connected/reconnected → connected; reconnecting, client_disconnect, ttl_exceeded, failed_to_connect, failed_to_reconnect (and the measured disconnected) → disconnected; new_configuration_accepted → unknown; none of them reported", async () => {
+    const rows: [string, IngestState][] = [
+      ["connected", "connected"],
+      ["reconnected", "connected"],
+      ["reconnecting", "disconnected"],
+      ["client_disconnect", "disconnected"],
+      ["ttl_exceeded", "disconnected"],
+      ["failed_to_connect", "disconnected"],
+      ["failed_to_reconnect", "disconnected"],
+      ["new_configuration_accepted", "unknown"],
+      ["disconnected", "disconnected"],   // R0-measured, not in the documented enum
+    ];
+    reported.mockClear();
+    let checked = 0;
+    for (const [w, want] of rows) {
+      word = w;
+      expect((await cf.inputStatus("in_g1", { sessionId: "sess-g1-known" })).state, w).toBe(want);
+      checked++;
+    }
+    expect(checked, "the documented eight plus the measured disconnected").toBe(9);
+    expect(rows.filter(([, s]) => s === "connected").length, "the phone-is-sending words").toBe(2);
+    expect(inputReports(), "a known word is never reported").toHaveLength(0);
+  });
+
+  it("an unseen input word reads unknown AND is reported with the raw word — once per session; a second session reports again; a no-session call keys on its input", async () => {
+    reported.mockClear();
+    word = "streaming_somehow";
+    expect((await cf.inputStatus("in_g1", { sessionId: "sess-g1-a" })).state, "never connected").toBe("unknown");
+    expect(inputReports()).toHaveLength(1);
+    expect(inputReports()[0]![1]).toMatchObject({ route: "relay.input_state", extra: { sessionId: "sess-g1-a", inputUid: "in_g1", word: "streaming_somehow" } });
+    for (let i = 0; i < 3; i++) await cf.inputStatus("in_g1", { sessionId: "sess-g1-a" });
+    expect(inputReports(), "once per session, not once per 5 s poll").toHaveLength(1);
+    await cf.inputStatus("in_g1", { sessionId: "sess-g1-b" });
+    expect(inputReports()).toHaveLength(2);
+    await cf.inputStatus("in_g1");
+    await cf.inputStatus("in_g1");
+    expect(inputReports()).toHaveLength(3);
+    expect(inputReports()[2]![1]).toMatchObject({ extra: { sessionId: null, inputUid: "in_g1" } });
+    // A missing word (a status with no state) is not a word: unknown, nothing reported.
+    reported.mockClear();
+    word = undefined;
+    expect((await cf.inputStatus("in_g1", { sessionId: "sess-g1-none" })).state).toBe("unknown");
+    expect(inputReports()).toHaveLength(0);
+  });
+});
+
+// m-c (B5 re-review 3; controller ruling 2026-10-01): since round 2 a failed outputs read is NOT READ (null) and the
+// poll records nothing — so a read that fails for the rest of a stream leaves D3 blind with nothing said anywhere. The
+// adapter reports it, through the same injected reporter, once per session, after OUTPUT_READ_FAILURES_BEFORE_REPORT
+// CONSECUTIVE failures (config.ts says why that number). Expected values come from the declarations, never the adapter:
+// the number of failed polls that spans D3's hold is the hold over the poll interval.
+describe("m-c: a PERSISTENT failed outputs read is reported once per session, after N consecutive failures", () => {
+  it("N is the number of organiser polls that spans D3's 30 s hold", () => {
+    expect(OUTPUT_READ_FAILURES_BEFORE_REPORT).toBe(OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS);
+    expect(OUTPUT_READ_FAILURES_BEFORE_REPORT).toBe(6);
+  });
+
+  it("N-1 failures say nothing; the Nth says it once with the HTTP status; more say nothing; a success resets the run; a second session reports again", async () => {
+    const N = OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS;
+    let ok = false;
+    const reported = vi.fn<ErrorReporter>();
+    const cf = new CloudflareIngest({
+      fetchImpl: recorder(() => ok
+        ? { status: 200, body: { success: true, result: [{ uid: "o", status: { current: { state: "connected" } } }] } }
+        : { status: 429, body: { success: false, errors: [{ code: 10000, message: "rate limited" }] } }).fetchImpl,
+      accountId: "acct", token: "tok", reportError: reported,
+    });
+    const failures = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_read_failed");
+    const poll = (sessionId: string | null = "sess-mc") => cf.outputState("in_mc", sessionId ? { sessionId } : {});
+    // N-1 failures, a success, N-1 more: never N in a row, so nothing.
+    for (let i = 0; i < N - 1; i++) expect(await poll()).toBeNull();
+    ok = true;
+    expect(await poll(), "PREMISE: the read can succeed").toBe("ok");
+    ok = false;
+    for (let i = 0; i < N - 1; i++) await poll();
+    expect(failures(), "a success resets the run").toHaveLength(0);
+    await poll();   // the Nth in a row
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0]![1]).toMatchObject({ extra: { sessionId: "sess-mc", inputUid: "in_mc", consecutive: N, httpStatus: 429, errorCode: 10000 } });
+    for (let i = 0; i < 2 * N; i++) await poll();
+    expect(failures(), "once per session, however long it lasts").toHaveLength(1);
+    // …even across a recovery and a second run in the same session.
+    ok = true;
+    await poll();
+    ok = false;
+    for (let i = 0; i < N; i++) await poll();
+    expect(failures(), "still once for this session").toHaveLength(1);
+    for (let i = 0; i < N; i++) await poll("sess-mc-2");
+    expect(failures(), "a second session is its own report").toHaveLength(2);
+    for (let i = 0; i < N; i++) await poll(null);
+    expect(failures(), "no session: keyed on the input").toHaveLength(3);
+  });
+});
+
 describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
   type Shape = { operation: string; method: string; template: string; idCount: number; subject: string };
 

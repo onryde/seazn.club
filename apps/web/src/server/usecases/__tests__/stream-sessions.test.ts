@@ -3900,6 +3900,62 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     }
   });
 
+  // m-a (B5 re-review 3; MC4 survived): the clamp's reconnect is an event INTO `connected` — not any event that is not
+  // FROM connected. While the phone is silent, a destination flipping between two non-ok words records events from
+  // `disconnected` to `disconnected` (Cloudflare's output reads `unknown` without inbound video, so a drop produces
+  // exactly that flip). Read as a reconnect, each flip would push the PHONE box back by up to 30 s.
+  it("m-a: the phone silent from +5 s while the destination flips connecting → unknown → connecting: the flips are not reconnects — since stays at live, and the PHONE box shows at live+30 s", async () => {
+    const r = await rig({ credits: 1 });
+    let out: OutputState = "connecting";
+    const spy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const set = (w: OutputState) => { out = w; };
+    const W = OUTPUT_WARNING_AFTER_MS;
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      await goLive(r);
+      const tLive = r.deps.now().getTime();
+      const phone = await phoneOf(r, sessionId);
+      phone("disconnected");
+      expect(d3Warning(await pollAt(r, tLive, 5_000, "connecting", set)), "the drop").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, 15_000, "unknown", set)), "a flip while silent").toBeNull();
+      expect(d3Warning(await pollAt(r, tLive, 20_000, "connecting", set)), "and back").toBeNull();
+      const [{ flips }] = await sql<{ flips: number }[]>`
+        select count(*)::int as flips from fixture_stream_events
+         where session_id = ${sessionId} and type = 'ingest_status' and from_state = 'disconnected' and to_state = 'disconnected'`;
+      expect(flips, "PREMISE: the flips were recorded as silent-to-silent events").toBe(2);
+      const due = await pollAt(r, tLive, W, "connecting", set);
+      expect(due.output, "no reconnect happened: since is still live").toEqual({ state: "connecting", since: iso(new Date(tLive)), elapsedMs: W });
+      expect(d3Warning(due), "live+30 s: the phone box, on time").toBe("phone");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // m-b (B5 re-review 3; MWL survived): why a failed outputs read is `null` rather than a throw. Both reads share one try
+  // (N1), so a throw would null the PHONE's read too, and warming → live is decided on the phone's read — a token without
+  // the outputs scope would never go live. The null path keeps the phone's read deciding go-live on its own.
+  it("m-b: warming → live with EVERY outputs read failing (null): the phone's read alone takes the session live, the projection answers no output, and no poll sample or event is written", async () => {
+    const r = await rig({ credits: 1 });
+    // The port's NOT READ (`null`); the fake's own signature is the narrower OutputState, hence the cast (as in m-2).
+    const spy = vi.spyOn(r.ingest, "outputState").mockResolvedValue(null as unknown as OutputState);
+    try {
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      const early = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(early.state, "PREMISE: not live before the phone connects").not.toBe("live");
+      r.tick(3000);
+      const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(spy, "PREMISE: the failed read really ran").toHaveBeenCalled();
+      expect(live.state, "the phone connected: live, without any output read").toBe("live");
+      expect(live.ingest?.state).toBe("connected");
+      expect(live.output, "nothing read, nothing answered").toBeNull();
+      const [{ samples }] = await sql<{ samples: number }[]>`select count(*)::int as samples from fixture_stream_samples where session_id = ${sessionId} and source = 'poll'`;
+      const [{ events }] = await sql<{ events: number }[]>`select count(*)::int as events from fixture_stream_events where session_id = ${sessionId} and type = 'ingest_status'`;
+      expect({ samples, events }).toEqual({ samples: 0, events: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // m-2 (B5 re-review 2 §4a): a FAILED outputs read — Cloudflare's failed envelope, or no result — is not evidence. The
   // port answers it with `null` (ports.ts), and the poll SKIPS it: no sample, no event, no output on the projection. It
   // used to be read as `unknown`, a non-ok word, so six failed polls on a healthy stream put the key box on screen.
