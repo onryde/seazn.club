@@ -1,6 +1,11 @@
 // M1: seed 1's first opponent does not turn up. The walkover is recorded for
 // seed 1 and, in a bracket, seed 1 goes on. Canary: ALSO expect the ABSENT side.
 //
+// W1-driving T15 (live w1drv-l3): a stepladder seats seed 1 only in its last
+// game, so there the walkover IS the terminal final (the engine's own,
+// ObservedStage.terminalFinals) and no later round exists — "goes on" means
+// the title: seed 1 holds rank 1 in the finalRanks the product minted.
+//
 // W1-driving Task 8 (D14, ruling 51): on an americano stage the fixtures seat
 // the PAIR entrants the product mints, never seed 1 itself, so the target is
 // the first fixture whose pair entrant holds seed 1's person (entrantMembers),
@@ -80,6 +85,9 @@ export const m1Walkover: Scenario = {
     const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
     const t = target as Target | null;
     const fx = t === null ? undefined : observed.stages[0].fixtures.find((f) => f.id === t.id);
+    const s0 = observed.stages[0];
+    const finalWalkover = fx?.extKey != null && (s0.terminalFinals ?? []).includes(fx.extKey);
+    const rankOne = s0.complete?.finalRanks?.[0];
     return {
       observed,
       events: rec.events,
@@ -94,7 +102,9 @@ export const m1Walkover: Scenario = {
           { ok: winnerOf(fx.outcome) === t.winner, note: `winner ${winnerOf(fx.outcome)}, expected ${t.winner}` },
         ], [{ ok: winnerOf(fx.outcome) === t.absent, note: `winner ${winnerOf(fx.outcome)}, expected ${t.absent}` }], ctx.spec.canary)),
         assertion("m1-winner-progresses",
-          [{ ok: t !== null && observed.stages[0].fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
+          [finalWalkover
+            ? { ok: rankOne === seed1, note: `the walkover was the terminal final, but finalRanks[0] is ${rankOne ?? "(none: no finalRanks)"}, not seed 1 (${seed1})` }
+            : { ok: t !== null && s0.fixtures.some((f) => (f.roundNo ?? 0) > t.round && (f.home === seed1 || f.away === seed1)), note: "seed 1 absent from every later round" }],
           BRACKETS.has(setup.stage.kind) ? null : "not a bracket stage"),
         stageCompleted(observed),
         loopBounded(rec, observed),

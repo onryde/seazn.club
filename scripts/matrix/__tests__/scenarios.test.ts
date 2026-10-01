@@ -1862,6 +1862,37 @@ describe("T15: F1 judges a bracket's FIRST round, at the size its format opens w
   });
 });
 
+// W1-driving T15 (live w1drv-l3): every non-drawing stepladder_only M1 case
+// redded m1-winner-progresses alone, "seed 1 absent from every later round".
+// A stepladder seats seed 1 only in its last game (the rulebook: the lowest
+// seeds play first, the winner climbs to the top seed), so the walkover M1
+// records for seed 1 IS the final, and no later round exists to go on to.
+// What "goes on" means after the final is the title: rank 1.
+describe("T15: M1 on a bracket whose walkover is the terminal final", () => {
+  it("stepladder_only M1: seed 1's one game is the final; the walkover makes seed 1 champion, and m1-winner-progresses judges rank 1", async () => {
+    const r = await runOn(new FakeKnockoutDriver({ stepladder: true }), "M1", { row: "stepladder_only" });
+    const s = r.out.observed.stages[0]!;
+    const seed1 = r.driver.entrants.find((e) => e.seed === 1)!.id;
+    const mine = s.fixtures.filter((f) => f.home === seed1 || f.away === seed1);
+    expect(mine).toEqual([expect.objectContaining({ status: "forfeited", isFinal: true, roundNo: Math.max(...s.fixtures.map((f) => f.roundNo ?? 0)) })]);
+    expect(s.complete?.finalRanks?.[0]).toBe(seed1);
+    expect(r.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+  });
+  it("a final walkover whose winner is NOT ranked first still reds m1-winner-progresses, naming the rank", async () => {
+    class RanksSeed1Second extends FakeKnockoutDriver {
+      override async completeStage() {
+        const out = await super.completeStage();
+        const ranks = (out.events[0] as { finalRanks: string[] }).finalRanks;
+        return { ...out, events: [{ type: "stage_completed", finalRanks: [ranks[1]!, ranks[0]!, ...ranks.slice(2)] }] };
+      }
+    }
+    const r = await runOn(new RanksSeed1Second({ stepladder: true }), "M1", { row: "stepladder_only" });
+    const seed1 = r.driver.entrants.find((e) => e.seed === 1)!.id;
+    expect(r.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "fail", evidence: [`the walkover was the terminal final, but finalRanks[0] is ${r.out.observed.stages[0]!.complete!.finalRanks![0]}, not seed 1 (${seed1})`] });
+  });
+});
+
 describe("cascadeItems — consistency with the policy the engine CHOSE", () => {
   const after = (id: string, status: string, outcome: ObservedFixture["outcome"], home: string | null = "w", away: string | null = "x"): ObservedFixture =>
     ({ id, stageId: "s1", poolId: null, roundNo: 2, home, away, status, outcome, declared: null });
