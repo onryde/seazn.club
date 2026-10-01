@@ -786,6 +786,48 @@
       ],
       "planned": {}
     },
+    "w1drv-l1/w1drv-l1-t15-r1": {
+      "plan": "--set w1-driving-l1",
+      "layered": true,
+      "driven": [
+        "league|football|LIFECYCLE@1280",
+        "groups_ko|badminton|LIFECYCLE@1280",
+        "ladder|generic|LIFECYCLE@1280",
+        "americano|badminton|LIFECYCLE@1280",
+        "mexicano|generic|LIFECYCLE@1280",
+        "group_only|badminton|LIFECYCLE@1280",
+        "group_group_ko|cricket|LIFECYCLE@1280"
+      ],
+      "planned": {}
+    },
+    "w1drv-l1/w1drv-l1-t15-r2": {
+      "plan": "--set w1-driving-l1",
+      "layered": true,
+      "driven": [
+        "league|football|LIFECYCLE@1280",
+        "groups_ko|badminton|LIFECYCLE@1280",
+        "ladder|generic|LIFECYCLE@1280",
+        "americano|badminton|LIFECYCLE@1280",
+        "mexicano|generic|LIFECYCLE@1280",
+        "group_only|badminton|LIFECYCLE@1280",
+        "group_group_ko|cricket|LIFECYCLE@1280"
+      ],
+      "planned": {}
+    },
+    "w1drv-l1/w1drv-l1-t15-r3": {
+      "plan": "--set w1-driving-l1",
+      "layered": true,
+      "driven": [
+        "league|football|LIFECYCLE@1280",
+        "groups_ko|badminton|LIFECYCLE@1280",
+        "ladder|generic|LIFECYCLE@1280",
+        "americano|badminton|LIFECYCLE@1280",
+        "mexicano|generic|LIFECYCLE@1280",
+        "group_only|badminton|LIFECYCLE@1280",
+        "group_group_ko|cricket|LIFECYCLE@1280"
+      ],
+      "planned": {}
+    },
     "w1drv-l3": {
       "plan": "--set w1-driving",
       "layered": false,

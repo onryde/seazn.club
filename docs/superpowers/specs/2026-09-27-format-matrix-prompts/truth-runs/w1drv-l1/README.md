@@ -197,7 +197,62 @@ Duplicates: `04-started` = `05-generated-before` = `run-sheet-all`. There is no 
   against the 16 in r1 and r3, because `04-started` and `run-sheet-all` stopped being byte-identical. That is timing, not a
   different state: verdicts and counts are identical.
 
+## Task 15: three more runs at the T15 head, and the triage of (a)–(f)
+
+**The env.** One fresh `seazn-local-env` stand-up, label `w1drvt15`. It is the same env as the ruling-48 L3 run (`../w1drv-l3`):
+
+- Postgres at v428, built with `db:apply` + `sync:sports`;
+- a production build with `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000`, which the preflight re-proved on every run.
+
+**The runs.** `pnpm matrix:browser --set w1-driving-l1 --run-id w1drv-l1-t15-r{1,2,3}`, one after the other, on harness `63bda33e4` (clean). Each exited 0 in about 3 min 40 s (15:30:41–15:41:43 UTC in all), with `vacuous: none` and `error reds: none`.
+
+| L1 case (1280) | t15-r1 | t15-r2 | t15-r3 | checks (each run) |
+|---|---|---|---|---|
+| `league\|football\|11-a-side\|LIFECYCLE@1280` | ✅ works | ✅ works | ✅ works | 23 |
+| `groups_ko\|badminton\|bwf\|LIFECYCLE@1280` | ✅ works | ✅ works | ✅ works | 25 |
+| `ladder\|generic\|score\|LIFECYCLE@1280` | ✅ works | ✅ works | ✅ works | 19 |
+| `americano\|badminton\|bwf\|LIFECYCLE@1280` | ✅ works | ✅ works | ✅ works | 18 |
+| `mexicano\|generic\|score\|LIFECYCLE@1280` | ❌ red | ❌ red | ❌ red | 20 |
+| `group_only\|badminton\|short\|LIFECYCLE@1280` | ✅ works | ✅ works | ✅ works | 20 |
+| `group_group_ko\|cricket\|t20\|LIFECYCLE@1280` | ✅ works | ✅ works | ✅ works | 23 |
+
+- **Identical across all three runs.** In t15-r2 and t15-r3, every case has the same state and every check the same verdict and `checked` count as in t15-r1.
+- **Identical to T13.** t15-r1 also equals T13's `w1drv-l1-r1` on all 206 checks, with 0 differences. The harness fixes between them (F1 / M1 / the mexicano duplicate note) touch nothing the L1 set checks.
+- **Scroll.** `no-horizontal-scroll` passes on every shot: 33 / 20 / 18 / 18 / 19 / 22 / 16 shots, case by case.
+- **The server log in the three runs' window** (15:30:39–15:41:50 UTC) holds exactly 3 level-50 lines. Each is `v1: unhandled error | duplicate key value violates unique constraint "entrant_members_pkey"`, one per run: the mexicano red. It is the W7 self-pair 500 that the L3 run records on 30 cases.
+
+### Parity (Step 6)
+
+**The brief's command** compares `../w1drv-http-slice` with `w1drv-l1-r1`. It wrote [`parity.md`](parity.md) and exited 1: `NOT PARITY: compared 0 cases — the two runs share no case`.
+
+- The slice holds league/knockout/swiss on generic and badminton. The L1 set holds five capability cells and two template cells.
+- **The pairing is structurally vacuous.** The brief's premise that they share cells is false.
+
+**The comparison that has shared cases** is the ruling-48 L3 run against `w1drv-l1-t15-r1`, written to [`parity-l3-vs-l1.md`](parity-l3-vs-l1.md). It compared **6 cases and 126 common checks**, and exited 1 with 12 differences:
+
+- **0 state differences and 0 verdict differences.**
+- **11 differences are `checked` counts only**, every one `pass` on both sides, all on `group_group_ko|cricket|t20`. They are D11 at work:
+  - the HTTP case seeds `DEFAULT_FIELD` 8 through the API and plays 19 fixtures;
+  - the browser case builds from the t20-super8 card, whose `entrantCount` is 16, and plays 39 fixtures (4×6 + 2×6 + 3).
+  - **Not a driver divergence.**
+- **1 case is absent on the HTTP side.** `group_only|badminton|short` is the box-league template's own variant, and the L3 plan runs `group_only|badminton` on `bwf`. This is by design.
+- **Repeat.** The same comparison against T13's `w1drv-l1-r1` gives the identical 12 differences.
+
+### Observations (a)–(f): T15 re-checked each on t15-r1's screens
+
+| | observation | at the T15 head | triage |
+|---|---|---|---|
+| (a) | The box-league public page crowns one champion over four boxes | **Reproduced.** `11-public` shows CHAMPION "Matrix Player 1", the Pool A winner, above Boxes Pool A–D. | **Product, a rulebook question → W5.** Should a box league with parallel boxes name a single champion? The owner decides. |
+| (b) | Ladder standings read 0 everywhere | **Reproduced.** `11-public` shows P / W / L / PTS 0 on all 8 rungs, with CHAMPION "Matrix Player 2". The division's own Standings tab says "No table stages in this division — standings apply to league, group and swiss stages." | **Product → W7** (ladder family). The L3 ladder R4 note asks a rulebook question about rung ranks. |
+| (c) | Americano personal points 0; pair champions | **Reproduced.** In `08-completed` the Rotation "Personal points" table reads PTS 0 for all 8 players at GAMES 7, while the rounds show "✓ scored". `11-public` shows CHAMPION "Matrix Player 4 / Matrix Player 1" over 21 pair rows. The mexicano CHAMPION is "Matrix Player 7 / Matrix Player 4". | **Product → W7.** It matches the L3 finding: the Americano view's "Personal points" are 0 on every sport but generic, and 0 of 14 decided non-generic fixtures carry a `match_states` score. The T12-R1 note, minted pairs as entrants, is confirmed. |
+| (d) | No shot of the groups_ko knockout's completion | **Reproduced.** `08-completed` is the group stage's "Stage completed." with the knockout's "Confirm proposal" pending. `11-public` shows the final played. | **Harness screen-coverage gap, owed to T16.** No check misreads it, and the knockout's completion is proven by the case's own checks. |
+| (e) | Team entrants are named "Matrix Player N" | **Reproduced** on case-1's `03-entrants`: kind Team, names "Matrix Player 1–8". | **Harness naming, owed to T16.** It breaks the "Matrix Team N" constraint, and no check depends on it. It is outside T15's fix scope, which covers harness defects behind triaged reds. |
+| (f) | Duplicate shot grouping varies between runs | In all three T15 runs, case-5 has 17 distinct shots against 16 in T13's r1 and r3: `05-generated-before` equals `08-completed-before`. Case-4 has 16. Every T15 run gives the same counts, 29 / 16 / 16 / 16 / 17 / 18 / 14. | **Timing, not state.** Verdicts and counts are identical. |
+
+**Filler counts** (T13's concern) are still not in `results.json`: `filler` appears 0 times. The live proof stays indirect, and the counts are proven only by unit tests. Recording them is a harness change, owed to T16.
+
 ## Evidence
 
-`w1drv-l1-r1/`, `w1drv-l1-r2/`, `w1drv-l1-r3/`: each run's redacted `results.json` and `MATRIX.md`. The shots are in
-the gitignored `matrix-report/<run-id>/shots/` and are kept locally.
+- `w1drv-l1-r1/`, `w1drv-l1-r2/`, `w1drv-l1-r3/` (T13) and `w1drv-l1-t15-r1/`, `w1drv-l1-t15-r2/`, `w1drv-l1-t15-r3/` (T15) hold each run's redacted `results.json` and `MATRIX.md`.
+- The shots are kept locally, in the gitignored `matrix-report/<run-id>/shots/`.
+- [`parity.md`](parity.md) is the brief's slice-vs-L1 comparison: 0 cases. [`parity-l3-vs-l1.md`](parity-l3-vs-l1.md) is L3 vs L1 over the 6 shared cases.
