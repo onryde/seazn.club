@@ -12,9 +12,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { StageKind } from "@seazn/engine/core";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
+import { RefusedCall } from "../lib/driver/types.ts";
+import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, snap, type FixtureSnap, type ObservedFixture, type ObservedOutcome } from "../lib/observed.ts";
 import { decideState, type CheckResult } from "../lib/results.ts";
@@ -24,11 +27,11 @@ import { ladderSchedule, playLadder } from "../lib/scenarios/ladder-loop.ts";
 import { cascadeItems, notChallengedLater } from "../lib/scenarios/r4-withdrawal.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { planCanaryCase } from "../lib/slice.ts";
-import { drawsAllowed, resolveSportCfg } from "../lib/sport-cfg.ts";
+import { drawsAllowed, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
 import { FakeLadderDriver } from "./fake-formats-driver.ts";
-import { bracketWalkoverKindsText, departedStatusesText, ladderText, withdrawalPendingText, withdrawalTableKindsText } from "./product-text.ts";
+import { bracketWalkoverKindsText, departedStatusesText, ladderText, wireCodeFor, withdrawalPendingText, withdrawalTableKindsText } from "./product-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
@@ -60,12 +63,16 @@ async function runCanary(spec: CaseSpec, driver: FakeLeagueDriver): Promise<{ ve
   const checks = [...evaluateInvariants(out.observed), ...out.assertions];
   return { verdict: decideState({ checks, deferred: null, error: null }).state, checks };
 }
+/** D8 (ruling 52), stated from the ruling and not read from ladder-loop.ts: step k of n−1 has the challenger climb on odd k. */
+const D8_CLIMBS = (k: number): boolean => k % 2 === 1;
+/** D8's first non-climbing step over a field of n (null: none) — where a draw goes when the engine declares one. */
+const firstNonClimb = (n: number): number | null => Array.from({ length: Math.max(0, n - 1) }, (_, j) => j + 1).find((k) => !D8_CLIMBS(k)) ?? null;
 /** The adjacent-swap RULE applied to a seed order over D8's sweep (no playLadder). */
 function swapRule(seeds: readonly string[]): string[] {
   const expected = [...seeds];
   for (let k = 1; k < seeds.length; k++) {
     const i = seeds.length - k;
-    if (k % 2 === 1) [expected[i - 1], expected[i]] = [expected[i]!, expected[i - 1]!];
+    if (D8_CLIMBS(k)) [expected[i - 1], expected[i]] = [expected[i]!, expected[i - 1]!];
   }
   return expected;
 }
@@ -174,7 +181,7 @@ describe("ladderSchedule and playLadder — D8 (ruling 52)", () => {
     expect(state).toBe("works");
   });
 
-  it("no challenge played is red, never drained: a fake that refuses every challenge leaves exit refused_challenge and I9 fails on checked 0", async () => {
+  it("no challenge played is red, never drained: a fake that refuses every challenge leaves exit refused_challenge, life-loop-bounded fails, the refusal is noted, and the stage does not complete (I9 itself is Task 9's)", async () => {
     const { out, checks } = await runOn(new FakeLadderDriver({ refuseAll: "LADDER_CHALLENGE_OUT_OF_RANGE" }), "LIFECYCLE", { row: "ladder" });
     expect(checks.find((c) => c.id === "life-loop-bounded")?.verdict).toBe("fail");
     expect(out.observed.stages[0]!.exit).toBe("refused_challenge");
@@ -193,9 +200,13 @@ describe("ladderSchedule and playLadder — D8 (ruling 52)", () => {
       expect(failing, sport).toEqual([]);
       expect(state, sport).toBe("works");
       expect(driver.ladderOrder(), sport).toEqual(swapRule(driver.entrantsBySeed()));
-      const declares = drawsAllowed(sport, resolveSportCfg(sport, variantFor(sport)), "ladder");
+      // m-9: the engine's own declaration (supportsDraws, called directly) and D8's rule — never ladderSchedule, the code under test.
+      const declares = sportModule(sport).supportsDraws(resolveSportCfg(sport, variantFor(sport)), "ladder");
+      expect(declares, `${sport}: drawsAllowed is the engine's declaration`).toBe(drawsAllowed(sport, resolveSportCfg(sport, variantFor(sport)), "ladder"));
+      const drawStep = firstNonClimb(driver.entrants.length);
+      expect(drawStep, sport).not.toBeNull();
       const draws = driver.decidedChallenges().filter((c) => c.kind === "draw");
-      expect(draws.map((c) => c.step), sport).toEqual(declares ? [ladderSchedule(driver.entrants.length).find((c) => !c.challengerWins)!.step] : []);
+      expect(draws.map((c) => c.step), sport).toEqual(declares ? [drawStep] : []);
       expect(out.observed.stages[0]!.fixtures.filter((f) => f.outcome?.kind === "draw").length, sport).toBe(declares ? 1 : 0);
       if (declares) declaring.push(sport);
       judged++;
@@ -268,6 +279,50 @@ describe("FakeLadderDriver's swap (usecases/scoring.ts:774-786)", () => {
   });
 });
 
+/** Review m-3: a private copy of the product's pending set or kind union, in any shape. Comments are stripped first; a
+ *  literal in any quote counts, and so does an unquoted record key. A negated status predicate (`!isTerminal(b.status)`,
+ *  the shape Task 7 replaced) is a pending set by negation. A source may name at most ONE pinned kind
+ *  (r4-not-paired-later's `=== "swiss"`): two or more, in any shape — array, Set, record, `||` chain, switch — is a list.
+ *  What it does NOT see: a kind or status built at run time (string concatenation, a computed key). */
+function privateCopies(src: string): string[] {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const quoted = (w: string) => new RegExp(`(["'\`])${w}\\1`).test(code);
+  const keyed = (w: string) => new RegExp(`(^|[{,\\s])${w}\\s*:(?!:)`, "m").test(code);
+  const found = [...PENDING].filter(quoted).map((x) => `pending literal ${x}`);
+  if (/\bisTerminal\b/.test(code) || /!\s*is[A-Z]\w*\([^)]*\bstatus\b[^)]*\)/.test(code)) found.push("a negated status predicate (a pending set by negation)");
+  const named = [...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED].filter((k) => quoted(k) || keyed(k));
+  if (named.length >= 2) found.push(`a kind list: ${named.join(", ")}`);
+  return found;
+}
+
+describe("the private-copy scan (review m-3): one probe per shape", () => {
+  it("flags every shape of a second pending or kind list, and passes a lone kind comparison, a comment and the shared constant", () => {
+    const caught: [string, string][] = [
+      ["a single-quoted pending Set", "const P = new Set(['scheduled', 'in_play']);"],
+      ["a double-quoted pending Set", 'const P = new Set(["scheduled", "in_play"]);'],
+      ["a backtick pending literal", "if (b.status === `in_play`) walk(b);"],
+      ["a negated isTerminal", "if (!isTerminal(b.status)) walk(b);"],
+      ["a negated status predicate under another name", "if (!isDone(b.status)) walk(b);"],
+      ["an || chain", 'const forfeit = kind === "league" || kind === "group";'],
+      ["a single-quoted kind array", "const K = ['league', 'swiss'];"],
+      ["a multi-line kind array", '[\n  "league",\n  "swiss",\n]'],
+      ["a record with unquoted kind keys", "const M = { league: 'forfeit', knockout: 'forfeit' };"],
+      ["a switch over kinds", 'switch (kind) { case "swiss": case "double_elim": return 1; }'],
+    ];
+    const passed: [string, string][] = [
+      ["a lone kind comparison", 'if (kind === "swiss") x();'],
+      ["kinds in a comment only", '// "league" || "group" — prose\nconst y = 1;'],
+      ["kinds in a block comment only", '/* ["league", "swiss"] */ const y = 1;'],
+      ["the shared constants", "const p = PENDING_STATUSES.includes(b.status) && FORFEIT_MODEL_KINDS.includes(kind);"],
+      ["a positive status predicate", "if (isOpen(b.status)) walk(b);"],
+    ];
+    for (const [name, src] of caught) expect(privateCopies(src).length, `caught: ${name}`).toBeGreaterThan(0);
+    for (const [name, src] of passed) expect(privateCopies(src), `passed: ${name}`).toEqual([]);
+    process.stdout.write(`private-copy scan: ${caught.length} shapes caught, ${passed.length} clean shapes passed\n`);
+    expect(caught.length + passed.length).toBeGreaterThan(0);
+  });
+});
+
 describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
   it("R4 (D14, ruling 51): seed 3 is withdrawn after ITS first challenge, not after step 1 — reds on today's hook", async () => {
     const driver = new FakeLadderDriver({ challengeRange: 3 });
@@ -296,10 +351,7 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     // …and r4-withdrawal.ts holds no private copy of either: no status or kind literal of the pinned sets in its source.
     // (A single kind literal — `=== "swiss"` for r4-not-paired-later — is no list; a list literal naming two pinned kinds is.)
     const src = readFileSync(resolve(REPO, "scripts/matrix/lib/scenarios/r4-withdrawal.ts"), "utf8");
-    expect([...PENDING].filter((x) => src.includes(`"${x}"`)), "a second pending list in r4-withdrawal.ts").toEqual([]);
-    const kinds = new Set([...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED]);
-    const lists = [...src.matchAll(/\[([^\]]*)\]/g)].map((m) => [...m[1]!.matchAll(/"([a-z_]+)"/g)].map((x) => x[1]!).filter((k) => kinds.has(k)));
-    expect(lists.filter((l) => l.length >= 2), "a second kind list in r4-withdrawal.ts").toEqual([]);
+    expect(privateCopies(src), "a private pending or kind list in r4-withdrawal.ts").toEqual([]);
     expect(src).toContain("PENDING_STATUSES");
     expect(src).toContain("FORFEIT_MODEL_KINDS");
   });
@@ -331,9 +383,13 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     expect(later.verdict).toBe("pass");
     // Items: live absence, raw rung, and one per later challenge (under D8 with 8 entrants, step 6 alone).
     expect(later.checked).toBe(3);
-    // W7: the product snapshots the RAW order into finalRanks (engine-db/competition.ts:606), so seed 3 keeps its rung.
-    expect(out.notes.some((n) => n.includes(`ladder finalRanks keep withdrawn ${seed3} at rung ${heldAt}`) && /W7/.test(n))).toBe(true);
-    expect(out.observed.stages[0]!.complete?.finalRanks?.[heldAt]).toBe(seed3);
+    // W7 (review m-4): the note is written AFTER the snapshot, from the finalRanks the product minted — what was seen, not
+    // what must be true. The product snapshots the RAW order (competition.ts:606), so here the rung equals the held one.
+    const ranks = out.observed.stages[0]!.complete?.finalRanks ?? null;
+    expect(ranks?.[heldAt]).toBe(seed3);
+    const w7 = out.notes.filter((n) => /W7/.test(n));
+    expect(w7).toEqual([`ladder finalRanks rung ${ranks!.indexOf(seed3)} for withdrawn ${seed3} (raw held ${heldAt}) — W7 rulebook question`]);
+    expect(out.notes.some((n) => /\bkeep\b/.test(n))).toBe(false);
     expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);  // recorded, never asserted either way
   });
 
@@ -381,10 +437,15 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const abandonedAfter: ObservedFixture[] = [fx("f1", "abandoned", null, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
     const forfeitedAfter: ObservedFixture[] = [fx("f1", "forfeited", { kind: "award", winner: "x" }, "w", "x"), fx("f2", "decided", decidedW, "w", "y")];
     const failing = (items: { ok: boolean; note: string }[]) => items.filter((i) => !i.ok).map((i) => i.note);
-    // Kinds are read from the product's text-pinned sets, plus the open-format kinds the catalogue uses; each list asserted non-empty.
-    const openKinds = ["ladder", "page_playoff", "americano"].filter((k) => !TABLE_KINDS_PINNED.has(k) && !BRACKET_KINDS_PINNED.has(k));
+    // m-9: the open kinds are every engine stage kind (StageKind.options) outside the product's pinned union — derived, so a
+    // new open kind is judged here the day the engine declares it. Each list asserted non-empty, and together they cover the engine.
     const forfeitKinds = [...TABLE_KINDS_PINNED, ...BRACKET_KINDS_PINNED];
-    expect([openKinds.length, forfeitKinds.length]).toEqual([3, 6]);
+    const openKinds = StageKind.options.filter((k) => !TABLE_KINDS_PINNED.has(k) && !BRACKET_KINDS_PINNED.has(k));
+    expect(forfeitKinds.filter((k) => !(StageKind.options as readonly string[]).includes(k)), "a pinned kind the engine does not declare").toEqual([]);
+    expect(openKinds).toContain("ladder");
+    expect(openKinds.length).toBeGreaterThan(0);
+    expect(forfeitKinds.length).toBeGreaterThan(0);
+    expect(openKinds.length + forfeitKinds.length).toBe(StageKind.options.length);
     for (const kind of openKinds) {
       // POSITIVE: the abandon shape passes. Reds when kind-awareness is removed (forfeit model: f1 abandoned with x seated → item fails).
       expect(failing(cascadeItems("walkover", "w", before, abandonedAfter, 0, 1, kind)), kind).toEqual([]);
@@ -471,5 +532,154 @@ describe("rule 10 — playLadder under any withdrawal set and timing (plan revie
     expect(tally.runs).toBe(200);
     expect(tally.challenges, "challenges judged (anti-vacuity)").toBeGreaterThan(0);
     expect(tally.withdrewMidSweep, "runs where a challenge followed a withdrawal (anti-vacuity)").toBeGreaterThan(0);
+  });
+});
+
+describe("R4 on a ladder: the W7 note on a stage that never completes (review m-4)", () => {
+  it("names no rung when the product minted no finalRanks — the note says what was seen, never a finalRanks fact at withdrawal time", async () => {
+    class NeverCompletes extends FakeLadderDriver {
+      override completeStage(): Promise<{ completed: boolean; events: { type: string; finalRanks?: string[] }[] }> { return Promise.resolve({ completed: false, events: [] }); }
+    }
+    const driver = new NeverCompletes({ challengeRange: 3 });
+    const { out, checks } = await runOn(driver, "R4", { row: "ladder" });
+    const seed3 = driver.entrantsBySeed()[2]!;
+    const heldAt = driver.rawOrderAtWithdrawal().indexOf(seed3);
+    expect(heldAt).toBeGreaterThanOrEqual(0);
+    expect(out.observed.stages[0]!.complete?.finalRanks ?? null).toBeNull();
+    expect(out.notes.filter((n) => /W7/.test(n))).toEqual([`ladder finalRanks: stage not complete, no rung observed for withdrawn ${seed3} (raw held ${heldAt}) — W7 rulebook question`]);
+    expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);
+    expect(checks.find((c) => c.id === "life-stage-completed")?.verdict).toBe("fail");   // the run is red for its own reason
+  });
+
+  it("reads the rung from the finalRanks it observed, not the rung held at withdrawal: a product that pruned the withdrawn player is noted as holding none", async () => {
+    class PrunesDeparted extends FakeLadderDriver {
+      override async completeStage(): Promise<{ completed: boolean; events: { type: string; finalRanks?: string[] }[] }> {
+        const out = await super.completeStage();
+        const gone = this.withdrawnIds();
+        return { ...out, events: out.events.map((e) => (e.finalRanks === undefined ? e : { ...e, finalRanks: e.finalRanks.filter((x) => !gone.has(x)) })) };
+      }
+    }
+    const driver = new PrunesDeparted({ challengeRange: 3 });
+    const { out, checks } = await runOn(driver, "R4", { row: "ladder" });
+    const seed3 = driver.entrantsBySeed()[2]!;
+    const heldAt = driver.rawOrderAtWithdrawal().indexOf(seed3);
+    expect(heldAt).toBeGreaterThanOrEqual(0);
+    expect(out.observed.stages[0]!.complete?.finalRanks).not.toContain(seed3);
+    expect(out.notes.filter((n) => /W7/.test(n))).toEqual([`ladder finalRanks hold no rung for withdrawn ${seed3} (raw held ${heldAt}) — W7 rulebook question`]);
+    expect(checks.some((c) => /finalRanks/.test(c.id))).toBe(false);                     // still a note: ruling 53 asserts neither way
+  });
+});
+
+describe("F1 on the ladder — T7-R1", () => {
+  it("f1-round-size ABSTAINS by name on a ladder (a ladder declares no rounds); f1-ladder-sweep passes on n−1 challenges over the seeded field and every entrant in finalRanks", async () => {
+    const n = fieldSizeFor("ladder", "F1");                 // the seeded field, from the format's declaration — never a literal
+    expect(n % 2, "F1 is the odd field").toBe(1);
+    const driver = new FakeLadderDriver();
+    const { out, checks, state } = await runOn(driver, "F1", { row: "ladder" });
+    expect(driver.entrants.length).toBe(n);
+    const round = checks.find((c) => c.id === "f1-round-size")!;
+    expect([round.verdict, round.checked]).toEqual(["abstain", 0]);
+    expect(round.reason).toMatch(/a ladder declares no rounds/);
+    const sweep = checks.find((c) => c.id === "f1-ladder-sweep")!;
+    // Items: challenges issued, challenges decided, and one per seeded entrant in finalRanks.
+    expect(sweep).toMatchObject({ verdict: "pass", checked: 2 + n });
+    expect(driver.decidedChallenges().length).toBe(n - 1);
+    expect([...(out.observed.stages[0]!.complete?.finalRanks ?? [])].sort()).toEqual([...driver.entrantsBySeed()].sort());
+    expect(state).toBe("works");
+  });
+
+  it("f1-ladder-sweep reds a short sweep and a finalRanks that drops an entrant, naming each; it abstains off the ladder", async () => {
+    const n = fieldSizeFor("ladder", "F1");
+    const refused = await runOn(new FakeLadderDriver({ refuseAll: "LADDER_CHALLENGE_OUT_OF_RANGE" }), "F1", { row: "ladder" });
+    const short = refused.checks.find((c) => c.id === "f1-ladder-sweep")!;
+    expect(short).toMatchObject({ verdict: "fail", checked: 2 + n });
+    expect(short.evidence).toContain(`0 challenge(s) issued, expected ${n - 1} (n − 1 over a seeded field of ${n})`);
+    expect(short.evidence.filter((e) => /minted no finalRanks/.test(e)).length).toBe(n);
+    class DropsLastRank extends FakeLadderDriver {
+      override async completeStage(): Promise<{ completed: boolean; events: { type: string; finalRanks?: string[] }[] }> {
+        const out = await super.completeStage();
+        return { ...out, events: out.events.map((e) => (e.finalRanks === undefined ? e : { ...e, finalRanks: e.finalRanks.slice(0, -1) })) };
+      }
+    }
+    const dropper = new DropsLastRank();
+    const dropped = await runOn(dropper, "F1", { row: "ladder" });
+    const lost = dropper.ladderOrder().at(-1)!;
+    expect(dropped.checks.find((c) => c.id === "f1-ladder-sweep")).toMatchObject({ verdict: "fail", evidence: [`${lost} is missing from finalRanks`] });
+    // Issued but not decided: once the sweep is over, the division lists the first challenge as still in play.
+    class ListsFirstUndecided extends FakeLadderDriver {
+      override async listFixtures() {
+        const first = this.issuedChallenges()[0]?.fixtureId;
+        const over = this.decidedChallenges().length === this.entrants.length - 1;
+        return (await super.listFixtures()).map((f) => (over && f.id === first ? { ...f, status: "in_play", outcome: null } : f));
+      }
+    }
+    const undecided = await runOn(new ListsFirstUndecided(), "F1", { row: "ladder" });
+    expect(undecided.checks.find((c) => c.id === "f1-ladder-sweep")).toMatchObject({ verdict: "fail", evidence: [`${n - 2} challenge(s) decided, expected ${n - 1}`] });
+    const league = await runOn(new FakeLeagueDriver(), "F1", { row: "league" });
+    const off = league.checks.find((c) => c.id === "f1-ladder-sweep")!;
+    expect([off.verdict, off.checked]).toEqual(["abstain", 0]);
+    expect(off.reason).toMatch(/ladder only/);
+  });
+
+  it("f1-round-size is unchanged off the ladder: a league round seated one pair short still reds it, naming the round", async () => {
+    class SeatsShort extends FakeLeagueDriver {
+      // Round 1 loses one SEATED pair (an odd field's circle also holds a BYE pair, which seats nobody either way).
+      override circle(): [string, string][][] {
+        return super.circle().map((r, i) => {
+          if (i !== 0) return r;
+          const k = r.findIndex((p) => !p.includes("BYE"));
+          return r.filter((_, j) => j !== k);
+        });
+      }
+    }
+    const n = fieldSizeFor("league", "F1");
+    const { checks } = await runOn(new SeatsShort(), "F1", { row: "league" });
+    const round = checks.find((c) => c.id === "f1-round-size")!;
+    expect(round.verdict).toBe("fail");
+    expect(round.evidence).toEqual([`round 1: ${Math.floor(n / 2) - 1} seated, expected ${Math.floor(n / 2)}`]);
+  });
+});
+
+describe("playLadder's guards and the fake's refusals (review m-2, m-6)", () => {
+  it("a challenge whose fixture the division does not list throws, naming the fixture — never a silent skip", async () => {
+    class HidesChallenges extends FakeLadderDriver {
+      override async listFixtures() {
+        const issued = new Set(this.issuedChallenges().map((c) => c.fixtureId));
+        return (await super.listFixtures()).filter((f) => !issued.has(f.id));
+      }
+    }
+    await expect(runOn(new HidesChallenges(), "LIFECYCLE", { row: "ladder" })).rejects.toThrow(/^ladder: challenge answered fixture \S+, which the division list does not hold$/);
+  });
+
+  it("the fake's withdraw refuses as the product does: an unknown entrant is a 404 (entrants.ts getEntrant), a repeat a codeless 409 (withdrawal.ts)", async () => {
+    const product = readFileSync(resolve(REPO, "apps/web/src/server/usecases/withdrawal.ts"), "utf8");
+    expect(product).toContain('throw new HttpError(409, "entrant is already withdrawn");');
+    const d = new FakeLadderDriver();
+    const ctx = ctxFor(d, "LIFECYCLE");
+    const setup = await setUpDivision(ctx, new Recorder(), 3);
+    const s3 = setup.idOfSeed(3);
+    const unknown = await d.withdraw("nobody").catch((e: unknown) => e);
+    expect(unknown).toBeInstanceOf(RefusedCall);
+    expect(unknown).toMatchObject({ status: 404, code: wireCodeFor(404) });
+    const first = await d.withdraw(s3);
+    expect([first.status, first.policy]).toEqual(["withdrawn", "none"]);
+    const repeat = await d.withdraw(s3).catch((e: unknown) => e);
+    expect(repeat).toBeInstanceOf(RefusedCall);
+    expect(repeat).toMatchObject({ status: 409, code: wireCodeFor(409) });
+    expect((repeat as RefusedCall).message).toContain("entrant is already withdrawn");
+    expect(d.withdrawnIds()).toEqual(new Set([s3]));            // the refused repeat changed nothing
+  });
+
+  it("the first challenge walks the SEED order, not the order addEntrants happened to answer in (m-6)", async () => {
+    class AnswersReversed extends FakeLadderDriver {
+      override async addEntrants(divisionId: string, es: Parameters<FakeLadderDriver["addEntrants"]>[1]) { return (await super.addEntrants(divisionId, es)).reverse(); }
+    }
+    const driver = new AnswersReversed({ challengeRange: 1 });
+    const { state } = await runOn(driver, "LIFECYCLE", { row: "ladder" });
+    expect(driver.refusedChallenges()).toEqual([]);
+    const seeds = driver.entrantsBySeed();
+    expect(driver.issuedChallenges()[0]).toMatchObject({ challenger: seeds.at(-1), opponent: seeds.at(-2) });
+    expect(driver.ladderOrder()).toEqual(swapRule(seeds));
+    expect(state).toBe("works");
   });
 });

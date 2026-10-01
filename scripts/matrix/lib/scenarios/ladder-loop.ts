@@ -51,8 +51,9 @@ export async function playLadder(ctx: ScenarioContext, rec: Recorder, setup: Div
   // A draw this stage POSTED (decideFixture counts it), not one merely asked for: a hook may finish the fixture first.
   const drawsBefore = rec.drawsPosted;
   // Until the first challenge writes ladder_order: the entrants addEntrants
-  // answered, in seed order (the product initialises it by seed).
-  let order: readonly string[] = setup.entrants.map((e) => e.id);
+  // answered, SORTED by seed (the product initialises it by seed; the answer's
+  // own row order is not relied on — review m-6).
+  let order: readonly string[] = [...setup.entrants].sort((a, b) => setup.seedOf(a.id) - setup.seedOf(b.id)).map((e) => e.id);
   for (const c of plan) {
     const live = order.filter((e) => !rec.withdrawn.has(e));
     const idx = live.length - c.step; // the same walk, over the live order

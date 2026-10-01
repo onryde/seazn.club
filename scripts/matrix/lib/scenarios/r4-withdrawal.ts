@@ -13,7 +13,7 @@
 import type { CheckResult } from "../results.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
-import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
+import { DEPARTED_STATUSES, FORFEIT_MODEL_KINDS, PENDING_STATUSES, sameResult, snap, toObservedOutcome, winnerOf, type CompleteObs, type FixtureSnap, type ObservedFixture, type WithdrawalObs } from "../observed.ts";
 import { routeTo } from "../routing.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary, type Item } from "./assertions.ts";
@@ -155,6 +155,15 @@ export function notChallengedLater(i: NotChallengedLaterInput): CheckResult {
   ]);
 }
 
+/** What the observed /complete says of a withdrawn player's finalRanks rung (review m-4): the rung it holds, that it holds
+ *  none, or that no finalRanks exists — each with the raw rung it held when its withdrawal answered. */
+function ladderRanksNote(complete: CompleteObs | null, entrantId: string, heldAt: number): string {
+  const ranks = complete?.finalRanks ?? null;
+  if (ranks === null) return `ladder finalRanks: ${complete?.completed === true ? "stage completed with no finalRanks" : "stage not complete"}, no rung observed for withdrawn ${entrantId} (raw held ${heldAt})`;
+  const rung = ranks.indexOf(entrantId);
+  return rung < 0 ? `ladder finalRanks hold no rung for withdrawn ${entrantId} (raw held ${heldAt})` : `ladder finalRanks rung ${rung} for withdrawn ${entrantId} (raw held ${heldAt})`;
+}
+
 /** The stage's RAW ladder_order as the product lists it ([] before any challenge). */
 async function ladderOrderOf(ctx: Parameters<Scenario["run"]>[0], divisionId: string, stageId: string): Promise<string[]> {
   const listed = (await ctx.driver.listStages(divisionId)).find((s) => s.id === stageId)?.config.ladder_order;
@@ -184,10 +193,7 @@ export const r4Withdrawal: Scenario = {
         rec.withdrawn.add(seed3);
         if (out.policy === "expunge") rec.facts.add("expunged");
         withdrawal = { entrantId: seed3, afterRound: round, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedFinalized: out.skipped_finalized, before };
-        if (family === "ladder") {
-          heldAt = (await ladderOrderOf(ctx, setup.division.id, setup.stage.id)).indexOf(seed3);
-          rec.notes.push(`ladder finalRanks keep withdrawn ${seed3} at rung ${heldAt} (raw ladder_order) — ${LADDER_RANKS_ROUTE.wave} rulebook question`);
-        }
+        if (family === "ladder") heldAt = (await ladderOrderOf(ctx, setup.division.id, setup.stage.id)).indexOf(seed3);
       },
     });
     const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal });
@@ -205,6 +211,9 @@ export const r4Withdrawal: Scenario = {
       };
     }
     const kind = setup.stage.kind;
+    // Ruling 53 / review m-4: the W7 note is written AFTER the snapshot, from the finalRanks the product actually minted —
+    // what was seen, never a finalRanks fact claimed at withdrawal time. Recorded, never asserted.
+    if (family === "ladder") rec.notes.push(`${ladderRanksNote(observed.stages[0].complete, w.entrantId, heldAt)} — ${LADDER_RANKS_ROUTE.wave} rulebook question`);
     const mine = observed.stages[0].fixtures.filter((f) => f.home === w.entrantId || f.away === w.entrantId);
     // Canary: ALSO judge the cascade against the OPPOSITE policy (m-1).
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";
