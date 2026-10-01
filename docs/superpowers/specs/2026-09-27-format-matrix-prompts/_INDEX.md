@@ -14,7 +14,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
-| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review and the final whole-branch review (the controller's, T15-R1) are pending. PR and merge: pending, the owner's decision.** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replays all 8 committed cases as known (`w1drv-t16-model-reg2`). See "Findings routed (W1-driving)" and "W1d first tasks". |
+| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review and the final whole-branch review (the controller's, T15-R1) are pending. PR and merge: pending, the owner's decision (ruling 59).** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". |
 | W2 | Sport scoring fidelity | not started |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
@@ -830,6 +830,28 @@ a peer session as the other.
     - Execution worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. Same-shape tasks are
       batched per ruling 41.
 
+The five decisions below are the owner's, made on 2026-10-01 and recorded by the controller in the W1-driving SDD
+ledger. Controller ruling T16-R4 numbered them. Quotation marks hold the owner's words where the ledger has them.
+Elsewhere the text is the controller's record.
+
+55. **Format templates stay in code** (2026-10-01). The stage-graph format templates stay in code, with no DB table.
+    The ledger records no quote, only the ruling: the cleanup (move the file out of `components/v2`, single-source
+    `TakeRuleSchema`) is owed after this wave and is outside W1-driving's scope.
+56. **The matrix harness gets a boundary, not a separate repo** (2026-10-01). The controller's record (T16-R4): the
+    harness moves to its own workspace package, behind an import guard, with its evidence moved out and a
+    `.dockerignore` entry. It is NOT a separate repo. The ledger holds no quote, so the scope and the timing are
+    the controller's to state in the cleanup's own brief.
+57. **The W9 stage delete stays with W9** (2026-10-01). The owner: "W9 is fine". A refused format change deletes the
+    division's stages first: `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature`
+    gates. This is read-derived: the controller read it on `main` `58e8103e3`, and no committed run drives it. It
+    is not fixed now, and there is no separate PR.
+58. **No CI live-matrix proposal** (2026-10-01). The controller's record (T16-R4) is those words. The ledger holds no
+    quote and no further scope.
+59. **The W1-driving PR is raised after the reviews approve** (2026-10-01). The owner: "raise pr after review
+    approve". Push `feat/format-matrix-w1-driving` and open the PR once Task 16's review and the final whole-branch
+    review are approved, rebasing onto `main` first if it is behind, with a scoped re-verify. The merge is the
+    owner's decision.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
@@ -1043,6 +1065,13 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
   persons is seated, through any entrant, in a round after the withdrawal. The kept-playing signature covers it.
 - **T16-R1: Task 16's scope.** It is the brief's steps plus every open carry, T15-R4, T15-R5, G-1, G-2, the T15
   re-review minor, T14-R4 m-2, G-3 and T15-R9. Memory files are the controller's to write.
+- **T16-R2: the rate-limit carry is a W1d recommendation, not a refusal** (the harness cannot see Redis, so a
+  refusal would be a guess), and MB-009 is accepted.
+- **T16-R3: a fence guards only the trigger branch its cases show.** The double-elim arm of
+  `ko-generate-after-roster-change` was narrowed to the added-entrant branch (MB-007's). The G-1 test reads each case's
+  branch from its finding commands and asserts branch × stage kind. The live re-run that followed found MB-010.
+- **T16-R4: the review's seven minors are all fixed**, the findings-table generator is committed with a test, and
+  the owner's 2026-10-01 decisions are numbered (rulings 55–59).
 
 ## Decision log
 
@@ -1213,11 +1242,11 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
   - **Model team rosters, Swiss bias and family routes (ruling 49 as amended by D6):** `1b861f2ac`, `cde29a754`,
     `749e08462`, `49754e44a`.
   - **Live evidence and triage (ruling 48):** `15ed62365` through `e2db86c96`. See the Status row.
-  - **Task 16:** `ca3fcd081`, `95eb5203c`, `8198452ae`, and the docs commit that writes this entry.
+  - **Task 16:** `ca3fcd081`, `95eb5203c`, `8198452ae`, `e5abe105e`, `2f79c5f07`; fix round 1 `22c8aa141`, `5950801a3`,
+    `8bad7555e`, `548f3825d`, `215fd7ed5`, `31792a06d`, `163078054`, `5d3264a80`, and the docs commit that writes this line.
 - **2026-10-01** — **R1 gains W1-driving** (ruling 28): `_RULES.md` R1 now reads W1a → W1b → W1c → W1-driving → W1d
-  → W2 … W7. **For the design's owner:** `../2026-09-27-format-matrix-design.md` §8's "Order." line (line 462 at
-  `8198452ae`) still reads W1a → W1b → W1c → W1d → W2. The same one-word change belongs there. The design is outside
-  Task 16's edit scope, so it is recorded here and not edited.
+  → W2 … W7. `../2026-09-27-format-matrix-design.md` §8's "Order." line (line 462) gained the same one word in
+  Task 16's fix round 1 (T16-R2, T16-R4).
 - **2026-10-01** — **The W1b swiss model seeds reproduce only at their recorded `harnessCommit`** (T14-R4 m-2). Task 14
   biased the swiss command generator (`SWISS_BIAS`, ruling 49). So a swiss model seed committed by W1b (for example
   `-1180181307` in `w1b-model-0929b` and `w1b-model-0929g`, and `-2002771143` in `w1b-model-final-sb40`) draws a
@@ -1241,16 +1270,26 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
     `BRACKET_WALKOVER_KINDS`. `ko-generate-after-roster-change` covers knockout and double elim.
   - Re-run at `95eb5203c`: both cells ok (`w1drv-t16-model-g1c`), and `--regressions` 8/8 known
     (`w1drv-t16-model-reg2`).
+  - **Fix round 1 (T16-R3).** The generate fence keeps one kind list per trigger branch. The double-elim
+    withdrawn branch was lifted, and the live cell found **MB-010**: Start → Withdraw → Generate 500s, "would strand
+    home_slot_label" (`w1drv-t16fr1-model-de`, harness `22c8aa141`). It is committed with fence
+    `ko-generate-after-roster-change`, and that fence's withdrawn branch now covers knockout (MB-004) and double elim
+    (MB-010).
+  - MB-007 and MB-010 share cell, check and words, so a replay now offers its own case to the matcher first
+    (`5950801a3`). Otherwise MB-007 would claim MB-010's replay and the replay would read NOT REPRODUCED.
+  - Then double elim ran ok 20/20 with both branches fenced (`w1drv-t16fr1-model-de2`), and `--regressions` 9/9
+    known, each case under its own id (`w1drv-t16fr1-model-reg`, harness `8bad7555e`).
   - There is no MB-006, because `model-cli.test.ts` uses that id for a synthetic case.
-- **2026-10-01** — **Owner decisions recorded by the controller in the SDD ledger** (the owner's words to that
-  session; not numbered here, because numbering an owner ruling is the controller's call):
-  - **Format templates stay in code, with no DB.** The cleanup (move the file out of `components/v2`, single-source
-    `TakeRuleSchema`) is owed after W1-driving, outside its scope.
-  - **"W9 is fine".** A refused format change deletes the division's stages first: `replaceStages` deletes at
-    `stages.ts:543`, before `createStages`' `requireFeature` gates. This was confirmed on `main` `58e8103e3`. It
-    is not fixed now and stays with W9.
-  - **"Rebase when possible".** The branch was rebased onto `origin/main` `58e8103e3` with no conflicts, before
-    Task 15 (pre-rebase HEAD `4aa2e0db2` became `1b861f2ac`).
+- **2026-10-01** — **The owner's 2026-10-01 decisions are numbered as rulings 55–59** (controller ruling T16-R4;
+  the full text is under "Owner rulings"):
+  - 55: format templates stay in code, and the cleanup follows W1-driving;
+  - 56: the matrix harness gets its own workspace package, not a separate repo;
+  - 57: the W9 stage delete stays with W9, with no separate PR;
+  - 58: no CI live-matrix proposal;
+  - 59: the W1-driving PR is raised after the reviews approve, and the merge is the owner's.
+  - **"Rebase when possible"** (the owner's words, SDD ledger) is not among the five T16-R4 numbers. The branch was
+    rebased onto `origin/main` `58e8103e3` with no conflicts, before Task 15 (pre-rebase HEAD `4aa2e0db2` became
+    `1b861f2ac`).
 
 ## False premises found
 
@@ -1675,8 +1714,8 @@ false premise 10's correction). After each, what execution saw:
   - The snapshot's `ladder_order` was the setup-time copy; it is re-read once.
 - **Task 11.** The own-session premise held: the active org is per cookie jar. But two pieces of per-USER state are
   shared across workers, and both were found live:
-  - the owner's staff flag, flipped for entitlement busts (`f2991b430`);
-  - unused sign-in links, deleted by each new request (`login-link.ts:13`; `1a6371410`).
+  - the owner's staff flag, flipped for entitlement busts (`240ed64ac`);
+  - unused sign-in links, deleted by each new request (`login-link.ts:13`; `eff68a737`).
 - **Task 12.** PF-11 again: the loaders did not exist, so they were added.
 - **Task 13.**
   - The guard test "no route names W1-driving" could not pass at Task 13, because Task 14 owned the last route
@@ -1990,11 +2029,14 @@ W1-driving: product reds are recorded and routed (rulings 19, 48). Evidence path
 - **Read-derived** means read in the code and not driven.
 - **Predicted** means the fake or the plan says so and no committed run has shown it.
 
-**Source of the counts.** The per-case table at the end of this section is generated by a script from
-`truth-runs/w1drv-l3/TRIAGE.md`'s "Every ❌" table: every row whose final class is product. Each row's failing
-checks are read from the committed `results.json` of the run TRIAGE judges it on. The script refused any row that
-was not red on its judged run, or whose run's `harnessCommit` differed from TRIAGE's. It read 61 results files and
-164 rows, and refused none.
+**Source of the counts.** The per-case table at the end of this section is generated by
+`scripts/matrix/findings-table.ts` (T16-R4 m-6) from `truth-runs/w1drv-l3/TRIAGE.md`'s "Every ❌" table: every
+row whose final class is product. Each row's failing checks are read from the committed `results.json` of the run
+TRIAGE judges it on. The script refuses any row that is not red on its judged run, or whose run's `harnessCommit`
+differs from TRIAGE's. It read 61 results files and 164 rows, and refused none. `findings-table.test.ts` pins this
+table as its output, byte for byte. To re-run it:
+`node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/findings-table.ts
+<TRIAGE.md> <truth-runs dir> --out <file.md>`.
 
 **Per wave** (re-derived by script; ruling T15-R4 moved P1 from W4 to W2, and Task 16 applied it to TRIAGE):
 
@@ -2021,15 +2063,19 @@ was not red on its judged run, or whose run's `harnessCommit` differed from TRIA
 - **P3 — group_group_ko F1 (11) → W5.** 7 entrants snaked into 4 pools leave seed 1 alone in pool A, and stage 2's
   seeding then fails with a 409. **Confirmed** 11/11 (`w1drv-l3` 10; boardgame on its `w1drv-l3-fr1` P1 run). An owner question is recorded under
   "Recommendations": it may be ruled unfit instead.
-- **P4 — `page_playoff_only` R4 (11) → W4** (plan review 1 m-5, plan review 2 I-1). The open-format branch abandons
-  `pp-q2` and strands the final: `pp-final` is never seated, and `/complete` answers 200 `completed:false` with no
-  code. **Confirmed** 11/11 (`w1drv-l3` 9; boardgame and generic on their `w1drv-l3-fr1` P1 runs).
+- **P4 — `page_playoff_only` R4 (11) → W4** (plan review 1 m-5, plan review 2 I-1). **Confirmed** 11/11 (`w1drv-l3`
+  9; boardgame and generic on their `w1drv-l3-fr1` P1 runs): `/complete` answers 200 with no code and the stage does
+  not complete, the play loop exits `refused_generate`, and one fixture is left `scheduled`. **DB-derived, not in a
+  committed run:** the mechanism (the open-format branch abandons `pp-q2`, so `pp-final` is never seated) was read
+  from the T15 triage database. None of the 11 committed cases names `pp-q2` or `pp-final`.
 - **P5 — stepladder R4 (11) → W4** (T15-R7).
   - Withdrawing seed 3 is refused: 422 `WRONG_PHASE` "fixture has an unassigned entrant (bye/TBD)". The walkover
     cascade reaches a TBD line (`withdrawal.ts:217-220` → `append-event.ts:188-191`). **Confirmed** 11/11
     (`w1drv-l3-rerun` 10; boardgame on its `w1drv-l3-fr1` P1 run).
   - The model shows the same refusal on three bracket kinds: MB-002/003 (knockout), MB-008 (stepladder) and MB-009
-    (double elim). All are committed and replay known (`w1drv-t16-model-reg2`).
+    (double elim). All are committed and replay known (`w1drv-t16-model-reg2`, and again on
+    `w1drv-t16fr1-model-reg`). MB-009 is a double-elim row: it routes W4 with P5, cross-referenced to W6 as the row's
+    owner, as G-2 does for MB-007.
   - **G-3 → W4:** because of this, the stepladder R4 policy and cascade checks have never been judged live. A
     half-applied cascade is possible (`withdrawal.ts:216-225`; read-derived).
 - **P6 — swiss R4, `rank_adjacent` (3) → W3.** Round 5's Generate pairs nobody and answers success (SW-H1).
@@ -2047,8 +2093,8 @@ was not red on its judged run, or whose run's `harnessCommit` differed from TRIA
   - **Confirmed**: a later-round generate refused 500 on a self-pair (`entrant_members_pkey`) on 32 cases
     (`w1drv-l3-rerun` 23, `w1drv-l3-fr2` 9).
   - **Confirmed**: a person seated twice in one round on 32 cases. The 11 judged on `w1drv-l3-fr2` name the earlier
-    pair entrant the person belongs to. The 21 judged on `w1drv-l3-rerun` predate that naming (G-4) and name the
-    person only.
+    pair entrant the person belongs to. The 21 judged on `w1drv-l3-rerun` predate G-4. They name the person and the
+    two entrants seating them, but lack G-4's "is a member of earlier pair entrant" clause.
   - **Confirmed** at 1280: the L1 `mexicano|generic` case reds on the same 500 in every run (`w1drv-l1-t15-r1..r3`).
 - **Mexicano stalls on any fixture that is not `decided` → W7** (false premise 14). **Confirmed** on all 11
   mexicano M1 cases, failing set `[life-loop-bounded]` (`w1drv-l3-rerun`).
@@ -2093,13 +2139,19 @@ was not red on its judged run, or whose run's `harnessCommit` differed from TRIA
   - **W3 (17):** `swiss_playoff` 9, `swiss_knockout` 8.
   - None is on a W4 row. Each is a note, not a red. The family wave decides whether the product's listed order is
     a rule.
-- **An unplayed `gf-reset` → W6: read-derived and latent, with 0 cases.** No catalogue row sets `bracketReset` (0
-  of 74 double-elim stages), so no run can reach it. The product never voids `gf-reset`, so a double elim with
-  `bracketReset` would never complete (Task 9's read).
+- **An unplayed `gf-reset` → W6: read-derived and latent, with 0 cases.** No catalogue row sets `bracketReset`, so
+  no run can reach it. That is read-derived: neither `scripts/matrix/lib/catalogue.ts` nor `format-templates.ts`
+  names it. The "0 of 74 double-elim stages" count is DB-derived, from the T15 triage database, and was never
+  committed. The product never voids `gf-reset`, so a double elim with `bracketReset` would never complete (Task 9's
+  read).
 - **The double-elim model red (G-2): MB-007 → W4** (FX-G2), cross-referenced to W6 as the row's owner. A Generate
   after the roster changes 500s: "generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label"
   (`stages.ts:2658`). This is the shared generate path of MB-004/005 (knockout). **Confirmed** on
-  `w1drv-model-m6` and replayed known on `w1drv-t16-model-reg2`.
+  `w1drv-model-m6` and replayed known on `w1drv-t16-model-reg2` and `w1drv-t16fr1-model-reg`.
+- **MB-010, the same 500 after a WITHDRAWAL on double elim → W4**, cross-referenced to W6 as the row's owner, like
+  MB-007. The sequence is Start → Withdraw → Generate. It was found once T16-R3 lifted the fence's double-elim
+  withdrawn branch. **Confirmed** on `w1drv-t16fr1-model-de`, and replayed known as itself on
+  `w1drv-t16fr1-model-reg`. One root (`stages.ts:2658`) and two triggers: MB-004 is knockout's withdrawal instance.
 - **Screen observations at 1280** (`truth-runs/w1drv-l1/README.md`; each reproduced on `w1drv-l1-t15-r1`):
   - (a) a box league's public page crowns ONE champion over four parallel boxes → **W5**, a rulebook question for
     the owner;
@@ -2110,9 +2162,9 @@ was not red on its judged run, or whose run's `harnessCommit` differed from TRIA
   kept one failing set. See the W7 recommendation.
 - **Latent, if an americano stage ever gets a successor → W7:** I10 must then skip a seeding-failed 409 by name, as
   I2 does (Task 9, T9-R5).
-- **A refused format change deletes the division's stages first → W9** (the owner, 2026-10-01: "W9 is fine").
-  `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature` gates. It was confirmed on
-  `main` `58e8103e3` outside the matrix runs.
+- **A refused format change deletes the division's stages first → W9** (ruling 57; the owner, 2026-10-01: "W9 is
+  fine"). `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature` gates.
+  **Read-derived:** the controller read the delete on `main` `58e8103e3`, and no committed run drives it.
 
 **Every product red** (generated; P1 rows read W2 per T15-R4; "table:" rows are the coverage table's signatures):
 
