@@ -50,11 +50,12 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W12 | **Phone-side Stop (Q4).** A beat with state `ended` ends the session at once: the destination is freed, no further credit is spent, and the panel reads "Stopped from the phone". Silence, reconnecting and degraded only warn. (The condition was met: the phone sends `ended` only on an explicit operator Stop of a live broadcast.) |
 | W13 | **Two PRs.** PR-1 (capture-facing, staging first) and PR-2 (organiser extras). |
 | W14 | **Playback host (Q5).** One Cloudflare account serves staging and production, through the customer subdomain `customer-vv7totdc7j19biah.cloudflarestream.com`. It is not a secret, so it is plain configuration, not a Fly secret. |
-| W15 | **Ingest hosts.** Credentials use `rtmps://live.seazn.club:443/live/` and `srt://live.seazn.club:778` in production, and `live.stg.seazn.club` on staging, with one environment setting per environment. **SRT on the custom host must be proven with ffmpeg on staging** before it is relied on. |
+| W15 | **Ingest hosts.** Credentials use `rtmps://live.seazn.club:443/live/` and `srt://live.seazn.club:778` in production, and `live.stg.seazn.club` on staging, with one environment setting per environment. **SRT on the custom host must be proven with ffmpeg on staging** before it is relied on. **Amended by W21:** SRT stays on Cloudflare's own host from launch; only RTMPS uses the custom host. |
 | W16 | **Allow both** (answering mobile-s1): (1) operator start, as W6; (2) auto stop, as W7. |
 | W18 | **Overlay on every phone stream (O1, ruled YES 2026-10-01, on approving this spec at `137b9ec2b`).** The scorebug goes on phone streams for every plan. The rule stays the `streaming.overlay` entitlement (W11), so an override still switches it off for one org. |
 | W19 | **A live phone stream whose phone is gone ends (O2, ruled YES 2026-10-01).** After **15 min with no beat AND no video**, the session ends with endReason `phone_lost`. **Built in PR-1** (§6.8.5). |
-| W20 | **The SRT test is deferred (2026-10-01).** G0-h is no longer a publish gate. The schemas publish now with `cred.srt` nullable, and `STREAM_SRT_ENABLED` defaults to **false** (`srt: null`, `preferred: "rtmps"`) until SRT on `live.stg` is proven later, as a staging step, not a gate (S2b). |
+| W20 | **The SRT-on-`live.*` test is deferred (2026-10-01).** G0-h is no longer a publish gate. The schemas publish now with `cred.srt` nullable. The custom-host SRT proof becomes an **optional** later staging step (S2b), not a gate. (Its first form, "`STREAM_SRT_ENABLED` defaults to false", is superseded by W21 the same day.) |
+| W21 | **SRT uses Cloudflare's own host (owner direction, 2026-10-01).** `cred.srt.url` is `srt://live.cloudflare.com:778`, exactly as Cloudflare issues it. RTMPS stays on the environment's custom host (`live.seazn.club` / `live.stg.seazn.club`). `STREAM_SRT_ENABLED` **defaults ON**, so SRT is offered from launch; A18's `srt: null` stays a safety net. S2b could later move SRT to the custom host with **no contract change**. Capture's host rule must admit `live.cloudflare.com` for SRT: proposed to capture, their owner decides (§4.2 G0-i). |
 | W17 | **Answers sent to mobile-s1** (their owner approved them): `autoAllowed` sits in both waiting and session; there is one start endpoint, with `409 already_live` meaning take over; the heartbeat answer carries go-live and over; the server drives `pollSeconds`, 60 s and then 10 s from 30 min before the scheduled start; code names are neutral; the waiting answer carries the chosen destination's display name, or `null`; the panel shows the phone's mode. |
 
 ### 1.2 Capture's rulings we build against (their owner's; peer facts, not ours)
@@ -77,7 +78,7 @@ owner accepted the web-side consequences recorded in the log, and those conseque
 | A14 | A dead live phone may be taken over once there has been **no beat AND no video for 60 s**. The new phone rejoins the open broadcast, on the same credit. | §6.5, rule T4. |
 | A16 | Auto start fires once per match: at match start or on a late pairing, whichever comes first. | §7.2. |
 | A17 | The operator's Stop wins. The phone re-sends the stop on its next pairing. The server closes that sid even late, idempotently, and never a newer one. | §6.8. |
-| A18 | `cred.srt` may be null, with `preferred:"rtmps"`, **as a safety net only**. The target stays SRT on `live.seazn.club` / `live.stg.seazn.club`. With `srt` null the phone publishes RTMPS only, with no SRT→RTMPS fallback. | `STREAM_SRT_ENABLED` (§6.4) defaults to false (W20) until staging step S2b proves SRT on `live.stg`. |
+| A18 | `cred.srt` may be null, with `preferred:"rtmps"`, **as a safety net only**. The target stays SRT on `live.seazn.club` / `live.stg.seazn.club`. With `srt` null the phone publishes RTMPS only, with no SRT→RTMPS fallback. | Kept as the safety net: `STREAM_SRT_ENABLED` off. By W21 the flag defaults **on**, with SRT on `live.cloudflare.com` (§6.4). |
 
 ---
 
@@ -157,7 +158,7 @@ shapes", "The answer table" and "Asks for the web side"), with our replies to it
 | 8 — beats and 410 | **Beats never answer 410.** A sid that has ended, named by a beat (its `sid` or its `stopped`), gets `200 {state:"over", sid, endReason}`. 410 is reserved to `GET code`. This server answers an ended broadcast on `GET` with the session shape in `completed` or `failed` (to the phone) or the waiting shape (to the scan), so **no route of ours sends 410** today. |
 | 9 — `POST start` carries `{phone}`; a phone that is not current gets `409 replaced` | Agreed as written. |
 | 10 — a warming broadcast whose phone has gone quiet is ended | **Required, agreed.** The new end reason `phone_lost` (not `stopped`), with no credit spent. §6.8.3 gives the exact clock. |
-| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** The target is SRT on `live.*`. `STREAM_SRT_ENABLED` defaults to false (W20) until the later staging proof (S2b, not a gate). |
+| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** By W21 SRT is offered from launch on `srt://live.cloudflare.com:778`; RTMPS is on the environment's `live.*` host. |
 
 ### 4.2 G0 — the publish gate
 
@@ -174,15 +175,16 @@ below in writing.** Each confirmation is recorded here with its date and capture
 | G0-e | **`device: {model} \| null` on claim beats**, `Build.MODEL` only. PR-2 shows the paired phone's model and the takeover notice (§7.5). | **agreed**, `69ef359`, 2026-10-01 |
 | G0-f | **The end-reason value `failed`**, for a server-side end that is neither a stop nor a timeout (a credit running out at the live transition, a provider fault). Capture reads it "Stream ended by Seazn — ask the organiser". | **agreed**, `69ef359`, 2026-10-01 |
 | G0-g | **A claim and a stop are independent.** A claim refused while it carries `stopped` is answered `taken` or `replaced` by the claim rules, not `over X`. The stop is still applied, and that 2xx delivers it. | **agreed**, `69ef359`, 2026-10-01 |
-| G0-h | **The staging SRT test** on `srt://live.stg.seazn.club:778`. | **deferred by the owner, 2026-10-01 (W20): not a gate.** The schemas publish with `cred.srt` nullable and `STREAM_SRT_ENABLED` false. The proof is staging step S2b. |
+| G0-h | **The staging SRT test** on `srt://live.stg.seazn.club:778`. | **deferred by the owner, 2026-10-01 (W20): not a gate.** Optional later step S2b. |
+| G0-i | **Capture's ingest-host rule admits `live.cloudflare.com` for SRT** (W21). RTMPS stays on the environment's `live.*`. The schema documents the SRT hosts as {`live.cloudflare.com`, the environment's `live.*`}. | **proposed to capture, 2026-10-01; their owner decides.** Not a gate on publishing the schemas or on the plans. Until capture admits it, a phone refuses SRT `cred` (`startFailed: "cred-host"`), so a deployment whose phones run the old rule sets `STREAM_SRT_ENABLED` off (A18's safety net), with no contract change. |
 
 - **The schemas are published first.** PR-1's first task writes them to `docs/contracts/` and removes v1, so
   capture can vendor them while the server is built.
 - **G0 settles names and confirmations, not behaviour.** If capture's answer to any item changes behaviour (a state,
   a refusal, a status code), the change comes back to this file and to our owner. It is not absorbed in the plan.
-- **The later SRT proof (S2b)** needs only a Cloudflare input and the staging custom host. A tooling fact for it:
-  `srt-live-transmit` refuses ports below 1024, so it cannot target `:778` directly and needs a local UDP relay
-  (a high local port forwarded to `live.stg.seazn.club:778`). ffmpeg built with libsrt can target `:778` itself.
+- **A tooling fact for every SRT check (S2, S2b):** `srt-live-transmit` refuses ports below 1024, so it cannot
+  target `:778` directly and needs a local UDP relay (a high local port forwarded to the host's `:778`). ffmpeg built
+  with libsrt can target `:778` itself.
 - **The six points from our diff against `69ef359` were agreed by capture** (folded at capture `5344d04`, feat/s1-plan-c) (2026-10-01): the refusal body
   `{code, message, ...extras}` (§4); no hint field, since a session shape without `cred` is the hint (§6.3.1); the
   session shape gains `pollSeconds`, `code`, `scheduledStart` and `destinationName` (§6.3.1); the phone always sends
@@ -361,7 +363,9 @@ unless a status is shown.
   - The seal happens **before** any write, so a missing KEK writes nothing (the device-links Q1 order).
 - **Why RELAY_KEK, and not a new KEK.** The tok unlocks stream credentials, which RELAY_KEK already guards. A leak of
   RELAY_KEK already opens every stream key. Sealing the tok under it adds no new exposure, and needs no new Fly secret.
-  `crypto.ts` remains the only module that touches `*_enc` columns (enc-boundary.test.ts).
+  `crypto.ts` is the only module that seals and opens; the SQL over `tok_enc` lives in `relay/secret-columns.ts`,
+  and `enc-boundary.test.ts` gains `tok_enc` as a stream column it owns (the test requires every `*_enc` column to
+  have an owner).
 - **Ensure** (`POST /api/v1/fixtures/{id}/stream-code`):
   - It runs under the fixture's advisory lock (`stream_code:{fixtureId}`), the same race reason as device links.
   - It re-opens the ACTIVE code, re-checking that `sha256(open(tok_enc)) = tok_hash`. A mismatch falls through to a
@@ -556,8 +560,9 @@ treats that as success (capture's answer table).
 | `autoAllowed` | PR-1: always `false`. PR-2: the fixture's switch (§7.1). |
 | `destinationName` | The pre-picked target's `label` (§6.7.3), or null when there is none or it is archived (T36). |
 | `heartbeatUrl`, `startUrl` | `${captureOrigin()}/api/v1/capture/codes/{code}/beats` and `…/start`. |
-| `cred.rtmps.url`, `cred.srt.url` | The stored Cloudflare values with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
-| `cred.srt` | `null` while `STREAM_SRT_ENABLED` is off, its default (W20; A18's safety net). Present once S2b has proven SRT and the flag is turned on, which is the target. |
+| `cred.rtmps.url` | The stored Cloudflare value with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
+| `cred.srt.url` | The stored Cloudflare value **unchanged**: `srt://live.cloudflare.com:778` (W21). It is never rewritten. |
+| `cred.srt` | Present while `STREAM_SRT_ENABLED` is on, its default (W21). `null` while it is off: A18's safety net. |
 | `cred.*` secrets | `readFirstInput` (secret-columns.ts), opened only inside this request. |
 | `preferred`, `latencyMs` | `preferred` is `QR_PREFERRED_DEFAULT` (`srt`) when SRT is enabled, otherwise `"rtmps"`. A guard ties the two: `preferred` never names a null shape. `latencyMs` is `SRT_LATENCY_MS` (2000), unchanged. |
 | `playbackUrl` | `https://${STREAM_PLAYBACK_HOST}/${ingest_input_uid}/manifest/video.m3u8`, a bare manifest with no query (W14). |
@@ -569,16 +574,20 @@ treats that as success (capture's answer table).
 
 **Ingest URL rewrite.**
 
-- Only an exact `live.cloudflare.com` hostname is rewritten. The scheme, port and path are kept.
-- **Any other hostname answers `503`** (`ingest_host_unexpected`) and is logged as an error. Capture refuses a `cred`
-  that is not on its environment's ingest host, so serving it would only fail the start on the phone.
+- **RTMPS only.** An exact `live.cloudflare.com` hostname on the RTMPS url is rewritten to `STREAM_INGEST_HOST`. The
+  scheme, port and path are kept.
+- **SRT is never rewritten** (W21). Its url must have exactly the host `live.cloudflare.com`.
+- **Any other hostname, on either url, answers `503`** (`ingest_host_unexpected`) and is logged as an error. Capture
+  refuses a `cred` that is not on an allowed host, so serving it would only fail the start on the phone.
 - With `STREAM_INGEST_HOST` unset (local or CI), Cloudflare's values are served.
-- **SRT on `live.*` is the target; `srt: null` is A18's safety net only.**
-  - `STREAM_SRT_ENABLED` **defaults to false** (W20): unset means off, in code, so no environment serves SRT until
-    S2b proves it on `live.stg`. Then it is turned on in `fly.stg.toml`, and later in `fly.toml`.
-  - With the flag off the descriptor carries `cred.srt: null` and `preferred: "rtmps"`. The phone publishes RTMPS
-    only, with no SRT→RTMPS fallback, so a hold window ends the broadcast.
-  - Each flip is recorded in this file with its S2b evidence.
+- **SRT from launch on Cloudflare's host; `srt: null` is A18's safety net only.**
+  - `STREAM_SRT_ENABLED` **defaults ON** (W21): unset means on, in code. Setting it to `false` is the safety net: the
+    descriptor then carries `cred.srt: null` and `preferred: "rtmps"`, and the phone publishes RTMPS only, with no
+    SRT→RTMPS fallback, so a hold window ends the broadcast.
+  - The flag is turned off for an environment only when SRT fails there (S2), or while capture's host rule refuses
+    `live.cloudflare.com` (G0-i). Each flip is recorded in this file with its evidence.
+  - **Moving SRT to the custom host later (S2b, optional)** is a server change only: rewrite the SRT host too. The
+    contract already admits both hosts.
 
 **`captureOrigin()`** is `OAUTH_BASE_URL || NEXT_PUBLIC_BASE_URL`. Both are set in `fly.toml` and `fly.stg.toml`. Only
 when neither is set (local or CI) does it fall back to `deps.appUrl`. It is **never header-derived** where the
@@ -854,7 +863,7 @@ unchanged.
   stays empty until PR-2.
 - **Copy:** every string is in en, es, fr and nl, followed by the `gen-keys` regen. The key families are
   `stream.code.*`, `stream.phone.*` and `stream.end.*`, with the names indicative.
-- **Mockups (house rule "≥2 UI options before building").** Plan Task 1 produces two static options for the two
+- **Mockups (house rule "≥2 UI options before building").** A plan task (PR-1 Task 2) produces two static options for the two
   Ready states at 320, 768 and 1280, under `2026-10-01-capture-qr-v2-mockups/`. **The owner signs one off before the
   panel task starts.** The PR-1 build of the panel waits on that; the server work does not.
 
@@ -904,14 +913,14 @@ files are the cross-repo authority. The zod schemas mirror them, and parity is a
 |---|---|---|---|
 | `STREAM_INGEST_HOST` | `live.seazn.club` | `live.stg.seazn.club` | unset (Cloudflare's own hosts) |
 | `STREAM_PLAYBACK_HOST` | `customer-vv7totdc7j19biah.cloudflarestream.com` | same | the fake driver's value |
-| `STREAM_SRT_ENABLED` | unset (off, W20) until S2b passes, then on | unset (off) until staging has run on SRT | on (the fake driver) |
+| `STREAM_SRT_ENABLED` | unset (on, W21); `false` only as A18's safety net | unset (on); `false` only if S2's SRT check fails | unset (on; the fake driver) |
 | `RELAY_KEK` | existing Fly secret | existing | `.env` |
 
 - **A real-driver deployment without `STREAM_PLAYBACK_HOST`** answers a session GET with `503` (`playback_unconfigured`)
   and logs an error at boot. `playbackUrl` is required by capture, and a guessed host would be a lie.
-- **Environment-tunable timings (AGENTS.md #20).** `DEAD_PHONE_TAKEOVER_SECONDS` and the §6.9 constants can be
-  overridden **only** when `ENV_NAME ∈ {local, ci}`, so the walkthrough can drive A14 and ask 10 in seconds. Each guard
-  pins the **default**, never the live value.
+- **Environment-tunable timings (AGENTS.md #20).** `DEAD_PHONE_TAKEOVER_SECONDS`, `PHONE_LOST_LIVE_MINUTES` and the
+  §6.9 constants can be overridden **only** when `ENV_NAME ∈ {local, ci}`, so the walkthrough can drive A14, ask 10
+  and W19 in seconds. Each guard pins the **default**, never the live value.
 
 ---
 
@@ -1290,7 +1299,8 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
   reasons must equal the enum length.
 - `session.ts`: `stop` with each reason; `ending × stop` keeps the first reason; warming anchored on `warmingAt`
   (provisioning at 179 s still gets the full 10 min).
-- Ingest URL rewrite: an exact host, a foreign host, unset, and the scheme, port and path preserved.
+- Ingest URL rewrite: RTMPS on an exact host, a foreign host, unset, and the scheme, port and path preserved; SRT
+  never rewritten (it stays `live.cloudflare.com` with `STREAM_INGEST_HOST` set), and a foreign SRT host → 503.
 
 #### 11.1.2 Use-case (DB-backed vitest)
 
@@ -1515,10 +1525,10 @@ is not (W20).
 
 | # | Step |
 |---|---|
-| S1 | Deploy with `STREAM_INGEST_HOST=live.stg.seazn.club`, `STREAM_PLAYBACK_HOST` set and `STREAM_SRT_ENABLED` unset (off, W20). `GET` a session descriptor as the current phone. Confirm that `cred.rtmps.url` carries the staging host, `playbackUrl` the customer host, `cred.srt` is `null` and `preferred` is `"rtmps"`. As a second phone, the same GET has no `cred`. |
-| S2 | **Gate (W15).** Publish with ffmpeg over **RTMPS** to the descriptor's `rtmps://live.stg.seazn.club:443/live/` and stream key. The input must reach `connected` (Cloudflare status read). |
-| S2b | **Not a gate (W20); run later.** Prove SRT on `srt://live.stg.seazn.club:778` with a staging input's streamid and passphrase: ffmpeg with libsrt directly, or `srt-live-transmit` through a local UDP relay (it refuses ports below 1024). The input must reach `connected`. A pass turns `STREAM_SRT_ENABLED` on in `fly.stg.toml`, then S1 is re-run with SRT on (`cred.srt.url` on `:778`, `preferred: "srt"`), and the evidence is recorded in §6.4. Production follows in its own deploy. |
-| S3 | With S2b: measure the SRT hold window (disconnect, then time until the manifest ends) against the declared 183 s. A difference beyond the slack changes the constant before production. |
+| S1 | Deploy with `STREAM_INGEST_HOST=live.stg.seazn.club`, `STREAM_PLAYBACK_HOST` set and `STREAM_SRT_ENABLED` unset (on, W21). `GET` a session descriptor as the current phone. Confirm that `cred.rtmps.url` carries the staging host, `cred.srt.url` is `srt://live.cloudflare.com:778`, `preferred` is `"srt"`, and `playbackUrl` carries the customer host. As a second phone, the same GET has no `cred`. With the flag set `false`, `cred.srt` is `null` and `preferred` is `"rtmps"`. |
+| S2 | **Gate (W15, W21).** Publish with ffmpeg over **RTMPS** to the descriptor's `rtmps://live.stg.seazn.club:443/live/` and stream key, then over **SRT** to `srt://live.cloudflare.com:778` with the descriptor's streamid and passphrase (ffmpeg with libsrt, or `srt-live-transmit` through a local UDP relay). Each must reach `connected` (Cloudflare status read). If SRT fails, set `STREAM_SRT_ENABLED=false` on staging (A18) and record why; RTMPS failing is a stop. |
+| S2b | **Optional, not a gate (W20, W21); run later.** Prove SRT on `srt://live.stg.seazn.club:778` with a staging input's streamid and passphrase (ffmpeg with libsrt, or `srt-live-transmit` through a local UDP relay). A pass allows a server-only change that rewrites the SRT host to the custom host too, with no contract change. |
+| S3 | Measure the SRT hold window (disconnect, then time until the manifest ends) against the declared 183 s. A difference beyond the slack changes the constant before production. |
 | S4 | `playbackUrl` returns a manifest while live. |
 | S5 | `curl -i` on all three phone routes through the public host: `Cache-Control: private, no-store`, and `cf-cache-status` not `HIT` across two requests. |
 | S6 | A native-shaped request (no `Origin`) to `POST …/beats` passes `proxy.ts`. The same request with a foreign `Origin` gets 403 (the existing guard, proven unchanged). |
@@ -1606,7 +1616,9 @@ These were not ruled in conversation. Each is decided here with its reason, and 
 1. **O1 — overlay on every phone stream: YES** (W18). Built as W11's entitlement rule; nothing changes in the design.
 2. **O2 — a live phone that vanishes: YES** (W19). It ends after 15 min with no beat AND no video, endReason
    `phone_lost`, built in PR-1 (§6.8.5, T25a, S11).
-3. **The SRT test: DEFERRED** (W20). Not a publish gate; `STREAM_SRT_ENABLED` defaults to false; S2b proves SRT later.
+3. **The SRT test: DEFERRED** (W20), then **SRT on Cloudflare's host from launch** (W21): `STREAM_SRT_ENABLED`
+   defaults on; S2b (optional) could later move SRT to the custom host. Capture's host rule for SRT is theirs to
+   relax (G0-i).
 
 **Open:**
 
