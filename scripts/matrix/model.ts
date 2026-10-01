@@ -417,9 +417,17 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         const real = deps.driverFor(base, session, org.orgId);
         const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
         say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} maxCommands=${job.maxCommands} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
+        // T16 fix round 1: a replay offers its own case to the matcher first.
+        // Two open cases may share cell, check and match — one bug reached by
+        // two triggers (MB-007, MB-010) — and the first in the file would
+        // otherwise claim the other's replay, which verdictOf then calls NOT
+        // REPRODUCED although it failed as itself. Every other case stays, so
+        // a failure as ANOTHER case is still named as that case.
+        const replay = job.replay;
+        const ranked = replay === null ? regressions : [replay, ...regressions.filter((r) => r.id !== replay.id)];
         const rep = await runCell({
           cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: job.maxCommands, seed: job.seed, fences: job.fences,
-          timeLimitMs: cli.timeLimitMs, regressions,
+          timeLimitMs: cli.timeLimitMs, regressions: ranked,
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),

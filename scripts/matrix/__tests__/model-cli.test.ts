@@ -738,6 +738,30 @@ describe("model.ts", () => {
       expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [own] }), ["--run-id", "mmo", "--report-dir", reportDir(), "--regressions"])).toBe(0);
     });
 
+    // T16 fix round 1 (T16-R3): one bug reached by two triggers on one cell —
+    // MB-007 (added entrant) and MB-010 (withdrawal), both double elim, both
+    // the product's same words — is two cases with the same cell, check and
+    // match. Each replay fails AS ITSELF (its check and its match), so each is
+    // known by its own id, in either file order; the first match in the file
+    // must not claim the other's replay.
+    it("T16 fix round 1: two open cases sharing cell, check and match (one bug, two triggers) — each replay is known as itself, in either file order (exit 0)", async () => {
+      const io = capture();
+      expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "tw", "--report-dir", reportDir(), ...ONE])).toBe(1);
+      const a = completedStub(io.out(), { id: "MB-002", issue: null, fence: null, match: "refuses every result" });
+      const b = completedStub(io.out(), { id: "MB-003", issue: null, fence: null, match: "refuses every result" });
+      expect([a.cell, a.check, a.match]).toEqual([b.cell, b.check, b.match]);
+      let checked = 0;
+      for (const [tag, regs] of [["twab", [a, b]], ["twba", [b, a]]] as const) {
+        capture();
+        const dir = reportDir();
+        expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [...regs] }), ["--run-id", tag, "--report-dir", dir, "--regressions"]), tag).toBe(0);
+        const rep = JSON.parse(readFileSync(join(dir, tag, "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string; failure: { known: string | null } | null }[] };
+        expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.failure?.known ?? null]), tag).toEqual(regs.map((r) => [r.id, "known-failure", r.id]));
+        checked += rep.cells.length;
+      }
+      expect(checked).toBe(4);
+    });
+
     it("a FIXED regression that comes back is a NEW failure (exit 1); one that stays fixed is ok (exit 0)", async () => {
       const io = capture();
       await runModel(deps({ fault879: true }), ["--run-id", "rf1", "--report-dir", reportDir(), ...ONE, "--no-fences"]);
