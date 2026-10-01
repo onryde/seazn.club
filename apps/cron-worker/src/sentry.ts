@@ -35,12 +35,16 @@ export function parseDsn(dsn: string | undefined): Dsn | null {
 }
 
 /** One error event for a job that was not ok. Best-effort by contract: a
- *  Sentry outage must never stop or fail a job, so this swallows every error. */
+ *  Sentry outage must never stop or fail a job, so this never throws.
+ *  Resolves true only when Sentry ACCEPTED the event (HTTP 2xx), and false for a
+ *  throw, a timeout or any other status. A rotated DSN key or a deleted project
+ *  answers 4xx, and without this the alert path would go dark while the run
+ *  line still read `sentry:"on"` (review I-3). */
 export async function captureJobFailure(
   fetchFn: typeof fetch,
   dsn: Dsn,
   e: { environment: string; run: "scheduled" | "manual"; failure: JobFailure; eventId: string; nowMs: number },
-): Promise<void> {
+): Promise<boolean> {
   const f = e.failure;
   const reason = f.reason ?? f.status;
   const detail = f.degraded
@@ -65,13 +69,15 @@ export async function captureJobFailure(
     JSON.stringify(event),
   ].join("\n");
   try {
-    await fetchFn(`${dsn.origin}/api/${dsn.projectId}/envelope/?sentry_key=${encodeURIComponent(dsn.publicKey)}&sentry_version=7`, {
+    const res = await fetchFn(`${dsn.origin}/api/${dsn.projectId}/envelope/?sentry_key=${encodeURIComponent(dsn.publicKey)}&sentry_version=7`, {
       method: "POST",
       headers: { "content-type": "application/x-sentry-envelope" },
       body: envelope,
       signal: AbortSignal.timeout(SENTRY_TIMEOUT_MS),
     });
+    return res.ok;
   } catch {
-    // swallowed by contract
+    // swallowed by contract: reported as "not delivered", never thrown
+    return false;
   }
 }

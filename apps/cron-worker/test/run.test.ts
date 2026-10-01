@@ -20,14 +20,21 @@ const env = (over: Partial<Env> = {}): Env => ({
 });
 const isSentry = (u: string) => new URL(u).host.endsWith("sentry.io");
 
-function harness(route: (url: string) => Response | Error = () => new Response(HEALTHY)) {
+function harness(
+  route: (url: string) => Response | Error = () => new Response(HEALTHY),
+  sentryReply: () => Response | Error = () => new Response("{}", { status: 200 }),
+) {
   const lines: Record<string, unknown>[] = [];
   const calls: { url: string; init?: RequestInit }[] = [];
   let clock = 0;
   let n = 0;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
-    if (isSentry(url)) return new Response("{}", { status: 200 });
+    if (isSentry(url)) {
+      const s = sentryReply();
+      if (s instanceof Error) throw s;
+      return s;
+    }
     const r = route(url);
     if (r instanceof Error) throw r;
     return r;
@@ -93,6 +100,31 @@ describe("runDue: jobs and the run log", () => {
     const good = harness();
     await runDue(TUESDAY_1417, TRIGGER_CRON, env(), good.deps);
     expect(good.events()).toEqual([]);
+  });
+
+  // I-3: Sentry error events are the ONLY alert path while cron monitoring is deferred, so a
+  // rejected event must be visible in the log rather than reading as `sentry:"on"` and silence.
+  it.each([
+    ["answers 403 (a rotated DSN key or a deleted project)", () => new Response("denied", { status: 403 })],
+    ["throws (unreachable)", () => new TypeError("sentry unreachable")],
+  ])("a Sentry event that is not delivered (%s) is logged, and never stops the next job", async (_why, reply) => {
+    const h = harness(() => new Response("down", { status: 500 }), reply);
+    const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
+    expect(results.map((r) => [r.job, r.status, r.sentryDelivered])).toEqual([
+      ["registrations", "error", false],
+      ["billing-events", "error", false],
+      ["funnel-remind", "error", false],
+    ]);
+    expect(h.posts(), "every job still ran").toHaveLength(3);
+    expect(h.lines.filter((l) => l.event === "job").map((l) => l.sentryDelivered)).toEqual([false, false, false]);
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", sentry: "on", sentryUndelivered: ["registrations", "billing-events", "funnel-remind"] });
+  });
+
+  it("an accepted event reads sentryDelivered:true, and a job that is ok attempts none (the field is absent)", async () => {
+    const h = harness((u) => (u.endsWith("/api/cron/registrations") ? new Response("no", { status: 401 }) : new Response(HEALTHY)));
+    const results = await runDue(TUESDAY_1417, TRIGGER_CRON, env(), h.deps);
+    expect(results.map((r) => r.sentryDelivered)).toEqual([true, undefined, undefined]);
+    expect(h.lines.at(-1)).toMatchObject({ event: "run", sentryUndelivered: [] });
   });
 
   it("past the run deadline: the remaining jobs report error/deadline and raise events, never silence", async () => {

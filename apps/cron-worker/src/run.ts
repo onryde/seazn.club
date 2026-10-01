@@ -19,6 +19,8 @@ export interface RunDeps extends CallDeps {
 
 export interface JobResult extends CallOutcome {
   job: string;
+  /** Present only when a Sentry event was attempted for this job: did Sentry accept it (I-3)? */
+  sentryDelivered?: boolean;
 }
 
 export interface RunContext {
@@ -32,8 +34,11 @@ const PROBE_TIMEOUT_MS = 10_000;
 /**
  * Run the given jobs sequentially. Every job yields a result and a log line.
  * A job that is not ok (error, or degraded under R3) also raises ONE Sentry
- * error event when a DSN is set. One closing `event:"run"` line names the
- * Sentry state, so a missing DSN shows in the log rather than as silence.
+ * error event when a DSN is set, and its job line says whether Sentry accepted
+ * it (`sentryDelivered`, I-3): a failed delivery is logged, never thrown, and
+ * never stops the next job. One closing `event:"run"` line names the Sentry
+ * state and lists any undelivered events, so a missing DSN or a rejected one
+ * shows in the log rather than as silence.
  */
 export async function runJobs(
   jobs: readonly Job[],
@@ -50,7 +55,7 @@ export async function runJobs(
   for (const job of jobs) {
     const result: JobResult = { job: job.id, ...(await callJob(job, target, deps, deadline)) };
     if (dsn && result.status !== "ok") {
-      await captureJobFailure(deps.fetch, dsn, {
+      result.sentryDelivered = await captureJobFailure(deps.fetch, dsn, {
         environment: env.ENV_NAME,
         run: ctx.run,
         failure: result,
@@ -70,6 +75,7 @@ export async function runJobs(
     jobs: results.length,
     notOk: results.filter((r) => r.status !== "ok").map((r) => r.job),
     sentry: dsn ? "on" : env.SENTRY_DSN ? "misconfigured" : "off",
+    sentryUndelivered: results.filter((r) => r.sentryDelivered === false).map((r) => r.job),
   });
   return results;
 }

@@ -67,10 +67,20 @@ describe("captureJobFailure", () => {
     expect(sentBody(fetchFn)).not.toContain("org-secret-name");
   });
 
-  it("never rejects when Sentry is down", async () => {
+  it("resolves true only when Sentry ACCEPTS the event (I-3)", async () => {
+    expect(await send(vi.fn(async () => new Response('{"id":"x"}', { status: 200 })))).toBe(true);
+  });
+
+  it.each([400, 401, 403, 404, 429, 500])("resolves false, never throws, when Sentry answers %i (a rotated DSN key must not look delivered)", async (status) => {
+    const fetchFn = vi.fn(async () => new Response("no", { status }));
+    await expect(send(fetchFn)).resolves.toBe(false);
+    expect(fetchFn).toHaveBeenCalledTimes(1); // best-effort: no retry
+  });
+
+  it("never rejects when Sentry is down, and reports not delivered", async () => {
     const fetchFn = vi.fn(async () => {
       throw new TypeError("sentry unreachable");
     });
-    await expect(send(fetchFn)).resolves.toBeUndefined();
+    await expect(send(fetchFn)).resolves.toBe(false);
   });
 });
