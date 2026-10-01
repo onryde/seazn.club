@@ -61,8 +61,10 @@ export const LIST_VIDEOS_PAGE_LIMIT = 1000;
 interface CfEnvelope<T> { success: boolean; result?: T; errors?: { code?: number; message?: string }[] }
 
 /** m-2: every output `status.current.state` word `outputState` maps on purpose (staging check B, 2026-09-30, plus the
- *  `error` it keeps for a refusal). Any other word is reported once per session. */
-const OUTPUT_WORDS_SEEN: ReadonlySet<string> = new Set(["connected", "connecting", "reconnecting", "error"]);
+ *  `error` it keeps for a refusal, plus `disconnected` — staging, 2026-10-01 14:29 BST, Sentry SEAZN-CLUB-STG-A: the
+ *  phone stopped sending and the output read `disconnected`, which this set did not hold, so it was reported as unseen
+ *  and read `unknown`). Any other word is reported once per session. */
+const OUTPUT_WORDS_SEEN: ReadonlySet<string> = new Set(["connected", "connecting", "reconnecting", "disconnected", "error"]);
 
 /** G-1 (B5 re-review 3; controller ruling 2026-10-01): a live input's `status.current.state`, mapped word by word. The
  *  documented enum (quoted in `outputState`'s comment) plus `disconnected`, which R0 MEASURED on an idle input although
@@ -329,10 +331,12 @@ export class CloudflareIngest implements IngestProvider {
    *  no output-status vocabulary either. Staging check B (2026-09-30) captured the raw `result[].status.current.state`:
    *  a WRONG destination key read `connecting`, with no reason, for the ~2 minutes it was watched; a real key read
    *  `connected`/`connected` (recorded with a history of `[connecting]`); and before any inbound video the output's
-   *  `status` was `null`. So: `error` → rejected (never yet seen, kept for a refusal Cloudflare may still word
-   *  that way); any `connecting`/`reconnecting` → connecting, which is how a wrong key shows; every output `connected` →
-   *  ok; anything else (no status yet, or a word this code has never seen) → unknown — an unseen word is never read as a
-   *  healthy destination. */
+   *  `status` was `null`. Staging again (2026-10-01 14:29 BST, Sentry SEAZN-CLUB-STG-A): when the PHONE stopped
+   *  sending, the output read `disconnected` — the destination is not being fed, so it is not receiving right now (the
+   *  D3 box then points at the phone, `d3Warning`). So: `error` → rejected (never yet seen, kept for a refusal Cloudflare
+   *  may still word that way); any `connecting`/`reconnecting`/`disconnected` → connecting, which is how a wrong key
+   *  shows; every output `connected` → ok; anything else (no status yet, or a word this code has never seen) → unknown —
+   *  an unseen word is never read as a healthy destination. */
   async outputState(inputId: string, meta: ProviderCallMeta = {}): Promise<OutputState | null> {
     const r = await this.call<{ enabled?: boolean; status?: { current?: { state?: string } } | null }[]>(
       "GET", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, undefined,
@@ -375,8 +379,9 @@ export class CloudflareIngest implements IngestProvider {
     if (states.length === 0) return "unknown";
     // D3 (spec §5.6; staging round 1, 2026-09-30): a present, non-error state is NOT "ok". An output still dialling — or
     // re-dialling — the destination reads `connecting`/`reconnecting`; the panel said Live while YouTube received nothing
-    // because this returned "ok" for them.
-    if (states.some((s) => s === "connecting" || s === "reconnecting")) return "connecting";
+    // because this returned "ok" for them. `disconnected` (stg 2026-10-01, SEAZN-CLUB-STG-A: the phone stopped) is the
+    // same not-receiving reading — never `unknown`, and never a healthy destination.
+    if (states.some((s) => s === "connecting" || s === "reconnecting" || s === "disconnected")) return "connecting";
     return states.every((s) => s === "connected") ? "ok" : "unknown";
   }
 
