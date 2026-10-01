@@ -736,6 +736,51 @@ describe("m-c: a PERSISTENT failed outputs read is reported once per session, af
   });
 });
 
+// m-1 (B5 re-review 4, mutant MN4): "once per session" is once per KIND per session. The three reports — an unseen input
+// word, an unseen output word, an outputs read that keeps failing — are different facts, so an early one must never use
+// up the session's only report slot. With the kind dropped from the key, the unseen-word report early in a stream
+// silenced the later "read keeps failing" report m-c exists for, and no test had two kinds in one session.
+describe("m-1: each KIND of report is once per session — an early unseen word never silences a later failing read", () => {
+  it("one session: an unseen input word, then N failed outputs reads, then an unseen output word — three reports, three routes", async () => {
+    const N = OUTPUT_WARNING_AFTER_MS / STREAM_POLL_MS;
+    let outputs: "unseen" | "fail" = "fail";
+    const reported = vi.fn<ErrorReporter>();
+    const cf = new CloudflareIngest({
+      fetchImpl: recorder((c) => {
+        if (c.url.endsWith("/outputs")) {
+          return outputs === "unseen"
+            ? { status: 200, body: { success: true, result: [{ uid: "o", status: { current: { state: "dialling_sideways" } } }] } }
+            : { status: 503, body: { success: false, errors: [{ code: 10001, message: "unavailable" }] } };
+        }
+        return { status: 200, body: { success: true, result: { uid: "in_m1", status: { current: { ingestProtocol: "srt", state: "streaming_somehow", reason: null } } } } };
+      }).fetchImpl,
+      accountId: "acct", token: "tok", reportError: reported,
+    });
+    const meta = { sessionId: "sess-m1" };
+    const routes = () => reported.mock.calls.map(([, ctx]) => ctx?.route);
+
+    expect((await cf.inputStatus("in_m1", meta)).state, "PREMISE: the input word is unseen").toBe("unknown");
+    expect(routes(), "the input-word report").toEqual(["relay.input_state"]);
+    let failed = 0;
+    for (let i = 0; i < N; i++) {
+      expect(await cf.outputState("in_m1", meta)).toBeNull();
+      failed++;
+    }
+    expect(failed, "PREMISE: N consecutive failed reads ran").toBe(N);
+    expect(routes(), "the failing read still reports after an unseen word in the same session (MN4)").toEqual(["relay.input_state", "relay.output_read_failed"]);
+    outputs = "unseen";
+    expect(await cf.outputState("in_m1", meta), "PREMISE: the output word is unseen").toBe("unknown");
+    expect(routes(), "the output-word report is a third slot").toEqual(["relay.input_state", "relay.output_read_failed", "relay.output_state"]);
+    expect(new Set(routes()).size, "three distinct routes").toBe(3);
+    // And each slot is still once: more of every kind in the same session adds nothing.
+    await cf.inputStatus("in_m1", meta);
+    await cf.outputState("in_m1", meta);
+    outputs = "fail";
+    for (let i = 0; i < N; i++) await cf.outputState("in_m1", meta);
+    expect(reported, "still one per kind").toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
   type Shape = { operation: string; method: string; template: string; idCount: number; subject: string };
 
