@@ -7,7 +7,7 @@ import { ENGINE_HTTP_STATUS } from "../lib/driver/engine-http.ts";
 import { SEEDING_FAILED_AFTER_COMMIT } from "../lib/driver/types.ts";
 import { INVARIANTS, STEP_INVARIANTS, evaluateInvariant, evaluateInvariants, evaluateStepInvariants, type InvariantSpec } from "../lib/invariants.ts";
 import type { CaseFact, CompleteObs, ObservedFixture, ObservedOutcome, ObservedRun, ObservedStage, WithdrawalObs } from "../lib/observed.ts";
-import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
+import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import { structuralBracketFrom, structuralBracketText } from "./product-text.ts";
 import { GENERIC_ERROR_CODES, TERMINAL_STATUSES, isNamedRefusal, isTerminal, sameResult, toObservedOutcome } from "../lib/observed.ts";
 
@@ -234,6 +234,14 @@ describe("I2 structural (W1-driving Task 9, ruling 45)", () => {
     expect(bracketKinds).toHaveLength(3);
     expect([...STRUCTURAL_FINAL_KINDS].sort()).toEqual([...bracketKinds].sort());
     expect([...kinds].sort()).toEqual([...STRUCTURAL_FINAL_KINDS].sort());
+  });
+  it("final review m-3: I2's stage kinds are terminal-finals.ts's bracket table — every kind it lays out, none other, and the structural kinds a subset of it", () => {
+    expect(BRACKET_KINDS.length, "the bracket table is empty — the binding would be vacuous").toBeGreaterThan(0);
+    expect(BRACKET_KINDS).toEqual(Object.keys(BRACKET_OF));
+    expect(I2.stageKinds).not.toBe("any");
+    expect([...(I2.stageKinds as readonly string[])].sort()).toEqual([...BRACKET_KINDS].sort());
+    for (const k of STRUCTURAL_FINAL_KINDS) expect(BRACKET_KINDS, k).toContain(k);
+    console.info(`m-3: I2 judges the ${BRACKET_KINDS.length} bracket kinds of terminal-finals.ts`);
   });
   it("terminal keys come from the engine's generators, not a table — and they move with the field's size and the reset flag", () => {
     expect(terminalFinalKeys("page_playoff", F, {})).toEqual(finalsOf(generatePagePlayoff({ entrants: F }).fixtures));

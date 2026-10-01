@@ -25,11 +25,11 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { bracketFirstRound } from "../lib/scenarios/f1-odd-field.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
 import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
-import { BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
+import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
-import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture } from "./fake-driver.ts";
+import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture, type FakeKnockoutOptions } from "./fake-driver.ts";
 import { wireCodeFor } from "./product-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -1920,6 +1920,28 @@ describe("T15: M1 on a bracket whose walkover is the terminal final", () => {
     expect(s.complete?.finalRanks?.[0]).toBe(seed1);
     expect(r.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "pass", checked: 1 });
     expect(r.state, JSON.stringify(r.checks.filter((c) => c.verdict === "fail"))).toMatchObject({ state: "works" });
+  });
+  it("final review m-3: M1 judges m1-winner-progresses on every kind of terminal-finals.ts's bracket table, and abstains off it", async () => {
+    // The fake and row each bracket kind runs on; a kind the table gains without one is refused by name.
+    const ON: Readonly<Record<string, { opts: FakeKnockoutOptions; row: NonNullable<Opts["row"]> }>> = {
+      knockout: { opts: {}, row: "knockout" }, page_playoff: { opts: { pagePlayoff: true }, row: "page_playoff_only" },
+      stepladder: { opts: { stepladder: true }, row: "stepladder_only" }, double_elim: { opts: { doubleElim: true }, row: "double_elim" },
+    };
+    expect(BRACKET_KINDS.length).toBeGreaterThan(0);
+    let checked = 0;
+    for (const kind of BRACKET_KINDS) {
+      const on = ON[kind];
+      if (on === undefined) throw new Error(`m-3: no fake for bracket kind '${kind}' — add one before the table grows`);
+      const r = await runOn(new FakeKnockoutDriver(on.opts), "M1", { row: on.row, variant: "win_loss" });
+      expect(r.out.observed.stages[0]!.kind, kind).toBe(kind);
+      expect(r.checks.find((c) => c.id === "m1-winner-progresses")!.verdict, kind).not.toBe("abstain");
+      checked++;
+    }
+    expect(checked).toBe(BRACKET_KINDS.length);
+    // Off the table: a league abstains, naming why.
+    const league = await runOn(new FakeLeagueDriver(), "M1");
+    expect(league.checks.find((c) => c.id === "m1-winner-progresses")).toMatchObject({ verdict: "abstain", reason: "not a bracket stage" });
+    console.info(`m-3: M1 judged progression on ${checked} bracket kinds`);
   });
   it("a final walkover whose winner is NOT ranked first still reds m1-winner-progresses, naming the rank", async () => {
     class RanksSeed1Second extends FakeKnockoutDriver {

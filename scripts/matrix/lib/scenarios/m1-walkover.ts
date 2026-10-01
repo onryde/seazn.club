@@ -16,12 +16,14 @@ import { winnerOf } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, decideFixture, playDivision, setUpDivision, snapshot, type DivisionSetup } from "./common.ts";
+import { BRACKET_KINDS } from "./terminal-finals.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
  *  answers the FORMAT's field (a page playoff seeds 4; W1-driving Task 2). */
 const ENTRANTS = 8;
-const BRACKETS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
+/** Final review m-3: terminal-finals.ts's bracket table, never a second list. */
+const BRACKETS: ReadonlySet<string> = new Set(BRACKET_KINDS);
 
 /** `winner`: the side the walkover is recorded for — seed 1, or on an
  *  americano stage seed 1's pair entrant. */

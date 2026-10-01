@@ -15,7 +15,7 @@ import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateSt
  *  (ruling 45). invariants.test.ts holds it equal to I2's stage kinds minus
  *  knockout, so the snapshot and I2 cannot disagree on which stages carry the
  *  keys. */
-export const STRUCTURAL_FINAL_KINDS: readonly string[] = Object.freeze(["double_elim", "stepladder", "page_playoff"]);
+export const STRUCTURAL_FINAL_KINDS: readonly string[] = Object.freeze(["double_elim", "stepladder", "page_playoff"] as const satisfies readonly BracketKind[]);
 
 /** The bracket kinds' generators, called as the product's Start calls them
  *  (usecases/stages.ts:1648-1673): the field, and the stage config the
@@ -23,7 +23,8 @@ export const STRUCTURAL_FINAL_KINDS: readonly string[] = Object.freeze(["double_
  *  elim's bracketReset. ONE table for the snapshot's terminal finals and
  *  F1's opening round (T15-R8 m-4). A size or config the engine cannot lay
  *  out throws its EngineError, exactly as the product's Start refuses it. */
-export const BRACKET_OF: Readonly<Record<string, (field: readonly string[], config: Record<string, unknown>) => GeneratedBracket>> = Object.freeze({
+type BracketGen = (field: readonly string[], config: Record<string, unknown>) => GeneratedBracket;
+const BRACKET_TABLE = {
   knockout: (field, cfg) => generateSingleElim({
     entrants: [...field],
     thirdPlace: cfg.thirdPlace === true,
@@ -33,7 +34,12 @@ export const BRACKET_OF: Readonly<Record<string, (field: readonly string[], conf
   page_playoff: (field) => generatePagePlayoff({ entrants: [...field] }),
   stepladder: (field) => generateStepladder({ entrants: [...field] }),
   double_elim: (field, cfg) => generateDoubleElim({ entrants: [...field], bracketReset: cfg.bracketReset === true }),
-});
+} satisfies Record<string, BracketGen>;
+export const BRACKET_OF: Readonly<Record<string, BracketGen>> = Object.freeze(BRACKET_TABLE);
+/** Final review m-3: the bracket kinds, in the table's order — the ONE declaration M1's bracket set and I2's stage
+ *  kinds are read from (invariants.ts binds its literal to this type; it may not value-import this module). */
+export type BracketKind = keyof typeof BRACKET_TABLE;
+export const BRACKET_KINDS: readonly BracketKind[] = Object.freeze(Object.keys(BRACKET_TABLE) as BracketKind[]);
 
 /** The terminal final is the engine's own `isFinal` fixture for this bracket
  *  shape — never a key table typed here. The ids are the product's ext_keys

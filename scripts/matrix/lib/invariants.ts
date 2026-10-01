@@ -8,6 +8,7 @@
 // helpers have one authority instead of a copy here.
 import type { CheckResult } from "./results.ts";
 import type { CaseFact, InvariantResult, ObservedFixture, ObservedRun, ObservedStage } from "./observed.ts";
+import type { BracketKind } from "./scenarios/terminal-finals.ts";
 import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, sameResult, twoSided, winnerOf } from "./observed.ts";
 
 export interface InvariantSpec {
@@ -130,10 +131,15 @@ const seedingFailed = (s: ObservedStage): boolean =>
  *  last of the stage's terminalFinals (engine order: gf before gf-reset)
  *  that a decided fixture carries — and no order beyond rank 1 is asserted.
  *  A double elim's or page playoff's champion may have lost a game. */
+/** Final review m-3: I2 judges every bracket kind terminal-finals.ts lays out. This layer may not value-import that
+ *  module (boundary.test.ts PF7: type-only, for the fast-check model and W10), so the set is bound to its table by
+ *  TYPE: `satisfies Record<BracketKind, true>` refuses a kind the table lacks AND one it misses. invariants.test.ts
+ *  holds the two equal at run time too. */
+const I2_KINDS = { knockout: true, double_elim: true, stepladder: true, page_playoff: true } satisfies Record<BracketKind, true>;
 const I2: InvariantSpec = {
   id: "I2-bracket-one-champion-ranks-permutation",
   description: "a completed bracket ranks every entrant once; its rank 1 is the one unbeaten entrant (knockout) or the terminal final's winner (double elim, stepladder, page playoff)",
-  stageKinds: ["knockout", "double_elim", "stepladder", "page_playoff"],
+  stageKinds: Object.keys(I2_KINDS),
   abstainOn: ["shared_place_declared", "cut_short"],
   abstainOnStageConfig: [],
   requiresCompletedStage: true,
