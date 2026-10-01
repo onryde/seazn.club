@@ -1,7 +1,7 @@
-// Sibling of registrations-sweep-workflow.test.ts (#757): the scheduled ops workflows live in
-// onryde/seazn.club.workflow, so this repo must NOT schedule the relay sweep. Two repos scheduling one cron would run
-// retention and the orphan pass twice a day — and a Machine retry that fires twice is two Machines on one stream key.
-// The schedule there is DAILY (owner 2026-09-14); naming it for the owner is Task 17's.
+// Sibling of registrations-sweep-workflow.test.ts (#757): no workflow HERE may schedule the relay sweep. The schedule
+// is the cron Worker's (apps/cron-worker/src/schedule.ts, daily 04:17 UTC, R1), so a GitHub workflow that also
+// scheduled it would double-run retention and the orphan pass — and a Machine retry that fires twice is two Machines
+// on one stream key.
 //
 // Swept by BEHAVIOUR, not by filename (AGENTS.md class 16): a copy re-added under any other name would pass a
 // `relay-sweep.yml`-only check. The claim is "no workflow here SCHEDULES a POST to the relay-sweep endpoint" — so a
@@ -64,7 +64,7 @@ describe("relay sweep — what this repo owns (#757)", () => {
     expect(offenders).toEqual(["nightly-ops.yml", "relay-sweep.yml"]);
   });
 
-  it("the endpoint the other repo's workflow POSTs to exists here and calls the sweep", () => {
+  it("the endpoint the cron Worker POSTs to exists here and calls the sweep", () => {
     const route = readFileSync(ROUTE, "utf8");
     expect(route).toMatch(/export async function POST/);
     expect(route).toMatch(/sweepStreamSessions/);

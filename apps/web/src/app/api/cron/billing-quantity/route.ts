@@ -16,8 +16,12 @@ import { sweepStaleOrgAddonPrices } from "@/server/usecases/billing-events";
  *  from that item — so an uncorrected drift over-bills or under-bills for ever.
  *  Groups merely holding a freed slot are visited too and correct nothing; that
  *  is the cost of a filter that a failed sync cannot satisfy. Cron-shaped like
- *  /api/cron/billing-events: x-cron-secret header (CRON_SECRET env). Idempotent
- *  — it writes only where Stripe and the org count actually disagree. */
+ *  /api/cron/billing-events: x-cron-secret header (CRON_SECRET env).
+ *  Schedule: apps/cron-worker/src/schedule.ts (the Cloudflare cron Worker,
+ *  live while ACTIVE is "true" in apps/cron-worker/wrangler.json). The
+ *  onryde/seazn.club.workflow leg also fires it until that schedule is
+ *  switched off, so both may fire it meanwhile.
+ *  Idempotent — it writes only where Stripe and the org count actually disagree. */
 export async function POST() {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;
