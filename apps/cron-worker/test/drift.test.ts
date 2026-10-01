@@ -44,6 +44,31 @@ describe("schedule ↔ routes drift guard", () => {
   });
 });
 
+describe("R3 failure counters ↔ the usecases' return types", () => {
+  const WEB_SRC = join(REPO, "apps/web/src");
+  /** The source text of every module a route imports through the `@/` alias. */
+  const importedSource = (routePath: string) => {
+    const route = readFileSync(join(WEB_API, routePath.replace(/^\/api\//, ""), "route.ts"), "utf8");
+    const specs = [...route.matchAll(/from "@\/([^"]+)"/g)].map((m) => m[1]!);
+    return specs.map((s) => [`${s}.ts`, `${s}/index.ts`].map((f) => join(WEB_SRC, f)).find(existsSync)).filter((f): f is string => !!f).map((f) => readFileSync(f, "utf8")).join("\n");
+  };
+
+  it("every counter's field is declared as a number in a module its route imports (a renamed field cannot read as healthy)", () => {
+    let checked = 0;
+    for (const j of JOBS) {
+      if (!j.failureCounts) continue;
+      const src = importedSource(j.path);
+      expect(src.length, `${j.id}: imported modules found`).toBeGreaterThan(0);
+      for (const path of j.failureCounts) {
+        const leaf = path.split(".").at(-1)!;
+        expect(new RegExp(`\\b${leaf}\\s*:\\s*number\\b`).test(src), `${j.id}: ${path} → a "${leaf}: number" field`).toBe(true);
+        checked++;
+      }
+    }
+    expect(checked, "counters checked").toBe(6);
+  });
+});
+
 describe("wrangler.json ↔ schedule drift guard", () => {
   const cfg = JSON.parse(readFileSync(join(__dirname, "../wrangler.json"), "utf8"));
 

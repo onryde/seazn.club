@@ -117,11 +117,30 @@ describe("R3: failure counters inside a 200", () => {
 
   it("reads nested counters, from the FULL body rather than the 500-char log excerpt", async () => {
     const mismatches = Array.from({ length: 40 }, (_, i) => ({ orgId: `org-${i}`, priceId: `price_${i}` }));
-    const data = { checked: 3, corrected: 0, failed: 0, orphanOrgs: 0, addonPrices: { mismatches, alerted: 0 }, orphanGroups: { failed: 2 } };
+    // addonPrices has sweepStaleOrgAddonPrices' real shape: `mismatched` counts the stale riders and
+    // `alerted` counts staff emails, which is 0 whenever STAFF_ALERT_EMAIL is unset.
+    const addonPrices = { total: 40, checked: 40, mismatched: 40, unresolved: 0, vanished: 0, unreadable: 0, alerted: 0, mismatches };
+    const data = { checked: 3, corrected: 0, failed: 0, orphanOrgs: 0, addonPrices, orphanGroups: { failed: 2 } };
     expect(JSON.stringify({ ok: true, data }).length, "this case's premise").toBeGreaterThan(500);
     const out = await callJob(job("billing-quantity"), T, deps([billing(data)]), Infinity);
-    expect(out).toMatchObject({ status: "degraded", degraded: { "data.orphanGroups.failed": 2 } });
+    expect(out).toMatchObject({ status: "degraded" });
+    expect(out.degraded).toEqual({ "data.orphanGroups.failed": 2, "data.addonPrices.mismatched": 40 });
     expect(out.body).toHaveLength(500);
+  });
+
+  // I-4 (owner ruling): the addon price check alerts on `mismatched`, never on `alerted`.
+  it("a stale rider price is degraded even though no staff alert was sent (alerted 0: STAFF_ALERT_EMAIL unset)", async () => {
+    const addonPrices = { total: 5, checked: 5, mismatched: 3, unresolved: 0, vanished: 0, unreadable: 0, alerted: 0, mismatches: [] };
+    const body = { checked: 2, corrected: 0, failed: 0, orphanOrgs: 0, addonPrices, orphanGroups: { checked: 0, retired: 0, stillLive: 0, failed: 0 } };
+    expect(await callJob(job("billing-quantity"), T, deps([billing(body)]), Infinity)).toMatchObject({
+      status: "degraded", degraded: { "data.addonPrices.mismatched": 3 },
+    });
+  });
+
+  it("a healthy price sweep is ok, and `alerted` alone is no longer a failure counter", async () => {
+    const addonPrices = { total: 5, checked: 5, mismatched: 0, unresolved: 0, vanished: 0, unreadable: 0, alerted: 4, mismatches: [] };
+    const body = { checked: 2, corrected: 0, failed: 0, orphanOrgs: 0, addonPrices, orphanGroups: { checked: 0, retired: 0, stillLive: 0, failed: 0 } };
+    expect(await callJob(job("billing-quantity"), T, deps([billing(body)]), Infinity)).toMatchObject({ status: "ok" });
   });
 
   it("a counter that cannot be read is degraded ('unreadable'), so a renamed field never reads as healthy", async () => {

@@ -9,7 +9,7 @@ const FAST = "*/5 * * * *";
 const TICK: Job = { id: "stream-tick", path: "/api/cron/stream-tick", trigger: FAST, due: { kind: "every" }, retry: false, manual: true };
 const WITH_TICK: readonly Job[] = [...JOBS, TICK];
 // A healthy body for every route: the R3 counters read 0, the others ignore it.
-const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { alerted: 0 } } });
+const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { mismatched: 0 } } });
 const env = (over: Partial<Env> = {}): Env => ({
   ENV_NAME: "prod",
   BASE_URL: "https://seazn.club",

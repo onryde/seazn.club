@@ -61,7 +61,10 @@ export const JOBS: readonly Job[] = [
     due: { kind: "daily", hourUtc: 6 },
     retry: true,
     manual: true,
-    failureCounts: ["data.failed", "data.orphanGroups.failed", "data.addonPrices.alerted"],
+    // addonPrices.mismatched, NOT .alerted (I-4): `alerted` only increments inside
+    // `if (process.env.STAFF_ALERT_EMAIL)` (billing-events.ts, sweepStaleOrgAddonPrices), so it
+    // stays 0 on an environment without that variable while a stale rider price persists.
+    failureCounts: ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
   },
   {
     id: "billing-grant",

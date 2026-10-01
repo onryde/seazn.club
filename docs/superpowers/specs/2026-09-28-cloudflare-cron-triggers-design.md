@@ -205,10 +205,12 @@ These come from the pre-flight review of the plan (`.superpowers/sdd/2026-09-28-
    | Job | Counters |
    |---|---|
    | billing-events | `data.failed`, `data.alerted` |
-   | billing-quantity | `data.failed`, `data.orphanGroups.failed`, `data.addonPrices.alerted` |
+   | billing-quantity | `data.failed`, `data.orphanGroups.failed`, `data.addonPrices.mismatched` |
    | billing-grant | `data.failed` |
 
-   billing-quantity's `corrected`, `orphanOrgs`, `orphanGroups.stillLive` and `addonPrices.mismatched` are signals, not failures. They stay in the log line and do not alert, although today's workflow warns on `corrected` and `orphanOrgs`.
+   The addon price check counts `addonPrices.mismatched`, **not** `addonPrices.alerted` (owner ruling, 2026-10-01): `alerted` only increments when `STAFF_ALERT_EMAIL` is set (`sweepStaleOrgAddonPrices`), so on an environment without it a stale rider price would read `ok`. A persistent mismatch therefore raises one event per daily run, which that function's docstring says is intended ("it should nag until someone acts").
+
+   billing-quantity's `corrected`, `orphanOrgs` and `orphanGroups.stillLive` are signals, not failures. They stay in the log line and do not alert, although today's workflow warns on `corrected` and `orphanOrgs`.
 4. **R4 (controller): selection is keyed on the firing trigger.**
    - Each row names its trigger, and `dueJobs(scheduledTime, cron)` picks the rows whose trigger fired and whose slot is due.
    - `wrangler.json` registers exactly the table's distinct triggers, which the drift test enforces.

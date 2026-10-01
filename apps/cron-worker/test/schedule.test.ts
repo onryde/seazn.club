@@ -111,7 +111,7 @@ describe("JOBS table", () => {
     const withCounts = Object.fromEntries(JOBS.filter((j) => j.failureCounts).map((j) => [j.id, j.failureCounts]));
     expect(withCounts).toEqual({
       "billing-events": ["data.failed", "data.alerted"],
-      "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.alerted"],
+      "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
       "billing-grant": ["data.failed"],
     });
   });

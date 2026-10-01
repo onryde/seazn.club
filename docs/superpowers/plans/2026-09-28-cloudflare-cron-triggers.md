@@ -294,7 +294,7 @@ describe("JOBS table", () => {
     const withCounts = Object.fromEntries(JOBS.filter((j) => j.failureCounts).map((j) => [j.id, j.failureCounts]));
     expect(withCounts).toEqual({
       "billing-events": ["data.failed", "data.alerted"],
-      "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.alerted"],
+      "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
       "billing-grant": ["data.failed"],
     });
   });
@@ -374,7 +374,7 @@ export const JOBS: readonly Job[] = [
     due: { kind: "daily", hourUtc: 6 },
     retry: true,
     manual: true,
-    failureCounts: ["data.failed", "data.orphanGroups.failed", "data.addonPrices.alerted"],
+    failureCounts: ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"], // not .alerted: it stays 0 when STAFF_ALERT_EMAIL is unset (I-4)
   },
   {
     id: "billing-grant",
@@ -589,7 +589,7 @@ describe("R3: failure counters inside a 200", () => {
 
   it("reads nested counters, from the FULL body rather than the 500-char log excerpt", async () => {
     const mismatches = Array.from({ length: 40 }, (_, i) => ({ orgId: `org-${i}`, priceId: `price_${i}` }));
-    const data = { checked: 3, corrected: 0, failed: 0, orphanOrgs: 0, addonPrices: { mismatches, alerted: 0 }, orphanGroups: { failed: 2 } };
+    const data = { checked: 3, corrected: 0, failed: 0, orphanOrgs: 0, addonPrices: { mismatched: 40, alerted: 0, mismatches }, orphanGroups: { failed: 2 } };
     expect(JSON.stringify({ ok: true, data }).length, "this case's premise").toBeGreaterThan(500);
     const out = await callJob(job("billing-quantity"), T, deps([billing(data)]), Infinity);
     expect(out).toMatchObject({ status: "degraded", degraded: { "data.orphanGroups.failed": 2 } });
@@ -1017,7 +1017,7 @@ const FAST = "*/5 * * * *";
 const TICK: Job = { id: "stream-tick", path: "/api/cron/stream-tick", trigger: FAST, due: { kind: "every" }, retry: false, manual: true };
 const WITH_TICK: readonly Job[] = [...JOBS, TICK];
 // A healthy body for every route: the R3 counters read 0, the others ignore it.
-const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { alerted: 0 } } });
+const HEALTHY = JSON.stringify({ ok: true, data: { failed: 0, alerted: 0, orphanGroups: { failed: 0 }, addonPrices: { mismatched: 0 } } });
 const env = (over: Partial<Env> = {}): Env => ({
   ENV_NAME: "prod",
   BASE_URL: "https://seazn.club",
