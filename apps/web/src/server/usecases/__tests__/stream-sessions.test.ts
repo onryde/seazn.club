@@ -5161,8 +5161,64 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
 
     await expireTargetHolders(r.auth.orgId, null, r.deps);
     expect((await r.row(fresh.sessionId)).state, "second call: still nothing due").toBe("warming");
-    // The empty case: an org with no holder at all.
+    // The empty case: an org with no holder at all — nothing expired, nothing failed.
     const none = await rig({ credits: 1 });
-    await expect(expireTargetHolders(none.auth.orgId, null, none.deps)).resolves.toBeUndefined();
+    await expect(expireTargetHolders(none.auth.orgId, null, none.deps)).resolves.toEqual({ expired: [], failed: [] });
+  });
+
+  // B0 (R-3's routed item, coordinator 2026-10-01): one holder whose tick THROWS — a provider failure recordEffect
+  // rethrows, or the apply's own write — used to end the loop, so every LATER holder kept its "In use" lock until the next
+  // load. Each holder now has its own catch: the failure is reported once and the rest are still ticked. Here the middle
+  // holder's state write is refused at the database (a trigger on ITS row only), which makes its applyExpiry throw.
+  it("three due holders, the MIDDLE one's tick throws: the first and the third are still expired, the middle is reported once and left holding, and the answer names both sets; a second call, the fault gone, expires the middle", async () => {
+    const r = await rig({ credits: 3, fixtures: 2, connectAfterMs: 24 * 60 * 60_000 });
+    const extra = await startedDivisionWithFixture(r.auth);
+    const targets = [
+      r.target,
+      await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` }),
+      await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Third", streamKey: `yt-${randomUUID()}` }),
+    ];
+    const fixtures = [r.fixtureIds[0]!, r.fixtureIds[1]!, extra.fixtureId];
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await createSession(r.auth, fixtures[i]!, body(targets[i]!.id), r.deps)).sessionId);
+    const [first, middle, third] = ids as [string, string, string];
+    // All three abandoned past the warming timeout, in this order (holderRows ticks oldest first).
+    const due = r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
+    for (let i = 0; i < 3; i++) await sql`update fixture_stream_sessions set created_at = ${new Date(due - (3 - i) * 1000)} where id = ${ids[i]!}`;
+    const held = async () => new Map((await listStreamTargets(r.auth, r.auth.orgId)).map((t) => [t.id, t.inUse !== null]));
+    expect(await held(), "PREMISE: all three destinations show In use").toEqual(new Map(targets.map((t) => [t.id, true])));
+    const tickReports = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.expire_target_holders");
+    const fn = `b0_refuse_${randomBytes(4).toString("hex")}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+      begin
+        if new.id = '${middle}'::uuid and new.state is distinct from old.state then raise exception 'B0: the middle holder tick is refused'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger ${fn} before update on fixture_stream_sessions for each row execute function ${fn}()`);
+    sentry.captureError.mockClear();
+    try {
+      const result = await expireTargetHolders(r.auth.orgId, null, r.deps);
+      expect(result, "the first and the third expired; the middle failed").toEqual({ expired: [first, third], failed: [middle] });
+      let checked = 0;
+      for (const sid of [first, third]) {
+        expect(await r.row(sid), "expired past the middle's throw").toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+        checked++;
+      }
+      expect(checked).toBe(2);
+      expect((await r.row(middle)).state, "the refused tick left the middle as it was").toBe("warming");
+      expect(tickReports(), "the middle's failure is reported once").toHaveLength(1);
+      const [err, ctx] = tickReports()[0]!;
+      expect(String(err)).toMatch(/B0: the middle holder tick is refused/);
+      expect(ctx).toMatchObject({ orgId: r.auth.orgId, extra: { sessionId: middle, targetId: null } });
+      expect(await held(), "only the middle's destination is still locked").toEqual(new Map([[targets[0]!.id, false], [targets[1]!.id, true], [targets[2]!.id, false]]));
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on fixture_stream_sessions`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    // The second call, the fault gone: only the middle is left to tick, and it expires; nothing more is reported.
+    expect(await expireTargetHolders(r.auth.orgId, null, r.deps)).toEqual({ expired: [middle], failed: [] });
+    expect((await r.row(middle)).state).toBe("failed");
+    expect(tickReports(), "a clean tick reports nothing").toHaveLength(1);
+    expect(await held()).toEqual(new Map(targets.map((t) => [t.id, false])));
   });
 });

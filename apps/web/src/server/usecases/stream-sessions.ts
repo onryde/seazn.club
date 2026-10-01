@@ -1718,7 +1718,24 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
  *  M-3 (final review): `targetId: null` ticks every holder of the ORG's destinations — the Directory's Streaming tab,
  *  before it lists them. Its "In use" lock disables exactly the Replace and Remove buttons whose routes tick a single
  *  target, so an abandoned Go live otherwise kept the lock up until someone opened that match or the daily sweep ran.
- *  A holder that is not due is untouched (applyExpiry reads it and finds nothing to do). */
-export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<void> {
-  for (const h of await holderRows(sql, targetId === null ? { orgId } : { orgId, targetId })) await applyExpiry(h.sessionId, deps);
+ *  A holder that is not due is untouched (applyExpiry reads it and finds nothing to do).
+ *
+ *  B0 (R-3's routed item, 2026-10-01): EACH holder is best-effort. A tick that throws — a provider failure recordEffect
+ *  rethrows, or the apply's own write — is reported (captureError, route relay.expire_target_holders) and the loop goes
+ *  on; it used to end the loop, so every LATER holder kept its lock until the next load. The answer names what the
+ *  tick did: `expired` — the holders it left no longer holding the destination (a terminal state); `failed` — the holders
+ *  whose tick threw. A holder that was not due is in neither. */
+export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<{ expired: string[]; failed: string[] }> {
+  const expired: string[] = [];
+  const failed: string[] = [];
+  for (const h of await holderRows(sql, targetId === null ? { orgId } : { orgId, targetId })) {
+    try {
+      const after = await applyExpiry(h.sessionId, deps);
+      if (after && isTerminal(after.state)) expired.push(h.sessionId);
+    } catch (err) {
+      failed.push(h.sessionId);
+      captureError(err, { orgId, route: "relay.expire_target_holders", extra: { sessionId: h.sessionId, targetId } });
+    }
+  }
+  return { expired, failed };
 }
