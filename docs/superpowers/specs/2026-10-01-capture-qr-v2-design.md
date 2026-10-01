@@ -178,7 +178,7 @@ capture's commit.
   a refusal, a status code), the change comes back to this file and to our owner. It is not absorbed in the plan.
 - **G0-h does not wait on PR-1.** The test needs only a Cloudflare input and the staging custom host, so it runs
   against a hand-provisioned staging input before PR-1 merges. S2 repeats it through PR-1's own descriptor.
-- **The six points from our diff against `69ef359` were agreed by capture** (2026-10-01): the refusal body
+- **The six points from our diff against `69ef359` were agreed by capture** (folded at capture `5344d04`, feat/s1-plan-c) (2026-10-01): the refusal body
   `{code, message, ...extras}` (§4); no hint field, since a session shape without `cred` is the hint (§6.3.1); the
   session shape gains `pollSeconds`, `code`, `scheduledStart` and `destinationName` (§6.3.1); the phone always sends
   `?slot=` (§6.3.1); the stale ask-10 wording in their _Known gaps_; and the A17 edge, under which a `stopped` from a
