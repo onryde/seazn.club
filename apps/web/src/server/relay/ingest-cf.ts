@@ -266,14 +266,18 @@ export class CloudflareIngest implements IngestProvider {
     return r.json.result.uid;
   }
 
-  /** D3 (spec §5.6). The words are the plan's rule, NOT a documented enum: Cloudflare's OpenAPI (fetched 2026-09-30, the
+  /** D3 (spec §5.6). The words are OBSERVED, not a documented enum: Cloudflare's OpenAPI (fetched 2026-09-30, the
    *  Cloudflare MCP `search` over `spec.paths`, `GET /accounts/{account_id}/stream/live_inputs/{live_input_identifier}/
    *  outputs`) documents an output as `{enabled, streamKey, uid, url}` and NO `status` at all; the only connection enum
    *  it documents is the live INPUT's `status` (`connected`, `reconnected`, `reconnecting`, `client_disconnect`,
    *  `ttl_exceeded`, `failed_to_connect`, `failed_to_reconnect`, `new_configuration_accepted`), and the docs search finds
-   *  no output-status vocabulary either. Staging round 1 recorded only the adapter's mapped `ok`, never the raw word.
-   *  So: `error` → rejected; any `connecting`/`reconnecting` → connecting; every output `connected` → ok; anything else
-   *  (none, or a word this code has never seen) → unknown — an unseen word is never read as a healthy destination. */
+   *  no output-status vocabulary either. Staging check B (2026-09-30) captured the raw `result[].status.current.state`:
+   *  a WRONG destination key read `connecting`, with no reason, for the ~2 minutes it was watched; a real key read
+   *  `connected`/`connected` (recorded with a history of `[connecting]`); and before any inbound video the output's
+   *  `status` was `null`. So: `error` → rejected (never yet seen, kept for a refusal Cloudflare may still word
+   *  that way); any `connecting`/`reconnecting` → connecting, which is how a wrong key shows; every output `connected` →
+   *  ok; anything else (no status yet, or a word this code has never seen) → unknown — an unseen word is never read as a
+   *  healthy destination. */
   async outputState(inputId: string, meta: ProviderCallMeta = {}): Promise<OutputState> {
     const r = await this.call<{ enabled?: boolean; status?: { current?: { state?: string } } | null }[]>(
       "GET", `/live_inputs/${encodeURIComponent(inputId)}/outputs`, undefined,

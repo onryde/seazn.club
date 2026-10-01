@@ -129,7 +129,8 @@ describe("snapQrSize — the largest whole number of device px per module that f
     const rows: [number, number, number, number, string][] = [
       [363, 113, 1, 339, "3 × 113 — the stream at 1280 (§8a's cap)"],
       [236, 113, 1, 226, "2 × 113 — the stream at 320 (fixture page)"],
-      [172, 113, 1.25, 113 / 1.25, "1 × 113 device px ÷ 1.25 — 320 @ 125 % zoom (215 device px fit one, not two)"],
+      [172, 113, 1.25, 113 / 1.25, "1 × 113 device px ÷ 1.25 — 320 @ 125 % zoom on a 1× desktop panel (215 device px fit one, not two)"],
+      [172, 113, 2.5, 339 / 2.5, "3 × 113 device px ÷ 2.5 — 320 @ 125 % zoom on a 2× PHONE (430 device px fit three)"],
       [236, 113, 2, 452 / 2, "4 × 113 device px on a 2× phone"],
       [236, 113, 3, 678 / 3, "6 × 113 device px on a 3× phone (708 device px fit six)"],
       [291, 113, 3, 791 / 3, "7 × 113 device px ÷ 3 — finer than a CSS-px snap (which would give 226)"],

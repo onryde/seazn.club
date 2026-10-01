@@ -38,7 +38,17 @@ import {
   setEntitlementOverrideSql,
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
-import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, expectWholeModuleScale, installWakeLockStub, qrModulesOf, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
+import {
+  closeQrEnlarged,
+  expectQrDecodesAsPainted,
+  expectQrEnlargedOpen,
+  expectQrEnlarges,
+  expectWholeModuleScale,
+  installWakeLockStub,
+  qrModulesOf,
+  shotQr,
+  wakeLockCounts,
+} from "../helpers/qr-enlarge";
 import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
@@ -1660,118 +1670,141 @@ test("A10: in Spanish (es) the Phone tab reads Spanish through idle → live →
 // ===========================================================================
 // A11 — the QR at 320 zoomed to 125%
 // ===========================================================================
-test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per CSS px) the QR and its paste code fit their box and the page", async ({
-  browser,
-}) => {
-  const NAVS = 1; // openPhoneTab
-  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS);
-  // Browser zoom at 125% on a 320-px screen IS a 256-CSS-px layout viewport at 1.25 device pixels per CSS px.
-  const ctx = await browser.newContext({
-    storageState: test.info().project.use.storageState as string,
-    viewport: { width: Math.round(320 / 1.25), height: 700 },
-    deviceScaleFactor: 1.25,
-  });
-  const page = await ctx.newPage();
-  try {
-    const rig = await seedRelayRig(page);
-    await addTargetApi(page, rig.orgId, { label: "A11 destination" });
-    const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
-    const body = row.locator("[data-phone-body]");
-    await streamSlot(); // this test's share of the deployment's stream capacity
-    await body.getByTestId("stream-go-live").click();
-    await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
-    // The frame is measured once it exists (its ResizeObserver): wait for the snapped size before reading the boxes —
-    // §8a's rule over the sheet's 125 % `available`, for the symbol this page paints.
-    const modules125 = await qrModulesOf(body.getByTestId("stream-qr"));
-    const want125 = snappedQr(qrSizeRow().avail125, modules125, 1.25);
-    await expect.poll(async () => (await body.getByTestId("stream-qr").boundingBox())!.width).toBeCloseTo(want125, 1);
-    const fit = await body.evaluate((b) => {
-      const r = (id: string) => b.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
-      const qr = r("stream-qr");
-      const box = r("stream-qr-box");
-      const field = r("stream-qr-field");
-      return {
-        vw: document.documentElement.clientWidth,
-        qr: { l: qr.left, r: qr.right, t: qr.top, b: qr.bottom, w: qr.width, h: qr.height },
-        box: { l: box.left, r: box.right, t: box.top, b: box.bottom },
-        field: { l: field.left, r: field.right },
-      };
+/** 320 @ 125 % zoom is a 256-CSS-px layout viewport at the SCREEN's DPR × 1.25 (the controller's 125 % ruling, option
+ *  c, 2026-10-01): a 1× desktop panel gives 1.25 — the named edge, where the inline symbol holds one device px per
+ *  module for the real payload and the enlarged view is the scan surface — and a 320-CSS-px phone, which is 2×, gives
+ *  2.5, where the inline symbol holds three (the ruling's floor). Both decode as painted. */
+const A11_SCREENS = [
+  { dpr: 1.25, screen: "a 1× desktop panel", minInline: 1, tag: "dpr1.25" },
+  { dpr: 2.5, screen: "a 2× phone", minInline: 3, tag: "dpr2.5" },
+] as const;
+for (const a11 of A11_SCREENS) {
+  test(`A11: at 320 px zoomed to 125% on ${a11.screen} (a 256-px CSS viewport at ${a11.dpr} device px per CSS px) the QR decodes as painted, and it and its paste code fit their box and the page`, async ({
+    browser,
+  }) => {
+    const NAVS = 1; // openPhoneTab
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS);
+    // Browser zoom at 125% on a 320-px screen IS a 256-CSS-px layout viewport at the screen's DPR × 1.25.
+    const ctx = await browser.newContext({
+      storageState: test.info().project.use.storageState as string,
+      viewport: { width: Math.round(320 / 1.25), height: 700 },
+      deviceScaleFactor: a11.dpr,
     });
-    expect(fit.vw, "the zoomed viewport").toBe(256);
-    test.info().annotations.push({ type: "A11 qr", description: `${fit.qr.w} CSS px at 256 CSS px (320 @ 125 %)` });
-    // §8a's QR size row (amended 2026-10-01, measured on the fixture page): the box is the row's `available`, read
-    // never typed, and the symbol is a whole number of DEVICE px per module (ruling I-2). For the real v22 payload the
-    // 172 CSS px box (215 device px) holds ONE 113-module scale — the row's 90.4 — and the enlarged view below is the
-    // remedy; the fake driver's shorter payload holds two.
-    expect(Math.abs(fit.qr.w - want125), `the sheet's rule at 320 @ 125 % for ${modules125} modules`).toBeLessThanOrEqual(0.5);
-    // The box's own content (less its `p-3` and 1-px border, twice) is the row's 125 % `available`.
-    expect(Math.abs(fit.box.r - fit.box.l - 2 * (12 + 1) - qrSizeRow().avail125), "the sheet's 125 % available").toBeLessThanOrEqual(0.5);
-    test.info().annotations.push({ type: "A11 qr modules", description: `${modules125} modules → ${fit.qr.w} CSS px` });
-    const inline = await expectWholeModuleScale(page, body.getByTestId("stream-qr"), { what: "320 @ 125 %, inline" });
-    expect(inline.dpr, "PREMISE: the zoom is a 1.25 DPR").toBe(1.25);
-    expect(Math.abs(fit.qr.w - fit.qr.h), "square").toBeLessThan(1);
-    expect(fit.qr.l, "the QR starts inside its box").toBeGreaterThanOrEqual(fit.box.l - 0.5);
-    expect(fit.qr.r, "the QR ends inside its box").toBeLessThanOrEqual(fit.box.r + 0.5);
-    expect(fit.qr.t, "the QR's top is inside its box").toBeGreaterThanOrEqual(fit.box.t - 0.5);
-    expect(fit.qr.b, "the QR's bottom is inside its box").toBeLessThanOrEqual(fit.box.b + 0.5);
-    expect(fit.box.l, "the box starts inside the viewport").toBeGreaterThanOrEqual(-0.5);
-    expect(fit.box.r, "the box ends inside the viewport").toBeLessThanOrEqual(fit.vw + 0.5);
-    expect(fit.field.l, "the paste code starts inside the viewport").toBeGreaterThanOrEqual(-0.5);
-    expect(fit.field.r, "the paste code ends inside the viewport").toBeLessThanOrEqual(fit.vw + 0.5);
-    // No box of the stream panel reaches past the viewport (the page-wide check, scoped to what this walkthrough
-    // owns). The page-level scan below is RECORDED, not asserted: at 256 CSS px the app header's icon row overflows —
-    // D-A11, the site header, not the Phone tab, ACCEPTED by the owner 2026-09-29 (not to be fixed; A1 @320 proves the
-    // page clean at 100%). Every overflowing box is listed with whether it sits inside the panel, and the panel's share
-    // must be none. Only ELIGIBLE boxes count — painted, and not inside a scroll/clip container (whose overflow is
-    // reachable or clipped, never page overflow) — so the panel count below is the number the verdict really covered.
-    const scan = await page.evaluate(() => {
-      const vw = document.documentElement.clientWidth;
-      const panel = document.querySelector('[data-testid="stream-panel"]');
-      let panelEligible = 0;
-      const over: { el: string; right: number; inPanel: boolean }[] = [];
-      for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
-        const r = el.getBoundingClientRect();
-        if (r.width <= 0 || r.height <= 0) continue;
-        let contained = false;
-        for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
-          const ox = getComputedStyle(n).overflowX;
-          if (ox === "auto" || ox === "scroll" || ox === "hidden") { contained = true; break; }
-        }
-        if (contained) continue;
-        const inPanel = !!panel && panel.contains(el);
-        if (inPanel) panelEligible++;
-        if (r.right > vw + 1) {
-          over.push({ el: `${el.tagName.toLowerCase()}.${String(el.className).trim().split(/\s+/).slice(0, 3).join(".")}`, right: Math.round(r.right), inPanel });
-        }
-      }
-      return { vw, panelEligible, over };
-    });
-    test.info().annotations.push({ type: "A11", description: `${scan.panelEligible} eligible panel box(es) scanned` });
-    expect(scan.panelEligible, "the panel's eligible boxes were scanned").toBeGreaterThan(10);
-    expect(scan.over.filter((o) => o.inPanel), "nothing in the stream panel reaches past the zoomed viewport").toEqual([]);
-    if (scan.over.length > 0) {
-      test.info().annotations.push({ type: "D-A11 accepted by owner 2026-09-29", description: JSON.stringify(scan.over.slice(0, 5)) });
-    }
-    await shot(row.getByTestId("stream-panel"), "A11-320-at-125pct-qr.png");
-    await page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), "A11-320-at-125pct-page.png") });
-    // The remedy at this zoom: one tap paints the symbol at TWO device px per module (the 224 CSS px room is 280 device
-    // px — two 113-module scales), with no Wake Lock stub in this context (the browser's own, or none).
-    await body.getByTestId("stream-qr-enlarge").click();
-    const big = await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
-    expect(big.perModule, "enlarged at 125 %: at least two device px per module").toBeGreaterThanOrEqual(2);
-    // Never smaller than inline. (For the real v22 payload it is twice inline — 180.8 against 90.4, the unit's row; the
-    // fake driver's shorter symbol already holds two device px per module inline, so here the two can be equal.)
-    expect(big.width, "enlarged is never smaller than inline").toBeGreaterThanOrEqual(inline.width);
-    await shotQr(page, page.getByTestId("qr-enlarged"), "b6r1-stream-qr-125pct-enlarged.png", 0);
-    await closeQrEnlarged(page, "stream-qr", "escape");
-  } finally {
+    const page = await ctx.newPage();
     try {
-      await teardownStreams(); // before the context goes: the stop is made as this context's signed-in owner
+      const rig = await seedRelayRig(page);
+      await addTargetApi(page, rig.orgId, { label: "A11 destination" });
+      const row = await openPhoneTab(page, rig, rig.fixtures[0]!);
+      const body = row.locator("[data-phone-body]");
+      await streamSlot(); // this test's share of the deployment's stream capacity
+      await body.getByTestId("stream-go-live").click();
+      await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+      // The frame is measured once it exists (its ResizeObserver): wait for the snapped size before reading the boxes —
+      // §8a's rule over the sheet's 125 % `available`, for the symbol this page paints.
+      const modules125 = await qrModulesOf(body.getByTestId("stream-qr"));
+      const want125 = snappedQr(qrSizeRow().avail125, modules125, a11.dpr);
+      await expect.poll(async () => (await body.getByTestId("stream-qr").boundingBox())!.width).toBeCloseTo(want125, 1);
+      const fit = await body.evaluate((b) => {
+        const r = (id: string) => b.querySelector(`[data-testid="${id}"]`)!.getBoundingClientRect();
+        const qr = r("stream-qr");
+        const box = r("stream-qr-box");
+        const field = r("stream-qr-field");
+        return {
+          vw: document.documentElement.clientWidth,
+          qr: { l: qr.left, r: qr.right, t: qr.top, b: qr.bottom, w: qr.width, h: qr.height },
+          box: { l: box.left, r: box.right, t: box.top, b: box.bottom },
+          field: { l: field.left, r: field.right },
+        };
+      });
+      expect(fit.vw, "the zoomed viewport").toBe(256);
+      test.info().annotations.push({ type: `A11 qr @ ${a11.dpr}`, description: `${fit.qr.w} CSS px at 256 CSS px (320 @ 125 % on ${a11.screen})` });
+      // §8a's QR size row (amended 2026-10-01, measured on the fixture page): the box is the row's `available`, read
+      // never typed, and the symbol is a whole number of DEVICE px per module (ruling I-2). For the real v22 payload the
+      // 172 CSS px box holds, on a 2× phone (430 device px), THREE 113-module scales — the row's 135.6 — and on a 1×
+      // desktop panel (215 device px) ONE — the row's 90.4, the edge, where the enlarged view below is the scan surface.
+      // The fake driver's shorter payload holds four and two.
+      expect(Math.abs(fit.qr.w - want125), `the sheet's rule at 320 @ 125 % for ${modules125} modules`).toBeLessThanOrEqual(0.5);
+      // The box's own content (less its `p-3` and 1-px border, twice) is the row's 125 % `available`.
+      expect(Math.abs(fit.box.r - fit.box.l - 2 * (12 + 1) - qrSizeRow().avail125), "the sheet's 125 % available").toBeLessThanOrEqual(0.5);
+      test.info().annotations.push({ type: `A11 qr modules @ ${a11.dpr}`, description: `${modules125} modules → ${fit.qr.w} CSS px` });
+      const inline = await expectWholeModuleScale(page, body.getByTestId("stream-qr"), {
+        what: `320 @ 125 % on ${a11.screen}, inline`,
+        minPerModule: a11.minInline,
+      });
+      expect(inline.dpr, `PREMISE: the zoom is a ${a11.dpr} DPR`).toBe(a11.dpr);
+      // What the browser PAINTED decodes, exactly, to the payload (the paste code is the capture payload, D10a).
+      const pasteCode = await body.getByTestId("stream-qr-text").inputValue();
+      expect(pasteCode.length, "PREMISE: a capture payload, not an empty field").toBeGreaterThan(100);
+      const painted = await expectQrDecodesAsPainted(body.getByTestId("stream-qr"), pasteCode, `320 @ 125 % on ${a11.screen}, inline`);
+      expect(Math.abs(painted.width - inline.width * a11.dpr), "the screenshot is the painted size, in device px").toBeLessThanOrEqual(2);
+      test.info().annotations.push({ type: `A11 decoded @ ${a11.dpr}`, description: `${painted.width} device px, ${inline.perModule} per module` });
+      expect(Math.abs(fit.qr.w - fit.qr.h), "square").toBeLessThan(1);
+      expect(fit.qr.l, "the QR starts inside its box").toBeGreaterThanOrEqual(fit.box.l - 0.5);
+      expect(fit.qr.r, "the QR ends inside its box").toBeLessThanOrEqual(fit.box.r + 0.5);
+      expect(fit.qr.t, "the QR's top is inside its box").toBeGreaterThanOrEqual(fit.box.t - 0.5);
+      expect(fit.qr.b, "the QR's bottom is inside its box").toBeLessThanOrEqual(fit.box.b + 0.5);
+      expect(fit.box.l, "the box starts inside the viewport").toBeGreaterThanOrEqual(-0.5);
+      expect(fit.box.r, "the box ends inside the viewport").toBeLessThanOrEqual(fit.vw + 0.5);
+      expect(fit.field.l, "the paste code starts inside the viewport").toBeGreaterThanOrEqual(-0.5);
+      expect(fit.field.r, "the paste code ends inside the viewport").toBeLessThanOrEqual(fit.vw + 0.5);
+      // No box of the stream panel reaches past the viewport (the page-wide check, scoped to what this walkthrough
+      // owns). The page-level scan below is RECORDED, not asserted: at 256 CSS px the app header's icon row overflows —
+      // D-A11, the site header, not the Phone tab, ACCEPTED by the owner 2026-09-29 (not to be fixed; A1 @320 proves the
+      // page clean at 100%). Every overflowing box is listed with whether it sits inside the panel, and the panel's share
+      // must be none. Only ELIGIBLE boxes count — painted, and not inside a scroll/clip container (whose overflow is
+      // reachable or clipped, never page overflow) — so the panel count below is the number the verdict really covered.
+      const scan = await page.evaluate(() => {
+        const vw = document.documentElement.clientWidth;
+        const panel = document.querySelector('[data-testid="stream-panel"]');
+        let panelEligible = 0;
+        const over: { el: string; right: number; inPanel: boolean }[] = [];
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>("body *"))) {
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) continue;
+          let contained = false;
+          for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+            const ox = getComputedStyle(n).overflowX;
+            if (ox === "auto" || ox === "scroll" || ox === "hidden") { contained = true; break; }
+          }
+          if (contained) continue;
+          const inPanel = !!panel && panel.contains(el);
+          if (inPanel) panelEligible++;
+          if (r.right > vw + 1) {
+            over.push({ el: `${el.tagName.toLowerCase()}.${String(el.className).trim().split(/\s+/).slice(0, 3).join(".")}`, right: Math.round(r.right), inPanel });
+          }
+        }
+        return { vw, panelEligible, over };
+      });
+      test.info().annotations.push({ type: "A11", description: `${scan.panelEligible} eligible panel box(es) scanned` });
+      expect(scan.panelEligible, "the panel's eligible boxes were scanned").toBeGreaterThan(10);
+      expect(scan.over.filter((o) => o.inPanel), "nothing in the stream panel reaches past the zoomed viewport").toEqual([]);
+      if (scan.over.length > 0) {
+        test.info().annotations.push({ type: "D-A11 accepted by owner 2026-09-29", description: JSON.stringify(scan.over.slice(0, 5)) });
+      }
+      await shot(row.getByTestId("stream-panel"), `A11-320-at-125pct-${a11.tag}-qr.png`);
+      await page.screenshot({ path: join(process.env.VISUAL_DIR ?? test.info().outputPath(), `A11-320-at-125pct-${a11.tag}-page.png`) });
+      // The inline symbol itself, cropped with its box (re-review N-4): the figure the owner is asked to judge.
+      await shotQr(page, body.getByTestId("stream-qr-box"), `b6r2-stream-qr-125pct-${a11.tag}-inline.png`, 0);
+      // One tap: at 1.25 the 224 CSS px room is 280 device px — two 113-module scales, the desktop edge's scan surface —
+      // and at 2.5 it is 560 — four; no Wake Lock stub in this context (the browser's own, or none).
+      await body.getByTestId("stream-qr-enlarge").click();
+      const big = await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
+      expect(big.perModule, "enlarged at 125 %: at least two device px per module").toBeGreaterThanOrEqual(2);
+      // Never smaller than inline. (For the real v22 payload it is twice inline — 180.8 against 90.4, the unit's row; the
+      // fake driver's shorter symbol already holds two device px per module inline, so here the two can be equal.)
+      expect(big.width, "enlarged is never smaller than inline").toBeGreaterThanOrEqual(inline.width);
+      await expectQrDecodesAsPainted(page.getByTestId("qr-enlarged-img"), pasteCode, `320 @ 125 % on ${a11.screen}, enlarged`);
+      await shotQr(page, page.getByTestId("qr-enlarged"), `b6r2-stream-qr-125pct-${a11.tag}-enlarged.png`, 0);
+      await closeQrEnlarged(page, "stream-qr", "escape");
     } finally {
-      await ctx.close(); // even when the teardown throws
+      try {
+        await teardownStreams(); // before the context goes: the stop is made as this context's signed-in owner
+      } finally {
+        await ctx.close(); // even when the teardown throws
+      }
     }
-  }
-});
+  });
+}
 
 // ===========================================================================
 // A14 / A15 — the Seazn QR (T10): the stream QR's painted size, and tap to enlarge on the stream and check-in QRs

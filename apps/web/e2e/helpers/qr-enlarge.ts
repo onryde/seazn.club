@@ -8,6 +8,16 @@
 // included) and the DPR from the page, so the expected size is the ruling's arithmetic over what the browser shows.
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import jsQR from "jsqr";
+import sharp from "sharp";
+// The overlay's DECLARED layout (each pinned to its class in `QrEnlargedView` by the unit test): the room the caption and
+// the ✕ take on a near-square screen, where D10's own figure cannot stand (review m-2, re-review N-3).
+import {
+  QR_ENLARGE_CAPTION_H_PX,
+  QR_ENLARGE_CAPTION_W_PX,
+  QR_ENLARGE_CLOSE_BAND_PX,
+  QR_ENLARGE_GAP_PX,
+} from "../../src/lib/qr-enlarge";
 
 /** D10's gutter, from the ruling's own words ("minus a 16 px gutter"), never `QR_ENLARGE_GUTTER_PX`. */
 const RULING_GUTTER_PX = 16;
@@ -51,11 +61,24 @@ export async function expectWholeModuleScale(
   return { width: box.width, modules, dpr, perModule: Math.round(perModule) };
 }
 
+/** The painted QR as a camera on that screen sees it: an element screenshot at DEVICE px, read back by jsQR, must be
+ *  EXACTLY `expected` (the 125 % ruling, option c: a decode of what the browser painted, not of a raster the test drew).
+ *  Returns the screenshot's size in device px. */
+export async function expectQrDecodesAsPainted(img: Locator, expected: string, what: string): Promise<{ width: number; height: number }> {
+  const png = await img.screenshot({ scale: "device", animations: "disabled" });
+  const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  expect(info.channels, `${what}: the screenshot is RGBA`).toBe(4);
+  const got = jsQR(new Uint8ClampedArray(data.buffer, data.byteOffset, data.length), info.width, info.height)?.data ?? null;
+  expect(got, `${what}: the ${info.width}×${info.height} device-px screenshot decodes to the paste code`).toBe(expected);
+  return { width: info.width, height: info.height };
+}
+
 /** The open overlay's checks: a named modal dialog, the replay block where the QR is sensitive (on the overlay ROOT,
  *  the enlarged image AND the inline one), the ruling's size snapped to whole device px per module, wholly inside the
  *  viewport with its caption, clear of the ✕, the ✕ ≥ 44 px and focused. `nearSquare`: a viewport where the caption's
  *  own room (beside it in landscape, under it in portrait) or the ✕'s band is what bounds the QR, so it is BELOW
- *  D10's figure — there the checks are the fit, the whole scale and no overlap (review m-2). */
+ *  D10's figure — there the size is that room, snapped, EXACTLY (re-review N-3: a bound on one side only let a QR one
+ *  scale too small pass), and the checks are the fit, the whole scale and no overlap (review m-2). */
 export async function expectQrEnlargedOpen(page: Page, testId: string, opts: { sensitive: boolean; nearSquare?: boolean }): Promise<QrEnlargedBox> {
   const overlay = page.getByTestId("qr-enlarged");
   await expect(overlay).toBeVisible();
@@ -81,9 +104,18 @@ export async function expectQrEnlargedOpen(page: Page, testId: string, opts: { s
       .poll(async () => (await img.boundingBox())!.width, { message: `the enlarged QR is min(${vw}, ${vh}) − 32 snapped to ${modules}-module scales at ${dpr}×` })
       .toBeCloseTo(want, 1);
   } else {
+    // The overlay's own layout: landscape puts the caption beside the QR (its width and the gap come off vw), portrait
+    // and square stack it under (its two lines, the gap and the ✕'s band top and bottom come off vh).
+    const g = 2 * RULING_GUTTER_PX;
+    const room2 =
+      vw > vh
+        ? Math.min(vh - g, vw - g - QR_ENLARGE_GAP_PX - QR_ENLARGE_CAPTION_W_PX)
+        : Math.min(vw - g, vh - 2 * QR_ENLARGE_CLOSE_BAND_PX - QR_ENLARGE_GAP_PX - QR_ENLARGE_CAPTION_H_PX);
+    const reserved = (modules * Math.floor((room2 * dpr) / modules)) / dpr;
+    expect(reserved, `${vw}×${vh}: PREMISE — a near-square screen, where the caption's room binds below D10's figure`).toBeLessThan(want);
     await expect
-      .poll(async () => (await img.boundingBox())!.width, { message: `${vw}×${vh}: the QR gives the caption its room` })
-      .toBeLessThan(want);
+      .poll(async () => (await img.boundingBox())!.width, { message: `${vw}×${vh}: the QR gives the caption its room (${reserved})` })
+      .toBeCloseTo(reserved, 1);
   }
   const box = (await img.boundingBox())!;
   expect(Math.abs(box.width - box.height), "square").toBeLessThan(1);

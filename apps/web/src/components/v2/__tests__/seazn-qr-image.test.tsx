@@ -68,11 +68,16 @@ describe("SeaznQrImage / QrEnlargedView — D10, and the replay block (review R2
     expect(html).not.toContain('data-testid="qr-enlarged"'); // closed renders no overlay
   });
 
-  it("the caller's classes reach the inline image untouched; before the box is measured it paints its cap, SNAPPED", () => {
+  it("no caller class reaches the snapped image (re-review N-1); before the box is measured it paints its cap, SNAPPED", () => {
+    // A padding or a border on the <img> would shrink its content box under the snapped size and break the whole
+    // device px per module silently, so the prop does not exist: tsc refuses it (the directive below fails the type
+    // check the day `className` comes back), and at runtime the image's classes are exactly the component's own.
     const html = render(
-      <SeaznQrImage testId="checkin-qr" sensitive qr={{ src: "data:image/svg+xml,x", modules: 89 }} alt="QR" maxSize={288} className="rounded-lg" />,
+      // @ts-expect-error — SeaznQrImage takes no className: its box is the component's (re-review N-1).
+      <SeaznQrImage testId="checkin-qr" sensitive qr={{ src: "data:image/svg+xml,x", modules: 89 }} alt="QR" maxSize={288} className="p-2 border" />,
     );
-    expect(html).toMatch(/data-testid="checkin-qr"[^>]*class="ph-no-capture mx-auto block rounded-lg"/);
+    expect(html).toMatch(/data-testid="checkin-qr"[^>]*class="ph-no-capture mx-auto block"/);
+    expect(html, "the caller's box-model classes are nowhere on the image").not.toMatch(/data-testid="checkin-qr"[^>]*class="[^"]*\b(p-2|border)\b/);
     // 288 holds three 89-module scales (267) and not four (356): the size is 3 × 89, never the cap itself.
     expect(html).toMatch(/data-testid="checkin-qr"[^>]*style="width:267px;height:267px"/);
   });
@@ -530,6 +535,32 @@ describe("the painted size — the measured box snapped to whole device px per m
     island.unmount();
     expect(m.ros[0]!.disconnected, "the observer is let go").toBe(true);
     expect(m.listeners.has("resize"), "the resize listener is removed").toBe(false);
+  });
+
+  it("no ResizeObserver (a very old browser, re-review N-2): the frame is read once on mount and on every window resize — never the cap painted unmeasured past a narrower box", () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const listeners = new Map<string, Listener>();
+    const win = {
+      devicePixelRatio: 1,
+      addEventListener: (t: string, l: Listener) => listeners.set(t, l),
+      removeEventListener: (t: string, l: Listener) => {
+        if (listeners.get(t) === l) listeners.delete(t);
+      },
+    };
+    vi.stubGlobal("window", win);
+    let width = 236;
+    const el = { getBoundingClientRect: () => ({ width }) };
+    const island = renderIsland(SeaznQrImage, base);
+    const size = () => widthOf(byTestId(island.tree(), "stream-qr"));
+    expect(size(), "before the frame exists: the cap, snapped").toBe(339);
+    (propsOf(frameOf(island.tree())).ref as (el: unknown) => void)(el);
+    expect(size(), "236 at 320, read on mount with no observer: 2 × 113, not the 339 cap past the box").toBe(226);
+    expect(listeners.has("resize"), "a window resize listener, observer or not").toBe(true);
+    width = 500;
+    listeners.get("resize")!({});
+    expect(size(), "a window resize re-reads it").toBe(339);
+    island.unmount();
+    expect(listeners.has("resize"), "the resize listener is removed").toBe(false);
   });
 
   it("the enlarged overlay paints the SAME symbol the inline image does (src and module count, not a re-encode)", () => {

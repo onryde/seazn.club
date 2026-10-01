@@ -15,7 +15,7 @@ import { resolve } from "node:path";
 import jsQR from "jsqr";
 import QRCode from "qrcode";
 import sharp from "sharp";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CaptureQrV1 } from "@/lib/capture-qr";
 import { routes } from "@/lib/routes";
 import { qrText } from "@/lib/stream-session-view";
@@ -23,17 +23,26 @@ import { MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS } from "@/se
 import { relayTokenExpiry } from "@/server/relay/tokens";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { endOfLocalDay, mintDeviceLinkSecret } from "@/server/usecases/device-links";
+import { renderScorerSheetPdf } from "@/server/scorer-sheet-pdf";
+import { header as sheetHeader, model as sheetModel, row as sheetRow, useBrandFonts } from "@/server/__tests__/_sheet-fixtures";
+import { pdfImages, pdfLinks } from "../../../e2e/pdf-uris";
 import {
   SEAZN_QR_ERROR_CORRECTION,
   SEAZN_QR_ICON_FRACTION,
   SEAZN_QR_ICON_PAD_MODULES,
+  SEAZN_QR_LOGO_PATH,
   SEAZN_QR_QUIET_MODULES,
   seaznQrLayout,
   seaznQrModules,
   seaznQrSvg,
 } from "../seazn-qr";
 
-const LOGO = `data:image/png;base64,${readFileSync(resolve(import.meta.dirname, "../../../public/logo-square.png")).toString("base64")}`;
+/** The public file at a site path — what the browser's fetch of that path returns. */
+const publicFile = (path: string) => readFileSync(resolve(import.meta.dirname, "../../../public", `.${path}`));
+/** The icon the page REALLY embeds: the file at the helper's declared path, never a copy named here (review m-8). */
+const LOGO = `data:image/png;base64,${publicFile(SEAZN_QR_LOGO_PATH).toString("base64")}`;
+/** Spec §7's logo and the printed sheets' (`scorer-sheet-pdf.ts` reads the same file). */
+const SHEET_LOGO_PATH = "/logo-square.png";
 const THEMES_PATH = resolve(import.meta.dirname, "../../../../../docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md");
 const DLINK_PANEL_PATH = resolve(import.meta.dirname, "../../components/v2/device-link-panel.tsx");
 const CHECKIN_PATH = resolve(import.meta.dirname, "../../components/v2/checkin-qr.tsx");
@@ -139,19 +148,48 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
     expect(seaznQrModules(DLINK)).toBe(QRCode.create(DLINK, { errorCorrectionLevel: "H" }).modules.size + 2 * SEAZN_QR_QUIET_MODULES);
   });
 
-  it("the logo's size is the printed sheets' (review m-4): 0.22 of the symbol and a 1-module pad — from drawBrandQr's own constants", () => {
-    const sheet = readFileSync(SHEET_PDF_PATH, "utf8");
-    const mmPerPt = /const MM = 72 \/ 25\.4;/.test(sheet);
-    expect(mmPerPt, "scorer-sheet-pdf.ts still measures in points per millimetre").toBe(true);
-    const iconMm = Number(/const ICON = (\d+(?:\.\d+)?) \* MM;/.exec(sheet)?.[1]);
-    const iconPad = Number(/const ICON_PAD = (\d+);/.exec(sheet)?.[1]);
-    expect(iconMm, "drawBrandQr's ICON").toBe(12);
-    expect(SEAZN_QR_ICON_PAD_MODULES, "the white pad round the icon, in modules — drawBrandQr's ICON_PAD").toBe(iconPad);
-    // drawBrandQr prints a 12 mm icon (34.0 pt) on a symbol of about 152 pt (the sheet card's QR, :82-83 and :304-344):
-    // 34.0 / 152 = 0.224, which the screen helper states as 0.22 of the symbol.
-    const SHEET_SYMBOL_PT = 152;
-    expect(SEAZN_QR_ICON_FRACTION).toBe(Math.floor(((iconMm * 72) / 25.4 / SHEET_SYMBOL_PT) * 100) / 100);
-    expect(SEAZN_QR_ICON_FRACTION, "spec §7").toBe(0.22);
+  // Review m-4 (minor tail): nothing typed. The icon's side is the sheet's own declared `ICON`, checked against the icon
+  // a REAL sheet prints; the symbol it sits on is measured off that sheet; the screen's fraction is §8a's binding row.
+  // The brief's "12 mm on a ~152 pt symbol ≈ 0.22" was a false premise: a real Remote scoring link prints a v8 symbol of
+  // about 132 pt under the default header (12 mm = 0.26 of it) and 108 pt under the tallest one (0.31). So the screen's
+  // 0.22 is NOT the print's ratio — it is pinned to §8a, and held at or under the print's, where the knock-out is
+  // proven to decode in every print condition (`scorer-sheet-pdf.test.ts`, `_sheet-raster.ts`).
+  describe("the logo's size against the printed sheets' (review m-4)", () => {
+    beforeAll(useBrandFonts);
+    it("§8a's fraction, the sheet's own ICON and ICON_PAD — and never a larger knock-out than a real printed sheet's", async () => {
+      const source = readFileSync(SHEET_PDF_PATH, "utf8");
+      expect(/const MM = 72 \/ 25\.4;/.test(source), "scorer-sheet-pdf.ts still measures in points per millimetre").toBe(true);
+      const iconMm = Number(/const ICON = (\d+(?:\.\d+)?) \* MM;/.exec(source)?.[1]);
+      const iconPad = Number(/const ICON_PAD = (\d+);/.exec(source)?.[1]);
+      expect(iconMm, "drawBrandQr declares its ICON in millimetres").toBeGreaterThan(0);
+      expect(SEAZN_QR_ICON_PAD_MODULES, "the white pad round the icon, in modules — drawBrandQr's ICON_PAD").toBe(iconPad);
+      const encodingRow = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR encoding |"));
+      const bound = /the icon covers ([\d.]+) of the symbol/.exec(encodingRow ?? "");
+      expect(bound, "§8a's QR encoding row states the icon's fraction").not.toBeNull();
+      expect(SEAZN_QR_ICON_FRACTION, "§8a's QR encoding row").toBe(Number(bound![1]));
+      const tallHeader = {
+        ...sheetHeader,
+        title: "Northern Counties Inter-Club Badminton Championships — Autumn Series Finals 2026",
+        branding: { orgName: "Riverside Shuttlers", logos: [] },
+      };
+      const ratios: string[] = [];
+      let checked = 0;
+      for (const [name, h] of [["default header", sheetHeader], ["tallest header", tallHeader]] as const) {
+        // A real Remote scoring link on every card: the sheet prints the same `/score/<secret>` URL the panel does.
+        const pdf = await renderScorerSheetPdf({ ...sheetModel([[1, 2, 3].map((i) => sheetRow(i, { url: DLINK }))]), header: h });
+        const icons = pdfImages(pdf);
+        const symbols = pdfLinks(pdf);
+        expect(icons.length, `${name}: one icon per card`).toBe(symbols.length);
+        for (const [i, symbol] of symbols.entries()) {
+          expect(icons[i]!.width, `${name}: the printed icon IS the declared ICON`).toBeCloseTo((iconMm * 72) / 25.4, 2);
+          const ratio = icons[i]!.width / symbol.width;
+          ratios.push(`${name} ${symbol.width.toFixed(1)} pt → ${ratio.toFixed(3)}`);
+          expect(SEAZN_QR_ICON_FRACTION, `${name}: the screen knocks out no more than the print (${ratios.at(-1)})`).toBeLessThanOrEqual(ratio);
+          checked++;
+        }
+      }
+      expect(checked, ratios.join("; ")).toBe(6);
+    });
   });
 
   it("the knock-out is the smallest ODD square holding the icon plus its pad, centred (scorer-sheet-pdf geometry)", () => {
@@ -235,7 +273,9 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
       cases.push({ name: "Remote scoring @ its cap", text: DLINK, box: dlinkCap, dpr });
       cases.push({ name: "check-in @ its cap", text: CHECKIN, box: checkinCap, dpr });
     }
-    cases.push({ name: "stream @ 320 @ 125 % zoom", text: STREAM_PAYLOAD, box: avail125, dpr: 1.25 });
+    // 320 @ 125 % zoom: on a 1× desktop panel (DPR 1.25, the edge) and on a phone (a 320-CSS-px phone is 2×, so 2.5).
+    cases.push({ name: "stream @ 320 @ 125 % zoom, 1× desktop panel", text: STREAM_PAYLOAD, box: avail125, dpr: 1.25 });
+    cases.push({ name: "stream @ 320 @ 125 % zoom, phone", text: STREAM_PAYLOAD, box: avail125, dpr: 2.5 });
     for (const box of enlarged) {
       cases.push({ name: `stream enlarged ${box}`, text: STREAM_PAYLOAD, box, dpr: 1 });
       cases.push({ name: `Remote scoring enlarged ${box}`, text: DLINK, box, dpr: 1 });
@@ -253,7 +293,7 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
       checked++;
     }
     expect(misses, "every painted size decodes exactly — no tolerance window").toEqual([]);
-    expect(checked).toBe(3 * 4 + 1 + 3 * enlarged.length);
+    expect(checked).toBe(3 * 4 + 2 + 3 * enlarged.length);
     expect(seen.size, "the rows are distinct sizes, not one size checked many times").toBeGreaterThan(15);
   });
 
@@ -277,28 +317,33 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
     const modules = seaznQrModules(STREAM_PAYLOAD);
     expect(modules, "premise: today's capture payload is v22 — 105 modules and the quiet zone").toBe(113);
     expect(row).toContain(`${modules} for today's v22 payload`);
-    // [painted, available, DPR, where]
-    const figures: [RegExp, RegExp, number][] = [
-      [/\*\*([\d.]+) CSS px at 1280\*\*/, /min\((\d+)px, available\)/, 1],
-      [/\*\*([\d.]+) CSS px at 320 \(fixture page\)\*\*/, /of an `available` of \*\*(\d+)\*\* at 320 \(fixture page\)/, 1],
-      [/\*\*([\d.]+) CSS px at 320 @ 125 % zoom \(fixture page\)\*\*/, /of an `available` of \*\*(\d+)\*\* at 320 @ 125 % zoom/, 1.25],
+    // [painted, available, DPR, the floor in device px per module]
+    const figures: [RegExp, RegExp, number, number][] = [
+      [/\*\*([\d.]+) CSS px at 1280\*\*/, /min\((\d+)px, available\)/, 1, 3],
+      [/\*\*([\d.]+) CSS px at 320 \(fixture page\)\*\*/, /of an `available` of \*\*(\d+)\*\* at 320 \(fixture page\)/, 1, 2],
+      // The 125 % controller ruling (option c): a PHONE at 125 % is DPR 2.5 and holds three px per module…
+      [/\*\*([\d.]+) CSS px at 320 @ 125 % zoom on a phone \(DPR 2\.5\)\*\*/, /of an `available` of \*\*(\d+)\*\* at 320 @ 125 % zoom/, 2.5, 3],
+      // …and the 1× desktop panel's DPR 1.25 is the edge: one px per module inline, the enlarged view its scan surface.
+      [/\*\*([\d.]+) CSS px at 320 @ 125 % zoom on a 1× desktop panel \(DPR 1\.25\)\*\*/, /of an `available` of \*\*(\d+)\*\* at 320 @ 125 % zoom/, 1.25, 1],
     ];
     let checked = 0;
-    for (const [paintedRe, availRe, dpr] of figures) {
+    for (const [paintedRe, availRe, dpr, floor] of figures) {
       const painted = Number(paintedRe.exec(row)?.[1]);
       const available = Number(availRe.exec(row)?.[1]);
       expect(painted, String(paintedRe)).toBeGreaterThan(0);
-      expect(painted, `${painted} of ${available} @ ${dpr}×`).toBeCloseTo((modules * Math.floor((available * dpr) / modules)) / dpr, 1);
+      const k = Math.floor((available * dpr) / modules);
+      expect(painted, `${painted} of ${available} @ ${dpr}×`).toBeCloseTo((modules * k) / dpr, 1);
+      expect(k, `${painted} CSS px @ ${dpr}×: device px per module`).toBeGreaterThanOrEqual(floor);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
   });
 });
 
 describe("renderSeaznQr — the data URL the three call sites paint (the icon fetched once per page)", () => {
   /** A fresh module (its once-per-page cache starts empty) over a stubbed `fetch` and `FileReader` — node has no
    *  FileReader, and the icon's real bytes are what the browser would embed. */
-  async function fresh(fetchImpl: () => Promise<Response>) {
+  async function fresh(fetchImpl: (input: string) => Promise<Response>) {
     vi.resetModules();
     const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(fetchImpl);
     vi.stubGlobal("fetch", fetchMock);
@@ -323,14 +368,15 @@ describe("renderSeaznQr — the data URL the three call sites paint (the icon fe
     expect(url).toMatch(/^data:image\/svg\+xml;charset=utf-8,/);
     return decodeURIComponent(url.slice("data:image/svg+xml;charset=utf-8,".length));
   };
-  const png = () => new Response(new Blob([readFileSync(resolve(import.meta.dirname, "../../../public/logo-square.png"))], { type: "image/png" }));
+  /** What the browser's fetch of a site path answers: the public file's real bytes. */
+  const png = (path: string = SEAZN_QR_LOGO_PATH) => new Response(new Blob([publicFile(path)], { type: "image/png" }));
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("the icon is fetched ONCE for every QR on the page, from the logo path, and embedded as a data URL; each QR carries its module count", async () => {
-    const { mod, fetchMock } = await fresh(async () => png());
+    const { mod, fetchMock } = await fresh(async (path) => png(path));
     const texts = [STREAM_PAYLOAD, DLINK, CHECKIN];
     const qrs = [];
     for (const text of texts) qrs.push(await mod.renderSeaznQr(text));
@@ -388,5 +434,34 @@ describe("renderSeaznQr — the data URL the three call sites paint (the icon fe
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("the data URL each QR paints carries the 192-px icon, not the 512-px logo — under 40 % of its weight (review m-8)", async () => {
+    // Measured through the real path: the page's fetch answered with the public file at the declared path, against the
+    // same symbol drawn with spec §7's 512-px logo-square.png (the printed sheets' file).
+    const { mod } = await fresh(async (path) => png(path));
+    const sheetLogo = `data:image/png;base64,${publicFile(SHEET_LOGO_PATH).toString("base64")}`;
+    const sizes: string[] = [];
+    let checked = 0;
+    for (const [name, text] of [["stream", STREAM_PAYLOAD], ["check-in", CHECKIN], ["Remote scoring", DLINK]] as const) {
+      const painted = (await mod.renderSeaznQr(text)).src.length;
+      const heavy = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(seaznQrSvg(text, { logoHref: sheetLogo }))}`.length;
+      sizes.push(`${name} ${(painted / 1000).toFixed(1)} kB (was ${(heavy / 1000).toFixed(1)})`);
+      expect(painted, `${name}: ${sizes.at(-1)}`).toBeLessThan(0.4 * heavy);
+      checked++;
+    }
+    expect(checked, sizes.join("; ")).toBe(3);
+  });
+
+  it("the 192-px icon IS the sheets' logo, downscaled — the same artwork, so the screen and the print carry one mark", async () => {
+    const small = await sharp(publicFile(SEAZN_QR_LOGO_PATH)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const big = await sharp(publicFile(SHEET_LOGO_PATH)).resize(small.info.width, small.info.height).ensureAlpha().raw().toBuffer();
+    expect(small.info.width, "a square icon").toBe(small.info.height);
+    expect(small.info.width, "smaller than the sheet's logo, or the swap saved nothing").toBeLessThan((await sharp(publicFile(SHEET_LOGO_PATH)).metadata()).width!);
+    expect(big.length).toBe(small.data.length);
+    let diff = 0;
+    for (let i = 0; i < big.length; i++) diff += Math.abs(big[i]! - small.data[i]!);
+    // Resampling alone differs by under one level in 255 on average; a different picture differs by tens.
+    expect(diff / big.length, "mean per-channel difference, in levels of 255").toBeLessThan(2);
   });
 });

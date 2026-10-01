@@ -1,6 +1,8 @@
 // lib/seazn-qr.ts — every QR carries the Seazn logo (owner ruling D7, a standing rule; spec 2026-09-30 §7). Error
-// correction H, the app icon centred over a knocked-out square — the geometry scorer-sheet-pdf.ts drawBrandQr prints
-// (ICON 12 mm on a ~152 pt symbol ≈ 0.22 of the symbol; 1-module white pad; the smallest odd knock-out that holds both).
+// correction H, the app icon centred over a knocked-out square — the knock-out geometry scorer-sheet-pdf.ts drawBrandQr
+// prints (a 1-module white pad; the smallest odd square that holds the icon and its pad). The icon covers 0.22 of the
+// symbol, §8a's `QR encoding` row: a SMALLER share than the print's, whose 12 mm icon is 0.26 of the ~132 pt symbol a
+// real Remote scoring link prints (0.31 under the tallest header) — measured off a rendered sheet, B6 minor tail m-4.
 // This branch: the stream capture QR, the Remote scoring QR, the check-in QR. The other six follow in their own PR.
 // Exceptions: none yet. (If the real-phone scan of the stream QR fails — T10 Step 6 — it is recorded HERE.)
 import QRCode from "qrcode";
@@ -9,7 +11,12 @@ export const SEAZN_QR_ERROR_CORRECTION = "H" as const;
 export const SEAZN_QR_QUIET_MODULES = 4;
 export const SEAZN_QR_ICON_FRACTION = 0.22;
 export const SEAZN_QR_ICON_PAD_MODULES = 1;
-export const SEAZN_QR_LOGO_PATH = "/logo-square.png";
+/** The 192-px app icon — the same artwork as spec §7's 512-px `logo-square.png` (the printed sheets' file), downscaled,
+ *  and pinned to it pixel for pixel in the test. Embedded in every QR's data URL, so its weight is each QR's: the
+ *  512-px logo made a 258–291 kB data URL, this one 58–91 kB (B6 minor tail m-8, measured on the real payloads). The largest icon painted is ≈ 139
+ *  CSS px (enlarged at 1280 on a 1× screen), so 192 holds it at 1×; on a 2× screen enlarged it upsamples ≈ 1.6×, which
+ *  softens the dressing and touches no module. */
+export const SEAZN_QR_LOGO_PATH = "/icons/icon-192.png";
 const INK = "#150b36"; // --mk-night: the sheets' navy, dark enough for every decoder
 
 /** Where the logo goes on an n-module symbol: the icon's edge (`icon`, in modules), the knock-out square's edge (`k`,

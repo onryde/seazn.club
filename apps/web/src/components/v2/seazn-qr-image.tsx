@@ -26,22 +26,24 @@ const CAPTION_CLASS = "mt-1 text-center text-xs text-slate-600";
 
 /** The frame's width and the screen's DPR, kept current. The ResizeObserver announces the first size itself (before
  *  the first paint) and every change of the box after it; the window's resize announces a zoom or a move to another
- *  screen, which changes the DPR and not always the box. With no ResizeObserver (a very old browser) nothing is
- *  measured and the QR paints its cap, snapped, inside `max-width: 100%`. */
+ *  screen, which changes the DPR and not always the box. With no ResizeObserver (a very old browser) the frame is read
+ *  once here, in the layout effect — so before the first paint — and again on every window resize: the QR never
+ *  paints its cap unmeasured past a narrower box (re-review N-2). */
 function useFrame(frame: HTMLElement | null): { width: number; dpr: number } | null {
   const [box, setBox] = useState<{ width: number; dpr: number } | null>(null);
   useLayoutEffect(() => {
-    if (!frame || typeof ResizeObserver !== "function") return;
+    if (!frame) return;
     const read = () => {
       const width = frame.getBoundingClientRect().width;
       const dpr = window.devicePixelRatio || 1;
       setBox((b) => (b && b.width === width && b.dpr === dpr ? b : { width, dpr }));
     };
-    const ro = new ResizeObserver(read);
-    ro.observe(frame);
+    const ro = typeof ResizeObserver === "function" ? new ResizeObserver(read) : null;
+    if (ro) ro.observe(frame);
+    else read();
     window.addEventListener("resize", read);
     return () => {
-      ro.disconnect();
+      ro?.disconnect();
       window.removeEventListener("resize", read);
     };
   }, [frame]);
@@ -61,16 +63,15 @@ export function SeaznQrImage({
   testId,
   sensitive,
   maxSize,
-  className,
 }: {
   qr: SeaznQr;
   alt: string;
   testId: string;
   sensitive: boolean;
-  /** The largest CSS px this QR may paint at; the frame it sits in may give it less. Snapped either way. */
+  /** The largest CSS px this QR may paint at; the frame it sits in may give it less. Snapped either way. There is
+   *  deliberately no `className`: a caller's padding or border on the image would shrink its content box under the
+   *  snapped size and break the whole device px per module (re-review N-1). Decorate the host around it instead. */
   maxSize: number;
-  /** Decoration only (a border, a radius): the size is the component's. */
-  className?: string;
 }) {
   const msg = useMsg();
   const [open, setOpen] = useState(false);
@@ -95,7 +96,7 @@ export function SeaznQrImage({
           data-testid={testId}
           src={qr.src}
           alt={alt}
-          className={[qrCaptureClass(sensitive), "mx-auto block", className].filter(Boolean).join(" ")}
+          className={[qrCaptureClass(sensitive), "mx-auto block"].filter(Boolean).join(" ")}
           style={{ width: size, height: size }}
         />
       </button>
