@@ -1,7 +1,8 @@
 "use client";
 // One relay session per fixture page (spec 2026-09-30 §2, T9b): the Stream button's dot, the Phone tab and the stop probe
 // read the SAME session, so they can never disagree and the page never runs two `current` polls. FixtureConsole mounts
-// the provider whenever it mounts Stream; everything below it reads `useSharedPhoneSession`.
+// the provider ALWAYS (a stable root — B5 review m-1) with `enabled` following its stream mount: no stream on the page,
+// no read and no poll. Everything below it reads `useSharedPhoneSession`.
 //
 // `usePhoneSession` moved here from fixture-stream-panel.tsx unchanged but for its options (`enabled`, `initialView`):
 // the panel imports it from here, so the provider importing the panel would have been a cycle.
@@ -16,7 +17,8 @@ import { apiV1 } from "@/lib/client-v1";
 import { STREAM_POLL_MS, phoneTabState, type StreamSessionView } from "@/lib/stream-session-view";
 
 export interface PhoneSessionOptions {
-  /** false: no read, no poll, no clock — a reader under a provider for the same fixture. Default true. */
+  /** false: no read, no poll, no clock — a reader under a provider for the same fixture, or the console's provider on a
+   *  page with no stream mount. Flipping it to true (a stream mount arriving on a refresh) reads at once. Default true. */
   enabled?: boolean;
   /** Seeds the view (and counts as loaded). A unit-test seam ONLY: the server never passes it. */
   initialView?: StreamSessionView | null;
@@ -36,7 +38,9 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
   const msg = useMsg();
   // B5 review m-1: the console mounts the provider on EVERY fixture page, disabled when there is no stream. A disabled
   // session never asks, so it needs no dialog (the console's node harnesses render none); an enabled one fails fast
-  // without it, as `useConfirm()` would. Asked anyway, a disabled one DECLINES — never a stop without a confirmation.
+  // without it, as `useConfirm()` would. With NO dialog in the tree, a session asked to stop declines — never a stop
+  // without a confirmation. (Under the root layout's dialog a disabled hook would ask like any other; none is exposed:
+  // the provider hands out `outer` when it does not own, and `useSharedPhoneSession` returns the match.)
   const dialog = useConfirm({ optional: true });
   if (enabled && !dialog) throw new Error("useConfirm needs <ConfirmProvider> in the tree");
   const confirm = dialog ?? (async () => false);

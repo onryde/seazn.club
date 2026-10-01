@@ -101,14 +101,16 @@ describe("SignalChain (spec §3.2)", () => {
 
   // B5 review m-3: in Live the picker is gone, so the chain's destination node is the only place the panel names the
   // destination at ≥768 — a truncated "YouTube · Riverside Badminto…" names nothing. The destination's name WRAPS there
-  // (never truncates, never overflows); the Phone and Seazn names are fixed short words and keep their one line.
-  it("m-3: the destination's name wraps in full at ≥768 — no truncate on it; Phone and Seazn keep theirs", () => {
+  // (never overflows); below 768 it keeps `truncate`, where it is the platform alone and the label has its own line.
+  // The Phone and Seazn names are fixed short words and keep their one line at every width.
+  it("m-3: the destination's name truncates only below 768 and wraps in full at ≥768; Phone and Seazn keep one line", () => {
     const label = "Riverside Badminton Club — Saturday Senior League Channel";
     const html = chainHtml(chainFor(null)!, { kind: "youtube", label });
     const dest = /<span data-testid="stream-chain-dest-name" class="([^"]*)">/.exec(html);
     expect(dest, "the destination's name element").not.toBeNull();
     const cls = ` ${dest![1]} `;
-    expect(cls, "wraps at ≥768").toContain(" md:whitespace-normal ");
+    expect(cls, "below 768: one line (the platform alone)").toContain(" truncate ");
+    expect(cls, "≥768: the truncate's nowrap is lifted").toContain(" md:whitespace-normal ");
     expect(cls, "…breaking a long word rather than overflowing").toContain(" md:[overflow-wrap:anywhere] ");
     expect(html).toContain(`<span class="max-md:hidden">YouTube · ${label}</span>`);
     const truncated = [...html.matchAll(/<span class="mt-2 max-w-full truncate[^"]*">([^<]*)<\/span>/g)].map((m) => m[1]);

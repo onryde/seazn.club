@@ -1096,6 +1096,24 @@ for (const width of [320, 1280] as const) {
     expect(early, "the warning did not show before the 30 s line").toEqual([]);
     expect(nearSamples, "the hold saw the last polls under the line ON SCREEN (zero would be a hold that ended early)").toBeGreaterThan(0);
     await expect(warning, "the first answer at the line puts the warning on screen").toHaveCount(1, { timeout: POLL_WAIT_MS });
+    // ONE WALL-CLOCK ANCHOR (B5 re-review N-1). The hold above judges the page by the server's own elapsed, so a server
+    // that stopped clamping `since` to live_at (review #9: the destination reads non-ok all through warming) would warn
+    // ~10 s early and still look "at the line". The live transition happened after the last NOT-live answer landed, so:
+    // the first answer at the line lands no earlier than 30 s of real time after it, and no live answer claims more
+    // elapsed than the wall clock since it (RENDER_MS of slack for the parse).
+    const byArrival = [...answers].sort((x, y) => x.at - y.at);
+    const firstLiveIx = byArrival.findIndex((x) => x.live);
+    const lastNotLive = firstLiveIx > 0 ? byArrival[firstLiveIx - 1] : undefined;
+    expect(lastNotLive, "premise: the page read the session before it went live").toBeDefined();
+    const firstAtLine = byArrival.find(atTheLine)!;
+    const liveToLine = byArrival.filter((x) => x.live && x.elapsedMs !== null && x.at <= firstAtLine.at);
+    const overClaims = liveToLine
+      .filter((x) => x.elapsedMs! > x.at - lastNotLive!.at + RENDER_MS)
+      .map((x) => `elapsed ${x.elapsedMs} ms, ${x.at - lastNotLive!.at} ms of wall clock after the last not-live answer`);
+    test.info().annotations.push({ type: "d3-wall-clock", description: `@${width}: line reached ${firstAtLine.at - lastNotLive!.at} ms after the last not-live answer; first live elapsed ${liveToLine[0]?.elapsedMs} ms; ${liveToLine.length} live answers checked` });
+    expect(liveToLine.length, "live answers checked against the wall clock (zero is vacuous)").toBeGreaterThan(0);
+    expect.soft(firstAtLine.at - lastNotLive!.at, "wall clock: the 30 s line is not reached before 30 s of real time after the live transition").toBeGreaterThanOrEqual(OUTPUT_WARNING_AFTER_MS - RENDER_MS);
+    expect.soft(overClaims, "no live answer claims more elapsed than the wall clock since the transition").toEqual([]);
     await expect(warning).toBeVisible();
     await expect(warning).toHaveAttribute("role", "status");
     await expect(warning).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));

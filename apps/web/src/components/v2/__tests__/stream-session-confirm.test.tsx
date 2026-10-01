@@ -1,8 +1,8 @@
 // B5 review m-1: the console mounts the stream session provider on EVERY fixture page, `enabled` only when the page has a
 // stream. A disabled session never asks the confirm dialog anything, so it must not demand one — the console's node
 // harnesses render it without a `<ConfirmProvider>`, exactly as before the provider was unconditional. An ENABLED
-// session still fails fast without the dialog (Stop on air is always confirmed), and a disabled one that is somehow
-// asked to stop declines rather than stopping unconfirmed.
+// session still fails fast without the dialog (Stop on air is always confirmed), and with no dialog a session that is
+// somehow asked to stop declines rather than stopping unconfirmed — the missing dialog decides that, not `enabled`.
 //
 // This file deliberately does NOT mock `@/components/ui/confirm-provider` — the real context is what is under test.
 // One sport is not a question here: the session reads no sport.
@@ -49,7 +49,7 @@ describe("the session's confirm dialog — needed only while the session is enab
     ).toContain("<i>page</i>");
   });
 
-  it("a disabled session asked to Stop a live view DECLINES — nothing is stopped without a confirmation", async () => {
+  it("with NO dialog in the tree, a (disabled) session asked to Stop a live view declines — nothing is stopped unconfirmed", async () => {
     const island = renderIsland(
       (p: { enabled: boolean }) => {
         const s = usePhoneSession("f1", { enabled: p.enabled, initialView: LIVE });

@@ -4,10 +4,22 @@
 // browser then runs one poll or two is the walkthrough's one-poller witness (stream-relay.spec.ts, A1b).
 //
 // One sport is not a question here: the session reads no sport.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { StreamSessionProvider, useSharedPhoneSession } from "@/components/v2/stream-session-provider";
-import type { StreamSessionView } from "@/lib/stream-session-view";
+import { StreamSessionProvider, useSharedPhoneSession, usePhoneSession } from "@/components/v2/stream-session-provider";
+import { renderIsland } from "@/components/__tests__/_hook-harness";
+import { STREAM_POLL_MS, type StreamSessionView } from "@/lib/stream-session-view";
+
+// Only the transition case below runs effects (the hook harness); every static render here reads nothing.
+const apiV1 = vi.fn<(url: string) => Promise<unknown>>();
+vi.mock("@/lib/client-v1", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/client-v1")>()),
+  apiV1: (url: string) => apiV1(url),
+}));
+afterEach(() => {
+  apiV1.mockReset();
+  vi.useRealTimers();
+});
 
 vi.mock("@/components/ui/confirm-provider", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/ui/confirm-provider")>()),
@@ -91,5 +103,33 @@ describe("StreamSessionProvider / useSharedPhoneSession — one session per fixt
     // The inner provider is f2's: an f1 reader under it does not match it, so it reads its OWN (unread) session.
     expect(read(html, "f2")).toBe("s2|loaded");
     expect(read(html, "f1")).toBe("none|unread");
+  });
+
+  // Re-review (B5 fix round 1, gap): the console's provider is now ALWAYS mounted, so a stream mount arriving on a page
+  // already open (an upgrade in another tab, then a scored event's refresh) flips `enabled` false → true on a LIVE hook
+  // instead of mounting a fresh one. It must read at once and poll from then on — both effects key on `enabled`.
+  it("enabled false → true on a mounted session reads at once, then polls; while false it read nothing", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    apiV1.mockImplementation(async () => view("s1", "f1"));
+    const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+    const island = renderIsland(
+      (p: { enabled: boolean }) => {
+        const s = usePhoneSession("f1", { enabled: p.enabled, initialView: view("s1", "f1") });
+        return <i data-state={s.state} />;
+      },
+      { enabled: false },
+    );
+    await flush();
+    vi.advanceTimersByTime(2 * STREAM_POLL_MS);
+    await flush();
+    expect(apiV1.mock.calls.length, "disabled: no read, no poll").toBe(0);
+    island.rerender({ enabled: true });
+    await flush();
+    const reads = () => apiV1.mock.calls.filter(([url]) => url === "/api/v1/fixtures/f1/stream-sessions/current").length;
+    expect(reads(), "the flip reads at once").toBe(1);
+    vi.advanceTimersByTime(STREAM_POLL_MS);
+    await flush();
+    expect(reads(), "…and the live session polls from then on").toBe(2);
+    island.unmount();
   });
 });
