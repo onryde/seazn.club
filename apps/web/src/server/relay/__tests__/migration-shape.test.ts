@@ -594,6 +594,13 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(n).toBe(3);
   });
 
+  it("ingest_polled_at (V428, final review I-1): NULLABLE timestamptz with no default, so every existing session reads 'never claimed' and its next poll reads Cloudflare", async () => {
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'ingest_polled_at'`;
+    expect(shape).toEqual({ data_type: "timestamp with time zone", is_nullable: "YES", column_default: null });
+  });
+
   it("runner_gone_confirmed_at (V422, A22(c)): NULLABLE timestamptz with no default, so every existing row reads 'not confirmed'; the mark is REFUSED on every ACTIVE state and accepted on every TERMINAL one — both lists the domain's own, never typed here", async () => {
     const r = await rig();
     const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`

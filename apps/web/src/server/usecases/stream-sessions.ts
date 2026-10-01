@@ -20,6 +20,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { checkDestination } from "@/lib/stream-destinations";
+import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
@@ -34,7 +35,7 @@ import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffe
 import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
-import { createFailureOf, createRefusedBeforeCall, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
+import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import { TargetSecretUnreadableError, lockStreamTarget, readFirstInput, readTargetSecret, storeInputCredentials } from "@/server/relay/secret-columns";
 import { recordEvent, recordSample, recordStorageSnapshot } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
@@ -544,10 +545,46 @@ async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): 
 /** The latest POLL sample — the one row the poll compares a new reading against (Ruling 13) and, for G-a, the phone's
  *  previous reading. Read from the DB, not from process memory, so a carry survives a restart and any number of
  *  processes. Undefined before any poll has recorded one. */
-async function latestPollSample(sessionId: string): Promise<{ ingest_state: string | null; output_state: string | null } | undefined> {
-  const [prev] = await sql<{ ingest_state: string | null; output_state: string | null }[]>`
-    select ingest_state, output_state from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`;
+async function latestPollSample(sessionId: string): Promise<PollSample | undefined> {
+  const [prev] = await sql<PollSample[]>`
+    select ingest_state, output_state, sampled_at, raw->>'protocol' as protocol
+      from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`;
   return prev;
+}
+type PollSample = { ingest_state: string | null; output_state: string | null; sampled_at: Date; protocol: string | null };
+
+/** I-1 (final review; controller ruling 2026-10-01): coalesce the organiser poll's Cloudflare reads ACROSS tabs, viewers
+ *  and processes. Every open organiser fixture page polls `current` every STREAM_POLL_MS, and each poll read the input
+ *  and its outputs: N tabs were N × 2 reads per 5 s against Cloudflare's account-wide API limit, and past that limit
+ *  every read 429s — so no poll could observe warming → live, and the D3 box went silent.
+ *
+ *  The mechanism is a CONDITIONAL WRITE (V428): a poll claims the read by stamping `ingest_polled_at`, and only when the
+ *  previous claim is at least STREAM_POLL_MS old. Postgres re-checks the WHERE of a concurrent UPDATE against the row
+ *  the winner committed, so two polls racing on one session claim it ONCE: the loser gets no row back and reads nothing.
+ *  Not an advisory lock: the lock would have to be held across the two Cloudflare calls, which carry no timeout, so a
+ *  slow provider would pin a pooled connection per session. A claim also coalesces the reads that FAIL (a 429 or a 5xx
+ *  records no sample), which is the storm this exists to stop. The clock is deps.now(), the poll's own clock. */
+async function claimIngestPoll(sessionId: string, now: Date): Promise<boolean> {
+  const claimed = await sql<{ id: string }[]>`
+    update fixture_stream_sessions set ingest_polled_at = ${now}
+     where id = ${sessionId}
+       and (ingest_polled_at is null or ingest_polled_at <= ${new Date(now.getTime() - STREAM_POLL_MS)})
+    returning id`;
+  return claimed.length === 1;
+}
+
+/** I-1: how old the latest poll sample may be for a poll that did NOT claim the read to answer from it — one poll
+ *  interval behind the claim it deferred to (whose own sample may still be in flight). Older than that is not this
+ *  poll's reading, and serving it would present a stale word as current: such a poll answers like a failed read
+ *  (ingest and output null) and decides nothing. */
+const COALESCED_SAMPLE_MAX_AGE_MS = 2 * STREAM_POLL_MS;
+
+/** I-1: the stored words of a poll sample, each guarded to its port type (the poll writes only those). */
+function sampledOutput(w: string | null): OutputState | null {
+  return w === "ok" || w === "connecting" || w === "rejected" || w === "unknown" ? w : null;
+}
+function sampledProtocol(w: string | null): IngestProtocol | null {
+  return w === "srt" || w === "rtmps" ? w : null;
 }
 
 /** G-a (controller ruling 2026-10-01): the word a no-evidence read (ports.ts IngestStatus.state null) carries forward —
@@ -1373,11 +1410,26 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     // N1: a provider read that throws is reported once and the projection answers without it (`ingest: null`) — never a
     // 500 on every organiser poll through an outage. Nothing is decided on an unknown; the next poll reads again.
     let read: { status: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["inputStatus"]>>; output: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["outputState"]>> } | null = null;
+    let coalesced = false;   // I-1: another poll claimed this interval's read
     if (inputId) {
-      try {
-        read = { status: await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id }), output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
-      } catch (err) {
-        reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
+      if (!(await claimIngestPoll(row.id, deps.now()))) coalesced = true;
+      else {
+        try {
+          read = { status: await deps.drivers.ingest.inputStatus(inputId, { sessionId: row.id }), output: await deps.drivers.ingest.outputState(inputId, { sessionId: row.id }) };
+        } catch (err) {
+          reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
+        }
+      }
+    }
+    if (coalesced) {
+      // I-1: no provider call — the view is the latest poll sample's, when it is recent enough to be this interval's
+      // reading. Nothing is recorded and nothing is decided: the poll that read decided on what it read. D3's `since`
+      // below is computed exactly as for a read (events, clamps, this response's clock), from the sampled word.
+      const sample = await latestPollSample(row.id);
+      if (sample && deps.now().getTime() - new Date(sample.sampled_at).getTime() < COALESCED_SAMPLE_MAX_AGE_MS) {
+        const phone = carriedIngest(sample);
+        ingestState = phone === null ? null : { state: phone, protocol: sampledProtocol(sample.protocol) };
+        outputObserved = sampledOutput(sample.output_state);
       }
     }
     if (read) {

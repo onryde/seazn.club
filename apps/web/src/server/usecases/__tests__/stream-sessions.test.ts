@@ -26,7 +26,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { OUTPUT_WARNING_AFTER_MS, createErrorCode, d3Warning, destinationWarning, phoneNoSignal } from "@/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS, createErrorCode, d3Warning, destinationWarning, phoneNoSignal } from "@/lib/stream-session-view";
 import { v1 } from "@/server/api-v1/http";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements, overrideRow } from "@/lib/entitlements";
@@ -539,7 +539,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("warming");
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live.state).toBe("live");
     expect(live.startedAt).not.toBeNull();
@@ -568,7 +568,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(warming.state).toBe("warming");
     expect(warming.creditUsed, "no consume row yet — the empty case").toBe(false);
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live.state).toBe("live");
     expect(live.creditUsed).toBe(true);
@@ -675,7 +675,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(warming).toMatchObject({ id: first.sessionId, state: "warming" });
     expect(warming.restartFree, "the empty case: nothing consumed on this fixture yet").toBe(false);
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live).toMatchObject({ state: "live", creditUsed: true, restartFree: true });
     await stopSession(r.auth, r.fixtureId, first.sessionId, r.deps);
@@ -1947,10 +1947,12 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
   });
 
   it("SAMPLES and SNAPSHOTS: each heartbeat and each poll is a sample; an unchanged poll adds a sample but no observed event; admission writes a snapshot with the session, a refusal writes one without", async () => {
-    const r = await rig({ credits: 1 });   // C4
+    // The phone connects after two poll intervals, so two polls (one interval apart: I-1 serves a second poll inside
+    // the same interval from the first's sample) read it disconnected first.
+    const r = await rig({ credits: 1, connectAfterMs: 2 * STREAM_POLL_MS });   // C4
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    await currentSession(r.auth, r.fixtureId, r.deps); await currentSession(r.auth, r.fixtureId, r.deps);   // two disconnected polls
-    r.tick(3001); await currentSession(r.auth, r.fixtureId, r.deps);                                        // connected
+    await currentSession(r.auth, r.fixtureId, r.deps); r.tick(STREAM_POLL_MS); await currentSession(r.auth, r.fixtureId, r.deps);   // two disconnected polls
+    r.tick(STREAM_POLL_MS + 1); await currentSession(r.auth, r.fixtureId, r.deps);                                                  // connected
     const token = await mintRelayToken({ sid: sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 60_000) });
     await heartbeat(sessionId, token, { state: "playing", fps: 30, bitrateKbps: 4500, egressBytes: 1 }, r.deps);
     const samples = await sql<{ source: string; ingest_state: string | null; fps: number | null }[]>`select source, ingest_state, fps from fixture_stream_samples where session_id = ${sessionId} order by id`;
@@ -2617,7 +2619,7 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     const before = (await currentSession(r.auth, r.fixtureId, r.deps))!.state;
     expect(holdStateOf(before), `premise: ${before} is a waiting state`).toBe("waiting");
     expect(await openStreamStates(r.auth, [r.fixtureId]), "the camera is warming").toEqual({ [r.fixtureId]: "waiting" });
-    r.tick(3000);
+    r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("live");
     expect(await openStreamStates(r.auth, [r.fixtureId]), "on air").toEqual({ [r.fixtureId]: "live" });
     await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
@@ -3942,7 +3944,7 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
       const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
       const early = (await currentSession(r.auth, r.fixtureId, r.deps))!;
       expect(early.state, "PREMISE: not live before the phone connects").not.toBe("live");
-      r.tick(3000);
+      r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
       const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
       expect(spy, "PREMISE: the failed read really ran").toHaveBeenCalled();
       expect(live.state, "the phone connected: live, without any output read").toBe("live");
@@ -4076,6 +4078,7 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     const r = await rig({ credits: 1, recorder: rec });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     await currentSession(r.auth, r.fixtureId, r.deps);
+    r.tick(STREAM_POLL_MS);   // I-1: goLive's poll is the NEXT interval's, not a second poll inside this one
     await goLive(r);
     await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
     await flush();
@@ -4730,6 +4733,7 @@ describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's prev
     expect(await counts(sessionId), "no evidence and no carry: nothing recorded").toEqual({ samples: 0, events: 0 });
     expect(sentry.captureError, "not a failed read: nothing reported").not.toHaveBeenCalled();
     expect(await consumesOf(sessionId)).toBe(0);
+    r.tick(STREAM_POLL_MS);   // the next poll interval (I-1: a second poll inside this one would be served, not read)
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(live.state, "the next real read goes live").toBe("live");
     expect(await consumesOf(sessionId)).toBe(1);
@@ -4796,5 +4800,198 @@ describe.skipIf(!HAS_DB)("G-a: a no-evidence input read carries the phone's prev
     const cur = (await currentSession(r.auth, r.fixtureId, noEvidence(r)))!;
     expect(cur.ingest, "not carried").toBeNull();
     expect(cur.state).toBe("live");
+  });
+});
+
+// I-1 (final review; controller ruling 2026-10-01): every open organiser tab polls `current` every STREAM_POLL_MS, and
+// each poll read Cloudflare twice (inputStatus + outputState). A poll now CLAIMS the interval's read with a conditional
+// write (V428 `ingest_polled_at`); a poll that finds a claim younger than STREAM_POLL_MS reads nothing and answers from
+// the latest poll sample. The interval is the lib's own constant, never a number typed here. Single-sport: the poll has
+// no sport branch (stream sessions are sport-blind).
+describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewers and processes — one claimed read per session per STREAM_POLL_MS", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  /** Another PROCESS polling the same provider account: its own deps and adapter object, the same fake state. */
+  const elsewhere = (r: Rig): SessionDeps => ({ ...r.deps, drivers: { ...r.deps.drivers, ingest: Object.create(r.ingest) as FakeIngest } });
+  const readsOf = (r: Rig) => {
+    const ins = vi.spyOn(r.ingest, "inputStatus");
+    const outs = vi.spyOn(r.ingest, "outputState");
+    return { count: () => ins.mock.calls.length + outs.mock.calls.length, ins, outs, restore: () => { ins.mockRestore(); outs.mockRestore(); } };
+  };
+  const counts = async (sid: string) => {
+    const [{ samples }] = await sql<{ samples: number }[]>`select count(*)::int as samples from fixture_stream_samples where session_id = ${sid} and source = 'poll'`;
+    const [{ events }] = await sql<{ events: number }[]>`select count(*)::int as events from fixture_stream_events where session_id = ${sid} and type = 'ingest_status'`;
+    return { samples, events };
+  };
+
+  it("two CONCURRENT polls inside one interval make 2 Cloudflare reads, not 4 — and so do four, from two viewers on two processes; every answer carries the same reading", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const reads = readsOf(r);
+    try {
+      // From the very first poll: no claim, no sample.
+      const pair = await Promise.all([currentSession(r.auth, r.fixtureId, r.deps), currentSession(r.auth, r.fixtureId, elsewhere(r))]);
+      expect(reads.count(), "two concurrent first polls: ONE inputStatus + ONE outputState").toBe(2);
+      expect(reads.ins).toHaveBeenCalledTimes(1);
+      expect(reads.outs).toHaveBeenCalledTimes(1);
+      expect(pair.some((v) => v!.state === "live"), "PREMISE: the claimed read took it live").toBe(true);
+      // The next interval, four viewers at once (a second organiser on another device, on another process).
+      r.tick(STREAM_POLL_MS);
+      const coAuth = { ...r.auth, userId: await rigUser() };
+      const four = await Promise.all([
+        currentSession(r.auth, r.fixtureId, r.deps), currentSession(r.auth, r.fixtureId, elsewhere(r)),
+        currentSession(coAuth, r.fixtureId, r.deps), currentSession(coAuth, r.fixtureId, elsewhere(r)),
+      ]);
+      expect(reads.count(), "four concurrent polls one interval later: two more reads, not eight").toBe(4);
+      let checked = 0;
+      for (const v of four) {
+        expect(v!.ingest, `viewer ${checked + 1}`).toEqual({ state: "connected", protocol: four[0]!.ingest!.protocol });
+        expect(v!.output?.state, `viewer ${checked + 1}`).toBe(four[0]!.output!.state);
+        expect(v!.state).toBe("live");
+        checked++;
+      }
+      expect(checked).toBe(4);
+      expect((await counts(sessionId)).samples, "one sample per CLAIMED read: two").toBe(2);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("the interval, in sequence: a poll 1 ms short of STREAM_POLL_MS after the claim reads nothing and answers from the sample; a poll at exactly STREAM_POLL_MS reads again; a second call after that reads nothing", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const reads = readsOf(r);
+    try {
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+      expect(reads.count()).toBe(2);
+      r.tick(STREAM_POLL_MS - 1);
+      const before = await counts(sessionId);
+      const served = (await currentSession(r.auth, r.fixtureId, elsewhere(r)))!;
+      expect(reads.count(), "inside the interval: no call").toBe(2);
+      expect(served.ingest?.state, "answered from the sample").toBe("connected");
+      expect(await counts(sessionId), "a coalesced poll records nothing").toEqual(before);
+      r.tick(1);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.ingest?.state).toBe("connected");
+      expect(reads.count(), "at exactly STREAM_POLL_MS after the claim: read again").toBe(4);
+      expect((await counts(sessionId)).samples).toBe(before.samples + 1);
+      await currentSession(r.auth, r.fixtureId, r.deps);
+      expect(reads.count(), "the second call of that interval: nothing").toBe(4);
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("the D3 hold and its clock are unchanged by coalescing: a served poll keeps the read's `since`, its elapsedMs runs on THIS response's clock, and the box arrives at exactly OUTPUT_WARNING_AFTER_MS whether that poll READ or was SERVED", async () => {
+    const P = STREAM_POLL_MS, HOLD = OUTPUT_WARNING_AFTER_MS;
+    expect(HOLD % P, "PREMISE: the hold is a whole number of poll intervals (both the lib's own constants)").toBe(0);
+    let checked = 0;
+    for (const landingReads of [true, false]) {
+      const r = await rig({ credits: 1, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomUUID()}` });
+      await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      r.tick(3000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live (that poll claimed at live+0)").toBe("live");
+      const tLive = r.deps.now();
+      // Polls every P from live, either ON the claim grid (claims at P, 2P, …: the hold lands on a claim) or half an
+      // interval off it (the first poll at P/2 is served, then claims at 3P/2, 5P/2, …: the hold lands between claims).
+      const first = landingReads ? P : P / 2;
+      const times: number[] = [];
+      for (let t = first; t < HOLD; t += P) times.push(t);
+      times.push(HOLD - 1, HOLD);
+      const reads = readsOf(r);
+      try {
+        let at = 0;
+        for (const t of times) {
+          const callsBefore = reads.count();
+          r.tick(t - at);
+          at = t;
+          const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+          expect(v.output, `t=${t}`).toEqual({ state: "connecting", since: tLive.toISOString(), elapsedMs: t });
+          expect(d3Warning(v), `t=${t}`).toBe(t >= HOLD ? "destination" : null);
+          if (t === HOLD) expect(reads.count() > callsBefore, `the poll AT the hold ${landingReads ? "read" : "was served"}`).toBe(landingReads);
+          if (t === HOLD - 1) expect(reads.count(), "1 ms short of the hold: served in both walks").toBe(callsBefore);
+        }
+        // Anti-vacuity: on the grid, P..HOLD−P is HOLD/P − 1 polls; off it, P/2..HOLD−P/2 is HOLD/P; plus the two at the hold.
+        expect(times.length, "the walk crossed the whole hold").toBe(landingReads ? HOLD / P + 1 : HOLD / P + 2);
+        checked++;
+      } finally {
+        reads.restore();
+      }
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a coalesced poll whose latest sample is NOT this interval's (another process holds the claim, its read still in flight) answers like a failed read — ingest and output null, nothing recorded, nothing decided; one ms younger and the sample is served", async () => {
+    let checked = 0;
+    for (const ageMs of [2 * STREAM_POLL_MS, 2 * STREAM_POLL_MS - 1]) {
+      const r = await rig({ credits: 1 });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      r.tick(3000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+      r.tick(ageMs);
+      // Another process claims this interval and has not written its sample yet.
+      await sql`update fixture_stream_sessions set ingest_polled_at = ${r.deps.now()} where id = ${sessionId}`;
+      const reads = readsOf(r);
+      try {
+        const before = await counts(sessionId);
+        const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(reads.count(), `age ${ageMs}: the claim is held elsewhere, no call`).toBe(0);
+        expect(await counts(sessionId)).toEqual(before);
+        expect(v.state).toBe("live");
+        if (ageMs >= 2 * STREAM_POLL_MS) {
+          expect(v.ingest, "a stale sample is not presented as now").toBeNull();
+          expect(v.output).toBeNull();
+        } else {
+          expect(v.ingest?.state, "the sample is this interval's: served").toBe("connected");
+          expect(v.output).not.toBeNull();
+        }
+        checked++;
+      } finally {
+        reads.restore();
+      }
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a served sample's stored words are guarded to their port types: an output word or a protocol the poll never writes is not served (null), never that word; the ingest word beside them still is", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live").toBe("live");
+    await sql`insert into fixture_stream_samples (session_id, sampled_at, source, ingest_state, output_state, raw)
+              values (${sessionId}, ${r.deps.now()}, 'poll', 'connected', 'streaming', ${sql.json({ protocol: "webrtc" })})`;
+    r.tick(1);
+    const reads = readsOf(r);
+    try {
+      const v = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(reads.count(), "PREMISE: served, not read").toBe(0);
+      expect(v.ingest).toEqual({ state: "connected", protocol: null });
+      expect(v.output, "a foreign output word is not this poll's reading").toBeNull();
+    } finally {
+      reads.restore();
+    }
+  });
+
+  it("a claimed read that FAILS still holds the interval (a 429 storm is coalesced too): one call and one report for two polls inside the interval; the poll after it reads again", async () => {
+    const r = await rig({ credits: 1 });
+    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const err = Object.assign(new Error("cloudflare inputStatus: HTTP 429"), { status: 429 });
+    const down = vi.spyOn(r.ingest, "inputStatus").mockRejectedValue(err);
+    try {
+      sentry.captureError.mockClear();
+      const first = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(first.ingest, "PREMISE: a failed read answers without the ingest (N1)").toBeNull();
+      r.tick(STREAM_POLL_MS - 1);
+      const second = (await currentSession(r.auth, r.fixtureId, elsewhere(r)))!;
+      expect(second.ingest).toBeNull();
+      expect(down, "one call for the interval").toHaveBeenCalledTimes(1);
+      expect(sentry.captureError, "one report for the interval").toHaveBeenCalledTimes(1);
+      r.tick(1);
+      down.mockRestore();
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "the next interval's read succeeds and goes live").toBe("live");
+    } finally {
+      down.mockRestore();
+    }
   });
 });
