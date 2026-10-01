@@ -151,7 +151,7 @@ describe.skipIf(!HAS_DB)("fixtures_track_finished — every status pair, insert,
     expect(tally).toEqual({ stamped: n * f, kept: f * f, cleared: STATUSES.length * n });
   });
 
-  it("INSERT: a row inserted in a finished status is stamped; one inserted unfinished is not", async () => {
+  it("INSERT that supplies no stamp: a row inserted in a finished status is stamped; one inserted unfinished is not", async () => {
     const { auth } = await seedOrg("pro");
     const { fixtureIds } = await divisionRig(auth, { entrants: 2 });
     let checked = 0;
@@ -171,6 +171,62 @@ describe.skipIf(!HAS_DB)("fixtures_track_finished — every status pair, insert,
       checked++;
     }
     expect(checked).toBe(STATUSES.length);
+  });
+
+  // C-2 (B3 review): history Undo/restore re-inserts a snapshotted row WITH its own finished_at
+  // (history.ts restoreFixtures). The INSERT arm keeps a supplied stamp; it stamps now() only when
+  // the insert supplies none (the case above). Leaving the set still clears it, and the row's next
+  // fresh entry into the set is stamped anew — the supplied stamp is not sticky.
+  it("INSERT that SUPPLIES finished_at (history restore): kept in a finished status, cleared in an unfinished one; leaving and re-entering the set stamps anew", async () => {
+    const { auth } = await seedOrg("pro");
+    const { fixtureIds } = await divisionRig(auth, { entrants: 2 });
+    // Bound as TEXT: a timestamp-typed parameter goes through a JS Date and loses the microseconds.
+    const SUPPLIED = "2020-01-02T03:04:05.678901Z";
+    const suppliedUs = BigInt(Date.UTC(2020, 0, 2, 3, 4, 5, 678)) * 1000n + 901n;
+    const insertWith = async (round: number, seq: number, status: string): Promise<string> => {
+      const [row] = await sql<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, round_no, seq_in_round, status, finished_at)
+        select stage_id, division_id, ${round}, ${seq}, ${status}, ${SUPPLIED}::text::timestamptz
+        from fixtures where id = ${fixtureIds[0]!}
+        returning id`;
+      return row!.id;
+    };
+    let kept = 0;
+    let cleared = 0;
+    for (const [i, status] of STATUSES.entries()) {
+      const stamp = await stampOf(await insertWith(91, i + 1, status));
+      if (FINISHED.has(status)) {
+        expect(stamp, status).toBe(suppliedUs);
+        kept++;
+      } else {
+        expect(stamp, status).toBeNull();
+        cleared++;
+      }
+    }
+    // The split is the declarations' own: §3's set against V214's vocabulary.
+    expect({ kept, cleared }).toEqual({
+      kept: STATUSES.filter((s) => FINISHED.has(s)).length,
+      cleared: STATUSES.filter((s) => !FINISHED.has(s)).length,
+    });
+    expect(kept).toBeGreaterThan(0);
+    expect(cleared).toBeGreaterThan(0);
+
+    // The sequence after a restore: kept → an in-set move keeps it → leaving clears it → a fresh
+    // entry stamps NOW, never the supplied value back.
+    const [inSet, otherInSet] = STATUSES.filter((s) => FINISHED.has(s));
+    const open = STATUSES.find((s) => !FINISHED.has(s))!;
+    const fx = await insertWith(92, 1, inSet!);
+    expect(await stampOf(fx)).toBe(suppliedUs);
+    await sql`update fixtures set status = ${otherInSet!} where id = ${fx}`;
+    expect(await stampOf(fx), "an in-set move keeps the restored stamp").toBe(suppliedUs);
+    await sql`update fixtures set status = ${open} where id = ${fx}`;
+    expect(await stampOf(fx)).toBeNull();
+    const t0 = await dbNow();
+    await sql`update fixtures set status = ${inSet!} where id = ${fx}`;
+    const fresh = await stampOf(fx);
+    expect(fresh).not.toBeNull();
+    expect(fresh! >= t0, "a fresh entry is stamped by the trigger").toBe(true);
+    expect(fresh).not.toBe(suppliedUs);
   });
 
   it("an update that does not NAME status never moves finished_at — the trigger is `update of status` (why the backfill cannot be re-stamped by it)", async () => {

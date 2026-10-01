@@ -17,12 +17,16 @@
 -- 1. When a fixture finished, maintained in ONE place for every writer (appendEvent's fold, finalize,
 --    the admin correction, the Swiss and knockout bye writers). "Finished" is the §3 set; leaving it
 --    (a reverted result, C5) clears the stamp. The trigger fires only on INSERT and on an UPDATE that
---    names `status`, so an update of any other column never moves the stamp.
+--    names `status`, so an update of any other column never moves the stamp. An INSERT in the set
+--    KEEPS a stamp it supplies (history Undo/restore re-inserts a snapshotted row with its own
+--    finished_at, history.ts restoreFixtures) and is stamped now() only when it supplies none.
 alter table fixtures add column finished_at timestamptz null;
 create function fixtures_track_finished() returns trigger language plpgsql as $$
 begin
   if new.status in ('decided','finalized','forfeited','abandoned','cancelled') then
-    if tg_op = 'INSERT' or old.status not in ('decided','finalized','forfeited','abandoned','cancelled') then
+    if tg_op = 'INSERT' then
+      new.finished_at := coalesce(new.finished_at, now());
+    elsif old.status not in ('decided','finalized','forfeited','abandoned','cancelled') then
       new.finished_at := now();
     end if;
   else
@@ -100,6 +104,10 @@ alter table fixture_stream_sessions
   drop column qr_issued_first_at;
 alter table fixture_stream_sessions rename column credentials_revealed_first_at to credentials_served_first_at;
 alter table fixture_stream_sessions rename column credentials_reveal_count to credentials_served_count;
+-- The counter's inline `>= 0` check keeps the name Postgres gave it in V410; renamed with the column so a grep for
+-- the new name finds its constraint too.
+alter table fixture_stream_sessions rename constraint fixture_stream_sessions_credentials_reveal_count_check
+  to fixture_stream_sessions_credentials_served_count_check;
 -- end_reason: V410 declares its value check INLINE and unnamed (V410 `end_reason text null check
 -- (end_reason in ('stopped','max_duration'))`), so Postgres names it by default
 -- fixture_stream_sessions_end_reason_check — confirmed with \d fixture_stream_sessions on a fresh

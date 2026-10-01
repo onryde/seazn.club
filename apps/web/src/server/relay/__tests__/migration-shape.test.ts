@@ -830,6 +830,12 @@ describe.skipIf(!HAS_DB)("V430__capture_stream_codes.sql — the constraints are
                              'credentials_served_first_at', 'credentials_served_count')
        order by column_name`;
     expect(cols.map((c) => c.column_name)).toEqual(["credentials_served_count", "credentials_served_first_at"]);
+    // The counter's check follows the column's name (B3 review m-7), and still refuses a negative (the session-facts case).
+    const checks = await sql<{ conname: string }[]>`
+      select conname from pg_constraint
+       where conrelid = 'fixture_stream_sessions'::regclass and conname like 'fixture_stream_sessions_credentials_%'
+       order by conname`;
+    expect(checks.map((c) => c.conname)).toEqual(["fixture_stream_sessions_credentials_served_count_check"]);
   });
 
   it("end_reason admits EXACTLY the fold's five — every one lands on an ending session, anything else is refused — and the live constraint lists the same five", async () => {

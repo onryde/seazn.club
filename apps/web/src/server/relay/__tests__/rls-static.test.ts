@@ -8,6 +8,8 @@
 // so the scan reads the FOLD (V410 and every later stream/capture delta), not
 // V410 alone.
 import { describe, expect, it } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { STREAM_DELTA_FILES, STREAM_DELTAS, STREAM_TABLES, stripSqlComments } from "./_stream-migration";
 
 // SQL, not prose: `--` comments are stripped before either claim reads the files. V410's
@@ -43,6 +45,22 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  // m-2 (B3 review): the fold selects deltas by FILENAME (/stream|capture/), so a later `V4xx__relay_*.sql` that alters
+  // a stream table would escape every scan here (AGENTS #16: sweep by behaviour, never by filename). This reads the
+  // directory itself — not the fold's list — and checks every delta from V410 on by what its SQL touches.
+  it("the fold misses no delta that touches a stream table — chosen by name, checked by content", () => {
+    const dir = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
+    const version = (f: string): number => Number(/^V(\d+)__/.exec(f)![1]);
+    const deltas = readdirSync(dir).filter((f) => /^V\d+__.+\.sql$/.test(f));
+    const v410 = deltas.find((f) => /^V\d+__stream_sessions\.sql$/.test(f));
+    expect(v410, "V410 is where the stream tables begin").toBeDefined();
+    const touching = deltas
+      .filter((f) => version(f) >= version(v410!))
+      .filter((f) => /\b(fixture_stream_|org_stream_)\w*/.test(stripSqlComments(readFileSync(join(dir, f), "utf8"))));
+    expect(touching.length, "no delta touches a stream table — the sweep proved nothing").toBeGreaterThan(1);
+    for (const f of touching) expect(STREAM_DELTA_FILES, f).toContain(f);
   });
 
   it("creates no policy and no grant to app_user — across the whole fold, V430 included", () => {
