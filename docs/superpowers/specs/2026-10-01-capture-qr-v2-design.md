@@ -56,6 +56,10 @@ Each row below is the latest word on its subject. Where the log changed its mind
 | W19 | **A live phone stream whose phone is gone ends (O2, ruled YES 2026-10-01).** After **15 min with no beat AND no video**, the session ends with endReason `phone_lost`. **Built in PR-1** (§6.8.5). |
 | W20 | **The SRT-on-`live.*` test is deferred (2026-10-01).** G0-h is no longer a publish gate. The schemas publish now with `cred.srt` nullable. The custom-host SRT proof becomes an **optional** later staging step (S2b), not a gate. (Its first form, "`STREAM_SRT_ENABLED` defaults to false", is superseded by W21 the same day.) |
 | W21 | **SRT uses Cloudflare's own host (owner direction, 2026-10-01).** `cred.srt.url` is `srt://live.cloudflare.com:778`, exactly as Cloudflare issues it. RTMPS stays on the environment's custom host (`live.seazn.club` / `live.stg.seazn.club`). `STREAM_SRT_ENABLED` **defaults ON**, so SRT is offered from launch; A18's `srt: null` stays a safety net. S2b could later move SRT to the custom host with **no contract change**. Capture's host rule admits `live.cloudflare.com` for SRT: **agreed** (§4.2 G0-i, capture's owner's ruling, 2026-10-01). |
+| W22 | **A 5-minute stream tick (O3, ruled YES 2026-10-01).** The Cloudflare Cron Triggers programme (`docs/superpowers/plans/2026-09-28-cloudflare-cron-triggers.md`, branch `docs/cloudflare-cron-triggers`) **executes first**. PR-1 adds a `stream-tick` job: the route `POST /api/cron/stream-tick` plus its row in `apps/cron-worker`'s schedule, every 5 min (§6.11). It ends `phone_lost` streams (W19) and warming timeouts without a panel open. PR-2's auto stop rides the same tick. The panel's poll still ticks too, for a fast answer while the panel is open. **PR-1 executes only after the cron plan merges.** |
+| W23 | **Free restarts are capped at 3 (2026-10-01).** Inside the 24 h reuse window, 3 restarts are free; the next Go live costs 1 credit. It never hard-blocks. Only restarts that **reached video** (`first_ingest_at`) count. The first live is the paid one. A rejoin or takeover of the same sid never counts, and neither does a Go live that never got video. The panel shows the count before Go live ("Free restarts used (3 of 3) — this one uses 1 credit"). Built in PR-1 (§6.7.4). This reading of the ruling was put to the owner by the coordinator; §16 O4 records the one point it leaves open. |
+| W24 | **A reconnecting countdown (2026-10-01).** While live with no video from the phone, the Phone node says "Reconnecting…" instead of "No signal". After a 30 s hold, a sentence counts down to the W19 end: "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." Warming ("Waiting for camera…") gets the same countdown to the 10-min warming timeout. Built in PR-1 (§6.12). The PR-1 mockups show these states. |
+| W25 | **The unnamed-match label is localised (2026-10-01).** The "Match {n}" fallback sent to the phone uses the competition's locale, not English (§6.4). |
 | W17 | **Answers sent to mobile-s1** (their owner approved them): `autoAllowed` sits in both waiting and session; there is one start endpoint, with `409 already_live` meaning take over; the heartbeat answer carries go-live and over; the server drives `pollSeconds`, 60 s and then 10 s from 30 min before the scheduled start; code names are neutral; the waiting answer carries the chosen destination's display name, or `null`; the panel shows the phone's mode. |
 
 ### 1.2 Capture's rulings we build against (their owner's; peer facts, not ours)
@@ -553,7 +557,7 @@ treats that as success (capture's answer table).
 
 | Field | Source |
 |---|---|
-| `label` | "{side A} v {side B}". It falls back to "Match {n}" while a side is not yet known. Entrant names are user data, not translated. |
+| `label` | "{side A} v {side B}". It falls back to "Match {n}" while a side is not yet known, **in the competition's locale** (W25), using the `breadcrumb.match` key. The tree has no per-competition locale: the competition's locale is its organisation's `organizations.default_locale` (V281), which the public league pages already read. Entrant names are user data, not translated. |
 | `venueTimezone` | Venue lane V305: division override → org timezone → UTC (the `checkin-token.ts` query). |
 | `scheduledStart` | `fixtures.scheduled_at`, as epoch seconds. With no `scheduled_at` it is **omitted** from the waiting shape (`scheduledStart?`) and `null` on the beat answer (`scheduledStart \| null`), per capture's shapes. |
 | `pollSeconds` | §6.9. |
@@ -695,6 +699,27 @@ refusal in the session events.
 - **Archiving** a destination in Directory leaves the pre-pick pointing at an archived row, which reads as none
   (T36). Nothing cascades: the row stays, as D2 requires.
 
+#### 6.7.4 Free restarts: three per reuse window (W23)
+
+- **Today** a restart of the same fixture inside `CREDIT_REUSE_HOURS` (24) of its last net consume is free, without
+  limit (`reuseWindowOpen`, `stream-credits.ts`).
+- **The rule.** `FREE_RESTARTS_PER_WINDOW` = 3.
+  - The **anchor** is the fixture's latest net consume row inside the window (the paid live). Its session is the
+    paid one and never counts.
+  - **Used** = the fixture's sessions created after the anchor's session that have `first_ingest_at` set,
+    excluding the session being decided. A rejoin or takeover keeps the same sid, so it is one session and counts
+    once at most. A session that never got video does not count.
+  - A restart is **free** while the window is open and used < 3. Otherwise it is admitted on the balance gate like
+    a first start, and consumes 1 credit at live, as today.
+  - That paid restart writes a new consume row, which becomes the anchor, so the next three restarts are free again
+    (§16 O4).
+- **One authority.** A single `restartAllowance(exec, {orgId, fixtureId, excludeSessionId}, now)` returns
+  `{windowOpen, used, limit, free}`. Admission (the balance waiver), `consumeForSession` (the consume at live) and
+  the panel's read all call it, so the three cannot disagree. It replaces `reuseWindowOpen` at those three call
+  sites.
+- **The panel** shows the count before Go live, while the window is open: "Free restarts used ({used} of 3)", and
+  at the limit "Free restarts used (3 of 3) — this one uses 1 credit". The copy is in all four locales.
+
 ### 6.8 Stopping a broadcast and end reasons
 
 #### 6.8.1 Organiser Stop
@@ -755,7 +780,7 @@ stopped` and waits on the same code.
 - **The panel** reads "The phone and its video were gone for 15 minutes" (new copy, all four locales), told apart from
   ask 10's line by `first_ingest_at`.
 - **When it fires.** At the first tick after the 15 min: at once while an organiser panel is open (its poll ticks),
-  otherwise at the next tick from any other driver (§6.11). See §16 for what that means without a panel.
+  otherwise within 5 min, from the `stream-tick` job (W22, §6.11).
 
 #### 6.8.4 End reasons — the DB and the wire
 
@@ -773,7 +798,7 @@ exactly one wire value. A test sweeps the DB enums: the count of mapped reasons 
 | fail `target_rejected` | `target_rejected` | as today |
 | every other fail reason (`no_credits`, `provision_timeout`, `admission_timeout`, `relay_disabled`, the runner's) | `failed` | as today |
 
-The V429 check constraint admits all five end reasons at once. A DB that cannot store `auto_stopped` would leave
+The V430 check constraint admits all five end reasons at once. A DB that cannot store `auto_stopped` would leave
 PR-2's writer with no column to write.
 
 ### 6.9 Present, silent, and not responding
@@ -833,11 +858,17 @@ read). A phone-started or automatic session may have no organiser watching.
 5. ask 10's end of a warming broadcast whose phone is lost (§6.8.3);
 6. W19's end of a live broadcast whose phone and video are both gone for 15 min (§6.8.5).
 
-It is called from three places:
+It is called from four places:
 
 - the organiser poll (unchanged behaviour);
 - **every beat from the session's phone**;
-- the daily sweep.
+- **the `stream-tick` job, every 5 min (W22).** `POST /api/cron/stream-tick` is cron-shaped like `relay-sweep`: it
+  answers 503 when `CRON_SECRET` is unset, before 401 on a wrong `x-cron-secret`. It ticks every open session of
+  every org (`requested`, `provisioning`, `warming`, `live`, `ending`), each in its own try/catch, and answers
+  `{ticked, ended}`. The Cloudflare cron Worker (`apps/cron-worker`) POSTs it from a row in its schedule table. That
+  needs a second trigger, `*/5 * * * *`, beside the programme's hourly `17 * * * *`: four triggers per account across
+  stg and prod, under the Workers Free limit of five;
+- the daily sweep, kept as a backstop.
 
 The coalescing claim guarantees one provider read per `STREAM_POLL_MS` however many callers tick, so a phone beating
 every 10 s plus an open panel never doubles Cloudflare reads.
@@ -852,7 +883,9 @@ unchanged.
 | **Ready, no phone** | The picker (it now saves the pre-pick). The **QR** with "Scan with the Seazn Capture app" and the paste code. A "Revoke & reissue" text button, with a confirm. **Go live disabled**, with "Pair a phone first: scan the code with Seazn Capture". Phone node: slate, "Not connected". |
 | **Ready, phone paired** | The picker. Phone node: lime ring, "Paired". The QR folds into a "Show the code again" disclosure, with Revoke & reissue inside it. **Go live enabled.** |
 | **Ready, phone paired but silent** (§6.9) | Phone node amber, "Not answering". **Go live disabled**, with "The phone stopped checking in. Open Seazn Capture on it". The QR stays folded. |
-| **Waiting** (requested, provisioning or warming) | Phone node amber, "Starting". The line "Waiting for the phone's video". The pollSeconds line from §6.6 when relevant. Cancel. **No QR**: the phone is already paired. |
+| **Waiting** (requested, provisioning or warming) | Phone node amber, "Starting". The line "Waiting for the phone's video". The pollSeconds line from §6.6 when relevant. Cancel. **No QR**: the phone is already paired. **Warming countdown (W24):** after 30 s in warming with no video, "No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.", counting down to the warming deadline (`warming_at` + `WARMING_TIMEOUT_MINUTES`). |
+| **Live, reconnecting** (W24) | The Phone node says "Reconnecting…" instead of "No signal" while the input is not connected. After `RECONNECT_QUIET_SECONDS` (30) with no video **and** no beat, the sentence "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come back." counts down to W19's end. `remaining` = 15 min − the **shorter** of the two silences, because W19 needs both. While the phone still beats, W19 cannot fire, so there is no countdown: "Reconnecting…" alone. |
+| **Ready or Ended, inside the reuse window** (W23) | Above Go live: "Free restarts used ({used} of 3)", or at the limit "Free restarts used (3 of 3) — this one uses 1 credit". |
 | **Live, Ended, Failed** | As today. The new end reasons use the copy in §6.8.4. |
 | **Code ended** (finish + 2 h) | "This match is over. Its stream code has ended." No QR and no Go live. |
 
@@ -860,12 +893,15 @@ unchanged.
 
 - **Polling.** The panel polls `GET /api/v1/fixtures/{id}/stream-phone` (§9) every `STREAM_POLL_MS` while it is open,
   beside the existing `current` poll.
-- **The PR-1 Phone node** shows only the paired, present or silent state. The one-line health summary (the D9 slot)
+- **The countdown is computed on the server** (`lostCountdown`, §6.8.5's clocks), and `current` carries
+  `countdown: {kind: "warming" | "live", elapsedMs, remainingMs} | null`, so the panel never compares its own clock
+  with a server timestamp. The panel formats both durations in the viewer's locale.
+- **The PR-1 Phone node** shows only the paired, present, silent or reconnecting state. The one-line health summary (the D9 slot)
   stays empty until PR-2.
 - **Copy:** every string is in en, es, fr and nl, followed by the `gen-keys` regen. The key families are
   `stream.code.*`, `stream.phone.*` and `stream.end.*`, with the names indicative.
-- **Mockups (house rule "≥2 UI options before building").** A plan task (PR-1 Task 2) produces two static options for the two
-  Ready states at 320, 768 and 1280, under `2026-10-01-capture-qr-v2-mockups/`. **The owner signs one off before the
+- **Mockups (house rule "≥2 UI options before building").** A plan task (PR-1 Task 2) produces two static options for the
+  Ready states, the warming and live countdowns (W24) and the restart count (W23) at 320, 768 and 1280, under `2026-10-01-capture-qr-v2-mockups/`. **The owner signs one off before the
   panel task starts.** The PR-1 build of the panel waits on that; the server work does not.
 
 ### 6.13 v1 removal (W4): a hard cut
@@ -987,9 +1023,8 @@ autoStopDue(session) =
 - **A broadcast started after the result is the organiser's deliberate post-match broadcast, and is never
   auto-stopped.** Without this rule a post-match interview would be killed at once.
 - **A reverted result** clears `finished_at` (T32), so an auto stop that has not yet fired is cancelled.
-- **Latency.** The tick is a beat (~10 s while held), an organiser poll, or the daily sweep. A phone that died after
-  the result, with no panel open, is stopped at the sweep. The broadcast was already showing "No signal", and
-  W19 (§6.8.5) and O3 (§16) apply.
+- **Latency.** The tick is a beat (~10 s while held), an organiser poll, or the 5-minute `stream-tick` job (W22). A
+  phone that died after the result, with no panel open, is stopped within 5 min of the 180 s.
 
 ### 7.4 The phone-health line (W9, W8)
 
@@ -1044,12 +1079,13 @@ This fills fixture-page §3.4's reserved slot, the `phoneStatus` prop of `Signal
 
 ## 8. Data model
 
-The numbering must be re-checked when each file is written. `main` tops at V426. PR #908 adds V427 and V428. No
-branch on origin claims V429 or later as of 2026-10-01. PR-1 therefore takes **V429** and PR-2 **V430**: the next
+The numbering must be re-checked when each file is written. `main` tops at V426. PR #908 adds V427 and V428. The
+Cloudflare Cron Triggers programme executes first and takes **V429** (its plan's V419 was already taken on main).
+PR-1 therefore takes **V430** and PR-2 **V431**: the next
 free numbers at the rebase that writes each file, re-derived with `ls db/migration/deltas | sort -V | tail -1` and a
 check of `git log --all`.
 
-### 8.1 V429 — PR-1 (`V429__capture_stream_codes.sql`)
+### 8.1 V430 — PR-1 (`V430__capture_stream_codes.sql`)
 
 ```sql
 -- 1. When a fixture finished, maintained in ONE place for every writer (appendEvent's fold, finalize, cancel, staff
@@ -1170,7 +1206,7 @@ create index on fixture_stream_phone_beats (recorded_at);
 
 The `migration-shape.test.ts` sweep gains the new tables, constraints and trigger.
 
-### 8.2 V430 — PR-2 (`V430__auto_stream.sql`)
+### 8.2 V431 — PR-2 (`V431__auto_stream.sql`)
 
 ```sql
 alter table fixture_stream_settings
@@ -1252,7 +1288,7 @@ At the Cloudflare edge (adopted 2026-09-22), staging step S5 checks that `/api/v
 |---|---|
 | Photographed QR → a stranger pairs while the slot is not live (A9) | **No credentials until a session opens, and then only to the current phone.** The organiser sees the device model and a takeover notice (PR-2). Revoke & reissue (PR-1). Owner-accepted residual: the code lasts until finish + 2 h with no cap (W2). |
 | Photographed QR → a stranger takes over a dead live phone (A14) | Needs 60 s with no beat **and** no video. The stranger then publishes to the organiser's destination. Remedy: Stop, then Revoke. The notice names this (§7.5). |
-| A photographed QR spends credits (`POST start`) | It needs the pre-pick (organiser-chosen) and current pairing. The credit is consumed only at live. The reuse window caps it at one credit per fixture per 24 h. |
+| A photographed QR spends credits (`POST start`) | It needs the pre-pick (organiser-chosen) and current pairing. The credit is consumed only at live. Each paid live buys three free restarts (W23), so a stranger needs four broadcasts that reach video to spend one more credit. |
 | Brute force of code or tok | 60 + 128 bits. Rate-limited per IP for 401s (§10.4). Uniform 401. |
 | An old or replaced phone stops a newer broadcast | A stop names one sid and closes only that sid, never a newer one (T23, T24). A phone that is not current can stop nothing with an `ended` beat (T22). A late `stopped` from a phone that is not current is ignored while the current phone holds that sid (T24a, §6.8.2). |
 | Cross-site request | No cookies are read. The routes are Bearer-only. `proxy.ts`'s cross-origin non-GET guard needs no exemption, because native requests carry no `Origin`, which staging step S6 confirms. |
@@ -1339,7 +1375,10 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
 - **Money** (programme §5.4 style, against the Stripe sandbox where purchase is involved):
   - an operator-started session consumes exactly once, at live;
   - a takeover (T4) consumes nothing;
-  - an operator restart inside 24 h is free;
+  - an operator restart inside 24 h is free, up to three that reached video (W23);
+  - **the boundary:** restarts 1–3 that reached video are free, and the 4th consumes 1 credit at live; a restart
+    with no video leaves the count unchanged; a rejoin or takeover of the same sid never counts; after the paid
+    4th, the next restart is free again (O4);
   - a `phone_lost` session consumed nothing.
 
 #### 11.1.3 Mutation (rule 5). The killer **list** is recorded in the PR, one mutant per surface
@@ -1621,11 +1660,17 @@ These were not ruled in conversation. Each is decided here with its reason, and 
    defaults on; S2b (optional) could later move SRT to the custom host. Capture's host rule admits
    `live.cloudflare.com` for SRT (G0-i, agreed 2026-10-01 by capture's owner), so no interim `false` is needed.
 
+4. **O3 — how prompt W19's 15 minutes is: YES, a 5-minute tick** (W22, 2026-10-01). The Cloudflare Cron
+   Triggers programme runs first; PR-1 adds the `stream-tick` job (§6.11).
+5. **Free restarts: 3 per reuse window** (W23), **the reconnecting countdown** (W24) and **the localised label**
+   (W25), all ruled 2026-10-01.
+
 **Open:**
 
-1. **O3 — how prompt W19's 15 minutes is.** W19 fires at the first tick after 15 min (§6.11). With an organiser
-   panel open, that is within one poll. With no panel open, the session's phone gone, and no other caller, the next
-   tick is the **daily** relay sweep (its schedule lives in `seazn.club.workflow`), so the destination can stay held
-   for up to a day. **Recommendation:** ship PR-1 on the existing drivers, and give `tickSession` a 5-minute
-   driver through the Cloudflare Cron Triggers programme (its plan `aadf3348b`) rather than a GitHub `schedule:`,
-   which runs late and drops runs. Until then, the panel's open poll covers the case anyone can see.
+1. **O4 — after the paid 4th restart, are the next three free again?** This spec reads yes: the paid restart writes
+   a consume row, which re-anchors the 24 h window and resets the count, the same way the window works today
+   (§6.7.4). The alternative is "every restart after the third costs 1 credit until the window closes", which
+   needs a different anchor. The coordinator flagged W23 itself to the owner as a reading.
+2. **O5 — no countdown while the phone still beats.** W19 needs no beat **and** no video, so a phone that beats
+   without video is never ended by it. The countdown therefore shows only when both are silent, and "Reconnecting…"
+   shows alone otherwise (§6.12). A countdown in that case would promise an end that never comes.

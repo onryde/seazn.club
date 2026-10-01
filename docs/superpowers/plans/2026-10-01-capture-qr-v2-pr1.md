@@ -14,7 +14,7 @@ phone is paired.
 - **Thin use-cases.** `stream-codes.ts` mints and resolves codes. `capture-phone.ts` serves the three phone routes.
   `stream-sessions.ts` gains `startBroadcast` (one start path for organiser and operator) and `tickSession` (one tick
   for organiser polls, phone beats and the sweep).
-- **One V429 migration.** `relay/secret-columns.ts` stays the only SQL over sealed columns, `tok_enc` included.
+- **One V430 migration.** `relay/secret-columns.ts` stays the only SQL over sealed columns, `tok_enc` included.
 - **The contract first.** Task 1 publishes the JSON contracts that capture vendors. Everything after it builds
   against their zod twins.
 
@@ -28,7 +28,7 @@ phone is paired.
 - Playwright (the walkthrough project and the seven width projects of `mobile.spec.ts`), and `scripts/smoke.ts`.
 
 **Spec:** `docs/superpowers/specs/2026-10-01-capture-qr-v2-design.md`, approved by the owner on 2026-10-01, with
-rulings W18–W21. Read it beside every task: section numbers below (§n) point into it. The spec binds. Where this plan
+rulings W18–W25. Read it beside every task: section numbers below (§n) point into it. The spec binds. Where this plan
 deviates, the deviation is named under "Premises re-verified". Capture's side is its amendment
 `docs/specs/2026-10-01-s1-amendment-stable-code-design.md` (capture repo, `feat/s1-plan-c`, agreed through
 `5344d04`).
@@ -37,15 +37,18 @@ deviates, the deviation is named under "Premises re-verified". Capture's side is
 
 - Path: `/Users/ashokhein/github/seazn.club/.claude/worktrees/capture-qr-v2-pr1`.
 - Branch: `feat/capture-qr-v2-pr1`.
-- Cut from `docs/capture-qr-v2-spec` after rebasing that docs-only branch onto `origin/main` (58e8103e3 or newer), so
-  the spec and this plan travel with the build.
+- **Dependency (W22): this plan executes only after the Cloudflare Cron Triggers plan
+  (`docs/superpowers/plans/2026-09-28-cloudflare-cron-triggers.md`, branch `docs/cloudflare-cron-triggers` at
+  327eee9e1) has merged.** T7b adds a job to its `apps/cron-worker`, and its V429 sits below this plan's V430.
+- Cut from `docs/capture-qr-v2-spec` after rebasing that docs-only branch onto `origin/main` **after the cron merge**,
+  so the spec and this plan travel with the build.
 - `WT` below means that absolute path. Every command starts with `cd $WT…` in the **same** shell call (AGENTS.md:
   shell cwd resets between calls).
 - The worktree has no `node_modules` until `pnpm install` runs in it. Stand it up with the `seazn-local-env` skill.
 
 ## Execution batches
 
-Ten batches. Each batch gets **one implementer and one review**. Inside a batch the implementer still commits **once
+Ten batches over eighteen tasks. Each batch gets **one implementer and one review**. Inside a batch the implementer still commits **once
 per task**, in task order, so each commit stays bisectable and each task's own gate and mutations still run.
 
 | Batch | Tasks | Boundary gate (the orchestrator re-runs it, scoped) |
@@ -53,8 +56,8 @@ per task**, in task order, so each commit stays bisectable and each task's own g
 | B1 | T1 | T1 Step 6. **Committable alone, first: capture vendors it.** |
 | B2 | T2 | The mockup files exist and differ (Step 3); then **STOP for the owner's sign-off**. B3 does not wait for it. |
 | B3 | T3 + T4a + T4b | T3, T4a and T4b scope commands together |
-| B4 | T5 + T6 | T5 and T6 scope commands, plus `stream-contract.test.ts` and `routes.test.ts` |
-| B5 | T7 + T8a | T7 and T8a scope commands |
+| B4 | T5 + T6 + T6b | T5, T6 and T6b scope commands, plus `stream-contract.test.ts` and `routes.test.ts` |
+| B5 | T7 + T7b + T8a | T7, T7b (both the web and the cron-worker runs) and T8a scope commands |
 | B6 | T8b + T8c | T8b and T8c scope commands, plus `key-scopes.test.ts` and `openapi-coverage.test.ts` |
 | B7 | T9 + T10 | T9's scope, then T10's model run **three times** (each seed logged) and the mutation table recorded |
 | B8 | T11 | **Gated on B2's sign-off.** T11 scope, then `mobile.spec.ts` whole, then screenshots |
@@ -110,6 +113,15 @@ gate is re-run before the next batch starts.
 - **A17 and T24a:** a late `stopped` from a phone that is not current is ignored while the current phone holds that
   sid.
 - **Ask 10:** a warming session whose phone goes silent is ended `phone_lost`, cadence-aware, and no credit is spent.
+- **W22:** a `stream-tick` job ticks every open session every 5 min through the cron Worker. The panel poll still
+  ticks too.
+- **W23:** `FREE_RESTARTS_PER_WINDOW` = 3. Only restarts that reached video count, never the paid first live, never
+  a rejoin or takeover of the same sid. The 4th costs 1 credit at live and never hard-blocks. One authority,
+  `restartAllowance`, serves admission, the consume and the panel.
+- **W24:** "Reconnecting…" replaces "No signal" while live without video; after `RECONNECT_QUIET_SECONDS` = 30 a
+  server-computed countdown runs to W19's end (live) or the warming deadline (warming).
+- **W25:** the "Match {n}" fallback on the wire is in the competition's locale, which is
+  `organizations.default_locale`.
 
 **House rules (AGENTS.md, RULES.md, TEST-STRATEGY.md) that bind every task:**
 
@@ -177,24 +189,24 @@ owning task.
      throttling or W19.
    - Owner: T8b, "`at` five hours ahead still writes a minute row on the server's clock".
 5. **A fixture whose sides are unknown (TBD) when the code is minted.**
-   - Expect: `label` is "Match {n}" through the existing `breadcrumb.match` text on the panel. On the wire, `label` is
-     server-built from the entrant names, falling back to `Match {n}` with the numeral. That is English-free apart
-     from the word "Match", so the fallback is flagged to the owner (T13).
-   - Owner: T8a `labelFor`, with a TBD-sided case.
+   - Expect: `label` is "{side A} v {side B}" once both are known, and before that the `breadcrumb.match` text in the
+     organisation's `default_locale` with the match number (W25): "Match 7", "Partido 7", and so on.
+   - Owner: T8a `labelFor`, with a TBD-sided case in each of the four locales.
 
 ## Premises re-verified (spec → corrected fact)
 
 These were re-pinned against `origin/main` 58e8103e3 (PR #908 merged) on 2026-10-01. Each item says what the plan
 does about it.
 
-1. **Migration numbers.** `main` tops out at `V428__stream_poll_claim.sql`, and no ref in `git log --all` names V429
-   or V430. **V429 is PR-1's and V430 is PR-2's.** T3 and T13 re-check.
+1. **Migration numbers.** `main` tops out at `V428__stream_poll_claim.sql`. The Cloudflare Cron plan executes first
+   and takes V429 (its text says V419, which main already holds). **V430 is PR-1's and V431 is PR-2's.** T3 and T13
+   re-check.
 2. **`enc-boundary.test.ts` requires every `*_enc` column to have an owner.** It derives `ENC_COLUMNS` from every
    delta. The spec's first form ("crypto.ts remains the only module") was corrected on 2026-10-01: T3 adds `tok_enc`
    to `STREAM_COLUMNS`, owned by `server/relay/secret-columns.ts`. That edit is the test's own designed extension
    point, not a weakening.
 3. **`_stream-migration.ts` reads only `V410__stream_sessions.sql`.** `stream-contract.test.ts` checks enums against
-   V410's CHECK lists. V429 redefines `end_reason` and `fixture_stream_events.source`, so T3 teaches the helper to
+   V410's CHECK lists. V430 redefines `end_reason` and `fixture_stream_events.source`, so T3 teaches the helper to
    read V410 plus every later delta, with the **last** definition of a named check winning. Otherwise T6's widened
    `StreamEndReason` reds against V410's two values.
 4. **`rateLimit()` throws `HttpError(429)` with no `Retry-After`** (`lib/rate-limit.ts:66`). T8c gives `HttpError` an
@@ -221,8 +233,26 @@ does about it.
     matches only `stream-sessions|stream-targets`. Without widening the regex, the new routes never enter the pin and
     it stays at seven, which is a vacuous pass. T6 widens it; T9 reaches eleven; T8c pins the three `capture` routes
     in a sibling case.
-11. **The relay sweep is daily** (`app/api/cron/relay-sweep/route.ts`, schedule in `seazn.club.workflow`). W19's
-    promptness without an open panel is §16 O3, still open for the owner. PR-1 ships on the existing drivers.
+11. **The relay sweep is daily** (`app/api/cron/relay-sweep/route.ts`, schedule in `seazn.club.workflow`). W22 adds
+    the 5-minute `stream-tick` job (T7b); the sweep stays as a backstop and keeps the beat-history purge.
+12. **The cron Worker's conventions are not the ones in the brief.** The brief said "POSTs with HMAC to
+    `/api/internal/jobs/*`". The approved cron plan (327eee9e1) instead:
+    - POSTs with a shared `x-cron-secret` header to unchanged `/api/cron/*` routes (`relay-sweep` is the model: 503
+      when `CRON_SECRET` is unset, before 401 on a mismatch);
+    - declares jobs in one table, `apps/cron-worker/src/schedule.ts` (`JOBS`, `Due`, `dueJobs(scheduledTime)`);
+    - has exactly one trigger per env, `17 * * * *`, pinned by `test/drift.test.ts`, which also requires every
+      `/api/cron/*` route to have exactly one `JOBS` row.
+
+    T7b follows the plan as written: `POST /api/cron/stream-tick` with `x-cron-secret`, a `JOBS` row, and a second
+    trigger, `*/5 * * * *`. A 5-minute job cannot ride an hourly trigger. **Also flagged:** `relay-sweep` (merged in
+    #908 after the cron plan was written) is a `/api/cron/*` route with no `JOBS` row, so the cron plan's drift guard
+    reds on execution unless that plan adds it. That is the cron programme's to fix; T7b re-checks it at Step 1.
+13. **No competition has a locale.** The tree has `organizations.default_locale` (V281) and `users.locale`, nothing on
+    competitions. W25's "competition's locale" is therefore the organisation's default, which the public league pages
+    already read. T8a uses it.
+14. **`reuseWindowOpen` has three callers** that must agree (`stream-credits.ts:125`): admission's balance waiver
+    (`stream-sessions.ts:1183`), `consumeForSession` (`stream-credits.ts:169`) and the panel's `restartFree`
+    (`stream-sessions.ts:1577`). T6b replaces all three with `restartAllowance`, and its tests prove they agree.
 
 ## File Structure
 
@@ -234,7 +264,7 @@ does about it.
 | `apps/web/src/server/api-v1/capture-schemas.ts` | zod twins of the four contracts (re-exported from `schemas.ts`) | T1 |
 | `apps/web/src/server/api-v1/__tests__/capture-contract.test.ts` | checksums, zod ↔ JSON parity, fixtures | T1 |
 | `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-{a,b}.html` | the two Ready-state options | T2 |
-| `db/migration/deltas/V429__capture_stream_codes.sql` | spec §8.1 | T3 |
+| `db/migration/deltas/V430__capture_stream_codes.sql` | spec §8.1 | T3 |
 | `apps/web/src/server/relay/domain/stream-code.ts` | C1–C5 | T4a |
 | `apps/web/src/server/relay/domain/pairing.ts` | T1–T7, silent / present / not responding, A14 | T4a |
 | `apps/web/src/server/relay/domain/slot.ts` | §5.4 | T4a |
@@ -251,6 +281,8 @@ does about it.
 | `apps/web/src/app/api/internal/relay/fake-ingest/[inputId]/route.ts` | fake connect control (local/ci) | T7 |
 | `apps/web/src/server/usecases/stream-phone.ts` + `app/api/v1/fixtures/[id]/stream-phone/route.ts` | the panel's read model | T9 |
 | `apps/web/src/server/usecases/__tests__/capture-model.test.ts` | the fast-check model (§11.1.4) | T10 |
+| `apps/web/src/server/usecases/__tests__/restart-allowance.test.ts` | W23 boundary and sequence | T6b |
+| `apps/web/src/app/api/cron/stream-tick/route.ts` + `route.test.ts` | the 5-minute tick job (W22) | T7b |
 | `apps/web/e2e/helpers/fake-capture-phone.ts` | the phone, driven from the panel's paste code | T12 |
 | `apps/web/e2e/walkthrough/capture-phone.spec.ts` | §11.1.5 | T12 |
 
@@ -260,7 +292,7 @@ does about it.
 |---|---|---|
 | `apps/web/src/lib/capture-qr.ts` | `CaptureQrV2` and `parseCaptureQrV2` added (T1); v1 removed (T11) | T1, T11 |
 | `apps/web/src/server/relay/secret-columns.ts` | `insertStreamCode`, `openStreamCodeTok`, `wipeStreamCodeTok` | T5 |
-| `apps/web/src/server/relay/__tests__/enc-boundary.test.ts`, `_stream-migration.ts`, `migration-shape.test.ts` | `tok_enc` owner; the delta fold; V429 shape | T3 |
+| `apps/web/src/server/relay/__tests__/enc-boundary.test.ts`, `_stream-migration.ts`, `migration-shape.test.ts` | `tok_enc` owner; the delta fold; V430 shape | T3 |
 | `apps/web/src/server/relay/config.ts` | the §6 constants, `STREAM_SRT_ENABLED`, `tunable()` | T4a, T8a |
 | `apps/web/src/server/relay/domain/session.ts` | `startCause`, `stop` reasons, `warmingAt`, `phone_not_paired` | T6 |
 | `apps/web/src/server/usecases/stream-sessions.ts` | `startBroadcast`, `tickSession`, v1 QR removed | T6, T7, T11 |
@@ -273,6 +305,8 @@ does about it.
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` + generated `lib/i18n-keys.ts` | `stream.code.*`, `stream.phone.*`, `stream.end.*` | T11 |
 | `apps/web/e2e/walkthrough/stream-relay.spec.ts`, `e2e/mobile.spec.ts`, `lib/__tests__/e2e-ci-wiring.test.ts` | v2 rewrite; registration | T11, T12 |
 | `scripts/smoke.ts` | `captureV2Suite` in `SELECTABLE_SUITES` | T12 |
+| `apps/web/src/server/usecases/stream-credits.ts`, `server/relay/domain/credits.ts` | `restartAllowance`, `restartIsFree` | T6b |
+| `apps/cron-worker/src/schedule.ts`, `wrangler.json`, `src/index.ts`, `test/schedule.test.ts`, `test/drift.test.ts` | the `stream-tick` row and the `*/5` trigger | T7b |
 
 ---
 
@@ -545,15 +579,18 @@ Owes: unit (parity, fixtures) and regression (v1 gone; QR has 4 keys).
 
 - Create: `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-a.html`
 - Create: `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/option-b.html`
-- Create: the screenshots `…/shots/{a,b}-{320,768,1280}-{nophone,paired,silent}.png`
+- Create: the screenshots `…/shots/{a,b}-{320,768,1280}-{nophone,paired,silent,restarts,warming,reconnecting}.png`
 
 - [ ] **Step 1: Read** `docs/superpowers/specs/2026-09-30-fixture-page-stream-mockups/option-a.html`. It is the
   Option A frame the panel already ships. Read spec §6.12.
 
-- [ ] **Step 2: Build two options**, each a static HTML page with the three Ready states side by side:
+- [ ] **Step 2: Build two options**, each a static HTML page with six states side by side:
   - Ready, no phone;
   - Ready, phone paired;
-  - Ready, phone paired but silent.
+  - Ready, phone paired but silent;
+  - Ready inside the reuse window, at the limit: "Free restarts used (3 of 3) — this one uses 1 credit" (W23);
+  - Waiting, warming with the countdown (W24);
+  - Live, "Reconnecting…" with the countdown (W24).
 
   Every option uses §6.12's copy verbatim. Stay inside the existing tokens: lime (`--mk-lime`) is never text.
   - **Option A ("QR first").** The QR leads the body, and Go live sits disabled under it with the pairing reason.
@@ -563,8 +600,8 @@ Owes: unit (parity, fixtures) and regression (v1 gone; QR has 4 keys).
 
 - [ ] **Step 3: Capture** each option at 320, 768 and 1280 with Playwright (`page.setViewportSize`, a full-page
   screenshot). Then check:
-  - all 18 PNGs exist;
-  - no two are byte-identical (`shasum` shows 18 distinct hashes);
+  - all 36 PNGs exist;
+  - no two are byte-identical (`shasum` shows 36 distinct hashes);
   - `document.documentElement.scrollWidth <= innerWidth` at each width, printed per image.
 
 - [ ] **Step 4: Commit** with `docs(capture): PR-1 Ready-state mockups, options A and B (T2)`. Then **STOP**. Send
@@ -577,14 +614,14 @@ Owes: nothing executable. This is the house "≥2 UI options" gate.
 
 ## Wave S — server
 
-### Task 3: V429 — the schema, its trigger, and the boundary tests
+### Task 3: V430 — the schema, its trigger, and the boundary tests
 
 **Files:**
 
-- Create: `db/migration/deltas/V429__capture_stream_codes.sql`
+- Create: `db/migration/deltas/V430__capture_stream_codes.sql`
 - Modify:
   - `apps/web/src/server/relay/__tests__/_stream-migration.ts` (the delta fold);
-  - `migration-shape.test.ts` (the V429 cases);
+  - `migration-shape.test.ts` (the V430 cases);
   - `enc-boundary.test.ts` (the `tok_enc` owner);
   - `rls-static.test.ts`, only if its table list is derived and needs the new tables admitted.
 - Test: `apps/web/src/server/usecases/__tests__/fixture-finished-at.test.ts` (new, DB-backed)
@@ -616,7 +653,7 @@ Owes: nothing executable. This is the house "≥2 UI options" gate.
     trigger, or the trigger would stamp it again.
 
 - [ ] **Step 2: Write the failing tests.**
-  - `migration-shape.test.ts` gains a V429 block:
+  - `migration-shape.test.ts` gains a V430 block:
     - the four tables exist;
     - `fixture_stream_codes_one_active` and `fixture_stream_pairings_one_current` are partial unique indexes;
     - `tok_enc` is nullable, with the check `ended_at is null or tok_enc is null`;
@@ -648,7 +685,7 @@ cd $WT/apps/web && rm -f /tmp/cq1-t3.json && pnpm vitest run src/server/relay/__
   - The backfill before the trigger. Red: a backfilled row's stamp moves on its next in-set update.
   - Drop `"tok_enc"` from `STREAM_COLUMNS`. Red: the ownership case.
 
-- [ ] **Step 5: Commit** with `feat(capture): V429 stream codes, pairings, beat history, finished_at (T3)`, listing
+- [ ] **Step 5: Commit** with `feat(capture): V430 stream codes, pairings, beat history, finished_at (T3)`, listing
   the mutations in the body.
 
 Owes: unit (shape), use-case (trigger, every sport) and regression (the end-reason check admits five).
@@ -814,7 +851,15 @@ export function livePhoneLost(i: {
   state: SessionState; firstIngestAt: Date | null; phoneBeatAt: Date | null;
   freshReadConnected: boolean; lastConnectedSampleAt: Date | null;
 }, now: Date, lostMinutes: number): boolean;   // W19, §6.8.5 — lostMinutes = tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES)
+/** W24: the panel's countdown, on the server clock. null = nothing to show. */
+export function lostCountdown(i: {
+  state: SessionState; firstIngestAt: Date | null; warmingAt: Date | null; phoneBeatAt: Date | null;
+  ingestConnected: boolean; lastConnectedSampleAt: Date | null;
+}, now: Date, cfg: { lostMinutes: number; warmingMinutes: number; quietSeconds: number }):
+  { kind: "warming" | "live"; elapsedMs: number; remainingMs: number } | null;
 ```
+
+- Produces, in `config.ts`: `RECONNECT_QUIET_SECONDS = 30`.
 
 - [ ] **Step 1: Write the failing tables.**
   - **`beat-answer.test.ts`.**
@@ -842,6 +887,16 @@ export function livePhoneLost(i: {
       - `phoneBeatAt: null` falls back to `firstIngestAt`.
       - `lostMinutes` is passed as `PHONE_LOST_LIVE_MINUTES`; a second run with `lostMinutes = 1` proves the
         parameter is used.
+    - **`lostCountdown` (W24).** The empty case first: connected → null.
+      - Live, no video and no beat for `RECONNECT_QUIET_SECONDS` − 1 s → null; at 30 s → `{kind:"live", elapsedMs:
+        30_000, remainingMs: lostMinutes·60 000 − 30 000}`.
+      - Live, video gone 10 min but the phone beat 2 min ago → **null** (O5: W19 cannot fire while the phone beats).
+      - Live, the two silences differ (beat 12 min, video 9 min) → elapsed is the **shorter** (9 min) and remaining
+        is `lostMinutes` − 9 min. This is the ordering differential: the longer silence gives the wrong answer.
+      - Warming, no video, 30 s after `warmingAt` → `{kind:"warming"}`, with remaining = `warmingAt` +
+        `WARMING_TIMEOUT_MINUTES` − now.
+      - Every expected value comes from `PHONE_LOST_LIVE_MINUTES`, `WARMING_TIMEOUT_MINUTES` and
+        `RECONNECT_QUIET_SECONDS`.
 
 - [ ] **Step 2: Run** and see them fail.
 
@@ -869,11 +924,13 @@ export function livePhoneLost(i: Parameters<typeof livePhoneLost>[0], now: Date,
   - `>=` → `>`;
   - swap rows 2 and 3 of `beatAnswer`;
   - `operator_stopped` → `failed`;
-  - ask 10 with a flat 60 s.
+  - ask 10 with a flat 60 s;
+  - `lostCountdown` takes the longer silence (`Math.max`). Red: the 12/9 case;
+  - `lostCountdown` ignores the beat. Red: the O5 case.
 
   Each one must go red.
 
-- [ ] **Step 6: Commit** with `feat(capture): beat answer, end-reason map, ask-10 and W19 predicates (T4b)`, listing
+- [ ] **Step 6: Commit** with `feat(capture): beat answer, end reasons, ask-10, W19 and the countdown (T4b)`, listing
   the mutations in the body.
 
 Owes: unit.
@@ -1065,6 +1122,96 @@ cd $WT/apps/web && rm -f /tmp/cq1-t6.json && pnpm vitest run src/server/relay/do
 
 Owes: unit, use-case and regression (the warming anchor, and the end-reason check admits five).
 
+### Task 6b: Free restarts — three per reuse window (W23)
+
+**Files:**
+
+- Modify:
+  - `apps/web/src/server/relay/domain/credits.ts` (`restartIsFree`);
+  - `apps/web/src/server/relay/config.ts` (`FREE_RESTARTS_PER_WINDOW = 3`);
+  - `apps/web/src/server/usecases/stream-credits.ts` (`restartAllowance`; `consumeForSession` uses it);
+  - `apps/web/src/server/usecases/stream-sessions.ts` (admission at :1183 and the read at :1577 use it);
+  - `apps/web/src/server/api-v1/schemas.ts` (`StreamSessionCurrent.restartFree` becomes `restart`).
+- Test:
+  - `server/usecases/__tests__/restart-allowance.test.ts` (new, DB-backed);
+  - `server/relay/domain/__tests__/credits.test.ts`;
+  - `server/usecases/__tests__/stream-credits.test.ts` and `stream-sessions.test.ts`.
+
+**Interfaces:**
+
+- Produces:
+
+```ts
+export const FREE_RESTARTS_PER_WINDOW = 3;                         // config.ts
+export function restartIsFree(a: { windowOpen: boolean; used: number }, limit: number): boolean;   // domain/credits.ts
+export type RestartAllowance = { windowOpen: boolean; used: number; limit: number; free: boolean };
+export async function restartAllowance(
+  exec: Executor,
+  args: { orgId: string; fixtureId: string | null; excludeSessionId: string | null },
+  now: Date,
+): Promise<RestartAllowance>;                                      // stream-credits.ts
+```
+
+- The SQL. The anchor is `reuseWindowOpen`'s query unchanged, also selecting `c.session_id`. Then:
+
+```sql
+select count(*)::int as used from fixture_stream_sessions s
+ where s.org_id = ${orgId} and s.fixture_id = ${fixtureId}
+   and s.first_ingest_at is not null
+   and s.id <> ${anchorSessionId}
+   and (${excludeSessionId}::uuid is null or s.id <> ${excludeSessionId})
+   and s.created_at > (select created_at from fixture_stream_sessions where id = ${anchorSessionId})
+```
+
+- `StreamSessionCurrent.restart: RestartAllowance | null` (null when no window is open) replaces `restartFree`.
+  Re-pin every reader of `restartFree` with `grep -rn -a restartFree $WT/apps/web/src` and move them all.
+
+- [ ] **Step 1: Write the failing tests.**
+  - **`credits.test.ts`.** The empty case first: the window is closed → not free. Then `used` 0, 1 and 2 → free, and
+    3 → not free. `limit` comes from `FREE_RESTARTS_PER_WINDOW`.
+  - **`restart-allowance.test.ts`** (DB-backed, fake drivers, injected clock). Each case asserts the credit ledger
+    rows, not just the flag:
+    - **Boundary:** paid live, then three restarts that each reach video, all free (0 consume rows added). The 4th
+      that reaches video consumes 1 at live. Then the 5th is free again (O4: the paid 4th re-anchors).
+    - **No video:** a restart that is stopped before first ingest leaves `used` unchanged, so after three counted
+      restarts and one without video, the next is still the 4th.
+    - **Same sid:** a takeover (T4) and an operator rejoin of the live session never change `used`.
+    - **Never blocks:** at the limit with a balance of 0, Go live is refused `402 no_credits` at admission. That is the
+      existing balance gate, not a new block; with a balance of 1 it is admitted.
+    - **Agreement:** at every step of the boundary sequence, admission's waiver, `consumeForSession`'s decision and
+      `current.restart.free` are equal. Assert the count of compared steps is 5.
+    - **The window closes:** 24 h after the anchor, `restart` is null and a Go live pays, as today.
+  - **Sequence (rule 10):** a fast-check property over `{goLive, ingest, stop}` sequences of length ≤ 12 on one
+    fixture. The expected number of consume rows is computed by a model that knows only the W23 rule text: the first
+    live pays, every 4th counted restart after an anchor pays, and sessions without video never count. It is never
+    computed from `restartAllowance`. Count the runs that reached a 4th restart and assert > 0.
+
+- [ ] **Step 2: Run** and see them fail.
+
+```bash
+cd $WT/apps/web && rm -f /tmp/cq1-t6b.json && pnpm vitest run src/server/usecases/__tests__/restart-allowance.test.ts src/server/relay/domain/__tests__/credits.test.ts src/server/usecases/__tests__/stream-credits.test.ts src/server/usecases/__tests__/stream-sessions.test.ts --reporter=json --outputFile=/tmp/cq1-t6b.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq1-t6b.json
+```
+
+  If `credits.test.ts` or `stream-credits.test.ts` has a different name in the tree, use the real one
+  (`ls $WT/apps/web/src/server/relay/domain/__tests__ $WT/apps/web/src/server/usecases/__tests__ | grep -a credit`)
+  and confirm it appears in `.files`.
+
+- [ ] **Step 3: Implement.** `reuseWindowOpen` stays exported for any other caller that grep finds, but none of the
+  three call sites in Premise 14 uses it any more.
+
+- [ ] **Step 4: Run Step 2's command.** Expected: green, with every existing reuse-window case unchanged.
+
+- [ ] **Step 5: Mutate.**
+  - `used < limit` → `used <= limit`. Red: the boundary case at the 4th.
+  - Drop `first_ingest_at is not null`. Red: the no-video case.
+  - Drop the anchor exclusion. Red: the 3rd restart pays.
+  - Make admission still call `reuseWindowOpen`. Red: the agreement case.
+
+- [ ] **Step 6: Commit** with `feat(stream): three free restarts per reuse window, one authority (T6b)`, listing the
+  mutations in the body.
+
+Owes: unit, use-case, money and the sequence test.
+
 ### Task 7: The tick — `tickSession`, ask 10, W19, the sweep, the fake-ingest control
 
 **Files:**
@@ -1140,6 +1287,96 @@ cd $WT/apps/web && rm -f /tmp/cq1-t7.json && pnpm vitest run src/server/usecases
 Owes: use-case, regression (the fake route outside local/ci) and money (no consume for `phone_lost` before ingest; no
 refund after).
 
+### Task 7b: The 5-minute `stream-tick` job (W22)
+
+**Precondition:** the Cloudflare Cron plan has merged. `ls $WT/apps/cron-worker/src/schedule.ts` exists. If not, STOP.
+
+**Files:**
+
+- Create: `apps/web/src/app/api/cron/stream-tick/route.ts` and `route.test.ts` beside it
+- Modify: `apps/web/src/server/usecases/stream-sessions.ts` (`tickOpenSessions`)
+- Modify, in `apps/cron-worker`:
+  - `src/schedule.ts`: a `{ kind: "every"; minutes: 5 }` `Due`, the `stream-tick` row and `FAST_TRIGGER_CRON`;
+  - `src/index.ts`: `scheduled` passes `controller.cron` to `runDue`;
+  - `wrangler.json`: both envs carry the two triggers;
+  - `test/schedule.test.ts` and `test/drift.test.ts`.
+
+**Interfaces:**
+
+- Produces `tickOpenSessions(deps): Promise<{ ticked: number; ended: number; failed: number }>`. It reads every open
+  session of every org, then runs `tickSession(id, deps, "sweep")` on each inside its own try/catch, so one bad
+  session never stops the rest.
+- Produces the route `POST /api/cron/stream-tick`, which is a copy of `relay-sweep/route.ts`'s guard order: 503 with
+  no `CRON_SECRET`, 401 on a mismatched `x-cron-secret`, and `{disabled: true}` when `deps.drivers.disabled`.
+- Produces, in `schedule.ts`:
+
+```ts
+export const FAST_TRIGGER_CRON = "*/5 * * * *";
+// JOBS gains:
+{ id: "stream-tick", path: "/api/cron/stream-tick", due: { kind: "every", minutes: 5 }, retry: true, manual: true },
+// dueJobs(scheduledTime, cron): the FAST trigger runs only `every` jobs; TRIGGER_CRON runs only the others, as before.
+export function dueJobs(scheduledTime: Date, cron: string): Job[];
+// jobCrontab(stream-tick) === FAST_TRIGGER_CRON (its Sentry monitor schedule).
+```
+
+- [ ] **Step 1: Re-pin the merged cron Worker.** Read `schedule.ts`, `index.ts`, `run.ts` and `test/drift.test.ts` as
+  they landed. Confirm three things:
+  - the job header is still `x-cron-secret`;
+  - the drift guard still requires one `JOBS` row per `/api/cron/*` route;
+  - `relay-sweep` has a row (Premise 12).
+
+  If the merged shape differs from this task's, follow the merged shape and record each difference in the commit
+  body.
+
+- [ ] **Step 2: Write the failing tests.**
+  - **`route.test.ts`.**
+    - No `CRON_SECRET` → 503. A wrong secret → 401, before any session is read (a spy on `tickSession` sees 0 calls).
+    - With a live W19 session and a warming session past its deadline, the job ends both (`phone_lost` and
+      `no_inbound_timeout`) and answers `{ticked: 2, ended: 2, failed: 0}`.
+    - A session whose tick throws is counted in `failed`, and the next one is still ticked.
+    - An ended session is never ticked.
+    - With no open sessions → `{ticked: 0, …}`. This is the empty case, and it asserts 0 ticks rather than skipping.
+  - **`schedule.test.ts`.**
+    - `dueJobs(t, FAST_TRIGGER_CRON)` is exactly `[stream-tick]` at any minute.
+    - `dueJobs(t, TRIGGER_CRON)` never contains `stream-tick`, and is otherwise unchanged from the merged table: the
+      count of hourly jobs is read from the table, not typed.
+  - **`drift.test.ts`.**
+    - Both envs carry `[TRIGGER_CRON, FAST_TRIGGER_CRON]`.
+    - The stream-tick row's path resolves to the new route file.
+    - The route scan now finds one more route than before, and still matches `JOBS` one to one.
+
+- [ ] **Step 3: Run** and see them fail.
+
+```bash
+cd $WT/apps/web && rm -f /tmp/cq1-t7b.json && pnpm vitest run src/app/api/cron/stream-tick/route.test.ts src/app/api/cron/relay-sweep/route.test.ts src/server/usecases/__tests__/stream-tick.test.ts --reporter=json --outputFile=/tmp/cq1-t7b.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq1-t7b.json
+cd $WT/apps/cron-worker && rm -f /tmp/cq1-t7b-cw.json && npx vitest run --reporter=json --outputFile=/tmp/cq1-t7b-cw.json test/schedule.test.ts test/drift.test.ts test/run.test.ts; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq1-t7b-cw.json
+cd $WT && pnpm --filter @seazn/cron-worker typecheck; echo EXIT=$?
+```
+
+  The cron-worker's test file names are the merged plan's: `schedule`, `call`, `sentry`, `run`, `manual` and `drift`.
+
+- [ ] **Step 4: Implement.** Make the smallest change to the cron Worker:
+  - one `Due` kind;
+  - one row;
+  - one trigger constant;
+  - `dueJobs` keyed on `(scheduledTime, cron)`.
+
+  The `ACTIVE` gate, the retry policy, the Sentry check-ins and the 12-minute deadline apply to `stream-tick` as they
+  do to every job.
+
+- [ ] **Step 5: Run Step 3's commands.** Expected: green in both workspaces.
+
+- [ ] **Step 6: Mutate.**
+  - `dueJobs` ignores `cron`. Red: every hourly job also fires every 5 min.
+  - The route skips the secret check. Red: the 401 case.
+  - `tickOpenSessions` stops at the first throw. Red: the `failed` case.
+  - Drop `FAST_TRIGGER_CRON` from `wrangler.json`. Red: the drift case.
+
+- [ ] **Step 7: Commit** with `feat(stream): a 5-minute stream-tick job on the cron Worker (T7b, W22)`, listing the
+  mutations in the body. The PR body (T13) notes the account now runs four Cron Triggers of the Free plan's five.
+
+Owes: unit, use-case and regression (the hourly jobs are unchanged).
+
 ### Task 8a: The descriptor — `GET /api/v1/capture/codes/{code}`
 
 **Files:**
@@ -1213,7 +1450,8 @@ export function ingestCred(raw: RawCred, env: { ingestHost: string | null; srtEn
       starting;
     - no `phone` gives waiting in every case;
     - every field from its §6.4 source:
-      - `label` with a TBD side → `Match {n}` (Review Focus 5);
+      - `label` with a TBD side → the `breadcrumb.match` text in the organisation's `default_locale` (W25, Review
+        Focus 5): one case per locale (en, es, fr, nl), with the expected text read from that locale's `ui.json`;
       - `venueTimezone` through the V305 lane;
       - `scheduledStart` omitted when null;
       - `overlayUrl` both ways of the entitlement (W18), never header-derived: a forged `X-Forwarded-Host` is
@@ -1456,15 +1694,21 @@ Owes: use-case, unit and money.
   - Editors only. An API key → refused (`NEVER_KEY_ROUTES`).
   - `stream-contract.test.ts`: the relay-route pin gains `GET /fixtures/:id/stream-phone`, for eleven (T6 widened
     the filter). Add the file to the scope command below.
+  - **W24 on `current`:** `currentSession` gains `countdown`, computed by `lostCountdown` (T4b) from the same clocks
+    the tick uses, on the server's `now`. Test it in `stream-sessions.test.ts`: live and silent past 30 s → a
+    countdown whose `remainingMs` matches W19's firing (tick at `now + remainingMs` ends the session; tick 1 s earlier
+    does not), and warming → remaining equals the warming deadline. Add `stream-sessions.test.ts` to the scope
+    command.
 
 - [ ] **Step 2: Run, implement, re-run.**
 
 ```bash
-cd $WT/apps/web && rm -f /tmp/cq1-t9.json && pnpm vitest run src/server/usecases/__tests__/stream-phone.test.ts "src/app/api/v1/fixtures/[id]/stream-phone/__tests__/route.test.ts" src/server/api-v1/__tests__/key-scopes.test.ts src/server/api-v1/__tests__/openapi-coverage.test.ts src/server/api-v1/__tests__/stream-contract.test.ts --reporter=json --outputFile=/tmp/cq1-t9.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq1-t9.json
+cd $WT/apps/web && rm -f /tmp/cq1-t9.json && pnpm vitest run src/server/usecases/__tests__/stream-phone.test.ts "src/app/api/v1/fixtures/[id]/stream-phone/__tests__/route.test.ts" src/server/api-v1/__tests__/key-scopes.test.ts src/server/api-v1/__tests__/openapi-coverage.test.ts src/server/api-v1/__tests__/stream-contract.test.ts src/server/usecases/__tests__/stream-sessions.test.ts --reporter=json --outputFile=/tmp/cq1-t9.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq1-t9.json
 ```
 
-- [ ] **Step 3: Mutate.** Read `present` from the last beat alone, ignoring `ended_at`. Red: "a replaced pairing is
-  not present".
+- [ ] **Step 3: Mutate.**
+  - Read `present` from the last beat alone, ignoring `ended_at`. Red: "a replaced pairing is not present".
+  - Compute `countdown` from `heartbeat_at` instead of `phone_beat_at`. Red: the W19-agreement case.
 
 - [ ] **Step 4: Commit** with `feat(stream): stream-phone read model for the panel (T9)`, listing the mutation in the
   body.
@@ -1488,11 +1732,14 @@ Owes: use-case.
 - [ ] **Step 1: Write the model.**
   - Use `fc.commands` with the actions in §11.1.4, two phones (A and B), and a model state:
     `{ current: "A"|"B"|null; open: {sid; live: boolean; holder: "A"|"B"} | null; stopRecords: Map<phone, sid> }`.
-  - Each `Command.run` calls the real use-case, then checks **all ten invariants** against the DB.
+  - Each `Command.run` calls the real use-case, then checks **all eleven invariants** (the spec's ten plus W23's) against the DB.
   - `phone_lost` (invariant 10) is checked by reading `end_reason` and the clocks at the moment it was written.
+  - **W23 and W22 join the model.** Add the actions `restart` (organiser Go live after an end) and `cronTick` (calls
+    `tickOpenSessions`). Add invariant 11: the fixture's consume rows equal the W23 model's count, from the rule text
+    as in T6b. Add a counter `paidRestarts`, which must be > 0.
 
 ```ts
-it("capture model: ten invariants hold over every generated sequence", async () => {
+it("capture model: eleven invariants hold over every generated sequence", async () => {
   const counts = { takeovers: 0, lateStopsDelivered: 0, lateStopsIgnoredHeld: 0, credsServed: 0, phoneLostLive: 0,
                    phoneLostWarming: 0, consumes: 0, refusedClaims: 0, oneCurrent: 0, oneOpen: 0 };
   await fc.assert(
@@ -1527,7 +1774,7 @@ cd $WT/apps/web && for i in 1 2 3; do rm -f /tmp/cq1-t10-$i.json; CAPTURE_MODEL_
   Most rows were already run in their task; re-run them here as one sweep on the integrated tree, because two guards
   covering for each other only show up together (AGENTS.md class 3). Write the table into the mutations file.
 
-- [ ] **Step 5: Commit** with `test(capture): fast-check model with ten invariants; mutation table (T10)`.
+- [ ] **Step 5: Commit** with `test(capture): fast-check model with eleven invariants; mutation table (T10)`.
 
 Owes: the sequence test and the mutation table.
 
@@ -1554,7 +1801,12 @@ Owes: the sequence test and the mutation table.
   - `capture-qr.test.ts`, `stream-sessions.test.ts`, `stream-contract.test.ts`, `stream-session-view.test.ts` and
     `fixture-stream-panel.test.tsx` (the v1 cases removed).
 - Modify: the dictionaries `{en,es,fr,nl}/ui.json`, then `pnpm i18n:gen-keys`. The keys are `stream.code.*`,
-  `stream.phone.*` and `stream.end.*`, including W19's "The phone and its video were gone for 15 minutes".
+  `stream.phone.*`, `stream.end.*` and `stream.restart.*`. They include:
+  - W19's "The phone and its video were gone for 15 minutes";
+  - W24's "Reconnecting…", "No video from the phone for {elapsed} — the stream ends in {remaining} if it doesn't come
+    back." and "No video from the phone yet — the stream is cancelled in {remaining} if it doesn't arrive.";
+  - W23's "Free restarts used ({used} of {limit})" and "Free restarts used ({used} of {limit}) — this one uses 1
+    credit".
 - Modify: `apps/web/e2e/mobile.spec.ts`, only if a stream testid it asserts changes.
 
 **Interfaces:**
@@ -1572,6 +1824,10 @@ Owes: the sequence test and the mutation table.
     - each state renders the signed-off option's structure and §6.12's copy keys;
     - the QR and the paste code carry `ph-no-capture`;
     - `captureQrV2Text` output has exactly 4 keys (W3 regression);
+    - W24: with `countdown` set, the sentence renders `elapsed` and `remaining` through the locale's duration
+      formatter; with a connected live session, the Phone node reads `stream.chain.word.noSignal`'s successor
+      "Reconnecting…" only while the input is not connected, and no countdown renders when `countdown` is null;
+    - W23: the restart line renders only when `restart` is non-null; the credit suffix only when `free` is false;
     - no `qr` or `reveal` is read.
   - Regression: `current` has no `qr`, and `?reveal=1` → 400.
 
@@ -1636,7 +1892,13 @@ Owes: unit, regression (v1 gone) and visual.
 - [ ] **Step 1: Write the walkthroughs** from spec §11.1.5. Every case is listed there.
   - Budgets are derived from the constants (AGENTS.md #20).
   - The server runs with `ENV_NAME=local`, `DEAD_PHONE_TAKEOVER_SECONDS=3`, `PHONE_LOST_LIVE_MINUTES=1` and the
-    silent floor shortened, so A14, ask 10 and W19 run in seconds. Each spec asserts the env it needs at its top and
+    silent floor shortened, so A14, ask 10 and W19 run in seconds.
+  - **W24:** the W19 case also asserts the panel shows "Reconnecting…", then the countdown sentence after 30 s, and
+    that the session ends when the countdown reaches zero (within one poll).
+  - **W22:** a W19 case with the panel **closed** ends through a direct `POST /api/cron/stream-tick` with the local
+    `x-cron-secret`, proving the job ends a session no one is watching.
+  - **W23:** four restarts that reach video through the fake ingest. The panel shows "(3 of 3) — this one uses 1
+    credit" before the 4th, and the balance drops by exactly 1 after it. Each spec asserts the env it needs at its top and
     fails loudly if the env is missing.
   - The W19 case drives `fake-ingest/{inputId}` to disconnected and stops beats. It asserts the panel's
     `phone_lost` copy and the DB `end_reason`.
@@ -1669,7 +1931,7 @@ Owes: E2E and smoke.
 ### Task 13: Lane close — the scoped gate, the staging runbook, then STOP
 
 - [ ] **Step 1: Re-check the migration number.** `ls db/migration/deltas | sort -V | tail -1` on `origin/main`, plus
-  `git log --all --name-only | grep -a V429`. If main has moved past V428, renumber and re-run T3's scope.
+  `git log --all --name-only | grep -a V430`. If main has moved past V428, renumber and re-run T3's scope.
 
 - [ ] **Step 2: Run the scoped gate.** That is the union of every task's vitest path list in one JSON run, then
   typecheck and lint. **Never the full suite.**
@@ -1680,7 +1942,8 @@ Owes: E2E and smoke.
   - the per-screen verdicts (T11);
   - the staging runbook S1–S11, copied from spec §12 with each step's command. S2 includes the
     `srt-live-transmit` UDP-relay note. S11 is the W19 real-Cloudflare run;
-  - the open items: §16 O3 (W19 promptness) and the `Match {n}` label fallback
+  - the open items: §16 O4 (does a paid 4th restart re-anchor the free count?) and O5 (no countdown while the phone
+    still beats), plus the account's Cron Trigger count (four of the Free plan's five)
     (Review Focus 5).
 
 - [ ] **Step 4: STOP.** No push and no PR. Report the branch, the gate counts and the open items to the orchestrator.
@@ -1692,7 +1955,7 @@ Owes: E2E and smoke.
 - **Spec coverage.**
   - §4 and §6.14 → T1.
   - §6.12 mockups → T2. Panel → T11.
-  - §8 V429 → T3.
+  - §8 V430 → T3.
   - §5 machines → T4a/T4b.
   - §6.1/§6.2/§6.5 code, QR and pairing → T4a, T5 and T8b.
   - §6.3.1/§6.4/W21 → T8a.
@@ -1700,7 +1963,8 @@ Owes: E2E and smoke.
   - §6.3.4/§6.7/§10 → T8c.
   - §6.6 → T4a and T8b.
   - §6.7.1 → T6.
-  - §6.8.3/§6.8.5/§6.9–§6.11 → T7.
+  - §6.8.3/§6.8.5/§6.9–§6.11 → T7; the W22 job → T7b.
+  - §6.7.4 (W23) → T6b, T10 and T11. W24 → T4b, T9 and T11. W25 → T8a.
   - §6.8.4 → T4b.
   - §9 `stream-phone` → T9.
   - §6.13 → T1 (contract) and T11 (code).

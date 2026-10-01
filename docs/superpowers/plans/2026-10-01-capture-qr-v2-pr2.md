@@ -13,8 +13,8 @@ and is told when the camera moves to another phone.
   - Auto start runs at the beat's step 6 (`capture-phone.ts` `postBeat`).
   - Auto stop runs in `tickSession`, which serves the beat, the organiser poll and the sweep.
 - **The scoring path gets no hook.** The predicates read `fixtures.status` and `finished_at`, which every scoring
-  surface writes through `appendEvent` and V429's trigger.
-- **One migration, V430,** adds the auto columns to `fixture_stream_settings`.
+  surface writes through `appendEvent` and V430's trigger.
+- **One migration, V431,** adds the auto columns to `fixture_stream_settings`.
 - **The panel.** PR-2 fills the `auto` block and uses `lastTakeover` on PR-1's `stream-phone` read model, and draws the
   health line into `SignalChain`'s reserved `phoneStatus` slot.
 
@@ -28,7 +28,9 @@ dependency.** PR-2 is cut only after PR-1 has merged. Every interface named unde
 **Worktree.**
 
 - Path: `/Users/ashokhein/github/seazn.club/.claude/worktrees/capture-qr-v2-pr2`.
-- Branch: `feat/capture-qr-v2-pr2`, cut from `origin/main` **after** PR-1 merges.
+- Branch: `feat/capture-qr-v2-pr2`, cut from `origin/main` **after** PR-1 merges. PR-1 itself executes only after the
+  Cloudflare Cron Triggers plan merges (W22), so PR-2 inherits both dependencies. Its auto stop rides PR-1's 5-minute
+  `stream-tick` job (T7b), and the panel poll still ticks while the panel is open.
 - `WT` below means that absolute path. Every command starts with `cd $WT…` in the same shell call.
 
 ## Execution batches
@@ -116,7 +118,7 @@ post-PR-1 main**, because PR-1 changes the files this plan touches.
 4. **Credit purchase in a use-case test** follows `server/usecases/__tests__/credit-packs.test.ts`. The Stripe sandbox
    is used only in the smoke and walkthrough (memory: Billing = SANDBOX). The use-case test grants credits through
    the same ledger insert those tests use.
-5. **V430 is free** on 2026-10-01; T2 Step 1 re-checks it. If PR-1 renumbered V429, V430 moves with it.
+5. **V431 is free** on 2026-10-01; T2 Step 1 re-checks it. If PR-1 renumbered V430, V431 moves with it.
 
 ## File Structure
 
@@ -125,7 +127,7 @@ post-PR-1 main**, because PR-1 changes the files this plan touches.
 | Path | Responsibility | Task |
 |---|---|---|
 | `docs/superpowers/specs/2026-10-01-capture-qr-v2-mockups/pr2/option-{a,b}.html` + `shots/` | the §7.6 options | T1 |
-| `db/migration/deltas/V430__auto_stream.sql` | spec §8.2 | T2 |
+| `db/migration/deltas/V431__auto_stream.sql` | spec §8.2 | T2 |
 | `apps/web/src/server/relay/domain/auto-stream.ts` | `autoStartDue`, `autoStopDue`, `autoRefusalOf` | T3 |
 | `apps/web/src/server/relay/domain/phone-health.ts` | `phoneHealthOf` (the line and the amber pick) | T6 |
 | `apps/web/e2e/walkthrough/capture-auto.spec.ts` | §11.2 E2E | T9 |
@@ -182,11 +184,11 @@ plus `pr2/shots/{a,b}-{320,768,1280}-{state}.png`.
 
 Owes: the house "≥2 UI options" gate.
 
-### Task 2: V430, the switch API, and `autoAllowed`
+### Task 2: V431, the switch API, and `autoAllowed`
 
 **Files:**
 
-- Create: `db/migration/deltas/V430__auto_stream.sql`
+- Create: `db/migration/deltas/V431__auto_stream.sql`
 - Modify:
   - `server/usecases/stream-codes.ts` (`saveStreamSettings` accepts `{targetId?, autoStream?}`);
   - `app/api/v1/fixtures/[id]/stream-settings/route.ts`;
@@ -218,7 +220,7 @@ Owes: the house "≥2 UI options" gate.
   Record any drift in the commit body.
 
 - [ ] **Step 2: Write the failing tests.**
-  - **`migration-shape`.** The six V430 columns, with defaults and nullability exactly as §8.2. The
+  - **`migration-shape`.** The six V431 columns, with defaults and nullability exactly as §8.2. The
     `auto_start_refusal` check list equals `AutoRefusal`'s values, read from the delta (anti-vacuity: 5).
   - **`stream-codes`.**
     - `{autoStream: true}` saves.
@@ -239,7 +241,7 @@ cd $WT/apps/web && rm -f /tmp/cq2-t2.json && pnpm vitest run src/server/relay/__
   - `autoAllowed: true` constant. Red: the `false` cases.
   - `saveStreamSettings` writes `autoStream ?? false`. Red: the "`{targetId}` alone" case.
 
-- [ ] **Step 5: Commit** with `feat(capture): V430 auto columns; autoStream setting; autoAllowed (PR-2 T2)`, listing
+- [ ] **Step 5: Commit** with `feat(capture): V431 auto columns; autoStream setting; autoAllowed (PR-2 T2)`, listing
   the mutations in the body.
 
 Owes: unit and use-case.
@@ -291,7 +293,7 @@ export function autoRefusalOf(code: string): AutoRefusal;
   - `autoRefusalOf`: each of `no_destination`, `no_credit`, `not_entitled` and `unavailable` maps to itself;
     `target_in_use` → `destination_in_use`; an unknown code → `unavailable`.
 
-  The `AutoRefusal` list is read from V430 through `_stream-migration.ts`'s `lastCheckList` (PR-1 T3).
+  The `AutoRefusal` list is read from V431 through `_stream-migration.ts`'s `lastCheckList` (PR-1 T3).
 - `tunable()`: the two new names honour an override only in local and ci, and the guard pins the defaults 60 and 180.
 
 - [ ] **Step 2: Run** and see the cases fail; implement; run again.
@@ -399,7 +401,9 @@ Owes: use-case, money (one consume, at live) and regression (A12).
 - [ ] **Step 1: Write the failing tests.**
   - **The delay.** At `finished_at + AUTO_STOP_AFTER_RESULT_SECONDS`, the session ends `auto_stopped`, and the wire
     shows `auto_stopped`. At 179 s it is still open.
-  - **Each tick cause.** Driven by a beat, an organiser poll and the sweep: three cases.
+  - **Each tick cause.** Driven by a beat, an organiser poll, the sweep and the `stream-tick` job (`POST
+    /api/cron/stream-tick` with the test `x-cron-secret`, PR-1 T7b): four cases. With no panel and no phone, the job
+    alone stops the session.
   - **A15.** Stop by hand, restart by hand **before** the result, then the result: auto-stopped.
   - **Post-result broadcast.** A broadcast started after the result is never auto-stopped, even at +1 h.
   - **T32.** A revert at +100 s cancels; at +180 s from the first stamp it is still open.
@@ -410,13 +414,14 @@ Owes: use-case, money (one consume, at live) and regression (A12).
 - [ ] **Step 2: Run** and see them fail; implement; run again.
 
 ```bash
-cd $WT/apps/web && rm -f /tmp/cq2-t5.json && pnpm vitest run src/server/usecases/__tests__/capture-auto-stop.test.ts src/server/usecases/__tests__/stream-tick.test.ts src/app/api/cron/relay-sweep/route.test.ts --reporter=json --outputFile=/tmp/cq2-t5.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq2-t5.json
+cd $WT/apps/web && rm -f /tmp/cq2-t5.json && pnpm vitest run src/server/usecases/__tests__/capture-auto-stop.test.ts src/server/usecases/__tests__/stream-tick.test.ts src/app/api/cron/relay-sweep/route.test.ts src/app/api/cron/stream-tick/route.test.ts --reporter=json --outputFile=/tmp/cq2-t5.json; echo EXIT=$?; jq '{p:.numPassedTests,t:.numTotalTests,f:.numFailedTests,files:[.testResults[].name]}' /tmp/cq2-t5.json
 ```
 
 - [ ] **Step 3: Mutate.**
   - Drop `created_at < finished_at`. Red: the post-result case.
   - Read `finished_at` from a cached first stamp. Red: Review Focus 2.
   - Leave auto stop out of the sweep. Red: the sweep case.
+  - Leave auto stop out of `tickOpenSessions`'s path. Red: the stream-tick case.
 
 - [ ] **Step 4: Commit** with `feat(capture): automatic stop after the result, in every tick (PR-2 T5)`, listing the
   mutations in the body.
@@ -489,7 +494,7 @@ Owes: unit and use-case.
     2. it never fires after an organiser Stop;
     3. auto stop never stops a session created after `finished_at`.
   - Add one anti-vacuity counter per new invariant (`autoFired`, `blockedChecked`, `postResultSurvived`), each `> 0`
-    at the end. All ten PR-1 invariants and counters stay.
+    at the end. All eleven PR-1 invariants and counters stay.
 
 - [ ] **Step 2: Run it three times,** with each seed logged.
 
@@ -622,13 +627,13 @@ Owes: E2E, smoke and regression.
 
 ### Task 10: Lane close — the scoped gate, then STOP
 
-- [ ] **Step 1:** Re-check that V430 is free on `origin/main`.
+- [ ] **Step 1:** Re-check that V431 is free on `origin/main`.
 - [ ] **Step 2:** Run the scoped gate (the union of T2–T9's vitest paths in one JSON run), then typecheck and lint.
   **Never the full suite.**
 - [ ] **Step 3:** Write the PR body draft to `docs/superpowers/plans/2026-10-01-capture-qr-v2-pr2-pr-body.md`, with:
   - the mutation table (T7);
   - the per-screen verdicts (T8b);
-  - the open items: §16 O3, which bites auto stop too when no panel is open, and capture's A4 mode-switch build
+  - the open items: capture's A4 mode-switch build
     status.
 - [ ] **Step 4: STOP.** No push and no PR. Report to the orchestrator.
 
