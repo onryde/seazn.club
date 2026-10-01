@@ -26,12 +26,42 @@ export interface ObservedFixture {
   declared: ObservedDeclared | null;
   /** The product flagged this row a knockout's third-place match (W1b Task 10). Absent otherwise. */
   thirdPlace?: boolean;
+  /** W1-driving Task 6: the row's ext_key as the product stored it (a later
+   *  stage's TBD rows are identified by it). Absent where the source has none. */
+  extKey?: string | null;
+  /** W1-driving Task 6: the product flagged this row its stage's final. */
+  isFinal?: boolean;
 }
 
 export interface StandingsRowObs { entrantId: string; rank: number; points: number | null }
-export interface GenerateObs { status: number; code: string | null; total: number; created: number }
+/** `message` (W1-driving Task 8, T8-R1): a refused generate's message, as the
+ *  RefusedCall carries it (redacted) — the evidence a 5xx's cause is read
+ *  from. Absent on an answered generate (and on the model's). */
+export interface GenerateObs { status: number; code: string | null; total: number; created: number; message?: string }
 export interface PairRoundObs { roundNo: number; seated: number }
-export interface CompleteObs { status: number; code: string | null; completed: boolean; finalRanks: string[] | null }
+/** `seedProposal` (W1-driving Task 6): the next stage's draft proposal the
+ *  /complete minted (usecases/stages.ts progressCompletedStage) — null when
+ *  none was (the last stage, a refusal, a seeding failure). Optional so the
+ *  model's and the tests' literals that predate it still type. */
+export interface CompleteObs { status: number; code: string | null; completed: boolean; finalRanks: string[] | null; seedProposal?: { id: string; status: string } | null }
+
+/** Why a stage's play loop stopped (I-1). Only "drained" — generate answered
+ *  and no seated fixture was left open, or the swiss budget was paired
+ *  through — is a loop that ran to its end; life-loop-bounded reds every
+ *  other exit, and a drained loop that still leaves a fixture open.
+ *  "not_reached" (W1-driving Task 6): a later stage the run never got to play
+ *  — its source stage did not complete, or the seed advance was refused.
+ *  "refused_challenge" (W1-driving Task 7, D8): a ladder whose challenge was
+ *  refused, or whose field is too small to hold one — no challenge played is
+ *  never "drained".
+ *  "stalled_rounds" (W1-driving Task 8, D9): a mexicano whose generate
+ *  created nothing before the stage's config.rounds were played — the product
+ *  refusing to go on, never "drained" and never `cut_short`.
+ *  "short_plan" (W1-driving Task 8, T8-R2): an americano whose Start planned
+ *  fewer rounds than the engine's planner lays out for its field and
+ *  config.rounds — or none — every planned round decided: a format played
+ *  short, never "drained". */
+export type LoopExit = "drained" | "cap" | "refused_generate" | "empty_pair_round" | "not_reached" | "refused_challenge" | "stalled_rounds" | "short_plan";
 
 export interface ObservedStage {
   id: string;
@@ -50,6 +80,21 @@ export interface ObservedStage {
   generates: GenerateObs[];
   pairRounds: PairRoundObs[];
   complete: CompleteObs | null;
+  /** W1-driving Task 6 (PF-6): how this stage's play loop ended; null when it
+   *  never ran. Optional: the model (lib/model/state.ts) has no play loop. */
+  exit?: LoopExit | null;
+  /** W1-driving Task 8: on an americano stage, entrant → its person ids — every
+   *  pair entrant its fixtures seat, as entrantMembers answered (two each), and
+   *  every division entrant, as the setup read them (one per individual).
+   *  Absent on every other kind. */
+  persons?: Record<string, readonly string[]>;
+  /** W1-driving Task 9 (ruling 45): on a double elim, stepladder or page
+   *  playoff, the ext_keys of its terminal finals in engine order (gf before
+   *  gf-reset) — the engine generator's own isFinal fixtures for the bracket
+   *  the product laid out (scenarios/terminal-finals.ts). An engine-derived
+   *  expectation carried as data, like ObservedFixture.declared, so I2 stays
+   *  type-only. Absent on every other kind. */
+  terminalFinals?: readonly string[];
 }
 
 export interface FixtureSnap { id: string; status: string; outcome: ObservedOutcome | null }
@@ -71,7 +116,9 @@ export interface ConfigEditObs {
   after: FixtureSnap[];
 }
 
-export type CaseFact = "withdrawn" | "expunged" | "voided" | "cut_short" | "late_entry" | "shared_place_declared";
+/** `seeding_tie_picked` (W1-driving Task 6): a confirm was refused on a
+ *  flagged tie, and the harness took the product's own listed order. */
+export type CaseFact = "withdrawn" | "expunged" | "voided" | "cut_short" | "late_entry" | "shared_place_declared" | "seeding_tie_picked";
 
 export interface ObservedRun {
   caseId: string;
@@ -145,6 +192,16 @@ export function snap(f: ObservedFixture): FixtureSnap {
 export const PENDING_STATUSES: readonly string[] = Object.freeze(["scheduled", "in_play"]);
 /** Locked: the cascade reports these and never touches them (withdrawal.ts:102). */
 export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "cancelled"]);
+/** W1-driving Task 7 (false premise 16): the stage kinds whose withdrawal
+ *  walkover FORFEITS each pending fixture to the opponent — the withdrawal
+ *  module's TABLE_KINDS (withdrawal.ts:37) ∪ BRACKET_WALKOVER_KINDS
+ *  (stages.ts:880-884). Every other kind takes the open-format branch
+ *  (withdrawal.ts:213-217): pending fixtures are voided, nothing forfeited.
+ *  ladder-loop.test.ts holds it equal to the product's two sets, read as text. */
+export const FORFEIT_MODEL_KINDS: readonly string[] = Object.freeze(["league", "group", "swiss", "knockout", "double_elim", "stepladder"]);
+/** W1-driving Task 7: entrant statuses that have LEFT the field (stages.ts
+ *  departedEntrantIds) — off the live ladder, refused as a challenge side. */
+export const DEPARTED_STATUSES: readonly string[] = Object.freeze(["withdrawn", "disqualified"]);
 
 /** A bye is the engine's only legitimate one-sided finished shape: a
  *  forfeited AWARD to the seated side (competition/stage.ts:30-34). */

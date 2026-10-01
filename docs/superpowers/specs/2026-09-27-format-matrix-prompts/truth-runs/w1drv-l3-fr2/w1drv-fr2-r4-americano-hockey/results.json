@@ -1,0 +1,279 @@
+{
+  "schemaVersion": 3,
+  "runId": "w1drv-fr2-r4-americano-hockey",
+  "harnessCommit": "817bf53d6",
+  "startedAt": "2026-10-01T17:00:28.261Z",
+  "finishedAt": "2026-10-01T17:00:30.044Z",
+  "grid": {
+    "rows": [
+      "league",
+      "triple_rr",
+      "league_ko",
+      "groups_ko",
+      "group_stepladder",
+      "group_playoffs",
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "knockout",
+      "ko_plate",
+      "qualifying_main",
+      "double_elim",
+      "americano",
+      "mexicano",
+      "ladder",
+      "group_only",
+      "group_group_ko",
+      "knockout_third_place",
+      "page_playoff_only",
+      "stepladder_only"
+    ],
+    "sports": [
+      "football",
+      "cricket",
+      "boardgame",
+      "carrom",
+      "generic",
+      "volleyball",
+      "badminton",
+      "tabletennis",
+      "tennis",
+      "icehockey",
+      "hockey"
+    ]
+  },
+  "layer": "L3",
+  "driver": "http",
+  "plan": "--set w1-driving --only americano|hockey --scenario R4",
+  "cases": [
+    {
+      "caseId": "americano|hockey|fih-outdoor|R4",
+      "row": "americano",
+      "sport": "hockey",
+      "variant": "fih-outdoor",
+      "scenario": "R4",
+      "canary": false,
+      "state": "red",
+      "reason": "r4-policy-reported: policy none, expected walkover (6 pending game(s) of ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a at withdrawal, through any entrant; withdrawal.ts open-format rule); r4-not-seated-later: 9b76d701-9772-4ded-a553-2ced542adf68 (round 2, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 48d11367-aa99-4d6e-a587-87f95edb9631",
+      "checks": [
+        {
+          "id": "I1-rr-pair-once-per-leg",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: case fact withdrawn",
+          "evidence": [
+            "abstain: case fact withdrawn"
+          ]
+        },
+        {
+          "id": "I2-bracket-one-champion-ranks-permutation",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)",
+          "evidence": [
+            "abstain: no applicable stage (knockout/double_elim/stepladder/page_playoff)"
+          ]
+        },
+        {
+          "id": "I3-table-points-equal-declared",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group/swiss)",
+          "evidence": [
+            "abstain: no applicable stage (league/group/swiss)"
+          ]
+        },
+        {
+          "id": "I4-nothing-ends-stuck",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 15,
+          "reason": "every generate/pair returns fixtures or a named refusal; every stage completes or refuses with a named reason",
+          "evidence": []
+        },
+        {
+          "id": "I5-config-edit-never-rescores",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no config edit attempted",
+          "evidence": [
+            "abstain: no config edit attempted"
+          ]
+        },
+        {
+          "id": "I6-swiss-no-rematch",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (swiss)",
+          "evidence": [
+            "abstain: no applicable stage (swiss)"
+          ]
+        },
+        {
+          "id": "I7-rr-no-pair-over-legs",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (league/group)",
+          "evidence": [
+            "abstain: no applicable stage (league/group)"
+          ]
+        },
+        {
+          "id": "I8-generate-named",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no generate recorded",
+          "evidence": [
+            "abstain: no generate recorded"
+          ]
+        },
+        {
+          "id": "I9-ladder-order-is-the-field",
+          "kind": "invariant",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "abstain: no applicable stage (ladder)",
+          "evidence": [
+            "abstain: no applicable stage (ladder)"
+          ]
+        },
+        {
+          "id": "I10-americano-seats-each-person-once",
+          "kind": "invariant",
+          "verdict": "pass",
+          "checked": 85,
+          "reason": "each americano round seats every person at most once, every field entrant plays, and a completed stage ranks each pair entrant it seated exactly once",
+          "evidence": []
+        },
+        {
+          "id": "life-built-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 25,
+          "reason": "25 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-fold-parity",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 14,
+          "reason": "14 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-results-as-posted",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 14,
+          "reason": "14 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-policy-reported",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 1,
+          "reason": "policy none, expected walkover (6 pending game(s) of ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a at withdrawal, through any entrant; withdrawal.ts open-format rule)",
+          "evidence": [
+            "policy none, expected walkover (6 pending game(s) of ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a at withdrawal, through any entrant; withdrawal.ts open-format rule)"
+          ]
+        },
+        {
+          "id": "r4-cascade-consistent",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-paired-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "not a swiss stage",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-challenged-later",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "ladder only: challenges exist on ladder stages alone",
+          "evidence": []
+        },
+        {
+          "id": "r4-not-seated-later",
+          "kind": "assertion",
+          "verdict": "fail",
+          "checked": 12,
+          "reason": "9b76d701-9772-4ded-a553-2ced542adf68 (round 2, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 48d11367-aa99-4d6e-a587-87f95edb9631",
+          "evidence": [
+            "9b76d701-9772-4ded-a553-2ced542adf68 (round 2, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 48d11367-aa99-4d6e-a587-87f95edb9631",
+            "23219a78-379f-40e7-8f09-f72ed27cb6f3 (round 3, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 3492f558-98b5-49be-b4e2-58584d7194be",
+            "0583bf64-ac22-416a-99b7-eeedea4b44cc (round 4, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 5db4d281-4c0d-42f1-87b7-eeca101dc0b3",
+            "6233d36a-8c51-4449-ad49-e74add9ba383 (round 5, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 48d11367-aa99-4d6e-a587-87f95edb9631",
+            "054ca583-1b06-4b66-903e-a1284d4e1c98 (round 6, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 1952fd5e-9b84-48b8-a706-b5c254bcd66a",
+            "cec26cf8-c16e-4887-ad87-1cf4d6e2c586 (round 7, decided) seats withdrawn ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a through 10788d5c-29df-4604-aa9e-70c8ada73bad"
+          ]
+        },
+        {
+          "id": "life-stage-completed",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 1,
+          "reason": "1 ok",
+          "evidence": []
+        },
+        {
+          "id": "life-loop-bounded",
+          "kind": "assertion",
+          "verdict": "pass",
+          "checked": 2,
+          "reason": "2 ok",
+          "evidence": []
+        },
+        {
+          "id": "advance-seeded-as-declared",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "single-stage row — no later stage to seed",
+          "evidence": []
+        },
+        {
+          "id": "life-lineups-put",
+          "kind": "assertion",
+          "verdict": "abstain",
+          "checked": 0,
+          "reason": "an americano stage seats product-minted pair entrants, which carry no lineup",
+          "evidence": []
+        }
+      ],
+      "counts": {
+        "calls": 164,
+        "fixtures": 14,
+        "events": 84
+      },
+      "durationMs": 1728,
+      "notes": [
+        "stage americano status after start: active",
+        "lineups: stage 5ef3da15-b93d-4cc2-8586-d9be98c9060f seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side",
+        "americano generated on team entrants with one arbitrary roster member each — W7 finding (false premise 10): e0d3a3e6-ca7f-45d2-9699-b6d970162fe6→68454bde-278a-4d27-9a99-fecc7bdca88f, 422780e2-d156-4a20-b718-e431dd66c328→a3b603c2-44d6-4271-a4b2-d36eea820913, 82c143bb-322f-4c61-8f21-215f8f2e8f4e→c938f3cd-3926-4a73-8750-332e1fb1072a, 4b451d5a-4bfc-4a4d-ab0b-556617882811→ffcdd564-41e6-4d66-9049-5b009cc4cd42, f8b8156e-b979-4450-9f69-848c9174fc39→9c78c686-4447-4eac-b1b3-10a0e8370720, a3d35e08-e74d-4155-9600-b14cff902189→64e59a18-b13f-4570-a474-56beb30fe3a6, e0eb4a30-fb69-4a02-abb9-b9358166c570→dbce6911-ce24-4eb5-9ab0-d12d0057604e, d4468754-d816-4460-8b11-299cd1a4fa12→9d182899-697c-4cc8-bf27-609a88901e85",
+        "lineups: 0 PUT across 14 team fixture(s) scored",
+        "r4-withdrawn-player-kept-playing: ba545de7-18cb-438c-8ddd-5610526033d6+c5d425db-217c-4a4a-85eb-83c5626ba160+72caf86c-8af7-40a3-95be-5999f156a524+978ada9a-f1c7-48e4-a558-7fa022b66ba9+253f05e0-46ff-480f-a127-bd20d58a8d05+257e8adc-3f77-4fa3-b11b-ef1e64b873b7+f9068869-a6ed-4436-8270-b4c4892a4355+4c8e6c89-b238-48d4-b4dd-eaeb90a3ebce+ddb9ac0a-20ef-4fb0-9bc3-fdbb9ea2549f+e1cf1b40-d9c1-41db-835f-a30039662eea+bffbd22b-3547-474e-b1c9-1d77996d2137+6fca6abb-f3ed-4e9d-a740-1d4f382c5d59+d3aa195f-cfe7-4dfa-952e-63450c3dff85+8d8e67cb-68e0-4484-b6cf-6ba64bc2b5e7+a819889c-4ece-4918-a660-696ed333b4ac+c84f844a-d741-46ed-95a0-07fb96fdb3b9+604c9026-1fd2-4a94-9fcc-6a894ec53ea1+c938f3cd-3926-4a73-8750-332e1fb1072a still seated in 6 later fixture(s) — predicted product red → W7"
+      ],
+      "layer": "L3",
+      "driver": "http",
+      "width": null
+    }
+  ]
+}

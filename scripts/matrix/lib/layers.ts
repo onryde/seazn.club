@@ -19,6 +19,11 @@
 //    controller's Task 12 ruling). No builder control reaches these rows, so
 //    the browser layer records them without running them — never a silent
 //    pass, never an error red.
+//  - `--set w1-driving-l1` (W1-driving Task 13, ruling 47, D11, D13): one L1
+//    cell per capability W1-driving added (team rosters, the seed advance, the
+//    ladder, americano, mexicano), then the two template-only cells, each
+//    carrying its catalog template so its case sets up through the gallery
+//    card — at 1280, LIFECYCLE, driven.
 //
 // A PLANNED case (🚫/░) is recorded by run.ts without a driver, an org or a
 // check (N-3), so it reaches results.json and MATRIX.md as its state and is
@@ -29,6 +34,7 @@
 // the leaf api-only-ui.ts, never from browser-driver.ts.
 import { API_ONLY_ROWS, cellId, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
+import { templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
 import { ATOMIC, HARNESS_SCENARIO, type AtomicScenario } from "./scenario-catalogue.ts";
@@ -192,6 +198,7 @@ export const LAYER_PLANNERS: Readonly<Record<"L1" | "L2", PlanLayers>> = Object.
 
 export const WIDTH_SWEEP_SET = "width-sweep";
 export const API_ONLY_BROWSER_SET = "api-only-browser";
+export const W1_DRIVING_L1_SET = "w1-driving-l1";
 
 const refuseFilters = (set: string, cli: PlannerCli): void => {
   if (cli.only !== undefined || cli.scenario !== undefined || cli.canary !== undefined) throw new SetTakesNoFilter(set, cli);
@@ -216,6 +223,24 @@ export const widthSweepPlanner: PlanLayers = (cli: PlannerCli) => {
   };
 };
 
+/** A 🚫 asked for a cell a catalog template reaches: the cell has an organiser
+ *  path (its card), so planning it 🚫 would name a wave that owes nothing. */
+export class TemplateReachable extends Error {
+  readonly cell: string;
+  constructor(row: string, sport: string, template: string) {
+    super(`layers: ${row}|${sport} is reachable through catalog template ${template}'s card — plan it driven with that template (--set ${W1_DRIVING_L1_SET}), never 🚫`);
+    this.name = "TemplateReachable";
+    this.cell = `${row}|${sport}`;
+  }
+}
+
+/** The 🚫 an API-only cell is planned with (api-only-ui.ts), refusing a cell a template reaches. */
+export function apiOnlyNoPath(row: (typeof API_ONLY_ROWS)[number], sport: string): NoPath {
+  const p = apiOnlyUiPath(row, sport);
+  if (p.reachable) throw new TemplateReachable(row, sport, p.template);
+  return { wave: p.wave, reason: p.reason };
+}
+
 /** D7 as ruled: each API-only row, on generic, at 1280 — planned 🚫 naming the
  *  wave that owns its organiser control (api-only-ui.ts). */
 export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
@@ -225,13 +250,51 @@ export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
     sports: [sport], deniesFeatures: false, layer: "L1", label: `--set ${API_ONLY_BROWSER_SET}`, acceptsWidth: L1_WIDTH,
     layered: (variantFor) => {
       const variant = variantFor(sport);
-      return API_ONLY_ROWS.map((row): PlannedLayerCase => {
-        const p = apiOnlyUiPath(row, sport);
-        return {
-          spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
-          layer: "L1", width: L1_WIDTH, noPath: { wave: p.wave, reason: p.reason }, notRun: null, run: null,
-        };
-      });
+      return API_ONLY_ROWS.map((row): PlannedLayerCase => ({
+        spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
+        layer: "L1", width: L1_WIDTH, noPath: apiOnlyNoPath(row, sport), notRun: null, run: null,
+      }));
     },
+  };
+};
+
+/** W1-driving Task 13: the capability cells, each the capability's first L1
+ *  proof (the wave's tasks name them): team rosters on football (Task 4 —
+ *  carry G-1: the pad adapters' first lineup fixtures), the multi-stage seed
+ *  advance on groups_ko (Task 6), the ladder's challenges (Task 7), americano
+ *  and mexicano (Task 8). D13: no cricket `test` case — its pad adapter has
+ *  no route for the two-innings events (W1d). */
+const W1_DRIVING_L1_CELLS: readonly { readonly row: RowKey; readonly sport: string }[] = Object.freeze([
+  { row: "league", sport: "football" }, { row: "groups_ko", sport: "badminton" }, { row: "ladder", sport: "generic" },
+  { row: "americano", sport: "badminton" }, { row: "mexicano", sport: "generic" },
+]);
+/** The two template-only cells (ruling 47), by their template: each case's
+ *  row is the one the template builds (templateRow, which refuses a drifted
+ *  catalog) and its sport and variant are the template's own (templateField,
+ *  D11) — never variantFor's builder default. */
+const W1_DRIVING_L1_TEMPLATES: readonly string[] = Object.freeze(["box-league", "t20-super8"]);
+
+export function planW1DrivingL1(variantFor: (sport: string) => string): DrivenLayerCase[] {
+  const at = (spec: CaseSpec): DrivenLayerCase => ({ spec, layer: "L1", width: L1_WIDTH, noPath: null, notRun: null, run: null });
+  const cells = W1_DRIVING_L1_CELLS.map(({ row, sport }) => {
+    const variant = variantFor(sport);
+    return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false });
+  });
+  const templates = W1_DRIVING_L1_TEMPLATES.map((template) => {
+    const row = templateRow(template);
+    const { sport, variant } = templateField(template);
+    return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false, template });
+  });
+  return [...cells, ...templates];
+}
+
+/** `--set w1-driving-l1`: the seven cases above. Its sports are its cases'
+ *  (the template cells' too, so the runner reads their variants as well). */
+export const w1DrivingL1Planner: PlanLayers = (cli: PlannerCli) => {
+  refuseFilters(W1_DRIVING_L1_SET, cli);
+  const sports = [...new Set([...W1_DRIVING_L1_CELLS.map((c) => c.sport), ...W1_DRIVING_L1_TEMPLATES.map((t) => templateField(t).sport)])];
+  return {
+    sports, deniesFeatures: false, layer: "L1", label: `--set ${W1_DRIVING_L1_SET}`, acceptsWidth: L1_WIDTH,
+    layered: (variantFor) => planW1DrivingL1(variantFor),
   };
 };

@@ -12,9 +12,9 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | --- | --- | --- |
 | W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
-| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. PR and merge: pending, the owner's decision.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
+| W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
-| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | not started (ruling 28) |
+| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review and the final whole-branch review (the controller's, T15-R1) are pending. PR and merge: pending, the owner's decision (ruling 59).** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". The branch was rebased onto `main` twice (2026-10-01): every recorded harness SHA is pre-rebase and stays as recorded; `truth-runs/W1-DRIVING-REBASES.md` maps each to its rebased commit and shows the harness unchanged across both. |
 | W2 | Sport scoring fidelity | not started |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
@@ -468,6 +468,7 @@ traps.
 - [W1a — L3 core](W1a-l3-core.md)
 - [W1b — catalogues + reference skeleton](W1b-catalogues-reference.md)
 - [W1c — browser layers](W1c-browser-layers.md)
+- [W1-driving — L3 driving breadth](W1-driving.md) (runs before W1d, ruling 28)
 - [W1d — CI + first truth run](W1d-ci-truth-run.md)
 - [W2 — sport scoring fidelity](W2-scoring-fidelity.md)
   - [W2 coverage audit](w2-coverage-audit.md): the controller's engine → rulebook → generator audit (2026-09-30) behind the W2 checklist
@@ -741,6 +742,118 @@ a peer session as the other.
       review m-1). The set itself has never been run live.
     - (b) **The API-only set runs as planned 🚫 `no_path` with no browser,** each row naming its wave and reason, not
       ❌ `organiser-ui-path` from Generate onward as D7 (ruling 40) said.
+44–49. **W1-driving scope** (2026-09-30). The controller put six scope recommendations for W1-driving planning, and
+    the owner answered "all rec". They are recorded here as the owner's rulings on those recommendations (class 17).
+    Inputs: three read-only scouts at `ebf7ec040`, which found 13 items routed to W1-driving (the status row names 5)
+    and 177 of 231 LIFECYCLE cells ⏳ W1-driving (33 ladder-family, 99 multi-stage, 45 team-roster).
+    - **44. The cricket two-innings (`test`) generator and the cricket tie outcome belong to W1-driving.** Both are
+      struck from W2's generator-breadth checklist. Ruling 31 had already routed the 24 `test` cases here. The W2
+      checklist also claimed both, which left two owners.
+    - **45. I2 on double elim, stepladder and page playoff is STRUCTURAL only.**
+      - What W1-driving asserts:
+        - the champion is the winner of the terminal final fixture: `pp-final`, the last stepladder game, or
+          GF / gf-reset;
+        - that winner is `finalRanks[0]`;
+        - `finalRanks` is a permutation of the field.
+      - "Exactly one unbeaten entrant" stays knockout-only. A DE or page-playoff champion may have lost once.
+      - Rulebook semantics, including the bracket-reset rules, stay with W4 and W6 (R8/R9).
+    - **46. Parallel workers are in-process and belong to W1-driving.**
+      - N workers run against ONE server and DB.
+      - Each worker has its own sign-in, session and cookie jar.
+      - Results are written in plan order.
+      - W1d owns the CI shards (one DB each), and runs these workers inside each shard.
+    - **47. Browser scope.**
+      - Roster and lineup seeding, seed-proposal → confirm and ladder challenges are HTTP setup filler.
+        `BrowserDriver` uses the same filler, so L1 on those cells stops being ⏳.
+      - Live L1 proof at 1280 covers one cell per new capability. The full L1 grid stays W1d's.
+      - Rule-override driving in the browser (`OVERRIDE_WAVE`, which no wave owned) goes to **W2**. W2 owns the
+        editor fixes under ruling 33.
+      - The two template-only cells (`group_only|badminton`, `group_group_ko|cricket`) are driven by W1-driving.
+    - **48. Done-when.**
+      - The evidence is an HTTP run of the four scripted scenarios (LIFECYCLE, M1, R4a, F1) over all 231 cells
+        (924 cases, on workers), plus the 24 cricket `test` variant cases.
+      - The wave is done when no ⏳ names W1-driving and no ❌ has a harness cause.
+      - Product reds are recorded and routed, never fixed in this wave (ruling 19).
+    - **49. Reference model.**
+      - The model gets team rosters, so team cells can run in it.
+      - Swiss gets a command generator biased toward Start → Generate → Score, instead of relying on 40 runs.
+      - Multi-stage and the ladder family in the model go to the family waves (W4, W5, W7), where their rulebooks
+        live.
+    - *Folded in by the controller without a separate ruling* (the owner was told and did not object):
+      - Field size is per format: a page playoff seeds 4. F1 on `page_playoff_only` is dropped as unfit, because
+        an odd field is impossible there (ruling 6, case by case).
+      - Rosters are always the full declared size. Lineups are PUT before each fixture's first event.
+      - Americano and mexicano individual entrants get linked persons.
+      - The Q-A guard is widened to read the six blind-spot routes. The W1-driving status row reads "in progress"
+        while deferrals remain.
+      - A `W1-driving.md` prompt file is written, and R1's sequence gains W1-driving.
+50–52. **W1-driving plan review 1** (2026-09-30). The controller put two questions from plan review 1 and the plan's
+    D1–D13 to the owner, and the owner answered "all rec". They are recorded here as the owner's rulings on those
+    recommendations (class 17). Plan: `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`.
+    - **50. The `l2-pairs.json` reshuffle is accepted once.**
+      - Dropping F1 on `page_playoff_only` renumbers 931 of 1,731 L2 runs and re-widths 949. The cause is global
+        numbering plus a lap shift every 7 picks (`pairs.ts:132-165`).
+      - The reshuffle is accepted and named in the commit.
+      - Committed evidence stays judged against `plans.lock.json`.
+      - Task 10's regen must change only `l3Gap` fields.
+    - **51. M1 and R4 get a defined meaning on the ladder family.**
+      - M1 on americano and mexicano targets the first fixture whose pair entrant has seed 1's person as a member.
+      - R4 on the ladder withdraws seed 3 after its first challenge.
+      - R4 on americano and mexicano, where the withdrawn player keeps playing their pair games, is a predicted
+        product red routed to W7.
+      - Not dropped as unfit, per ruling 42.
+    - **52. Plan decisions D1–D13 are accepted as written.**
+      - D6 amends ruling 49: model refusals route by design §8, which adds **W3** for `swiss_playoff` and
+        `swiss_knockout` beside W4, W5 and W7.
+      - D5: future generator gaps route to W2.
+      - D10: `--workers > 1` is HTTP-only in this wave.
+      - D13: the L1 proof excludes cricket `test`, and the pad routes for its new events go to W1d's list.
+53. **R4 on the ladder is judged by what a withdrawal actually leaves** (2026-09-30). The owner said "apply rec" to
+    the controller's recommendation from plan review 2. It is recorded here as the owner's ruling on that
+    recommendation (class 17).
+    - **Why.** False premise 13 was confirmed by the review. After seed 3's decided first challenge, nothing is
+      pending. The ladder takes the open-format branch (`withdrawal.ts:213-217`), so the policy is `none` and
+      nothing is voided.
+    - **What a ladder R4 asserts:**
+      - the policy is derived from the product's pending set;
+      - seed 3's decided challenge is unchanged;
+      - seed 3 is gone from the live ladder order but stays in the raw `ladder_order`;
+      - no later challenge seats seed 3;
+      - zero challenges are refused.
+    - **Noted for W7, not asserted:** `finalRanks` is the raw `ladder_order` (`competition.ts:606`), so a withdrawn
+      player keeps their rung.
+54. **The W1-driving plan is approved; execution is subagent-driven** (2026-09-30). The owner answered "Yes" to the
+    controller's three questions: does the plan capture what you want, which execution method (the controller
+    recommended subagent-driven), and push the branch.
+    - Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` at `dc85a7741`, after plan review 4
+      (Approved, five minors carried to the executor).
+    - Execution worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. Same-shape tasks are
+      batched per ruling 41.
+
+The five decisions below are the owner's, made on 2026-10-01 and recorded by the controller in the W1-driving SDD
+ledger. Controller ruling T16-R4 numbered them. Quotation marks hold the owner's words where the ledger or the controller's 2026-10-01 conversation with the owner has them.
+Elsewhere the text is the controller's record.
+
+55. **Format templates stay in code** (2026-10-01). The owner, asked "should we hardcode like this, should driven from
+    db?" and given the controller's recommendation (stay in code; the matrix catalogue reads the file, so a DB list
+    would make case counts differ per environment): "apply rec". No DB table. The cleanup (move the file out of
+    `components/v2`, single-source `TakeRuleSchema`) is owed after this wave and is outside W1-driving's scope.
+56. **The matrix harness gets a boundary, not a separate repo** (2026-10-01). The controller's record (T16-R4): the
+    harness moves to its own workspace package, behind an import guard, with its evidence moved out and a
+    `.dockerignore` entry. It is NOT a separate repo. The owner raised the concern ("I a thinking as we are making
+    bigger monolithic") and answered the recommendation with "Ok". The runtime image already excludes the harness
+    (`Dockerfile:88-105` copies only the standalone build). Timing: the same post-W1-driving cleanup as ruling 55.
+57. **The W9 stage delete stays with W9** (2026-10-01). The owner: "W9 is fine". A refused format change deletes the
+    division's stages first: `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature`
+    gates. This is read-derived: the controller read it on `main` `58e8103e3`, and no committed run drives it. It
+    is not fixed now, and there is no separate PR.
+58. **No CI live-matrix proposal** (2026-10-01). Offered a W1d proposal for a live matrix job in CI (sharded, judged
+    against the committed `results.json`, triggered on a `main` push or by hand), the owner: "no". Not logged as a
+    W1d item.
+59. **The W1-driving PR is raised after the reviews approve** (2026-10-01). The owner: "raise pr after review
+    approve". Push `feat/format-matrix-w1-driving` and open the PR once Task 16's review and the final whole-branch
+    review are approved, rebasing onto `main` first if it is behind, with a scoped re-verify. The merge is the
+    owner's decision.
 
 ## Recommendations (mine — not rulings)
 
@@ -799,6 +912,42 @@ a peer session as the other.
   to pick:
   - map them out of the plan;
   - never run parity on that set.
+
+- **For W1-driving (the plan's decisions, `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`).**
+  - **D1–D13: accepted, ruling 52.** D1: seed advance through two driver methods, not bench `advance.ts`. D2:
+    full-size rosters, members inline over HTTP and as filler in the browser. D3: PADPROOF keeps `rosterlessTeams`.
+    D4: the cricket `test` streams and the tie. D5: a future generator gap routes to W2. D6: model refusals get their
+    own class, routed by family; **D6 amends ruling 49** by adding **W3** for `swiss_playoff` and `swiss_knockout`
+    (design §8; false premise 9). D7: one routing construct. D8: the ladder schedule is one bottom-up sweep of
+    adjacent upward challenges. D9: the americano and mexicano loops. D10: `--workers > 1` is HTTP-only in this
+    wave. D11: template-only cells use the template's own field. D12: the M1 and R4 hooks fire on stage 1 only.
+    D13: the L1 proof excludes the cricket `test` streams, and the pad routes for its events go to W1d.
+  - **D14 (M1 and R4 on the ladder family): ruled in two parts.** Its M1/R4 meanings are ruling 51. Its ladder R4
+    expectation (the policy derived from what is pending at withdrawal) is ruling 53.
+  - **Not rulings:** the predicted-signature legs and the triage rule of Task 15 Step 3 (the coverage table, P1–P7)
+    are the planner's method. The executing controller's decisions are listed in "Controller rulings (execution,
+    W1-driving)" below. They are not owner rulings either.
+- **For the owner (from W1-driving Task 15; not assumed):** `group_group_ko` F1 seats 7 entrants in 4 pools, which
+  leaves seed 1 alone in pool A. This can be ruled unfit for F1 instead of a product red. Until the owner rules, it
+  stays a product red → W5 (TRIAGE P3).
+- **For W7 (from W1-driving Task 15):** seed and tie-break mexicano pairing deterministically before pinning its
+  cells. Over four live runs of mexicano R4, no case kept one failing set. The hypothesis, not proven live: every
+  mexicano point is 0 on a sport that folds no score, so the person-id tie-break (random UUIDs) decides the
+  pairing.
+- **For W1d (from W1-driving Task 16; the rate-limit carry):** do NOT add a `--workers` refusal keyed on Redis.
+  Instead, give each shard one sign-in budget and document the threshold:
+  - **The threshold.** With `REDIS_URL` set, `POST /api/auth/magic-link` is limited to 5 per 300 s per IP
+    (`EMAIL_LIMIT`, `rate-limit.ts:81`; the route's call is at `magic-link/route.ts:27`). It refuses when
+    `count > max` (`:64`), so the **sixth** sign-in inside 300 s answers 429. The harness signs in once per worker
+    (`run.ts:832` first, `:925` each further worker). So 6 or more workers trip it, and so do back-to-back runs from
+    one IP. T11's report said "5 or more", which is off by one.
+  - **Why no refusal.** The harness cannot see whether the server has `REDIS_URL`. Without Redis the limiter is
+    inert (`rate-limit.ts:55-62`). That covers every env this programme has run against: the local env recipe sets
+    no `REDIS_URL`. Also, read-derived and not run: under Redis, `getUserOrgs` caches `orgs:<uid>`
+    (`auth.ts:161-175`). A case org seeded in SQL would then be missing from the cached list at ANY worker count.
+    So a Redis target would break the harness before the worker cap mattered.
+  - What W1d should do: if a target ever runs Redis, give each shard its own source IP or synthetic owner, and
+    invalidate the org cache after seeding. Do not cap the workers.
 
 ## Controller rulings (execution, W1c)
 
@@ -863,6 +1012,69 @@ because they are owner rulings: the batching (ruling 41) and the enumerate-every
   as accepted; owner ruling 43(b) (2026-09-30) accepts it.
 - **Task 12 carry.** `LayerCase.noPath` is `{wave, reason}`.
 - **Task 14 carry.** Run the width sweep on a knockout cell. Owner ruling 43(a) (2026-09-30) accepts it.
+
+## Controller rulings (execution, W1-driving)
+
+These are decisions the W1-driving controller made while executing the owner-approved plan (ruling 54). They are
+**not owner rulings** (class 17). Each carried a "cost if wrong" line in the SDD ledger
+(`.superpowers/sdd/2026-09-30-format-matrix-w1-driving/progress.md`, gitignored). Only the ones that change what
+a check means or where a finding goes are listed here. SHAs are post-rebase (the branch was rebased onto
+`58e8103e3` on 2026-10-01, before Task 15).
+
+- **T6-R1: the bracket draw stall is a product red, not a harness one.** The harness posts a draw wherever the
+  engine's `supportsDraws` declares one legal (R9). The stall was first routed W4. **T15-R4 amended that to W2**,
+  because design §8 puts SC-O1/SC-O2 there and the spec outranks a controller ruling.
+- **T6-R2 (FP-5): every reached stage is asked to complete exactly once**, drained or not, as W1a's test pins. The
+  plan said a non-drained stage is never asked. That line is superseded. The triage coverage table was re-derived
+  for it.
+- **T7-R1: F1 on a ladder.** `f1-round-size` abstains by name, because a ladder declares no rounds. Instead F1
+  asserts that the 7-entrant bottom-up sweep completes with n−1 challenges and that every entrant is in
+  `finalRanks`. The cell is given a meaning, not dropped (ruling 42).
+- **T8-R1: the refused-form `mexicano-pair-entrants-counted-as-players` signature is stamped only on the product's
+  own cause** (`entrant_members_pkey`). Any other 5xx stays unsigned and goes to harness-first triage.
+- **T8-R4: mexicano R4 is judged from what each run shows.** The kept-playing signature is written if and only if
+  seed 3 is seated after the withdrawal. The verdict can differ between runs, and the evidence says so beside it.
+- **T9-R1, T9-R2, T9-R4.** I9 judges the order of ACTIVE entrants; the withdrawn entrant may be present or absent
+  (ruling 53's note). I10 reds a completed stage with null `finalRanks`. Its rank-item skip on a stage that did
+  not complete is allowed only as a NAMED note.
+- **T12-R1: the americano entrants-only save.** The config probe saves the kinds actually in use. The product's
+  refusal to narrow the kinds while minted pairs are active becomes a predicted W7 note
+  (`americano-minted-pairs-block-kind-edit`).
+- **T12-R3 and T12-R4: a timed-out shared turn aborts the run by name** (exit 3). Cases still mid-scenario then
+  finish but are excluded from the evidence, so a late 401 cannot be credited to another case.
+- **T13-R1: `livePlan` reads `--set w1-driving-l1` and `--set w1-driving`**, so committed W1-driving runs are judged
+  against frozen plans.
+- **T14-R1: a vacuous swiss model cell stays exit 1**, and is re-run at 40 runs with a recorded seed. It is never
+  counted as a pass.
+- **T14-R2: `--regressions` without `--cell` replays every committed case.** A skipped case is a printed, counted
+  verdict.
+- **T14-R3: one shared lineup planner** feeds both the harness and the model, with a differential test as the
+  witness.
+- **T15-R1: the whole-branch review is the controller's**, not the Task 15 implementer's.
+- **T15-R3: the parity pair is replaced.** The plan's pair (HTTP slice against L1) shares 0 cells. The accepted
+  substitute is `w1drv-l3` against L1: 6 shared cases, 0 state or verdict differences
+  (`truth-runs/w1drv-l1/parity-l3-vs-l1.md`).
+- **T15-R4: P1 (the bracket draw stall, 62 cases) routes to W2.** Task 16 applied it to TRIAGE's wave column.
+- **T15-R5: the two new model reds are committed as MB-007 and MB-008**, matched on the product's own words.
+- **T15-R6: the americano/mexicano `r4-policy-reported` expectation is DERIVED** from what was pending at the
+  withdrawal, or it abstains by name. A fixed `policy !== "none"` could never go green.
+- **T15-R7: P5 (the stepladder R4 422) routes to W4**, not W5: design §8 lists stepladder under W4, and the root is
+  MB-002/003's.
+- **T15-R8.** Every TRIAGE row names the run it is judged on. P1's ≥1-draw precondition is committed as data. G-4:
+  the duplicate signature needs the repeated person to belong to an earlier pair entrant. G-1/G-2 went to Task 16.
+  G-3 is carried to W4.
+- **T15-R9: `r4-not-seated-later`.** After T15-R6, a withdrawn person seated again on mexicano would have redded no
+  check: a confirmed defect would have gone silent (class 6). The check reds when any of the withdrawn entrant's
+  persons is seated, through any entrant, in a round after the withdrawal. The kept-playing signature covers it.
+- **T16-R1: Task 16's scope.** It is the brief's steps plus every open carry, T15-R4, T15-R5, G-1, G-2, the T15
+  re-review minor, T14-R4 m-2, G-3 and T15-R9. Memory files are the controller's to write.
+- **T16-R2: the rate-limit carry is a W1d recommendation, not a refusal** (the harness cannot see Redis, so a
+  refusal would be a guess), and MB-009 is accepted.
+- **T16-R3: a fence guards only the trigger branch its cases show.** The double-elim arm of
+  `ko-generate-after-roster-change` was narrowed to the added-entrant branch (MB-007's). The G-1 test reads each case's
+  branch from its finding commands and asserts branch × stage kind. The live re-run that followed found MB-010.
+- **T16-R4: the review's seven minors are all fixed**, the findings-table generator is committed with a test, and
+  the owner's 2026-10-01 decisions are numbered (rulings 55–59).
 
 ## Decision log
 
@@ -1015,6 +1227,72 @@ because they are owner rulings: the batching (ruling 41) and the enumerate-every
   - the pad-proof set (`49d27f068`);
   - the parity CLI (`c158ac377`);
   - Task 14's live evidence. See "W1c session status".
+
+- **2026-09-30 to 2026-10-01** — rulings 44–54 applied in W1-driving. Commits are post-rebase SHAs on
+  `feat/format-matrix-w1-driving`.
+  - **Routing and the guard (D7):** one routing construct, and a Q-A guard that reads every route and floors its own
+    module scan (`f40bb7700`, `40a30c107`, `cfe9d11d4`).
+  - **Field size per format, cricket tie and two innings (ruling 44, D4, D5):** `cccc35d06` and `fe41d525a`. The
+    `l2-pairs.json` reshuffle is accepted once (ruling 50), and the regen changed only `l3Gap`.
+  - **Rosters, lineups and linked persons (D2, D3):** `a0f6814ad`, `6bece2570`, `336af8a8b`, `d338b0214`.
+  - **Multi-stage advance (D1, D12):** `247b186eb`, `9b0f92d3d`, `d6a8debed`.
+  - **Ladder (D8, D14, rulings 51 and 53):** `f3689feb7`, `c1982bd6f`.
+  - **Americano and mexicano loops (D9):** `8dfddb0e5`, `af6877f6d`, `832c4289e`.
+  - **Structural I2, plus I9 and I10 (ruling 45):** `4fc9fddb8` through `53b9c0902`.
+  - **In-process workers (ruling 46, D10):** `4c4d7723c` through `31f28e048`.
+  - **The `w1-driving` set and `--only` (Task 12):** `3a556ee77`.
+  - **Browser filler, the L1 proof and the template cells (ruling 47, D11):** `eca0f0307`, `669bbd259`, `064839963`.
+  - **Model team rosters, Swiss bias and family routes (ruling 49 as amended by D6):** `1b861f2ac`, `cde29a754`,
+    `749e08462`, `49754e44a`.
+  - **Live evidence and triage (ruling 48):** `15ed62365` through `e2db86c96`. See the Status row.
+  - **Task 16:** `ca3fcd081`, `95eb5203c`, `8198452ae`, `e5abe105e`, `2f79c5f07`; fix round 1 `22c8aa141`, `5950801a3`,
+    `8bad7555e`, `548f3825d`, `215fd7ed5`, `31792a06d`, `163078054`, `5d3264a80`, and the docs commit that writes this line.
+- **2026-10-01** — **R1 gains W1-driving** (ruling 28): `_RULES.md` R1 now reads W1a → W1b → W1c → W1-driving → W1d
+  → W2 … W7. `../2026-09-27-format-matrix-design.md` §8's "Order." line (line 462) gained the same one word in
+  Task 16's fix round 1 (T16-R2, T16-R4).
+- **2026-10-01** — **The W1b swiss model seeds reproduce only at their recorded `harnessCommit`** (T14-R4 m-2). Task 14
+  biased the swiss command generator (`SWISS_BIAS`, ruling 49). So a swiss model seed committed by W1b (for example
+  `-1180181307` in `w1b-model-0929b` and `w1b-model-0929g`, and `-2002771143` in `w1b-model-final-sb40`) draws a
+  different command list today. Re-running one needs that run's `harnessCommit`. The five committed regression
+  cases of the time (MB-001..005) are league and knockout cells. They draw exactly what they drew, which a test
+  pins by sampling.
+- **2026-10-01** — **T15-R9's check is named:** `r4-not-seated-later` (`notSeatedLater`,
+  `scripts/matrix/lib/scenarios/r4-withdrawal.ts`). It is the americano-kinds sibling of the swiss
+  `r4-not-paired-later` and the ladder `r4-not-challenged-later`. The coverage table's kept-playing signature
+  covers it on americano and mexicano R4. It reds americano 11/11 and mexicano 3/11 on `w1drv-l3-fr2`.
+- **2026-10-01** — **DRIVING_WAVE (PF-10): nothing left to decide at close.** The Task 13 dispatch deleted
+  `DRIVING_ROUTE` and `DRIVING_WAVE` together with their ruling-28 pin (`eca0f0307`). The guard test changed in the
+  same commit: an identifier wave argument is read as unread. Only comments name it now.
+- **2026-10-01** — **The bracket fences cover the stage kinds their committed cases witness** (T15-R5, G-1;
+  `ca3fcd081`, `95eb5203c`, `8198452ae`). MB-007 (double elim, generate after a roster change, 500 "would strand
+  home_slot_label") and MB-008 (stepladder, withdraw while waiting on a TBD opponent, 422 "fixture has an
+  unassigned entrant (bye/TBD)") are committed from `w1drv-model-m6`.
+  - Task 16's run of the two widened cells (`w1drv-t16-model-g1`) found the withdraw 422 on double elim as well,
+    committed as MB-009.
+  - `ko-withdraw-waiting-on-tbd` now covers knockout, stepladder and double elim: all of `stages.ts`
+    `BRACKET_WALKOVER_KINDS`. `ko-generate-after-roster-change` covers knockout and double elim.
+  - Re-run at `95eb5203c`: both cells ok (`w1drv-t16-model-g1c`), and `--regressions` 8/8 known
+    (`w1drv-t16-model-reg2`).
+  - **Fix round 1 (T16-R3).** The generate fence keeps one kind list per trigger branch. The double-elim
+    withdrawn branch was lifted, and the live cell found **MB-010**: Start → Withdraw → Generate 500s, "would strand
+    home_slot_label" (`w1drv-t16fr1-model-de`, harness `22c8aa141`). It is committed with fence
+    `ko-generate-after-roster-change`, and that fence's withdrawn branch now covers knockout (MB-004) and double elim
+    (MB-010).
+  - MB-007 and MB-010 share cell, check and words, so a replay now offers its own case to the matcher first
+    (`5950801a3`). Otherwise MB-007 would claim MB-010's replay and the replay would read NOT REPRODUCED.
+  - Then double elim ran ok 20/20 with both branches fenced (`w1drv-t16fr1-model-de2`), and `--regressions` 9/9
+    known, each case under its own id (`w1drv-t16fr1-model-reg`, harness `8bad7555e`).
+  - There is no MB-006, because `model-cli.test.ts` uses that id for a synthetic case.
+- **2026-10-01** — **The owner's 2026-10-01 decisions are numbered as rulings 55–59** (controller ruling T16-R4;
+  the full text is under "Owner rulings"):
+  - 55: format templates stay in code, and the cleanup follows W1-driving;
+  - 56: the matrix harness gets its own workspace package, not a separate repo;
+  - 57: the W9 stage delete stays with W9, with no separate PR;
+  - 58: no CI live-matrix proposal;
+  - 59: the W1-driving PR is raised after the reviews approve, and the merge is the owner's.
+  - **"Rebase when possible"** (the owner's words, SDD ledger) is not among the five T16-R4 numbers. The branch was
+    rebased onto `origin/main` `58e8103e3` with no conflicts, before Task 15 (pre-rebase HEAD `4aa2e0db2` became
+    `1b861f2ac`).
 
 ## False premises found
 
@@ -1329,6 +1607,144 @@ branch changed is the root `package.json`, cited without a line). The
     defaults to "Today" only when the phase is `match_day`, else "All" (`stages-panel.tsx:555`). No matrix run
     reaches a match day, so carry 2's press branch never ran live (0 `run-sheet-all-before` shots in 91 live cases).
 
+### Found during W1-driving planning and execution
+
+**Planning** (plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`, "False premises found in
+planning", with file:line evidence there; numbers kept, including plan review 1's 12–15, plan review 2's 16–17 and
+false premise 10's correction). After each, what execution saw:
+
+1. **"GET the seed proposal to read the latest."** The route has no GET. `POST …/seed-proposal` computes (201) and
+   `POST …/confirm` fills. The harness confirms the id `/complete` returned (D1). The live multi-stage cells
+   advanced this way (`w1drv-l3`).
+2. **"`Scenario.entrantCount` sets the field."** Nothing reads it; each scenario passes its own constant. Task 2
+   changed the calls (`field-size.ts`).
+3. **"Only mexicano risks a duplicate round on re-generate."** `americanoGen` plans on every generate. The americano
+   loop never generates after Start (D9).
+4. **"The M5 tie gap covers cricket."** It covers limited-overs cricket only: `LEVEL_PROBES.cricket` returns null
+   without a numeric `ballsPerInnings`, and the `test` preset has none. Task 10 built the tie stream for both
+   shapes. Whether M5 should probe a 4-innings level tie is routed to **W2** ("Findings routed (W1-driving)").
+5. **"924 cases" (ruling 48).** F1 on `page_playoff_only` is unfit, which leaves 913 cases, plus 24 cricket `test`
+   cases = **937**. Seen: `w1drv-l3/results.json` holds 937.
+6. **`RowBuildDeferred` is a deferral class the guard reads.** It is never constructed. The guard reads every route
+   instead (Task 1).
+7. **"A structural champion rule needs a new product field."** The fixture list already serves `ext_key`,
+   `is_final` and `lane`. The harness stopped dropping them (Task 9).
+8. **"The Q-A guard's anti-vacuity is sound."** Its only shipped sites were the three deferrals this wave deletes,
+   so at close it would have redded for a harness reason. Task 1 moved the floor to every route read. At close it
+   reads 0 routes naming W1-driving and stays green.
+9. **"Multi-stage in the model goes to W4/W5/W7" (ruling 49).** Design §8 puts `swiss_playoff` and `swiss_knockout`
+   in **W3**. D6 routes them there, and ruling 52 accepted it. The same holds for the seeding ties on those rows
+   (Findings).
+10. **"Americano × team sport refuses."** Corrected at plan review 1: the first draft's `STAGE_NOT_READY`
+    prediction was itself false. `americanoGen` keeps one person per entrant over every member row, with no kind
+    filter and no order, so team divisions generate silently with one arbitrary member each. **Confirmed**: the note is on all
+    42 cases of the 10 team cells, each on its latest committed run (`w1drv-l3` 16, `w1drv-l3-rerun` 16,
+    `w1drv-l3-fr2` 10) → W7.
+11. **The W1c status row said "PR and merge: pending".** It merged as #905 (`ebf7ec040`) on 2026-09-30. Corrected
+    by Task 16.
+12. **"M1 and R4 mean the same on every family"** (plan review 1, C-1). On americano and mexicano, fixtures seat
+    ephemeral pair entrants, so M1 found no fixture. On a ladder, R4's seed 3 had no fixture yet. Ruling 51 defines
+    each meaning (D14).
+13. **"Ruling 51's ladder timing gives R4 a policy to report."** After seed 3's decided first challenge, nothing is
+    pending, and the product's correct answer is policy `none`. Ruling 53 derives the expectation instead. Seen:
+    every ladder R4 case is ✅ (11/11, `w1drv-l3`), each with the W7 rung note.
+14. **"Mexicano waits only on a finalized round."** It waits on any fixture not `decided`, so an M1 walkover
+    (`forfeited`) stalls it. **Confirmed** 11/11 mexicano M1, failing set `[life-loop-bounded]`
+    (`w1drv-l3-rerun`) → W7.
+15. **"Dropping one L2 run removes only that run"** (plan review 1, I-4). The drop renumbers 931 of 1,731 runs and
+    re-widths 949. Ruling 50 accepted the reshuffle once.
+16. **"The open-format withdrawal cascade forfeits to the opponent"** (plan review 2, I-1). On the ladder,
+    `page_playoff` and americano kinds the product abandons every pending fixture instead. `cascadeItems` became
+    kind-aware (Task 7). Seen: TRIAGE P4 (`page_playoff_only` R4) records `pp-q2 abandoned` on all 11 cases, read from the triage DB.
+17. **"Mexicano's players are the division's individuals"** (plan review 2, I-3). The active-entrant read has no
+    kind filter, so from round 2 every earlier pair entrant also counts as a player. **Confirmed**: a later-round
+    self-pair 500 on 32 cases (`w1drv-l3-rerun` 23, `w1drv-l3-fr2` 9), a repeated person on 32 (`w1drv-l3-rerun` 21,
+    `w1drv-l3-fr2` 11), and the 500 once per L1 run on `mexicano|generic` → W7.
+
+**Execution (each task's Step 0 or in-task premise that proved false; what was seen):**
+
+- **Task 1.**
+  - Step 3's expected-unread list was short by 5 sites.
+  - The brief's `api-only-ui.ts:45-47` was `:43-45`.
+  - "The drop reason reads `gap.route.why`" would have broken byte identity, so it was composed instead.
+  - `OVERRIDE_ROUTE` was module-private.
+  - The Status-row regex also matched the header row.
+  - The widened arm found 10 live cases, not 3.
+  - Provenance text naming a closed wave could not be "fixed by routing", because the judge refuses a closed wave.
+    It was rephrased.
+- **Task 2.** "Read `driver.calls` for the addEntrants count": the fake logs one bare name per call.
+- **Task 10.**
+  - `legalBalls: TEST_BALLS` on every innings is false for 23 of 24 `test` cases, because they override
+    `ballsPerInnings`.
+  - The draw's `Math.min(3, allOut)` closes a 3-a-side match early.
+  - `tied` must guard `superOver` first.
+  - `GENERATES_TIE` became unused.
+  - The brief's file list missed `pad-adapters.test.ts`, a real consumer.
+  - Follow-on "off" still needs `lead`.
+  - PF-11: `readVariantsFile` and `readDropIndex` do not exist.
+- **Task 3.**
+  - `sportModule` is not exported from `@seazn/engine/sport`.
+  - `LineupSlot.orderNo` is required.
+  - The product orders a roster nulls last.
+  - Lineup refusals carry no code: the wire code is `ERROR`.
+  - No sport declares `team.maxMembers`.
+  - The MCC Law 1 page returns 404, so ICC/ECB conditions are cited.
+- **Task 4.**
+  - A "posted seed → answered entrant" lookup guard pre-empts `life-built-as-posted`'s own canary.
+  - The n−1 guard must reject before the trace logs.
+- **Task 5.**
+  - `setUpDivision` could not reach an americano row until Task 8; the test drives `buildDivision`.
+  - The fake needed no change.
+  - A pair kind on an americano row is refused by name.
+- **Task 6.**
+  - FP-1: the 409 is `/complete`'s `STAGE_COMPLETED_SEEDING_FAILED`; a later generate never refuses.
+  - FP-2: a withdrawn qualifier's seat is left empty and walked over, not closed up.
+  - FP-3: that 409 is a commit, not a retryable 4xx.
+  - FP-4: `DriverMisuse` is the driver's guard.
+  - FP-5: every reached stage is asked to complete once (T6-R2).
+  - FP-6: draws were already per stage; only the LIFECYCLE check was stage-1-only.
+- **Task 7.**
+  - Draws are declared on a ladder for `generic` and `boardgame`.
+  - An award (walkover) or a draw swaps nobody; only a decided win swaps.
+  - A product text pin cannot see a harness copy, so a structural scan was added.
+  - `runCanary` and `variantFor` did not exist.
+- **Task 8.**
+  - No `selfPairAnswers500` option is needed: the self-pair comes from the product's own points.
+  - The brief's round-2 `[]` set is unreachable.
+  - Whether `seatedLater` holds depends on person-id (UUID) order, so it is swept over both orders.
+- **Task 9.**
+  - `terminalFinalKeys` cannot live in `invariants.ts` (a boundary rule), so the snapshot computes it.
+  - The snapshot's `ladder_order` was the setup-time copy; it is re-read once.
+- **Task 11.** The own-session premise held: the active org is per cookie jar. But two pieces of per-USER state are
+  shared across workers, and both were found live:
+  - the owner's staff flag, flipped for entitlement busts (`240ed64ac`);
+  - unused sign-in links, deleted by each new request (`login-link.ts:13`; `eff68a737`).
+- **Task 12.** PF-11 again: the loaders did not exist, so they were added.
+- **Task 13.**
+  - The guard test "no route names W1-driving" could not pass at Task 13, because Task 14 owned the last route
+    (`MODEL_ROSTERS`).
+  - The gallery sends no visibility, so template competitions are created public.
+- **Task 14.**
+  - FP-T14-1: `ModelFakeDriver` could not run a swiss stage.
+  - FP-T14-2: the fake's log shape is `calls` plus `trace`, and the method is `postStream`.
+  - FP-T14-3: W1b's live seed does not transfer to the fake.
+  - FP-T14-4: `run-cell.ts` has no model state when it picks the bias, so the bias derives from the row.
+  - FP-T14-5: no committed case pins a command list, so the bias applies to replays too.
+  - FP-T14-6: the cascade writes through `postStream` as well.
+- **Task 15.**
+  - Step 6's parity pair shared 0 cells (T15-R3).
+  - The budget of "~1 min per case" was 0.5–7.8 s measured.
+  - A fixed `policy !== "none"` expectation on americano could never go green (T15-R6).
+  - The `gf-reset` prediction is not confirmed: no row sets `bracketReset`, so 0 cases.
+  - The review's "18 P1 cases with a committed draw trace" was 5.
+- **Task 16.**
+  - The T1-R1 guard test (`scenario-catalogue.test.ts`) read the REAL W1-driving row and needed it open, so closing
+    the row would have redded it. It now uses synthetic open rows, like its sibling.
+  - The replay-rule test was hard-wired to `w1b-model-final`'s 5 cases; it now reads every committed
+    `--regressions` report.
+  - Run 514's `l3Gap` is gone since Task 10's regen, so W1d first task 4's premise changed.
+  - The brief's seeding-tie routing "W4/W5" predates false premise 9: the swiss-source rows go to W3.
+
 ## Findings routed (W1b)
 
 Every live ❌ and every confirmed hypothesis from W1b, with its case or leg,
@@ -1606,6 +2022,325 @@ product changes (D4).
   went unseen until Task 14. The final review ran it: 2692/2692 over `scripts/matrix/__tests__`. Its two Important findings, I-1 and I-2,
   are fixed in `0532d0cb6`.
 
+## Findings routed (W1-driving)
+
+Every product red W1-driving's live runs found, and every product finding its tasks carried here. None is fixed in
+W1-driving: product reds are recorded and routed (rulings 19, 48). Evidence paths are under `truth-runs/`.
+
+**How each claim is labelled:**
+- **Confirmed** cites a committed run id.
+- **Read-derived** means read in the code and not driven.
+- **Predicted** means the fake or the plan says so and no committed run has shown it.
+
+**Source of the counts.** The per-case table at the end of this section is generated by
+`scripts/matrix/findings-table.ts` (T16-R4 m-6) from `truth-runs/w1drv-l3/TRIAGE.md`'s "Every ❌" table: every
+row whose final class is product. Each row's failing checks are read from the committed `results.json` of the run
+TRIAGE judges it on. The script refuses any row that is not red on its judged run, or whose run's `harnessCommit`
+differs from TRIAGE's. It read 61 results files and 164 rows, and refused none. `findings-table.test.ts` pins this
+table as its output, byte for byte. To re-run it:
+`node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/findings-table.ts
+<TRIAGE.md> <truth-runs dir> --out <file.md>`.
+
+**Per wave** (re-derived by script; ruling T15-R4 moved P1 from W4 to W2, and Task 16 applied it to TRIAGE):
+
+| wave | before T15-R4 | recorded (after T15-R4) | what |
+|---|---|---|---|
+| W2 | 0 | **62** | P1 bracket draw stall |
+| W3 | 3 | **3** | P6 swiss R4 |
+| W4 | 94 | **32** | P2 ko_plate F1 (10), P4 page-playoff R4 (11), P5 stepladder R4 (11); P1 (62) before T15-R4 |
+| W5 | 11 | **11** | P3 group_group_ko F1 |
+| W7 | 56 | **56** | the coverage table (44), P7 mexicano outside it (12) |
+| total | 164 | **164** | + 30 harness reds now ✅, 0 unfit, 0 unclassified |
+
+**The product rules** (TRIAGE states each rule's exact accepted failing set):
+
+- **P1 — bracket draw stall (62) → W2** (T15-R4; design §8 SC-O1/SC-O2).
+  - The engine's `supportsDraws` lets boardgame draw on every bracket kind, and generic draw on a page playoff
+    (`generic.ts:650-653`). A drawn bracket fixture never advances.
+  - **Two shapes** (re-derived by script, final review m-1): a stall (55), where the stage never completes; and
+    completed over a drawn final (7), where the stage completes and only I2 fails ("bracket fixture ended draw" on
+    5; no decided fixture with the terminal final key on 2). TRIAGE names the seven.
+  - **Confirmed** on all 62: each case has ≥ 1 drawn bracket fixture, read from its env's DB
+    (`truth-runs/w1drv-l3-fr1/draw-counts.json`, runs `w1drv-p1-*`).
+  - boardgame 52 on 14 rows; generic 10 (page_playoff_only 2, group_playoffs 4, swiss_playoff 4). This confirms
+    Task 2's carry: a generic page-playoff draw leaves `pp-final` never seated.
+- **P2 — ko_plate F1 (10) → W4.** Stage 1 commits, then `/complete` answers 409 `STAGE_COMPLETED_SEEDING_FAILED`, and
+  the plate is never seeded. **Confirmed** 10 of 11 (`w1drv-l3`); boardgame is masked by P1.
+- **P3 — group_group_ko F1 (11) → W5.** 7 entrants snaked into 4 pools leave seed 1 alone in pool A, and stage 2's
+  seeding then fails with a 409. **Confirmed** 11/11 (`w1drv-l3` 10; boardgame on its `w1drv-l3-fr1` P1 run). An owner question is recorded under
+  "Recommendations": it may be ruled unfit instead.
+- **P4 — `page_playoff_only` R4 (11) → W4** (plan review 1 m-5, plan review 2 I-1). **Confirmed** 11/11 (`w1drv-l3`
+  9; boardgame and generic on their `w1drv-l3-fr1` P1 runs): `/complete` answers 200 with no code and the stage does
+  not complete, the play loop exits `refused_generate`, and one fixture is left `scheduled`. **DB-derived, not in a
+  committed run:** the mechanism (the open-format branch abandons `pp-q2`, so `pp-final` is never seated) was read
+  from the T15 triage database. None of the 11 committed cases names `pp-q2` or `pp-final`.
+- **P5 — stepladder R4 (11) → W4** (T15-R7).
+  - Withdrawing seed 3 is refused: 422 `WRONG_PHASE` "fixture has an unassigned entrant (bye/TBD)". The walkover
+    cascade reaches a TBD line (`withdrawal.ts:217-220` → `append-event.ts:188-191`). **Confirmed** 11/11
+    (`w1drv-l3-rerun` 10; boardgame on its `w1drv-l3-fr1` P1 run).
+  - The model shows the same refusal on three bracket kinds: MB-002/003 (knockout), MB-008 (stepladder) and MB-009
+    (double elim). All are committed and replay known (`w1drv-t16-model-reg2`, and again on
+    `w1drv-t16fr1-model-reg`). MB-009 is a double-elim row: it routes W4 with P5, cross-referenced to W6 as the row's
+    owner, as G-2 does for MB-007.
+  - **G-3 → W4:** because of this, the stepladder R4 policy and cascade checks have never been judged live. A
+    half-applied cascade is possible (`withdrawal.ts:216-225`; read-derived).
+- **P6 — swiss R4, `rank_adjacent` (3) → W3.** Round 5's Generate pairs nobody and answers success (SW-H1).
+  **Confirmed** on `swiss_knockout` generic and hockey and on `swiss_playoff` hockey (`w1drv-l3`). It is
+  intermittent: `swiss_playoff` boardgame hit SW-H1 in `w1drv-l3` and a P1 draw stall on its fr1 run.
+- **The coverage table (44) → W7**, and **P7, mexicano outside the table (12) → W7.** The signatures are below.
+
+**Named findings** (the brief's list and the open carries):
+
+- **Americano × team sport plays one arbitrary roster member per team → W7** (false premise 10). **Confirmed**: the
+  note is on all 42 cases of the 10 team cells, each on its latest committed run (`w1drv-l3`, `w1drv-l3-rerun`,
+  `w1drv-l3-fr2`). The americano team cells are ✅ on every check but R4, so the note IS the finding.
+- **Mexicano counts round-1 pair entrants as players → W7** (false premise 17; `stages.ts:2290-2293` has no kind
+  filter).
+  - **Confirmed**: a later-round generate refused 500 on a self-pair (`entrant_members_pkey`) on 32 cases
+    (`w1drv-l3-rerun` 23, `w1drv-l3-fr2` 9).
+  - **Confirmed**: a person seated twice in one round on 32 cases. The 11 judged on `w1drv-l3-fr2` name the earlier
+    pair entrant the person belongs to. The 21 judged on `w1drv-l3-rerun` predate G-4. They name the person and the
+    two entrants seating them, but lack G-4's "is a member of earlier pair entrant" clause.
+  - **Confirmed** at 1280: the L1 `mexicano|generic` case reds on the same 500 in every run (`w1drv-l1-t15-r1..r3`).
+- **Mexicano stalls on any fixture that is not `decided` → W7** (false premise 14). **Confirmed** on all 11
+  mexicano M1 cases, failing set `[life-loop-bounded]` (`w1drv-l3-rerun`).
+- **Mexicano predictions (D9; carry from Task 8):**
+  - **A mexicano stage completes after any decided round: confirmed.** The product's `/complete` answers
+    `completed: true` after round 1, which is why M1's failing set holds only `life-loop-bounded` (11/11,
+    `w1drv-l3-rerun`).
+  - **Personal points read 0 on every sport but generic: read-derived for mexicano.** `stages.ts:774-783` reads
+    `state->'score'`, and only `generic.ts:81` folds one. The americano screen shows it live: "Personal points"
+    PTS 0 for all 8 players after 7 scored rounds (`w1drv-l1-t15-r1`, `truth-runs/w1drv-l1/README.md` (c)). The
+    Task 15 API read over 22 stages agreed, but its output is not committed, so it is not cited as confirmation.
+  - **Sit-outs never rotate (the same 3 of 7 never play): predicted, not observable live.** The "3 of 7" figure is
+    from the fake, and the mechanism is read from `americano.ts:61, :93-95`. The self-pair 500 stops every live
+    mexicano F1 by round 3, before a rotation could show.
+- **R4 on americano/mexicano: the withdrawn player keeps playing → W7** (ruling 51). **Confirmed** on
+  `w1drv-l3-fr2`. Americano 11/11: 6 of the 12 later fixtures seat seed 3's person, through `r4-not-seated-later`
+  (T15-R9). Mexicano 3/11, only where the second leg holds (generic, icehockey, volleyball).
+- **The organiser cannot narrow entrant kinds on a running americano: minted pairs block it → W7** (T12-R1;
+  `divisions.ts:857-871`).
+  - **Predicted** in the committed runs: the note marks the precondition (minted pair entrants active) on 24
+    cases.
+  - Task 12's live cells saw the 422 `ENTRANT_KIND_IN_USE` before the probe was changed. That evidence is not
+    committed.
+- **The ladder keeps a withdrawn player's rung in `finalRanks` → W7** (ruling 53's note, never asserted). The raw
+  `ladder_order` is used (`competition.ts:606`). **Confirmed** as a note on all 11 ladder R4 cases, each ✅: "ladder
+  finalRanks rung 3 for withdrawn <id> (raw held 3) — W7 rulebook question" (`w1drv-l3`).
+- **Ladder, read-derived → W7:**
+  - no guard stops an entrant holding two open challenges (Task 7);
+  - no code path un-swaps a voided challenge (Task 7 G-1, grep only);
+  - the swap rule has no live replay: I9 compares two reads of `competition.ts:606` (Task 9 m-2).
+- **The 4-innings level-tie applicability question → W2** (false premise 4). M5 does not probe a two-innings tie
+  (`applicability.ts:101-122`; read-derived). Also (Task 10 m10-2): no scenario requests a tie, so M5 is
+  unscripted. Design §4 builds M5 in W2, so it is routed there as a missing producer.
+- **Side size differs from the catalog's `lineup.size` → W2** (Task 3, m-2; `rosters.ts` `SIDE_SIZE_ROUTE`).
+  `volleyball/beach` plays 2 a side against a lineup of 6. `hockey/youth` plays 7 against 11. Rulebook-derived from
+  the committed `RULEBOOK_SIDE_SIZE` table; the setbased kernel has no `positionsFor`.
+- **Seeding ties the harness had to pick → by row** (the brief said W4/W5; false premise 9 puts the swiss-source
+  rows in W3).
+  - 38 cases carry "stage N: 1 seeding tie(s) picked in the product's listed order", each on its latest committed
+    run.
+  - **W5 (21):** `group_group_ko` 9, `groups_ko` 3, `league_ko` 3, `group_playoffs` 3, `group_stepladder` 3.
+  - **W3 (17):** `swiss_playoff` 9, `swiss_knockout` 8.
+  - None is on a W4 row. Each is a note, not a red. The family wave decides whether the product's listed order is
+    a rule.
+- **An unplayed `gf-reset` → W6: read-derived and latent, with 0 cases.** No catalogue row sets `bracketReset`, so
+  no run can reach it. That is read-derived: neither `scripts/matrix/lib/catalogue.ts` nor `format-templates.ts`
+  names it. The "0 of 74 double-elim stages" count is DB-derived, from the T15 triage database, and was never
+  committed. The product never voids `gf-reset`, so a double elim with `bracketReset` would never complete (Task 9's
+  read).
+- **The double-elim model red (G-2): MB-007 → W4** (FX-G2), cross-referenced to W6 as the row's owner. A Generate
+  after the roster changes 500s: "generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label"
+  (`stages.ts:2658`). This is the shared generate path of MB-004/005 (knockout). **Confirmed** on
+  `w1drv-model-m6` and replayed known on `w1drv-t16-model-reg2` and `w1drv-t16fr1-model-reg`.
+- **MB-010, the same 500 after a WITHDRAWAL on double elim → W4**, cross-referenced to W6 as the row's owner, like
+  MB-007. The sequence is Start → Withdraw → Generate. It was found once T16-R3 lifted the fence's double-elim
+  withdrawn branch. **Confirmed** on `w1drv-t16fr1-model-de`, and replayed known as itself on
+  `w1drv-t16fr1-model-reg`. One root (`stages.ts:2658`) and two triggers: MB-004 is knockout's withdrawal instance.
+- **Screen observations at 1280** (`truth-runs/w1drv-l1/README.md`; each reproduced on `w1drv-l1-t15-r1`):
+  - (a) a box league's public page crowns ONE champion over four parallel boxes → **W5**, a rulebook question for
+    the owner;
+  - (b) the ladder's public standings read P/W/L/PTS 0 on every rung after 7 decided challenges → **W7**;
+  - (c) americano personal points read 0, and the champion is a pair entrant → **W7**.
+  - (d), (e) and the missing filler counts are harness items → "W1d first tasks".
+- **Mexicano R4 is not reproducible run to run → W7** (TRIAGE "Reproducibility"). Over four runs, no mexicano R4 case
+  kept one failing set. See the W7 recommendation.
+- **Latent, if an americano stage ever gets a successor → W7:** I10 must then skip a seeding-failed 409 by name, as
+  I2 does (Task 9, T9-R5).
+- **A refused format change deletes the division's stages first → W9** (ruling 57; the owner, 2026-10-01: "W9 is
+  fine"). `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature` gates.
+  **Read-derived:** the controller read the delete on `main` `58e8103e3`, and no committed run drives it.
+
+**Every product red** (generated; P1 rows read W2 per T15-R4; "table:" rows are the coverage table's signatures):
+
+| wave | TRIAGE # | case | failing checks (on the run it is judged on) | judged on | rule |
+|---|---|---|---|---|---|
+| W2 | 1 | `league_ko\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-league-ko-boardgame` | P1 bracket draw stall |
+| W2 | 2 | `league_ko\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-league-ko-boardgame` | P1 bracket draw stall |
+| W2 | 3 | `league_ko\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-league-ko-boardgame` | P1 bracket draw stall |
+| W2 | 4 | `league_ko\|boardgame\|blitz\|F1` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-league-ko-boardgame` | P1 bracket draw stall |
+| W2 | 5 | `groups_ko\|boardgame\|blitz\|LIFECYCLE` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-groups-ko-boardgame` | P1 bracket draw stall |
+| W2 | 6 | `groups_ko\|boardgame\|blitz\|M1` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-groups-ko-boardgame` | P1 bracket draw stall |
+| W2 | 7 | `groups_ko\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-groups-ko-boardgame` | P1 bracket draw stall |
+| W2 | 8 | `groups_ko\|boardgame\|blitz\|F1` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-groups-ko-boardgame` | P1 bracket draw stall |
+| W2 | 9 | `group_stepladder\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-stepladder-boardgame` | P1 bracket draw stall |
+| W2 | 10 | `group_stepladder\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-stepladder-boardgame` | P1 bracket draw stall |
+| W2 | 11 | `group_stepladder\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-stepladder-boardgame` | P1 bracket draw stall |
+| W2 | 12 | `group_stepladder\|boardgame\|blitz\|F1` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-group-stepladder-boardgame` | P1 bracket draw stall |
+| W2 | 13 | `group_playoffs\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-boardgame` | P1 bracket draw stall |
+| W2 | 14 | `group_playoffs\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-boardgame` | P1 bracket draw stall |
+| W2 | 15 | `group_playoffs\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-boardgame` | P1 bracket draw stall |
+| W2 | 16 | `group_playoffs\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-boardgame` | P1 bracket draw stall |
+| W2 | 17 | `group_playoffs\|generic\|score\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-generic` | P1 bracket draw stall |
+| W2 | 18 | `group_playoffs\|generic\|score\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-generic` | P1 bracket draw stall |
+| W2 | 19 | `group_playoffs\|generic\|score\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-generic` | P1 bracket draw stall |
+| W2 | 20 | `group_playoffs\|generic\|score\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-playoffs-generic` | P1 bracket draw stall |
+| W2 | 21 | `swiss_playoff\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-boardgame` | P1 bracket draw stall |
+| W2 | 22 | `swiss_playoff\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-boardgame` | P1 bracket draw stall |
+| W2 | 23 | `swiss_playoff\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-boardgame` | P1 bracket draw stall |
+| W2 | 24 | `swiss_playoff\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-boardgame` | P1 bracket draw stall |
+| W2 | 25 | `swiss_playoff\|generic\|score\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-generic` | P1 bracket draw stall |
+| W2 | 26 | `swiss_playoff\|generic\|score\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-generic` | P1 bracket draw stall |
+| W2 | 27 | `swiss_playoff\|generic\|score\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-generic` | P1 bracket draw stall |
+| W2 | 28 | `swiss_playoff\|generic\|score\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-playoff-generic` | P1 bracket draw stall |
+| W2 | 30 | `swiss_knockout\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 31 | `swiss_knockout\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 32 | `swiss_knockout\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-swiss-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 33 | `swiss_knockout\|boardgame\|blitz\|F1` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-swiss-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 36 | `knockout\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 37 | `knockout\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 38 | `knockout\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 39 | `knockout\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-boardgame` | P1 bracket draw stall |
+| W2 | 42 | `ko_plate\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-ko-plate-boardgame` | P1 bracket draw stall |
+| W2 | 43 | `ko_plate\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-ko-plate-boardgame` | P1 bracket draw stall |
+| W2 | 44 | `ko_plate\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-ko-plate-boardgame` | P1 bracket draw stall |
+| W2 | 45 | `ko_plate\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-ko-plate-boardgame` | P1 bracket draw stall |
+| W2 | 54 | `qualifying_main\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-qualifying-main-boardgame` | P1 bracket draw stall |
+| W2 | 55 | `qualifying_main\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-qualifying-main-boardgame` | P1 bracket draw stall |
+| W2 | 56 | `qualifying_main\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-qualifying-main-boardgame` | P1 bracket draw stall |
+| W2 | 57 | `qualifying_main\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-qualifying-main-boardgame` | P1 bracket draw stall |
+| W2 | 60 | `double_elim\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-double-elim-boardgame` | P1 bracket draw stall |
+| W2 | 61 | `double_elim\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-double-elim-boardgame` | P1 bracket draw stall |
+| W2 | 62 | `double_elim\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-double-elim-boardgame` | P1 bracket draw stall |
+| W2 | 63 | `double_elim\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-double-elim-boardgame` | P1 bracket draw stall |
+| W2 | 129 | `group_group_ko\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-group-ko-boardgame` | P1 bracket draw stall |
+| W2 | 130 | `group_group_ko\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-group-ko-boardgame` | P1 bracket draw stall |
+| W2 | 131 | `group_group_ko\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-group-group-ko-boardgame` | P1 bracket draw stall |
+| W2 | 141 | `knockout_third_place\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-third-place-boardgame` | P1 bracket draw stall |
+| W2 | 142 | `knockout_third_place\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-third-place-boardgame` | P1 bracket draw stall |
+| W2 | 143 | `knockout_third_place\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-third-place-boardgame` | P1 bracket draw stall |
+| W2 | 144 | `knockout_third_place\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-knockout-third-place-boardgame` | P1 bracket draw stall |
+| W2 | 147 | `page_playoff_only\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-page-playoff-only-boardgame` | P1 bracket draw stall |
+| W2 | 148 | `page_playoff_only\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-page-playoff-only-boardgame` | P1 bracket draw stall |
+| W2 | 151 | `page_playoff_only\|generic\|score\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-page-playoff-only-generic` | P1 bracket draw stall |
+| W2 | 152 | `page_playoff_only\|generic\|score\|M1` | I2-bracket-one-champion-ranks-permutation | `w1drv-l3-fr1/w1drv-p1-page-playoff-only-generic` | P1 bracket draw stall |
+| W2 | 166 | `stepladder_only\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-stepladder-only-boardgame` | P1 bracket draw stall |
+| W2 | 167 | `stepladder_only\|boardgame\|blitz\|M1` | I4-nothing-ends-stuck, m1-walkover-recorded, m1-winner-progresses, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-stepladder-only-boardgame` | P1 bracket draw stall |
+| W2 | 169 | `stepladder_only\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-stepladder-only-boardgame` | P1 bracket draw stall |
+| W3 | 29 | `swiss_playoff\|hockey\|fih-outdoor\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P6 swiss R4 |
+| W3 | 34 | `swiss_knockout\|generic\|score\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P6 swiss R4 |
+| W3 | 35 | `swiss_knockout\|hockey\|fih-outdoor\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P6 swiss R4 |
+| W4 | 40 | `ko_plate\|football\|11-a-side\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 41 | `ko_plate\|cricket\|t20\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 46 | `ko_plate\|carrom\|club-29\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 47 | `ko_plate\|generic\|score\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 48 | `ko_plate\|volleyball\|beach\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 49 | `ko_plate\|badminton\|bwf\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 50 | `ko_plate\|tabletennis\|bo5\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 51 | `ko_plate\|tennis\|tour\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 52 | `ko_plate\|icehockey\|iihf\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 53 | `ko_plate\|hockey\|fih-outdoor\|F1` | I4-nothing-ends-stuck, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P2 ko_plate F1 |
+| W4 | 145 | `page_playoff_only\|football\|11-a-side\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 146 | `page_playoff_only\|cricket\|t20\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 149 | `page_playoff_only\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-page-playoff-only-boardgame` | P4 page_playoff_only R4 |
+| W4 | 150 | `page_playoff_only\|carrom\|club-29\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 153 | `page_playoff_only\|generic\|score\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3-fr1/w1drv-p1-page-playoff-only-generic` | P4 page_playoff_only R4 |
+| W4 | 154 | `page_playoff_only\|volleyball\|beach\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 155 | `page_playoff_only\|badminton\|bwf\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 156 | `page_playoff_only\|tabletennis\|bo5\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 157 | `page_playoff_only\|tennis\|tour\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 158 | `page_playoff_only\|icehockey\|iihf\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 159 | `page_playoff_only\|hockey\|fih-outdoor\|R4` | I4-nothing-ends-stuck, life-loop-bounded | `w1drv-l3` | P4 page_playoff_only R4 |
+| W4 | 161 | `stepladder_only\|football\|11-a-side\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-football` | P5 stepladder R4 |
+| W4 | 164 | `stepladder_only\|cricket\|t20\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-cricket` | P5 stepladder R4 |
+| W4 | 168 | `stepladder_only\|boardgame\|blitz\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-fr1/w1drv-p1-stepladder-only-boardgame` | P5 stepladder R4 |
+| W4 | 171 | `stepladder_only\|carrom\|club-29\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-carrom` | P5 stepladder R4 |
+| W4 | 174 | `stepladder_only\|generic\|score\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-generic` | P5 stepladder R4 |
+| W4 | 177 | `stepladder_only\|volleyball\|beach\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-volleyball` | P5 stepladder R4 |
+| W4 | 180 | `stepladder_only\|badminton\|bwf\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-badminton` | P5 stepladder R4 |
+| W4 | 183 | `stepladder_only\|tabletennis\|bo5\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-tabletennis` | P5 stepladder R4 |
+| W4 | 186 | `stepladder_only\|tennis\|tour\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-tennis` | P5 stepladder R4 |
+| W4 | 189 | `stepladder_only\|icehockey\|iihf\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-icehockey` | P5 stepladder R4 |
+| W4 | 192 | `stepladder_only\|hockey\|fih-outdoor\|R4` | error red — RefusedCall: POST /api/v1/entrants/<id>/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant (bye/TBD) | `w1drv-l3-rerun/w1drv-rr-stepladder-only-hockey` | P5 stepladder R4 |
+| W5 | 127 | `group_group_ko\|football\|11-a-side\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 128 | `group_group_ko\|cricket\|t20\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 132 | `group_group_ko\|boardgame\|blitz\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3-fr1/w1drv-p1-group-group-ko-boardgame` | P3 group_group_ko F1 |
+| W5 | 133 | `group_group_ko\|carrom\|club-29\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 134 | `group_group_ko\|generic\|score\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 135 | `group_group_ko\|volleyball\|beach\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 136 | `group_group_ko\|badminton\|bwf\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 137 | `group_group_ko\|tabletennis\|bo5\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 138 | `group_group_ko\|tennis\|tour\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 139 | `group_group_ko\|icehockey\|iihf\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W5 | 140 | `group_group_ko\|hockey\|fih-outdoor\|F1` | I1-rr-pair-once-per-leg, I4-nothing-ends-stuck, life-built-as-posted, f1-everyone-drawn, life-loop-bounded, advance-seeded-as-declared | `w1drv-l3` | P3 group_group_ko F1 |
+| W7 | 72 | `americano\|football\|11-a-side\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-football` | table: kept-playing |
+| W7 | 73 | `americano\|cricket\|t20\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-cricket` | table: kept-playing |
+| W7 | 74 | `americano\|boardgame\|blitz\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-boardgame` | table: kept-playing |
+| W7 | 75 | `americano\|carrom\|club-29\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-carrom` | table: kept-playing |
+| W7 | 76 | `americano\|generic\|score\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-generic` | table: kept-playing |
+| W7 | 77 | `americano\|volleyball\|beach\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-volleyball` | table: kept-playing |
+| W7 | 78 | `americano\|badminton\|bwf\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-badminton` | table: kept-playing |
+| W7 | 79 | `americano\|tabletennis\|bo5\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-tabletennis` | table: kept-playing |
+| W7 | 80 | `americano\|tennis\|tour\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-tennis` | table: kept-playing |
+| W7 | 81 | `americano\|icehockey\|iihf\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-icehockey` | table: kept-playing |
+| W7 | 82 | `americano\|hockey\|fih-outdoor\|R4` | r4-policy-reported, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-americano-hockey` | table: kept-playing |
+| W7 | 83 | `mexicano\|football\|11-a-side\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-football` | table: self-pair + duplicate |
+| W7 | 84 | `mexicano\|football\|11-a-side\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-football` | table: mexicano stall |
+| W7 | 85 | `mexicano\|football\|11-a-side\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-football` | table: self-pair + duplicate |
+| W7 | 86 | `mexicano\|football\|11-a-side\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-football` | P7 mexicano, outside the coverage table |
+| W7 | 87 | `mexicano\|cricket\|t20\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-cricket` | table: self-pair + duplicate |
+| W7 | 88 | `mexicano\|cricket\|t20\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-cricket` | table: mexicano stall |
+| W7 | 89 | `mexicano\|cricket\|t20\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-cricket` | table: self-pair + duplicate |
+| W7 | 90 | `mexicano\|cricket\|t20\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-cricket` | P7 mexicano, outside the coverage table |
+| W7 | 91 | `mexicano\|boardgame\|blitz\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-boardgame` | table: self-pair + duplicate |
+| W7 | 92 | `mexicano\|boardgame\|blitz\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-boardgame` | table: mexicano stall |
+| W7 | 93 | `mexicano\|boardgame\|blitz\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-boardgame` | table: self-pair + duplicate |
+| W7 | 94 | `mexicano\|boardgame\|blitz\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-boardgame` | P7 mexicano, outside the coverage table |
+| W7 | 95 | `mexicano\|carrom\|club-29\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-carrom` | table: self-pair + duplicate |
+| W7 | 96 | `mexicano\|carrom\|club-29\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-carrom` | table: mexicano stall |
+| W7 | 97 | `mexicano\|carrom\|club-29\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-carrom` | table: self-pair + duplicate |
+| W7 | 98 | `mexicano\|carrom\|club-29\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-carrom` | P7 mexicano, outside the coverage table |
+| W7 | 99 | `mexicano\|generic\|score\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, life-draw-path-exercised, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-generic` | table: self-pair |
+| W7 | 100 | `mexicano\|generic\|score\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-generic` | table: mexicano stall |
+| W7 | 101 | `mexicano\|generic\|score\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, r4-not-seated-later, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-generic` | table: self-pair + duplicate + kept-playing |
+| W7 | 102 | `mexicano\|generic\|score\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-generic` | P7 mexicano, outside the coverage table |
+| W7 | 103 | `mexicano\|volleyball\|beach\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-volleyball` | table: self-pair + duplicate |
+| W7 | 104 | `mexicano\|volleyball\|beach\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-volleyball` | table: mexicano stall |
+| W7 | 105 | `mexicano\|volleyball\|beach\|R4` | I10-americano-seats-each-person-once, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-volleyball` | P7 mexicano, outside the coverage table |
+| W7 | 106 | `mexicano\|volleyball\|beach\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-volleyball` | P7 mexicano, outside the coverage table |
+| W7 | 107 | `mexicano\|badminton\|bwf\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-badminton` | table: self-pair + duplicate |
+| W7 | 108 | `mexicano\|badminton\|bwf\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-badminton` | table: mexicano stall |
+| W7 | 109 | `mexicano\|badminton\|bwf\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-badminton` | table: self-pair + duplicate |
+| W7 | 110 | `mexicano\|badminton\|bwf\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-badminton` | P7 mexicano, outside the coverage table |
+| W7 | 111 | `mexicano\|tabletennis\|bo5\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-tabletennis` | table: self-pair + duplicate |
+| W7 | 112 | `mexicano\|tabletennis\|bo5\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-tabletennis` | table: mexicano stall |
+| W7 | 113 | `mexicano\|tabletennis\|bo5\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-tabletennis` | table: self-pair + duplicate |
+| W7 | 114 | `mexicano\|tabletennis\|bo5\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-tabletennis` | P7 mexicano, outside the coverage table |
+| W7 | 115 | `mexicano\|tennis\|tour\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-tennis` | table: self-pair + duplicate |
+| W7 | 116 | `mexicano\|tennis\|tour\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-tennis` | table: mexicano stall |
+| W7 | 117 | `mexicano\|tennis\|tour\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-tennis` | table: self-pair + duplicate |
+| W7 | 118 | `mexicano\|tennis\|tour\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-tennis` | P7 mexicano, outside the coverage table |
+| W7 | 119 | `mexicano\|icehockey\|iihf\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-icehockey` | table: self-pair + duplicate |
+| W7 | 120 | `mexicano\|icehockey\|iihf\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-icehockey` | table: mexicano stall |
+| W7 | 121 | `mexicano\|icehockey\|iihf\|R4` | I10-americano-seats-each-person-once, r4-not-seated-later | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-icehockey` | table: duplicate + kept-playing |
+| W7 | 122 | `mexicano\|icehockey\|iihf\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-icehockey` | P7 mexicano, outside the coverage table |
+| W7 | 123 | `mexicano\|hockey\|fih-outdoor\|LIFECYCLE` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-hockey` | table: self-pair + duplicate |
+| W7 | 124 | `mexicano\|hockey\|fih-outdoor\|M1` | life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-hockey` | table: mexicano stall |
+| W7 | 125 | `mexicano\|hockey\|fih-outdoor\|R4` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-fr2/w1drv-fr2-r4-mexicano-hockey` | table: self-pair + duplicate |
+| W7 | 126 | `mexicano\|hockey\|fih-outdoor\|F1` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-built-as-posted, f1-everyone-drawn, f1-round-size, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-hockey` | P7 mexicano, outside the coverage table |
+| W7 | 194 | `mexicano\|cricket\|test\|LIFECYCLE\|cricket#060` | I4-nothing-ends-stuck, I8-generate-named, I10-americano-seats-each-person-once, life-loop-bounded | `w1drv-l3-rerun/w1drv-rr-mexicano-cricket` | table: self-pair + duplicate |
+
 ## W2 checklist (binding; from the W1c coverage audit)
 
 The owner's direction (ruling 42, 2026-09-30) is "don't miss any possibilities": every sport's rule-level
@@ -1682,7 +2417,7 @@ sign-off:
 `scripts/matrix/lib/streams/` emits any of these:
 
 - any decider: extra time, shoot-out, overtime, GWS, super over, DLS;
-- a cricket tie;
+- ~~a cricket tie;~~ struck by ruling 44 (W1-driving builds it: `streams/cricket.ts` `tied`);
 - a deciding set, except at `bestOf: 1`;
 - a set cap;
 - a tie-break set;
@@ -1690,7 +2425,7 @@ sign-off:
 - a double walkover;
 - an abandon under `abandonPolicy: "award"`;
 - any sanction;
-- a two-innings cricket win or draw.
+- ~~a two-innings cricket win or draw.~~ struck by ruling 44 (W1-driving builds it: `streams/cricket.ts` two innings a side).
 
 Forfeit and abandon are only ever sent straight after `core.start`, at 0–0. A W2 truth run without that task proves
 only what the generators already reach, and every row above would read as untested, not as passing.
@@ -1739,10 +2474,13 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
    `durationMs === 0` heuristic. What it closes: a hand-flip of a driven case to ⏳/🚫 that keeps its duration and
    calls, with its fixtures and events zeroed, cannot be told from a real runtime ⏳/🚫 today. A flip that keeps
    fixtures or events already reds (`f33c1b312`), because the runner never writes that shape.
-4. **`LayerCase.run` is an inert seam: record it** (m-7). Planned and driven L2 cases carry `n`, `covers` and
-   `l3Gap`, but `run.ts` writes none of them. W1d's full L2 is the first plan that holds run 514
-   (`groups_ko|cricket|t20|M5@375`, the only `l3Gap` run), and it will be ░. Its result must say that this ░ is the
-   pair's ONLY coverage. Record `n` too, so an L2 result maps back to its committed run.
+4. **`LayerCase.run` is an inert seam: record it** (m-7). Every case the layers build carries `run: null`
+   (`layers.ts:105`, `:220`, `:255`, `:278`), and `run.ts` writes no `n` or `covers` into a result, so an L2 result
+   cannot be mapped back to its committed `l2-pairs.json` run. Record `n` and `covers`.
+   - **The premise changed in W1-driving** (Task 10's regen, `fe41d525a`). `l2-pairs.json` now holds 1,731 runs, and
+     every `l3Gap` is null (`counts.json` `l2.l3GapRuns` 0). Run 514 is still `groups_ko|cricket|t20|M5@375`, but
+     it carries no `l3Gap` now: ruling 44's cricket tie stream removed the M5 harness gap that marked it. If a later
+     regen marks a run `l3Gap` again, its result must say that this run is the pair's only coverage.
 5. **`NoLayerForWidth` exits 3, not 2** (m-3; T12). It is thrown inside `execute` and is not in `refused`. It cannot
    be reached today (`BROWSER_WIDTHS = [1280, ...L2_WIDTHS]`). Add it to `refused`, or resolve `layerOfWidth` in
    `runSlice`, the first time a width is added.
@@ -1780,3 +2518,38 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     - the sweep's fold branch, not recorded;
     - void, never driven in any browser run;
     - forfeit and withdraw on league and knockout cells in the browser (carry 8).
+
+**Added by W1-driving (Task 16, 2026-10-01).** Each item below is routed to W1d by name:
+
+16. **Cricket pad adapter routes for the two-innings events** (D13, ruling 52). These are `cricket.followon`,
+    `cricket.match.close` and a declared innings. `pads/cricket.ts:66` refuses `inningsPerSide` 2 by name, and
+    `pad-adapters.test.ts` sweeps single-innings requests only (Task 10). Until the routes exist, the 24 cricket
+    `test` cases are proven over HTTP only.
+17. **Browser workers inside a shard** (D10, ruling 46). `--driver browser --workers 2` is a usage error that names
+    W1d (`run.ts:454`, `BROWSER_WORKERS`).
+18. **`MAX_WORKERS` may rise inside a shard** (Task 11). It is 8, the local-env bound (`lib/workers.ts:25-28`; the
+    prod DB budget note is 60 connections). Provisions take one run-wide turn each, because the staff flag and the
+    sign-in links are per user. A cheaper entitlement bust, or a dedicated synthetic owner per shard, would lift
+    that cap.
+19. **One sign-in budget per shard under Redis.** No `--workers` refusal. See "Recommendations": with `REDIS_URL`
+    set, the sixth magic-link sign-in from one IP inside 300 s answers 429.
+20. **Templates in the grid.**
+    - The W1d grid must pass the template for an ad-hoc `--driver browser --only <template cell>`, which fails by
+      name today (Task 13).
+    - Template competitions are created **public**: the gallery sends no visibility, and the schema defaults to
+      `public`. A shard that reuses an org must allow for its public quota.
+21. **Record the filler counts in `results.json`.** `filler` appears 0 times today, so the live filler proof is
+    indirect, and the counts are proven only in unit tests (Task 13; `truth-runs/w1drv-l1/README.md`).
+22. **A knockout-completion shot on multi-stage L1** (`truth-runs/w1drv-l1/README.md` (d)). The `groups_ko` case's
+    `08-completed` is the group stage's completion, taken with the knockout's proposal pending. No check misreads
+    it.
+23. **Name team entrants "Matrix Team N", not "Matrix Player N"** (`truth-runs/w1drv-l1/README.md` (e)). This is the
+    house constraint, and no check depends on it.
+24. **Cosmetic: the americano policy note prints a team entrant's whole roster** ("of <id>+<id>+…", Task 15).
+25. **Item 12 again, on the model CLI** (Task 16). A model run id reused against the same DB, after its report
+    directory was removed, aborted on `organizations_slug_key` instead of refusing up front by name.
+26. **Two committed cases that share cell, check and match make an exploring run's fence rule blind** (Task 16
+    re-review 1). MB-007 and MB-010 share all three, so the narrowed-fence run (`w1drv-t16fr1-model-de`) labelled
+    the new withdrawn-trigger failure `known: MB-007` and exited 0; MB-010 was found only by reading its commands.
+    "A fence guards only what a committed case shows, else the bug reports NEW" does not hold for such pairs: make
+    the matcher (or the exploring run's report) distinguish cases by their shown trigger, not only cell/check/match.

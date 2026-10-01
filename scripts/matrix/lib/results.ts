@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { baseScrubber, findSecrets, mapStrings } from "./redact.ts";
 import { BROWSER_WIDTHS } from "./widths.ts";
+import { MAX_WORKERS } from "./workers.ts";
 
 // Re-exported so every existing `from "./results.ts"` import keeps working.
 export { BROWSER_WIDTHS } from "./widths.ts";
@@ -109,7 +110,36 @@ export interface RunResults {
    *  carry 6. run.ts always writes it; v3 evidence written before the field
    *  (Task 8's walkthrough-a) has none, so it is optional to READ. */
   plan?: string;
+  /** W1-driving Task 11 (ruling 46): how many in-process workers RAN the
+   *  cases, each on its own sign-in — never more than the cases, so a
+   *  `--workers 8` run of three cases records 3 (fix round 1 m-1). Written
+   *  only when more than one ran — every v3 file before the field (all the
+   *  committed v3 evidence) and every one-worker run is a single sign-in, so
+   *  absent means one. */
+  workers?: number;
+  /** W1-driving fix round 2 (ruling T12-R3): written only when a shared turn
+   *  outlived its deadline and the run aborted. `cases` then holds only the
+   *  cases that finished BEFORE the trip — the evidence; the case whose turn it
+   *  was is named here and gets no red, and the cases that finished during the
+   *  abort are listed in `inFlight` (fix round 3, T12-R4), never in `cases`. */
+  aborted?: RunAbort;
   cases: CaseResult[];
+}
+
+/** Why a run aborted (T12-R3). Exactly one of `caseId` and `worker` is set:
+ *  a case-org provision belongs to a case, a worker's sign-in to no case. */
+export interface RunAbort {
+  /** The shared turn that outlived its deadline, by its lock's label. */
+  turn: string;
+  deadlineMs: number;
+  caseId: string | null;
+  /** 0-based: worker 0 signs in before the queue, so a timed-out sign-in is 1..N-1. */
+  worker: number | null;
+  /** Fix round 3 (T12-R4): the cases mid-scenario at the trip, which finished
+   *  during the abort. A late answer from the timed-out turn could have landed
+   *  on them, so they are NOT evidence: listed here for a re-run, in plan
+   *  order, and excluded from `cases` (so from the grid and every total). */
+  inFlight: string[];
 }
 
 /** What parseResults reads: committed v2 evidence, or a v3 run. */
@@ -178,6 +208,15 @@ export const RunResultsSchemaV3 = z.strictObject({
   layer: z.enum(LAYERS),
   driver: z.enum(DRIVER_KINDS),
   plan: z.string().min(1).optional(),
+  workers: z.number().int().min(1).max(MAX_WORKERS).optional(),
+  aborted: z.strictObject({
+    turn: z.string().min(1),
+    deadlineMs: z.number().int().min(1),
+    caseId: z.string().min(1).nullable(),
+    worker: z.number().int().min(0).max(MAX_WORKERS - 1).nullable(),
+    inFlight: z.array(z.string().min(1)),
+  }).refine((a) => (a.caseId === null) !== (a.worker === null), "an abort names the case whose turn it was or the worker whose sign-in it was — exactly one")
+    .refine((a) => new Set(a.inFlight).size === a.inFlight.length && (a.caseId === null || !a.inFlight.includes(a.caseId)), "an abort lists each in-flight case once, and never the case whose turn it was").optional(),
   cases: z.array(CaseSchemaV3),
 });
 

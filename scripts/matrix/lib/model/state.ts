@@ -11,12 +11,20 @@
 // Every ledger that goes unknown is counted (`unknowns`), every step is
 // classed (`steps`), and informativeSteps() fails a cell with none that told
 // the model anything (R25).
+// W1-driving Task 14 (ruling 49, D6): a team division fields full catalog
+// rosters and PUTs a lineup per fixture side before its first post — by the
+// scenario harness's own rule (lineup-plan.ts, shared with ensureLineups;
+// fix round 1, T14-R3) — and a row the model does not drive is refused by
+// family (ModelUnsupported).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
-import { nextMatchFixtureId, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
-import { stagesForRow, type RowKey } from "../catalogue.ts";
+import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
+import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
+import { NotAWave, WAVE_ID, type Route } from "../routing.ts";
+import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from "../scenarios/lineup-plan.ts";
+import { rosterMembers, rosterSize } from "../scenarios/rosters.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
@@ -96,6 +104,16 @@ export interface ModelState {
   unknowns: UnknownLedger[];
   /** Known product findings met on the way, by id: counted, never a stop. */
   findings: Map<string, { count: number; evidence: string[] }>;
+  /** Each team entrant's roster as the product read it back (Task 14); empty on any other kind. */
+  rosters: Map<string, readonly EntrantMember[]>;
+  /** fixture id → the sides whose lineup the model PUT: ensureLineups'
+   *  rec.lineupSides, keyed on fixture AND side (T45-R2). */
+  lineupSides: Map<string, Set<string>>;
+  /** fixture id → the division entrants it seated when the model posted to
+   *  it: decideFixture's rec.teamPosts. Team divisions only. */
+  teamPosts: Map<string, string[]>;
+  /** Lineups PUT, summed (ensureLineups' rec.lineupsPut). */
+  lineupsPut: number;
 }
 
 /** The fixture statuses the product reads as VOID — not a meeting, dropped
@@ -123,6 +141,24 @@ export const ROSTER_LOCK_FINDING = "CD-T13b";
  *  candidates instead (W1c Task 2, ruling Q2). */
 export const NEXT_MATCH_UNHELD_FINDING = "model-next-match-unheld";
 export const VACUITY_CHECK = "model-informative-steps";
+/** T45-R1 (assertions.ts lineupsPut, "life-lineups-put"), on the shared
+ *  items (lineup-plan.ts lineupItems): every side of every team fixture the
+ *  model posted to had its lineup PUT, one item per side, re-judged after
+ *  every step. A team cell owes > 0 (vacuityOf). */
+export const LINEUPS_CHECK = "model-lineups-put";
+/** The product warned on a lineup the model PUT, and the warning is not the
+ *  known side-size finding (the harness's LineupWarned, in the same words). */
+export const LINEUP_WARNED_CHECK = "model-lineup-warned";
+/** The known side-size finding on its own row (rosters.ts SIDE_SIZE_FOUND,
+ *  routed by SIDE_SIZE_ROUTE): counted, never a stop. */
+export const LINEUP_SIDE_SIZE_FINDING = "lineup-side-size-warning";
+/** A team fixture already past scheduled when the model came to post to it:
+ *  the product locks its lineups, so none is PUT (the harness's note). Counted
+ *  — and not a stop on its own, but not a pass either: the post still goes
+ *  ahead, so the same step's model-lineups-put reds on that fixture's sides,
+ *  as the harness's note is followed by life-lineups-put's red (review m-8;
+ *  model-core.test.ts drives it through a Score). */
+export const LINEUP_LOCKED_FINDING = "model-lineup-past-scheduled";
 
 /** entrants.ts createEntrants: once the division is `active` or `completed`
  *  (Start, then completion) the entrant list is locked with a 422, unless a
@@ -249,20 +285,95 @@ type Knobs = Parameters<typeof stagesForRow>[1];
 
 const slugOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").slice(0, 60);
 
+/** D6 (owner ruling 52, amending ruling 49): a row the model does not drive,
+ *  routed to the family wave that owns it. Every construction names its wave
+ *  as a LITERAL (MODEL_FAMILY below), so the Q-A guard reads each one (PF-3);
+ *  the wave is checked against the programme's ids here, as routeTo would. */
+export class ModelUnsupported extends Error {
+  readonly wave: string;
+  readonly reason: string;
+  constructor(wave: string, reason: string) {
+    if (!WAVE_ID.test(wave)) throw new NotAWave(wave);
+    if (reason.trim() === "") throw new Error(`model: a refusal routed to ${wave} needs a reason`);
+    super(`model: ${reason} → ${wave}`);
+    this.name = "ModelUnsupported";
+    this.wave = wave;
+    this.reason = reason;
+  }
+}
+
+const SINGLE = "the model drives single-stage rows";
+/** D6's families, one literal wave each (PF-3). The model drives one stage
+ *  with a fixed field: a multi-stage row is its family's, and the ladder
+ *  family (an open-window roster, rounds the organiser calls) is W7's. */
+const roundRobinFamily = (row: string) => new ModelUnsupported("W5", `${row} is multi-stage — a round robin or group stage seeding a later stage; ${SINGLE}`);
+const knockoutFamily = (row: string) => new ModelUnsupported("W4", `${row} is multi-stage — a knockout feeding a plate or a main draw; ${SINGLE}`);
+const swissFamily = (row: string) => new ModelUnsupported("W3", `${row} is multi-stage — a swiss seeding a playoff or knockout; ${SINGLE}`);
+const ladderFamily = (row: string) => new ModelUnsupported("W7", `${row} is an open-window format — its roster never locks and its rounds are the organiser's to call; the model's commands assume a fixed field and a generated schedule`);
+const MODEL_FAMILY: Readonly<Record<string, (row: string) => ModelUnsupported>> = Object.freeze({
+  league_ko: roundRobinFamily, groups_ko: roundRobinFamily, group_stepladder: roundRobinFamily, group_playoffs: roundRobinFamily, group_group_ko: roundRobinFamily,
+  ko_plate: knockoutFamily, qualifying_main: knockoutFamily,
+  swiss_playoff: swissFamily, swiss_knockout: swissFamily,
+  ladder: ladderFamily, americano: ladderFamily, mexicano: ladderFamily,
+});
+/** Each model-refused row and the route its refusal carries (D6), read off
+ *  MODEL_FAMILY — the one authority. */
+export const MODEL_FAMILY_ROUTE: Readonly<Record<string, Route>> = Object.freeze(Object.fromEntries(
+  Object.entries(MODEL_FAMILY).map(([row, refuse]) => {
+    const e = refuse(row);
+    return [row, Object.freeze({ wave: e.wave, why: e.reason })];
+  }),
+));
+
+/** The refusal for a row the model does not drive, or null for one it does.
+ *  Assumptions are guards: a multi-stage row, or an open-window stage
+ *  (ROSTER_LOCK.openKinds), that no family routes is a named error — never
+ *  admitted, never refused to no wave. */
+export function modelRowRefusal(row: RowKey, bodies: readonly StagePostBody[] = stagesForRow(row)): ModelUnsupported | null {
+  const family = MODEL_FAMILY[row];
+  if (family !== undefined) return family(row);
+  if (bodies.length !== 1) throw new Error(`model: ${row} is multi-stage and routes to no family (MODEL_FAMILY_ROUTE) — a new multi-stage row must be routed before the model refuses it`);
+  const kind = bodies[0]?.kind ?? "";
+  if (ROSTER_LOCK.openKinds.includes(kind)) throw new Error(`model: ${row} builds a ${kind} stage, an open-window format that routes to no family (MODEL_FAMILY_ROUTE) — route it before the model runs it`);
+  return null;
+}
+
+/** The model's n-th entrant. A team carries its full catalog roster inline
+ *  (rosters.ts rosterMembers), as the scenario harness's setUpDivision posts it. */
+export function entrantInput(m: { sport: string; cfg: unknown; kind: ModelState["kind"] }, n: number): EntrantInput {
+  return m.kind === "team"
+    ? { displayName: `Matrix Team ${n}`, seed: n, kind: m.kind, members: rosterMembers(m.sport, m.cfg, n) }
+    : { displayName: `Matrix Player ${n}`, seed: n, kind: m.kind };
+}
+
+/** A team entrant's roster as the product stored it — read back, never the
+ *  input. One short of the catalog's size would play short: refused by name,
+ *  in the scenario harness's own words (common.ts setUpDivision). */
+export async function readRoster(d: OrganiserDriver, m: { sport: string; cfg: unknown }, e: EntrantRow): Promise<EntrantMember[]> {
+  const size = rosterSize(m.sport, m.cfg);
+  const stored = await d.entrantMembers(e.id);
+  if (stored.length !== size) throw new Error(`model: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} roster member(s), ${size} posted — a short roster would play short`);
+  return stored;
+}
+
 /** A fresh division (not started) with `entrants` entrants on the row's single
- *  stage, built from the builder's own bodies (stagesForRow). */
+ *  stage, built from the builder's own bodies (stagesForRow). A row the model
+ *  does not drive is refused by family before any driver call (D6). */
 export async function newModelState(input: { driver: OrganiserDriver; row: RowKey; sport: string; variant: string; entrants: number; tag: string; competitionId?: string; knobs?: Knobs }): Promise<ModelState> {
   const bodies = stagesForRow(input.row, input.knobs);
-  if (bodies.length !== 1) throw new Error(`model: ${input.row} is multi-stage — the model drives single-stage rows (W1a's slice)`);
+  const refused = modelRowRefusal(input.row, bodies);
+  if (refused !== null) throw refused;
   const cfg = resolveSportCfg(input.sport, input.variant);
   const kind = entrantKindFor(input.sport, cfg);
-  if (kind === "team") throw new Error(`model: ${input.sport} fields teams — rosters are W1-driving`);
+  const who = { sport: input.sport, cfg, kind };
   const d = input.driver;
   const competitionId = input.competitionId ?? (await d.createCompetition({ name: `Matrix model ${input.tag}`, slug: slugOf(`m-${input.tag}`) })).id;
   const division = await d.createDivision(competitionId, { name: `Matrix model ${input.tag}`, slug: slugOf(`d-${input.tag}`), sportKey: input.sport, variantKey: input.variant });
   const [stage] = await d.postStages(division.id, bodies);
   if (stage === undefined) throw new Error("model: postStages answered no stage");
-  const added = await d.addEntrants(division.id, Array.from({ length: input.entrants }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1, kind })));
+  const added = await d.addEntrants(division.id, Array.from({ length: input.entrants }, (_, i) => entrantInput(who, i + 1)));
+  const rosters = new Map<string, readonly EntrantMember[]>();
+  if (kind === "team") for (const e of added) rosters.set(e.id, await readRoster(d, who, e));
   const zero = (): CommandCounts => ({ ran: 0, accepted: 0, refused: 0, expected: 0, unexpected: 0 });
   return {
     sport: input.sport, variant: input.variant, cfg, kind, stageKind: stage.kind, stageConfig: stage.config,
@@ -271,7 +382,34 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
     fixtures: new Map(), generates: [],
     counts: Object.fromEntries(COMMAND_KINDS.map((k) => [k, zero()])) as ModelState["counts"],
     stepChecks: new Map(), foldParity: 0, fenced: new Map(), history: [], steps: [], unknowns: [], findings: new Map(),
+    rosters, lineupSides: new Map(), teamPosts: new Map(), lineupsPut: 0,
   };
+}
+
+/** The model's sinks for the shared lineup planner: every message a finding,
+ *  every unexpected warning a model-lineup-warned violation. An americano
+ *  stage cannot reach the model (D6 refuses the ladder family), so a
+ *  product-minted pair side is a named refusal here, never a skip. */
+function modelLineupSink(m: ModelState): LineupSink {
+  return {
+    prefix: "model", actor: "model",
+    locked: (line) => recordFinding(m, LINEUP_LOCKED_FINDING, line),
+    pairSideSkipped: (line) => { throw new Error(`model: ${line} — the model drives no americano stage (D6 refuses the ladder family before any run)`); },
+    knownWarning: (line) => recordFinding(m, LINEUP_SIDE_SIZE_FINDING, line),
+    warned: (w) => new ModelViolation(LINEUP_WARNED_CHECK, [lineupWarningLine(w.row, w.fixtureId, w.entrantId, w.kind, w.warning)]),
+  };
+}
+
+/** The scenario harness's lineup rule (lineup-plan.ts putOwedLineups — the
+ *  one ensureLineups runs, T14-R3) over the model's own division, ledger and
+ *  sinks: each side of `f` gets its lineup PUT once, keyed on fixture AND
+ *  side, while `f` is still scheduled, before the model posts to it.
+ *  `f.status` is the status the model last read. */
+export async function ensureModelLineups(m: ModelState, d: OrganiserDriver, f: FixtureModel): Promise<void> {
+  await putOwedLineups(d, {
+    sport: m.sport, variant: m.variant, cfg: m.cfg, kind: m.kind, rosterless: false,
+    entrantIds: new Set(m.entrants), rosters: m.rosters, stageKindOf: (id) => (id === m.stageId ? m.stageKind : undefined),
+  }, m, { id: f.id, stageId: m.stageId, home: f.home, away: f.away, status: f.status }, modelLineupSink(m));
 }
 
 /** Folds the product's fixture list into the model. A fixture first seen
@@ -336,6 +474,13 @@ function orientationCheck(m: ModelState, meetings: readonly FixtureRow[]): { che
   return { checked: pairs.size, fails: fails.slice(0, 12) };
 }
 
+/** assertions.ts lineupsPut's items (lineup-plan.ts lineupItems) over the
+ *  model's posts: one per side posted to, ok iff that side's lineup was PUT. */
+function lineupsCheck(m: ModelState): { checked: number; fails: string[] } {
+  const items = lineupItems(m.teamPosts, m.lineupSides);
+  return { checked: items.length, fails: items.filter((i) => !i.ok).map((i) => i.note).slice(0, 12) };
+}
+
 /** The engine's fold of a known ledger, or why it refused one. */
 function engineOutcome(m: ModelState, home: string, away: string, ledger: readonly LedgerEntry[]): { out: ObservedOutcome | null; refused: string | null } {
   try {
@@ -372,6 +517,11 @@ export async function checkStep(m: ModelState, d: OrganiserDriver): Promise<void
   const o = orientationCheck(m, meetings);
   add(m, ORIENTATION_CHECK, o.checked);
   if (o.fails.length > 0) throw new ModelViolation(ORIENTATION_CHECK, o.fails);
+  if (m.kind === "team") {
+    const l = lineupsCheck(m);
+    add(m, LINEUPS_CHECK, l.checked);
+    if (l.fails.length > 0) throw new ModelViolation(LINEUPS_CHECK, l.fails);
+  }
   for (const r of mine) {
     const f = m.fixtures.get(r.id);
     if (f === undefined || f.ledger === null || f.ledger.length === 0 || r.home_entrant_id === null || r.away_entrant_id === null) continue;

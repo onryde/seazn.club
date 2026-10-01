@@ -37,6 +37,7 @@ import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, parseRegressions, type Regress
 import { DataDirMismatch } from "../lib/seed-org.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
+import { offlineVariantOrder } from "../lib/variants.ts";
 import { ModelFakeDriver } from "./model-fake-driver.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -156,7 +157,6 @@ describe("model.ts", () => {
     const d = deps({ openDb: noDb(), harnessCommit: async () => { throw new Error("must not read git"); } });
     const refused: readonly (readonly string[])[] = [
       ["--cell", "nope|generic"],
-      ["--cell", "league|cricket"],
       ["--runs", "0"],
       ["--max-commands", "0"],
       ["--time-limit", "10"],
@@ -738,6 +738,30 @@ describe("model.ts", () => {
       expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [own] }), ["--run-id", "mmo", "--report-dir", reportDir(), "--regressions"])).toBe(0);
     });
 
+    // T16 fix round 1 (T16-R3): one bug reached by two triggers on one cell —
+    // MB-007 (added entrant) and MB-010 (withdrawal), both double elim, both
+    // the product's same words — is two cases with the same cell, check and
+    // match. Each replay fails AS ITSELF (its check and its match), so each is
+    // known by its own id, in either file order; the first match in the file
+    // must not claim the other's replay.
+    it("T16 fix round 1: two open cases sharing cell, check and match (one bug, two triggers) — each replay is known as itself, in either file order (exit 0)", async () => {
+      const io = capture();
+      expect(await runModel(deps({ driverFor: () => new RefusingPosts() }), ["--run-id", "tw", "--report-dir", reportDir(), ...ONE])).toBe(1);
+      const a = completedStub(io.out(), { id: "MB-002", issue: null, fence: null, match: "refuses every result" });
+      const b = completedStub(io.out(), { id: "MB-003", issue: null, fence: null, match: "refuses every result" });
+      expect([a.cell, a.check, a.match]).toEqual([b.cell, b.check, b.match]);
+      let checked = 0;
+      for (const [tag, regs] of [["twab", [a, b]], ["twba", [b, a]]] as const) {
+        capture();
+        const dir = reportDir();
+        expect(await runModel(deps({ driverFor: () => new RefusingPosts(), regs: [...regs] }), ["--run-id", tag, "--report-dir", dir, "--regressions"]), tag).toBe(0);
+        const rep = JSON.parse(readFileSync(join(dir, tag, "model-report.json"), "utf8")) as { cells: { replayOf: string | null; verdict: string; failure: { known: string | null } | null }[] };
+        expect(rep.cells.map((c) => [c.replayOf, c.verdict, c.failure?.known ?? null]), tag).toEqual(regs.map((r) => [r.id, "known-failure", r.id]));
+        checked += rep.cells.length;
+      }
+      expect(checked).toBe(4);
+    });
+
     it("a FIXED regression that comes back is a NEW failure (exit 1); one that stays fixed is ok (exit 0)", async () => {
       const io = capture();
       await runModel(deps({ fault879: true }), ["--run-id", "rf1", "--report-dir", reportDir(), ...ONE, "--no-fences"]);
@@ -916,5 +940,122 @@ describe("the per-competition division cap (T15 fix round 1)", () => {
     // The pair: a cap of 1 is a plan the model can run on (one division per competition).
     capture();
     expect((await run(1, "cp1b")).exit).toBe(0);
+  });
+});
+
+// W1-driving Task 14 (ruling 49, D6). Not single-sport: a team cell (league|
+// cricket, refused as an unknown cell before T14) and the D6 rows on generic.
+// Transitions: a grid cell outside the slice → admitted; a row the model does
+// not drive → refused by family, exit 2, before git, the base, the preflight or
+// the DB. Empty case first: a cell off the grid is still a usage refusal.
+describe("model.ts --cell (W1-driving Task 14)", () => {
+  /** The live builder's variant order for any sport — the offline catalogue's, so no drift. */
+  const gridDeps = (driver: () => ModelFakeDriver): ModelDeps => deps({
+    driverFor: driver,
+    openDb: async () => ({ userIdForEmail: async () => "u1", variantKeysInBuilderOrder: async (s: string) => offlineVariantOrder(s), chooseTopPublicPlan: async () => "pro", planGrants: async () => [], planLimit: async () => null, dispose: async () => {} }),
+  });
+  it("empty case first: a cell off the grid is a usage refusal naming it, exit 2, before any DB work", async () => {
+    const io = capture();
+    expect(await runModel(deps({ openDb: noDb() }), ["--run-id", "g0", "--cell", "nope|generic"])).toBe(2);
+    expect(io.err()).toContain("unknown cell 'nope|generic' (not a grid cell");
+    expect(io.err()).toContain(MODEL_USAGE);
+  });
+  it("a team cell outside the slice (league|cricket) runs: rosters stored, a lineup per side before every post, no failure", async () => {
+    capture();
+    const dir = reportDir();
+    const made: ModelFakeDriver[] = [];
+    const exit = await runModel(gridDeps(() => { const d = new ModelFakeDriver(); made.push(d); return d; }), ["--run-id", "tc", "--report-dir", dir, "--cell", "league|cricket", "--runs", "5"]);
+    const rep = JSON.parse(readFileSync(join(dir, "tc", "model-report.json"), "utf8")) as { cells: { cell: string; failure: unknown; vacuous: string[]; verdict: string; stepChecks: Record<string, number> }[] };
+    expect(rep.cells.map((c) => c.cell)).toEqual(["league|cricket"]);
+    // Review m-7: the vacuous list itself, not just "not refused" — a team cell
+    // whose lineup check counted nothing would land here (vacuityOf) and exit 1.
+    expect(rep.cells[0]?.vacuous).toEqual([]);
+    expect(rep.cells[0]?.verdict).toBe("ok");
+    expect(exit).toBe(0);
+    expect(rep.cells[0]?.failure).toBeNull();
+    expect(rep.cells[0]?.stepChecks["model-lineups-put"] ?? 0).toBeGreaterThan(0);
+    expect(made.length).toBe(1);
+    const d = made[0]!;
+    expect(d.memberCount()).toBeGreaterThan(0);
+    // The organiser's posts only: the withdrawal cascade's are the product's own (`… by-product`).
+    const posted = [...new Set(d.trace.flatMap((t) => /^postStream (\S+)$/.exec(t)?.[1] ?? []))];
+    expect(posted.length).toBeGreaterThan(0);
+    for (const f of posted) expect(d.trace.filter((t) => t.startsWith(`putLineup ${f} `)), f).toHaveLength(2);
+  });
+  // D6 (ruling 52), typed from the ruling — never read from MODEL_FAMILY_ROUTE.
+  it.each([["swiss_playoff|generic", "W3"], ["ko_plate|badminton", "W4"], ["league_ko|generic", "W5"], ["ladder|generic", "W7"]] as const)("%s is refused by family (%s): exit 2, ModelUnsupported on stderr, before git, the base, the preflight or the DB", async (cell, wave) => {
+    const io = capture();
+    const touched: string[] = [];
+    const d = deps({
+      openDb: noDb(),
+      harnessCommit: async () => { touched.push("git"); return "abc1234"; },
+      preflight: async () => { touched.push("preflight"); return { ok: true, refusals: [] }; },
+      env: {},
+    });
+    const dir = reportDir();
+    expect(await runModel(d, ["--run-id", "fr", "--report-dir", dir, "--cell", cell])).toBe(2);
+    expect(touched).toEqual([]);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(io.err()).toContain(`model: refused ${cell} — ModelUnsupported:`);
+    expect(io.err()).toContain(`→ ${wave}`);
+    expect(io.err()).not.toContain("usage: model.ts");
+  });
+});
+
+// W1-driving Task 14 fix round 1 (T14-R2, review I-1): T14 widened --cell to
+// the grid, so a case can now be committed on a cell outside the slice. With
+// no --cell, --regressions replays every cell a committed case names (each
+// through the D6 refusal); with --cell, a case on another cell is skipped
+// ALOUD — printed, counted in the summary and listed in the report. Empty case
+// first: nothing committed and no --cell is still "nothing to run".
+describe("model.ts --regressions: which cells it replays (W1-driving Task 14 fix round 1, T14-R2)", () => {
+  const football = (id: string): RegressionCase => ({ ...openReg(id, I7), cell: "league|football", variant: "11-a-side" });
+  type Rep = { cells: { cell: string; replayOf: string | null }[]; skipped: { id: string; cell: string }[] };
+  it("empty case first: no committed case and no --cell — nothing to run, exit 1, before the DB", async () => {
+    const io = capture();
+    expect(await runModel(deps({ openDb: noDb(), regs: [] }), ["--run-id", "rd0", "--report-dir", reportDir(), "--regressions"])).toBe(1);
+    expect(io.err()).toMatch(/nothing to run/);
+  });
+  it("no --cell: a committed league|football case (outside the slice) is replayed beside a league|generic one, none skipped", async () => {
+    const io = capture();
+    const dir = reportDir();
+    const regs = [openReg("MB-001", I7), football("MB-006")];
+    // Both replay against a correct product: each is an open case that does not reproduce (exit 1) — a verdict, not a skip.
+    expect(await runModel(deps({ regs }), ["--run-id", "rd1", "--report-dir", dir, "--regressions"])).toBe(1);
+    const rep = JSON.parse(readFileSync(join(dir, "rd1", "model-report.json"), "utf8")) as Rep;
+    expect(rep.cells.map((c) => [c.cell, c.replayOf])).toEqual([[CELL, "MB-001"], ["league|football", "MB-006"]]);
+    expect(rep.skipped).toEqual([]);
+    expect(io.out()).toMatch(/NOT REPRODUCED MB-006/);
+    expect(io.out()).toContain("0 committed case(s) skipped");
+    expect(io.out()).not.toMatch(/skipped MB-/);
+  });
+  it("with --cell, a case on another cell is skipped aloud: printed by id, counted in the summary, listed in the report", async () => {
+    const io = capture();
+    const dir = reportDir();
+    expect(await runModel(deps({ regs: [openReg("MB-001", I7), football("MB-006")] }), ["--run-id", "rd2", "--report-dir", dir, "--regressions", "--cell", CELL])).toBe(1);
+    const rep = JSON.parse(readFileSync(join(dir, "rd2", "model-report.json"), "utf8")) as Rep;
+    expect(rep.cells.map((c) => c.replayOf)).toEqual(["MB-001"]);
+    expect(rep.skipped).toEqual([{ id: "MB-006", cell: "league|football" }]);
+    expect(io.out()).toContain(`skipped MB-006 league|football — not among the --cell cells (${CELL})`);
+    expect(io.out()).toContain("1 committed case(s) skipped");
+  });
+  it("with --cell and every case elsewhere: nothing to run (exit 1), each skipped case still named", async () => {
+    const io = capture();
+    expect(await runModel(deps({ openDb: noDb(), regs: [football("MB-006")] }), ["--run-id", "rd3", "--report-dir", reportDir(), "--regressions", "--cell", CELL])).toBe(1);
+    expect(io.err()).toMatch(/nothing to run/);
+    expect(io.out()).toContain("skipped MB-006 league|football");
+  });
+  it("no --cell: a committed case on a row the model does not drive is refused by family (exit 2) before the base, the preflight or the DB — never skipped", async () => {
+    const io = capture();
+    const touched: string[] = [];
+    const d = deps({
+      openDb: noDb(), env: {},
+      preflight: async () => { touched.push("preflight"); return { ok: true, refusals: [] }; },
+      regs: [openReg("MB-001", I7), { ...openReg("MB-007", I7), cell: "ladder|generic" }],
+    });
+    expect(await runModel(d, ["--run-id", "rd4", "--report-dir", reportDir(), "--regressions"])).toBe(2);
+    expect(touched).toEqual([]);
+    expect(io.err()).toContain("model: refused ladder|generic — ModelUnsupported:");
+    expect(io.err()).toContain("→ W7");
   });
 });

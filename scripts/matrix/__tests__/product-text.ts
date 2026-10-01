@@ -1,7 +1,7 @@
 // Product rules the model's fake and its pins READ from the product's source
 // instead of typing them (Task 13 fix round 1, ruling C-1): a product change
 // moves the fake with it, and turns the model's pin red.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,39 @@ import type * as TS from "typescript";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
+
+/** T8-R5 (I-R1), pure: the entrant_members primary key's name and the unique
+ *  violation a second (entrant, person) member row raises, as Postgres words
+ *  it. V213 declares the key with no `constraint <name>`, so Postgres names it
+ *  `<table>_pkey` (within NAMEDATALEN − 1 = 63 bytes). Refused by name when
+ *  V213's key is not that unnamed clause, or when any OTHER migration alters a
+ *  constraint on the table, or mentions the derived name (an index rename) —
+ *  the derived name would then not be the live one. `scanned` counts the other
+ *  migrations read; none is refused (anti-vacuity). */
+export function entrantMembersPkeyFrom(v213: string, others: readonly { path: string; text: string }[]): { name: string; violation: string; scanned: number } {
+  const table = /create table if not exists (\w+) \(([\s\S]*?)\n\);/.exec(v213);
+  if (table === null) throw new Error("product-text: V213 has no create table in the expected shape");
+  const [, name0, body] = table;
+  if (!/\n {2}primary key \(entrant_id, person_id\)\n$/.test(`${body}\n`) || /\bconstraint\s+\w+\s+primary\s+key\b/i.test(body)) throw new Error(`product-text: V213's ${name0} primary key is not the unnamed (entrant_id, person_id) clause`);
+  const name = `${name0}_pkey`;
+  if (name.length > 63) throw new Error(`product-text: ${name} exceeds 63 bytes — Postgres would truncate it`);
+  if (others.length === 0) throw new Error(`product-text: no migration besides V213 was scanned for ${name0} constraint changes`);
+  const alters = new RegExp(`alter\\s+table\\s+(?:if\\s+exists\\s+)?(?:only\\s+)?(?:public\\.)?${name0}\\b[^;]*`, "gi");
+  for (const { path, text } of others) {
+    const touched = [...text.matchAll(alters)].some(([stmt]) => /\b(?:constraint|primary\s+key|rename)\b/i.test(stmt)) || text.includes(name);
+    if (touched) throw new Error(`product-text: ${path} changes ${name0}' constraints — the default ${name} may not be the live key name`);
+  }
+  return { name, violation: `duplicate key value violates unique constraint "${name}"`, scanned: others.length };
+}
+
+/** T8-R5 (I-R1): entrantMembersPkeyFrom over the repo's own migrations. */
+export function entrantMembersPkeyText(): { name: string; violation: string; scanned: number } {
+  const V213 = "db/migration/v2-engine/tables/V213__entrant_members.sql";
+  const others = readdirSync(resolve(REPO, "db/migration"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".sql") && !f.endsWith("V213__entrant_members.sql"))
+    .map((f) => ({ path: f, text: read(`db/migration/${f}`) }));
+  return entrantMembersPkeyFrom(read(V213), others);
+}
 
 /** api-v1 http.ts statusCode(): the code an HttpError that carries none of its
  *  own reaches the wire with. */
@@ -147,6 +180,34 @@ export function bracketRoundNoText(): (lane: string | undefined, round: number, 
   return (lane, round, laneDepth) => (lane === "LB" ? laneDepth : lane === "GF" ? laneDepth * gf : 0) + round + 1;
 }
 
+/** stages.ts: the two product facts I2's structural terminal keys rest on
+ *  (W1-driving Task 9 m-1, scenarios/terminal-finals.ts). Every bracket row's
+ *  ext_key is the engine fixture id (bracketToGen `extKey: f.id`), and
+ *  generate() lays out page_playoff, double_elim and stepladder with the
+ *  engine's own generator — double elim's reset read as `cfg.<key> === true`.
+ *  Returns the kinds found and that config key; throws by name otherwise.
+ *  `src` is stages.ts's text (a parameter so a test can feed a variant). */
+export function structuralBracketFrom(src: string): { kinds: string[]; resetKey: string } {
+  const body = /\nfunction bracketToGen\(bracket: GeneratedBracket, laneDepth: number\): GenFixture\[\] \{([\s\S]*?)\n\}\n/.exec(src)?.[1];
+  if (body === undefined || !/\n\s*extKey: f\.id,\n/.test(body)) {
+    throw new Error("product-text: stages.ts bracketToGen no longer stores the engine fixture id as ext_key — I2's terminal final keys would match no row");
+  }
+  const kinds: string[] = [];
+  let resetKey: string | null = null;
+  for (const [kind, gen] of [["page_playoff", "generatePagePlayoff"], ["double_elim", "generateDoubleElim"], ["stepladder", "generateStepladder"]] as const) {
+    const m = new RegExp(`case "${kind}": \\{\\s*const bracket = ${gen}\\(\\{ entrants: ids, seeds(?:, bracketReset: cfg\\.(\\w+) === true)? \\}\\);\\s*return bracketToGen\\(bracket, bracket\\.rounds\\);`).exec(src);
+    if (m === null) throw new Error(`product-text: stages.ts generate() no longer lays out ${kind} with ${gen} through bracketToGen — re-read it`);
+    if (kind === "double_elim") {
+      if (m[1] === undefined) throw new Error("product-text: stages.ts generate() no longer reads double elim's bracket reset from the stage config — re-read it");
+      resetKey = m[1];
+    }
+    kinds.push(kind);
+  }
+  if (resetKey === null) throw new Error("product-text: no double_elim arm was read — the reset key is unknown");
+  return { kinds, resetKey };
+}
+export const structuralBracketText = () => structuralBracketFrom(read("apps/web/src/server/usecases/stages.ts"));
+
 /** The literal words of every `throw new X(…)` in a product source file: each
  *  string argument, and a template's literal pieces (its head and the text
  *  after each substitution, which splits them). A committed regression `match`
@@ -169,4 +230,60 @@ export function thrownWords(path: string): string[] {
   visit(sf);
   if (out.length === 0) throw new Error(`product-text: ${path} throws no literal words — a vacuous pin`);
   return out;
+}
+
+/** A `new Set([...])` literal's string members, refused when empty. */
+function setMembers(m: RegExpExecArray | null, what: string): string[] {
+  if (m === null) throw new Error(`product-text: ${what} not found in the expected shape — re-read it`);
+  const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error(`product-text: ${what} names no member`);
+  return out;
+}
+
+/** withdrawal.ts TABLE_KINDS: the kinds the withdrawal module treats as a
+ *  table (its OWN copy — engine-db/competition.ts's includes americano, this
+ *  one does not). W1-driving T7, false premise 16. */
+export function withdrawalTableKindsText(): string[] {
+  return setMembers(/\nconst TABLE_KINDS = new Set\(\[([^\]]*)\]\);/.exec(read("apps/web/src/server/usecases/withdrawal.ts")), "withdrawal.ts TABLE_KINDS");
+}
+
+/** stages.ts BRACKET_WALKOVER_KINDS: the bracket kinds whose withdrawal
+ *  forfeits each pending line to the opponent (W1-driving T7). */
+export function bracketWalkoverKindsText(): string[] {
+  return setMembers(/\nexport const BRACKET_WALKOVER_KINDS: ReadonlySet<string> = new Set\(\[([\s\S]*?)\]\);/.exec(read("apps/web/src/server/usecases/stages.ts")), "stages.ts BRACKET_WALKOVER_KINDS");
+}
+
+/** stages.ts departedEntrantIds: the entrant statuses that have LEFT the
+ *  field — a challenge naming one is LADDER_ENTRANT_WITHDRAWN, and the live
+ *  ladder is the raw order without them (W1-driving T7). */
+export function departedStatusesText(): string[] {
+  const m = /\nasync function departedEntrantIds\(tx: Tx, divisionId: string\): Promise<Set<string>> \{[\s\S]*?status in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/stages.ts"));
+  if (m === null) throw new Error("product-text: stages.ts departedEntrantIds not found in the expected shape — re-read it");
+  const out = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error("product-text: stages.ts departedEntrantIds names no status");
+  return out;
+}
+
+export interface LadderText {
+  /** DEFAULT_LADDER_CHALLENGE_RANGE: the reach when the stage config names none. */
+  defaultRange: number;
+  /** issueChallenge's LADDER_* refusal codes, in source order. */
+  codes: string[];
+  /** The entrant statuses the first challenge's ladder_order is written from. */
+  fieldStatuses: string[];
+}
+
+/** stages.ts issueChallenge (W1-driving T7, D8): what FakeLadderDriver
+ *  mirrors, read from the product's text. */
+export function ladderText(): LadderText {
+  const src = read("apps/web/src/server/usecases/stages.ts");
+  const range = /\nexport const DEFAULT_LADDER_CHALLENGE_RANGE = (\d+);/.exec(src);
+  if (range === null) throw new Error("product-text: stages.ts DEFAULT_LADDER_CHALLENGE_RANGE not found");
+  const body = /\nexport async function issueChallenge\([\s\S]*?\n\}\n/.exec(src)?.[0];
+  if (body === undefined) throw new Error("product-text: stages.ts issueChallenge not found");
+  const codes = [...new Set([...body.matchAll(/"(LADDER_[A-Z_]+)"/g)].map((x) => x[1]))];
+  if (codes.length === 0) throw new Error("product-text: stages.ts issueChallenge throws no LADDER_* code");
+  const field = /where division_id = \$\{stage\.division_id\} and status in \(([^)]*)\)\s*order by seed nulls last/.exec(body);
+  if (field === null) throw new Error("product-text: issueChallenge's ladder_order initialisation is not the seed-ordered field read the fake mirrors — re-read it");
+  return { defaultRange: Number(range[1]), codes, fieldStatuses: [...field[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]) };
 }

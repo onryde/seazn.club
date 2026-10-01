@@ -147,6 +147,104 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1-driving Task 1: the one routing construct (D7), a leaf every routing
+  // module reaches at load — cricket's stream, the model, the catalogue.
+  const W1DRV_T1 = ["lib/routing.ts"];
+  it("W1-driving Task 1's modules are all in the walk", () => {
+    const missing = W1DRV_T1.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T1.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 2: the per-format field size every scripted scenario asks.
+  const W1DRV_T2 = ["lib/field-size.ts"];
+  it("W1-driving Task 2's modules are all in the walk", () => {
+    const missing = W1DRV_T2.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T2.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 3: the roster and lineup builders (D2), which reach the
+  // engine's catalog through a bare import at load.
+  const W1DRV_T3 = ["lib/scenarios/rosters.ts"];
+  it("W1-driving Task 3's modules are all in the walk", () => {
+    const missing = W1DRV_T3.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T3.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 6: the seed advance (D1) — confirm, the tie pick, and
+  // the take vocabulary — which common.ts value-imports at load.
+  const W1DRV_T6 = ["lib/scenarios/advance.ts"];
+  it("W1-driving Task 6's modules are all in the walk", () => {
+    const missing = W1DRV_T6.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T6.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+  const W1DRV_T7 = ["lib/scenarios/ladder-loop.ts"];
+  it("W1-driving Task 7's modules are all in the walk", () => {
+    const missing = W1DRV_T7.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T7.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 8: the americano and mexicano round loops (D9).
+  const W1DRV_T8 = ["lib/scenarios/americano-loop.ts"];
+  it("W1-driving Task 8's modules are all in the walk", () => {
+    const missing = W1DRV_T8.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T8.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 9: the engine-derived terminal final keys I2 reads (ruling 45).
+  const W1DRV_T9 = ["lib/scenarios/terminal-finals.ts"];
+  it("W1-driving Task 9's modules are all in the walk", () => {
+    const missing = W1DRV_T9.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T9.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 11: the in-process worker queue (ruling 46).
+  const W1DRV_T11 = ["lib/workers.ts"];
+  it("W1-driving Task 11's modules are all in the walk", () => {
+    const missing = W1DRV_T11.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T11.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 12: the w1-driving planner set.
+  const W1DRV_T12 = ["lib/w1-driving-set.ts"];
+  it("W1-driving Task 12's modules are all in the walk", () => {
+    const missing = W1DRV_T12.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T12.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 13: the catalog templates the browser drives through their cards (D11).
+  const W1DRV_T13 = ["lib/templates.ts"];
+  it("W1-driving Task 13's modules are all in the walk", () => {
+    const missing = W1DRV_T13.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T13.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 14 fix round 1 (T14-R3): the lineup planner the harness and the model share.
+  const W1DRV_T14 = ["lib/scenarios/lineup-plan.ts"];
+  it("W1-driving Task 14's modules are all in the walk", () => {
+    const missing = W1DRV_T14.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T14.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
+  // W1-driving Task 16 fix round 1 (T16-R4 m-6): the findings-table CLI that
+  // generates _INDEX's per-case product-red table.
+  const W1DRV_T16 = ["findings-table.ts"];
+  it("W1-driving Task 16's modules are all in the walk", () => {
+    const missing = W1DRV_T16.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T16.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

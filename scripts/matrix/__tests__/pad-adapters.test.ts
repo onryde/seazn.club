@@ -20,7 +20,7 @@ import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/dr
 import { START_MATCH_TESTID, selectorForTapStep, type PadPage, type TapAdapterContext } from "../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
-import { PAD_OWNER, PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
+import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-sports.ts";
 import { foldStream } from "../lib/fold.ts";
 import { BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
 import { CARROM_BOARD, CARROM_BOARD_TILE, carromPad } from "../lib/pads/carrom.ts";
@@ -59,14 +59,24 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
 }
 const req = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "league", home: HOME, away: AWAY, outcome });
 
-/** Every request over every system variant of `sport`. The builder default
- *  (offlineBuilderDefault, pinned to division-builder.tsx by catalogue.test.ts)
- *  comes first, and it is what PADPROOF plays. */
+/** A cfg the sport's pad route refuses by name: cricket's over route covers
+ *  single-innings cricket only (pads/cricket.ts cfgOf). Until ruling 44 the
+ *  generator refused two innings too (GeneratorUnsupported, so streamOf gave
+ *  []); it builds them now, and the pad has no route for a declaration, a
+ *  follow-on or a time close. The sweeps keep the adapter's own scope, and
+ *  "every request left out of the pad sweeps…" below pins that each request
+ *  left out here is one the adapter itself refuses with that message. */
+const outOfPadRoute = (sport: string, cfg: unknown): boolean => sport === "cricket" && (cfg as { inningsPerSide?: unknown }).inningsPerSide !== 1;
+
+/** Every request over every system variant of `sport` inside its pad route.
+ *  The builder default (offlineBuilderDefault, pinned to division-builder.tsx
+ *  by catalogue.test.ts) comes first, and it is what PADPROOF plays. */
 function requestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
   return variants.flatMap((v) => {
     const cfg = resolveSportCfg(sport, v);
+    if (outOfPadRoute(sport, cfg)) return [];
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
 }
@@ -93,15 +103,15 @@ describe("the pad adapter registry", () => {
     for (const [k, a] of ADAPTERS) expect(a.sport, k).toBe(k);
   });
 
-  it("the leaf run.ts plans from is the registry's key list; a sport outside it would name the W1c task that owes it — none is owed today (carry f), so the owner loop checks 0", () => {
+  it("the leaf run.ts plans from is the registry's key list; a sport outside it would name the route that owes it — none is owed today (carry f), so the owner loop checks 0", () => {
     expect([...PAD_SPORTS]).toEqual(Object.keys(PAD_ADAPTERS));
     const owned = Object.keys(PAD_OWNER);
     expect(owned.filter((s) => PAD_SPORTS.includes(s))).toEqual([]);
     expect([...owned, ...PAD_SPORTS].sort()).toEqual([...SPORT_KEYS].sort());
     for (const [s, owner] of Object.entries(PAD_OWNER)) {
-      expect(owner, s).toMatch(/^W1c Task (9|10|11)$/);
-      // The reason is what the mixed ledger's exemption rule and the ⏳ case read.
-      expect(noPadReason(s)).toBe(`no pad adapter for ${s} yet → ${owner}`);
+      // A route (lib/routing.ts), so the Q-A guard reads its wave; the reason names it.
+      expect(Object.isFrozen(owner), s).toBe(true);
+      expect(noPadReason(s)).toBe(`no pad adapter for ${s} yet → ${owner.wave} (${owner.why})`);
     }
     expect(owned.length).toBe(SPORT_KEYS.length - PAD_SPORTS.length);
   });
@@ -117,8 +127,16 @@ describe("the pad adapter registry", () => {
     expect(checked).toBe(11);
     expect(Object.keys(PAD_ADAPTERS)).toEqual([...SPORT_KEYS]);
     expect(Object.keys(PAD_OWNER)).toEqual([]);
-    // A sport the catalogue gains later, with no adapter, still names a wave.
-    expect(noPadReason("curling")).toBe("no pad adapter for curling yet → W1c (no task owns it)");
+    // A sport the catalogue gains later, with no adapter, still names a wave — an OPEN one
+    // (T1-R2: W1c is closed). Design §8: a gap no wave lists goes to the wave owning its
+    // sport, which is the one sport-family wave; read from the design, never typed.
+    const design = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../docs/superpowers/specs/2026-09-27-format-matrix-design.md"), "utf8");
+    const waves = design.slice(design.indexOf("## 8. Waves"), design.indexOf("## 9."));
+    expect(waves).toMatch(/Gaps not listed go to the wave owning their\s+format\/sport/);
+    const sportFamily = [...waves.matchAll(/^\| \*\*(W\d+) — [^|]*a sport-family wave/gm)].map((m) => m[1]!);
+    expect(sportFamily).toHaveLength(1);
+    expect(PAD_UNOWNED.wave).toBe(sportFamily[0]);
+    expect(noPadReason("curling")).toBe(`no pad adapter for curling yet → ${sportFamily[0]} (${PAD_UNOWNED.why})`);
   });
 
   it("I-1: every registered fallback declares the row types it writes (its own type among them) and a judge", () => {
@@ -907,6 +925,7 @@ describe("cricket", () => {
     let innings = 0;
     for (const v of variantKeys("cricket")) {
       const cfg = resolveSportCfg("cricket", v);
+      if (outOfPadRoute("cricket", cfg)) continue; // pinned below: the adapter refuses it by name
       const bpo = (cfg as { ballsPerOver: number }).ballsPerOver;
       for (const winner of ["home", "away"] as const) {
         const r = req("cricket", cfg, { kind: "win", winner });
@@ -943,6 +962,25 @@ describe("cricket", () => {
     }
     console.info(`pad-adapters: cricket: ${innings} generated innings split into overs`);
     expect(innings).toBeGreaterThanOrEqual(4); // t20 alone: 2 innings × 2 outcomes
+  });
+
+  it("every request left out of the pad sweeps (two innings a side) is one the adapter refuses by name, and the generator does build it (ruling 44)", () => {
+    let left = 0;
+    for (const v of variantKeys("cricket")) {
+      const cfg = resolveSportCfg("cricket", v);
+      if (!outOfPadRoute("cricket", cfg)) continue;
+      for (const outcome of outcomesFor("cricket", cfg)) {
+        const r = req("cricket", cfg, outcome);
+        const evs = streamOf(r);
+        const first = evs.find((e) => e.type === CRICKET_SUMMARY);
+        if (outcome.kind === "forfeit") { expect(first, `${v} ${JSON.stringify(outcome)}`).toBeUndefined(); continue; }
+        expect(first, `${v} ${JSON.stringify(outcome)}: the generator builds it`).toBeDefined();
+        cricketPad.stepsFor(START, ctxOf(r));
+        expect(() => cricketPad.stepsFor(first!, ctxOf(r)), `${v} ${JSON.stringify(outcome)}`).toThrow(/the over route covers single-innings cricket only/);
+        left++;
+      }
+    }
+    expect(left).toBeGreaterThan(0);
   });
 
   it("replayed on the fake ledger: every innings a fallback of one row per over, no finding, and the stored rows fold to the requested outcome", async () => {

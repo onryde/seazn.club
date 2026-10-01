@@ -459,7 +459,7 @@ format/sport; **every audit ID must be closed or ruled by programme end**.
 | **W9 — operational [O]** (lane) | schedule, devices, registration, division admin | the [O] list (§4), the division-level 🚫 scenarios **D1 merge, D2 split, R13 move an entrant between divisions** (build-or-refuse rulings), #880, bench findings: cross-competition court double-booking (`schedule.ts:939`), `solver_unavailable`, `start_window` never blocks, inert `crossPersonClash`, no engine request, `lang` until hydration |
 | **W10 — sweep** (lane) | unrelated issues + one privacy defect + shadow invariants | **ST-G22 first** (recap/digest bypasses youth-name masking — a privacy defect), #878 browser Sentry, then **production shadow invariants** (§7.5, reusing the harness's invariant functions), #858 admin URL, #853 player card, #843 roster i18n |
 
-**Order.** W1a → W1b → W1c → W1d → W2 → W3 → W4 → W5 → W6 → W7 in sequence —
+**Order.** W1a → W1b → W1c → W1-driving → W1d → W2 → W3 → W4 → W5 → W6 → W7 in sequence —
 they share the engine and `stages.ts` (5,794 lines). W8, W9, W10 run in
 **parallel lanes** in their own worktrees; each lane proves its file set
 disjoint from the wave in flight before it starts.

@@ -21,7 +21,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
-import { MissingRule, RULES, decide, type Rule } from "./applicability.ts";
+import { MissingRule, RULES, decide, gapReason, type Rule } from "./applicability.ts";
 import { l2Atomic } from "./scenario-catalogue.ts";
 import type { SportVariants } from "./variants.ts";
 import { L2_WIDTHS, type L2Width } from "./widths.ts";
@@ -109,7 +109,7 @@ function owed(id: string, r: Rule, row: RowKey, sport: string, variants: readonl
   if (gap === undefined || d.gapped.length === 0) return null;
   const u = decide(lifted, row, sport, variants);
   if (!u.applies) throw new GapUnbound(id, row, sport, d.gapped);
-  return { row, sport, preset: u.preset, bound: u.bound, l3Gap: gap.reason };
+  return { row, sport, preset: u.preset, bound: u.bound, l3Gap: gapReason(gap) };
 }
 
 export function planL2(input: { rules?: Readonly<Record<string, Rule>>; variants: readonly SportVariants[]; only?: readonly string[] }): L2Plan {

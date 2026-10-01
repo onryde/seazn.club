@@ -38,12 +38,24 @@
 //    and never a model-error. The run it hung in is skipped, no further run
 //    starts, and the cell reports `timeout`; the CLI aborts it.
 import fc from "fast-check";
-import type { RowKey } from "../catalogue.ts";
+import { stagesForRow, type RowKey } from "../catalogue.ts";
 import { RefusedCall, RequestTimedOut, productMessageOf, type OrganiserDriver } from "../driver/types.ts";
 import { STEP_INVARIANTS } from "../invariants.ts";
 import { MATCH_REQUIRED_CHECKS, type RegressionCase } from "../scenario-catalogue.ts";
-import { COMMAND_KINDS, ModelViolation, modelCommands } from "./commands.ts";
-import { ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, type CommandCounts, type CommandKind, type ModelState, type UnknownLedger } from "./state.ts";
+import { COMMAND_KINDS, ModelViolation, SWISS_BIAS, modelCommands } from "./commands.ts";
+import { LINEUPS_CHECK, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, UNEXPECTED_REFUSAL, VACUITY_CHECK, informativeSteps, modelRowRefusal, type CommandCounts, type CommandKind, type ModelState, type UnknownLedger } from "./state.ts";
+
+/** Generator weights per command kind (modelCommands). */
+export type Bias = Readonly<Partial<Record<CommandKind, number>>>;
+
+/** Ruling 49: the weights a cell's generator runs under — SWISS_BIAS when the
+ *  row's root stage is a swiss, none otherwise. Applied to every run of the
+ *  cell, a replay included: a case found on a swiss cell was found biased, so
+ *  its replay must be too. No case found before the bias is on a swiss cell
+ *  (model-run-cell.test.ts pins the committed ones), so each replays as it was. */
+export function biasFor(row: RowKey): Bias | undefined {
+  return stagesForRow(row)[0]?.kind === "swiss" ? SWISS_BIAS : undefined;
+}
 
 export interface RunCellInput {
   cell: string;
@@ -61,6 +73,9 @@ export interface RunCellInput {
   regressions: readonly RegressionCase[];
   /** The time box's clock, in ms (default Date.now). Injectable so a test can run out of time on cue. */
   now?: () => number;
+  /** The generator's weights: absent, the row's own (biasFor); null, the
+   *  uniform set — a test's way to witness what the bias buys. */
+  bias?: Bias | null;
 }
 
 export interface CellFailure {
@@ -86,6 +101,8 @@ export interface CellReport {
   runs: number;
   maxCommands: number;
   fences: boolean;
+  /** The generator weights the cell ran under (RunCellInput.bias); null when uniform. */
+  bias: Bias | null;
   /** fast-check's count: runs that passed, or the run the first failure came from. */
   numRuns: number;
   /** Property runs executed, shrinking included — the denominator of every sum below. */
@@ -179,13 +196,16 @@ export interface VacuityInput {
   informative: number;
   /** The stage kind the cell built; null when no run started. */
   stageKind: string | null;
+  /** The entrant kind the cell fielded; null when no run started. */
+  entrantKind: string | null;
 }
 
 /** R25 for one cell, summed across its runs: every line is a zero count the
  *  cell owed. A step check is owed only on the stage kinds it declares
  *  (STEP_INVARIANTS' stageKinds; ORIENTATION_STAGE_KINDS): I6 on a swiss, I7
  *  and the orientation check on a round robin, I8 on any. With no stage kind
- *  known, only the any-stage ones are owed. */
+ *  known, only the any-stage ones are owed. A team cell owes the lineup check
+ *  (LINEUPS_CHECK, T45-R1) on any stage kind. */
 export function vacuityOf(v: VacuityInput): string[] {
   const out: string[] = [];
   for (const k of COMMAND_KINDS) if (v.counts[k].ran === 0) out.push(`command ${k} never ran`);
@@ -196,12 +216,18 @@ export function vacuityOf(v: VacuityInput): string[] {
     if (applies && (v.stepChecks[s.id] ?? 0) === 0) out.push(`step invariant ${s.id} checked zero items`);
   }
   if (kind !== null && ORIENTATION_STAGE_KINDS.includes(kind) && (v.stepChecks[ORIENTATION_CHECK] ?? 0) === 0) out.push(`step check ${ORIENTATION_CHECK} checked zero items`);
+  if (v.entrantKind === "team" && (v.stepChecks[LINEUPS_CHECK] ?? 0) === 0) out.push(`step check ${LINEUPS_CHECK} checked zero items`);
   if (v.foldParity === 0) out.push("fold parity compared zero fixtures");
   if (v.informative === 0) out.push(`no informative step (${VACUITY_CHECK})`);
   return out;
 }
 
 export async function runCell(input: RunCellInput): Promise<CellReport> {
+  // D6: a row the model does not drive is refused by family before any run —
+  // never a model-error failure on every run.
+  const refused = modelRowRefusal(input.row);
+  if (refused !== null) throw refused;
+  const bias = input.bias === undefined ? (biasFor(input.row) ?? null) : input.bias;
   const counts = Object.fromEntries(COMMAND_KINDS.map((k) => [k, zeroCounts()])) as Record<CommandKind, CommandCounts>;
   const stepChecks: Record<string, number> = {};
   const fenced: Record<string, number> = {};
@@ -210,7 +236,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   const masked: Record<string, number> = {};
   const maskedNew: Record<string, string[]> = {};
   const knownFor = (check: string, said: string | null): string | null => regressionFor(input.regressions, input.cell, check, said);
-  const seen = { stageKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false, timeout: null as string | null };
+  const seen = { stageKind: null as string | null, entrantKind: null as string | null, foldParity: 0, informative: 0, executions: 0, timeBoxed: false, timeout: null as string | null };
   const absorb = (m: ModelState): void => {
     for (const k of COMMAND_KINDS) {
       const into = counts[k];
@@ -241,7 +267,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
     if (k.known === null && maskedNew[k.check] === undefined) maskedNew[k.check] = commands;
   };
   const constraints = { maxCommands: input.maxCommands, size: "max" as const, ...(input.replayPath === undefined ? {} : { replayPath: input.replayPath }) };
-  const prop = fc.asyncProperty(fc.commands(modelCommands({ fences: input.fences }), constraints), async (cmds) => {
+  const prop = fc.asyncProperty(fc.commands(modelCommands({ fences: input.fences, ...(bias === null ? {} : { bias }) }), constraints), async (cmds) => {
     if (now() >= deadline) {
       seen.timeBoxed = true;
       fc.pre(false);
@@ -252,6 +278,7 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
       const setup = await input.newDriverState(++seen.executions);
       model = setup.model;
       seen.stageKind = setup.model.stageKind;
+      seen.entrantKind = setup.model.kind;
       await fc.asyncModelRun(() => setup, cmds);
     } catch (e) {
       // A skip (fc.pre) is fast-check's, never a failure: it must not become the target.
@@ -328,10 +355,10 @@ export async function runCell(input: RunCellInput): Promise<CellReport> {
   // after a run or two. Only a NEW failure (already failing) and a timeout
   // (no verdict at all) go unjudged.
   const vacuous = (failure === null || failure.known !== null) && seen.timeout === null
-    ? vacuityOf({ counts, stepChecks, foldParity: seen.foldParity, informative: seen.informative, stageKind: seen.stageKind })
+    ? vacuityOf({ counts, stepChecks, foldParity: seen.foldParity, informative: seen.informative, stageKind: seen.stageKind, entrantKind: seen.entrantKind })
     : [];
   return {
-    cell: input.cell, variant: input.variant, seed: input.seed, runs: input.runs, maxCommands: input.maxCommands, fences: input.fences,
+    cell: input.cell, variant: input.variant, seed: input.seed, runs: input.runs, maxCommands: input.maxCommands, fences: input.fences, bias,
     numRuns: details.numRuns, executions: seen.executions, interrupted: seen.timeBoxed,
     counts, stepChecks, foldParity: seen.foldParity, fenced, unknowns, findings, informativeSteps: seen.informative, masked, maskedNew, vacuous, failure, timeout: seen.timeout,
   };

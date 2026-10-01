@@ -1,7 +1,12 @@
-// The runner: own-DB guard → preflight → ONE sign-in → per case: SQL org +
-// plan seeding, the scenario over its driver, the invariants → one redacted
-// results.json → MATRIX.md. L3 drives HttpDriver; `--driver browser --width W`
-// (W1c Task 6) drives each case through the organiser UI in one chromium
+// The runner: own-DB guard → preflight → one sign-in per worker → per case:
+// SQL org + plan seeding, the scenario over its driver, the invariants → one
+// redacted results.json → MATRIX.md. `--workers N` (W1-driving T11, ruling
+// 46) runs the cases on N in-process workers against the one server and DB,
+// each on its OWN sign-in, session and cookie jar (lib/workers.ts); results
+// stay in plan order. Over HTTP only in this wave (D10).
+//
+// L3 drives HttpDriver; `--driver browser --width W` (W1c Task 6) drives
+// each case through the organiser UI in one chromium
 // per run and one context per case (BrowserDriver), at width W — recorded as
 // W's layer: L1 at 1280, L2 at a phone width (layerOfWidth; T12 fix round 1).
 // `--driver browser --layer L1|L2` (W1c Task 12, ruling 39) runs a LAYERED
@@ -12,8 +17,13 @@
 // driven browser case, so a plan that only records opens none.
 //
 //   pnpm run matrix:l3 --
-//     [--base URL] [--run-id ID] [--report-dir DIR]
+//     [--base URL] [--run-id ID] [--report-dir DIR] [--workers N]
 //     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
+//
+// `--only` takes any catalogue cell (W1-driving Task 12): a slice cell plans
+// as the slice always has; any other cell is planned by the w1-driving set
+// (lib/w1-driving-set.ts). `--set w1-driving` is the one named set that also
+// takes `--only` and `--scenario`.
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
 //   pnpm run matrix:browser -- --layer L1|L2 [--only row|sport] [--scenario KEY (L1)]
 //
@@ -35,7 +45,9 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter, a run id that is empty or too long once slugged; an unknown
+//      filter but --set w1-driving with --only/--scenario, a run id that is empty or too long once slugged; a --workers
+//      that is not an integer in 1..MAX_WORKERS, or above 1 on a browser run
+//      (D10); an unknown
 //      --driver, --driver browser without --width, a --width outside
 //      BROWSER_WIDTHS, or a --width on an http run; --layer other than L1/L2,
 //      without --driver browser, beside --set or --canary, L2 with --scenario;
@@ -58,7 +70,9 @@
 //      from the offline one the committed catalogue assumes
 //      (BuilderDefaultDrift, Review Focus 5 — found after sign-in, before any
 //      case); a case orgs' plan that does not grant a gate a planned case
-//      touches (PlanLacksGate, RR-1 — after the plan read, before any case).
+//      touches (PlanLacksGate, RR-1 — after the plan read, before any case);
+//      a plan whose stages.per_division.max is below the longest planned
+//      row's stage count (PlanStageCapTooLow, W1-driving T6).
 //      BuilderDefaultDrift is an environment refusal, not catalogue
 //      drift (gen-catalogue's exit 1): the codes are per CLI, so a wrapper
 //      switches on the CLI, never on the code alone.
@@ -91,19 +105,20 @@ import { createRealPlanSql, provisionPlan } from "../bench/lib/plan.ts";
 import { createRealPreflightProbes, runPreflight } from "../bench/lib/env.ts";
 import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "./lib/catalogue.ts";
 import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
-import { HttpDriver } from "./lib/driver/http-driver.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "./lib/main-module.ts";
+import { routeTo } from "./lib/routing.ts";
 import {
-  API_ONLY_BROWSER_SET, LAYER_PLANNERS, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, widthSweepPlanner,
+  API_ONLY_BROWSER_SET, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
   type LayerCase, type PlannedLayerCase,
 } from "./lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
-import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunResults } from "./lib/results.ts";
+import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunAbort, type RunResults } from "./lib/results.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
@@ -111,9 +126,11 @@ import {
   DataDirMismatch, DataDirUnset, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
 } from "./lib/seed-org.ts";
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
-import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
+import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkCellFilter, checkSliceFilter, isSliceCell, planCanaryCase, planSliceCases } from "./lib/slice.ts";
+import { W1_DRIVING_SET, w1DrivingPlanner } from "./lib/w1-driving-set.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
+import { MAX_WORKERS, PLATFORM_CLOCK, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, runQueue, sharedTurns, type SharedTurns, type TurnClock } from "./lib/workers.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -139,6 +156,11 @@ export interface RunDeps {
   preflight(base: string): Promise<{ ok: boolean; refusals: { reason: string; detail: string }[] }>;
   openDb(): Promise<RunDb>;
   signIn(base: string, email: string): Promise<Session>;
+  /** The run's shared turns (fix round 1 m-2, fix round 2 T12-R3): realDeps
+   *  makes them and holds the provision's staff window on them; the workers'
+   *  sign-ins take turns on them too, so a deadline on either closes both.
+   *  Absent (a test's deps): the run makes its own, at TURN_DEADLINE_MS. */
+  turns?: SharedTurns;
   /** `deny` (ruling 24): feature keys the case org is denied after provisioning;
    *  `denied` is what was applied, and it is what the scenario judges. */
   prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string; denied: readonly string[] }>;
@@ -235,19 +257,31 @@ export class UndeclaredPlannerSport extends Error {
   }
 }
 
-export const slicePlanner: PlanCases = (cli) => ({
-  sports: SLICE_SPORTS,
-  deniesFeatures: false,
-  plan: (variantFor) => (cli.canary !== undefined
-    ? [planCanaryCase(variantFor, cli.canary)]
-    : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario })),
-});
+export const slicePlanner: PlanCases = (cli) => {
+  // W1-driving Task 12: an --only cell outside the slice is planned by the
+  // w1-driving set, restricted to that cell; a slice cell plans exactly as
+  // before (the committed plans stay frozen).
+  if (cli.canary === undefined && cli.only !== undefined && !isSliceCell(cli.only)) return w1DrivingPlanner({ only: cli.only, scenario: cli.scenario });
+  return {
+    sports: SLICE_SPORTS,
+    deniesFeatures: false,
+    plan: (variantFor) => (cli.canary !== undefined
+      ? [planCanaryCase(variantFor, cli.canary)]
+      : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario })),
+  };
+};
 
 /** The named sets `--set` chooses from. */
 export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.freeze({
   [PROBE_SET]: probePlanner, [PAD_PROOF_SET]: padProofPlanner,
   // W1c Task 12 (ruling 39 / D7): layered — each places its own widths.
   [WIDTH_SWEEP_SET]: widthSweepPlanner, [API_ONLY_BROWSER_SET]: apiOnlyBrowserPlanner,
+  // W1-driving Task 12 (ruling 48): every catalogue cell × the four scripts,
+  // plus cricket's test cases — and it takes --only / --scenario.
+  [W1_DRIVING_SET]: w1DrivingPlanner,
+  // W1-driving Task 13 (ruling 47): one L1 cell per capability, plus the two
+  // template-only cells through their gallery cards — layered, at 1280.
+  [W1_DRIVING_L1_SET]: w1DrivingL1Planner,
 });
 
 export class UnknownSet extends Error {
@@ -366,6 +400,39 @@ export function gatesNeeded(specs: readonly CaseSpec[], stagesOf: (row: string) 
   return out;
 }
 
+/** W1-driving Task 6 Step 3a (plan review 1, m-1): the case orgs' plan caps
+ *  stages per division (`stages.per_division.max`). A row with more stages
+ *  than the cap would read the product's refusal of its postStages as a
+ *  product red — RR-1's class, for a numeric limit. */
+export class PlanStageCapTooLow extends Error {
+  readonly plan: string;
+  readonly cap: number;
+  readonly needed: number;
+  readonly caseIds: readonly string[];
+  constructor(plan: string, cap: number, needed: number, caseIds: readonly string[]) {
+    super(`matrix: the case orgs' plan '${plan}' caps stages.per_division.max at ${cap}; ${caseIds.length} planned case(s) need ${needed} — ${caseIds.slice(0, 5).join(", ")}`);
+    this.name = "PlanStageCapTooLow";
+    this.plan = plan;
+    this.cap = cap;
+    this.needed = needed;
+    this.caseIds = caseIds;
+  }
+}
+
+/** The most stages any planned case's row posts, and the cases at that most.
+ *  No specs need none. A row that cannot be derived is not this guard's to
+ *  judge (as gatesNeeded): the case reds on its own derivation. */
+export function stagesNeeded(specs: readonly CaseSpec[], stagesOf: (row: string) => readonly unknown[] = stagesForRow): { needed: number; caseIds: string[] } {
+  let needed = 0;
+  let caseIds: string[] = [];
+  for (const s of specs) {
+    let n = 0;
+    try { n = stagesOf(s.row).length; } catch { n = 0; }
+    if (n > needed) { needed = n; caseIds = [s.caseId]; } else if (n === needed && n > 0) caseIds.push(s.caseId);
+  }
+  return { needed, caseIds };
+}
+
 /** A planner planned a deny it did not declare: the Redis guard (which reads
  *  only the declaration, before the DB) would have been bypassed. */
 export class UndeclaredDeny extends Error {
@@ -380,7 +447,11 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]`;
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)`;
+
+/** D10 (ruling 52): browser workers are not this wave's — one chromium per
+ *  run, one context per case, one case at a time. */
+const BROWSER_WORKERS = routeTo("W1d", "browser workers inside a shard (D10)");
 
 const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
@@ -390,7 +461,20 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
  *  kept as typed until the plan is chosen: a plain browser run needs one
  *  (resolved by plainBrowserWidth), a layered plan sets its own and refuses
  *  any other (layeredWidthRefusal). */
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined }
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined; workers: number }
+
+/** `--workers` (W1-driving T11): digits only, then 1..MAX_WORKERS — the same
+ *  bound runQueue refuses by name (WorkersOutOfRange), checked here first so
+ *  a bad count is a usage error before anything touches the DB or the server.
+ *  Absent is one worker: today's single sign-in. */
+function parseWorkers(v: string | undefined): { workers: number } | { usage: string } {
+  if (v === undefined) return { workers: 1 };
+  // Digits only: Number("") is 0, Number(" 3") is 3 and Number("1.5") is 1.5 — none was asked for.
+  if (!/^\d+$/.test(v)) return { usage: `--workers must be an integer in 1..${MAX_WORKERS}, got '${v}'` };
+  const n = Number(v);
+  if (n < 1 || n > MAX_WORKERS) return { usage: `--workers: ${new WorkersOutOfRange(n).message}` };
+  return { workers: n };
+}
 
 /** The plan a run was made from, as its command line chose it — results.json's
  *  `plan` (W1c Task 14 carry 6, Task 12 review m-7), so a reader never guesses
@@ -398,9 +482,10 @@ interface Cli { base: string | undefined; runId: string; reportDir: string; only
  *  this does not name (--set or --canary beside a filter or a layer). The
  *  driver and width are recorded apart (D9). */
 export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario">): string {
-  if (cli.set !== undefined) return `--set ${cli.set}`;
-  if (cli.canary !== undefined) return `--canary ${cli.canary}`;
   const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
+  // Only --set w1-driving takes filters (Task 12); for every other set they are refused, so this is `--set NAME`.
+  if (cli.set !== undefined) return [`--set ${cli.set}`, ...filters].join(" ");
+  if (cli.canary !== undefined) return `--canary ${cli.canary}`;
   return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}`, ...filters].join(" ");
 }
 
@@ -443,18 +528,24 @@ export function withoutBareDashes(argv: readonly string[]): string[] {
 }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string; workers?: string };
   try {
     ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
       only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
-      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" },
+      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, workers: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
   }
   const how = parseDriver(values.driver, values.width);
   if ("usage" in how) return how;
+  const w = parseWorkers(values.workers);
+  if ("usage" in w) return w;
+  // D10: every browser plan (plain or layered) runs one case at a time.
+  if (how.driver === "browser" && w.workers > 1) {
+    return { usage: `--workers ${w.workers} is HTTP-only in this wave (D10); browser workers are owed by ${BROWSER_WORKERS.wave} — ${BROWSER_WORKERS.why}` };
+  }
   // W1c Task 12: --layer chooses the plan, and it is a browser plan.
   let layer: Cli["layer"];
   if (values.layer !== undefined) {
@@ -465,7 +556,9 @@ function parseCli(argv: string[]): Cli | { usage: string } {
     if (values.layer === "L2" && values.scenario !== undefined) return { usage: "--layer L2 plans the committed l2-pairs.json runs; it takes no --scenario" };
     layer = values.layer;
   }
-  if (values.set !== undefined && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
+  // W1-driving Task 12: the w1-driving set takes --only/--scenario, never --canary.
+  if (values.set === W1_DRIVING_SET && values.canary !== undefined) return { usage: `--set ${W1_DRIVING_SET} takes --only and --scenario; it takes no --canary` };
+  if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
     return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
   }
   if (values.canary !== undefined && (values.only !== undefined || values.scenario !== undefined)) {
@@ -474,7 +567,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width, workers: w.workers };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -519,8 +612,28 @@ export function keepNotes(notes: readonly string[]): string[] {
  *  never makes writeResults throw the whole run away (it still refuses, as the backstop). */
 const redactCheck = (c: CheckResult): CheckResult => ({ ...c, reason: redact(c.reason), evidence: c.evidence.map((x) => redact(x)) });
 
-/** `reportDir`: the run's own report directory. */
+/** `reportDir`: the run's own report directory. `session`: the sign-in of
+ *  the worker running the case (W1-driving T11: one per worker). */
 interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string; reportDir: string }
+
+/** The environment, never a case: the DB stopped proving it is ours, a
+ *  case's browser could not be set up, or (T12-R3) a shared turn outlived its
+ *  deadline or was refused because one did. runCase rethrows these, and the
+ *  worker queue aborts the whole run on them rather than record a product red. */
+const abortsRun = (e: unknown): boolean => e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted
+  || e instanceof TurnDeadlineExceeded || e instanceof TurnsClosed;
+
+/** The run's browser could not be opened (no chromium, a hold mismatch): the
+ *  environment. Carries the original error so the abort reads exactly as it
+ *  did before workers (W1-driving T11) — `crashed` rethrows `original`. */
+class BrowserOpenFailed extends Error {
+  readonly original: unknown;
+  constructor(original: unknown) {
+    super("matrix: the run's browser could not be opened");
+    this.name = "BrowserOpenFailed";
+    this.original = original;
+  }
+}
 
 /** One case the runner DRIVES: its spec, the layer it records, and its browser
  *  and width — null over HTTP. A plain run gives every case the CLI's width
@@ -573,7 +686,7 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     // The DB stopped proving it is ours, or the case's browser could not be
     // set up: that is the environment, not this case. Abort the run rather
     // than record it as a product red.
-    if (e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted) throw e;
+    if (abortsRun(e)) throw e;
     if (e instanceof ScenarioUnsupported || e instanceof RowBuildDeferred) deferred = { wave: e.wave, reason: e.message };
     // M-4 ruling: a path this layer does not drive is 🚫 naming its wave, never an error red.
     else if (e instanceof NoOrganiserPath) noPath = { wave: e.wave, reason: e.reason };
@@ -643,6 +756,20 @@ export function canaryVerdict(key: string, c: CaseResult | undefined): number {
   return ok ? EXIT.OK : EXIT.NO_SIGNAL;
 }
 
+/** W1-driving T11 (Review Focus 4): a driven case whose run THREW past
+ *  runCase's own catch (which keeps every product or driver refusal as the
+ *  case's error red, so this is a harness defect) is recorded red at its own
+ *  plan index — every other worker's case keeps its result. Never for the
+ *  environment (abortsRun) nor for a planned case: those abort the run. */
+function crashResult(spec: CaseSpec, layer: Layer, width: BrowserWidth | null, e: unknown): CaseResult {
+  const { state, reason } = decideState({ checks: [], deferred: null, error: `crashed — ${errText(e)}`, mandated: null, noPath: null });
+  return {
+    caseId: atWidth(spec.caseId, width), row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
+    state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
+    ...(width === null ? { layer, driver: "http", width: null } as const : { layer, driver: "browser", width } as const),
+  };
+}
+
 /** One item of a run, in plan order: a case the runner drives at its layer
  *  and width (null over HTTP), or a layered plan's 🚫/░ case, recorded. */
 type RunItem =
@@ -675,6 +802,15 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // A holder, not a `let`: it is opened inside browserFor, and the `finally`
   // must see that (a `let` assigned only in a closure narrows to null there).
   const opened: { run: BrowserRun | null } = { run: null };
+  // Fix round 1 m-1: the workers the queue actually opened (never more than
+  // the cases), counted where they open — the header records these.
+  const lanes = { opened: 0 };
+  // T12-R3: the shared turn that outlived its deadline, and whose turn it was
+  // (a case's, or a worker's sign-in), set where the timeout reaches its holder.
+  const timedOut: { abort: RunAbort | null } = { abort: null };
+  // Every case that finished, by plan index, and whether it finished after
+  // the turns tripped (T12-R4: in flight at the abort, so not evidence).
+  const finished = new Map<number, { result: CaseResult; duringAbort: boolean }>();
   const db = await deps.openDb();
   try {
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
@@ -689,7 +825,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // The sign-in is the one HTTP write before either proof. Switching orgs by
     // any other route (an API token, say) silently drops proof 2 — replace it
     // with an equivalent server-reads-our-write check before doing that.
-    const session = await deps.signIn(base, owner); // ONE sign-in per run (single worker)
+    // Worker 0's sign-in, before the proofs below; workers 1..N-1 sign in as
+    // the same owner when the queue opens them (W1-driving T11, ruling 46:
+    // the active org is a per-jar cookie, so one owner on N jars never
+    // switches another worker's org — proven live at T11 Step 0).
+    const first = await deps.signIn(base, owner);
     const userId = await db.userIdForEmail(owner);
     const plan = await db.chooseTopPublicPlan();
     const order = new Map<string, string[]>();
@@ -716,6 +856,13 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       const gaps = needed.filter((n) => !grants.has(n.gate));
       if (gaps.length > 0) throw new PlanLacksGate(plan, gaps);
     }
+    // W1-driving T6 Step 3a: …and must allow as many stages per division as
+    // the longest planned row posts (null is unlimited).
+    const stages = stagesNeeded(specs);
+    if (stages.needed > 0) {
+      const cap = await db.planLimit(plan, "stages.per_division.max");
+      if (cap !== null && cap < stages.needed) throw new PlanStageCapTooLow(plan, cap, stages.needed, stages.caseIds);
+    }
     // W1c Task 6: one browser per run, opened after every start gate has
     // passed. No browser is the environment: the run aborts, and no case is
     // ever recorded as a product red for it. Task 12: opened at the first
@@ -727,20 +874,78 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       }
       return opened.run;
     };
-    const ctx: RunCtx = { base, session, userId, plan, runId: cli.runId, reportDir: dir };
-    for (const [i, item] of items.entries()) {
-      let result: CaseResult;
-      if (item.kind === "planned") {
-        result = recordPlanned(item.case);
-      } else {
+    // m-2 + T12-R3: the run's shared turns (realDeps' staff window is on
+    // them; the sign-ins below take turns on them too).
+    const turns = deps.turns ?? sharedTurns(TURN_DEADLINE_MS);
+    const progress = (i: number, result: CaseResult): CaseResult => {
+      // T12-R4: no case starts after the trip, so one finishing after it was
+      // mid-scenario at the abort — where the timed-out turn's late answer can land.
+      const duringAbort = turns.tripped() !== null;
+      say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}${duringAbort ? " (finished during abort — re-run; not evidence)" : ""}`);
+      finished.set(i, { result, duringAbort });
+      return result;
+    };
+    // Today's loop body, on the worker's own session. A browser plan runs
+    // one worker (D10), so the browser is still opened at most once.
+    const runOne = async (session: Session, item: RunItem, i: number): Promise<CaseResult> => {
+      if (item.kind === "planned") return progress(i, recordPlanned(item.case));
+      let browser: { run: BrowserRun; width: BrowserWidth } | null = null;
+      if (item.width !== null) {
         // Outside runCase's try: a browser that cannot open aborts the run (above).
-        const browser = item.width === null ? null : { run: await browserFor(), width: item.width };
-        const ran = await runCase(deps, ctx, { spec: item.spec, layer: item.layer, browser }, i);
-        result = ran.result;
-        if (ran.refusal !== null) refusals.set(result.caseId, ran.refusal);
+        try { browser = { run: await browserFor(), width: item.width }; } catch (e) { throw new BrowserOpenFailed(e); }
       }
-      cases.push(result);
-      say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}`);
+      const ran = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir }, { spec: item.spec, layer: item.layer, browser }, i);
+      if (ran.refusal !== null) refusals.set(ran.result.caseId, ran.refusal);
+      return progress(i, ran.result);
+    };
+    // Throwing from here aborts the queue (lib/workers.ts): the in-flight
+    // cases finish, no other starts, and the error reaches runSlice's catch
+    // exactly as the sequential loop's did.
+    const crashed = (item: RunItem, i: number, e: unknown): CaseResult => {
+      if (e instanceof BrowserOpenFailed) throw e.original;
+      // T12-R3: this case held the turn that timed out. It is named in the
+      // run's abort, never given a result: its request may still land.
+      if (e instanceof TurnDeadlineExceeded && item.kind === "driven") timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: item.spec.caseId, worker: null, inFlight: [] };
+      if (abortsRun(e) || item.kind === "planned") throw e;
+      return progress(i, crashResult(item.spec, item.layer, item.width, e));
+    };
+    // Found live (w1drv-t11-w3b, -w8): requesting a sign-in link deletes the
+    // owner's unused ones (apps/web/src/lib/login-link.ts), so workers signing
+    // in at once deleted each other's links before they were consumed. The
+    // sign-ins take turns; the cases still run concurrently.
+    // m-2 + T12-R3: the sign-ins take turns on the run's shared turns (the
+    // provision's staff window is on them too). A sign-in that never answers
+    // closes them at the deadline; its open throws and the queue aborts, as
+    // for any refused sign-in, naming the worker — never parking the others.
+    const signInTurn = turns.lock("workers' sign-in");
+    const open = async (n: number): Promise<Session> => {
+      lanes.opened++;
+      if (n === 0) return first;
+      try {
+        return await signInTurn(() => deps.signIn(base, owner));
+      } catch (e) {
+        if (e instanceof TurnDeadlineExceeded) timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: null, worker: n, inFlight: [] };
+        throw e;
+      }
+    };
+    try {
+      // T12-R5: the queue's abort flag is the trip itself, recorded the moment
+      // a deadline fires. The timed-out case's own abort reaches the queue only
+      // after realDeps has closed its DB handles (real I/O); a lane that freed
+      // up in between took the next item, inserted its org and switched its
+      // session before the window refused it — and "no later case started"
+      // was false. From the trip on, no lane takes another item.
+      cases.push(...await runQueue(items, cli.workers, open, runOne, crashed, () => turns.tripped()));
+    } catch (e) {
+      // T12-R3: a turn timeout aborts the run but keeps the cases that
+      // finished, in plan order, and names the holder. A turn error that names
+      // no holder is filed against nothing: it aborts as before, writing nothing.
+      if (!(e instanceof TurnDeadlineExceeded || e instanceof TurnsClosed) || timedOut.abort === null) throw e;
+      // T12-R4: only the cases that finished BEFORE the trip are evidence; the
+      // ones that finished during the abort are listed for a re-run instead.
+      const inOrder = [...finished.entries()].sort(([a], [b]) => a - b).map(([, f]) => f);
+      cases.push(...inOrder.filter((f) => !f.duringAbort).map((f) => f.result));
+      timedOut.abort.inFlight = inOrder.filter((f) => f.duringAbort).map((f) => f.result.caseId);
     }
   } finally {
     // A failed close must not throw away the cases that already ran. The
@@ -760,11 +965,16 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     schemaVersion: 3, runId: cli.runId, harnessCommit, startedAt, finishedAt: new Date().toISOString(), grid,
     // A layered plan names its layer; a plain one is its width's (layerOfWidth:
     // 1280 L1, a phone width L2), L3 over HTTP.
-    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli), cases,
+    layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli),
+    // Ruling 46: written only when more than one worker RAN (m-1: a --workers 8
+    // run of one case ran one), so a one-worker run's header is today's.
+    ...(lanes.opened > 1 ? { workers: lanes.opened } : {}),
+    ...(timedOut.abort !== null ? { aborted: timedOut.abort } : {}),
+    cases,
   };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
-  if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
+  if (cli.canary !== undefined && timedOut.abort === null) return canaryVerdict(cli.canary, cases[0]);
   // The summary is printed before MATRIX.md is rendered, so a render failure
   // (renderMatrix refuses a case off the run's grid) cannot lose it.
   printSummary(summariseRun(cases, refusals));
@@ -772,6 +982,12 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     writeFileSync(join(dir, "MATRIX.md"), deps.render(written));
   } catch (e) {
     warn(`matrix: results.json kept at ${resultsPath}; MATRIX.md failed — ${errText(e)}`);
+    return EXIT.ABORTED;
+  }
+  const a = timedOut.abort;
+  if (a !== null) {
+    const whose = a.caseId !== null ? `case ${a.caseId}` : `worker ${a.worker}'s sign-in`;
+    warn(`matrix: aborted — TurnDeadlineExceeded: ${a.turn}: held its turn past the ${a.deadlineMs}ms deadline (${whose}); its request was not aborted and may still land, so no further turn was admitted and no later case started — results.json keeps the ${cases.length} case(s) that finished before the trip as evidence; ${a.inFlight.length} finished during the abort and are listed for a re-run, not kept as evidence${a.inFlight.length === 0 ? "" : ` (${a.inFlight.join(", ")})`}`);
     return EXIT.ABORTED;
   }
   return cases.length === 0 ? EXIT.NO_SIGNAL : EXIT.OK;
@@ -783,7 +999,12 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   // PF13: the keys are static, so a typo is refused before anything touches the DB or the server.
   try {
     if (cli.canary !== undefined) checkCanary(cli.canary);
-    else checkSliceFilter({ only: cli.only, scenario: cli.scenario });
+    else {
+      // Task 12: --only takes any catalogue cell here. A layered plan keeps
+      // the slice's cells: its planner refuses any other when it is built, below.
+      checkSliceFilter({ scenario: cli.scenario });
+      if (cli.only !== undefined) checkCellFilter(cli.only);
+    }
   } catch (e) {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;
@@ -836,7 +1057,7 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     return await execute(deps, cli, base, planner, width);
   } catch (e) {
     const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate
-      || e instanceof NothingPlanned || e instanceof DuplicateCaseId;
+      || e instanceof PlanStageCapTooLow || e instanceof NothingPlanned || e instanceof DuplicateCaseId;
     warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
@@ -876,9 +1097,34 @@ export function describeCommit(git: (args: string[]) => string): string {
   return dirty ? `${sha}-dirty` : sha;
 }
 
-export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
+/** Fix round 1 m-2: the most HTTP calls one shared turn holds — a case-org
+ *  provision's two admin calls (bench plan.ts bustOrgEntitlements) or a
+ *  sign-in's request and consume (bench http.ts signIn). Both go through
+ *  bench's raw(), so neither has HttpDriver's per-request timeout. */
+export const TURN_REQUESTS = 2;
+/** How long a task may hold a shared turn before it fails by name and the
+ *  run's turns close (T12-R3): the driver's allowance for one request, per
+ *  request. */
+export const TURN_DEADLINE_MS = TURN_REQUESTS * REQUEST_TIMEOUT_MS;
+
+/** `clock` (fix round 4): the deadline's timers — the platform's, unless a
+ *  test fires them by hand. */
+export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TURN_DEADLINE_MS, clock: TurnClock = PLATFORM_CLOCK): RunDeps {
+  // W1-driving T11, found live (w1drv-t11-w3): provisionPlan's entitlement
+  // bust flips the case org's owner — the run's ONE owner, whichever worker
+  // seeds the org — to staff for two admin calls, then back. Two workers'
+  // windows overlapped, one's demotion landed between the other's calls, and
+  // the admin route answered 401 "Staff access required". The owner's staff
+  // flag is per USER, not per session, so the provisions take turns.
+  // m-2 + T12-R3: a provision that hangs inside the window outlives the
+  // deadline, its request may still land in the next holder's window, so the
+  // turns close and the run aborts naming that case (execute) — no red is
+  // filed against it, and no further turn is admitted.
+  const turns = sharedTurns(turnDeadlineMs, clock);
+  const ownerStaffWindow = turns.lock("case-org provision (the owner's staff window)");
   return {
     env: process.env,
+    turns,
     // harnessCommit and openDb do no async work. Each body runs inside a
     // Promise executor, whose throw REJECTS — exactly what the `async` arrow
     // with no `await` did — so a failing git or handle open still reaches the
@@ -916,7 +1162,7 @@ export function realDeps(dbf: DbFactories = REAL_DB): RunDeps {
       try {
         return await prepareCaseOrg({
           sql: m.sql, transport: { raw }, base: ctx.base, session: ctx.session, userId: ctx.userId, plan: ctx.plan,
-          provision: (orgId, plan) => provisionPlan({ base: ctx.base, orgId, plan, ownerSession: ctx.session, sql: p.sql }),
+          provision: (orgId, plan) => ownerStaffWindow(() => provisionPlan({ base: ctx.base, orgId, plan, ownerSession: ctx.session, sql: p.sql })),
         }, input);
       } finally { await closeHandles(m, p); }
     },

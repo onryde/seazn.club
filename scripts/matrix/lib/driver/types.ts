@@ -11,19 +11,91 @@ import { mapStrings, redact } from "../redact.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
 export type EntrantKind = "individual" | "pair" | "team";
+/** One roster member as the harness writes it (D2): a synthetic person
+ *  ("Matrix Player <entrant>.<m>", R14a), created by name — inline on the
+ *  create (schemas.ts NewPersonMemberInput) or as filler (persons, then the
+ *  entrant's PATCH). */
+export interface MemberInput { readonly fullName: string; readonly squadNumber: number; readonly isCaptain: boolean }
+/** An entrant to add. `members` absent: no roster, and no `members` key on
+ *  the wire (an individual's body, byte for byte). */
+export interface EntrantInput { readonly displayName: string; readonly seed: number; readonly kind: EntrantKind; readonly members?: readonly MemberInput[] }
+/** A stored roster member, trimmed to what the harness reads (entrants.ts
+ *  withMembers serves more: name, dob, gender, roles). */
+export interface EntrantMember { readonly person_id: string; readonly squad_number: number | null; readonly is_captain: boolean }
+/** One lineup slot on the wire (schemas.ts LineupSlotInput). */
+export interface LineupSlotWire { readonly person_id: string; readonly slot: "starting" | "bench"; readonly position_key?: string; readonly order_no?: number; readonly roles?: readonly string[] }
+
+/** A roster in the product's order — squad number, nulls last (entrants.ts
+ *  withMembers `order by em.squad_number nulls last`) — each member trimmed to
+ *  an EntrantMember. The one authority for that order: HttpDriver, the fakes
+ *  and the lineup builder all read it. */
+export function inSquadOrder(members: readonly EntrantMember[]): EntrantMember[] {
+  const key = (m: EntrantMember) => m.squad_number ?? Number.POSITIVE_INFINITY;
+  return [...members].sort((a, b) => key(a) - key(b)).map((m) => ({ person_id: m.person_id, squad_number: m.squad_number, is_captain: m.is_captain }));
+}
 export interface CompetitionRef { id: string; slug: string; orgId: string }
 export interface DivisionRef { id: string; slug: string; sportKey: string; variantKey: string; config: Record<string, unknown> }
 export interface StageRef { id: string; seq: number; kind: string; config: Record<string, unknown>; status: string }
-export interface EntrantRow { id: string; display_name: string; seed: number | null; status: string }
+/** POST /api/v1/competitions/from-template's answer (api-v1/schemas.ts
+ *  FromTemplateResult, W1-driving Task 13): ids and the APPLIED visibility —
+ *  no org id, no sport, no stage kind, so the caller reads those back. */
+export interface FromTemplateAnswer {
+  competitionId: string;
+  slug: string;
+  visibility: string;
+  public_quota_degraded?: unknown;
+  divisions: { id: string; stages: { id: string; fixtureCount: number }[] }[];
+  templateKey: string;
+  templateVersion: number;
+}
+/** What one template instantiation built, read back from the product. */
+export interface FromTemplateOut { readonly competition: CompetitionRef; readonly division: DivisionRef; readonly stages: readonly StageRef[] }
+/** `kind` (W1-driving Task 8): the product serves it (entrants.ts COLS) and
+ *  lists EVERY entrant of the division, the `pair` entrants an americano
+ *  stage mints included (entrants.ts listEntrants has no kind filter).
+ *  Optional: the fakes' plain rows omit it, which reads as not a pair. */
+export interface EntrantRow { id: string; display_name: string; seed: number | null; status: string; kind?: string }
 /** `third_place` (W1b Task 10, T3 review G1): the product's row flag for a
  *  knockout's third-place match (usecases/fixtures.ts listDivisionFixtures
  *  selects it; the division fixtures route serves it). Optional: the fakes
- *  and older rows omit it, which reads as "not a third-place match". */
-export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean }
+ *  and older rows omit it, which reads as "not a third-place match".
+ *  `ext_key` / `is_final` (W1-driving Task 6): kept as the product serves them
+ *  (fixtures.ts listDivisionFixtures selects both) — a later stage's TBD row
+ *  is identified by its ext_key; absent from the fakes' single-stage rows. */
+export interface FixtureRow { id: string; stage_id: string; pool_id: string | null; round_no: number | null; fixture_no: number | null; home_entrant_id: string | null; away_entrant_id: string | null; status: string; outcome: unknown; third_place?: boolean; ext_key?: string | null; is_final?: boolean }
 export interface GenerateOut { created: number; existing: number; fixtures: FixtureRow[] }
 export interface StartOut { division_id: string; status: string; started: boolean; generated: number }
-export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean }
+/** The next stage's DRAFT seed proposal a /complete minted
+ *  (usecases/stages.ts progressCompletedStage `seed_proposal`). There is no GET:
+ *  /complete's answer is the only place the harness learns its id. */
+export interface SeedProposalRef { readonly id: string; readonly status: string }
+export interface CompleteOut { completed: boolean; events: { type: string; finalRanks?: string[] }[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
+/** A flagged seeding tie: the destination slots it spans and the tied
+ *  entrants, in the product's listed order (computeSeedProposal `ties`). */
+export interface SeedTie { readonly slots: readonly string[]; readonly entrantIds: readonly string[]; readonly reason: string }
+/** A recomputed draft (POST /stages/:id/seed-proposal → 201 `computed`). */
+export interface SeedProposalOut { readonly id: string; readonly status: string; readonly qualifiers: readonly { rank: number; entrantId: string; destinationSlot: string }[]; readonly ties: readonly SeedTie[] }
+/** confirmSeedProposal's answer: `filled` counts SLOTS (a bye seed owns two),
+ *  and `fixtures` is the WHOLE target stage (stages.ts, `where f.stage_id`). */
+export interface SeedConfirmOut { readonly proposalId: string; readonly filled: number; readonly fixtures: readonly FixtureRow[] }
+/** W1-driving T6 (FP-3): the 409 a /complete answers when the stage's
+ *  completion COMMITTED and only the next stage's seed proposal failed
+ *  (usecases/stages.ts progressCompletedStage). A repeat of that /complete
+ *  would re-run the progression, so the drivers record it as a completion.
+ *  Pinned against the product's text by http-driver.test.ts. */
+export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
 export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number }
+/** W1-driving T7 (D8): a ladder challenge's answer (route stages/[id]/challenges
+ *  → 201 usecases/stages.ts issueChallenge). `ladder_order` is the RAW order
+ *  as it stood when the challenge was ISSUED — before its result lands, and
+ *  never pruned of a departed entrant. */
+export interface ChallengeOut { readonly fixture_id: string; readonly ladder_order: readonly string[] }
+/** W1-driving Task 8: the americano read model (GET /stages/:id/americano →
+ *  usecases/americano.ts americanoView). `mode` is the product's own reading
+ *  of the stage's config.mode (anything but "mexicano" reads "americano");
+ *  each match's team1/team2 are the fixture's home/away pair entrants. Only
+ *  the fields the harness reads are typed. */
+export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; readonly rounds: readonly { round_no: number; matches: readonly { fixture_id: string; status: string; team1: { entrant_id: string }; team2: { entrant_id: string } }[] }[]; readonly leaderboard: readonly { person_id: string; points: number; games: number }[] }
 export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
@@ -64,14 +136,32 @@ export interface StagesProbe { status: number; code: string | null; featureKey: 
 
 export interface OrganiserDriver {
   createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef>;
+  /** W1-driving Task 13 (ruling 47): ONE organiser act builds a catalog
+   *  template's competition, division and stages — and no entrant
+   *  (usecases/templates.ts). The answer is the product's, read back. */
+  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut>;
   createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef>;
   getDivision(divisionId: string): Promise<DivisionRef>;
   postStages(divisionId: string, stages: readonly StagePostBody[]): Promise<StageRef[]>;
   listStages(divisionId: string): Promise<StageRef[]>;
-  addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]>;
+  /** An input's `members` ride inline on the create over HTTP; the browser
+   *  adds by name and seeds them as filler (D2, ruling 47). */
+  addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]>;
   /** The division's stored entrants (GET, ordered by seed) — the read-back
    *  life-built-as-posted compares with what was posted (final review I-2). */
   listEntrants(divisionId: string): Promise<EntrantRow[]>;
+  /** The entrant's stored roster (GET /entrants/:id → members), in squad
+   *  order (inSquadOrder); [] for an entrant with none. */
+  entrantMembers(entrantId: string): Promise<EntrantMember[]>;
+  /** Replaces the entrant's lineup for the fixture (PUT
+   *  /fixtures/:id/lineups/:entrantId). The product takes it only while the
+   *  fixture is `scheduled`, with no person twice, and only of the entrant's
+   *  own members (fixtures.ts putLineup); a refusal throws RefusedCall. A
+   *  lineup it takes is saved and then checked — WARNING-ONLY — so the
+   *  answer is returned: `warnings` for the caller to record, never refused
+   *  here. A lineup saved UNCHECKED throws LineupUnchecked. An empty `slots`
+   *  is refused before any call (the product would delete the lineup, 2xx). */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked>;
   start(divisionId: string): Promise<StartOut>;
   generate(stageId: string): Promise<GenerateOut>;
   listFixtures(divisionId: string): Promise<FixtureRow[]>;
@@ -80,10 +170,27 @@ export interface OrganiserDriver {
   forfeit(fixtureId: string, byEntrantId: string, reason: "walkover" | "retired hurt", idempotencyPrefix: string): Promise<PostedEvent[]>;
   withdraw(entrantId: string): Promise<WithdrawOut>;
   completeStage(stageId: string): Promise<CompleteOut>;
+  /** Confirms a draft seed proposal (POST /stages/:id/seed-proposal/confirm,
+   *  schemas.ts ConfirmSeedProposal): fills the stage's TBD rows through
+   *  fillSlot. A refusal (stale, already confirmed, an unresolved tie, a
+   *  withdrawn qualifier, nothing to fill) throws RefusedCall. */
+  confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut>;
+  /** Recomputes the stage's draft (POST /stages/:id/seed-proposal), marking
+   *  the previous draft stale. Throws RefusedCall on a refusal. */
+  recomputeSeedProposal(stageId: string): Promise<SeedProposalOut>;
   /** Replaces a root stage's fixtures wholesale (POST /stages/:id/rebuild).
    *  Throws RefusedCall on a refusal — 409 STAGE_HAS_RESULTS once any fixture
    *  carries a result (usecases/stages.ts rebuildStageFixtures). */
   rebuild(stageId: string): Promise<void>;
+  /** Issues a ladder challenge (POST /stages/:id/challenges, body
+   *  `{challenger_id, opponent_id}`): the product inserts ONE scheduled
+   *  fixture, challenger home. A refusal (FOREIGN, WITHDRAWN, NOT_UPWARD,
+   *  OUT_OF_RANGE, a non-ladder stage) throws RefusedCall. */
+  challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut>;
+  /** The americano read model (GET /stages/:id/americano, W1-driving Task 8):
+   *  the rotation grid and the personal-points leaderboard. A stage of any
+   *  other kind is a codeless 422 ("not an americano stage") → RefusedCall. */
+  americanoView(stageId: string): Promise<AmericanoViewOut>;
   standings(stageId: string, poolId: string | null): Promise<StandingsOut>;
   publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut>;
   /** A probe: returns the refusal, never throws on 4xx. */
@@ -158,6 +265,28 @@ export class DriverMisuse extends Error {
   constructor(message: string) {
     super(redact(message));
     this.name = "DriverMisuse";
+  }
+}
+
+/** The product's verdict on a lineup it saved (fixtures.ts PutLineupOut's
+ *  LineupCheck, checked arm): validateLineup on the division's STORED config,
+ *  each issue as one warning string. Warnings do not stop the save. */
+export interface LineupChecked { readonly checked: true; readonly warnings: readonly string[] }
+
+/** A lineup PUT the product saved but did not check: its answer said
+ *  `checked: false` (validation crashed; `reason` is the error's kind), or
+ *  carried no check at all. Fail closed — an unchecked lineup is never read as
+ *  a clean one (fix round 1, I-1). */
+export class LineupUnchecked extends Error {
+  readonly fixtureId: string;
+  readonly entrantId: string;
+  readonly reason: string;
+  constructor(fixtureId: string, entrantId: string, reason: string) {
+    super(redact(`driver: the lineup for entrant ${entrantId} on fixture ${fixtureId} was saved UNCHECKED — ${reason}`));
+    this.name = "LineupUnchecked";
+    this.fixtureId = fixtureId;
+    this.entrantId = entrantId;
+    this.reason = reason;
   }
 }
 

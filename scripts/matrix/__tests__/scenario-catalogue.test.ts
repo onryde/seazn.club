@@ -13,7 +13,6 @@ import { fileURLToPath } from "node:url";
 import type * as TS from "typescript";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
-import { DRIVING_WAVE } from "../lib/scenarios/common.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import {
   ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
@@ -369,6 +368,46 @@ describe("regression cases (R29)", () => {
     }
     expect(checked).toBe(cases.length);
   });
+  // T15-R5 (W1-driving Task 16): a NEW product failure in committed model
+  // evidence is committed as a regression case (R29), so the next model run
+  // judges it instead of rediscovering it. Every run is held to it, from W1d
+  // on too (T16-R4 m-7), except the named history below. Expected values are
+  // the finding report's, never the catalogue's.
+  /** W1b's first model reports: they hold failures found before W1b's own
+   *  shrinks and harness fixes, committed as history and never as cases
+   *  (MB-001..005 were committed from W1b fix round 1's later runs). */
+  const PRE_FIX_HISTORY_RUNS: readonly string[] = ["w1b-model-0928a", "w1b-model-0928b"];
+  it("T15-R5: every new failure in a committed model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences — save the named pre-fix W1b history (T16-R4 m-7)", () => {
+    type Cell = { cell: string; verdict: string; maxCommands: number; fences: boolean; failure: { check: string; seed: number; path: string; replayPath: string | null } | null };
+    const found: { runId: string; cell: Cell; failure: NonNullable<Cell["failure"]> }[] = [];
+    const exempted = new Map<string, number>(PRE_FIX_HISTORY_RUNS.map((id) => [id, 0]));
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as { runId: string; cells: Cell[] };
+          const news = rep.cells.filter((c) => c.verdict === "new-failure" && c.failure !== null);
+          if (exempted.has(rep.runId)) { exempted.set(rep.runId, (exempted.get(rep.runId) ?? 0) + news.length); continue; }
+          for (const c of news) found.push({ runId: rep.runId, cell: c, failure: c.failure! });
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
+    // The exemption is earned, not stale: each named run is committed and holds a NEW failure.
+    for (const [id, n] of exempted) expect(n, `${id}: the exempt run is gone or holds no NEW failure — drop it from the exemption`).toBeGreaterThan(0);
+    expect(found.length, "no NEW failure in committed model evidence — the pin would be vacuous").toBeGreaterThan(0);
+    const cases = loadRegressions();
+    let checked = 0;
+    for (const { runId, cell, failure } of found) {
+      const r = cases.find((c) => c.cell === cell.cell && c.check === failure.check && c.seed === failure.seed && c.path === failure.path);
+      expect(r, `${runId} ${cell.cell}: NEW ${failure.check} (seed ${failure.seed}, path ${failure.path}) is not a committed case`).toBeDefined();
+      expect({ replayPath: r?.replayPath, maxCommands: r?.maxCommands, fencesOn: r?.fencesOn, runId: r?.runId, status: r?.status }, r?.id)
+        .toEqual({ replayPath: failure.replayPath, maxCommands: cell.maxCommands, fencesOn: cell.fences, runId, status: "open" });
+      checked++;
+    }
+    expect(checked).toBe(found.length);
+    console.info(`T15-R5: ${checked} NEW failure(s), each a committed case; exempt ${JSON.stringify(Object.fromEntries(exempted))}`);
+  });
   // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its
   // finding, so honouring it would fence out the very command the case exists
   // to reproduce. Expected values are the ruling's three branches, not the code.
@@ -387,27 +426,61 @@ describe("regression cases (R29)", () => {
     }
     expect(checked).toBe(FENCES.length);
   });
-  it("under the replay rule the committed cases replay with the fences the committed 5/5-known replays ran (truth-runs w1b-model-final, ruling Q1)", () => {
-    // The evidence: w1b-model-final's --regressions reports, every committed
-    // case known-failure. The rule must reproduce the fences those replays
-    // ran with — a replay that fences out a case's own command goes NOT REPRODUCED.
-    const dir = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final");
+  // W1-driving Task 16 (T15-R5): the catalogue grew past the 5 cases
+  // w1b-model-final replayed, so the check reads EVERY committed --regressions
+  // report rather than that one directory: a replay that fences out a case's
+  // own command goes NOT REPRODUCED, whichever run made it.
+  it("under the replay rule, every replay in every committed --regressions report ran with the fences the rule gives its case, and was known (truth-runs, ruling Q1)", () => {
     type Rep = { runId: string; settings: { regressions: boolean }; cells: { replayOf: string | null; verdict: string; fences: boolean }[] };
-    const reps = readdirSync(dir).filter((n) => /^model-report-regressions.*\.json$/.test(n)).map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as Rep);
+    const reps: Rep[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Rep;
+          if (rep.settings.regressions) reps.push(rep);
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
     expect(reps.length, "no committed replay report — the check would be vacuous").toBeGreaterThan(0);
-    const cases = loadRegressions();
-    expect(cases.length).toBeGreaterThan(0);
+    const cases = new Map(loadRegressions().map((r) => [r.id, r]));
+    expect(cases.size).toBeGreaterThan(0);
     let checked = 0;
     for (const rep of reps) {
-      expect(rep.settings.regressions, rep.runId).toBe(true);
-      for (const r of cases) {
-        const cell = rep.cells.find((c) => c.replayOf === r.id);
-        if (cell === undefined) throw new Error(`${rep.runId}: no replay of ${r.id}`);
+      for (const cell of rep.cells) {
+        if (cell.replayOf === null) continue;
+        const r = cases.get(cell.replayOf);
+        if (r === undefined) throw new Error(`${rep.runId}: replays ${cell.replayOf}, which is no committed case`);
         expect([cell.verdict, replayFences(r)], `${rep.runId} ${r.id}`).toEqual(["known-failure", cell.fences]);
         checked++;
       }
     }
-    expect(checked).toBe(reps.length * cases.length);
+    expect(checked, "no replay read across the committed reports").toBeGreaterThan(0);
+    console.info(`replay rule: ${checked} replays across ${reps.length} committed --regressions reports`);
+  });
+  it("…and some committed --regressions report replays EVERY committed case as known: a case added to regressions.json owes a live replay (T15-R5, Task 16)", () => {
+    type Rep = { runId: string; settings: { regressions: boolean }; cells: { replayOf: string | null; verdict: string }[] };
+    const ids = loadRegressions().map((r) => r.id).sort();
+    expect(ids.length, "no committed case — the check would be vacuous").toBeGreaterThan(0);
+    const full: string[] = [];
+    let reports = 0;
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Rep;
+          if (!rep.settings.regressions) continue;
+          reports++;
+          const known = rep.cells.filter((c) => c.replayOf !== null && c.verdict === "known-failure").map((c) => c.replayOf!).sort();
+          if (JSON.stringify(known) === JSON.stringify(ids)) full.push(rep.runId);
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
+    expect(reports, "no committed --regressions report").toBeGreaterThan(0);
+    expect(full, `no committed --regressions report replays all ${ids.length} committed cases known (${ids.join(", ")}) across ${reports} report(s)`).not.toEqual([]);
+    console.info(`full replay: ${full.join(", ")} replay(s) all ${ids.length} committed cases known, of ${reports} --regressions report(s)`);
   });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();
@@ -545,19 +618,35 @@ describe("regression cases (R29)", () => {
   });
 });
 
-// --- Q-A guard (ruling 28) ------------------------------------------------------
-/** The deferral classes, each with the index of its wave argument. */
-const DEFERRALS: Readonly<Record<string, number>> = { ScenarioUnsupported: 0, RowBuildDeferred: 1 };
-interface DeferralScan { sites: number; waves: string[]; unread: string[] }
-/** Every use of a deferral class in `src`, read from the TypeScript AST (so a
- *  comment or a string is never a site). A `new` with a literal or
- *  DRIVING_WAVE wave is read; the declaration, a plain import/re-export,
- *  `instanceof` and a type position construct nothing. ANY other use — a
- *  subclass (its wave hides in `super(`), an `as` alias, a value alias,
- *  `Reflect.construct` — is unread, and an unread use fails the guard. */
-function scanDeferrals(src: string, file = "synthetic.ts"): DeferralScan {
+// --- Q-A guard (ruling 28; W1-driving D7) -----------------------------------------
+/** The deferral classes, each with the index of its wave argument. `ModelUnsupported`
+ *  is constructed from W1-driving Task 14 on; reading a class nothing builds yet costs nothing. */
+const DEFERRALS: Readonly<Record<string, number>> = { ScenarioUnsupported: 0, RowBuildDeferred: 1, NoOrganiserPath: 0, ModelUnsupported: 0 };
+/** The one routing call (lib/routing.ts): its argument 0 is the wave. */
+const ROUTE_CALL = "routeTo";
+/** A wave-id token inside any literal text (T1-R2). Wider than routing.ts WAVE_ID on
+ *  purpose: a wave-shaped token that names no programme wave (W11) is refused
+ *  too, never read as prose. */
+const WAVE_TOKEN = /\bW\d+[a-z]?\b|W1-driving/;
+interface RouteScan { sites: number; waves: string[]; unread: string[] }
+/** Every route in `src`, read from the TypeScript AST (so a comment is never a
+ *  site). Two constructs name a wave: `routeTo(<wave>, …)` and a `new` of a
+ *  deferral class. Either is read when its wave argument is a literal; any
+ *  other argument — DRIVING_WAVE included, since W1-driving Task 13 deleted
+ *  it — is unread. A deferral class's declaration,
+ *  a plain import/re-export, `instanceof` and a type position construct
+ *  nothing, and neither does routeTo's own declaration or a plain import. ANY
+ *  other use — a subclass (its wave hides in `super(`), an `as` alias, a value
+ *  alias, `Reflect.construct`, routeTo passed as a value — is unread.
+ *  And a string, template or template span that carries a wave-id token
+ *  (WAVE_TOKEN: a whole id, or one inside prose such as "lands with W2's
+ *  rulebook") anywhere but a site's own wave argument is a stray wave literal
+ *  (a map value, a const, a `routedTo:` field, a message, a route's why),
+ *  unread by name: a new routing shape cannot hide from the guard (T1-R2).
+ *  An unread use fails the guard. */
+function scanRoutes(src: string, file = "synthetic.ts"): RouteScan {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const out: DeferralScan = { sites: 0, waves: [], unread: [] };
+  const out: RouteScan = { sites: 0, waves: [], unread: [] };
   const at = (n: TS.Node) => `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
   // Fail closed on a parse error: an unclosed comment or template swallows
   // the code after it, and a deferral inside would read as "no sites".
@@ -567,55 +656,112 @@ function scanDeferrals(src: string, file = "synthetic.ts"): DeferralScan {
   }
   const waveOf = (arg: TS.Expression | undefined): string | null => {
     if (arg === undefined) return null;
-    if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) return arg.text;
-    return ts.isIdentifier(arg) && arg.text === "DRIVING_WAVE" ? DRIVING_WAVE : null;
+    return ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg) ? arg.text : null;
+  };
+  /** The literals that ARE a route's wave argument: never strays. */
+  const declared = new Set<TS.Node>();
+  const readSite = (arg: TS.Expression | undefined, where: string): void => {
+    out.sites++;
+    const w = waveOf(arg);
+    if (w === null) { out.unread.push(where); return; }
+    out.waves.push(w);
+    if (arg !== undefined) declared.add(arg);
   };
   const classify = (id: TS.Identifier, waveIndex: number): void => {
     const p = id.parent;
     const callee: TS.Node = ts.isPropertyAccessExpression(p) && p.name === id ? p : id;
     const host = callee.parent;
-    if (ts.isNewExpression(host) && host.expression === callee) {
-      out.sites++;
-      const w = waveOf(host.arguments?.[waveIndex]);
-      if (w === null) out.unread.push(`${at(id)} ${host.getText(sf)}`); else out.waves.push(w);
-      return;
-    }
+    if (ts.isNewExpression(host) && host.expression === callee) { readSite(host.arguments?.[waveIndex], `${at(id)} ${host.getText(sf)}`); return; }
     if (ts.isClassDeclaration(p) && p.name === id) return;
     if ((ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) && p.propertyName === undefined) return;
     if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && p.right === id) return;
     if (ts.isTypeReferenceNode(p)) return;
     out.unread.push(`${at(id)} ${id.text} used as ${ts.SyntaxKind[p.kind]}`);
   };
+  const classifyRoute = (id: TS.Identifier): void => {
+    const p = id.parent;
+    if (ts.isCallExpression(p) && p.expression === id) { readSite(p.arguments[0], `${at(id)} ${p.getText(sf)}: routeTo's wave is not a literal`); return; }
+    if (ts.isFunctionDeclaration(p) && p.name === id) return;
+    if ((ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) && p.propertyName === undefined) return;
+    out.unread.push(`${at(id)} ${ROUTE_CALL} used as ${ts.SyntaxKind[p.kind]}`);
+  };
+  const literals: TS.Node[] = [];
   const visit = (n: TS.Node): void => {
-    if (ts.isIdentifier(n) && Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
+    if (ts.isIdentifier(n)) {
+      if (Object.hasOwn(DEFERRALS, n.text)) classify(n, DEFERRALS[n.text]!);
+      else if (n.text === ROUTE_CALL) classifyRoute(n);
+    } else if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) {
+      if (WAVE_TOKEN.test(n.text)) literals.push(n);
+    }
     ts.forEachChild(n, visit);
   };
   visit(sf);
+  for (const n of literals) {
+    if (!declared.has(n)) out.unread.push(`${at(n)} stray wave literal ${n.getText(sf)}: name a wave only through routeTo or a deferral class`);
+  }
   return out;
 }
 /** A Status-table state that is still owed work. Markdown emphasis is not part of the state. */
 const isOpen = (state: string): boolean => /^(not started|in progress|awaiting)/i.test(state.replace(/[*_]/g, "").trim());
+/** _INDEX.md's Status table: wave → state. */
+function statusRows(): Map<string, string> {
+  const start = INDEX.indexOf("## Status");
+  const status = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1));
+  return new Map([...status.matchAll(/^\| (W[\w-]+) \| [^|]* \| (.*) \|$/gm)].map((m) => [m[1]!, m[2]!]));
+}
+/** The guard's judgement, apart from the tree it reads: nothing unread, at
+ *  least one route read BY THE MODULE SCAN (R25: zero read is a failure, never
+ *  "no deferral sites" — false premise 8; the scan's floor is its own, so the
+ *  JSON's routes can never stand in for a walk that read nothing, T1-R1), and
+ *  every wave a route names has an open Status row. `alsoNamed`: waves the
+ *  catalogue's data names (knownNoPath / l2NoPath), judged too but not counted
+ *  as routes read. */
+function judgeRoutes(scans: readonly RouteScan[], jsonRoutes: readonly string[], rows: ReadonlyMap<string, string>, alsoNamed: readonly string[] = []): { read: number; waves: string[] } {
+  expect(scans.flatMap((s) => s.unread), "a route names its wave in a shape this guard cannot read, or a bare wave literal sits outside routeTo").toEqual([]);
+  const scanned = scans.reduce((n, s) => n + s.sites, 0);
+  expect(scanned, "routes read across every construct by the module scan").toBeGreaterThan(0);
+  const read = scanned + jsonRoutes.length;
+  const waves = [...new Set([...scans.flatMap((s) => s.waves), ...jsonRoutes, ...alsoNamed])];
+  for (const w of waves) {
+    expect(rows.has(w), `${w} has no status row in _INDEX.md`).toBe(true);
+    expect(isOpen(rows.get(w)!), `${w}: "${rows.get(w)}" is not open`).toBe(true);
+  }
+  return { read, waves };
+}
 /** Every module the harness ships (test files and fixtures excluded). */
 const shipped = (d: string): string[] => readdirSync(d, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? (e.name === "__tests__" ? [] : shipped(join(d, e.name)))
     : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [join(d, e.name)] : []);
 
-describe("Q-A guard — the deferral reader", () => {
-  it("reads a literal wave, DRIVING_WAVE by value, RowBuildDeferred's second argument, and a namespaced class", () => {
-    expect(scanDeferrals(`throw new ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
-    expect(scanDeferrals(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`)).toEqual({ sites: 1, waves: [DRIVING_WAVE], unread: [] });
-    expect(scanDeferrals(`throw new RowBuildDeferred("ladder", "W7");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
-    expect(scanDeferrals(`import * as T from "./types.ts";\nthrow new T.ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+describe("Q-A guard — the route reader", () => {
+  it("empty case first: an empty source reads no route and nothing unread", () => {
+    expect(scanRoutes("")).toEqual({ sites: 0, waves: [], unread: [] });
+  });
+  it("reads a literal wave, RowBuildDeferred's second argument, and a namespaced class — and, DRIVING_WAVE being gone (Task 13), an identifier wave is unread", () => {
+    expect(scanRoutes(`throw new ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+    const gone = scanRoutes(`throw new ScenarioUnsupported(DRIVING_WAVE, "x");`);
+    expect([gone.sites, gone.waves, gone.unread.length]).toEqual([1, [], 1]);
+    expect(scanRoutes(`throw new RowBuildDeferred("ladder", "W7");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
+    expect(scanRoutes(`import * as T from "./types.ts";\nthrow new T.ScenarioUnsupported("W3", "x");`)).toEqual({ sites: 1, waves: ["W3"], unread: [] });
+  });
+  it("reads routeTo(<literal>, …) and the four deferral classes, NoOrganiserPath and ModelUnsupported included", () => {
+    expect(scanRoutes(`export const r = routeTo("W4", "why");`)).toEqual({ sites: 1, waves: ["W4"], unread: [] });
+    expect(scanRoutes(`throw new NoOrganiserPath("W2", "x");`)).toEqual({ sites: 1, waves: ["W2"], unread: [] });
+    expect(scanRoutes(`throw new ModelUnsupported("W7", "x");`)).toEqual({ sites: 1, waves: ["W7"], unread: [] });
+    // A route by identifier: the one construct's declaration and imports are not sites.
+    expect(scanRoutes(`import { routeTo } from "./routing.ts";\nexport function routeTo(wave: string, why: string) { return { wave, why }; }\nconst r = routeTo("W1-driving", "why");`))
+      .toEqual({ sites: 1, waves: ["W1-driving"], unread: [] });
   });
   it("ignores what constructs nothing: the declaration, a plain import, instanceof, a type, a comment, a string", () => {
     const src = [
       `import { ScenarioUnsupported, RowBuildDeferred } from "./types.ts";`,
       `export class ScenarioUnsupported extends Error {}`,
       `// a comment: new ScenarioUnsupported("W1a", "x")`,
-      `const name = "new RowBuildDeferred(row, \\"W1a\\")";`,
+      // A string that spells a construction is not a site (one that names a wave is a stray: T1-R2).
+      `const name = "new RowBuildDeferred(row, wave)";`,
       `function f(e: ScenarioUnsupported | RowBuildDeferred) { return e instanceof ScenarioUnsupported; }`,
     ].join("\n");
-    expect(scanDeferrals(src)).toEqual({ sites: 0, waves: [], unread: [] });
+    expect(scanRoutes(src)).toEqual({ sites: 0, waves: [], unread: [] });
   });
   it("refuses what hides the wave: an unreadable argument, a missing one, a subclass, an import alias, a value alias, Reflect.construct", () => {
     const hidden = {
@@ -630,10 +776,50 @@ describe("Q-A guard — the deferral reader", () => {
       unterminatedTemplate: `const s = \`never closed\nthrow new ScenarioUnsupported("W1a", "x");`,
     };
     for (const [shape, src] of Object.entries(hidden)) {
-      const scan = scanDeferrals(src);
+      const scan = scanRoutes(src);
       expect(scan.unread.length, `${shape}: ${JSON.stringify(scan)}`).toBeGreaterThan(0);
       expect(scan.waves, shape).not.toContain("W1a");
     }
+  });
+  it("a stray wave literal is refused by name: a map value, a const, a template, a W1-driving substring, a wave inside prose", () => {
+    const stray = {
+      mapValue: `const M = { D1: "W9" };`,
+      constant: `export const OVERRIDE = "W1-driving";`,
+      template: "const t = `W4`;",
+      substring: `const s = "owed to W1-driving later";`,
+      routedTo: `const c = { routedTo: "W2" };`,
+      // A template span, not a whole literal: "rosters are W1-driving" in a message.
+      span: "const m = `model: ${sport} fields teams — rosters are W1-driving`;",
+      // A routeTo's WHY that names the wave is a stray too: the wave is argument 0's alone.
+      why: `const r = routeTo("W2", "owed to W1-driving");`,
+      // T1-R2: any wave inside prose, not only W1-driving — the shapes the tree carried at 00c2d8199.
+      prose: "const m = `the tieBoard:'draw' shape lands with W2's carrom rulebook`;",
+      closedOwner: `const o = "W1c (no task owns it)";`,
+      trailing: `const w = "the engine refuses the cfg: a rulebook question for W2";`,
+      // A wave-shaped token that is no programme wave is refused too, never read as prose.
+      notAWave: `const a = "W11";`,
+    };
+    let refused = 0;
+    for (const [shape, src] of Object.entries(stray)) {
+      const scan = scanRoutes(src);
+      expect(scan.unread.some((u) => u.includes("stray wave literal")), `${shape}: ${JSON.stringify(scan)}`).toBe(true);
+      refused++;
+    }
+    expect(refused).toBe(Object.keys(stray).length);
+  });
+  it("a routeTo whose wave is not a literal is unread (a variable hides the wave), and so is routeTo passed as a value", () => {
+    expect(scanRoutes(`const w = pick(); routeTo(w, "x");`).unread.length).toBeGreaterThan(0);
+    expect(scanRoutes(`const w = pick(); routeTo(w, "x");`).sites).toBe(1);
+    expect(scanRoutes(`routeTo();`).unread.length).toBeGreaterThan(0);
+    expect(scanRoutes(`const r = routeTo; r(pick(), "x");`).unread.length).toBeGreaterThan(0);
+  });
+  it("text that only looks like a wave is not a site: a lowercase set name, a W inside a word, a W with no digit, a comment", () => {
+    expect(scanRoutes(`const b = "w1-driving"; const c = "AW2"; const d = "W3C"; const e = "Wave"; // routeTo("W4", "x")`)).toEqual({ sites: 0, waves: [], unread: [] });
+  });
+  it("every programme wave id in the index is a wave token (the stray arm cannot miss a real wave)", () => {
+    const rows = [...statusRows().keys()].filter((w) => w !== "Wave");
+    expect(rows.length, "Status rows read").toBeGreaterThan(0);
+    for (const w of rows) expect(scanRoutes(`const x = "${w}";`).unread.some((u) => u.includes("stray wave literal")), w).toBe(true);
   });
   it("a Status state is open when it says not started / in progress / awaiting, with or without emphasis", () => {
     // W1b's and W1a's cells as written on 2026-09-28, then the plain forms.
@@ -645,25 +831,74 @@ describe("Q-A guard — the deferral reader", () => {
   });
 });
 
-describe("Q-A guard — a deferral or an owning wave never names a finished wave (ruling 28)", () => {
-  it("every wave a deferral or the catalogue's knownNoPath / l2NoPath names has an _INDEX status row that is open", () => {
-    const start = INDEX.indexOf("## Status");
-    const status = INDEX.slice(start, INDEX.indexOf("\n## ", start + 1));
-    const rows = new Map([...status.matchAll(/^\| (W[\w-]+) \| [^|]* \| (.*) \|$/gm)].map((m) => [m[1]!, m[2]!]));
+describe("Q-A guard — the judgement, apart from the tree", () => {
+  it("empty case first: zero routes read is a failure, never a pass (R25)", () => {
+    const rows = statusRows();
+    expect(rows.size).toBeGreaterThan(0);
+    expect(() => judgeRoutes([], [], rows)).toThrow(/routes read across every construct/);
+    // A scan that read nothing is still zero, whatever the catalogue's data names.
+    expect(() => judgeRoutes([{ sites: 0, waves: [], unread: [] }], [], rows, ["W2"])).toThrow(/routes read across every construct/);
+  });
+  it("T1-R1: a walk over modules that reads 0 routes fails on its own floor, whatever counts.json routes", () => {
+    // Synthetic open rows (W1-driving Task 16): the real W1-driving row is
+    // closed now, and this test is about the floor, not about the index.
+    const rows = new Map([["W2", "not started"], ["W1-driving", "in progress"]]);
+    // Two modules that name no wave: the walk found files, and read nothing.
+    const walk = ["export const a = 1;", "export const b = 'x';"].map((src, i) => scanRoutes(src, `m${i}.ts`));
+    expect(walk.map((w) => w.sites)).toEqual([0, 0]);
+    expect(() => judgeRoutes(walk, ["W2", "W1-driving"], rows)).toThrow(/routes read across every construct by the module scan/);
+    expect(() => judgeRoutes([{ sites: 0, waves: [], unread: [] }], ["W2"], rows)).toThrow(/by the module scan/);
+    // The positive pair: one route read by the walk, and the same JSON routes pass.
+    expect(judgeRoutes([...walk, scanRoutes(`routeTo("W2", "why");`, "m2.ts")], ["W2", "W1-driving"], rows).read).toBe(3);
+  });
+  it("a route to a wave whose Status row is closed fails naming the row; the same route to an open row passes", () => {
+    // Synthetic rows: never the real W1-driving row, which Task 16 closes.
+    const one: RouteScan[] = [{ sites: 1, waves: ["W1-driving"], unread: [] }];
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "done"]]))).toThrow(/W1-driving: "done" is not open/);
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "**Tasks 1–16 done** — merged"]]))).toThrow(/W1-driving: .* is not open/);
+    expect(judgeRoutes(one, [], new Map([["W1-driving", "**in progress** — plan"]]))).toEqual({ read: 1, waves: ["W1-driving"] });
+    // A counts.json route and a catalogue-named wave are judged the same way.
+    expect(() => judgeRoutes([{ sites: 1, waves: [], unread: [] }], ["W1-driving"], new Map([["W1-driving", "done"]]))).toThrow(/W1-driving: "done" is not open/);
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "in progress"], ["W9", "done"]]), ["W9"])).toThrow(/W9: "done" is not open/);
+    expect(() => judgeRoutes(one, [], new Map([["W1-driving", "in progress"]]), ["W9"])).toThrow(/W9 has no status row/);
+  });
+  it("an unread route fails the judgement, whatever else was read", () => {
+    const rows = new Map([["W2", "not started"]]);
+    expect(() => judgeRoutes([{ sites: 2, waves: ["W2"], unread: ["x.ts:1 stray wave literal \"W2\""] }], [], rows)).toThrow(/cannot read, or a bare wave literal/);
+  });
+});
+
+describe("Q-A guard — a route never names a finished wave (ruling 28)", () => {
+  it("every wave a route names — routeTo, a deferral class, the catalogue's knownNoPath / l2NoPath, counts.json's routedTo — has an _INDEX status row that is open", () => {
+    const rows = statusRows();
     expect(rows.size).toBeGreaterThan(0);
     const modules = shipped(resolve(REPO, "scripts/matrix"));
     expect(modules.length).toBeGreaterThan(0);
-    const scans = modules.map((f) => scanDeferrals(readFileSync(f, "utf8"), f));
-    // A site whose wave the reader cannot see would be skipped silently.
-    expect(scans.flatMap((s) => s.unread), "a deferral names its wave in a shape this guard cannot read").toEqual([]);
-    expect(scans.reduce((n, s) => n + s.sites, 0)).toBeGreaterThan(0);
-    const deferred = new Set(scans.flatMap((s) => s.waves));
-    const owing = new Set(ATOMIC.flatMap((a) => [a.knownNoPath, a.l2NoPath]).filter((w): w is string => w !== null));
-    expect(deferred.size).toBeGreaterThan(0);
-    expect(owing.size).toBeGreaterThan(0);
-    for (const w of new Set([...deferred, ...owing])) {
-      expect(rows.has(w), `${w} has no status row in _INDEX.md`).toBe(true);
-      expect(isOpen(rows.get(w)!), `${w}: "${rows.get(w)}" is not open`).toBe(true);
-    }
+    const scans = modules.map((f) => scanRoutes(readFileSync(f, "utf8"), f));
+    const counts = JSON.parse(readFileSync(resolve(REPO, "scripts/matrix/catalogue/counts.json"), "utf8")) as { variants: Record<string, unknown> };
+    const jsonRoutes = Object.values(counts.variants).flatMap((v) => (v !== null && typeof v === "object" && typeof (v as { routedTo?: unknown }).routedTo === "string" ? [(v as { routedTo: string }).routedTo] : []));
+    // The reader is not blind to the JSON: counts.json routes its unscorable variant lists (committed-catalogue.test.ts).
+    expect(jsonRoutes.length, "counts.json routes read").toBeGreaterThan(0);
+    const owing = ATOMIC.flatMap((a) => [a.knownNoPath, a.l2NoPath]).filter((w): w is string => w !== null);
+    expect(owing.length).toBeGreaterThan(0);
+    const { read, waves } = judgeRoutes(scans, jsonRoutes, rows, owing);
+    console.info(`Q-A guard: ${read} routes read (${read - jsonRoutes.length} in ${modules.length} modules, ${jsonRoutes.length} in counts.json); waves ${waves.join(", ")}`);
+  });
+});
+
+// W1-driving Task 13: the last W1-driving routes are retired (DRIVING_ROUTE /
+// DRIVING_WAVE, TEMPLATE_DRIVING). FP-1: the one T13 left, lib/model/state.ts's
+// MODEL_ROSTERS (PF-3), was Task 14's: the model fields team rosters now
+// (ruling 49), so the route is gone and nothing names the wave. Reuses
+// scanRoutes, so a comment citing the wave is never a site (a raw text grep
+// would read it).
+describe("Q-A guard — no route names W1-driving (W1-driving Tasks 13 and 14)", () => {
+  it("no route names W1-driving anywhere in the shipped harness (Task 14 retired the model's rosters route, FP-1)", () => {
+    const root = resolve(REPO, "scripts/matrix");
+    const scans = shipped(root).map((f) => ({ file: f.slice(root.length + 1), scan: scanRoutes(readFileSync(f, "utf8"), f) }));
+    expect(scans.reduce((n, s) => n + s.scan.sites, 0)).toBeGreaterThan(0);
+    expect(scans.flatMap((s) => s.scan.unread)).toEqual([]);
+    const naming = scans.flatMap((s) => s.scan.waves.filter((w) => w === "W1-driving").map(() => s.file));
+    expect(naming).toEqual([]);
   });
 });

@@ -16,7 +16,10 @@ import { findSecrets } from "../lib/redact.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { decideState, parseResults, stringsIn, type CaseResultV2 } from "../lib/results.ts";
 import { L2_WIDTHS } from "../lib/widths.ts";
-import { LOCK_PATH, PLAN_BEFORE_CARRY_6, REPO, TRUTH_RUNS, committedRuns, freeze, judgeRun, noVariant, planFor, readLock, reDecide, sweepCommitted, thawed, trackedUnder } from "./committed-plans.ts";
+import { layerCaseId } from "../lib/layers.ts";
+import { W1_DRIVING_SET, w1DrivingPlanner } from "../lib/w1-driving-set.ts";
+import { SETS } from "../run.ts";
+import { LOCK_PATH, PLAN_BEFORE_CARRY_6, REPO, TRUTH_RUNS, committedRuns, freeze, judgeRun, livePlan, noVariant, planFor, readLock, reDecide, sweepCommitted, thawed, trackedUnder } from "./committed-plans.ts";
 import { loopbackLiteralsIn } from "./loopback-literals.ts";
 
 /** Every committed slice: its wave and its directory under truth-runs. */
@@ -269,6 +272,23 @@ describe("each committed run, judged against its own plan (W1c Task 14 fix round
     expect(runs.filter((r) => lock.runs[r.dir]!.plan !== r.plan).map((r) => `${r.dir}: ran ${JSON.stringify(r.plan)}, frozen as "${lock.runs[r.dir]!.plan}"`)).toEqual([]);
     expect(frozen.length).toBe(runs.length);
     expect(runs.length).toBeGreaterThanOrEqual(RESULTS_FLOOR);
+  });
+  it("livePlan reads every --set the runner registers (run.ts SETS), each as that set's own planner plans it — so a new set's run can be frozen (T13-R1 I-1)", () => {
+    let checked = 0;
+    for (const [name, planner] of Object.entries(SETS)) {
+      const out = planner({});
+      const ids = "layered" in out ? out.layered((s) => s).map(layerCaseId) : out.plan((s) => s).map((c) => c.caseId);
+      const p = livePlan(`--set ${name}`);
+      expect(p.layered, name).toBe("layered" in out);
+      expect([...p.driven, ...p.planned.keys()].sort(), name).toEqual(ids.map(noVariant).sort());
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(SETS).length);
+    expect(checked).toBeGreaterThan(0);
+    // --set w1-driving is the one set that takes filters (run.ts planOf): one cell × one script is one case.
+    const one = livePlan(`--set ${W1_DRIVING_SET} --only league|football --scenario LIFECYCLE`);
+    expect([...one.driven]).toEqual(w1DrivingPlanner({ only: "league|football", scenario: "LIFECYCLE" }).plan((s) => s).map((c) => noVariant(c.caseId)));
+    expect([...one.driven]).toEqual(["league|football|LIFECYCLE"]);
   });
   it("every committed results.json is exactly its FROZEN plan: each driven case re-decided, each planned row the plan's own", () => {
     const files = trackedUnder(TRUTH_RUNS).filter((f) => f.endsWith("/results.json"));

@@ -1,8 +1,12 @@
-// Every sport × declared variant × {league, knockout, swiss} × 6 outcomes:
+// Every sport × declared variant × {league, knockout, swiss} × 7 outcomes:
 // generate, FOLD through the real module (strict), and demand the folded
 // outcome equals the request. Draw reachability comes from supportsDraws, not
-// a table (R9). Gaps the generators knowingly leave are a COMMITTED list whose
-// staleness is checked in both directions.
+// a table (R9); tie reachability from the engine's own source and decideTie.
+// Gaps the generators knowingly leave are a COMMITTED list whose staleness is
+// checked in both directions (empty since ruling 44).
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { describe, expect, it } from "vitest";
@@ -10,14 +14,28 @@ import { CfgInvalid, drawsAllowed, resolveSportCfg, sportModule, variantKeys } f
 import { foldStream } from "../lib/fold.ts";
 import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
-import { AllOutUndeclared, declaredAllOut } from "../lib/streams/cricket.ts";
+import { AllOutUndeclared, TEST_BALLS, cricketGenerator, declaredAllOut } from "../lib/streams/cricket.ts";
 import { stagesForRow } from "../lib/catalogue.ts";
-import { buildSportVariants } from "../lib/variants.ts";
+import { buildSportVariants, offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
 import { footballPhases } from "../lib/streams/football.ts";
 import { periodLabels } from "../lib/streams/period.ts";
 import {
   ALL_OUTCOMES, GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel, type RequestedOutcome, type StreamRequest,
 } from "../lib/streams/types.ts";
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** Engine sport directories with a non-test source that emits a `kind: "tie"`
+ *  outcome — read from the engine's own text, never from the generators, so a
+ *  sport whose engine can end level but whose generator declares no tied()
+ *  reds the sweep instead of hiding behind OutcomeUnreachable. */
+const SPORTS_SRC = resolve(REPO, "packages/engine/src/sports");
+const TIE_SPORTS = new Set((readdirSync(SPORTS_SRC, { recursive: true }) as string[])
+  .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts") && !p.split(sep).includes("__tests__"))
+  .filter((p) => /kind:\s*"tie"/.test(readFileSync(resolve(SPORTS_SRC, p), "utf8")))
+  .map((p) => p.split(sep)[0]!));
+/** A tie is unreachable where the engine never emits one, or where its level
+ *  score opens a super over instead (cricket decideTie, cricket.ts:935-946). */
+const tieUnreachable = (req: StreamRequest): boolean => !TIE_SPORTS.has(req.sportKey) || (req.cfg as { superOver?: unknown }).superOver === true;
 
 const STAGES: readonly StageKind[] = ["league", "knockout", "swiss"];
 const CASES = builtinModules.flatMap((m) =>
@@ -39,7 +57,7 @@ const thrownUnsupported = new Set<string>();
 const folded = new Set<string>();
 
 describe("stream sweep — discovery first (an empty sweep passes vacuously, R13/R25)", () => {
-  it("covers all 11 sports, every declared variant, 3 stage kinds, 6 outcomes", () => {
+  it("covers all 11 sports, every declared variant, 3 stage kinds, 7 outcomes", () => {
     expect(new Set(CASES.map((c) => c.req.sportKey)).size).toBe(11);
     const variants = builtinModules.reduce((n, m) => n + variantKeys(m.key).length, 0);
     expect(CASES.length).toBe(variants * STAGES.length * ALL_OUTCOMES.length);
@@ -54,6 +72,10 @@ describe("stream sweep", () => {
       events = generateStream(req);
     } catch (e) {
       if (e instanceof OutcomeUnreachable) {
+        if (req.outcome.kind === "tie") {
+          expect(tieUnreachable(req), `${key}: a tie the engine can reach was refused`).toBe(true);
+          return;
+        }
         expect(req.outcome.kind).toBe("draw");
         expect(drawsAllowed(req.sportKey, req.cfg, req.stageKind)).toBe(false);
         return;
@@ -74,6 +96,7 @@ describe("stream sweep", () => {
     }
     const result = foldStream(m, req.cfg, "H", "A", events); // strict: throws on an unreachable score
     expect(matchesRequest(req, result.outcome), key).toBe(req.outcome.kind === "abandon" ? "unasserted" : "match");
+    if (req.outcome.kind === "tie") expect(tieUnreachable(req), `${key}: a tie generated where the engine cannot end level`).toBe(false);
     folded.add(key);
   });
 
@@ -85,6 +108,15 @@ describe("stream sweep", () => {
     for (const m of builtinModules) {
       const decided = [...folded].filter((k) => k.startsWith(`${m.key}:`) && /:win-(home|away)$/.test(k));
       expect(decided.length, `${m.key}: no win row folded`).toBeGreaterThan(0);
+    }
+  });
+
+  it("the sweep folded a tie row for every sport whose engine can end level, and for no other (ruling 44)", () => {
+    expect(TIE_SPORTS.size).toBeGreaterThan(0);
+    for (const m of builtinModules) {
+      const ties = [...folded].filter((k) => k.startsWith(`${m.key}:`) && k.endsWith(":tie"));
+      if (TIE_SPORTS.has(m.key)) expect(ties.length, `${m.key}: no tie row folded`).toBeGreaterThan(0);
+      else expect(ties, m.key).toEqual([]);
     }
   });
 });
@@ -222,15 +254,18 @@ function declaredWicketsMax(cfg: unknown): number {
 }
 function cricketWins(cfg: unknown, stageKind: StageKind, label: string): number {
   let n = 0;
+  const innings = 2 * (cfg as { inningsPerSide: number }).inningsPerSide;
   for (const outcome of WINS) {
     const req: StreamRequest = { sportKey: "cricket", cfg, stageKind, home: "H", away: "A", outcome };
     const events = generateStream(req);
     const max = declaredWicketsMax(cfg);
     const summaries = events.filter((e) => e.type === SUMMARY).map((e) => e.payload as { wickets: number });
-    expect(summaries.length, label).toBe(2);
+    // One summary per innings; a two-innings innings victory ends an innings early.
+    expect(summaries.length, label).toBeLessThanOrEqual(innings);
+    expect(summaries.length, label).toBeGreaterThanOrEqual(innings === 2 ? 2 : innings - 1);
     for (const s of summaries) expect(s.wickets, `${label} ${outcomeLabel(outcome)}`).toBeLessThanOrEqual(max);
     // A chase that wins has a wicket in hand: the side is not all out.
-    if (outcome.kind === "win" && outcome.winner === "away") expect(summaries[1]?.wickets, label).toBeLessThan(max);
+    if (outcome.kind === "win" && outcome.winner === "away") expect(summaries.at(-1)?.wickets, label).toBeLessThan(max);
     expect(matchesRequest(req, foldStream(sportModule("cricket"), cfg, "H", "A", events).outcome), `${label} ${outcomeLabel(outcome)}`).toBe("match");
     n++;
   }
@@ -245,17 +280,14 @@ describe("cricket wickets follow playersPerSide (T8 RR-1)", () => {
     let twoInnings = 0;
     for (const vc of vs.cases) {
       const cfg = resolveSportCfg("cricket", vc.preset, { ...vc.overrides }) as { playersPerSide: number; inningsPerSide: number };
-      if (cfg.inningsPerSide !== 1) {
-        // Two innings: a KNOWN generator gap (W1-driving), refused by name.
-        expect(() => generateStream({ sportKey: "cricket", cfg, stageKind: "league", home: "H", away: "A", outcome: { kind: "win", winner: "home" } }), vc.id).toThrow(GeneratorUnsupported);
-        twoInnings++;
-        continue;
-      }
-      folded += cricketWins(cfg, stagesForRow(vc.row)[0]!.kind as StageKind, `${vc.id} (${cfg.playersPerSide} a side)`);
+      // Two innings a side folds too since ruling 44 (no generator gap left).
+      if (cfg.inningsPerSide === 2) twoInnings++;
+      folded += cricketWins(cfg, stagesForRow(vc.row)[0]!.kind as StageKind, `${vc.id} (${cfg.playersPerSide} a side, ${cfg.inningsPerSide} innings)`);
       sizes.add(cfg.playersPerSide);
     }
     expect(folded).toBeGreaterThan(0);
-    expect(folded / WINS.length + twoInnings).toBe(vs.cases.length);
+    expect(twoInnings, "the sweep holds no two-innings case to witness ruling 44 with").toBeGreaterThan(0);
+    expect(folded / WINS.length).toBe(vs.cases.length);
     // Load-bearing: the set holds a side too short for the old hard-coded 5
     // wickets (all-out below 5), or this sweep cannot witness RR-1.
     expect([...sizes].some((n) => declaredWicketsMax(resolveSportCfg("cricket", "t20", { playersPerSide: n })) < 5), [...sizes].join(",")).toBe(true);
@@ -306,4 +338,131 @@ describe("label derivations — empty/degenerate first", () => {
     expect(footballPhases(4)).toEqual(["QT", "HT", "3QT", "FT"]);
     expect(footballPhases(3)).toBeNull();
   });
+});
+
+describe("cricket two-innings and tie (ruling 44, D4)", () => {
+  // State transitions and empty case first: a `test` cfg asked for EVERY
+  // outcome (win either side, draw, tie) on a stage that allows the draw and
+  // one that refuses it; then the variations the right answer depends on —
+  // the follow-on on/off/out of reach, the super over on, a sport with no tie.
+  /** The 24 committed `test`-preset cases (ruling 31), read from the committed catalogue as the other tests read it. */
+  const testCases = (): VariantCase[] =>
+    (JSON.parse(readFileSync(resolve(REPO, "scripts/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: VariantCase[] }[] })
+      .sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test");
+  const LEVEL = ALL_OUTCOMES.filter((o) => o.kind === "win" || o.kind === "draw" || o.kind === "tie");
+
+  it("empty case first: the preset itself (no overrides) folds every reachable outcome, and the knockout draw is the one refused", () => {
+    const cfg = resolveSportCfg("cricket", "test");
+    expect((cfg as { ballsPerInnings: unknown }).ballsPerInnings).toBeNull(); // the TEST_BALLS premise, from the engine preset
+    const got: string[] = [];
+    for (const stageKind of ["league", "knockout"] as const) {
+      for (const outcome of LEVEL) {
+        const req = { sportKey: "cricket", cfg, stageKind, home: "h", away: "a", outcome };
+        try {
+          const events = generateStream(req);
+          expect(events.filter((e) => e.type === SUMMARY).every((e) => (e.payload as { legalBalls: number }).legalBalls <= TEST_BALLS)).toBe(true);
+          expect(matchesRequest(req, foldStream(sportModule("cricket"), cfg, "h", "a", events).outcome), `${stageKind} ${outcomeLabel(outcome)}`).toBe("match");
+          got.push(`${stageKind}:${outcomeLabel(outcome)}`);
+        } catch (e) {
+          expect(e, `${stageKind} ${outcomeLabel(outcome)}`).toBeInstanceOf(OutcomeUnreachable);
+          got.push(`${stageKind}:${outcomeLabel(outcome)}:unreachable`);
+        }
+      }
+    }
+    // Draw reachability is the engine's (supportsDraws), never a table: only where it answers false is the draw refused.
+    const expected = (["league", "knockout"] as const).flatMap((k) => LEVEL.map((o) => `${k}:${outcomeLabel(o)}${o.kind === "draw" && !drawsAllowed("cricket", cfg, k) ? ":unreachable" : ""}`));
+    expect(got).toEqual(expected);
+    expect(got.filter((g) => g.endsWith(":unreachable"))).toEqual(["knockout:draw:unreachable"]);
+  });
+
+  it("the 24 committed test-preset cases each fold every reachable outcome to the requested result — counted", () => {
+    let folded = 0;
+    const cases = testCases();
+    expect(cases.length).toBe(24);
+    for (const vc of cases) {
+      const cfg = resolveSportCfg("cricket", "test", vc.overrides);
+      for (const stageKind of ["league", "knockout"] as const) {
+        for (const outcome of LEVEL) {
+          const req = { sportKey: "cricket", cfg, stageKind, home: "h", away: "a", outcome };
+          let events;
+          try { events = generateStream(req); } catch (e) {
+            expect(e, `${vc.id} ${stageKind} ${outcomeLabel(outcome)}`).toBeInstanceOf(OutcomeUnreachable);
+            expect(outcome.kind === "draw" && !drawsAllowed("cricket", cfg, stageKind), `${vc.id}: only a refused draw may be unreachable here`).toBe(true);
+            continue;
+          }
+          expect(matchesRequest(req, foldStream(sportModule("cricket"), cfg, "h", "a", events).outcome), `${vc.id} ${stageKind} ${outcomeLabel(outcome)}`).toBe("match");
+          folded++;
+        }
+      }
+    }
+    expect(folded).toBeGreaterThan(cases.length * 2);
+    console.info(`streams: ${folded} two-innings outcomes folded across the ${cases.length} committed test cases`);
+  });
+
+  it("a cfg with an over limit (most committed test cases override ballsPerInnings) keeps every innings inside it; with none, TEST_BALLS — both arms reached", () => {
+    let checked = 0;
+    for (const vc of testCases()) {
+      const cfg = resolveSportCfg("cricket", "test", vc.overrides) as { ballsPerInnings: number | null };
+      for (const outcome of LEVEL) {
+        let events;
+        try { events = generateStream({ sportKey: "cricket", cfg, stageKind: "league", home: "h", away: "a", outcome }); } catch { continue; }
+        for (const e of events.filter((x) => x.type === SUMMARY)) {
+          expect((e.payload as { legalBalls: number }).legalBalls, vc.id).toBeLessThanOrEqual(cfg.ballsPerInnings ?? TEST_BALLS);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    // Both arms: some committed cases set a quota (the strict fold refuses legalBalls above it, cricket.ts:1686), some keep the preset's none.
+    const withQuota = testCases().filter((c) => typeof c.overrides.ballsPerInnings === "number").length;
+    expect(withQuota).toBeGreaterThan(0);
+    expect(withQuota).toBeLessThan(testCases().length);
+  });
+
+  it("win-home uses the follow-on only where the cfg enables it and the lead reaches it; the by-runs shape otherwise folds to the same winner", () => {
+    const on = resolveSportCfg("cricket", "test");
+    const off = resolveSportCfg("cricket", "test", { followOn: { enabled: false, lead: 200 } });
+    const beyond = resolveSportCfg("cricket", "test", { followOn: { enabled: true, lead: 400 } }); // the shape's lead is 300: out of reach
+    const ev = (cfg: unknown) => generateStream({ sportKey: "cricket", cfg, stageKind: "league", home: "h", away: "a", outcome: { kind: "win", winner: "home" } });
+    expect(ev(on).some((e) => e.type === "cricket.followon")).toBe(true);
+    expect(ev(off).some((e) => e.type === "cricket.followon")).toBe(false);
+    expect(ev(beyond).some((e) => e.type === "cricket.followon")).toBe(false);
+    for (const cfg of [on, off, beyond]) expect(foldStream(sportModule("cricket"), cfg, "h", "a", ev(cfg)).outcome).toMatchObject({ kind: "win", winner: "h" });
+    // The innings victory is the follow-on's own result, and the 4-innings chase is by runs.
+    expect(foldStream(sportModule("cricket"), on, "h", "a", ev(on)).outcome).toMatchObject({ method: "innings" });
+    expect(foldStream(sportModule("cricket"), off, "h", "a", ev(off)).outcome).toMatchObject({ method: "regulation" });
+  });
+
+  it("tie: limited overs folds level with superOver off, is unreachable with it on; two innings folds level too; a sport with no tied() is unreachable", () => {
+    const t20 = resolveSportCfg("cricket", "t20");
+    const test = resolveSportCfg("cricket", "test");
+    const req = (cfg: unknown, sportKey = "cricket") => ({ sportKey, cfg, stageKind: "league" as const, home: "h", away: "a", outcome: { kind: "tie" } as const });
+    expect(foldStream(sportModule("cricket"), t20, "h", "a", generateStream(req(t20))).outcome?.kind).toBe("tie");
+    expect(foldStream(sportModule("cricket"), test, "h", "a", generateStream(req(test))).outcome?.kind).toBe("tie");
+    // The guard's premise, from the engine (decideTie, cricket.ts:935-946): under a super over the same level stream does NOT end tied.
+    const t20so = resolveSportCfg("cricket", "t20", { superOver: true });
+    expect(foldStream(sportModule("cricket"), t20so, "h", "a", generateStream(req(t20))).outcome).toBeNull();
+    expect(() => generateStream(req(t20so))).toThrow(OutcomeUnreachable);
+    // Two innings cannot carry a super over (the engine's refine: "superOver requires inningsPerSide = 1");
+    // a raw cfg that claims both is still refused by the guard, never generated.
+    expect(() => resolveSportCfg("cricket", "test", { superOver: true })).toThrow(CfgInvalid);
+    expect(() => generateStream(req({ ...(test as object), superOver: true }))).toThrow(OutcomeUnreachable);
+    expect(() => generateStream(req(resolveSportCfg("badminton", offlineBuilderDefault("badminton")), "badminton"))).toThrow(OutcomeUnreachable);
+  });
+
+  it("matchesRequest's tie arm: a tie request matches a folded tie only — a win, a draw or nothing is a mismatch (preflight T10 a)", () => {
+    const r = { sportKey: "cricket", cfg: resolveSportCfg("cricket", "t20"), stageKind: "league" as const, home: "h", away: "a", outcome: { kind: "tie" } as const };
+    expect(matchesRequest(r, { kind: "tie" })).toBe("match");
+    expect(matchesRequest(r, { kind: "win", winner: "h", loser: "a" })).toBe("mismatch");
+    expect(matchesRequest(r, { kind: "draw" })).toBe("mismatch");
+    expect(matchesRequest(r, null)).toBe("mismatch");
+  });
+
+  it("a cfg that is neither one nor two innings a side is refused by name (the schema allows neither; a guard, reached)", () => {
+    const cfg = { ...(resolveSportCfg("cricket", "t20") as object), inningsPerSide: 3 };
+    expect(() => cricketGenerator.decided({ sportKey: "cricket", cfg, stageKind: "league", home: "h", away: "a", outcome: { kind: "win", winner: "home" } })).toThrow(GeneratorUnsupported);
+    expect(() => resolveSportCfg("cricket", "t20", { inningsPerSide: 3 })).toThrow(CfgInvalid);
+  });
+
+  it("KNOWN_UNSUPPORTED is empty (ruling 44)", () => { expect(KNOWN_UNSUPPORTED).toEqual([]); });
 });

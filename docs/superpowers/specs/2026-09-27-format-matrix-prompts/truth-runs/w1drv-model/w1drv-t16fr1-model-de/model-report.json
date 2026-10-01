@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "runId": "w1drv-t16fr1-model-de",
+  "harnessCommit": "22c8aa141",
+  "settings": {
+    "maxCommands": 30,
+    "timeLimitMs": 300000,
+    "regressions": false
+  },
+  "cells": [
+    {
+      "cell": "double_elim|generic",
+      "variant": "score",
+      "seed": -798828420,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "bias": null,
+      "numRuns": 17,
+      "executions": 60,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 36,
+          "accepted": 36,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 33,
+          "accepted": 13,
+          "refused": 0,
+          "expected": 20,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 21,
+          "accepted": 21,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 11,
+          "accepted": 11,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 15,
+          "accepted": 15,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 9,
+          "accepted": 5,
+          "refused": 1,
+          "expected": 3,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 6,
+          "accepted": 2,
+          "refused": 0,
+          "expected": 4,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 65,
+          "accepted": 56,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 29,
+          "accepted": 10,
+          "refused": 19,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 16,
+          "accepted": 16,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 0,
+        "I8-generate-named": 188,
+        "model-rr-orientation": 0
+      },
+      "foldParity": 177,
+      "fenced": {
+        "ko-withdraw-waiting-on-tbd": 2,
+        "ko-generate-after-roster-change": 1
+      },
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 1
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 20,
+          "evidence": [
+            "AddEntrant(43,0): POST /api/v1/divisions/883639f3-2e6e-497c-bcb7-91a7a2a3ae9f/entrants → 422 ERROR",
+            "AddEntrant(4,1): POST /api/v1/divisions/883639f3-2e6e-497c-bcb7-91a7a2a3ae9f/entrants → 422 ERROR",
+            "AddEntrant(30,0): POST /api/v1/divisions/22c8c967-3a11-4b79-81c8-ce0601aabc06/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 185,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": {
+        "check": "model-refusal-named",
+        "seed": -798828420,
+        "path": "16:3:4:3:3:5:5:4:4",
+        "replayPath": "AAABABVY:qC",
+        "commands": [
+          "Start(0,0)",
+          "Withdraw(45,0)",
+          "Generate(0,0)"
+        ],
+        "evidence": [
+          "Generate(0,0): POST /api/v1/stages/bfa0256a-74eb-4ebb-93b2-b060cb9d0d10/generate → 500 INTERNAL",
+          "POST /api/v1/stages/bfa0256a-74eb-4ebb-93b2-b060cb9d0d10/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) 764f798b-d4f5-4cfd-aa4a-35c61bae5b03 instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present"
+        ],
+        "said": "POST /api/v1/stages/bfa0256a-74eb-4ebb-93b2-b060cb9d0d10/generate → HTTP 500 INTERNAL: generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) 764f798b-d4f5-4cfd-aa4a-35c61bae5b03 instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present",
+        "known": "MB-007"
+      },
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "known-failure"
+    }
+  ],
+  "skipped": []
+}

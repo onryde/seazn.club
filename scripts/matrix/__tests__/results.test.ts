@@ -7,6 +7,7 @@ import { L2_WIDTHS } from "../lib/pairs.ts";
 import { BaseNotUrl, LOCAL_BASE, baseScrubber, findSecrets, redact } from "../lib/redact.ts";
 import { BROWSER_WIDTHS, CASE_STATES, GLYPH, SecretInResults, decideState, parseResults, writeResults, type CaseResult, type CaseResultV2, type CheckResult, type RunResults, type RunResultsV2 } from "../lib/results.ts";
 import { baseLiteralsIn, loopbackLiteralsIn } from "./loopback-literals.ts";
+import { MAX_WORKERS } from "../lib/workers.ts";
 
 /** The base every writeResults call below scrubs (FB-1): no evidence here names it unless a test says so. */
 const RUN_BASE = "http://localhost:3999";
@@ -382,6 +383,122 @@ describe("results v3 — the plan that produced a run (W1c Task 14 carry 6)", ()
     const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
     expect(() => parseResults(v2)).not.toThrow();
     expect(() => parseResults({ ...v2, plan: "slice" })).toThrow();
+  });
+});
+
+// W1-driving Task 11 (ruling 46): a run on N > 1 workers says so in its header.
+// A v3 file written before the field ran on one sign-in, so the field is
+// optional to read, and absent means one. CI-R1: committed v3 evidence now
+// holds both kinds (T15's runs carry the header), so each is held to its own
+// rule and counted.
+describe("results v3 — the run's worker count (W1-driving T11, ruling 46)", () => {
+  it("empty case first: a v3 run with no workers field (every run before T11, and every --workers 1 run) parses, and carries none", () => {
+    const old = parseResults(V3_RUN);
+    expect(old.schemaVersion).toBe(3);
+    expect("workers" in old).toBe(false);
+  });
+  it("every committed v3 results.json parses: one with no workers header carries no workers, and one with it carries that header's positive integer — at least one file of each kind", () => {
+    let without = 0;
+    let withHeader = 0;
+    for (const f of COMMITTED_RESULTS) {
+      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number; workers?: unknown };
+      if (raw.schemaVersion !== 3) continue;
+      const parsed = parseResults(raw);
+      if (!("workers" in raw)) {
+        expect("workers" in parsed, `${f}: no header, yet parsed with workers`).toBe(false);
+        without++;
+        continue;
+      }
+      expect(Number.isInteger(raw.workers) && (raw.workers as number) > 0, `${f}: workers header ${JSON.stringify(raw.workers)} is not a positive integer`).toBe(true);
+      if (parsed.schemaVersion !== 3) throw new Error(`${f}: a v3 header parsed as v${parsed.schemaVersion}`);
+      expect(parsed.workers, f).toBe(raw.workers);
+      withHeader++;
+    }
+    expect(without, "committed v3 results files with no workers header").toBeGreaterThan(0);
+    expect(withHeader, "committed v3 results files with a workers header").toBeGreaterThan(0);
+    console.info(`CI-R1: ${without} committed v3 results.json without a workers header, ${withHeader} with one`);
+  });
+  it("a worker count in 1..MAX_WORKERS parses and round-trips through writeResults unchanged", () => {
+    let checked = 0;
+    for (const workers of [2, MAX_WORKERS]) {
+      const run: RunResults = { ...V3_RUN, workers };
+      expect(parseResults(run)).toEqual(run);
+      const { path, written } = writeResults(mkdtempSync(join(tmpdir(), "fm-")), run, RUN_BASE);
+      expect(written.workers).toBe(workers);
+      expect((JSON.parse(readFileSync(path, "utf8")) as { workers: unknown }).workers).toBe(workers);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("a worker count outside 1..MAX_WORKERS, or not an integer, is refused by the v3 schema, on the field", () => {
+    let checked = 0;
+    for (const bad of [0, MAX_WORKERS + 1, 2.5, "3"]) {
+      expect(issuesOf({ ...V3_RUN, workers: bad }).some((i) => i.startsWith("workers: ")), String(bad)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+  it("v2 evidence carries no worker count: the v2 schema refuses one", () => {
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => parseResults({ ...v2, workers: 2 })).toThrow();
+  });
+});
+
+// W1-driving fix round 2 (ruling T12-R3): a shared turn that outlived its
+// deadline aborts the run, and the results say why — the turn and the case
+// whose turn it was, or the worker whose sign-in it was. The case gets no red;
+// the cases that finished are kept. Absent on every run that was not aborted.
+describe("results v3 — an aborted run says why (W1-driving fix round 2, T12-R3)", () => {
+  const PROVISION = { turn: "case-org provision (the owner's staff window)", deadlineMs: 120_000, caseId: "league|generic|score|LIFECYCLE", worker: null, inFlight: ["league|badminton|bwf|M1"] };
+  const SIGN_IN = { turn: "workers' sign-in", deadlineMs: 120_000, caseId: null, worker: 2, inFlight: [] };
+  it("empty case first: a run with no aborted field (every run that finished) parses, and carries none; no committed v3 file carries one", () => {
+    expect("aborted" in parseResults(V3_RUN)).toBe(false);
+    let v3Files = 0;
+    for (const f of COMMITTED_RESULTS) {
+      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number };
+      if (raw.schemaVersion !== 3) continue;
+      expect("aborted" in parseResults(raw), f).toBe(false);
+      v3Files++;
+    }
+    expect(v3Files).toBeGreaterThan(0);
+  });
+  it("a case's turn and a worker's sign-in each parse and round-trip through writeResults unchanged", () => {
+    let checked = 0;
+    for (const aborted of [PROVISION, SIGN_IN]) {
+      const run: RunResults = { ...V3_RUN, aborted };
+      expect(parseResults(run)).toEqual(run);
+      const { path, written } = writeResults(mkdtempSync(join(tmpdir(), "fm-")), run, RUN_BASE);
+      expect(written.aborted).toEqual(aborted);
+      expect((JSON.parse(readFileSync(path, "utf8")) as { aborted: unknown }).aborted).toEqual(aborted);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("an abort that names both a case and a worker, or neither, or no turn, or a bad deadline or worker, is refused on the field", () => {
+    const bad: unknown[] = [
+      { ...PROVISION, worker: 0 },
+      { ...PROVISION, caseId: null },
+      { ...PROVISION, turn: "" },
+      { ...PROVISION, deadlineMs: 0 },
+      { ...SIGN_IN, worker: -1 },
+      { ...SIGN_IN, worker: MAX_WORKERS },
+      { ...PROVISION, why: "extra key" },
+      // Fix round 3 (T12-R4): the cases that finished during the abort are listed, once each, never the holder.
+      (({ inFlight: _i, ...rest }) => rest)(PROVISION),
+      { ...PROVISION, inFlight: ["league|badminton|bwf|M1", "league|badminton|bwf|M1"] },
+      { ...PROVISION, inFlight: [PROVISION.caseId] },
+      { ...PROVISION, inFlight: [""] },
+    ];
+    let checked = 0;
+    for (const aborted of bad) {
+      expect(issuesOf({ ...V3_RUN, aborted }).some((i) => i.startsWith("aborted")), JSON.stringify(aborted)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+  });
+  it("v2 evidence carries no abort: the v2 schema refuses one", () => {
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => parseResults({ ...v2, aborted: PROVISION })).toThrow();
   });
 });
 

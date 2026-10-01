@@ -11,14 +11,16 @@ import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, StageKind } from "@seazn/engine/core";
 import { BRACKET_STAGE_KINDS, withdrawTableEntrant } from "@seazn/engine/competition";
+import { generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
 import { describe, expect, it } from "vitest";
 import { configKeysFor } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
-  ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, planL3, rowCounts, scenarioCounts, stageFactsOf,
+  ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
   type CellFacts, type PlannedCase, type Rule, type WitnessCell,
 } from "../lib/applicability.ts";
 import { foldStream } from "../lib/fold.ts";
+import { routeTo } from "../lib/routing.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
@@ -45,13 +47,14 @@ const TIE_SOURCE_DIRS = new Set((readdirSync(SPORTS_SRC, { recursive: true }) as
   .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts") && !p.split(sep).includes("__tests__"))
   .filter((p) => /kind:\s*"tie"/.test(readFileSync(resolve(SPORTS_SRC, p), "utf8")))
   .map((p) => p.split(sep)[0]!));
-/** The pinned text of M5's harness-gap reason (applicability.ts). */
-const TIE_GAP_REASON = "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving";
 /** A level-scores stream built WITHOUT LEVEL_PROBES: the generator's own
  *  home-win stream with the chase's runs set to the first innings' (cricket's
  *  shape, START + one summary per innings — streams/cricket.ts), folded by the
- *  real engine. A sport whose engine emits no tie (TIE_SOURCE_DIRS) is null
- *  without a fold; a stream the generator or engine refuses is "refused". */
+ *  real engine. At two innings a side (ruling 44: the generator builds them)
+ *  the first two innings made level leave the match undecided — the engine
+ *  decides only after the fourth (cricket.ts decideAfterClose). A sport whose
+ *  engine emits no tie (TIE_SOURCE_DIRS) is null without a fold; a stream the
+ *  generator or engine refuses is "refused". */
 function independentLevelFold(sport: string, cfg: Readonly<Record<string, unknown>>): string | null {
   if (!TIE_SOURCE_DIRS.has(sport)) return null;
   let win: StreamEvent[];
@@ -62,7 +65,8 @@ function independentLevelFold(sport: string, cfg: Readonly<Record<string, unknow
     throw e;
   }
   const [start, first, chase, ...rest] = win;
-  if (start?.type !== "core.start" || first?.type !== "cricket.innings.summary" || chase?.type !== "cricket.innings.summary" || rest.length > 0) {
+  const twoInnings = (cfg as { inningsPerSide?: unknown }).inningsPerSide === 2;
+  if (start?.type !== "core.start" || first?.type !== "cricket.innings.summary" || chase?.type !== "cricket.innings.summary" || (rest.length > 0 && !twoInnings)) {
     throw new Error(`independentLevelFold: ${sport}'s win stream is not START + two innings summaries — build its level stream here`);
   }
   const level = [start, first, { ...chase, payload: { ...(chase.payload as object), runs: (first.payload as { runs: number }).runs } }];
@@ -215,6 +219,31 @@ describe("applicability — predicates against the product's own declarations", 
     }
     expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
   });
+  it("F1 (an odd field) applies everywhere but a lone page playoff, whose ENGINE generator takes exactly one even size (W1-driving Task 2)", () => {
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `e${i + 1}`);
+    // The premise, from the engine: a page playoff refuses the odd field F1 seeds; a stepladder (another fixed-shape bracket) takes it — the differing case.
+    expect(() => generatePagePlayoff({ entrants: ids(7) })).toThrow(EngineError);
+    expect(generateStepladder({ entrants: ids(7) }).fixtures.length).toBe(6);
+    expect(RULES.F1!.witness).toMatchObject({ keep: { cell: "league|generic" }, drop: { cell: "page_playoff_only|generic" } });
+    let judged = 0;
+    let dropped = 0;
+    for (const row of ROW_KEYS) for (const s of SPORT_KEYS) {
+      const bodies = stagesForRow(row);
+      const lonePagePlayoff = bodies.length === 1 && bodies[0]!.kind === "page_playoff";
+      expect(RULES.F1!.when(cellFacts(row, s)), `${row}|${s}`).toBe(!lonePagePlayoff);
+      judged++;
+      if (lonePagePlayoff) dropped++;
+    }
+    expect(judged).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+    expect(dropped).toBe(SPORT_KEYS.length); // one row, every sport
+    // A multi-stage row that ENDS in a page playoff seeds its first stage, not the playoff: F1 still applies.
+    expect(stagesForRow("group_playoffs").some((b) => b.kind === "page_playoff")).toBe(true);
+    expect(RULES.F1!.when(cellFacts("group_playoffs", "generic"))).toBe(true);
+    // The planned drops carry it, kind inapplicable, one per sport.
+    const f1 = base.drops.filter((d) => d.scenario === "F1");
+    expect(f1.map((d) => d.cell).sort()).toEqual(SPORT_KEYS.map((s) => `page_playoff_only|${s}`).sort());
+    for (const d of f1) expect(d, d.cell).toMatchObject({ kind: "inapplicable", reason: expect.stringMatching(/odd field cannot enter a fixed 4-seat page playoff/) });
+  });
   it("M5 applies exactly where a DRAW the sport allows somewhere is refused by some stage (supportsDraws), or a TIE the engine folds reaches a bracket stage (registry sweep)", () => {
     let judged = 0;
     let draw = 0;
@@ -297,47 +326,42 @@ describe("M5's tie arm — a level result supportsDraws does not declare (I-1)",
     expect(ladder.length).toBeGreaterThan(0);
     for (const d of ladder) expect(d.reason, d.cell).toContain("a ladder's order moves only on a winner");
   });
-  it("the harness cannot drive a tie yet, so every cricket bracket cell DROPS M5 with the TRUE reason; no cricket cell says it never ends level", () => {
+  it("the harness drives a tie now (ruling 44): every cricket bracket cell PLANS M5, no rule carries a harness gap, and no cricket cell says it never ends level", () => {
     // single-sport: cricket is the only sport whose engine emits a tie.
-    expect(ALL_OUTCOMES.map((o) => o.kind as string)).not.toContain("tie"); // the gap's premise
+    expect(ALL_OUTCOMES.map((o) => o.kind as string)).toContain("tie"); // the gap's premise is gone
+    expect(Object.entries(RULES).filter(([, r]) => r.gap !== undefined).map(([id]) => id)).toEqual([]);
+    expect(base.drops.filter((x) => x.kind === "harness-gap")).toEqual([]);
+    // The tie arm reaches a bracket at the builder default, so the bracket rows plan M5 unbound.
+    const def = offlineBuilderDefault("cricket");
+    const testCfg = resolveSportCfg("cricket", "test") as Record<string, unknown>;
     let bracketRows = 0;
+    let drawRows = 0;
+    let dropped = 0;
     for (const row of ROW_KEYS) {
+      const planned = base.cases.find((c) => c.cell === `${row}|cricket` && c.scenario === "M5");
       const d = base.drops.find((x) => x.cell === `${row}|cricket` && x.scenario === "M5");
-      expect(d, `${row}|cricket plans M5 with no tie outcome to request`).toBeDefined();
-      expect(d!.reason, row).not.toMatch(/never ends level/);
+      expect((planned === undefined) !== (d === undefined), `${row}|cricket: planned XOR dropped`).toBe(true);
       if (stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind))) {
-        expect(d!.reason.startsWith(TIE_GAP_REASON), `${row}: ${d!.reason}`).toBe(true);
-        expect(d!.reason, row).toContain(`; it applies at `);
-        expect(d!.reason, row).toContain(`${offlineBuilderDefault("cricket")} (builder default)`);
+        expect(planned, `${row}|cricket: a reachable tie in a bracket is planned`).toMatchObject({ preset: def, bound: null });
         bracketRows++;
+      } else if (stagesForRow(row).some((st) => !sportModule("cricket").supportsDraws(testCfg as never, st.kind as never))) {
+        // The draw arm: a two-innings cfg draws somewhere and this row has a stage that refuses it
+        // (supportsDraws) — driveable since ruling 44 made the `test` cases scorable, so it binds to one.
+        expect(planned, `${row}|cricket: the two-innings draw arm binds`).toMatchObject({ preset: "test" });
+        expect(planned!.bound, row).toMatch(/^cricket#\d{3}$/);
+        drawRows++;
       } else {
-        expect(d!.reason, row).not.toContain(TIE_GAP_REASON);
+        expect(d, `${row}|cricket`).toMatchObject({ kind: "inapplicable" });
+        expect(d!.reason, row).not.toMatch(/never ends level/);
+        dropped++;
       }
     }
     expect(bracketRows).toBeGreaterThan(0);
-    expect(bracketRows).toBeLessThan(ROW_KEYS.length);
-    // The drop records the gap apart from a real inapplicability (T8: the
-    // committed drop list). M5 is the only rule with a harness gap today, so
-    // the gap drops are exactly the cricket bracket rows.
-    expect(Object.entries(RULES).filter(([, r]) => r.gap !== undefined).map(([id]) => id)).toEqual(["M5"]);
-    let flagged = 0;
-    for (const row of ROW_KEYS) {
-      const d = base.drops.find((x) => x.cell === `${row}|cricket` && x.scenario === "M5")!;
-      expect(d.kind === "harness-gap", row).toBe(stagesForRow(row).some((st) => BRACKET_STAGE_KINDS.has(st.kind)));
-      flagged++;
-    }
-    expect(flagged).toBe(ROW_KEYS.length);
-    expect(base.drops.filter((x) => x.kind === "harness-gap").length).toBe(bracketRows);
-    // The gap is the tie arm ALONE: where a refused draw also holds, the
-    // generator's draw request drives M5, so there is no gap. No committed cfg
-    // has both (a two-innings level stream is undecided), so the facts are
-    // synthetic: the two-innings preset's draw facts with a tie grafted on.
-    const both: CellFacts = { ...cellFacts("knockout", "cricket", "test"), levelFold: "tie" };
-    expect(RULES.M5!.when(both)).toBe(true);
-    expect(RULES.M5!.gap!.when(both)).toBe(false);
-    expect(RULES.M5!.gap!.when(cellFacts("knockout", "cricket"))).toBe(true);
-    const ko = base.drops.find((x) => x.cell === "knockout|cricket" && x.scenario === "M5")!;
-    expect(ko.reason).toMatch(/; the other committed variants that enable it \(\d+: cricket#\d+/);
+    expect(drawRows).toBeGreaterThan(0);
+    expect(dropped).toBeGreaterThan(0);
+    expect(bracketRows + drawRows + dropped).toBe(ROW_KEYS.length);
+    // No drop anywhere is unscorable-only on cricket any more: nothing the harness cannot score enables M5 there.
+    expect(base.drops.filter((x) => x.sport === "cricket" && x.scenario === "M5" && x.kind === "unscorable-only")).toEqual([]);
   });
 });
 
@@ -509,6 +533,25 @@ describe("applicability — the L3 plan", () => {
     expect(bareCricket.length).toBe(ROW_KEYS.length);
     expect(bareCricket.every((d) => /no committed variant enables it/.test(d.reason))).toBe(true);
     expect(bareCricket.every((d) => d.kind === "inapplicable")).toBe(true);
+  });
+  it("a rule whose harness gap holds where it applies drops as harness-gap with the gap's reason; lift the gap and the same cells plan (synthetic: no real rule carries a gap since ruling 44)", () => {
+    // single-sport: the arm is sport-blind; one sport keeps the expected cell set explicit.
+    const one = SPORT_KEYS[0]!;
+    const gap = { when: () => true, route: routeTo("W2", "synthetic L3 gap") };
+    const gapped: Rule = { when: (f) => f.sport === one, reason: "only one sport", variantDependent: false, witness: null, gap };
+    const held = planL3({ variants, rules: { ...RULES, M5: gapped }, only: ["M5"] });
+    const mine = held.drops.filter((d) => d.sport === one);
+    expect(mine.length).toBe(ROW_KEYS.length);
+    for (const d of mine) {
+      expect(d.kind, d.cell).toBe("harness-gap");
+      expect(d.reason.startsWith(gapReason(gap)), d.cell).toBe(true);
+    }
+    expect(held.cases).toEqual([]);
+    // Every other sport is a plain inapplicability with the rule's own reason, never the gap's.
+    expect(held.drops.filter((d) => d.sport !== one).every((d) => d.kind === "inapplicable" && d.reason === "only one sport")).toBe(true);
+    const lifted = planL3({ variants, rules: { ...RULES, M5: { ...gapped, gap: { ...gap, when: () => false } } }, only: ["M5"] });
+    expect(lifted.cases.map((c) => c.cell)).toEqual(ROW_KEYS.map((r) => `${r}|${one}`));
+    expect(lifted.drops.filter((d) => d.kind === "harness-gap")).toEqual([]);
   });
   it("the planner is deterministic and walks the registry in order", () => {
     expect(planL3({ variants })).toEqual(base);

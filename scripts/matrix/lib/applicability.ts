@@ -8,11 +8,13 @@ import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
 import { STAGE_RULES_SPORTS, showsOnePointsField } from "../../../apps/web/src/lib/match-rules.ts";
 import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
+import { isLonePagePlayoff } from "./field-size.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
 import { foldStream } from "./fold.ts";
+import { routeTo, type Route } from "./routing.ts";
 import { ATOMIC, LIFECYCLE_ID, l3Atomic } from "./scenario-catalogue.ts";
 import { drawsAllowed, entrantKindsFor, resolveSportCfg, sportModule } from "./sport-cfg.ts";
-import { ALL_OUTCOMES, START, type StreamEvent } from "./streams/types.ts";
+import { START, type StreamEvent } from "./streams/types.ts";
 import { buildVariant, offlineBuilderDefault, type SportVariants } from "./variants.ts";
 
 /** One progression source, resolved to the index of the stage it takes from. */
@@ -148,6 +150,10 @@ const or = (...ps: Predicate[]): Predicate => (f) => ps.some((p) => p(f));
 const not = (p: Predicate): Predicate => (f) => !p(f);
 const hasKind = (...kinds: readonly string[]): Predicate => (f) => f.stages.some((s) => kinds.includes(s.kind));
 const multiStage: Predicate = (f) => f.stages.length > 1;
+/** A single page-playoff stage: the engine's fixed 4-seat shape (generatePagePlayoff:
+ *  exactly 4 entrants), so no odd field can enter it (W1-driving Task 2). The
+ *  one predicate field-size.ts seeds 4 by (carry m2-1, W1-driving Task 13). */
+const onlyPagePlayoff: Predicate = (f) => isLonePagePlayoff(f.stages);
 const entrant = (...kinds: string[]): Predicate => (f) => f.entrantKinds.some((k) => kinds.includes(k));
 
 /** Text-pinned copy of the product's points-table kinds
@@ -182,8 +188,6 @@ const canTie: Predicate = (f) => f.levelFold === "tie";
 /** M5, tie arm: a tie reaches a bracket stage, which has no tied result to
  *  place. A points table pays one (cricket points.tie, cricket.ts:3923-3928). */
 const tieInBracket = and(canTie, bracket);
-/** Whether the L3 generator can request a tie at all (streams/types.ts). */
-const GENERATES_TIE = (ALL_OUTCOMES.map((o) => o.kind) as readonly string[]).includes("tie");
 /** Scoreless: generic's win_loss mode records a winner only (match-rules.ts resultMode options). */
 const scoreless: Predicate = (f) => f.sport === "generic" && f.cfg.resultMode === "win_loss";
 /** The product's own condition for the Bo1 points editor (match-rules.ts showsOnePointsField). */
@@ -246,7 +250,10 @@ export interface Rule {
    *  rule's own (which would then be false). */
   readonly gap?: HarnessGap;
 }
-export interface HarnessGap { readonly when: Predicate; readonly reason: string }
+/** `route`: the wave that owes the harness path, and why (lib/routing.ts). */
+export interface HarnessGap { readonly when: Predicate; readonly route: Route }
+/** A gap's text as the committed drop list and L2 pairs carry it: the why, then the wave it is routed to. */
+export const gapReason = (g: HarnessGap): string => `${g.route.why} — routed ${g.route.wave}`;
 const ALWAYS: Rule = Object.freeze({ when: always, reason: "", variantDependent: false, witness: null });
 type W = string | WitnessCell;
 const cellOf = (w: W): WitnessCell => (typeof w === "string" ? { cell: w } : w);
@@ -263,6 +270,10 @@ const LADDER = "ladder|generic";
 const NO_TEAM = "no team entrants in this sport's model";
 const NO_PAIR = "no pair entrants in this sport's model";
 const NO_TABLE = "no points-table stage in this row (brackets place by elimination; a ladder orders by position)";
+/** False premise 9: a boardgame KO tie resolves at the fixture layer, which the
+ *  knockout wave owns. M6's drop reason names it through this route (T1-R2),
+ *  in the same bytes drop-list.json commits. */
+const KO_TIE_AT_FIXTURE = routeTo("W4", "boardgame knockout ties resolve at the fixture layer (false premise 9)");
 
 export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   [LIFECYCLE_ID]: ALWAYS,
@@ -291,18 +302,12 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   // a guard in applicability.test.ts folds it for every sport.
   M4a: ALWAYS,
   M4b: rule(abandonWithResult, "no organiser-reachable config lets an abandon yield a result here: football/hockey/icehockey need abandonPolicy \"award\", which no editor field sets (configKeysFor; false premise 10); cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS)", { cell: "league|cricket", values: { dls: "on" } }, "league|badminton", true),
-  M5: Object.freeze({
-    ...rule(
-      or(drawRefusedHere, tieInBracket),
-      "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
-      ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
-    ),
-    gap: Object.freeze({
-      when: and(not(drawRefusedHere), tieInBracket, () => !GENERATES_TIE),
-      reason: "the L3 generator has no tie outcome (streams/types.ts RequestedOutcome), and here a tie is reachable (fold-proven: level scores fold to {kind:\"tie\"} through the engine) with a bracket stage that has no tied result to place — routed W1-driving",
-    }),
-  }),
-  M6: rule(decider, "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, W4), or none is switched on under this config", "knockout|icehockey", "knockout|badminton", true),
+  M5: rule(
+    or(drawRefusedHere, tieInBracket),
+    "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing)",
+    ["knockout|football", "knockout|cricket"], "knockout|badminton", true,
+  ),
+  M6: rule(decider, `the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, ${KO_TIE_AT_FIXTURE.wave}), or none is switched on under this config`, "knockout|icehockey", "knockout|badminton", true),
   M7a: ALWAYS, M7b: ALWAYS,
   M8a: rule(not(scoreless), "generic win_loss records a winner only: there is no score to correct while keeping the winner", T, { cell: T, preset: "win_loss" }, true),
   M8b: ALWAYS, M9a: ALWAYS, M9b: ALWAYS, M10: ALWAYS, M11: ALWAYS,
@@ -310,7 +315,8 @@ export const RULES: Readonly<Record<string, Rule>> = Object.freeze({
   M12a: rule(entrant("team"), `${NO_TEAM}: no substitute can come on for an injured player`, "league|football", "league|badminton"),
   M12b: rule(entrant("team"), `${NO_TEAM}: there is no team to play short`, "league|football", "league|badminton"),
   M12c: rule(declaresEvent("cricket.retire"), "the sport declares no retired-hurt event (module eventSchemas has no cricket.retire; ruling 30: cricket only)", "league|cricket", "league|football"),
-  F1: ALWAYS, F2: ALWAYS,
+  F1: rule(not(onlyPagePlayoff), "an odd field cannot enter a fixed 4-seat page playoff (engine generatePagePlayoff: exactly 4) — unfit (ruling 6, case by case)", T, "page_playoff_only|generic"),
+  F2: ALWAYS,
   F3: rule(hasKind("knockout", "double_elim"), "no knockout or double-elimination bracket in this row: nothing to size to a power of two", [KO, "double_elim|generic"], T),
   F4: rule(hasKind("group"), "no pooled (group) stage in this row", "groups_ko|generic", T),
   F5a: rule(table, `${NO_TABLE}: no points to tie on`, T, LADDER),
@@ -425,7 +431,7 @@ const dropReason = (r: Rule, d: Decision): string => {
   // Gapped: the rule APPLIES, so its own reason ("why not") would be false.
   if (r.gap !== undefined && isHarnessGap(r, d)) {
     const also = d.unscorable.length > 0 ? `; the other committed variants that enable it (${listed(d.unscorable)}) cannot be scored by the harness` : "";
-    return `${r.gap.reason}; it applies at ${listed(d.gapped)}${also}`;
+    return `${gapReason(r.gap)}; it applies at ${listed(d.gapped)}${also}`;
   }
   if (!r.variantDependent) return r.reason;
   if (d.unscorable.length === 0) return `${r.reason} — no committed variant enables it`;

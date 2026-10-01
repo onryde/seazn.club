@@ -6,8 +6,8 @@ to it.
 
 ## Sequencing
 
-- **R1.** W1a → W1b → W1c → W1d → W2 … W7 run strictly in sequence, each in
-  its own worktree. They share `packages/engine` and
+- **R1.** W1a → W1b → W1c → **W1-driving** → W1d → W2 … W7 run strictly in
+  sequence, each in its own worktree (W1-driving's place: ruling 28). They share `packages/engine` and
   `apps/web/src/server/usecases/stages.ts`.
 - **R2.** W8, W9, W10 are parallel lanes. A lane starts only after listing its
   file set and proving it disjoint from the wave in flight. A production change

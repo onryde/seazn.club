@@ -4,28 +4,31 @@
 // the proof it did (Review Focus 1): a type the case invoked that never ran in
 // the browser reds the case on `mixed-driver-coverage`, by name — a page
 // object that quietly fell back to HTTP can never read as a browser green.
-// The one way past that is an exemption, whose reason must name the wave that
-// owns the missing organiser path (D7: the API-only rows).
+// The one way past that is an exemption, which carries the route (lib/routing.ts)
+// to the wave that owns the missing organiser path (D7: the API-only rows).
 //
 // Pure: no browser, no HTTP. BrowserDriver asks `wantsBrowser` before each
 // organiser action, `record`s the path it took, and returns `coverage()` among
 // its checks.
 import type { CheckResult } from "../results.ts";
+import { WAVE_ID, type Route } from "../routing.ts";
 
 export const ACTION_TYPES = ["createCompetition", "createDivision", "addEntrants", "start", "generate", "score", "forfeit", "withdraw", "completeStage", "standingsView", "publicView"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 export type Via = "browser" | "http";
 export type PadPolicy = "first" | "all";
 
-/** An exemption's reason names the wave that owns the missing path: "→ W<n>"
- *  (design §8) or "→ W1-driving" (ruling 28). */
-const NAMES_A_WAVE = /→ W\d|→ W1-driving/;
-
 const DECLARED: ReadonlySet<string> = new Set(ACTION_TYPES);
 
 function assertType(a: string): asserts a is ActionType {
   if (!DECLARED.has(a)) throw new Error(`mixed: '${a}' is not an action type (declared: ${ACTION_TYPES.join(", ")})`);
 }
+
+/** Ruling 47: setup filler — HTTP by design in every layer, never an organiser
+ *  action type (no browser turn is owed), recorded so a report shows it ran. */
+export const FILLER = ["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView"] as const;
+export type FillerName = (typeof FILLER)[number];
+const FILLERS: ReadonlySet<string> = new Set(FILLER);
 
 /** O-1 (W1c Task 8 review): action types whose browser turn is used up only
  *  once a browser call CREATED something — the value names that path for
@@ -42,6 +45,21 @@ interface Tally { browser: number; http: number; exempt: string | null; answered
 
 export class MixedLedger {
   readonly #tally = new Map<ActionType, Tally>();
+  readonly #filler = new Map<FillerName, number>();
+
+  /** One setup-filler call (ruling 47). Counted beside the organiser actions,
+   *  never among them: coverage and the browser policy do not read it. A name
+   *  outside FILLER — an organiser action type included — is refused by name
+   *  (strip-types runs untyped callers). */
+  filler(name: FillerName): void {
+    if (!FILLERS.has(name)) throw new Error(`mixed: '${String(name)}' is not setup filler (declared: ${FILLER.join(", ")})`);
+    this.#filler.set(name, (this.#filler.get(name) ?? 0) + 1);
+  }
+
+  /** The filler calls counted so far, by name ({} before any). */
+  fillers(): Readonly<Partial<Record<FillerName, number>>> {
+    return Object.freeze(Object.fromEntries(this.#filler));
+  }
 
   #of(a: ActionType): Tally {
     let t = this.#tally.get(a);
@@ -73,14 +91,17 @@ export class MixedLedger {
   }
 
   /** `a` has no organiser path in this cell, so it runs over http by
-   *  necessity; `reason` names the wave that owns the missing path, and is kept
-   *  as the check's evidence. One owner per type: a second, different reason is
-   *  refused. */
-  exempt(a: ActionType, reason: string): void {
+   *  necessity; `route` names the wave that owns the missing path, and
+   *  "→ <wave>: <why>" is kept as the check's evidence. One owner per type: a
+   *  second, different route is refused. strip-types runs untyped callers, so a
+   *  value that is not a route to a programme wave is refused by name. */
+  exempt(a: ActionType, route: Route): void {
     assertType(a);
-    if (!NAMES_A_WAVE.test(reason)) {
-      throw new Error(`mixed: an exemption for ${a} must name the wave that owns the missing path ("→ W<n>" or "→ W1-driving"), got ${JSON.stringify(reason)}`);
+    const r = route as Partial<Route> | null | undefined;
+    if (typeof r !== "object" || r === null || typeof r.wave !== "string" || !WAVE_ID.test(r.wave) || typeof r.why !== "string" || r.why.trim() === "") {
+      throw new Error(`mixed: an exemption for ${a} must carry a route to the wave that owns the missing path (routing.ts routeTo), got ${JSON.stringify(route)}`);
     }
+    const reason = `→ ${r.wave}: ${r.why}`;
     const t = this.#of(a);
     if (t.exempt !== null && t.exempt !== reason) throw new Error(`mixed: ${a} is already exempt (${t.exempt}); a second reason (${reason}) would hide which wave owns it`);
     t.exempt = reason;

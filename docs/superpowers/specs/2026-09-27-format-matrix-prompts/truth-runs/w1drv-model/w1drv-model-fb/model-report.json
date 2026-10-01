@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "runId": "w1drv-model-fb",
+  "harnessCommit": "e26eda889",
+  "settings": {
+    "maxCommands": 30,
+    "timeLimitMs": 300000,
+    "regressions": false
+  },
+  "cells": [
+    {
+      "cell": "league|football",
+      "variant": "11-a-side",
+      "seed": 550027448,
+      "runs": 20,
+      "maxCommands": 30,
+      "fences": true,
+      "bias": null,
+      "numRuns": 20,
+      "executions": 20,
+      "interrupted": false,
+      "counts": {
+        "Start": {
+          "ran": 15,
+          "accepted": 15,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "AddEntrant": {
+          "ran": 35,
+          "accepted": 17,
+          "refused": 0,
+          "expected": 18,
+          "unexpected": 0
+        },
+        "Withdraw": {
+          "ran": 10,
+          "accepted": 10,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Score": {
+          "ran": 16,
+          "accepted": 16,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Walkover": {
+          "ran": 21,
+          "accepted": 21,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Void": {
+          "ran": 12,
+          "accepted": 12,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Correct": {
+          "ran": 5,
+          "accepted": 5,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Generate": {
+          "ran": 30,
+          "accepted": 30,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Rebuild": {
+          "ran": 24,
+          "accepted": 11,
+          "refused": 13,
+          "expected": 0,
+          "unexpected": 0
+        },
+        "Complete": {
+          "ran": 22,
+          "accepted": 22,
+          "refused": 0,
+          "expected": 0,
+          "unexpected": 0
+        }
+      },
+      "stepChecks": {
+        "I6-swiss-no-rematch": 0,
+        "I7-rr-no-pair-over-legs": 1275,
+        "I8-generate-named": 200,
+        "model-rr-orientation": 1275,
+        "model-lineups-put": 432
+      },
+      "foldParity": 195,
+      "fenced": {
+        "late-entry-then-generate": 1
+      },
+      "unknowns": {
+        "retried": 0,
+        "tip-moved": 0,
+        "next-match-unverified": 0
+      },
+      "findings": {
+        "CD-T13b": {
+          "count": 18,
+          "evidence": [
+            "AddEntrant(24,1): POST /api/v1/divisions/ea8ca277-c675-4046-bc5c-f6f5fba3c223/entrants → 422 ERROR",
+            "AddEntrant(50,0): POST /api/v1/divisions/ea8ca277-c675-4046-bc5c-f6f5fba3c223/entrants → 422 ERROR",
+            "AddEntrant(13,1): POST /api/v1/divisions/641f60d2-e2cf-4b92-bc5e-b353ffc812a2/entrants → 422 ERROR"
+          ]
+        }
+      },
+      "informativeSteps": 159,
+      "masked": {},
+      "maskedNew": {},
+      "vacuous": [],
+      "failure": null,
+      "timeout": null,
+      "replayOf": null,
+      "verdict": "ok"
+    }
+  ],
+  "skipped": []
+}

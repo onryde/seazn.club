@@ -1,4 +1,8 @@
-// The fast-check model over W1a's slice, run live (design §7.5, R29):
+// The fast-check model over the format×sport grid, run live (design §7.5,
+// R29). --cell takes any grid cell (W1-driving Task 14); with none, a run
+// takes W1a's slice (SLICE_CELLS) and a --regressions replay takes every cell
+// a committed case names (T14-R2). Either way a cell on a row the model does
+// not drive is refused by family before anything runs (D6, ModelUnsupported):
 //
 //   pnpm run matrix:model --
 //     --run-id ID [--report-dir DIR] [--cell row|sport]... [--runs N]
@@ -13,7 +17,8 @@
 // fresh division in it (runCell), and the cell moves to a fresh competition
 // before the plan's per-competition division cap (DIVISION_CAP_KEY). A cell's seed is FNV-1a of `${runId}|${cell}`
 // — derived, logged and written, never read from a clock. --regressions
-// replays every committed regression on the cells instead, each at its own
+// replays every committed regression on the cells instead (a case on a cell
+// --cell left out is a skip said aloud: printed, counted, listed), each at its own
 // seed, path, replayPath and command bound (its maxCommands, W1b carry b), one
 // run, with the fences it was found at unless it names a fence of its own
 // (replayFences, W1c T2 ruling Q1).
@@ -58,6 +63,7 @@ import { isMainModule } from "./lib/main-module.ts";
 import { productMessageOf, type OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";
+import { modelRowRefusal } from "./lib/model/state.ts";
 import { BaseNotUrl, baseScrubber, findSecrets, mapStrings, redact } from "./lib/redact.ts";
 import { SecretInResults, stringsIn } from "./lib/results.ts";
 import { MATCH_MIN_LENGTH, MATCH_REQUIRED_CHECKS, loadRegressions, replayFences, type RegressionCase } from "./lib/scenario-catalogue.ts";
@@ -104,12 +110,15 @@ async function competitionSlots(d: OrganiserDriver, cap: number | null, input: (
   };
 }
 
-/** Every model cell: W1a's slice, in registry order. */
+/** The cells a run takes with no --cell: W1a's slice, in registry order. */
 const SLICE_CELLS: ReadonlyMap<string, { row: RowKey; sport: string }> = new Map(
   SLICE_ROWS.flatMap((row) => SLICE_SPORTS.map((sport) => [cellId(row, sport), { row, sport }] as const)),
 );
-/** Every grid cell's sport: a committed regression may name any of them. */
-const GRID_SPORT: ReadonlyMap<string, string> = new Map(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport) => [cellId(row, sport), sport] as const)));
+/** Every grid cell: `--cell` may name any of them (W1-driving Task 14), and a
+ *  committed regression may too. A row the model does not drive is refused
+ *  by family before the run (runModel, D6). */
+const GRID_CELLS: ReadonlyMap<string, { row: RowKey; sport: string }> = new Map(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport) => [cellId(row, sport), { row, sport }] as const)));
+const GRID_SPORT: ReadonlyMap<string, string> = new Map([...GRID_CELLS].map(([cell, { sport }]) => [cell, sport] as const));
 
 /** FNV-1a, 32-bit, over UTF-8 bytes, as a signed int (fast-check seeds are ints). */
 export function fnv1a32(text: string): number {
@@ -131,7 +140,7 @@ const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.me
 
 interface SliceCell { cell: string; row: RowKey; sport: string }
 interface Cli {
-  runId: string; reportDir: string; cells: SliceCell[]; runs: number; maxCommands: number; timeLimitMs: number;
+  runId: string; reportDir: string; cells: SliceCell[]; cellsGiven: boolean; runs: number; maxCommands: number; timeLimitMs: number;
   seed: number | undefined; path: string | undefined; replayPath: string | undefined; fences: boolean; regressions: boolean; base: string | undefined;
   root: string | undefined;
 }
@@ -174,8 +183,8 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   if (runs === null || maxCommands === null || timeLimitMs === null) return { usage: "--runs and --max-commands take an integer ≥ 1, --time-limit an integer ≥ 1000 (ms)" };
   const cells: SliceCell[] = [];
   for (const cell of v.cell ?? [...SLICE_CELLS.keys()]) {
-    const parts = SLICE_CELLS.get(cell);
-    if (parts === undefined) return { usage: `unknown cell '${cell}' (the model runs W1a's slice: ${[...SLICE_CELLS.keys()].join(", ")})` };
+    const parts = GRID_CELLS.get(cell);
+    if (parts === undefined) return { usage: `unknown cell '${cell}' (not a grid cell: row|sport, a builder row and a registry sport; with no --cell the model runs the slice cells: ${[...SLICE_CELLS.keys()].join(", ")})` };
     cells.push({ cell, ...parts });
   }
   // fast-check seeds are 32-bit ints; a longer number is a typo, not a seed.
@@ -193,7 +202,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
   return {
-    runId, reportDir: v["report-dir"] ?? "matrix-report", cells, runs, maxCommands, timeLimitMs,
+    runId, reportDir: v["report-dir"] ?? "matrix-report", cells, cellsGiven: v.cell !== undefined, runs, maxCommands, timeLimitMs,
     seed, path: v.path, replayPath: v["replay-path"], fences: v["no-fences"] !== true, regressions: v.regressions === true, base: v.base, root: v.root,
   };
 }
@@ -330,6 +339,27 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
     regressions = (deps.loadRegressions ?? loadRegressions)(cli.root);
     checkRegressionVariants(regressions);
   } catch (e) { warn(`model: ${errText(e)}`); return EXIT.REFUSED; }
+  // T14-R2: with no --cell, a replay takes every cell a committed case names —
+  // T14 opened --cell to the grid, so a case may sit outside the slice, and a
+  // slice-only default would drop it unseen. Otherwise the cells given (or the slice).
+  let runCells: SliceCell[] = cli.cells;
+  if (cli.regressions && !cli.cellsGiven) {
+    runCells = [];
+    for (const cell of new Set(regressions.map((r) => r.cell))) {
+      const parts = GRID_CELLS.get(cell);
+      // checkRegressionVariants refused an off-grid cell above; reaching here without one is a harness fault.
+      if (parts === undefined) { warn(`model: regressions.json names cell '${cell}', which is not on the grid`); return EXIT.REFUSED; }
+      runCells.push({ cell, ...parts });
+    }
+  }
+  // D6: a row the model does not drive is refused by family, before anything
+  // is asked of the environment — never a cell that fails every run, never a
+  // committed case skipped unseen.
+  for (const c of runCells) {
+    let refused: Error | null;
+    try { refused = modelRowRefusal(c.row); } catch (e) { refused = e instanceof Error ? e : new Error(String(e)); }
+    if (refused !== null) { warn(`model: refused ${c.cell} — ${errText(refused)}`); return EXIT.REFUSED; }
+  }
   const base = cli.base ?? deps.env.SMOKE_BASE;
   if (!base) { warn("model: no --base and no SMOKE_BASE (seazn-local-env `env`)"); return EXIT.REFUSED; }
   // FB-1: the report is written with this base as LOCAL_BASE; one that is no URL is refused before anything runs.
@@ -341,7 +371,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   try { pf = await deps.preflight(base); } catch (e) { warn(`model: preflight: ${errText(e)}`); return EXIT.REFUSED; }
   if (!pf.ok) { for (const r of pf.refusals) warn(`preflight refused: ${r.reason} — ${r.detail}`); return EXIT.REFUSED; }
 
-  const chosen = new Map(cli.cells.map((c) => [c.cell, c]));
+  const chosen = new Map(runCells.map((c) => [c.cell, c]));
   const jobs: Job[] = cli.regressions
     ? regressions.flatMap((r) => {
       const c = chosen.get(r.cell);
@@ -350,7 +380,11 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
       // fences: ruling Q1 (replayFences).
       return c === undefined ? [] : [{ ...c, seed: r.seed, path: r.path, replayPath: r.replayPath ?? undefined, runs: 1, maxCommands: r.maxCommands, fences: replayFences(r), replay: r }];
     })
-    : cli.cells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, maxCommands: cli.maxCommands, fences: cli.fences, replay: null }));
+    : runCells.map((c) => ({ ...c, seed: cli.seed ?? seedFor(cli.runId, c.cell), path: cli.path, replayPath: cli.replayPath, runs: cli.runs, maxCommands: cli.maxCommands, fences: cli.fences, replay: null }));
+  // T14-R2: a committed case on a cell the run did not take is a verdict, said
+  // aloud — printed here, counted in the summary, listed in the report.
+  const skipped = cli.regressions ? regressions.filter((r) => !chosen.has(r.cell)) : [];
+  for (const r of skipped) say(`  skipped ${r.id} ${r.cell} — not among the --cell cells (${[...chosen.keys()].join(", ")})`);
   if (jobs.length === 0) { warn("model: nothing to run — --regressions found no committed case on these cells"); return EXIT.NO_SIGNAL; }
 
   const cells: ModelCell[] = [];
@@ -383,9 +417,17 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
         const real = deps.driverFor(base, session, org.orgId);
         const competitionFor = await competitionSlots(real, cap, (k) => ({ name: `Matrix model ${job.cell}`, slug: `mm-${cli.runId}-${i + 1}${k === 1 ? "" : `-${k}`}` }));
         say(`[${i + 1}/${jobs.length}] ${job.cell} (${variant}) seed=${job.seed}${job.path === undefined ? "" : ` path=${job.path}`}${job.replayPath === undefined ? "" : ` replayPath=${job.replayPath}`} maxCommands=${job.maxCommands} fences=${job.fences ? "on" : "off"}${job.replay === null ? "" : ` — replay of ${job.replay.id}`}`);
+        // T16 fix round 1: a replay offers its own case to the matcher first.
+        // Two open cases may share cell, check and match — one bug reached by
+        // two triggers (MB-007, MB-010) — and the first in the file would
+        // otherwise claim the other's replay, which verdictOf then calls NOT
+        // REPRODUCED although it failed as itself. Every other case stays, so
+        // a failure as ANOTHER case is still named as that case.
+        const replay = job.replay;
+        const ranked = replay === null ? regressions : [replay, ...regressions.filter((r) => r.id !== replay.id)];
         const rep = await runCell({
           cell: job.cell, row: job.row, sport: job.sport, variant, runs: job.runs, maxCommands: job.maxCommands, seed: job.seed, fences: job.fences,
-          timeLimitMs: cli.timeLimitMs, regressions,
+          timeLimitMs: cli.timeLimitMs, regressions: ranked,
           ...(deps.now === undefined ? {} : { now: deps.now }),
           ...(job.path === undefined ? {} : { path: job.path }),
           ...(job.replayPath === undefined ? {} : { replayPath: job.replayPath }),
@@ -405,7 +447,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   }
 
   // A replay has no run-wide bound: each cell records the one its case was found at (W1b carry b).
-  const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.regressions ? null : cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells };
+  const out = { schemaVersion: 1, runId: cli.runId, harnessCommit, settings: { maxCommands: cli.regressions ? null : cli.maxCommands, timeLimitMs: cli.timeLimitMs, regressions: cli.regressions }, cells, skipped: skipped.map((r) => ({ id: r.id, cell: r.cell })) };
   // The secret scan reads the report BEFORE the base is scrubbed (FB-1).
   const secrets = stringsIn(out).flatMap((s) => findSecrets(s));
   if (secrets.length > 0) { warn(`model: ${new SecretInResults(secrets.length).message}`); return EXIT.ABORTED; }
@@ -419,7 +461,7 @@ export async function runModel(deps: ModelDeps, argv: string[]): Promise<number>
   for (const c of cells) if (c.verdict === "new-failure") printStub(c, cli.runId);
   const tally = (v: Verdict) => cells.filter((c) => c.verdict === v).length;
   const abortedNew = cells.filter((c) => c.verdict === "aborted" && c.failure !== null && c.failure.known === null).length;
-  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted${abortedNew === 0 ? "" : ` (${abortedNew} with a NEW failure found before its timeout)`}, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT`);
+  say(`model: ${cells.length} cell(s) — ${tally("ok")} ok, ${tally("known-failure")} known, ${tally("new-failure")} NEW, ${tally("vacuous")} vacuous, ${tally("not-reproduced")} not reproduced, ${tally("aborted")} aborted${abortedNew === 0 ? "" : ` (${abortedNew} with a NEW failure found before its timeout)`}, ${cells.filter((c) => c.interrupted).length} TIME BOX HIT${cli.regressions ? `, ${skipped.length} committed case(s) skipped` : ""}`);
   if (cells.some((c) => c.verdict === "aborted")) return EXIT.ABORTED;
   return cells.some((c) => FAILING.includes(c.verdict)) ? EXIT.NO_SIGNAL : EXIT.OK;
 }

@@ -10,10 +10,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { decideState, parseResults, type CaseResultV2 } from "../lib/results.ts";
-import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
+import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
 import { planCanaryCase, planSliceCases } from "../lib/slice.ts";
+import { W1_DRIVING_SET, w1DrivingPlanner } from "../lib/w1-driving-set.ts";
 
 export const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 export const TRUTH_RUNS = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs";
@@ -98,6 +99,10 @@ export function livePlan(plan: string): ExpectedPlan {
     if (set === PROBE_SET) return fromSpecs(plan, probePlanner({}).plan(anyVariant).map((c) => c.caseId));
     if (set === API_ONLY_BROWSER_SET) return fromLayered(plan, apiOnlyBrowserPlanner({}).layered(anyVariant));
     if (set === WIDTH_SWEEP_SET) return fromLayered(plan, widthSweepPlanner({}).layered(anyVariant));
+    // W1-driving Task 13 (T13-R1 I-1): the capability cells and the two template cards, at 1280.
+    if (set === W1_DRIVING_L1_SET) return fromLayered(plan, w1DrivingL1Planner({}).layered(anyVariant));
+    // W1-driving Task 12: the one set that takes --only / --scenario (run.ts planOf records them).
+    if (set === W1_DRIVING_SET) return fromSpecs(plan, w1DrivingPlanner(filters).plan(anyVariant).map((c) => c.caseId));
   }
   if (words[0] === "--canary" && words[1] !== undefined) return fromSpecs(plan, [planCanaryCase(anyVariant, words[1]).caseId]);
   if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, l1Planner(filters).layered(anyVariant));

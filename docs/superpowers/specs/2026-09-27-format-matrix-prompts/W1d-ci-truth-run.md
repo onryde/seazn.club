@@ -23,7 +23,7 @@ the moment the ~150 audit hypotheses become a list of reproduced problems.
 
 ## Prerequisites
 
-W1a, W1b, W1c merged (design §8 order, R1).
+W1a, W1b, W1c merged; W1-driving merged (ruling 28). Order: design §8, R1.
 
 ## Scope
 

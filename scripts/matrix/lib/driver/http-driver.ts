@@ -13,10 +13,10 @@ import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
-  DriverMisuse, OrgMismatch, RequestTimedOut, VisibilityDegraded, idempotencyKey, retryKey,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, idempotencyKey, inSquadOrder, retryKey,
+  type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -41,6 +41,13 @@ export interface HttpDriverOptions {
  *  awaited: it may still land, which is why a timed-out /complete is recorded
  *  as an unknown outcome (completeStage). */
 export const REQUEST_TIMEOUT_MS = 60_000;
+
+/** The visibility a template create applies when none is asked
+ *  (schemas.ts CreateFromTemplate `visibility: Visibility.default("public")`,
+ *  pinned by http-driver.test.ts). The gallery sends none, so neither does
+ *  createFromTemplate: both paths build the same competition, and anything
+ *  else applied is the public-dashboard cap's degrade (W1-driving Task 13). */
+export const TEMPLATE_VISIBILITY = "public";
 
 const toDivisionRef = (d: { id: string; slug: string; sport_key: string; variant_key: string; config: Record<string, unknown> | null }): DivisionRef =>
   ({ id: d.id, slug: d.slug, sportKey: d.sport_key, variantKey: d.variant_key, config: d.config ?? {} });
@@ -106,6 +113,38 @@ export class HttpDriver implements OrganiserDriver {
     return { id: c.id, slug: c.slug, orgId: c.org_id };
   }
 
+  /** W1-driving Task 13: the card's POST, then the read-back. The body is the
+   *  gallery's (template-gallery.tsx submit) less its optional version guard
+   *  and start date: no visibility, so the product's default applies. */
+  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+    const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", { template_key: key, name: input.name, ends_on: input.endsOn });
+    return this.readBackTemplate(answer, key);
+  }
+
+  /** What a template create built, read back — the answer carries ids only
+   *  (FromTemplateResult). The browser path's read-back too (BrowserDriver).
+   *  Refused by name: a competition outside the case org (RF4, as
+   *  createCompetition), an applied visibility other than the default (the
+   *  row is the one authority, as createCompetition reads it), a template
+   *  with other than one division, stages that are not the ones the create
+   *  answered, and (T13-R1 m-7) an answer for another template than the
+   *  `key` the caller asked for — before anything is read back. */
+  async readBackTemplate(answer: FromTemplateAnswer, key: string): Promise<FromTemplateOut> {
+    if (answer.templateKey !== key) throw new DriverMisuse(`driver: the create answered template ${answer.templateKey}; asked for ${key}`);
+    if (answer.divisions.length !== 1) throw new DriverMisuse(`driver: template ${answer.templateKey} built ${answer.divisions.length} division(s); a case drives exactly one`);
+    const c = await this.#call<{ id: string; slug: string; org_id: string; visibility: string }>(`/api/v1/competitions/${answer.competitionId}`);
+    if (c.org_id !== this.#expectedOrgId) throw new OrgMismatch(this.#expectedOrgId, c.org_id);
+    if (c.visibility !== TEMPLATE_VISIBILITY) throw new VisibilityDegraded(c.slug);
+    const created = answer.divisions[0];
+    const division = await this.getDivision(created.id);
+    const stages = [...await this.listStages(division.id)].sort((a, b) => a.seq - b.seq);
+    const asked = created.stages.map((s) => s.id);
+    if (JSON.stringify(stages.map((s) => s.id)) !== JSON.stringify(asked)) {
+      throw new DriverMisuse(`driver: division ${division.id} lists stages ${stages.map((s) => s.id).join(", ") || "none"}; template ${answer.templateKey} answered ${asked.join(", ") || "none"}`);
+    }
+    return { competition: { id: c.id, slug: c.slug, orgId: c.org_id }, division, stages };
+  }
+
   async createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
     return toDivisionRef(await this.#call(`/api/v1/competitions/${competitionId}/divisions`, "POST", {
       name: input.name, slug: input.slug, sport_key: input.sportKey, variant_key: input.variantKey, config: input.config ?? {},
@@ -125,14 +164,59 @@ export class HttpDriver implements OrganiserDriver {
     return this.#call(`/api/v1/divisions/${divisionId}/stages`);
   }
 
-  async addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+  /** D2: an input's members ride inline as `new_person` members (schemas.ts
+   *  NewPersonMemberInput), in order; an input without them sends no
+   *  `members` key at all, so an individual's body is unchanged. */
+  async addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]> {
     const out = await this.#call<EntrantRow | EntrantRow[]>(`/api/v1/divisions/${divisionId}/entrants`, "POST",
-      entrants.map((e) => ({ kind: e.kind, display_name: e.displayName, seed: e.seed })));
+      entrants.map((e) => ({
+        kind: e.kind, display_name: e.displayName, seed: e.seed,
+        ...(e.members !== undefined ? { members: e.members.map((m) => ({ new_person: { full_name: m.fullName }, squad_number: m.squadNumber, is_captain: m.isCaptain })) } : {}),
+      })));
     return Array.isArray(out) ? out : [out];
   }
 
   async listEntrants(divisionId: string): Promise<EntrantRow[]> {
     return this.#call(`/api/v1/divisions/${divisionId}/entrants`);
+  }
+
+  async entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    const e = await this.#call<{ members?: readonly EntrantMember[] }>(`/api/v1/entrants/${entrantId}`);
+    return inSquadOrder(e.members ?? []);
+  }
+
+  /** The product saves, then answers `{ ...lineup, checked, warnings }`
+   *  (fixtures.ts putLineup, WARNING-ONLY): the warnings are returned for the
+   *  caller to record; `checked: false`, or an answer with no check at all,
+   *  is LineupUnchecked. An empty `slots` is refused before any call: the
+   *  product would skip its member check, DELETE the lineup and answer 2xx. */
+  async putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
+    if (slots.length === 0) throw new DriverMisuse(`driver: putLineup for entrant ${entrantId} on fixture ${fixtureId} with no slots — the product would delete its lineup and answer 2xx, never refuse`);
+    const out = await this.#call<{ checked?: unknown; warnings?: unknown; reason?: unknown }>(`/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`, "PUT", { slots });
+    const raw: unknown = out.warnings;
+    const warnings: readonly string[] | null = Array.isArray(raw) && raw.every((w): w is string => typeof w === "string") ? raw : null;
+    if (out.checked === false && warnings !== null) throw new LineupUnchecked(fixtureId, entrantId, typeof out.reason === "string" ? out.reason : "the product gave no reason");
+    if (out.checked !== true || warnings === null) {
+      throw new LineupUnchecked(fixtureId, entrantId, `the PUT answered no lineup check (checked: ${JSON.stringify(out.checked)}, warnings: ${JSON.stringify(out.warnings)})`);
+    }
+    return { checked: true, warnings: [...warnings] };
+  }
+
+  /** The browser's roster filler (ruling 47): the entrants tab adds by name
+   *  only, so each member is created as a person (POST /persons) and the
+   *  entrant's roster is then set in ONE PATCH naming them (schemas.ts
+   *  PatchEntrant `members`, a full replacement). Answers the stored roster.
+   *  An empty roster is refused before any call: its PATCH would CLEAR the
+   *  entrant's roster, never seed one. A refused person stops before the
+   *  PATCH, so no roster is half-set. */
+  async setMembers(entrantId: string, members: readonly MemberInput[]): Promise<EntrantMember[]> {
+    if (members.length === 0) throw new DriverMisuse(`driver: setMembers for entrant ${entrantId} with no members — a PATCH of [] would clear its roster, not seed it`);
+    const ids: string[] = [];
+    for (const m of members) ids.push((await this.#call<{ id: string }>("/api/v1/persons", "POST", { full_name: m.fullName })).id);
+    const e = await this.#call<{ members?: readonly EntrantMember[] }>(`/api/v1/entrants/${entrantId}`, "PATCH", {
+      members: members.map((m, i) => ({ person_id: ids[i], squad_number: m.squadNumber, is_captain: m.isCaptain })),
+    });
+    return inSquadOrder(e.members ?? []);
   }
 
   async start(divisionId: string): Promise<StartOut> {
@@ -224,7 +308,10 @@ export class HttpDriver implements OrganiserDriver {
     // so a 5xx, or a request that never answered, may follow a committed
     // completion. Its outcome is unknown, and a repeat would re-run the
     // progression; it is recorded like a completion. A 4xx (a named refusal)
-    // committed nothing and stays retryable.
+    // committed nothing and stays retryable — except W1-driving T6's FP-3:
+    // 409 STAGE_COMPLETED_SEEDING_FAILED is the product saying the completion
+    // DID commit and only the next stage's seed proposal failed (:4239-4252),
+    // so it is recorded like a completion too.
     let r: RawResult;
     try {
       r = await this.#send(path, "POST", {});
@@ -233,9 +320,44 @@ export class HttpDriver implements OrganiserDriver {
       throw e;
     }
     if (r.status >= 500) this.#completed.add(stageId);
-    const out = this.#unwrap<CompleteOut>("POST", path, r);
+    let out: CompleteOut;
+    try {
+      out = this.#unwrap<CompleteOut>("POST", path, r);
+    } catch (e) {
+      if (e instanceof RefusedCall && e.code === SEEDING_FAILED_AFTER_COMMIT) this.#completed.add(stageId);
+      throw e;
+    }
     if (out.completed) this.#completed.add(stageId);
     return out;
+  }
+
+  /** W1-driving T6 (D1): the organiser's Confirm on the next stage's draft
+   *  (route seed-proposal/confirm, schemas.ts ConfirmSeedProposal). */
+  async confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut> {
+    return this.#call(`/api/v1/stages/${stageId}/seed-proposal/confirm`, "POST", body);
+  }
+
+  /** W1-driving T6 (D1): Recompute — a fresh draft, the previous one stale.
+   *  The route answers 201 with the slate under `computed`
+   *  (usecases/stages.ts computeSeedProposal). */
+  async recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
+    const p = await this.#call<{ id: string; status: string; computed: { qualifiers: SeedProposalOut["qualifiers"]; ties: SeedProposalOut["ties"] } }>(`/api/v1/stages/${stageId}/seed-proposal`, "POST", {});
+    return { id: p.id, status: p.status, qualifiers: p.computed.qualifiers, ties: p.computed.ties };
+  }
+
+  /** W1-driving T7 (D8): a ladder challenge (route stages/[id]/challenges,
+   *  body `{challenger_id, opponent_id}` → 201 usecases/stages.ts
+   *  issueChallenge). The answer's ladder_order is the order at issue; a
+   *  refusal (LADDER_*, a non-ladder 422) is the product's RefusedCall. */
+  async challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    return this.#call(`/api/v1/stages/${stageId}/challenges`, "POST", { challenger_id: challengerId, opponent_id: opponentId });
+  }
+
+  /** W1-driving Task 8: the americano read model (route stages/[id]/americano
+   *  → usecases/americano.ts americanoView), answered as the product serves
+   *  it. A non-americano stage is the product's codeless 422 → RefusedCall. */
+  async americanoView(stageId: string): Promise<AmericanoViewOut> {
+    return this.#call(`/api/v1/stages/${stageId}/americano`);
   }
 
   async rebuild(stageId: string): Promise<void> {

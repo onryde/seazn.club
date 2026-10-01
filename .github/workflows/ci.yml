@@ -65,9 +65,12 @@ jobs:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
-        # Depth 2 so the single-sport ratchet below can read HEAD^1's baseline.
+        # Full history: the single-sport ratchet below reads HEAD^1's baseline,
+        # and the matrix step's rebase-map.test.ts proves every SHA in
+        # truth-runs/W1-DRIVING-REBASES.md is an ancestor of HEAD (it refuses
+        # a shallow clone by name).
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 10.34.5
@@ -105,7 +108,7 @@ jobs:
       # so a PR cannot raise the ceiling it is checked against. HEAD^1: on a
       # pull_request the checkout is the merge commit, whose first parent is
       # the base tip (and on a push it would be the previous commit), which
-      # fetch-depth: 2 above makes present. No `if:`/continue-on-error:
+      # the full-history checkout above makes present. No `if:`/continue-on-error:
       # ci-wiring.test.ts pins that this step always runs and always gates.
       - run: pnpm matrix:single-sport --check --against HEAD^1
       - run: npm run reference:boundary

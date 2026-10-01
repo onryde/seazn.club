@@ -4,6 +4,7 @@
 // rename reds the pin test by name instead of timing out mid-run.
 import { readFileSync } from "node:fs";
 import type { TemplateRowKey } from "../catalogue.ts";
+import { templateField } from "../templates.ts";
 
 export interface Pin { readonly file: string; readonly needle: string }
 /** A testid. `needle` is its literal `data-testid="…"` in `file` — or, for a
@@ -80,6 +81,8 @@ export const TESTID = testids({
   // Task 5: the entrant row's name button, and the builder's refusal line.
   entrantDisclosure: { id: "entrant-row-disclosure", file: `${V2}/entrants-panel.tsx`, needle: 'data-testid="entrant-row-disclosure"' },
   builderError: { id: "division-builder-error", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-error"' },
+  // W1-driving Task 13: the template detail sheet's "Use this template" (template-gallery.tsx:421).
+  templateDetailSubmit: { id: "template-detail-submit", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-detail-submit"' },
   // Pad and console chassis testids are NOT restated here (ruling 38): they are the bench's
   // START_MATCH_TESTID, SEND_NOW_TESTID, FINALIZE_TESTID, FORFEIT_TESTID, FORFEIT_SIDE_TESTID_PREFIX,
   // PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, DOCK_CHIP_TESTID_PREFIX (scorer.ts:165-176), and the
@@ -103,6 +106,22 @@ export const PAD_PINS: readonly Readonly<{ name: string } & Pin>[] = Object.free
   // A data-role, not a testid: the phone twin of the device hand-over.
   { name: "DEVICE_HANDOVER_PHONE", needle: 'data-role="device-handover-phone"', file: `${V2}/fixture-console.tsx` },
 ].map((p) => Object.freeze(p)));
+
+/** W1-driving Task 13: the gallery composes each card's testid from its
+ *  template's key (template-gallery.tsx:242) — pinned as that composition,
+ *  verbatim; templateCardTestid fills it. */
+export const TEMPLATE_CARD: Readonly<Pin> = Object.freeze({ file: `${V2}/template-gallery.tsx`, needle: "data-testid={`template-card-${template.key}`}" });
+
+/** The card testid for a catalog template's key. The prefix is read out of
+ *  TEMPLATE_CARD's needle (never retyped), and the key must name a catalog
+ *  template (templateField refuses an unknown or unsafe one by name), so no
+ *  page object waits on a card the gallery never renders. */
+export function templateCardTestid(key: string): string {
+  templateField(key);
+  const prefix = /`([\w-]+)\$\{template\.key\}`/.exec(TEMPLATE_CARD.needle)?.[1];
+  if (prefix === undefined) throw new Error(`selectors: cannot read the card prefix out of ${TEMPLATE_CARD.needle}`);
+  return `${prefix}${key}`;
+}
 
 export const NAME = names({
   // Hardcoded English in the product (scout C; no dictionary key to pin): the
@@ -128,6 +147,10 @@ export const NAME = names({
   // The organiser standings tab's no-table note (d/[divSlug]/page.tsx), and the
   // public page's champion banner label (public dictionary).
   standingsEmpty: dictionary("div.detail.standings.empty", ORG_DIVISION_PAGE),
+  // W1-driving Task 13: the template detail sheet's two fields (template-gallery.tsx:437-462).
+  // Its Ends on is decorated exactly as the blank wizard's.
+  templateName: dictionary("comp.wizard.name.label", `${V2}/template-gallery.tsx`),
+  templateEndsOn: decorated("comp.wizard.endsOn", `${V2}/template-gallery.tsx`, "`${msg(\"comp.wizard.endsOn\")} *`"),
   championLabel: dictionary("table.champion", PUBLIC_DIVISION_PAGE, "public"),
 });
 
@@ -145,6 +168,9 @@ export const DATA = data({
   standingsRegion: { selector: '[role="region"]', file: STANDINGS_TABLE, needle: 'role="region"' },
   standingsRowHeader: { selector: '[scope="row"]', file: STANDINGS_TABLE, needle: 'scope="row"' },
   standingsRowName: { selector: "[title]", file: STANDINGS_TABLE, needle: "title={entrantNames[row.entrantId] ?? row.entrantId}" },
+  // W1-driving Task 13: the sheet's form, which scopes its fields (the CTA in
+  // the modal footer submits it by `form="template-detail-form"`).
+  templateDetailForm: { selector: 'form[id="template-detail-form"]', file: `${V2}/template-gallery.tsx`, needle: '<form id="template-detail-form"' },
 });
 
 export class MissingLabel extends Error {

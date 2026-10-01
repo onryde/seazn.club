@@ -11,7 +11,7 @@
 // finalizing alone could never tell the two apart.
 import type { StageKind } from "@seazn/engine/core";
 import type { FixtureRow } from "../driver/types.ts";
-import { isTerminal } from "../observed.ts";
+import { isTerminal, type LoopExit } from "../observed.ts";
 import { PAD_SPORTS, noPadReason } from "../pad-sports.ts";
 import { drawsAllowed } from "../sport-cfg.ts";
 import type { RequestedOutcome } from "../streams/types.ts";
@@ -61,12 +61,14 @@ export const padProof: Scenario = {
     // left, and life-loop-bounded names any fixture it left unfinished.
     const tried = new Set<string>();
     let ordinal = 0;
+    // W1-driving T6: the root stage's own track carries the exit too (snapshot reads it per stage).
+    const exit = (e: LoopExit) => { rec.exit = e; rec.track(setup.stage.id).exit = e; };
     for (let i = 0; ; i++) {
-      if (i === MAX_ITERATIONS) { rec.exit = "cap"; rec.facts.add("cut_short"); break; }
+      if (i === MAX_ITERATIONS) { exit("cap"); rec.facts.add("cut_short"); break; }
       const fixtures = await recordGenerate(ctx, rec, setup.stage.id);
-      if (fixtures === null) { rec.exit = "refused_generate"; break; }
+      if (fixtures === null) { exit("refused_generate"); break; }
       const open = fixtures.filter((f) => seatedOpen(f) && !tried.has(f.id));
-      if (open.length === 0) { rec.exit = "drained"; break; }
+      if (open.length === 0) { exit("drained"); break; }
       const round = Math.min(...open.map((f) => f.round_no ?? 0));
       for (const f of open.filter((x) => (x.round_no ?? 0) === round).sort(byNo)) {
         tried.add(f.id);
@@ -90,8 +92,9 @@ export const padProof: Scenario = {
         finalized.push({ ok: s.status === "finalized", note: `${f.id}: ${s.status} after Finalize` });
       }
     }
-    const complete = await finishStage(ctx, rec, setup);
-    const observed = await snapshot(ctx, rec, setup, { complete, configEdit: null, withdrawal: null });
+    const complete = await finishStage(ctx, rec, setup.stage.id);
+    const plays = [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete }];
+    const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
     const decided = [...tried];
     return {
       observed,

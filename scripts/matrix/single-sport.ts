@@ -505,7 +505,7 @@ export function baselineAt(root: string, ref: string): Baseline | null {
   const top = git(root, ["rev-parse", "--show-toplevel"]);
   if (top.status !== 0 || realpathSync(top.stdout.trim()) !== realpathSync(root)) throw new Refusal(`--against needs ${root} to be a git checkout's top level`);
   if (git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).status !== 0) {
-    throw new Refusal(`--against ${ref}: no such commit here (in CI the gates job checks out with fetch-depth: 2 so the base, HEAD^1, is present)`);
+    throw new Refusal(`--against ${ref}: no such commit here (in CI the gates job checks out the full history, fetch-depth: 0, so the base, HEAD^1, is present)`);
   }
   if (!existsAt(root, ref, BASELINE_PATH)) {
     // Final batch FB-8: keyed on REF's own package.json, which no constant in

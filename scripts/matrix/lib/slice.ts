@@ -4,7 +4,12 @@
 // "run zero cases" — and because the keys are static, run.ts checks a filter
 // with checkSliceFilter / checkCanary before it touches the DB or the server
 // (PF13).
-import type { TemplateRowKey } from "./catalogue.ts";
+//
+// W1-driving Task 12: `--only` also admits any catalogue cell (checkCellFilter,
+// ROW_KEYS × SPORT_KEYS); a cell outside the slice is planned by the
+// w1-driving set's planner (lib/w1-driving-set.ts). checkSliceFilter keeps the
+// slice's own semantics, which the layered plans still use.
+import { ROW_KEYS, SPORT_KEYS, type RowKey, type TemplateRowKey } from "./catalogue.ts";
 import { SCENARIOS } from "./scenarios/index.ts";
 import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
 
@@ -38,6 +43,22 @@ export interface SliceFilter { only?: string; scenario?: string }
 const caseId = (row: string, sport: string, variant: string, scenario: string) => `${row}|${sport}|${variant}|${scenario}`;
 
 const sliceCells = (): string[] => SLICE_ROWS.flatMap((row) => SLICE_SPORTS.map((sport) => `${row}|${sport}`));
+
+/** Whether `only` names one of the slice's six cells. */
+export const isSliceCell = (only: string): boolean => sliceCells().includes(only);
+
+/** W1-driving Task 12: the catalogue cell an `--only` names, or UnknownFilter.
+ *  Exactly one `|`, a registry row and a registry sport — matched, never
+ *  trimmed or case-folded, so what is planned is what was typed. */
+export function checkCellFilter(only: string): { row: RowKey; sport: string } {
+  const parts = only.split("|");
+  const row = ROW_KEYS.find((r) => r === parts[0]);
+  const sport = SPORT_KEYS.find((x) => x === parts[1]);
+  if (parts.length !== 2 || row === undefined || sport === undefined) {
+    throw new UnknownFilter("--only cell", only, ["<row>|<sport>", `row one of: ${ROW_KEYS.join(" ")}`, `sport one of: ${SPORT_KEYS.join(" ")}`]);
+  }
+  return { row, sport };
+}
 
 /** Throws UnknownFilter for a value the slice does not hold. An empty string
  *  is a value, not "no filter". */

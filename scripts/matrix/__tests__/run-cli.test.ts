@@ -7,16 +7,16 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { API_ONLY_ROWS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesForRow } from "../lib/catalogue.ts";
-import { NoOrganiserPath, RefusedCall } from "../lib/driver/types.ts";
+import { NoOrganiserPath, OrgMismatch, RefusedCall } from "../lib/driver/types.ts";
 import { openBrowserRun, type OpenBrowserRun } from "../lib/browser/browser-run.ts";
 import type { PageCtx } from "../lib/browser/pages/ctx.ts";
 import type { CaseBrowser } from "../lib/browser/session.ts";
-import { EMPTY_PADS, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
-import type { Transport } from "../lib/driver/http-driver.ts";
+import { EMPTY_PADS, OVERRIDE_ROUTE, REAL_PAGES, type BrowserDriver, type BrowserPages } from "../lib/driver/browser-driver.ts";
+import { REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
 import { ADVANCED_KINDS, DOUBLE_ELIM_KINDS, expectedGate } from "../lib/format-gates-copy.ts";
 import { INVARIANTS } from "../lib/invariants.ts";
 import { PROBE_SET, makeProbePlanner, probeRows } from "../lib/probe-set.ts";
-import { API_ONLY_BROWSER_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
+import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET } from "../lib/layers.ts";
 import { PAD_PROOF_SET } from "../lib/pad-proof-set.ts";
 import { PAD_SPORTS } from "../lib/pad-sports.ts";
 import { PAD_ADAPTERS } from "../lib/pads/index.ts";
@@ -26,7 +26,10 @@ import { LOCAL_BASE } from "../lib/redact.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
-import type { CaseResult, CheckResult, RunResults } from "../lib/results.ts";
+import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
+import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, sharedTurns } from "../lib/workers.ts";
+import { deferred, handClock } from "./hand-clock.ts";
+import { W1_DRIVING_SET } from "../lib/w1-driving-set.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { ScenarioUnsupported, type ScenarioContext, type ScenarioOutput } from "../lib/scenarios/types.ts";
@@ -34,7 +37,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { EXIT, NOTES_CAP, PlanStageCapTooLow, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
@@ -110,6 +113,8 @@ function readsOf(base: Deps): { sports: string[]; lists: Map<string, string[]>; 
 
 const dirFor = () => mkdtempSync(join(tmpdir(), "fm-"));
 const resultsIn = (dir: string, runId: string) => JSON.parse(readFileSync(join(dir, runId, "results.json"), "utf8")) as { cases: CaseResult[] };
+/** The run's results.json, through the schema (fix round 2: the header fields too). */
+const runIn = (dir: string, runId: string): RunResults => parseResults(JSON.parse(readFileSync(join(dir, runId, "results.json"), "utf8"))) as RunResults;
 
 /** Everything runSlice prints, captured (and kept off the reporter). */
 function capture() {
@@ -181,11 +186,13 @@ describe("runSlice — refusals first", () => {
   // PF13: the filter keys are static, so a typo is refused before the run
   // proves its DB, preflights, opens a connection or signs in. The data dir is
   // ALSO unset here: the refusal must name the filter, not the data dir.
-  it.each([["--only", "league|genric"], ["--scenario", "M9"], ["--canary", "LIFECYCLE"], ["--only", ""]])(
+  // W1-driving Task 12: --only now admits any catalogue cell, so the typo rows
+  // include one outside the slice, and the w1-driving set's own filters.
+  it.each([["--only", "league|genric"], ["--scenario", "M9"], ["--canary", "LIFECYCLE"], ["--only", ""], ["--only", "league_ko|footbal"], ["--set w1-driving --only", "nope|generic"], ["--set w1-driving --scenario", "DENIED"]])(
     "%s '%s' is refused (exit 2, UnknownFilter on stderr) before the own-DB check, preflight, DB or sign-in", async (flag, value) => {
       const io = capture();
       const d = deps({ env: { SMOKE_BASE: "http://localhost:3999" } });
-      expect(await runSlice(d, [flag, value, "--report-dir", dirFor()])).toBe(2);
+      expect(await runSlice(d, [...flag.split(" "), value, "--report-dir", dirFor()])).toBe(2);
       expect(d.order).toEqual([]);
       expect(io.err()).toMatch(/UnknownFilter: slice: unknown --(only cell|scenario|canary) '/);
       expect(io.err()).not.toMatch(/BENCH_EXPECTED_DATA_DIR/);
@@ -214,7 +221,7 @@ describe("runSlice — refusals first", () => {
     const io = capture();
     expect(await runSlice(d, ["--set", name, "--report-dir", dirFor()])).toBe(2);
     expect(d.order).toEqual([]);
-    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET})`);
+    expect(io.err()).toContain(`UnknownSet: matrix: unknown --set '${name}' (allowed: ${PROBE_SET}, ${PAD_PROOF_SET}, ${WIDTH_SWEEP_SET}, ${API_ONLY_BROWSER_SET}, ${W1_DRIVING_SET}, ${W1_DRIVING_L1_SET})`);
   });
   // W1c Task 7: pad-proof scores every fixture on the pad, so over HTTP it has nothing to prove.
   it("--set pad-proof without --driver browser is refused (exit 2) before the DB, naming the driver it needs", async () => {
@@ -229,6 +236,28 @@ describe("runSlice — refusals first", () => {
       checked++;
     }
     expect(checked).toBe(2);
+  });
+  it("--set w1-driving takes --only and --scenario but not --canary: a usage refusal naming what it takes", async () => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, ["--set", W1_DRIVING_SET, "--canary", "M1"])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toContain(`--set ${W1_DRIVING_SET} takes --only and --scenario; it takes no --canary`);
+    expect(io.err()).toMatch(/usage: run\.ts/);
+  });
+  it("--set w1-driving with a real cell and a scenario the committed drop list drops is refused before the DB (never an empty run)", async () => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, ["--set", W1_DRIVING_SET, "--only", "page_playoff_only|generic", "--scenario", "F1", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/W1DrivingPlansNothing: .*page_playoff_only\|generic.*F1/);
+  });
+  it("--layer keeps the slice's --only: a catalogue cell outside the slice is still refused there", async () => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--only", "league_ko|football", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/UnknownFilter: slice: unknown --only cell 'league_ko\|football' \(allowed: league\|generic,/);
   });
   it("--set with --only/--scenario/--canary is a usage refusal", async () => {
     for (const extra of [["--only", "league|generic"], ["--scenario", "M1"], ["--canary", "M1"]]) {
@@ -1044,6 +1073,61 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
   });
 });
 
+// W1-driving Task 6 Step 3a (plan review 1, m-1): the case orgs' plan caps
+// stages per division. A 3-stage row on a plan capped at 2 would read the
+// product's refusal as a ❌ — the RR-1 class, for a numeric limit.
+describe("the stage-cap start gate — refused before any case", () => {
+  const spec = (row: string) => ({ caseId: `${row}|generic|score|LIFECYCLE`, row, sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false }) as never;
+  const one = (row: string) => () => ({ sports: ["generic"], deniesFeatures: false, plan: (v: (s: string) => string) => [
+    { caseId: `${row}|generic|score|LIFECYCLE`, row, sport: "generic", variant: v("generic"), scenario: "LIFECYCLE", canary: false },
+  ] as never });
+  const capped = (cap: number | null, reads: string[]) => (base: Deps): Partial<RunDeps> => ({ openDb: async () => ({
+    ...(await base.openDb()),
+    planLimit: async (k: string, f: string) => { reads.push(`${k} ${f}`); return cap; },
+  }) });
+  const run = async (row: string, cap: number | null, id: string) => {
+    const reads: string[] = [];
+    const base = deps({ planCases: one(row) as never });
+    const d: Deps = { ...base, ...capped(cap, reads)(base) };
+    const io = capture();
+    const dir = dirFor();
+    const code = await runSlice(d, ["--run-id", id, "--report-dir", dir]);
+    return { code, d, io, dir, reads };
+  };
+  const ggko = stagesForRow("group_group_ko").length;
+
+  it("empty case first: no specs need no stages; a single-stage plan needs 1 — derived from the rows", () => {
+    expect(stagesNeeded([])).toEqual({ needed: 0, caseIds: [] });
+    expect(stagesNeeded([spec("league")])).toEqual({ needed: stagesForRow("league").length, caseIds: ["league|generic|score|LIFECYCLE"] });
+  });
+  it("the max over the planned rows, naming every case at it; a row that cannot be derived is not this gate's to judge", () => {
+    expect(ggko).toBe(3);
+    expect(stagesNeeded([spec("league"), spec("group_group_ko"), spec("league_ko"), spec("nope")])).toEqual({ needed: ggko, caseIds: ["group_group_ko|generic|score|LIFECYCLE"] });
+    expect(stagesNeeded([spec("league_ko"), spec("groups_ko")]).caseIds).toEqual(["league_ko|generic|score|LIFECYCLE", "groups_ko|generic|score|LIFECYCLE"]);
+  });
+  it("a plan capping stages.per_division.max below a planned row: PlanStageCapTooLow (exit 2), naming plan, cap and case; no org, nothing written", async () => {
+    const { code, d, io, dir, reads } = await run("group_group_ko", ggko - 1, "cap2");
+    expect(code).toBe(2);
+    expect(io.err()).toContain(`matrix: refused — PlanStageCapTooLow: matrix: the case orgs' plan 'pro' caps stages.per_division.max at ${ggko - 1}; 1 planned case(s) need ${ggko} — group_group_ko|generic|score|LIFECYCLE`);
+    expect(reads).toEqual(["pro stages.per_division.max"]);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "cap2"))).toBe(false);
+  });
+  it("…a cap equal to the need, or unlimited (null), lets the run start", async () => {
+    for (const [cap, id] of [[ggko, "cap3"], [null, "capnull"]] as const) {
+      const { code, d, reads } = await run("group_group_ko", cap, id);
+      expect(code, String(cap)).toBe(0);
+      expect(reads, String(cap)).toEqual(["pro stages.per_division.max"]);
+      expect(d.orgs, String(cap)).toHaveLength(1);
+      vi.restoreAllMocks();
+    }
+  });
+  it("PlanStageCapTooLow is a typed refusal carrying what it names", () => {
+    const e = new PlanStageCapTooLow("free", 1, 3, ["a", "b"]);
+    expect(e).toMatchObject({ name: "PlanStageCapTooLow", plan: "free", cap: 1, needed: 3, caseIds: ["a", "b"] });
+  });
+});
+
 describe("summariseRun (PF4) — empty first", () => {
   const base = { row: "league", sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false, counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [], layer: "L3" as const, driver: "http" as const, width: null };
   const chk = (verdict: CheckResult["verdict"], checked: number): CheckResult => ({ id: `k-${verdict}-${checked}`, kind: "invariant", verdict, checked, reason: "", evidence: [] });
@@ -1059,7 +1143,7 @@ describe("summariseRun (PF4) — empty first", () => {
       // Controller ruling (fix round 1): ⏳ is an honest owner-assigned state, never vacuity.
       kase("deferred", "later", "W1b: team rosters", []),
       // …and so is 🚫 (W1c Task 6, M-4 ruling): a path this layer does not drive, owned by a wave.
-      kase("no-path", "no_path", "W1-driving: the division builder takes no rule override", []),
+      kase("no-path", "no_path", `${OVERRIDE_ROUTE.wave}: the division builder takes no rule override`, []),
       kase("works", "works", "1 checks, 3 items", [chk("pass", 3), chk("abstain", 0)]),
       kase("real-red", "red", "k: wrong", [chk("fail", 2)]),
       kase("refused", "red", "error: RefusedCall: POST /x → HTTP 400 VALIDATION: bad", []),
@@ -1186,6 +1270,124 @@ describe("realDeps wiring (Task 7 M3)", () => {
       expect(plain).toEqual({ orgId: "o1", orgSlug: "m-r-2", denied: [] });
       expect(log.filter((l) => l.startsWith("m.deny"))).toEqual([]);
       expect(log[0]).toBe("m.insert m-r-2");
+    } finally {
+      await new Promise<void>((r) => { server.close(() => { r(); }); });
+    }
+  });
+
+  // W1-driving T11, found live (w1drv-t11-w3, knockout|badminton|bwf|M1):
+  // the provision's entitlement bust flips the run's ONE owner to staff for
+  // two admin calls and back (bench plan.ts bustOrgEntitlements). Two workers
+  // share that owner, so one's demotion landed between the other's two calls
+  // and the admin route answered 401 "Staff access required". The loopback
+  // server here answers exactly that whenever the owner is not staff at the
+  // moment of the call, and stalls each POST so two windows WOULD overlap.
+  // Fix round 1 m-2 + fix round 2 (ruling T12-R3): a provision whose admin
+  // call never answers used to hold the staff window forever. At the deadline
+  // its request is not aborted and may still land — inside the NEXT
+  // provision's window, as that case's 401. So the turns fail closed: the
+  // provision queued behind it is refused by name and never reaches the admin
+  // route. (Round 1's "the other provision then runs and succeeds" is gone.)
+  // Fix round 4: the 150ms deadline used to decide whether the second
+  // provision was queued behind the hung one or arrived after the trip. It is
+  // now fired by hand the moment the second is called, before its org switch
+  // can answer, so the second always reaches the window AFTER the trip. (The
+  // queued-behind refusal is workers.test.ts', on the same lock code.)
+  it("a case-org provision that hangs inside the staff window rejects by name at the deadline, and a provision that reaches the window after the trip is refused (TurnsClosed) without reaching the admin route", async () => {
+    const lb = await provisionLoopback((o) => o === "o-m-h-1");
+    try {
+      const hc = handClock();
+      const real = realDeps(lb.f, 150, hc.clock);
+      expect(real.turns?.deadlineMs).toBe(150);
+      const ctx = { base: lb.base, session: { cookies: {} }, userId: "u1", plan: "pro" };
+      const first = real.prepareCaseOrg(ctx, { name: "Matrix h 1", slug: "m-h-1" }).catch((e: unknown) => e);
+      await lb.hungArrived;
+      // Called while the window is held; it reaches the window only after its org switch answers.
+      const second = real.prepareCaseOrg(ctx, { name: "Matrix h 2", slug: "m-h-2" }).catch((e: unknown) => e);
+      expect(real.turns?.tripped()).toBeNull();
+      expect(hc.live().map((t) => t.ms)).toEqual([150]);
+      hc.fireTheOne();
+      const e1 = await first;
+      expect(e1).toBeInstanceOf(TurnDeadlineExceeded);
+      expect(e1).toMatchObject({ label: "case-org provision (the owner's staff window)", ms: 150 });
+      const e2 = await second;
+      expect(e2).toBeInstanceOf(TurnsClosed);
+      expect(e2).toMatchObject({ label: "case-org provision (the owner's staff window)", tripped: e1 });
+      expect(real.turns?.tripped()).toBe(e1);
+      expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-h-1/entitlement-override"]);
+      expect(lb.answered).toEqual([]);
+      // The second did reach the window: its org was switched to before the refusal.
+      expect(lb.switched).toEqual(["o-m-h-1", "o-m-h-2"]);
+      // The refused provision set no deadline of its own, and none is left live.
+      expect(hc.timers).toHaveLength(1);
+      expect(hc.live()).toEqual([]);
+    } finally {
+      await lb.close();
+    }
+  });
+  it("realDeps holds each shared turn to TURN_DEADLINE_MS by default: the driver's per-request allowance for each request a turn makes, counted in bench's own source", () => {
+    expect(realDeps().turns?.deadlineMs).toBe(TURN_DEADLINE_MS);
+    const body = (file: string, head: string): string => {
+      const src = readFileSync(resolve(REPO, file), "utf8");
+      const at = src.indexOf(head);
+      if (at < 0) throw new Error(`test: ${file} no longer has ${head}`);
+      return src.slice(at, src.indexOf("\n}\n", at));
+    };
+    const adminCalls = body("scripts/bench/lib/plan.ts", "export async function bustOrgEntitlements(").match(/\bt\.request\(/g)?.length ?? 0;
+    const signInCalls = body("scripts/bench/lib/http.ts", "export async function signIn(").match(/\bawait call\(/g)?.length ?? 0;
+    expect([adminCalls, signInCalls]).toEqual([2, 2]);
+    expect(TURN_DEADLINE_MS).toBe(Math.max(adminCalls, signInCalls) * REQUEST_TIMEOUT_MS);
+  });
+  it("two workers' case orgs provisioned at once on ONE realDeps never overlap the owner's staff window (the live 401)", async () => {
+    let staff = false;
+    const events: string[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+      req.on("end", () => {
+        const reply = (status: number, v: unknown, cookie?: string) => {
+          res.writeHead(status, { "content-type": "application/json", ...(cookie === undefined ? {} : { "set-cookie": cookie }) });
+          res.end(JSON.stringify(v));
+        };
+        if (req.method === "POST" && req.url === "/api/orgs/active") return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${(JSON.parse(body) as { org_id: string }).org_id}; Path=/`);
+        if (req.url?.endsWith("/entitlement-override")) {
+          const answer = () => { events.push(`${req.method} ${req.url} staff=${String(staff)}`); return staff ? reply(200, { ok: true, data: {} }) : reply(401, { ok: false, error: "Staff access required" }); };
+          if (req.method === "POST") { setTimeout(answer, 25); return; }
+          return answer();
+        }
+        return reply(404, { ok: false, error: "not found" });
+      });
+    });
+    await new Promise<void>((r) => { server.listen(0, "127.0.0.1", r); });
+    try {
+      const { port } = server.address() as AddressInfo;
+      let n = 0;
+      const m: MatrixSql = {
+        userIdForEmail: async () => "u1",
+        insertCaseOrg: async (i) => ({ orgId: `o${++n}`, orgSlug: i.slug }),
+        listPlanKeys: async () => [],
+        variantKeysInBuilderOrder: async () => [],
+        denyFeature: async () => {},
+        planGrants: async () => [],
+        planLimit: async () => null,
+      };
+      // ONE owner behind both orgs: setOwnerStaff flips the same user, as the real SQL does.
+      const p = {
+        getOrgSubscriptionId: async () => "sub",
+        updateSubscriptionPlan: async () => {},
+        createSubscriptionForOrg: async () => {},
+        setOwnerStaff: async (o: string, on: boolean) => { staff = on; events.push(`staff ${o} ${String(on)}`); },
+      };
+      const f: DbFactories = { matrixSql: () => ({ sql: m, dispose: async () => {} }), planSql: () => ({ sql: p as never, dispose: async () => {} }) };
+      const base = `http://127.0.0.1:${port}`;
+      const real = realDeps(f);
+      const both = await Promise.allSettled([1, 2].map((k) => real.prepareCaseOrg({ base, session: { cookies: {} }, userId: "u1", plan: "pro" }, { name: `Matrix r ${k}`, slug: `m-r-${k}` })));
+      expect(both.map((s) => s.status), JSON.stringify(both.map((s) => (s.status === "rejected" ? String(s.reason) : "ok")))).toEqual(["fulfilled", "fulfilled"]);
+      // Each window opens and closes before the next opens: true, (POST, DELETE), false — twice, never nested.
+      const staffOnly = events.filter((e) => e.startsWith("staff ")).map((e) => e.split(" ")[2]);
+      expect(staffOnly).toEqual(["true", "false", "true", "false"]);
+      expect(events.filter((e) => e.includes("entitlement-override")).every((e) => e.endsWith("staff=true"))).toBe(true);
+      expect(events.filter((e) => e.includes("entitlement-override"))).toHaveLength(4);
     } finally {
       await new Promise<void>((r) => { server.close(() => { r(); }); });
     }
@@ -1412,7 +1614,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     const run: BrowserRun = {
       caseDriver: async (co) => {
         const driver = Object.assign(new FakeLeagueDriver(co.orgId), {
-          createDivision: async () => { throw new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"); },
+          createDivision: async () => { throw new NoOrganiserPath(OVERRIDE_ROUTE.wave, "the division builder takes no rule override (pointsToWin)"); },
           checks: (): CheckResult[] => [],
         });
         return { driver, close: async () => undefined };
@@ -1421,7 +1623,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     };
     expect(await runSlice(deps({ openBrowserRun: async () => run }), ["--only", "league|generic", "--scenario", "LIFECYCLE", "--driver", "browser", "--width", "1280", "--run-id", "np", "--report-dir", dir])).toBe(0);
     const [c] = resultsIn(dir, "np").cases;
-    expect(c).toMatchObject({ state: "no_path", reason: "W1-driving: the division builder takes no rule override (pointsToWin)", checks: [] });
+    expect(c).toMatchObject({ state: "no_path", reason: `${OVERRIDE_ROUTE.wave}: the division builder takes no rule override (pointsToWin)`, checks: [] });
     expect(io.out()).toMatch(/vacuous: none/);
     expect(io.out()).toMatch(/error reds: none/);
   });
@@ -1630,7 +1832,7 @@ describe("runSlice — --driver browser --width (W1c Task 6)", () => {
     capture();
     const throws: [string, () => Error, string][] = [
       ["later", () => new ScenarioUnsupported("W1-driving", "team rosters"), "later"],
-      ["no_path", () => new NoOrganiserPath("W1-driving", "the division builder takes no rule override (pointsToWin)"), "no_path"],
+      ["no_path", () => new NoOrganiserPath(OVERRIDE_ROUTE.wave, "the division builder takes no rule override (pointsToWin)"), "no_path"],
       ["error", () => new Error("scenario boom"), "red"],
     ];
     let checked = 0;
@@ -1892,6 +2094,10 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     ["--layer L2", ["--driver", "browser", "--layer", "L2"], "--layer L2"],
     ["the width sweep", ["--set", WIDTH_SWEEP_SET, "--driver", "browser"], `--set ${WIDTH_SWEEP_SET}`],
     ["the API-only set", ["--set", API_ONLY_BROWSER_SET, "--driver", "browser"], `--set ${API_ONLY_BROWSER_SET}`],
+    // W1-driving Task 12: the w1-driving set takes filters, so its plan names them;
+    // the slice's --only on a catalogue cell outside the slice names that cell.
+    ["the w1-driving set, filtered", ["--set", W1_DRIVING_SET, "--only", "league|generic", "--scenario", "M1"], `--set ${W1_DRIVING_SET} --only league|generic --scenario M1`],
+    ["the slice's --only on a catalogue cell", ["--only", "league_ko|badminton", "--scenario", "R4"], "slice --only league_ko|badminton --scenario R4"],
   ];
   it.each(PLANS)("%s: results.json names it", async (_what, argv, plan) => {
     capture();
@@ -1907,6 +2113,24 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
   // Review m-6: the plan behind 7 of W1c Task 14's committed runs. Its own row:
   // the set plans every pad sport, so the DB must hand each one the order the
   // catalogue assumes (the table's fake knows generic and badminton only).
+  // W1-driving Task 13: the w1-driving-l1 set, through the real producer. It
+  // plans four sports, so the DB hands each the order the catalogue assumes.
+  it("the w1-driving-l1 set: results.json names it, and it plans its seven cases at 1280", async () => {
+    capture();
+    const dir = dirFor();
+    const base = deps();
+    const d = deps({
+      openBrowserRun: async () => fakeBrowserRun().run,
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] }),
+    });
+    expect(await runSlice(d, ["--set", W1_DRIVING_L1_SET, "--driver", "browser", "--run-id", "p1", "--report-dir", dir])).toBe(0);
+    const raw = JSON.parse(readFileSync(join(dir, "p1", "results.json"), "utf8")) as RunResults;
+    expect(raw.plan).toBe(`--set ${W1_DRIVING_L1_SET}`);
+    expect(raw.cases.map((c) => c.caseId.split("|").slice(0, 2).join("|"))).toEqual([
+      "league|football", "groups_ko|badminton", "ladder|generic", "americano|badminton", "mexicano|generic", "group_only|badminton", "group_group_ko|cricket",
+    ]);
+    expect(raw.cases.every((c) => c.caseId.endsWith("@1280"))).toBe(true);
+  });
   it("the pad-proof set: results.json names it", async () => {
     capture();
     const dir = dirFor();
@@ -1921,3 +2145,690 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
   });
 });
+
+// W1-driving Task 11 (ruling 46, D10): --workers N. Review Focus 4 — each
+// worker has its own session, a worker's case still refuses OrgMismatch,
+// results.cases[i] is plan item i whatever finished first, and a crash in one
+// case leaves every other index in place. The empty case of the queue (no
+// items) is workers.test.ts's; here the state transitions are the runner's:
+// one worker (today's run, unchanged), N workers, N > cases, a red case, an
+// environment refusal mid-run, and the browser refusal (D10).
+describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
+  /** Seven league cases the league fake can drive: generic × 4, badminton × 3. */
+  const SEVEN = ["generic|LIFECYCLE", "generic|M1", "generic|R4", "generic|F1", "badminton|LIFECYCLE", "badminton|M1", "badminton|R4"] as const;
+  const seven = () => ({
+    sports: ["generic", "badminton"], deniesFeatures: false,
+    plan: (v: (s: string) => string) => SEVEN.map((k) => {
+      const [sport, scenario] = k.split("|") as [string, string];
+      return { caseId: `league|${sport}|${v(sport)}|${scenario}`, row: "league", sport, variant: v(sport), scenario, canary: false };
+    }),
+  }) as never;
+  /** Each sign-in hands out its OWN session object, named, so a case's session says which worker ran it. */
+  function workerDeps(over: Partial<RunDeps> = {}): Deps & { sessions: Session[]; prepared: Map<string, Session>; driven: Map<string, Session> } {
+    const sessions: Session[] = [];
+    const prepared = new Map<string, Session>();
+    const driven = new Map<string, Session>();
+    const base = deps({
+      planCases: seven,
+      signIn: async (_b, e) => { base.order.push("signIn"); base.emails.push(`signIn ${e}`); const s: Session = { cookies: { worker: String(sessions.length) } }; sessions.push(s); return s; },
+      prepareCaseOrg: async (ctx, i) => { base.orgs.push(i); prepared.set(`org-${i.slug}`, ctx.session); return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] }; },
+      driverFor: (b, s, orgId) => { driven.set(orgId, s); const driver = new FakeLeagueDriver(orgId); base.drivers.push({ base: b, session: s, orgId, driver }); return driver; },
+      ...over,
+    });
+    return Object.assign(base, { sessions, prepared, driven });
+  }
+  const planIds = SEVEN.map((k) => { const [sport, scenario] = k.split("|"); return `league|${sport}|${sport === "generic" ? "score" : "bwf"}|${scenario}`; });
+
+  it("--workers 3 over 7 planned cases signs in exactly 3 times, every time as the run's owner", async () => {
+    capture();
+    const d = workerDeps();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk1", "--report-dir", dirFor()])).toBe(0);
+    expect(d.order.filter((x) => x === "signIn")).toHaveLength(3);
+    expect(d.sessions).toHaveLength(3);
+    expect(d.emails.filter((e) => e.startsWith("signIn "))).toEqual(Array(3).fill("signIn delivered+matrix-wk1@resend.dev"));
+    // The owner proof still follows the FIRST sign-in, once (run.ts's LOAD-BEARING note).
+    expect(d.emails.filter((e) => e.startsWith("db "))).toEqual(["db delivered+matrix-wk1@resend.dev"]);
+    expect(d.order.at(-1)).toBe("dispose");
+  });
+  it("each case's org is seeded AND driven on the session of the worker that ran it, and every worker ran a case", async () => {
+    capture();
+    const d = workerDeps();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk2", "--report-dir", dirFor()])).toBe(0);
+    let checked = 0;
+    for (let n = 1; n <= SEVEN.length; n++) {
+      const org = `org-m-wk2-${n}`;
+      expect(d.prepared.get(org), org).toBeDefined();
+      expect(d.driven.get(org), org).toBe(d.prepared.get(org));
+      expect(d.sessions, org).toContain(d.driven.get(org));
+      checked++;
+    }
+    expect(checked).toBe(7);
+    expect(new Set(d.driven.values()).size).toBe(3);
+  });
+  it("results.cases[i] is the plan's i-th case whatever finished first", async () => {
+    const io = capture();
+    const dir = dirFor();
+    // Later cases settle sooner, so completion order is the reverse of plan order.
+    const d = workerDeps({
+      prepareCaseOrg: async (_ctx, i) => {
+        const n = Number(i.slug.split("-").at(-1));
+        await new Promise((r) => setTimeout(r, (SEVEN.length - n) * 4));
+        return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] };
+      },
+    });
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk3", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "wk3").cases.map((c) => c.caseId)).toEqual(planIds);
+    // Teeth: the progress lines (printed as each case finishes) are NOT in plan order.
+    const finished = [...io.out().matchAll(/^\[(\d+)\/7\]/gm)].map((m) => Number(m[1]));
+    expect([...finished].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(finished).not.toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+  it("an OrgMismatch on one worker's case is that case's error red; every other case is unaffected", async () => {
+    capture();
+    const dir = dirFor();
+    const d = workerDeps({
+      driverFor: (_b, _s, orgId) => new (class extends FakeLeagueDriver {
+        override createCompetition(i: { name: string; slug: string }) {
+          if (orgId === "org-m-wk4-3") return Promise.reject(new OrgMismatch(orgId, "org-elsewhere"));
+          return super.createCompetition(i);
+        }
+      })(orgId),
+    });
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk4", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "wk4").cases;
+    expect(cases.map((c) => c.caseId)).toEqual(planIds);
+    expect(cases[2]!.state).toBe("red");
+    expect(cases[2]!.reason).toMatch(/^error: OrgMismatch: driver: competition landed in org org-elsewhere, expected org-m-wk4-3/);
+    const others = cases.filter((_c, k) => k !== 2);
+    expect(others.map((c) => c.reason.startsWith("error:"))).toEqual(Array(6).fill(false));
+    expect(others.filter((c) => c.scenario === "LIFECYCLE").map((c) => c.state)).toEqual(["works", "works"]);
+  });
+  // runCase keeps every driver and product refusal as its case's error red
+  // (the OrgMismatch case above), so a throw PAST it is a harness defect. One
+  // real seam reaches that today: the case's progress line. Review Focus 4 —
+  // the crash is recorded at its own plan index, and every other case keeps
+  // its own result.
+  it("a case whose run throws past runCase (its progress line cannot be written) is red at its own index as a crash; every other case keeps its result", async () => {
+    const lines: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.spyOn(process.stdout, "write").mockImplementation((s: string | Uint8Array) => {
+      const line = String(s);
+      if (line.startsWith("[3/7] ") && !line.includes("crashed")) throw new Error("stdout closed");
+      lines.push(line);
+      return true;
+    });
+    const dir = dirFor();
+    const clean = dirFor();
+    expect(await runSlice(workerDeps(), ["--workers", "3", "--run-id", "wkc", "--report-dir", dir])).toBe(0);
+    const cases = resultsIn(dir, "wkc").cases;
+    expect(cases.map((c) => c.caseId)).toEqual(planIds);
+    expect(cases[2]).toMatchObject({ state: "red", reason: "error: crashed — Error: stdout closed", checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, layer: "L3", driver: "http", width: null });
+    expect(lines.join("")).toContain(`[3/7] ${planIds[2]} → red error: crashed — Error: stdout closed`);
+    // Every other index holds what the same plan gives with nothing crashing.
+    vi.restoreAllMocks();
+    capture();
+    expect(await runSlice(workerDeps(), ["--workers", "3", "--run-id", "wkc", "--report-dir", clean])).toBe(0);
+    const want = resultsIn(clean, "wkc").cases;
+    let checked = 0;
+    for (const k of [0, 1, 3, 4, 5, 6]) {
+      expect([cases[k]!.caseId, cases[k]!.state, cases[k]!.reason], String(k)).toEqual([want[k]!.caseId, want[k]!.state, want[k]!.reason]);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(want[2]!.reason).not.toMatch(/crashed/);
+  });
+  it("a DB that stops proving it is ours in one worker's case refuses the run (exit 2): nothing written, no later case starts, and the DB is disposed only after every worker settled", async () => {
+    const io = capture();
+    const dir = dirFor();
+    let active = 0;
+    let activeAtDispose = -1;
+    const base = workerDeps();
+    const d = workerDeps({
+      openDb: async () => ({ ...(await base.openDb()), dispose: async () => { activeAtDispose = active; d.order.push("dispose"); } }),
+      prepareCaseOrg: async (_ctx, i) => {
+        d.orgs.push(i);
+        if (i.slug === "m-wk5-2") throw new DataDirMismatch("/tmp/pg", "/var/other");
+        active++;
+        await new Promise((r) => setTimeout(r, 20));
+        active--;
+        return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [] };
+      },
+    });
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wk5", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/matrix: refused — DataDirMismatch/);
+    expect(existsSync(join(dir, "wk5"))).toBe(false);
+    // Only the cases already in flight when it refused (at most one per worker) ever started.
+    expect(d.orgs.map((o) => o.slug)).toContain("m-wk5-2");
+    expect(d.orgs.length).toBeLessThanOrEqual(3);
+    expect(activeAtDispose).toBe(0);
+    expect(d.order.at(-1)).toBe("dispose");
+  });
+  // Found live (w1drv-t11-w3b, w1drv-t11-w8): a sign-in requests a magic link
+  // and consumes it, and requesting a link deletes the owner's unused ones
+  // (apps/web/src/lib/login-link.ts:13, `delete from login_links where
+  // user_id = … and used = false`). Workers opened at once raced: one's
+  // request deleted another's link before it was consumed, and the run
+  // aborted "This sign-in link is invalid or has expired". The fake below
+  // models exactly that: a sign-in fails when another was requested while it
+  // was in flight.
+  it("the workers' sign-ins take turns: an overlapping magic-link request would delete another worker's link (the live abort)", async () => {
+    capture();
+    let requested = 0;
+    let overlapping = 0;
+    let active = 0;
+    const d = workerDeps();
+    const signIn = d.signIn;
+    d.signIn = async (b, e) => {
+      const mine = ++requested;
+      active++;
+      if (active > 1) overlapping++;
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      if (mine !== requested) throw new Error("/api/auth/magic-link/consume: This sign-in link is invalid or has expired");
+      return signIn(b, e);
+    };
+    const dir = dirFor();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wks", "--report-dir", dir])).toBe(0);
+    expect(d.order.filter((x) => x === "signIn")).toHaveLength(3);
+    expect(overlapping).toBe(0);
+    expect(resultsIn(dir, "wks").cases.map((c) => c.caseId)).toEqual(planIds);
+  });
+  // Fix round 1 m-2 + fix round 2 (ruling T12-R3): a sign-in that never
+  // answers closes the run's turns at the deadline and aborts the run by name.
+  // The results say why — worker 1's sign-in, no case — and keep every case
+  // that finished; nothing is recorded against the timeout.
+  // Fix round 4: the 40ms deadline used to fire whenever it fired, so the
+  // split between kept, in-flight and never-started cases was whatever the
+  // clock made it (on an idle box worker 0 could finish all seven first,
+  // leaving "no case starts after the trip" nothing to witness). The deadline
+  // is now fired by hand while worker 0 is mid-scenario on its third case.
+  it("a workers' sign-in that never answers aborts the run by name at the turn deadline (exit 3): results.json names worker 1's sign-in, keeps the cases that finished, and no case starts after the trip", async () => {
+    const io = capture();
+    const hc = handClock();
+    const turns = sharedTurns(40, hc.clock);
+    let n = 0;
+    const late: string[] = [];
+    const stall = deferred();
+    const stallEntered = deferred();
+    const stalledPastTrip: boolean[] = [];
+    class Stalls extends FakeLeagueDriver {
+      override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
+        stallEntered.resolve();
+        await stall.promise;
+        stalledPastTrip.push(turns.tripped() !== null);
+        return super.createCompetition(i);
+      }
+    }
+    // Worker 0's third case stalls mid-scenario until the test lets it go.
+    const d = workerDeps({ turns, driverFor: (_b, _s, orgId) => (orgId === "org-m-wkh-3" ? new Stalls(orgId) : new FakeLeagueDriver(orgId)) });
+    const signIn = d.signIn;
+    // The first sign-in is worker 0's (before the owner proofs, outside the turns); the second is worker 1's turn.
+    d.signIn = async (b, e) => (++n === 2 ? new Promise<Session>(() => {}) : signIn(b, e));
+    const prepare = d.prepareCaseOrg;
+    d.prepareCaseOrg = async (ctx, i) => { if (turns.tripped() !== null) late.push(i.slug); return prepare(ctx, i); };
+    const dir = dirFor();
+    const run = runSlice(d, ["--workers", "3", "--run-id", "wkh", "--report-dir", dir]);
+    await stallEntered.promise;
+    // The one live deadline is worker 1's sign-in turn (worker 2's is queued behind it and has not begun).
+    expect(turns.tripped()).toBeNull();
+    hc.fireTheOne();
+    stall.resolve();
+    expect(await run).toBe(EXIT.ABORTED);
+    expect(stalledPastTrip).toEqual([true]);
+    expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: workers' sign-in: held its turn past the 40ms deadline \(worker 1's sign-in\)/);
+    const r = runIn(dir, "wkh");
+    // Worker 0 ran alone, in plan order: the two cases it finished before the trip are evidence; the third,
+    // mid-scenario at the trip, finished during the abort (T12-R4) and is listed for a re-run.
+    expect(r.aborted).toEqual({ turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 1, inFlight: [planIds[2]] });
+    expect(r.cases.map((c) => c.caseId)).toEqual(planIds.slice(0, 2));
+    expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
+    // No case started after the trip: exactly the three it had begun ever had an org.
+    expect(d.orgs.map((o) => o.slug)).toEqual(["m-wkh-1", "m-wkh-2", "m-wkh-3"]);
+    expect(late).toEqual([]);
+    expect(hc.live()).toEqual([]);
+    expect(readFileSync(join(dir, "wkh", "MATRIX.md"), "utf8")).toContain("> **Run aborted** — `workers' sign-in` held its turn past the 40ms deadline (worker 1's sign-in).");
+    expect(d.order.at(-1)).toBe("dispose");
+  });
+  // Ruling T12-R3, through the REAL provision wiring (realDeps' staff window
+  // on a loopback server) and the real runner: one worker, so the plan order
+  // is the run order and "no later item starts" is an exact count.
+  // Fix round 4: the deadline is fired by hand once case 3's admin call hangs.
+  // A real 100ms deadline could also time out cases 1 or 2's own provisions
+  // (two loopback calls each) on a loaded machine, naming the wrong case.
+  it("T12-R3: a never-resolving provision turn aborts the run by name (exit 3) — the cases before it keep their results, the case it held gets none, and no later item starts", async () => {
+    const io = capture();
+    const inserted: string[] = [];
+    const lb = await provisionLoopback((o) => o === "o-m-wkp-3", (slug) => { inserted.push(slug); });
+    try {
+      const hc = handClock();
+      const real = realDeps(lb.f, 100, hc.clock);
+      const d = workerDeps({ prepareCaseOrg: real.prepareCaseOrg, turns: real.turns });
+      const dir = dirFor();
+      const run = runSlice(d, ["--workers", "1", "--base", lb.base, "--run-id", "wkp", "--report-dir", dir]);
+      await lb.hungArrived;
+      hc.fireTheOne();
+      expect(await run).toBe(EXIT.ABORTED);
+      expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision \(the owner's staff window\): held its turn past the 100ms deadline \(case league\|/);
+      const r = runIn(dir, "wkp");
+      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[2], worker: null, inFlight: [] });
+      expect(r.cases.map((c) => c.caseId)).toEqual(planIds.slice(0, 2));
+      expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
+      expect(inserted).toEqual(["m-wkp-1", "m-wkp-2", "m-wkp-3"]);
+      expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-wkp-3/entitlement-override"]);
+      expect(readFileSync(join(dir, "wkp", "MATRIX.md"), "utf8")).toContain(`(case \`${planIds[2]}\`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 2 case(s) that finished before the trip.`);
+      // Three provision turns began (cases 1–3), and the hung one was the only deadline that ever fired.
+      expect(hc.timers).toHaveLength(3);
+      expect(hc.live()).toEqual([]);
+    } finally {
+      await lb.close();
+    }
+  });
+  // T12-R3 + fix round 3 (ruling T12-R4), on three workers, ordered by
+  // latches (fix round 4, re-review 1 I-1: the 300/50/100ms timers raced in
+  // both directions under load). Nothing here waits on wall time:
+  //   - case 0's driver stalls mid-scenario on a deferred the test resolves
+  //     only AFTER it fires the trip, so case 0 is in flight at the trip;
+  //   - case 3's org insert waits until cases 0, 1 and 2 are all past their
+  //     provisions (their drivers built), so case 3's hung admin call is the
+  //     only turn in the window when it hangs;
+  //   - every later org insert waits for that hung call, so it queues behind it;
+  //   - the deadline is fired by hand, once, after case 3's call hung and case
+  //     4's org was inserted — and case 4 is taken only by a lane that FINISHED
+  //     its case, with the other two lanes held by cases 0 and 3, so cases 1 and
+  //     2 have both finished before the trip.
+  // Case 0 finishes during the abort: a late answer from case 3's turn could
+  // have landed on it, so it is listed for a re-run and is NOT evidence.
+  // Cases 1 and 2, completed before the trip, stay as evidence.
+  it("T12-R3/R4 on three workers: the timed-out case is named with no result, a case mid-scenario at the trip finishes but is listed in-flight and excluded from evidence, cases completed before the trip are kept, and no case org is created after the trip", async () => {
+    const io = capture();
+    const hc = handClock();
+    const holder: { real: RunDeps | null } = { real: null };
+    const tripped = (): boolean => (holder.real?.turns?.tripped() ?? null) !== null;
+    const inserted: string[] = [];
+    const late: string[] = [];
+    const hungSeen = deferred();
+    const earlierPastProvision = deferred();
+    const fifthInserted = deferred();
+    const stall = deferred();
+    const stallEntered = deferred();
+    const pastProvision = new Set<string>();
+    const lb = await provisionLoopback(
+      (o) => { if (o !== "o-m-wkq-4") return false; hungSeen.resolve(); return true; },
+      (slug) => { inserted.push(slug); if (tripped()) late.push(slug); if (slug === "m-wkq-5") fifthInserted.resolve(); },
+      (slug) => (slug === "m-wkq-4" ? earlierPastProvision.promise : ["m-wkq-1", "m-wkq-2", "m-wkq-3"].includes(slug) ? undefined : hungSeen.promise),
+    );
+    class Stalls extends FakeLeagueDriver {
+      stalledPastTrip: boolean | null = null;
+      override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
+        stallEntered.resolve();
+        await stall.promise;
+        this.stalledPastTrip = tripped();
+        return super.createCompetition(i);
+      }
+    }
+    const stalls: Stalls[] = [];
+    try {
+      const real = realDeps(lb.f, 100, hc.clock);
+      holder.real = real;
+      const d = workerDeps({
+        prepareCaseOrg: real.prepareCaseOrg, turns: real.turns,
+        driverFor: (_b, _s, orgId) => {
+          // runCase builds a case's driver only once its org is provisioned.
+          pastProvision.add(orgId);
+          if (["o-m-wkq-1", "o-m-wkq-2", "o-m-wkq-3"].every((o) => pastProvision.has(o))) earlierPastProvision.resolve();
+          if (orgId !== "o-m-wkq-1") return new FakeLeagueDriver(orgId);
+          const slow = new Stalls(orgId);
+          stalls.push(slow);
+          return slow;
+        },
+      });
+      const dir = dirFor();
+      const run = runSlice(d, ["--workers", "3", "--base", lb.base, "--run-id", "wkq", "--report-dir", dir]);
+      await Promise.all([stallEntered.promise, hungSeen.promise, fifthInserted.promise]);
+      expect(tripped()).toBe(false);
+      // The one live deadline is case 3's provision turn: cases 0–2's were cleared, case 4's has not begun.
+      hc.fireTheOne();
+      expect(tripped()).toBe(true);
+      stall.resolve();
+      expect(await run).toBe(EXIT.ABORTED);
+      expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision .*; 1 finished during the abort and are listed for a re-run, not kept as evidence/);
+      const r = runIn(dir, "wkq");
+      // The witness: case 0 really was mid-scenario when the turns tripped.
+      expect(stalls.map((x) => x.stalledPastTrip)).toEqual([true]);
+      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[3], worker: null, inFlight: [planIds[0]] });
+      // In-flight (case 0) and the holder (case 3) are not evidence; cases 1 and 2, completed before the trip, are.
+      const kept = r.cases.map((c) => c.caseId);
+      expect(kept).toEqual([planIds[1], planIds[2]]);
+      expect(r.cases.filter((c) => c.reason.startsWith("error:"))).toEqual([]);
+      // No case org after the trip: case 4's was inserted before it (then refused at the window), and cases 5–6 never started.
+      expect(late).toEqual([]);
+      expect([...inserted].sort()).toEqual(["m-wkq-1", "m-wkq-2", "m-wkq-3", "m-wkq-4", "m-wkq-5"]);
+      expect(lb.hung).toEqual(["POST /api/admin/orgs/o-m-wkq-4/entitlement-override"]);
+      expect(hc.live()).toEqual([]);
+      // MATRIX.md: case 0 only under the banner, never in the grid or the counts.
+      const md = readFileSync(join(dir, "wkq", "MATRIX.md"), "utf8");
+      expect(md.split("\n").filter((l) => l.includes(planIds[0]!))).toEqual([`> Finished during abort — re-run (not evidence: a late answer from the timed-out turn could have landed on them): \`${planIds[0]}\`.`]);
+      expect(md).toContain("the grid shows the 2 case(s) that finished before the trip.");
+    } finally {
+      await lb.close();
+    }
+  });
+  // Fix round 4 (ruling T12-R5). The trip is recorded the moment the deadline
+  // fires, but the timed-out case reaches `crashed` (the queue's abort) only
+  // after realDeps has closed its DB handles — real I/O. A lane that freed up
+  // in that window used to take the next item: insert its org and switch its
+  // session before the window refused it, so the banner's "no later case
+  // started" was false. Reached here by latches: case 1's provision hangs and
+  // is timed out by hand, its handles' closing is HELD, and only then does case
+  // 0 (mid-scenario at the trip) finish and free its lane. The lane's next step
+  // is microtask-only (the fake driver does no I/O), so one macrotask turn is
+  // room for it to take an item; the closing is released only after that.
+  it("T12-R5: a lane that frees up while the timed-out case is still closing its DB handles takes no new item — no org is inserted, no session switched, and no case starts after the trip", async () => {
+    const io = capture();
+    const hc = handClock();
+    const holder: { real: RunDeps | null } = { real: null };
+    const tripped = (): boolean => (holder.real?.turns?.tripped() ?? null) !== null;
+    const inserted: string[] = [];
+    const late: string[] = [];
+    const hungSeen = deferred();
+    const casePastProvision = deferred();
+    const closing = deferred();
+    const releaseClosing = deferred();
+    const stall = deferred();
+    const stallEntered = deferred();
+    const lb = await provisionLoopback(
+      (o) => { if (o !== "o-m-wkw-2") return false; hungSeen.resolve(); return true; },
+      (slug) => { inserted.push(slug); if (tripped()) late.push(slug); },
+      // Case 1's insert waits for case 0 to be past its provision, so case 1's hung call holds the window alone.
+      (slug) => (slug === "m-wkw-2" ? casePastProvision.promise : undefined),
+      // Every DB handle closed after the trip is held — the timed-out case's first: that is the window.
+      () => { if (!tripped()) return undefined; closing.resolve(); return releaseClosing.promise; },
+    );
+    class Stalls extends FakeLeagueDriver {
+      override async createCompetition(i: Parameters<FakeLeagueDriver["createCompetition"]>[0]) {
+        stallEntered.resolve();
+        await stall.promise;
+        return super.createCompetition(i);
+      }
+    }
+    try {
+      const real = realDeps(lb.f, 100, hc.clock);
+      holder.real = real;
+      const d = workerDeps({
+        prepareCaseOrg: real.prepareCaseOrg, turns: real.turns,
+        driverFor: (_b, _s, orgId) => {
+          if (orgId !== "o-m-wkw-1") return new FakeLeagueDriver(orgId);
+          casePastProvision.resolve();
+          return new Stalls(orgId);
+        },
+      });
+      const dir = dirFor();
+      const run = runSlice(d, ["--workers", "2", "--base", lb.base, "--run-id", "wkw", "--report-dir", dir]);
+      await Promise.all([stallEntered.promise, hungSeen.promise]);
+      hc.fireTheOne();
+      // Case 1 is now in the window: its turn timed out, and it is closing its handles.
+      await closing.promise;
+      // Case 0 finishes inside the window; its lane is free and the queue has items left.
+      stall.resolve();
+      await new Promise<void>((r) => { setImmediate(r); });
+      const outInWindow = io.out();
+      const insertedInWindow = [...inserted];
+      const switchedInWindow = [...lb.switched];
+      releaseClosing.resolve();
+      expect(await run).toBe(EXIT.ABORTED);
+      // The window was reached: case 0's progress line was written before the closing was released.
+      expect(outInWindow).toContain(`[1/7] ${planIds[0]} → `);
+      expect(outInWindow).toContain("(finished during abort — re-run; not evidence)");
+      // …and in it the free lane took nothing: no org inserted, no session switched.
+      expect(insertedInWindow).toEqual(["m-wkw-1", "m-wkw-2"]);
+      expect(switchedInWindow).toEqual(["o-m-wkw-1", "o-m-wkw-2"]);
+      expect(inserted).toEqual(["m-wkw-1", "m-wkw-2"]);
+      expect(lb.switched).toEqual(["o-m-wkw-1", "o-m-wkw-2"]);
+      expect(late).toEqual([]);
+      const r = runIn(dir, "wkw");
+      expect(r.aborted).toEqual({ turn: "case-org provision (the owner's staff window)", deadlineMs: 100, caseId: planIds[1], worker: null, inFlight: [planIds[0]] });
+      expect(r.cases).toEqual([]);
+      expect(io.err()).toMatch(/no later case started — results\.json keeps the 0 case\(s\) that finished before the trip as evidence; 1 finished during the abort/);
+      expect(hc.live()).toEqual([]);
+    } finally {
+      releaseClosing.resolve();
+      await lb.close();
+    }
+  });
+  // Fix round 4: the deadline is fired by hand once the canary's admin call hangs.
+  it("T12-R3: an aborted canary run is an abort (exit 3, named), never a canary verdict on a case that has no result", async () => {
+    const io = capture();
+    const lb = await provisionLoopback(() => true);
+    try {
+      const hc = handClock();
+      const real = realDeps(lb.f, 60, hc.clock);
+      const d = workerDeps({ planCases: undefined, prepareCaseOrg: real.prepareCaseOrg, turns: real.turns });
+      const dir = dirFor();
+      const run = runSlice(d, ["--canary", "M1", "--base", lb.base, "--run-id", "wkc", "--report-dir", dir]);
+      await lb.hungArrived;
+      hc.fireTheOne();
+      expect(await run).toBe(EXIT.ABORTED);
+      expect(io.out()).not.toMatch(/canary M1:/);
+      expect(io.err()).toMatch(/matrix: aborted — TurnDeadlineExceeded: case-org provision \(the owner's staff window\): held its turn past the 60ms deadline \(case league\|generic\|/);
+      const r = runIn(dir, "wkc");
+      expect(r.aborted).toMatchObject({ turn: "case-org provision (the owner's staff window)", deadlineMs: 60, worker: null, inFlight: [] });
+      expect(r.aborted?.caseId).toMatch(/^league\|generic\|.*\|M1\|canary$/);
+      expect(r.cases).toEqual([]);
+    } finally {
+      await lb.close();
+    }
+  });
+  it("T12-R3 guard: a turn refusal that reaches the run with no case or worker named as its holder aborts writing nothing — it is never filed against a case", async () => {
+    const io = capture();
+    const stray = new TurnsClosed("case-org provision", new TurnDeadlineExceeded("elsewhere", 5));
+    const d = workerDeps({ prepareCaseOrg: async () => { throw stray; } });
+    const dir = dirFor();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wkg", "--report-dir", dir])).toBe(EXIT.ABORTED);
+    expect(io.err()).toMatch(/matrix: aborted — TurnsClosed: case-org provision: refused/);
+    expect(existsSync(join(dir, "wkg"))).toBe(false);
+  });
+  // Fix round 1 m-1: the header records the workers that RAN — one per
+  // sign-in the fake saw — never the number asked for.
+  it("--workers above the case count opens only as many workers as cases, and the header records the workers that ran", async () => {
+    capture();
+    const d = workerDeps({ planCases: undefined });
+    const oneDir = dirFor();
+    expect(await runSlice(d, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wk6", "--report-dir", oneDir])).toBe(0);
+    expect(d.order.filter((x) => x === "signIn")).toHaveLength(1);
+    // One case ran on one worker: today's single-sign-in header, no field.
+    const one = JSON.parse(readFileSync(join(oneDir, "wk6", "results.json"), "utf8")) as RunResults;
+    expect(one.cases).toHaveLength(1);
+    expect("workers" in one).toBe(false);
+    capture();
+    const two = workerDeps({ planCases: undefined });
+    const twoDir = dirFor();
+    expect(await runSlice(two, ["--workers", String(MAX_WORKERS), "--only", "league|generic", "--run-id", "wk6b", "--report-dir", twoDir])).toBe(0);
+    const signIns = two.order.filter((x) => x === "signIn").length;
+    expect(signIns).toBe(SCENARIO_KEYS.length);
+    // The case below only witnesses m-1 while fewer workers ran than were asked for.
+    expect(signIns).toBeGreaterThan(1);
+    expect(signIns).toBeLessThan(MAX_WORKERS);
+    const header = JSON.parse(readFileSync(join(twoDir, "wk6b", "results.json"), "utf8")) as RunResults;
+    expect(header.workers).toBe(signIns);
+    expect(parseResults(header)).toMatchObject({ workers: signIns });
+  });
+  it("--workers 3 is recorded in results.json's run header (parseResults reads it); --workers 1 writes today's header, with no workers field", async () => {
+    capture();
+    const dir = dirFor();
+    expect(await runSlice(workerDeps(), ["--workers", "3", "--run-id", "wk7", "--report-dir", dir])).toBe(0);
+    const three = JSON.parse(readFileSync(join(dir, "wk7", "results.json"), "utf8")) as RunResults;
+    expect(three.workers).toBe(3);
+    expect(parseResults(three)).toMatchObject({ schemaVersion: 3, workers: 3 });
+    capture();
+    expect(await runSlice(workerDeps(), ["--workers", "1", "--run-id", "wk7b", "--report-dir", dir])).toBe(0);
+    const one = JSON.parse(readFileSync(join(dir, "wk7b", "results.json"), "utf8")) as Record<string, unknown>;
+    expect("workers" in one).toBe(false);
+  });
+  it("--workers 1 is today's single-sign-in run: the same order, one sign-in, the same cases and states as no --workers at all", async () => {
+    let checked = 0;
+    const runs: { order: string[]; cases: [string, string][]; keys: string[] }[] = [];
+    for (const extra of [[], ["--workers", "1"]]) {
+      capture();
+      const dir = dirFor();
+      const d = deps();
+      expect(await runSlice(d, [...extra, "--only", "league|generic", "--run-id", "w1", "--report-dir", dir]), extra.join(" ")).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, "w1", "results.json"), "utf8")) as RunResults;
+      runs.push({ order: d.order, cases: raw.cases.map((c) => [c.caseId, c.state]), keys: Object.keys(raw).sort() });
+      expect(d.ctxs.every((c) => c.session === d.session)).toBe(true);
+      vi.restoreAllMocks();
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(runs[0]!.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+    expect(runs[1]).toEqual(runs[0]);
+  });
+  // "=-2" is one token: a bare "-2" after --workers is refused by parseArgs itself, as ambiguous.
+  it.each(["0", String(MAX_WORKERS + 1), "1.5", "abc", "", "=-2", " 3"])("--workers '%s' is a usage error naming the bound, before anything runs", async (n) => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, [...(n.startsWith("=") ? [`--workers${n}`] : ["--workers", n]), "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toContain(`1..${MAX_WORKERS}`);
+    expect(io.err()).toMatch(/usage: run\.ts .*--workers N/);
+  });
+  it("D10: --driver browser --workers 2 is a usage error naming the wave that owes browser workers; --workers 1 in a browser still runs", async () => {
+    const io = capture();
+    const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
+    expect(await runSlice(d, ["--driver", "browser", "--width", "1280", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/--workers 2 is HTTP-only in this wave .*W1d/);
+    expect(io.err()).toMatch(/usage: run\.ts/);
+    vi.restoreAllMocks();
+    capture();
+    const one = deps({ openBrowserRun: async () => fakeBrowserRun().run });
+    expect(await runSlice(one, ["--driver", "browser", "--width", "1280", "--workers", "1", "--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", "wb1", "--report-dir", dirFor()])).toBe(0);
+    expect(one.order).toEqual(["preflight", "openDb", "signIn", "dispose"]);
+  });
+  it("D10 holds for a layered plan too: --layer L1 --workers 2 is refused before anything runs", async () => {
+    const io = capture();
+    const d = deps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--workers", "2", "--report-dir", dirFor()])).toBe(2);
+    expect(d.order).toEqual([]);
+    expect(io.err()).toMatch(/W1d/);
+  });
+});
+
+// W1-driving Task 12: --only on any catalogue cell, and --set w1-driving. The
+// expected case ids are typed from the brief's scenario list and the
+// catalogue's offline builder default (the DB fake hands each sport the order
+// the catalogue assumes), never read back from the planner under test.
+describe("runSlice — --only on a catalogue cell outside the slice, and --set w1-driving (W1-driving T12)", () => {
+  const catalogueOrder = (base: Deps) => async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => [...offlineVariantOrder(s)] });
+  it("the slice's --only on a cell outside it runs that cell's four scenarios, reading only that sport's variant order", async () => {
+    capture();
+    const dir = dirFor();
+    const base = deps();
+    const d = deps();
+    const reads: string[] = [];
+    d.openDb = async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => { reads.push(s); return [...offlineVariantOrder(s)]; } });
+    expect(await runSlice(d, ["--only", "league|tennis", "--run-id", "c1", "--report-dir", dir])).toBe(0);
+    const v = offlineBuilderDefault("tennis");
+    expect(resultsIn(dir, "c1").cases.map((c) => c.caseId)).toEqual(["LIFECYCLE", "M1", "R4", "F1"].map((s) => `league|tennis|${v}|${s}`));
+    expect(reads).toEqual(["tennis"]);
+    expect((JSON.parse(readFileSync(join(dir, "c1", "results.json"), "utf8")) as RunResults).plan).toBe("slice --only league|tennis");
+  });
+  it("--set w1-driving --only <cricket cell> --scenario LIFECYCLE runs the grid case and the cell's committed test cases, overrides on the wire", async () => {
+    capture();
+    const dir = dirFor();
+    const d = deps();
+    d.openDb = catalogueOrder(deps());
+    expect(await runSlice(d, ["--set", W1_DRIVING_SET, "--only", "league|cricket", "--scenario", "LIFECYCLE", "--run-id", "c2", "--report-dir", dir])).toBe(0);
+    const tests = committedVariants().filter((c) => c.sport === "cricket" && c.preset === "test" && c.row === "league");
+    expect(tests.length).toBe(3);
+    expect(resultsIn(dir, "c2").cases.map((c) => c.caseId)).toEqual([
+      `league|cricket|${offlineBuilderDefault("cricket")}|LIFECYCLE`,
+      ...tests.map((vc) => `league|cricket|test|LIFECYCLE|${vc.id}`),
+    ]);
+    // Each test case's org was prepared, and its case driven, with the committed override.
+    expect(d.orgs).toHaveLength(4);
+    const raw = JSON.parse(readFileSync(join(dir, "c2", "results.json"), "utf8")) as RunResults;
+    expect(raw.plan).toBe(`--set ${W1_DRIVING_SET} --only league|cricket --scenario LIFECYCLE`);
+  });
+  it("a slice cell still plans exactly as before: the same 4 ids, generic's and badminton's orders read", async () => {
+    capture();
+    const dir = dirFor();
+    const r = readsOf(deps());
+    expect(await runSlice(r.deps(), ["--only", "league|generic", "--run-id", "c3", "--report-dir", dir])).toBe(0);
+    expect(resultsIn(dir, "c3").cases.map((c) => c.caseId)).toEqual(["LIFECYCLE", "M1", "R4", "F1"].map((s) => `league|generic|score|${s}`));
+    expect(r.sports).toEqual(["generic", "badminton"]);
+  });
+});
+
+/** Fix round 2 (ruling T12-R3): a loopback server for realDeps' case-org
+ *  seeding — the org switch, and the entitlement bust's admin calls (401
+ *  unless the owner is staff at that moment) — with fake DB handles behind
+ *  it. An admin POST for an org `hang` picks is never answered. Org ids are
+ *  `o-<slug>`; `switched` lists every org the session was switched to.
+ *  Fix round 4: no timer orders anything here. `insertGate` can hold a case
+ *  org's insert on a promise the test settles; `onInsert` sees each org as it
+ *  is created (after its gate); `disposeGate` can hold a case's DB handles
+ *  closing (both of them — realDeps closes the pair together). */
+async function provisionLoopback(
+  hang: (orgId: string) => boolean,
+  onInsert: (slug: string) => void = () => {},
+  insertGate: (slug: string) => Promise<void> | undefined = () => undefined,
+  disposeGate: () => Promise<void> | undefined = () => undefined,
+) {
+  const staff = { on: false };
+  const answered: string[] = [];
+  const hung: string[] = [];
+  const switched: string[] = [];
+  let arrived: () => void = () => {};
+  const hungArrived = new Promise<void>((r) => { arrived = r; });
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c: Buffer) => { body += c.toString("utf8"); });
+    req.on("end", () => {
+      const reply = (status: number, v: unknown, cookie?: string) => {
+        res.writeHead(status, { "content-type": "application/json", ...(cookie === undefined ? {} : { "set-cookie": cookie }) });
+        res.end(JSON.stringify(v));
+      };
+      if (req.method === "POST" && req.url === "/api/orgs/active") {
+        const orgId = (JSON.parse(body) as { org_id: string }).org_id;
+        switched.push(orgId);
+        return reply(200, { ok: true, data: {} }, `${ORG_COOKIE}=${orgId}; Path=/`);
+      }
+      const m = /^\/api\/admin\/orgs\/([^/]+)\/entitlement-override$/.exec(req.url ?? "");
+      if (m !== null) {
+        if (req.method === "POST" && hang(m[1]!)) { hung.push(`${req.method} ${req.url}`); arrived(); return; } // never answered
+        answered.push(`${req.method} ${req.url} staff=${String(staff.on)}`);
+        return staff.on ? reply(200, { ok: true, data: {} }) : reply(401, { ok: false, error: "Staff access required" });
+      }
+      return reply(404, { ok: false, error: "not found" });
+    });
+  });
+  await new Promise<void>((r) => { server.listen(0, "127.0.0.1", r); });
+  const { port } = server.address() as AddressInfo;
+  const m: MatrixSql = {
+    userIdForEmail: async () => "u1",
+    insertCaseOrg: async (i) => {
+      const gate = insertGate(i.slug);
+      if (gate !== undefined) await gate;
+      onInsert(i.slug);
+      return { orgId: `o-${i.slug}`, orgSlug: i.slug };
+    },
+    listPlanKeys: async () => [],
+    variantKeysInBuilderOrder: async () => [],
+    denyFeature: async () => {},
+    planGrants: async () => [],
+    planLimit: async () => null,
+  };
+  const p = {
+    getOrgSubscriptionId: async () => "sub",
+    updateSubscriptionPlan: async () => {},
+    createSubscriptionForOrg: async () => {},
+    setOwnerStaff: async (_o: string, on: boolean) => { staff.on = on; },
+  };
+  const dispose = async (): Promise<void> => { const gate = disposeGate(); if (gate !== undefined) await gate; };
+  const f: DbFactories = { matrixSql: () => ({ sql: m, dispose }), planSql: () => ({ sql: p as never, dispose }) };
+  const close = async (): Promise<void> => {
+    server.closeAllConnections();
+    await new Promise<void>((r) => { server.close(() => { r(); }); });
+  };
+  return { base: `http://127.0.0.1:${port}`, f, answered, hung, switched, hungArrived, close };
+}

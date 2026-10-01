@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
-import { HttpDriver, REQUEST_TIMEOUT_MS, type Transport } from "../lib/driver/http-driver.ts";
-import { DriverMisuse, OrgMismatch, RefusedCall, RequestTimedOut, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
+import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
+import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
-import { nextMatchStartedText } from "./product-text.ts";
+import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
 function fake(replies: ((c: Call) => RawResult | undefined)[]): { t: Transport; calls: Call[] } {
@@ -48,6 +51,80 @@ describe("HttpDriver — org pinning (Review Focus 4)", () => {
   it("the happy path returns the ref", async () => {
     const { t } = fake([() => ok(created(), 201)]);
     expect(await drv(t).createCompetition({ name: "M", slug: "m-1" })).toEqual({ id: "c1", slug: "m-1", orgId: "org-1" });
+  });
+});
+
+// W1-driving Task 13: POST /competitions/from-template answers FromTemplateResult
+// (api-v1/schemas.ts:1205-1226) — ids and the applied visibility, no org id and
+// no sport — so the driver reads the competition, division and stages back.
+describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
+  const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const answer = (over: Record<string, unknown> = {}) => ({ competitionId: "c9", slug: "box-league", visibility: "public", divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over });
+  const division = { id: "d9", slug: "main", sport_key: "badminton", variant_key: "short", config: { bestOf: 3 } };
+  const comp = (over: Record<string, unknown> = {}) => ({ id: "c9", slug: "box-league", org_id: "org-1", visibility: "public", ...over });
+  const replies = (o: { answer?: Record<string, unknown>; comp?: Record<string, unknown>; stages?: unknown[] } = {}) => [
+    (c: Call) => (c.method === "POST" && c.path === "/api/v1/competitions/from-template" ? ok(answer(o.answer), 201) : undefined),
+    (c: Call) => (c.path === "/api/v1/competitions/c9" ? ok(comp(o.comp)) : undefined),
+    (c: Call) => (c.path === "/api/v1/divisions/d9" ? ok(division) : undefined),
+    (c: Call) => (c.path === "/api/v1/divisions/d9/stages" ? ok(o.stages ?? [{ id: "s1", seq: 1, kind: "group", config: { pools: { count: 4 } }, status: "pending" }]) : undefined),
+  ];
+
+  it("the visibility it expects is the product's default for an omitted one (schemas.ts CreateFromTemplate)", () => {
+    const text = readFileSync(resolve(REPO_ROOT, "apps/web/src/server/api-v1/schemas.ts"), "utf8");
+    const block = text.slice(text.indexOf("export const CreateFromTemplate"), text.indexOf("export type CreateFromTemplate"));
+    expect(block).toContain(`visibility: Visibility.default("${TEMPLATE_VISIBILITY}")`);
+  });
+
+  it("POSTs {template_key, name, ends_on} — no visibility, as the gallery sends none — then reads the competition, division and stages back", async () => {
+    const { t, calls } = fake(replies());
+    const out = await drv(t).createFromTemplate("box-league", { name: "Matrix x", endsOn: "2030-12-31" });
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "POST /api/v1/competitions/from-template", "GET /api/v1/competitions/c9", "GET /api/v1/divisions/d9", "GET /api/v1/divisions/d9/stages",
+    ]);
+    expect(calls[0]!.body).toEqual({ template_key: "box-league", name: "Matrix x", ends_on: "2030-12-31" });
+    expect(out).toEqual({
+      competition: { id: "c9", slug: "box-league", orgId: "org-1" },
+      division: { id: "d9", slug: "main", sportKey: "badminton", variantKey: "short", config: { bestOf: 3 } },
+      stages: [{ id: "s1", seq: 1, kind: "group", config: { pools: { count: 4 } }, status: "pending" }],
+    });
+  });
+
+  it("refuses, by name: a competition in another org, an applied visibility other than the default (note or not), a template with other than one division, stages that are not the ones it created", async () => {
+    const cases: [string, Parameters<typeof replies>[0], new (...a: never[]) => Error][] = [
+      ["org", { comp: { org_id: "org-2" } }, OrgMismatch],
+      ["degraded, with the note", { comp: { visibility: "private" }, answer: { visibility: "private", public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 } } }, VisibilityDegraded],
+      ["private, no note", { comp: { visibility: "private" } }, VisibilityDegraded],
+      // The first division's stages are the ones the product lists, so only
+      // the one-division refusal can catch it (the stage-id guard cannot).
+      ["two divisions", { answer: { divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }, { id: "d8", stages: [{ id: "s2", fixtureCount: 0 }] }] } }, DriverMisuse],
+      ["other stages", { stages: [{ id: "s7", seq: 1, kind: "group", config: {}, status: "pending" }] }, DriverMisuse],
+      // T13-R1 m-7: the answer names another template than the one asked for.
+      ["another template", { answer: { templateKey: "t20-super8" } }, DriverMisuse],
+    ];
+    let refused = 0;
+    for (const [what, o, cls] of cases) {
+      const { t } = fake(replies(o));
+      await expect(drv(t).createFromTemplate("box-league", { name: "M", endsOn: "2030-12-31" }), what).rejects.toBeInstanceOf(cls);
+      refused++;
+    }
+    expect(refused).toBe(cases.length);
+    // Two divisions are refused by their count, before anything is read back.
+    const two = fake(replies({ answer: { divisions: [{ id: "d9", stages: [{ id: "s1", fixtureCount: 0 }] }, { id: "d8", stages: [] }] } }));
+    await expect(drv(two.t).createFromTemplate("box-league", { name: "M", endsOn: "2030-12-31" })).rejects.toThrow(/built 2 division\(s\)/);
+    expect(two.calls.filter((c) => c.method !== "POST")).toEqual([]);
+  });
+
+  it("readBackTemplate refuses an answer for another template by name, before anything is read back (T13-R1 m-7)", async () => {
+    const { t, calls } = fake(replies());
+    await expect(drv(t).readBackTemplate(answer({ templateKey: "t20-super8" }) as never, "box-league")).rejects.toThrow(/answered template t20-super8; asked for box-league/);
+    expect(calls).toEqual([]);
+  });
+
+  it("readBackTemplate alone (the browser path's read-back) makes no POST", async () => {
+    const { t, calls } = fake(replies());
+    const out = await drv(t).readBackTemplate(answer() as never, "box-league");
+    expect(posts(calls)).toEqual([]);
+    expect(out.stages.map((s) => s.id)).toEqual(["s1"]);
   });
 });
 
@@ -173,12 +250,108 @@ describe("HttpDriver — completeStage is never repeated after completion (desig
     expect((await d.completeStage("s1")).completed).toBe(true);
     expect(calls.length).toBe(2);
   });
+  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED came AFTER the completion committed, so a repeat is DriverMisuse with no HTTP", async () => {
+    const { t, calls } = fake([() => err(409, SEEDING_FAILED_AFTER_COMMIT)]);
+    const d = drv(t);
+    const e = await d.completeStage("s1").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect((e as RefusedCall).code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls.length).toBe(1);
+  });
+  it("W1-driving T6: completeStage passes the next stage's seed_proposal through unchanged", async () => {
+    const { t } = fake([() => ok({ completed: true, events: [], seed_proposal: { id: "sp-uuid", status: "draft" } })]);
+    expect(await drv(t).completeStage("s1")).toEqual({ completed: true, events: [], seed_proposal: { id: "sp-uuid", status: "draft" } });
+  });
   it("the guard is per stage: completing s1 does not block s2", async () => {
     const { t, calls } = fake([() => ok({ completed: true, events: [] })]);
     const d = drv(t);
     await d.completeStage("s1");
     await d.completeStage("s2");
     expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/complete", "/api/v1/stages/s2/complete"]);
+  });
+});
+
+describe("HttpDriver — the seed proposal (W1-driving T6, D1)", () => {
+  it("confirmSeedProposal POSTs the proposal id (and tiePicks) to the stage's confirm route and answers the product's fill", async () => {
+    const answer = { proposalId: "sp-1", filled: 4, fixtures: [{ id: "f1", stage_id: "s2", pool_id: null, round_no: 1, fixture_no: 1, home_entrant_id: "a", away_entrant_id: "b", status: "scheduled", outcome: null, ext_key: "se-r0-m0", is_final: false }] };
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s2/seed-proposal/confirm" ? ok(answer) : undefined)]);
+    const d = drv(t);
+    expect(await d.confirmSeedProposal("s2", { proposalId: "sp-1" })).toEqual(answer);
+    const picks = [{ slots: ["f1:home", "f1:away"], order: ["b", "a"] }];
+    await d.confirmSeedProposal("s2", { proposalId: "sp-1", tiePicks: picks });
+    expect(posts(calls).map((c) => c.body)).toEqual([{ proposalId: "sp-1" }, { proposalId: "sp-1", tiePicks: picks }]);
+  });
+  it("recomputeSeedProposal POSTs the seed-proposal route and maps the 201's computed slate onto the proposal", async () => {
+    const computed = { qualifiers: [{ rank: 1, source: { stageId: "s1", rank: 1 }, entrantId: "a", destinationSlot: "f1:home" }], ties: [{ slots: ["f1:home", "f2:home"], entrantIds: ["a", "c"], reason: "points" }], standingsHash: "h" };
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s2/seed-proposal" ? ok({ id: "sp-2", stageId: "s2", status: "draft", computed }, 201) : undefined)]);
+    const p = await drv(t).recomputeSeedProposal("s2");
+    expect(p).toEqual({ id: "sp-2", status: "draft", qualifiers: computed.qualifiers, ties: computed.ties });
+    expect(posts(calls).map((c) => [c.path, c.body])).toEqual([["/api/v1/stages/s2/seed-proposal", {}]]);
+  });
+  it("a refused confirm is the product's RefusedCall, its extra (the unresolved tie's slots and entrants) carried", async () => {
+    const { t } = fake([() => err(422, "SEEDING_TIE_UNRESOLVED", { slots: ["f1:home"], entrantIds: ["a", "c"] })]);
+    const e = await drv(t).confirmSeedProposal("s2", { proposalId: "sp-1" }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 422, code: "SEEDING_TIE_UNRESOLVED", extra: { slots: ["f1:home"], entrantIds: ["a", "c"] } });
+  });
+  it("SEEDING_FAILED_AFTER_COMMIT is the product's own code (usecases/stages.ts progressCompletedStage), read as text", () => {
+    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/server/usecases/stages.ts"), "utf8");
+    const m = /err instanceof Error \? err\.message : String\(err\),\s*"([A-Z_]+)"/.exec(text);
+    expect(m?.[1]).toBe(SEEDING_FAILED_AFTER_COMMIT);
+  });
+});
+
+describe("HttpDriver — ladder challenges (W1-driving T7, D8)", () => {
+  /** The route's own body schema, read as text (app/api/v1/stages/[id]/challenges/route.ts). */
+  const routeBody = (): string[] => {
+    const text = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/app/api/v1/stages/[id]/challenges/route.ts"), "utf8");
+    const m = /const Body = z\.object\(\{([^}]*)\}\);/.exec(text);
+    expect(m, "challenges route Body schema not found").not.toBeNull();
+    expect(text).toContain("reply(201, await issueChallenge(auth, id, body))");
+    return [...m![1]!.matchAll(/(\w+): z\./g)].map((x) => x[1]!);
+  };
+  it("challenge POSTs {challenger_id, opponent_id} — the route's own field names — to the stage's challenges route and answers the 201's {fixture_id, ladder_order}", async () => {
+    const answer = { fixture_id: "f9", ladder_order: ["a", "b", "c"] };
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/stages/s1/challenges" ? ok(answer, 201) : undefined)]);
+    expect(await drv(t).challenge("s1", "c", "b")).toEqual(answer);
+    expect(posts(calls).map((c) => [c.path, c.body])).toEqual([["/api/v1/stages/s1/challenges", { challenger_id: "c", opponent_id: "b" }]]);
+    expect(Object.keys(posts(calls)[0]!.body as object).sort()).toEqual(routeBody().sort());
+  });
+  it("a refused challenge is the product's RefusedCall, its code and extra (the reach) carried — never a silent answer", async () => {
+    const { t } = fake([() => err(422, "LADDER_CHALLENGE_OUT_OF_RANGE", { range: 3 })]);
+    const e = await drv(t).challenge("s1", "h", "a").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 422, code: "LADDER_CHALLENGE_OUT_OF_RANGE", extra: { range: 3 } });
+  });
+  it("a second challenge is a second POST (the product guards no repeat; each issues its own fixture)", async () => {
+    let n = 0;
+    const { t, calls } = fake([() => ok({ fixture_id: `f${++n}`, ladder_order: ["a", "b"] }, 201)]);
+    const d = drv(t);
+    expect((await d.challenge("s1", "b", "a")).fixture_id).toBe("f1");
+    expect((await d.challenge("s1", "b", "a")).fixture_id).toBe("f2");
+    expect(posts(calls)).toHaveLength(2);
+  });
+});
+
+describe("HttpDriver — the americano view (W1-driving T8, D9)", () => {
+  const ROUTE = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/app/api/v1/stages/[id]/americano/route.ts");
+  const USECASE = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/web/src/server/usecases/americano.ts");
+  it("americanoView GETs the stage's americano route — the product exports GET there and nothing else — and passes the answer through untouched", async () => {
+    const route = readFileSync(ROUTE, "utf8");
+    expect([...route.matchAll(/export async function (\w+)\(/g)].map((m) => m[1])).toEqual(["GET"]);
+    const answer = { mode: "mexicano", rounds: [{ round_no: 1, matches: [] }], leaderboard: [{ person_id: "p1", points: 3, games: 1 }] };
+    const { t, calls } = fake([(c) => (c.method === "GET" && c.path === "/api/v1/stages/s1/americano" ? ok(answer) : undefined)]);
+    expect(await drv(t).americanoView("s1")).toEqual(answer);
+    expect(calls.map((c) => [c.method, c.path])).toEqual([["GET", "/api/v1/stages/s1/americano"]]);
+    expect(posts(calls)).toEqual([]);
+  });
+  it("a non-americano stage is the product's codeless 422 (usecases/americano.ts), a RefusedCall — never a silent empty view", async () => {
+    expect(readFileSync(USECASE, "utf8")).toContain('if (stage.kind !== "americano") throw new HttpError(422, "not an americano stage");');
+    const { t } = fake([() => err(422, wireCodeFor(422))]);
+    const e = await drv(t).americanoView("s9").catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(RefusedCall);
+    expect(e).toMatchObject({ status: 422, code: wireCodeFor(422) });
   });
 });
 
@@ -551,5 +724,144 @@ describe("HttpDriver — finalize and the fixture ledger (W1c Task 6)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// The roster seam (W1-driving Task 3, D2). Transitions, the empty case first:
+// an entrant with no members (no `members` key at all, byte for byte); members
+// inline on the create; the stored roster read back; a lineup PUT; a second
+// PUT; a refused PUT; the browser's filler path (persons, then one PATCH).
+describe("HttpDriver — rosters and lineups (W1-driving Task 3)", () => {
+  const roster = [
+    { fullName: "Matrix Player 1.1", squadNumber: 1, isCaptain: true },
+    { fullName: "Matrix Player 1.2", squadNumber: 2, isCaptain: false },
+  ];
+  const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `e${i + 1}`, display_name: `Matrix Team ${i + 1}`, seed: i + 1, status: "registered" }));
+
+  it("empty case first: an entrant without members posts NO members key — the individual body, byte for byte", async () => {
+    const { t, calls } = fake([() => ok(rows(1), 201)]);
+    await drv(t).addEntrants("d1", [{ displayName: "Matrix Player 1", seed: 1, kind: "individual" }]);
+    expect(JSON.stringify(calls[0]!.body)).toBe('[{"kind":"individual","display_name":"Matrix Player 1","seed":1}]');
+  });
+
+  it("members ride inline on the create: one new_person per member, in order, with squad number and captaincy", async () => {
+    const { t, calls } = fake([() => ok(rows(2), 201)]);
+    await drv(t).addEntrants("d1", [
+      { displayName: "Matrix Team 1", seed: 1, kind: "team", members: roster },
+      { displayName: "Matrix Team 2", seed: 2, kind: "team" },
+    ]);
+    expect(calls.map((c) => [c.method, c.path])).toEqual([["POST", "/api/v1/divisions/d1/entrants"]]);
+    expect(JSON.stringify(calls[0]!.body)).toBe(JSON.stringify([
+      { kind: "team", display_name: "Matrix Team 1", seed: 1, members: [
+        { new_person: { full_name: "Matrix Player 1.1" }, squad_number: 1, is_captain: true },
+        { new_person: { full_name: "Matrix Player 1.2" }, squad_number: 2, is_captain: false },
+      ] },
+      { kind: "team", display_name: "Matrix Team 2", seed: 2 },
+    ]));
+  });
+
+  it("entrantMembers GETs the entrant and answers its members trimmed to what the harness reads, in squad order (nulls last, as the product orders them)", async () => {
+    const served = [
+      { person_id: "p3", full_name: "Matrix Player 1.3", dob: null, gender: null, squad_number: null, default_position_key: null, is_captain: false, roles: [] },
+      { person_id: "p2", full_name: "Matrix Player 1.2", dob: null, gender: null, squad_number: 2, default_position_key: null, is_captain: false, roles: [] },
+      { person_id: "p1", full_name: "Matrix Player 1.1", dob: null, gender: null, squad_number: 1, default_position_key: null, is_captain: true, roles: [] },
+    ];
+    const { t, calls } = fake([(c) => (c.method === "GET" && c.path === "/api/v1/entrants/e1" ? ok({ ...rows(1)[0], members: served }) : undefined)]);
+    expect(await drv(t).entrantMembers("e1")).toEqual([
+      { person_id: "p1", squad_number: 1, is_captain: true },
+      { person_id: "p2", squad_number: 2, is_captain: false },
+      { person_id: "p3", squad_number: null, is_captain: false },
+    ]);
+    expect(calls).toEqual([{ path: "/api/v1/entrants/e1", method: "GET", body: undefined, cookies: 1 }]);
+  });
+
+  it("entrantMembers on an entrant with no roster answers [] (empty case)", async () => {
+    const { t } = fake([() => ok({ ...rows(1)[0], members: [] })]);
+    expect(await drv(t).entrantMembers("e1")).toEqual([]);
+  });
+
+  // fix round 1, I-1 (T3-R1): the PUT is WARNING-ONLY — fixtures.ts putLineup
+  // saves, then answers `{ ...lineup, checked, warnings }` (PutLineupOut's
+  // LineupCheck), a 2xx even for a lineup the engine flags. The answer is the
+  // only product-side lineup verdict, so the driver returns it; `checked:
+  // false` (the check crashed, the lineup saved UNCHECKED) is refused by name.
+  const answer = (check: Record<string, unknown>) => ({ fixture_id: "f1", entrant_id: "e1", slots: [], ...check });
+
+  it("putLineup PUTs {slots} to the fixture's lineup for that entrant and returns the product's check; a second PUT is a second call, never short-circuited", async () => {
+    const slots = [{ person_id: "p1", slot: "starting" as const, order_no: 1, position_key: "GK", roles: [] }, { person_id: "p2", slot: "bench" as const, order_no: 2, roles: [] }];
+    const { t, calls } = fake([(c) => (c.method === "PUT" ? ok(answer({ checked: true, warnings: [] })) : undefined)]);
+    const d = drv(t);
+    expect(await d.putLineup("f1", "e1", slots)).toEqual({ checked: true, warnings: [] });
+    expect(await d.putLineup("f1", "e1", slots.slice(0, 1))).toEqual({ checked: true, warnings: [] });
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ["PUT", "/api/v1/fixtures/f1/lineups/e1", { slots }],
+      ["PUT", "/api/v1/fixtures/f1/lineups/e1", { slots: slots.slice(0, 1) }],
+    ]);
+  });
+
+  it("a lineup the product saved WITH warnings is returned with them, never refused here (Task 4 records them)", async () => {
+    // fixtures.ts formatLineupIssue's text, as the product would serve it.
+    const warnings = ["Starting lineup has 1 player(s), expected 11", "Position group \"GK\" has 0 starting player(s), minimum is 1"];
+    const { t } = fake([() => ok(answer({ checked: true, warnings }))]);
+    expect(await drv(t).putLineup("f1", "e1", [{ person_id: "p1", slot: "starting", roles: [] }])).toEqual({ checked: true, warnings });
+  });
+
+  it("a lineup the product saved UNCHECKED (checked: false — its validation crashed) is refused by name, carrying the product's reason", async () => {
+    const { t } = fake([() => ok(answer({ checked: false, warnings: [], reason: "TypeError" }))]);
+    const e = await drv(t).putLineup("f1", "e1", [{ person_id: "p1", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(LineupUnchecked);
+    expect([(e as LineupUnchecked).fixtureId, (e as LineupUnchecked).entrantId, (e as LineupUnchecked).reason]).toEqual(["f1", "e1", "TypeError"]);
+    expect((e as Error).message).toMatch(/entrant e1 on fixture f1.*TypeError/);
+  });
+
+  it("an answer with no lineup check at all (a product that stopped checking) is refused by name, never read as a clean lineup", async () => {
+    for (const bad of [{}, { checked: true }, { warnings: [] }, { checked: "yes", warnings: [] }, { checked: true, warnings: [7] }]) {
+      const { t } = fake([() => ok(answer(bad))]);
+      const e = await drv(t).putLineup("f1", "e1", [{ person_id: "p1", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+      expect(e, JSON.stringify(bad)).toBeInstanceOf(LineupUnchecked);
+      expect((e as LineupUnchecked).reason, JSON.stringify(bad)).toMatch(/no lineup check/);
+    }
+  });
+
+  it("empty case: putLineup with no slots is refused before any call — the product would DELETE the lineup and answer 2xx (m-4)", async () => {
+    const { t, calls } = fake([]);
+    await expect(drv(t).putLineup("f1", "e1", [])).rejects.toBeInstanceOf(DriverMisuse);
+    expect(calls).toEqual([]);
+  });
+
+  it("a refused PUT — the product's 422 (a codeless HttpError reaches the wire as http.ts's code) or a 409 — is RefusedCall with that status and code", async () => {
+    const code422 = wireCodeFor(422);
+    for (const [status, code] of [[422, code422], [409, wireCodeFor(409)]] as const) {
+      const { t } = fake([() => err(status, code)]);
+      const e = await drv(t).putLineup("f1", "e1", [{ person_id: "p9", slot: "starting", roles: [] }]).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(RefusedCall);
+      expect([(e as RefusedCall).status, (e as RefusedCall).code, (e as RefusedCall).method, (e as RefusedCall).path]).toEqual([status, code, "PUT", "/api/v1/fixtures/f1/lineups/e1"]);
+    }
+  });
+
+  it("setMembers (the browser's filler): one POST /persons per member, in order, then ONE PATCH of the entrant naming the persons the product made; answers the stored roster", async () => {
+    let n = 0;
+    const { t, calls } = fake([
+      (c) => (c.method === "POST" && c.path === "/api/v1/persons" ? ok({ id: `person-${++n}`, full_name: (c.body as { full_name: string }).full_name }, 201) : undefined),
+      (c) => (c.method === "PATCH" && c.path === "/api/v1/entrants/e1"
+        ? ok({ ...rows(1)[0], members: (c.body as { members: { person_id: string; squad_number: number; is_captain: boolean }[] }).members.map((m) => ({ ...m, full_name: "x", roles: [] })) })
+        : undefined),
+    ]);
+    const out = await drv(t).setMembers("e1", roster);
+    expect(calls.map((c) => [c.method, c.path, c.body])).toEqual([
+      ["POST", "/api/v1/persons", { full_name: "Matrix Player 1.1" }],
+      ["POST", "/api/v1/persons", { full_name: "Matrix Player 1.2" }],
+      ["PATCH", "/api/v1/entrants/e1", { members: [{ person_id: "person-1", squad_number: 1, is_captain: true }, { person_id: "person-2", squad_number: 2, is_captain: false }] }],
+    ]);
+    expect(out).toEqual([{ person_id: "person-1", squad_number: 1, is_captain: true }, { person_id: "person-2", squad_number: 2, is_captain: false }]);
+  });
+
+  it("setMembers: an empty roster is refused before any call (a PATCH of [] would CLEAR the entrant's roster); a refused person stops before the PATCH", async () => {
+    const empty = fake([]);
+    await expect(drv(empty.t).setMembers("e1", [])).rejects.toBeInstanceOf(DriverMisuse);
+    expect(empty.calls).toEqual([]);
+    const { t, calls } = fake([(c) => (c.path === "/api/v1/persons" ? err(422, wireCodeFor(422)) : undefined)]);
+    await expect(drv(t).setMembers("e1", roster)).rejects.toBeInstanceOf(RefusedCall);
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
   });
 });

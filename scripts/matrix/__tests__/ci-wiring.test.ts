@@ -292,7 +292,10 @@ describe("matrix CI wiring", () => {
       for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
     });
 
-    it("the gates checkout fetches deep enough for HEAD^1 to exist (fetch-depth 0 or at least 2)", () => {
+    // W1-driving final review I-1: rebase-map.test.ts proves every mapped SHA
+    // is an ancestor of HEAD, which needs the whole history — and the matrix
+    // step runs in this job. Depth 0 also keeps HEAD^1 for the ratchet.
+    it("the gates checkout fetches the full history (fetch-depth 0): HEAD^1 for the single-sport ratchet, and every ancestor for rebase-map.test.ts", () => {
       const job = lines.slice(gatesAt, gatesEnd);
       const checkouts = job.flatMap((l, i) => (l === "      - uses: actions/checkout@v5" ? [i] : []));
       expect(checkouts).toHaveLength(1);
@@ -302,7 +305,7 @@ describe("matrix CI wiring", () => {
       const depths = job.slice(c + 1, end).flatMap((l) => /^ {10}fetch-depth: (\d+)$/.exec(l)?.slice(1) ?? []).map(Number);
       expect(depths).toHaveLength(1);
       const depth = depths[0]!;
-      expect(depth === 0 || depth >= 2, `fetch-depth ${depth}`).toBe(true);
+      expect(depth, `fetch-depth ${depth}: rebase-map.test.ts's ancestry check refuses a shallow clone`).toBe(0);
       // and it sits before the ratchet step, in the same job
       expect(gatesAt + c).toBeLessThan(lines.indexOf(SS_STEP));
     });

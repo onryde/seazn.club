@@ -2,9 +2,13 @@
 // × pointsPerCoin (applyBoard :374); a game ends at gameTo or on the leader
 // after maxBoards (decideGame :306); the match is a majority of bestOf
 // (bankGame :320). DO NOT copy seed-demo.ts (no carrom case).
+import { routeTo } from "../routing.ts";
 import { GeneratorUnsupported, START, idOf, outcomeLabel, type SportStreamGenerator, type StreamEvent } from "./types.ts";
 
 interface CarromCfg { gameTo: number; maxBoards: number; bestOf: number; pointsPerCoin: number }
+/** The tieBoard 'draw' shape belongs to the carrom rulebook's wave; the refusal
+ *  names it through this route (T1-R2), in the same bytes as before. */
+const TIEBOARD_DRAW = routeTo("W2", "carrom's tieBoard 'draw' shape waits on the carrom rulebook");
 
 export const carromGenerator: SportStreamGenerator = {
   sportKeys: ["carrom"],
@@ -13,7 +17,7 @@ export const carromGenerator: SportStreamGenerator = {
     // needs tieBoard 'draw', which no variant sets, so generateStream throws
     // OutcomeUnreachable before reaching here.
     if (req.outcome.kind === "draw") {
-      throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), "the tieBoard:'draw' shape lands with W2's carrom rulebook");
+      throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), `the tieBoard:'draw' shape lands with ${TIEBOARD_DRAW.wave}'s carrom rulebook`);
     }
     const cfg = req.cfg as CarromCfg;
     const boardsPerGame = Math.min(cfg.maxBoards, Math.ceil(cfg.gameTo / (9 * cfg.pointsPerCoin)));

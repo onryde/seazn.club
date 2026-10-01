@@ -9,20 +9,47 @@
 // playStage (per-round generate, pair rounds, byes) is witnessed DB-free, and
 // FakeKnockoutDriver does the same for a bracket (M1's progression, F1's
 // first-round-only rule).
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { EngineError, type MatchOutcome, type StageKind } from "@seazn/engine/core";
+import { generateDoubleElim, generatePagePlayoff, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
+import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import type { StagePostBody } from "../lib/catalogue.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
-import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { DEPARTED_STATUSES } from "../lib/observed.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  RefusedCall, idempotencyKey,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
+  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
+import { wireCodeFor } from "./product-text.ts";
 
 export interface FakeFixture extends FixtureRow { events: StreamEvent[] }
+
+/** A catalog template as the product's JSON spells it (server/templates/catalog). */
+export interface RawCatalogTemplate {
+  key: string;
+  version: number;
+  divisions: { sportKey: string; variantKey: string; entrantKind: string; entrantCount: number; stages: { kind: string; groups?: number; points?: unknown; config?: Record<string, unknown>; progression?: unknown }[] }[];
+}
+const CATALOG_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/templates/catalog");
+/** The catalog file, read here as text — never through lib/templates.ts. */
+export function rawCatalogTemplate(key: string): RawCatalogTemplate {
+  return JSON.parse(readFileSync(join(CATALOG_DIR, `${key}.json`), "utf8")) as RawCatalogTemplate;
+}
+/** usecases/templates.ts effectiveStageConfig (text-pinned by templates.test.ts). */
+function templateStageConfig(st: RawCatalogTemplate["divisions"][number]["stages"][number]): Record<string, unknown> {
+  const cfg: Record<string, unknown> = {};
+  if (st.kind === "group" && st.groups !== undefined) cfg.pools = { count: st.groups };
+  if (st.points !== undefined) cfg.points = st.points;
+  Object.assign(cfg, st.config ?? {});
+  return cfg;
+}
 
 /** Key-sorted JSON, the product's canonicalJson comparison (divisions.ts:852-855). */
 function canonical(v: unknown): string {
@@ -41,6 +68,12 @@ const PLAYED = new Set(["decided", "finalized", "forfeited"]);
 const PENDING = new Set(["scheduled", "in_play"]);
 // stages.ts:979 — what the swiss gate counts as a finished board.
 const DECIDED = new Set(["decided", "finalized", "forfeited"]);
+/** The code the product's structural lineup refusals reach the wire with:
+ *  fixtures.ts throws them as codeless HttpError(422), so http.ts's status
+ *  default names them (read from the product, product-text.ts). Never
+ *  LINEUP_INVALID — that is the engine's event-time assertLineup code
+ *  (fix round 1, m-2). */
+const LINEUP_REFUSAL = wireCodeFor(422);
 
 /** Runs `body` NOW and settles with what it returns, or REJECTS with what it
  *  throws — exactly what an `async` method with no `await` does, since a
@@ -53,6 +86,11 @@ function settle<T>(body: () => T): Promise<T> {
 
 export class FakeLeagueDriver implements OrganiserDriver {
   readonly calls: string[] = [];
+  /** PF-4 (W1-driving Task 4): `calls` one for one, each line the bare method
+   *  name followed by the ids the call named where the method passes them
+   *  (`postStream <fixture>`, `putLineup <fixture> <entrant>`). Additive:
+   *  `calls` keeps its bare names, so every assert written against it holds. */
+  readonly trace: string[] = [];
   readonly orgId: string;
   sport = "";
   variant = "";
@@ -66,7 +104,22 @@ export class FakeLeagueDriver implements OrganiserDriver {
   completed = false;
   constructor(orgId = "org-fake") { this.orgId = orgId; }
   get callCount(): number { return this.calls.length; }
-  log(m: string): void { this.calls.push(m); }
+  log(m: string, ...ids: string[]): void {
+    this.calls.push(m);
+    this.trace.push([m, ...ids].join(" "));
+  }
+  /** Roster members stored across every entrant (W1-driving Task 4). */
+  memberCount(): number {
+    let n = 0;
+    for (const ms of this.members.values()) n += ms.length;
+    return n;
+  }
+  /** The fixtures a posted stream finished, in fixture order: a terminal
+   *  status reached through events. A bye's award, written at generation with
+   *  no event, is not one (W1-driving Task 4). */
+  decidedFixtureIds(): string[] {
+    return this.fixtures.filter((f) => DECIDED.has(f.status) && f.events.length > 0).sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0)).map((f) => f.id);
+  }
 
   createCompetition(i: { name: string; slug: string }): Promise<CompetitionRef> { return settle(() => { this.log("createCompetition"); return { id: "c1", slug: i.slug, orgId: this.orgId }; }); }
   createDivision(_c: string, i: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
@@ -98,14 +151,123 @@ export class FakeLeagueDriver implements OrganiserDriver {
     });
   }
   listStages(): Promise<StageRef[]> { return settle(() => { this.log("listStages"); return this.stage ? [{ ...this.stage }] : []; }); }
-  addEntrants(_d: string, es: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+
+  // --- W1-driving Task 13: the product's from-template -------------------------------------------------
+  // usecases/templates.ts createFromTemplate (pinned at 32e942711): one
+  // competition, its catalog division (sport, variant, the parsed preset), the
+  // stage rows at seq si + 1 with effectiveStageConfig's config and the
+  // progression verbatim, and NO entrant (templates.ts:351-366). The league
+  // fake holds one stage, so a multi-stage template is refused by name.
+  /** Every createFromTemplate the HTTP path made, as asked. */
+  readonly templateCalls: { key: string; input: { name: string; endsOn: string } }[] = [];
+  /** A test's edit of the catalog JSON before the fake instantiates it. */
+  templateOverride: ((raw: RawCatalogTemplate) => RawCatalogTemplate) | null = null;
+  #instantiate(key: string): FromTemplateAnswer {
+    const raw0 = rawCatalogTemplate(key);
+    const raw = this.templateOverride === null ? raw0 : this.templateOverride(raw0);
+    const d = raw.divisions[0];
+    if (raw.divisions.length !== 1 || d.stages.length !== 1) throw new Error(`fake: league only — the league fake instantiates a one-division, one-stage template (${key} has ${raw.divisions.length} division(s), ${d.stages.length} stage(s))`);
+    this.sport = d.sportKey;
+    this.variant = d.variantKey;
+    this.cfg = resolveSportCfg(d.sportKey, d.variantKey, {});
+    this.divisionConfig = { ...(resolveSportCfg(d.sportKey, d.variantKey, {}) as Record<string, unknown>) };
+    const st = d.stages[0];
+    this.stage = { id: "s1", seq: 1, kind: st.kind, config: templateStageConfig(st), status: "pending" };
+    return { competitionId: "c1", slug: `tmpl-${key}`, visibility: "public", divisions: [{ id: "d1", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: key, templateVersion: raw.version };
+  }
+  #readBack(a: FromTemplateAnswer): FromTemplateOut {
+    return {
+      competition: { id: a.competitionId, slug: a.slug, orgId: this.orgId },
+      division: { id: a.divisions[0].id, slug: "d", sportKey: this.sport, variantKey: this.variant, config: { ...this.divisionConfig } },
+      stages: this.stage === null ? [] : [{ ...this.stage }],
+    };
+  }
+  /** The card's product side (what the gallery's POST does), for the browser tests' fake page. */
+  instantiateTemplate(key: string): FromTemplateAnswer { this.log("instantiateTemplate", key); return this.#instantiate(key); }
+  /** HttpDriver.readBackTemplate's product side; `trace` keeps the key the caller asked for (T13-R1 m-7). */
+  readBackTemplate(a: FromTemplateAnswer, key: string): Promise<FromTemplateOut> { return settle(() => { this.log("readBackTemplate", key); return this.#readBack(a); }); }
+  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+    return settle(() => {
+      this.log("createFromTemplate", key);
+      this.templateCalls.push({ key, input: { ...input } });
+      return this.#readBack(this.#instantiate(key));
+    });
+  }
+  /** entrant id → its stored roster, in the product's order; person ids `p-<entrant>-<m>`. */
+  members = new Map<string, EntrantMember[]>();
+  /** `<fixture>|<entrant>` → the lineup last PUT (fixtures.ts putLineup replaces it whole). */
+  readonly lineups = new Map<string, LineupSlotWire[]>();
+  rosterOf(entrantId: string, ms: readonly MemberInput[]): EntrantMember[] {
+    return inSquadOrder(ms.map((m, k) => ({ person_id: `p-${entrantId}-${k + 1}`, squad_number: m.squadNumber, is_captain: m.isCaptain })));
+  }
+  addEntrants(_d: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
     return settle(() => {
       this.log("addEntrants");
-      this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
+      // `kind`: the product serves it on every row (entrants.ts COLS), as posted (T12-R1).
+      this.entrants = es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind }));
+      // Inline members (schemas.ts CreateEntrant): stored with the entrant they came on.
+      this.members = new Map(es.flatMap((e, i) => (e.members === undefined ? [] : [[`e${i + 1}`, this.rosterOf(`e${i + 1}`, e.members)] as const])));
       return this.entrants.map((e) => ({ ...e }));
     });
   }
   listEntrants(): Promise<EntrantRow[]> { return settle(() => { this.log("listEntrants"); return this.entrants.map((e) => ({ ...e })); }); }
+  #entrant(method: string, entrantId: string): void {
+    // entrants.ts getEntrant / patchEntrant: an unknown entrant is a 404.
+    if (!this.entrants.some((e) => e.id === entrantId)) throw new RefusedCall(method, `/api/v1/entrants/${entrantId}`, 404, "NOT_FOUND", "entrant not found");
+  }
+  entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    return settle(() => {
+      this.log("entrantMembers");
+      this.#entrant("GET", entrantId);
+      return (this.members.get(entrantId) ?? []).map((m) => ({ ...m }));
+    });
+  }
+  /** HttpDriver.setMembers's product side: the persons, then the PATCH's full replacement. */
+  setMembers(entrantId: string, ms: readonly MemberInput[]): Promise<EntrantMember[]> {
+    return settle(() => {
+      this.log("setMembers");
+      if (ms.length === 0) throw new Error("fake: setMembers with no members (HttpDriver refuses it before any call)");
+      this.#entrant("PATCH", entrantId);
+      this.members.set(entrantId, this.rosterOf(entrantId, ms));
+      return (this.members.get(entrantId) ?? []).map((m) => ({ ...m }));
+    });
+  }
+  /** fixtures.ts putLineup, in its order: the entrant must be a side of the
+   *  fixture, the fixture `scheduled`, no person twice, and every person the
+   *  entrant's member; then the lineup is replaced whole and CHECKED, warning
+   *  only: the answer is `{ checked: true, warnings }`, the warnings the
+   *  engine's validateLineup on the division's stored cfg. The warning TEXT is
+   *  the fake's own (each issue as JSON); the product formats them in
+   *  fixtures.ts formatLineupIssue. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
+    return settle(() => {
+      // Carry n-1: HttpDriver refuses an empty lineup before any call (the
+      // product would DELETE the stored one and answer 2xx); so does the fake.
+      if (slots.length === 0) throw new DriverMisuse(`driver: putLineup for entrant ${entrantId} on fixture ${fixtureId} with no slots — the product would delete its lineup and answer 2xx, never refuse`);
+      this.log("putLineup", fixtureId, entrantId);
+      const path = `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`;
+      const f = this.#f(fixtureId);
+      if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "entrant is not a side of this fixture");
+      if (f.status !== "scheduled") throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, `lineup is locked once a fixture is ${f.status}`);
+      if (new Set(slots.map((s) => s.person_id)).size !== slots.length) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "duplicate person in lineup");
+      const roster = new Set((this.members.get(entrantId) ?? []).map((m) => m.person_id));
+      if (slots.some((s) => !roster.has(s.person_id))) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "lineup contains a person who is not a member of the entrant");
+      const stored = slots.map((s) => ({ ...s, ...(s.roles !== undefined ? { roles: [...s.roles] } : {}) }));
+      this.lineups.set(`${fixtureId}|${entrantId}`, stored);
+      let issues: ReturnType<typeof validateLineup>;
+      try {
+        issues = validateLineup(resolvePositions(sportModule(this.sport) as never, this.cfg as never), {
+          entrantId,
+          slots: stored.map((s, i) => ({ personId: s.person_id, slot: s.slot, ...(s.position_key !== undefined ? { positionKey: s.position_key } : {}), roles: [...(s.roles ?? [])], orderNo: s.order_no ?? i + 1 })),
+        });
+      } catch (err) {
+        // The product answers `checked: false, reason: <error kind>` and has
+        // already saved; HttpDriver refuses that answer as LineupUnchecked.
+        throw new LineupUnchecked(fixtureId, entrantId, err instanceof Error ? err.name : "unknown");
+      }
+      return { checked: true, warnings: issues.map((x) => JSON.stringify(x)) };
+    });
+  }
   /** Circle-method rounds over the entrant ids, "BYE" padding an odd field. */
   circle(): [string, string][][] {
     const ring = this.entrants.length % 2 === 0 ? this.entrants.map((e) => e.id) : [...this.entrants.map((e) => e.id), "BYE"];
@@ -149,7 +311,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
   readonly keys = new Map<string, Map<string, PostedEvent>>();
   postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     return settle(() => {
-      this.log("postStream");
+      this.log("postStream", id);
       const f = this.#f(id);
       const seen = this.keys.get(id) ?? new Map<string, PostedEvent>();
       this.keys.set(id, seen);
@@ -227,6 +389,42 @@ export class FakeLeagueDriver implements OrganiserDriver {
       f.outcome = null;
     });
   }
+  /** W1-driving Task 6: a single stage has no later stage to seed. The
+   *  product refuses a recompute on a stage with no progression (422
+   *  SEEDING_RULES_MISSING, computeSeedProposal) and a confirm of a proposal
+   *  it never minted (404, codeless). FakeMultiStageDriver models the advance. */
+  recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
+    return settle(() => {
+      this.log("recomputeSeedProposal", stageId);
+      throw new RefusedCall("POST", `/api/v1/stages/${stageId}/seed-proposal`, 422, "SEEDING_RULES_MISSING", "this stage has no progression rules");
+    });
+  }
+  confirmSeedProposal(stageId: string, body: { proposalId: string }): Promise<SeedConfirmOut> {
+    return settle(() => {
+      this.log("confirmSeedProposal", stageId, body.proposalId);
+      throw new RefusedCall("POST", `/api/v1/stages/${stageId}/seed-proposal/confirm`, 404, wireCodeFor(404), "seed proposal not found");
+    });
+  }
+  /** W1-driving T7: challenges exist on ladder stages only — stages.ts
+   *  issueChallenge throws a CODELESS 422, so the wire code is http.ts's
+   *  default for the status (read from the product). FakeLadderDriver
+   *  (fake-formats-driver.ts) models a ladder. */
+  challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    return settle(() => {
+      this.log("challenge", stageId, challengerId, opponentId);
+      throw new RefusedCall("POST", `/api/v1/stages/${stageId}/challenges`, 422, wireCodeFor(422), "challenges only exist on ladder stages");
+    });
+  }
+  /** W1-driving Task 8: the americano read model exists on americano stages
+   *  only — usecases/americano.ts americanoView throws a CODELESS 422, so the
+   *  wire code is http.ts's default for the status (read from the product).
+   *  FakeAmericanoDriver (fake-formats-driver.ts) models one. */
+  americanoView(stageId: string): Promise<AmericanoViewOut> {
+    return settle(() => {
+      this.log("americanoView", stageId);
+      throw new RefusedCall("GET", `/api/v1/stages/${stageId}/americano`, 422, wireCodeFor(422), "not an americano stage");
+    });
+  }
   /** The table fake models no rebuild; refused by name (Task 13). */
   rebuild(_stageId: string): Promise<void> {
     return settle(() => {
@@ -244,10 +442,13 @@ export class FakeLeagueDriver implements OrganiserDriver {
   /** The table the product folds: [home, away] deltas from standingsDelta over
    *  each result, and a one-sided award (bye) scored the way
    *  engine-db/competition.ts awardByeDelta does it. */
+  /** Who the table folds over: the division's entrants. An americano stage
+   *  folds over its SIDES instead (FakeAmericanoDriver). */
+  tableEntrants(): string[] { return this.entrants.map((e) => e.id); }
   standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return settle(() => {
       this.log("standings");
-      const pts = new Map(this.entrants.map((e) => [e.id, 0]));
+      const pts = new Map(this.tableEntrants().map((id) => [id, 0]));
       const m = sportModule(this.sport);
       const kind = this.stage!.kind as StageKind;
       for (const f of this.fixtures) {
@@ -275,8 +476,17 @@ export class FakeLeagueDriver implements OrganiserDriver {
     this.log("publicStandings");
     return { division_id: "d1", standings: [{ stage_id: "s1", pool_id: null, rows: (await this.standings("s1", null)).rows }] };
   }
+  /** The distinct kinds of the division's ACTIVE entrants — divisions.ts:857-871
+   *  `select distinct kind from entrants where … status not in ('withdrawn',
+   *  'disqualified')`. A row with no kind names none. The americano fake adds
+   *  the pair entrants its stage mints. */
+  kindsInUse(): string[] {
+    return [...new Set(this.entrants.filter((e) => !DEPARTED_STATUSES.includes(e.status)).flatMap((e) => (e.kind === undefined ? [] : [e.kind])))];
+  }
   /** divisions.ts:795-870: once fixtures exist, a config that does not parse or
-   *  changes anything but `entrants` is 409 FORMAT_LOCKED; otherwise it saves. */
+   *  changes anything but `entrants` is 409 FORMAT_LOCKED; a model that no
+   *  longer accepts an active entrant's kind is 422 ENTRANT_KIND_IN_USE
+   *  (T12-R1, :857-871); otherwise it saves. */
   patchDivisionConfig(_d: string, config: Record<string, unknown>): Promise<ProbeOutcome> {
     return settle(() => {
       this.log("patchDivisionConfig");
@@ -289,6 +499,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
       }
       if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "FORMAT_LOCKED" };
       const entrants = config.entrants;
+      const next = entrantKindsFor(this.sport, entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed);
+      if (this.kindsInUse().some((k) => !next.includes(k))) return { status: 422, code: "ENTRANT_KIND_IN_USE" };
       this.divisionConfig = entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed;
       return { status: 200, code: null };
     });
@@ -395,20 +607,99 @@ export class FakeSwissDriver extends FakeLeagueDriver {
  *  (stages.ts:2614+). Deciding a fixture fills its winner into the next
  *  round's slot (scoring.ts:729 → fillSlot, stages.ts:3567). Complete emits
  *  stage_completed with finalRanks: the champion, then losers by the round
- *  they went out in, later first, seed order within a round. Standings and
- *  withdraw are the table fake's — no test drives LIFECYCLE or R4 here. */
+ *  they went out in, later first, seed order within a round. Standings are
+ *  the table fake's, and so is a knockout's withdraw.
+ *
+ *  `pagePlayoff: true` (W1-driving Task 2) makes it a single page_playoff
+ *  stage instead: Start builds the ENGINE's own generatePagePlayoff shape
+ *  (pp-q1, pp-elim, pp-q2, pp-final; its round r is round_no r + 1), and
+ *  refuses any field but the engine's as the product's Start does (an
+ *  EngineError → its status). A pp-q1 LOSER feeds pp-q2 as well as its
+ *  winner feeding the final. page_playoff is not a bracket-walkover kind
+ *  (stages.ts BRACKET_WALKOVER_KINDS), so withdraw takes the product's
+ *  open-format branch (withdrawal.ts:213-217): every pending fixture of the
+ *  withdrawn entrant is voided (abandoned), nothing is forfeited, and the
+ *  policy reads "walkover" once anything was voided, "none" otherwise.
+ *
+ *  `stepladder: true` (W1-driving T15) makes it a single stepladder stage the
+ *  same way: Start builds the ENGINE's own generateStepladder shape (sl-g0 the
+ *  two lowest seeds, then one game per round up to the top seed; its round r
+ *  is round_no r + 1, as the product's rows read). stepladder IS a
+ *  bracket-walkover kind, so its withdraw stays the table fake's.
+ *
+ *  `doubleElim: true` (T15-R8 m-7) makes it a single double_elim stage the
+ *  same way, on generateDoubleElim (no bracketReset): a bye line is a
+ *  one-sided forfeited AWARD row whose winner is fed forward, as the
+ *  knockout's are; a slot fed by a bye line's LOSER never fills, so a
+ *  fixture whose other slot is filled is awarded through (the product's
+ *  bye award at generation, stages.ts:2614+). Two such dead slots on one
+ *  fixture are out of this fake's scope and thrown by name. */
+export interface FakeKnockoutOptions { readonly pagePlayoff?: boolean; readonly stepladder?: boolean; readonly doubleElim?: boolean }
+type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
   /** fixture id → the next round's fixture and slot its winner fills. */
-  readonly feeds = new Map<string, { to: string; slot: "home_entrant_id" | "away_entrant_id" }>();
-  override acceptsStage(kind: string): boolean { return kind === "knockout"; }
-  override refuseStages(): never { throw new Error("fake: knockout only"); }
+  readonly feeds = new Map<string, { to: string; slot: Slot }>();
+  /** fixture id → the fixture and slot its LOSER fills (a page playoff's pp-q1 → pp-q2). */
+  readonly loserFeeds = new Map<string, { to: string; slot: Slot }>();
+  readonly pagePlayoff: boolean;
+  readonly stepladder: boolean;
+  readonly doubleElim: boolean;
+  /** `<row id>:<slot>`: a slot fed by a bye line's loser, which never fills (doubleElim). */
+  readonly deadSlots = new Set<string>();
+  /** The engine's fixture id (pp-q1, …) → the fake's row id, in the engine's order. */
+  readonly extIds = new Map<string, string>();
+  constructor(opts: FakeKnockoutOptions = {}, orgId = "org-fake") {
+    super(orgId);
+    this.pagePlayoff = opts.pagePlayoff === true;
+    this.stepladder = !this.pagePlayoff && opts.stepladder === true;
+    this.doubleElim = !this.pagePlayoff && !this.stepladder && opts.doubleElim === true;
+  }
+  /** The single stage kind this fake plays. */
+  get bracketKind(): string { return this.pagePlayoff ? "page_playoff" : this.stepladder ? "stepladder" : this.doubleElim ? "double_elim" : "knockout"; }
+  override acceptsStage(kind: string): boolean { return kind === this.bracketKind; }
+  override refuseStages(): never { throw new Error(`fake: ${this.bracketKind.replace("_", " ")} only`); }
   override expungesEarly(): boolean { return false; }
   /** Whether a finished fixture's winner goes on — a test seam for a product
    *  that drops one. */
   carriesForward(_f: FakeFixture): boolean { return true; }
+  /** Start on the engine's own bracket shape (a page playoff, a stepladder or a double elim). */
+  startEngineBracket(): StartOut {
+    let bracket: GeneratedBracket;
+    try {
+      const opts = { entrants: this.entrants.map((e) => e.id), seeds: new Map(this.entrants.map((e) => [e.id, e.seed ?? Number.MAX_SAFE_INTEGER])) };
+      bracket = this.pagePlayoff ? generatePagePlayoff(opts) : this.doubleElim ? generateDoubleElim(opts) : generateStepladder(opts);
+    } catch (e) {
+      if (!EngineError.is(e)) throw e;
+      throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus(e.code), e.code, e.message);
+    }
+    // Each row carries the engine's id and final flag, as the product's rows do
+    // (stages.ts bracketToGen `extKey: f.id`; fixtures.ts listDivisionFixtures
+    // serves ext_key and is_final) — I2 reads a page playoff's champion off them.
+    for (const g of bracket.fixtures) {
+      const tags = { ext_key: g.id, is_final: g.isFinal === true };
+      const row = g.award !== undefined
+        ? this.seat(g.round + 1, g.award, null, { ...tags, status: "forfeited", outcome: { kind: "award", winner: g.award } })
+        : this.seat(g.round + 1, g.home ?? null, g.away ?? null, tags);
+      this.extIds.set(g.id, row.id);
+    }
+    const awards = new Set(bracket.fixtures.filter((g) => g.award !== undefined).map((g) => g.id));
+    for (const g of bracket.fixtures) {
+      for (const [ref, slot] of [[g.homeFrom, "home_entrant_id"], [g.awayFrom, "away_entrant_id"]] as const) {
+        if (ref === undefined) continue;
+        if (ref.side === "loser" && awards.has(ref.fixtureId)) { this.deadSlots.add(`${this.extIds.get(g.id)!}:${slot}`); continue; }
+        (ref.side === "winner" ? this.feeds : this.loserFeeds).set(this.extIds.get(ref.fixtureId)!, { to: this.extIds.get(g.id)!, slot });
+      }
+    }
+    const bothDead = this.fixtures.find((x) => this.deadSlots.has(`${x.id}:home_entrant_id`) && this.deadSlots.has(`${x.id}:away_entrant_id`));
+    if (bothDead !== undefined) throw new Error(`fake: ${bothDead.id} has two dead slots (adjacent bye lines) — outside this fake`);
+    for (const f of this.fixtures.filter((x) => x.status === "forfeited")) this.feed(f);
+    this.stage!.status = "active";
+    return { division_id: "d1", status: "active", started: true, generated: this.fixtures.length };
+  }
   override start(): Promise<StartOut> {
     return settle(() => {
       this.log("start");
+      if (this.pagePlayoff || this.stepladder || this.doubleElim) return this.startEngineBracket();
       const size = 2 ** Math.ceil(Math.log2(Math.max(2, this.entrants.length)));
       let order = [1, 2];
       while (order.length < size) order = order.flatMap((s) => [s, order.length * 2 + 1 - s]);
@@ -429,8 +720,31 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   feed(f: FakeFixture): void {
     const w = (f.outcome as { winner?: unknown } | null)?.winner;
     const to = this.feeds.get(f.id);
-    if (typeof w !== "string" || to === undefined || !this.carriesForward(f)) return;
-    Object.assign(this.fixtures.find((x) => x.id === to.to)!, { [to.slot]: w });
+    const lo = this.loserFeeds.get(f.id);
+    if (typeof w !== "string" || (to === undefined && lo === undefined) || !this.carriesForward(f)) return;
+    if (to !== undefined) this.fill(to.to, to.slot, w);
+    const loser = w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id;
+    if (lo !== undefined && loser !== null) this.fill(lo.to, lo.slot, loser);
+  }
+  /** Fill a slot; a fixture whose OTHER slot is dead (a bye line's loser) is awarded through and fed on. */
+  fill(id: string, slot: Slot, entrant: string): void {
+    const target = this.fixtures.find((x) => x.id === id)!;
+    Object.assign(target, { [slot]: entrant });
+    const other: Slot = slot === "home_entrant_id" ? "away_entrant_id" : "home_entrant_id";
+    if (!this.deadSlots.has(`${id}:${other}`)) return;
+    Object.assign(target, { status: "forfeited", outcome: { kind: "award", winner: entrant } });
+    this.feed(target);
+  }
+  override async withdraw(entrantId: string): Promise<WithdrawOut> {
+    if (!this.pagePlayoff) return super.withdraw(entrantId);
+    this.log("withdraw");
+    let voided = 0;
+    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+      await this.abandonFixture(f);
+      voided++;
+    }
+    this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
+    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0 };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const out = await super.postStream(id, events, prefix);
@@ -448,7 +762,8 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       for (const f of this.fixtures) {
         const w = (f.outcome as { winner?: unknown } | null)?.winner;
         if (typeof w !== "string" || f.home_entrant_id === null || f.away_entrant_id === null) continue;
-        out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
+        // A loser that plays on (a page playoff's pp-q1) is not out yet.
+        if (!this.loserFeeds.has(f.id)) out.push({ id: w === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id, round: f.round_no ?? 0 });
         if (!this.feeds.has(f.id)) champion = w;
       }
       out.sort((a, b) => b.round - a.round || seed(a.id) - seed(b.id));

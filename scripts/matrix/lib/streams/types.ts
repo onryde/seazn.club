@@ -6,7 +6,11 @@ export type RequestedOutcome =
   | { readonly kind: "win"; readonly winner: Side }
   | { readonly kind: "draw" }
   | { readonly kind: "forfeit"; readonly by: Side; readonly reason: "walkover" | "retired hurt" }
-  | { readonly kind: "abandon" };
+  | { readonly kind: "abandon" }
+  /** Level scores that stand as a tie (cricket decideTie, ruling 44). A sport
+   *  generator builds it only through `tied`; one that declares none cannot
+   *  reach it (OutcomeUnreachable). */
+  | { readonly kind: "tie" };
 
 export type DecidedOutcome = Extract<RequestedOutcome, { kind: "win" | "draw" }>;
 
@@ -17,6 +21,7 @@ export const ALL_OUTCOMES: readonly RequestedOutcome[] = Object.freeze([
   { kind: "forfeit", by: "away", reason: "walkover" },
   { kind: "forfeit", by: "home", reason: "retired hurt" },
   { kind: "abandon" },
+  { kind: "tie" },
 ]);
 
 export function outcomeLabel(o: RequestedOutcome): string {
@@ -25,6 +30,7 @@ export function outcomeLabel(o: RequestedOutcome): string {
     case "draw": return "draw";
     case "forfeit": return `forfeit-${o.by}-${o.reason === "walkover" ? "walkover" : "retired"}`;
     case "abandon": return "abandon";
+    case "tie": return "tie";
   }
 }
 
@@ -49,6 +55,10 @@ export interface DecidedRequest extends StreamRequest {
 export interface SportStreamGenerator {
   readonly sportKeys: readonly string[];
   decided(req: DecidedRequest): StreamEvent[];
+  /** Level scores that fold to `{ kind: "tie" }`. Absent where the sport's
+   *  engine never ends level; a generator may still refuse a cfg whose level
+   *  score is played off (OutcomeUnreachable). */
+  tied?(req: StreamRequest): StreamEvent[];
 }
 
 /** Always first: boardgame refuses a forfeit outside `live`, and every kernel but
@@ -59,7 +69,8 @@ export function idOf(req: StreamRequest, side: Side): string {
   return side === "home" ? req.home : req.away;
 }
 
-/** The module declares this outcome impossible here (supportsDraws false). */
+/** The module declares this outcome impossible here: a draw where supportsDraws
+ *  is false, or a tie the sport cannot end on under this cfg. */
 export class OutcomeUnreachable extends Error {
   readonly sportKey: string;
   readonly label: string;

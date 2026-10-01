@@ -12,8 +12,9 @@
 //  - Submit POSTs /api/v1/competitions with no slug (:84-98): the PRODUCT picks
 //    the slug, so the caller reads it from the answer. On success it
 //    router.push(routes.competition(org, created.slug)) (:117).
+import type { FromTemplateAnswer } from "../../driver/types.ts";
 import { actAndAwait } from "../respond.ts";
-import { NAME, TESTID } from "../selectors.ts";
+import { DATA, NAME, TESTID, templateCardTestid } from "../selectors.ts";
 import { actBudget, awaitScreen, navBudget, shoot, visit, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";
 
@@ -44,5 +45,48 @@ export async function createCompetitionUi(c: PageCtx, input: { name: string }): 
   const nav = navBudget(c);
   await awaitScreen(() => page.waitForURL((u) => u.pathname === landing, { timeout: nav }), `the new competition's page ${landing}`, nav);
   await shoot(c, "01-competition-created", before);
+  return data;
+}
+
+/** W1-driving Task 13 (ruling 47): a catalog template's competition, division
+ *  and stages, through its gallery card — ONE organiser act. Product facts,
+ *  read at Step 0 (template-gallery.tsx):
+ *  - /o/<org>/c/new renders the gallery; each card is a button with
+ *    `template-card-<key>` (:242) that opens the template's detail sheet;
+ *  - the sheet's form (`template-detail-form`, :429) holds the name
+ *    (comp.wizard.name.label, pre-filled from the template) and the required
+ *    Ends on (the decorated `${msg("comp.wizard.endsOn")} *`, :458); "Use this
+ *    template" (`template-detail-submit`, :421) sits in the modal footer and
+ *    submits that form;
+ *  - the submit POSTs /api/v1/competitions/from-template with no visibility
+ *    (:305-321). On success it router.push()es to the competition; on a
+ *    public-dashboard degrade it opens the degrade modal and STAYS on /c/new
+ *    (:323-330) — so there is no landing to wait for, and the driver's
+ *    read-back refuses the visibility (HttpDriver.readBackTemplate).
+ *  The answer is the product's own (FromTemplateResult). */
+export async function createFromTemplateUi(c: PageCtx, key: string, input: { name: string; endsOn: string }): Promise<FromTemplateAnswer> {
+  // Refuses an unknown or unsafe key by name before any navigation.
+  const cardId = templateCardTestid(key);
+  const { page } = c;
+  const t = actBudget(c, 1);
+  const card = page.getByTestId(cardId);
+  await visit(c, paths.competitionNew(c.orgSlug), { control: card, what: `the template gallery's ${key} card` });
+  await card.click({ timeout: t });
+  const form = page.locator(DATA.templateDetailForm.selector);
+  await form.getByLabel(NAME.templateName.text, { exact: true }).fill(input.name, { timeout: t });
+  await form.getByLabel(NAME.templateEndsOn.text, { exact: true }).fill(input.endsOn, { timeout: t });
+  const before = await shoot(c, "01-competition-from-template-before");
+  const { data } = await actAndAwait<FromTemplateAnswer>(page, { method: "POST", path: /^\/api\/v1\/competitions\/from-template$/ },
+    () => page.getByTestId(TESTID.templateDetailSubmit.id).click({ timeout: t }), t);
+  // The product's own test, truthiness (template-gallery.tsx `if (created.public_quota_degraded) {`,
+  // text-pinned in page-objects.test.ts): a null note navigates there, so it navigates here (T13-R1 m-3).
+  if (data.public_quota_degraded) {
+    await shoot(c, "01-competition-from-template-degraded", before);
+    return data;
+  }
+  const landing = paths.competition(c.orgSlug, data.slug);
+  const nav = navBudget(c);
+  await awaitScreen(() => page.waitForURL((u) => u.pathname === landing, { timeout: nav }), `the new competition's page ${landing}`, nav);
+  await shoot(c, "01-competition-from-template", before);
   return data;
 }

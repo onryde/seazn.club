@@ -8,8 +8,10 @@
 //
 // What it records beside the scenario's own checks (checks()):
 //  - organiser-ui-path: the builder built the division (pass), or no organiser
-//    control builds this row (fail, naming the owning wave — D7), or only a
-//    catalog template does (abstain, → W1-driving);
+//    control builds this row (fail, naming the owning wave — D7). A
+//    template-only cell has no such check: its case carries the template, and
+//    the gallery card builds competition, division and stages in one act
+//    (createFromTemplate, W1-driving Task 13, ruling 47);
 //  - builder-posted-as-harness: what the builder posted against the harness's
 //    own bodies for the row, path by path;
 //  - ui-standings-match / ui-public-standings-match / ui-champion-shown: the
@@ -28,10 +30,10 @@
 // Every wait is derived from the product's constants (AGENTS class 20;
 // browser-budget.test.ts scans this file for a flat timeout).
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
-import { apiOnlyUiPath } from "../api-only-ui.ts";
+import { API_ONLY_UI_WAVE, apiOnlyUiPath } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";
-import { createCompetitionUi } from "../browser/pages/competition.ts";
+import { createCompetitionUi, createFromTemplateUi } from "../browser/pages/competition.ts";
 import { boundActions, navBudget, shoot, type DivisionWhere, type PageCtx } from "../browser/pages/ctx.ts";
 import { createDivisionUi, type StageOut } from "../browser/pages/division-builder.ts";
 import { addEntrantsUi, withdrawUi } from "../browser/pages/entrants.ts";
@@ -45,16 +47,17 @@ import { noPadReason } from "../pad-sports.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
 import type { MatrixPadAdapter } from "../pads/types.ts";
 import type { CheckResult } from "../results.ts";
+import { routeTo, type Route } from "../routing.ts";
 import { assertion, type Item } from "../scenarios/assertions.ts";
 import type { CaseSpec } from "../scenarios/types.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import type { HttpDriver } from "./http-driver.ts";
-import { MixedLedger, type ActionType, type PadPolicy } from "./mixed.ts";
+import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from "./mixed.ts";
 import {
-  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, VisibilityDegraded,
-  type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type FixtureRow,
-  type FixtureStateOut, type GenerateOut, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
+  DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded,
+  type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
+  type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
 } from "./types.ts";
 
 /** sport → pad adapter (pads/index.ts PAD_ADAPTERS). A sport without one is
@@ -67,6 +70,7 @@ export type Replay = typeof replayEvents;
 /** The page objects the driver clicks through; injectable so its tests need no browser. */
 export interface BrowserPages {
   readonly createCompetitionUi: typeof createCompetitionUi;
+  readonly createFromTemplateUi: typeof createFromTemplateUi;
   readonly createDivisionUi: typeof createDivisionUi;
   readonly addEntrantsUi: typeof addEntrantsUi;
   readonly withdrawUi: typeof withdrawUi;
@@ -80,12 +84,14 @@ export interface BrowserPages {
   readonly readPublicUi: typeof readPublicUi;
 }
 export const REAL_PAGES: BrowserPages = Object.freeze({
-  createCompetitionUi, createDivisionUi, addEntrantsUi, withdrawUi, startUi, generateUi,
+  createCompetitionUi, createFromTemplateUi, createDivisionUi, addEntrantsUi, withdrawUi, startUi, generateUi,
   completeStageUi, openFixtureUi, forfeitUi, finalizeUi, readStandingsUi, readPublicUi,
 });
 
-/** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger). */
-export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger">;
+/** The HTTP side: every organiser call, plus the ledger read (HttpDriver.ledger),
+ *  the roster filler the entrants tab cannot do (HttpDriver.setMembers) and the
+ *  read-back of what a template card built (HttpDriver.readBackTemplate). */
+export type HttpSide = OrganiserDriver & Pick<HttpDriver, "ledger" | "setMembers" | "readBackTemplate">;
 
 export interface Clock { now(): number; sleep(ms: number): Promise<void> }
 const REAL_CLOCK: Clock = { now: () => Date.now(), sleep: (ms) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }) };
@@ -116,9 +122,11 @@ export const PUBLIC_REVALIDATE_S = 30;
  *  regeneration of the page may read a data entry this old. */
 export const PUBLIC_DATA_REVALIDATE_S = 30;
 /** The rules editor, not the builder, carries a division's match-rules
- *  override; no wave in design §8 or the programme index owns driving it, so
- *  it is W1-driving's (M-4 ruling, fix round 1). */
-const OVERRIDE_WAVE = "W1-driving";
+ *  override (M-4 ruling, fix round 1). Ruling 47: driving it in the browser
+ *  goes to W2, which owns the editor fixes under ruling 33. The
+ *  NoOrganiserPath below spells the wave as a literal (the Q-A guard reads a
+ *  literal only, PF-3); browser-driver.test.ts pins the two together. */
+export const OVERRIDE_ROUTE = routeTo("W2", "the rules editor is not driven in the browser; its wave owns the editor fixes (rulings 33, 47)");
 /** The ledger row both finalize paths append (fixture-console.tsx send, scoring.ts finalizeFixture; text-pinned). */
 export const FINALIZE_EVENT = "core.finalize";
 /** The completion event the scenario reads finalRanks from (common.ts finishStage). */
@@ -354,7 +362,26 @@ export class BrowserDriver implements OrganiserDriver {
     throw new DriverMisuse(`browser: fixture ${fixtureId} is in no division this driver built — the run sheet cannot find its row`);
   }
 
+  /** The cell's catalog template when the case is on one of the two
+   *  template-only cells (api-only-ui.ts), else null. */
+  #templateReaching(): string | null {
+    const row = this.#spec.row;
+    if (!isApiOnly(row)) return null;
+    const path = apiOnlyUiPath(row, this.#spec.sport);
+    return path.reachable ? path.template : null;
+  }
+
   async createCompetition(input: { name: string; slug: string }): Promise<CompetitionRef> {
+    // W1-driving Task 13: a template case's competition is its card's, and a
+    // template-only cell without its template has no right organiser act (the
+    // blank wizard + builder cannot build the row). Refused before anything lands.
+    if (this.#spec.template !== undefined) {
+      throw new DriverMisuse(`browser: case ${this.#spec.caseId} carries catalog template ${this.#spec.template} — its competition is created by its card (createFromTemplate), never the blank wizard`);
+    }
+    const reaching = this.#templateReaching();
+    if (reaching !== null) {
+      throw new DriverMisuse(`browser: ${this.#spec.row}|${this.#spec.sport} is built through catalog template ${reaching} — plan the case with that template (CaseSpec.template, --set w1-driving-l1) so it sets up through the card`);
+    }
     if (!this.#wants("createCompetition")) {
       this.#ledger.record("createCompetition", "http");
       const ref = await this.#write(() => this.#http.createCompetition(input));
@@ -371,16 +398,50 @@ export class BrowserDriver implements OrganiserDriver {
     return { id: c.id, slug: c.slug, orgId: c.org_id };
   }
 
+  /** W1-driving Task 13 (ruling 47): the template case's ONE organiser act —
+   *  the gallery card builds the competition, the division and its stages,
+   *  so createCompetition AND createDivision are recorded on the path it took
+   *  (the browser while either still owes its turn, else over http), and no
+   *  stage is ever posted. The product's answer is read back over http (org,
+   *  visibility, division, stages — HttpDriver.readBackTemplate); only what
+   *  held is registered for the page objects. */
+  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+    if (this.#spec.template !== key) {
+      throw new DriverMisuse(`browser: case ${this.#spec.caseId} carries template ${this.#spec.template ?? "none"}; createFromTemplate(${key}) would build another shape under its name`);
+    }
+    let out: FromTemplateOut;
+    if (this.#wants("createCompetition") || this.#wants("createDivision")) {
+      this.#ledger.record("createCompetition", "browser");
+      this.#ledger.record("createDivision", "browser");
+      const answer = await this.#write(() => this.#ui((p) => p.createFromTemplateUi(this.#ctx, key, input)));
+      out = await this.#http.readBackTemplate(answer, key);
+    } else {
+      this.#ledger.record("createCompetition", "http");
+      this.#ledger.record("createDivision", "http");
+      out = await this.#write(() => this.#http.createFromTemplate(key, input));
+    }
+    this.#competitions.set(out.competition.id, out.competition.slug);
+    this.#register(out.division.id, out.competition.slug, out.division.slug);
+    for (const s of out.stages) this.#stageDivision.set(s.id, out.division.id);
+    return out;
+  }
+
   /** D7: an API-only row has no organiser control; the text names who owns it
-   *  (api-only-ui.ts, the one authority the layer planner reads too). */
-  #judgeApiOnlyPath(row: ApiOnlyRowKey): string {
+   *  (api-only-ui.ts, the one authority the layer planner reads too). Answers
+   *  the row's route, which the mixed ledger's exemption carries. A
+   *  template-only cell never gets here by a planned path (createCompetition
+   *  refuses it without its template, and a template case's division is its
+   *  card's), so reaching it is refused by name. */
+  #judgeApiOnlyPath(row: ApiOnlyRowKey): Route {
     const path = apiOnlyUiPath(row, this.#spec.sport);
-    const text = `${path.reason} → ${path.wave}`;
+    if (path.reachable) {
+      throw new DriverMisuse(`browser: ${row}|${this.#spec.sport} is ${path.reason} — its division is the card's (createFromTemplate), never a createDivision`);
+    }
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
-      this.#checks.push(path.template === null ? assertion("organiser-ui-path", [{ ok: false, note: text }]) : assertion("organiser-ui-path", [], text));
+      this.#checks.push(assertion("organiser-ui-path", [{ ok: false, note: `${path.reason} → ${path.wave}` }]));
     }
-    return text;
+    return API_ONLY_UI_WAVE[row];
   }
 
   async createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
@@ -389,8 +450,10 @@ export class BrowserDriver implements OrganiserDriver {
     const row = this.#spec.row;
     const apiOnly = isApiOnly(row);
     if (apiOnly || !this.#wants("createDivision")) {
+      // Judged first: a refused path records no invocation.
+      const route = apiOnly ? this.#judgeApiOnlyPath(row) : null;
       this.#ledger.record("createDivision", "http");
-      if (apiOnly) this.#ledger.exempt("createDivision", this.#judgeApiOnlyPath(row));
+      if (route !== null) this.#ledger.exempt("createDivision", route);
       const ref = await this.#write(() => this.#http.createDivision(competitionId, input));
       this.#register(ref.id, compSlug, ref.slug);
       return ref;
@@ -398,7 +461,7 @@ export class BrowserDriver implements OrganiserDriver {
     const override = Object.keys(input.config ?? {});
     // M-4 ruling: a cell with no path in this layer (🚫, owned by a wave), never an error red.
     if (override.length > 0) {
-      throw new NoOrganiserPath(OVERRIDE_WAVE, `the division builder takes no rule override (${override.join(", ")}); the rules editor that does is not driven in this layer`);
+      throw new NoOrganiserPath("W2", `the division builder takes no rule override (${override.join(", ")}); ${OVERRIDE_ROUTE.why}`);
     }
     this.#ledger.record("createDivision", "browser");
     const { division, stages } = await this.#write(() => this.#ui((p) => p.createDivisionUi(this.#ctx, compSlug, competitionId,
@@ -436,7 +499,11 @@ export class BrowserDriver implements OrganiserDriver {
     return out;
   }
 
-  async addEntrants(divisionId: string, entrants: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+  /** The http path sends members inline (HttpDriver.addEntrants). The
+   *  browser path adds each entrant by name through the entrants tab, so the
+   *  type keeps its browser coverage, then seeds every roster it was given as
+   *  HTTP filler (D2, ruling 47). */
+  async addEntrants(divisionId: string, entrants: readonly EntrantInput[]): Promise<EntrantRow[]> {
     // M-6: an empty add has no organiser act to drive — no click, no ledger row;
     // the API answers it as it would any other caller.
     if (entrants.length === 0) return this.#http.addEntrants(divisionId, entrants);
@@ -446,10 +513,76 @@ export class BrowserDriver implements OrganiserDriver {
     }
     const where = this.#whereOf(divisionId);
     this.#ledger.record("addEntrants", "browser");
-    return this.#write(() => this.#ui((p) => p.addEntrantsUi(this.#ctx, where, entrants.map((e) => ({ displayName: e.displayName, seed: e.seed, kind: e.kind })))));
+    const rows = await this.#write(() => this.#ui((p) => p.addEntrantsUi(this.#ctx, where, entrants.map((e) => ({ displayName: e.displayName, seed: e.seed, kind: e.kind })))));
+    await this.#seedRosters(entrants, rows);
+    return rows;
+  }
+
+  /** Each input with members gets its roster over HTTP (setMembers: persons,
+   *  then one PATCH), counted as filler. The tab answers one row per input,
+   *  in order, each as typed (entrants.ts addEntrantsUi) — that pairing is
+   *  what puts a roster on the right entrant, so a row that does not line up
+   *  is refused by name before any roster is seeded. */
+  async #seedRosters(inputs: readonly EntrantInput[], rows: readonly EntrantRow[]): Promise<void> {
+    if (!inputs.some((e) => (e.members?.length ?? 0) > 0)) return;
+    if (rows.length !== inputs.length || inputs.some((e, i) => rows[i]?.display_name !== e.displayName)) {
+      throw new DriverMisuse(`browser: the entrants tab answered ${rows.map((r) => r.display_name).join(", ") || "no entrant"} for ${inputs.map((e) => e.displayName).join(", ")} — a roster would land on the wrong entrant`);
+    }
+    for (const [i, e] of inputs.entries()) {
+      const members = e.members;
+      if (members === undefined || members.length === 0) continue;
+      const id = rows[i].id;
+      this.#ledger.filler("setMembers");
+      await this.#write(() => this.#http.setMembers(id, members));
+    }
   }
 
   listEntrants(divisionId: string): Promise<EntrantRow[]> { return this.#http.listEntrants(divisionId); }
+
+  /** Filler (ruling 47): a read, always HTTP. */
+  entrantMembers(entrantId: string): Promise<EntrantMember[]> {
+    this.#ledger.filler("entrantMembers");
+    return this.#http.entrantMembers(entrantId);
+  }
+
+  /** Filler (ruling 47): always HTTP, and a write; the product's lineup
+   *  check is returned untouched. */
+  putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
+    this.#ledger.filler("putLineup");
+    return this.#write(() => this.#http.putLineup(fixtureId, entrantId, slots));
+  }
+
+  /** Filler (ruling 47, W1-driving Task 6): the seed advance is always HTTP,
+   *  and a write; the product's answer or refusal passes through untouched. */
+  confirmSeedProposal(stageId: string, body: { proposalId: string; tiePicks?: readonly { slots: readonly string[]; order: readonly string[] }[] }): Promise<SeedConfirmOut> {
+    this.#ledger.filler("confirmSeedProposal");
+    return this.#write(() => this.#http.confirmSeedProposal(stageId, body));
+  }
+
+  /** Filler (ruling 47, W1-driving Task 6): a recompute is a write too (it
+   *  stales the previous draft). */
+  recomputeSeedProposal(stageId: string): Promise<SeedProposalOut> {
+    this.#ledger.filler("recomputeSeedProposal");
+    return this.#write(() => this.#http.recomputeSeedProposal(stageId));
+  }
+
+  /** Filler (ruling 47, W1-driving Task 7): a ladder challenge is always
+   *  HTTP, and a write (it inserts the challenge's fixture); the product's
+   *  answer or refusal passes through untouched. */
+  challenge(stageId: string, challengerId: string, opponentId: string): Promise<ChallengeOut> {
+    this.#ledger.filler("challenge");
+    return this.#write(() => this.#http.challenge(stageId, challengerId, opponentId));
+  }
+
+  /** Filler (ruling 47, W1-driving Task 8): the americano read model is a
+   *  read, always HTTP; the product's answer or refusal passes through. */
+  americanoView(stageId: string): Promise<AmericanoViewOut> {
+    this.#ledger.filler("americanoView");
+    return this.#http.americanoView(stageId);
+  }
+
+  /** The setup filler this driver ran, by name (mixed.ts FILLER). */
+  get fillers(): Readonly<Partial<Record<FillerName, number>>> { return this.#ledger.fillers(); }
 
   async start(divisionId: string): Promise<StartOut> {
     if (!this.#wants("start")) {
@@ -568,8 +701,9 @@ export class BrowserDriver implements OrganiserDriver {
       out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId)));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
-      // other ending may follow a committed completion, so it is never repeated.
-      if (!(e instanceof RefusedCall && e.status < 500)) this.#completed.add(stageId);
+      // other ending may follow a committed completion, so it is never repeated
+      // — and STAGE_COMPLETED_SEEDING_FAILED says it DID commit (W1-driving T6, FP-3).
+      if (!(e instanceof RefusedCall && e.status < 500 && e.code !== SEEDING_FAILED_AFTER_COMMIT)) this.#completed.add(stageId);
       throw e;
     }
     if (out.completed) {

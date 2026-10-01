@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import {
-  CANARY_CHECK, SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, UnknownFilter, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases,
+  CANARY_CHECK, SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, UnknownFilter, checkCanary, checkCellFilter, checkSliceFilter, isSliceCell, planCanaryCase, planSliceCases,
 } from "../lib/slice.ts";
 
 const v = (s: string) => (s === "generic" ? "score" : "bwf");
@@ -88,5 +89,46 @@ describe("CANARY_CHECK and planCanaryCase", () => {
     const c = planCanaryCase(v, "M1");
     expect(c).toEqual({ caseId: "league|generic|score|M1|canary", row: "league", sport: "generic", variant: "score", scenario: "M1", canary: true });
     expect(planSliceCases(v).map((x) => x.caseId)).not.toContain(c.caseId);
+  });
+});
+
+// W1-driving Task 12: --only on any catalogue cell. checkSliceFilter keeps the
+// slice's semantics (above); checkCellFilter admits ROW_KEYS × SPORT_KEYS, the
+// catalogue registry's own lists. Empty and malformed first.
+describe("checkCellFilter — empty and malformed first", () => {
+  it("an empty, one-sided, three-part or unknown cell is UnknownFilter", () => {
+    let refused = 0;
+    for (const only of ["", "|", "league", "league|", "|generic", "league|generic|x", "nope|generic", "league|nope", "LEAGUE|generic", " league|generic"]) {
+      expect(() => checkCellFilter(only), JSON.stringify(only)).toThrow(UnknownFilter);
+      refused++;
+    }
+    expect(refused).toBe(10);
+  });
+  it("the refusal names the flag, the value, and the rows and sports it takes", () => {
+    expect(() => checkCellFilter("league|genric")).toThrow(
+      `slice: unknown --only cell 'league|genric' (allowed: <row>|<sport>, row one of: ${ROW_KEYS.join(" ")}, sport one of: ${SPORT_KEYS.join(" ")})`,
+    );
+  });
+  it("every catalogue cell is admitted and answers its own row and sport — the registry swept, counted", () => {
+    let admitted = 0;
+    for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
+      expect(checkCellFilter(`${row}|${sport}`)).toEqual({ row, sport });
+      admitted++;
+    }
+    expect(admitted).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+    expect(admitted).toBeGreaterThan(SLICE_ROWS.length * SLICE_SPORTS.length);
+  });
+  it("isSliceCell: exactly the six slice cells, and no other catalogue cell", () => {
+    let inside = 0;
+    let outside = 0;
+    for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
+      const want = (SLICE_ROWS as readonly string[]).includes(row) && (SLICE_SPORTS as readonly string[]).includes(sport);
+      expect(isSliceCell(`${row}|${sport}`), `${row}|${sport}`).toBe(want);
+      if (want) inside++;
+      else outside++;
+    }
+    expect(inside).toBe(6);
+    expect(outside).toBeGreaterThan(0);
+    expect(isSliceCell("")).toBe(false);
   });
 });

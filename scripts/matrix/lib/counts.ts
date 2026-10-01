@@ -4,7 +4,16 @@ import { ROW_KEYS, SPORT_KEYS } from "./catalogue.ts";
 import { cellFacts, scenarioCounts, type Drop, type PlannedCase } from "./applicability.ts";
 import { ATOMIC, LIFECYCLE_ID, PARENTS, l2Atomic, l3Atomic, type RegressionCase } from "./scenario-catalogue.ts";
 import type { L2Run } from "./pairs.ts";
+import { routeTo } from "./routing.ts";
 import { offlineBuilderDefault, type SportVariants, type VariantCase } from "./variants.ts";
+
+/** Where the unscorable variant lists are routed. Each `why` is composed from
+ *  its route, so the committed text and routedTo are one authority (T1-R2).
+ *  A generator gap is generator breadth (D5): the last one, cricket's two
+ *  innings, was built under ruling 44, so the list is empty and any new gap
+ *  lands there. */
+const ENGINE_UNSCORABLE = routeTo("W2", "the engine refuses the cfg or its stream");
+const GENERATOR_BREADTH = routeTo("W2", "generator breadth");
 
 /** A variant case listed apart, with where its work is routed. */
 export interface CaseList { count: number; routedTo?: string; why: string; ids: string[] }
@@ -118,8 +127,8 @@ export function computeCounts(input: {
       cases: all.length,
       scorable,
       unscorable: engine.length + generator.length,
-      engineUnscorable: { count: engine.length, routedTo: "W2", why: "the engine refuses the cfg or its stream (EngineError): a rulebook question for W2", ids: engine },
-      generatorUnsupported: { count: generator.length, routedTo: "W1-driving", why: "the stream generator does not build this cfg yet (GeneratorUnsupported: cricket's two-innings presets)", ids: generator },
+      engineUnscorable: { count: engine.length, routedTo: ENGINE_UNSCORABLE.wave, why: `${ENGINE_UNSCORABLE.why} (EngineError): a rulebook question for ${ENGINE_UNSCORABLE.wave}`, ids: engine },
+      generatorUnsupported: { count: generator.length, routedTo: GENERATOR_BREADTH.wave, why: `the stream generator does not build this cfg yet (GeneratorUnsupported): ${GENERATOR_BREADTH.why}, owed by ${GENERATOR_BREADTH.wave}`, ids: generator },
       noOp: { count: noOp.length, why: "no overrides at the sport's builder-default preset: the case runs the builder-default cfg again (listed, not removed from the variant set)", ids: noOp },
       uncoverablePairs: input.variants.reduce((n, v) => n + v.uncoverable.length, 0),
     },
