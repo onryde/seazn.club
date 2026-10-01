@@ -34,7 +34,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { NOTES_CAP, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { NOTES_CAP, PlanStageCapTooLow, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type CaseDriverOptions, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
@@ -1041,6 +1041,61 @@ describe("RR-1: the case orgs' plan must grant every gate a planned case touches
     };
     expect(await (await realDeps(f).openDb()).planLimit("pro", "divisions.per_competition.max")).toBe(20);
     expect(log).toEqual(["m.planLimit pro divisions.per_competition.max"]);
+  });
+});
+
+// W1-driving Task 6 Step 3a (plan review 1, m-1): the case orgs' plan caps
+// stages per division. A 3-stage row on a plan capped at 2 would read the
+// product's refusal as a ❌ — the RR-1 class, for a numeric limit.
+describe("the stage-cap start gate — refused before any case", () => {
+  const spec = (row: string) => ({ caseId: `${row}|generic|score|LIFECYCLE`, row, sport: "generic", variant: "score", scenario: "LIFECYCLE", canary: false }) as never;
+  const one = (row: string) => () => ({ sports: ["generic"], deniesFeatures: false, plan: (v: (s: string) => string) => [
+    { caseId: `${row}|generic|score|LIFECYCLE`, row, sport: "generic", variant: v("generic"), scenario: "LIFECYCLE", canary: false },
+  ] as never });
+  const capped = (cap: number | null, reads: string[]) => (base: Deps): Partial<RunDeps> => ({ openDb: async () => ({
+    ...(await base.openDb()),
+    planLimit: async (k: string, f: string) => { reads.push(`${k} ${f}`); return cap; },
+  }) });
+  const run = async (row: string, cap: number | null, id: string) => {
+    const reads: string[] = [];
+    const base = deps({ planCases: one(row) as never });
+    const d: Deps = { ...base, ...capped(cap, reads)(base) };
+    const io = capture();
+    const dir = dirFor();
+    const code = await runSlice(d, ["--run-id", id, "--report-dir", dir]);
+    return { code, d, io, dir, reads };
+  };
+  const ggko = stagesForRow("group_group_ko").length;
+
+  it("empty case first: no specs need no stages; a single-stage plan needs 1 — derived from the rows", () => {
+    expect(stagesNeeded([])).toEqual({ needed: 0, caseIds: [] });
+    expect(stagesNeeded([spec("league")])).toEqual({ needed: stagesForRow("league").length, caseIds: ["league|generic|score|LIFECYCLE"] });
+  });
+  it("the max over the planned rows, naming every case at it; a row that cannot be derived is not this gate's to judge", () => {
+    expect(ggko).toBe(3);
+    expect(stagesNeeded([spec("league"), spec("group_group_ko"), spec("league_ko"), spec("nope")])).toEqual({ needed: ggko, caseIds: ["group_group_ko|generic|score|LIFECYCLE"] });
+    expect(stagesNeeded([spec("league_ko"), spec("groups_ko")]).caseIds).toEqual(["league_ko|generic|score|LIFECYCLE", "groups_ko|generic|score|LIFECYCLE"]);
+  });
+  it("a plan capping stages.per_division.max below a planned row: PlanStageCapTooLow (exit 2), naming plan, cap and case; no org, nothing written", async () => {
+    const { code, d, io, dir, reads } = await run("group_group_ko", ggko - 1, "cap2");
+    expect(code).toBe(2);
+    expect(io.err()).toContain(`matrix: refused — PlanStageCapTooLow: matrix: the case orgs' plan 'pro' caps stages.per_division.max at ${ggko - 1}; 1 planned case(s) need ${ggko} — group_group_ko|generic|score|LIFECYCLE`);
+    expect(reads).toEqual(["pro stages.per_division.max"]);
+    expect(d.orgs).toEqual([]);
+    expect(existsSync(join(dir, "cap2"))).toBe(false);
+  });
+  it("…a cap equal to the need, or unlimited (null), lets the run start", async () => {
+    for (const [cap, id] of [[ggko, "cap3"], [null, "capnull"]] as const) {
+      const { code, d, reads } = await run("group_group_ko", cap, id);
+      expect(code, String(cap)).toBe(0);
+      expect(reads, String(cap)).toEqual(["pro stages.per_division.max"]);
+      expect(d.orgs, String(cap)).toHaveLength(1);
+      vi.restoreAllMocks();
+    }
+  });
+  it("PlanStageCapTooLow is a typed refusal carrying what it names", () => {
+    const e = new PlanStageCapTooLow("free", 1, 3, ["a", "b"]);
+    expect(e).toMatchObject({ name: "PlanStageCapTooLow", plan: "free", cap: 1, needed: 3, caseIds: ["a", "b"] });
   });
 });
 

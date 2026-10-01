@@ -58,7 +58,9 @@
 //      from the offline one the committed catalogue assumes
 //      (BuilderDefaultDrift, Review Focus 5 — found after sign-in, before any
 //      case); a case orgs' plan that does not grant a gate a planned case
-//      touches (PlanLacksGate, RR-1 — after the plan read, before any case).
+//      touches (PlanLacksGate, RR-1 — after the plan read, before any case);
+//      a plan whose stages.per_division.max is below the longest planned
+//      row's stage count (PlanStageCapTooLow, W1-driving T6).
 //      BuilderDefaultDrift is an environment refusal, not catalogue
 //      drift (gen-catalogue's exit 1): the codes are per CLI, so a wrapper
 //      switches on the CLI, never on the code alone.
@@ -364,6 +366,39 @@ export function gatesNeeded(specs: readonly CaseSpec[], stagesOf: (row: string) 
     for (const gate of gates) out.push({ caseId: s.caseId, gate, path: "allowed" });
   }
   return out;
+}
+
+/** W1-driving Task 6 Step 3a (plan review 1, m-1): the case orgs' plan caps
+ *  stages per division (`stages.per_division.max`). A row with more stages
+ *  than the cap would read the product's refusal of its postStages as a
+ *  product red — RR-1's class, for a numeric limit. */
+export class PlanStageCapTooLow extends Error {
+  readonly plan: string;
+  readonly cap: number;
+  readonly needed: number;
+  readonly caseIds: readonly string[];
+  constructor(plan: string, cap: number, needed: number, caseIds: readonly string[]) {
+    super(`matrix: the case orgs' plan '${plan}' caps stages.per_division.max at ${cap}; ${caseIds.length} planned case(s) need ${needed} — ${caseIds.slice(0, 5).join(", ")}`);
+    this.name = "PlanStageCapTooLow";
+    this.plan = plan;
+    this.cap = cap;
+    this.needed = needed;
+    this.caseIds = caseIds;
+  }
+}
+
+/** The most stages any planned case's row posts, and the cases at that most.
+ *  No specs need none. A row that cannot be derived is not this guard's to
+ *  judge (as gatesNeeded): the case reds on its own derivation. */
+export function stagesNeeded(specs: readonly CaseSpec[], stagesOf: (row: string) => readonly unknown[] = stagesForRow): { needed: number; caseIds: string[] } {
+  let needed = 0;
+  let caseIds: string[] = [];
+  for (const s of specs) {
+    let n = 0;
+    try { n = stagesOf(s.row).length; } catch { n = 0; }
+    if (n > needed) { needed = n; caseIds = [s.caseId]; } else if (n === needed && n > 0) caseIds.push(s.caseId);
+  }
+  return { needed, caseIds };
 }
 
 /** A planner planned a deny it did not declare: the Redis guard (which reads
@@ -716,6 +751,13 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       const gaps = needed.filter((n) => !grants.has(n.gate));
       if (gaps.length > 0) throw new PlanLacksGate(plan, gaps);
     }
+    // W1-driving T6 Step 3a: …and must allow as many stages per division as
+    // the longest planned row posts (null is unlimited).
+    const stages = stagesNeeded(specs);
+    if (stages.needed > 0) {
+      const cap = await db.planLimit(plan, "stages.per_division.max");
+      if (cap !== null && cap < stages.needed) throw new PlanStageCapTooLow(plan, cap, stages.needed, stages.caseIds);
+    }
     // W1c Task 6: one browser per run, opened after every start gate has
     // passed. No browser is the environment: the run aborts, and no case is
     // ever recorded as a product red for it. Task 12: opened at the first
@@ -836,7 +878,7 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     return await execute(deps, cli, base, planner, width);
   } catch (e) {
     const refused = e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BuilderDefaultDrift || e instanceof PlanLacksGate
-      || e instanceof NothingPlanned || e instanceof DuplicateCaseId;
+      || e instanceof PlanStageCapTooLow || e instanceof NothingPlanned || e instanceof DuplicateCaseId;
     warn(`matrix: ${refused ? "refused" : "aborted"} — ${errText(e)}`);
     return refused ? EXIT.REFUSED : EXIT.ABORTED;
   }
