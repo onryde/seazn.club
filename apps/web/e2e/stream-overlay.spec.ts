@@ -735,7 +735,10 @@ test.describe("§8's live preview", () => {
       const control = streamControl(page);
       await expect(control, "the rig's org holds streaming.overlay, so the fixture page offers Stream").toHaveCount(1);
       await control.click();
-      await expect(page.locator('[data-testid="stream-tab-obs"]'), "the panel opens on its OBS tab").toHaveAttribute("aria-selected", "true");
+      // Spec 2026-09-30 §3.1 (T9b): Phone is the first tab and the default; OBS overlay is the second, one tap away.
+      await expect(page.locator('[data-testid="stream-tab-phone"]'), "the panel opens on its Phone tab").toHaveAttribute("aria-selected", "true");
+      await page.locator('[data-testid="stream-tab-obs"]').click();
+      await expect(page.locator('[data-testid="stream-tab-obs"]')).toHaveAttribute("aria-selected", "true");
       await expect(page.locator('[data-testid="stream-preview"]')).toHaveCount(1);
 
       const measure = () =>
@@ -854,13 +857,20 @@ test.describe("the Phone tab on a community org (V426)", () => {
     }
   });
 
-  /** The fixture page's stream panel, open on its default OBS tab. */
+  /** The fixture page's stream panel, open — on its default Phone tab (spec §3.1, T9b). */
   async function openPanel(page: Page): Promise<void> {
     await openFixture(page, community);
     const control = streamControl(page);
     await expect(control, "community holds streaming.overlay (V426), so the fixture page offers Stream").toHaveCount(1);
     await control.click();
-    await expect(page.locator('[data-testid="stream-tab-obs"]'), "the panel opens on its OBS tab").toHaveAttribute("aria-selected", "true");
+    await expect(page.locator('[data-testid="stream-tab-phone"]'), "the panel opens on its Phone tab").toHaveAttribute("aria-selected", "true");
+  }
+
+  /** …then the OBS overlay tab, the second — one tap away. */
+  async function openObsTab(page: Page): Promise<void> {
+    await openPanel(page);
+    await page.locator('[data-testid="stream-tab-obs"]').click();
+    await expect(page.locator('[data-testid="stream-tab-obs"]')).toHaveAttribute("aria-selected", "true");
   }
 
   async function openPhoneTab(page: Page): Promise<void> {
@@ -960,7 +970,7 @@ test.describe("the Phone tab on a community org (V426)", () => {
     try {
       await signInAs(page, community.ownerEmail);
       await page.setViewportSize({ width: 1280, height: 900 });
-      await openPanel(page);
+      await openObsTab(page);
 
       // Copy, as the organiser does — the button, not just the value it would copy.
       const origin = new URL(page.url()).origin;

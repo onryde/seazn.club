@@ -523,6 +523,12 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
     await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/directory?tab=streaming");
     await expect(body.getByTestId("stream-chain"), "§3.2: no destination, no path to draw").toHaveCount(0);
+    // §3.1 (T9b): Phone is the default tab, and the disabled "With scorebug — Coming soon" control is gone.
+    await expect(row.getByTestId("stream-tab-phone")).toHaveAttribute("aria-selected", "true");
+    await expect(body.getByTestId("stream-mode-scorebug")).toHaveCount(0);
+    // §2: idle — the Stream control has no dot and reads "Stream".
+    await expect(streamControl(page)).not.toHaveAttribute("data-dot", /./);
+    await expect(streamControl(page)).toHaveAccessibleName(en("stream.button"));
     await expectNoHorizontalScroll(page);
     if (width === 320) expect(await expectTapTargets(body), "idle controls hit-tested").toBeGreaterThan(3);
     await shot(panel, `A1-${width}-1-idle.png`);
@@ -553,6 +559,8 @@ for (const width of WIDTHS) {
     await goLive.click();
     await expect(body.getByTestId("stream-qr"), "the QR is drawn in the browser").toBeVisible({ timeout: POLL_WAIT_MS });
     await expect(pill).toHaveText(eitherPill("stream.phone.state.provisioning", "stream.phone.state.warming"));
+    // §2: waiting for the phone — the Stream control's dot is amber, still "Stream".
+    await expect(streamControl(page)).toHaveAttribute("data-dot", "amber");
     const session = await latestSession(f.id);
     const payload = JSON.parse(await body.getByTestId("stream-qr-text").inputValue()) as { v?: number; sid?: string };
     expect(payload.sid, "the paste code IS the QR payload, for THIS session").toBe(session.id);
@@ -568,8 +576,12 @@ for (const width of WIDTHS) {
 
     // LIVE — decided by the server on the tab's own poll.
     await expect(pill).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
-    await expect(body.getByTestId("stream-live-dot")).toBeVisible();
-    await expect(body.getByTestId("stream-rec")).toHaveText(en("stream.phone.rec"));
+    // §3.3 (T9b): "On air" and the elapsed clock; the pill is for assistive tech now (the chain shows the state).
+    await expect(body.getByTestId("stream-on-air")).toHaveText(en("stream.onAir"));
+    await expect(body.getByTestId("stream-on-air")).toBeVisible();
+    await expect(body.getByTestId("stream-rec"), "no REC badge in the tab").toHaveCount(0);
+    // §2: the Stream button reads the SAME session — red dot and "Live" while live, on whichever twin this width shows.
+    await expect(streamControl(page)).toHaveAttribute("data-dot", "red");
     const elapsed = body.getByTestId("stream-elapsed");
     await expect(elapsed).toHaveText(/^\d+:\d{2}$/);
     const first = await elapsed.innerText();
@@ -952,13 +964,20 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
  *  so the warning holds from (live + 30 s) to (connect + RECOVER_MS): at least RECOVER_MS − 30 s − POLL_WAIT_MS of
  *  window, which is two whole polls — the warning is observed on screen, never inferred. */
 const RECOVER_MS = OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS + 2 * STREAM_POLL_MS;
+/** The one-poller witness's window, in poll periods (T9b brief: K = 4). */
+const POLLER_K = 4;
 for (const width of [320, 1280] as const) {
   test(`D3 @${width}: live, the destination Connecting → at 30 s (not before) the amber warning, still live, Stop enabled → receiving resumes and it clears → Stop`, async ({
     page,
   }) => {
     const NAVS = 1; // openPhoneTab
-    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + RECOVER_MS + 4 * POLL_WAIT_MS + NAVS * NAV_MS);
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + RECOVER_MS + 4 * POLL_WAIT_MS + POLLER_K * STREAM_POLL_MS + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
+    // Spec §2 (T9b) — ONE `current` poller per fixture page: every browser GET of it, from the moment the page exists.
+    let currentGets = 0;
+    page.on("request", (r) => {
+      if (r.method() === "GET" && new URL(r.url()).pathname.endsWith("/stream-sessions/current")) currentGets++;
+    });
     const rig = await seedRelayRig(page);
     const target = await addTargetApi(page, rig.orgId, {
       label: `D3 ${width}`, kind: "youtube", streamKey: fakeRecoveringKey(RECOVER_MS, randomBytes(6).toString("hex")),
@@ -989,7 +1008,21 @@ for (const width of [320, 1280] as const) {
     await expect(chain).toHaveAttribute("data-dest", "connecting");
     await expect(chain).toHaveAttribute("data-link2", "connecting");
     await expect(warning, "under the 30 s line: no warning").toHaveCount(0);
+    // §2: the Stream button reads the same session — red while live and the destination still inside its 30 s.
+    const control = streamControl(page);
+    await expect(control).toHaveAttribute("data-dot", "red");
     await shot(panel, `D3-${width}-1-connecting.png`);
+
+    // THE ONE-POLLER WITNESS (spec §2, review #21: the node harness renders no effects, so only a browser can count).
+    // A live session polls every STREAM_POLL_MS; with the button, both twins and the panel all reading ONE provider, K
+    // periods see K GETs, give or take the window's edges. A second poller doubles it; zero means nothing polled.
+    // A measurement window, not a wait for a state: nothing here is waiting for something to happen.
+    const before = currentGets;
+    await page.waitForTimeout(POLLER_K * STREAM_POLL_MS);
+    const polled = currentGets - before;
+    test.info().annotations.push({ type: "one-poller", description: `${polled} GETs of current in ${POLLER_K} poll periods @${width}` });
+    expect(polled, "the session poll really ran").toBeGreaterThanOrEqual(POLLER_K - 1);
+    expect(polled, "ONE poller: a second one would double this").toBeLessThanOrEqual(POLLER_K + 1);
 
     // AT THE LINE: the warning — polled, never slept. Its FIRST sighting is the bound: no earlier than one poll of
     // rendering lag before 30 s from live (the server measures from live_at, which the pill can trail by one poll).
@@ -1003,6 +1036,9 @@ for (const width of [320, 1280] as const) {
     await expect(warning).toContainText(en("stream.output.warning", { platform: STREAM_KIND_BRAND.youtube }));
     await expect(chain).toHaveAttribute("data-dest", "notReceiving");
     await expect(chain).toHaveAttribute("data-link2", "problem");
+    // §2: D3 turns the Stream button's dot amber; it still reads "Live" (desktop text, or the phone twin's name).
+    await expect(control).toHaveAttribute("data-dot", "amber");
+    await expect(control).toHaveAccessibleName(en("stream.buttonLive"));
     await expect(chain, "the phone half never moves for the destination").toHaveAttribute("data-phone", "connected");
     const open = warning.getByTestId("stream-output-open-directory");
     await expect(open).toHaveAttribute("href", "/directory?tab=streaming");
@@ -1024,6 +1060,7 @@ for (const width of [320, 1280] as const) {
     await expect(chain).toHaveAttribute("data-dest", "live");
     await expect(chain).toHaveAttribute("data-link2", "flowing");
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
+    await expect(control, "receiving again: the dot is red again").toHaveAttribute("data-dot", "red");
     await shot(panel, `D3-${width}-3-receiving.png`);
 
     // STOP.
@@ -1032,6 +1069,9 @@ for (const width of [320, 1280] as const) {
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
     await expect(warning).toHaveCount(0);
     await expect(chain, "ended draws no chain (§3.2)").toHaveCount(0);
+    // §2: over — no dot, and the control is "Stream" again.
+    await expect(control).not.toHaveAttribute("data-dot", /./);
+    await expect(control).toHaveAccessibleName(en("stream.button"));
   });
 }
 

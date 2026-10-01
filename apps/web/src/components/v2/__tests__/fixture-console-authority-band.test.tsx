@@ -27,9 +27,15 @@ import { builtinModules } from "@seazn/engine/sports";
 import { FixtureConsole } from "@/components/v2/fixture-console";
 import { messages } from "@/lib/messages";
 import type { EventIn, FixtureStreamMount, LiveState, SideInfo, SportInfo } from "@/components/v2/fixture-console";
+import { StreamSessionProvider } from "@/components/v2/stream-session-provider";
+import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
+import type { StreamSessionView } from "@/lib/stream-session-view";
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  // T9b: the "panel" mount renders the stream panel itself, which reads the URL (its return params).
+  usePathname: () => "/o/org/c/comp/d/div/f/1",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 // The stop-only stream mount renders `PhoneStopProbe`, whose session hook asks for the page's confirm dialog. Its reads
 // run in effects, so they are inert under `renderToStaticMarkup`; the dialog itself is doubled (the page provides it).
@@ -93,6 +99,9 @@ function consoleHtml(
     /** Spec 2026-09-30 §2 — the page's stream mount and its `?stream=open`. */
     stream?: FixtureStreamMount;
     streamReturn?: boolean;
+    /** T9b: the page's shared stream session, seeded through `StreamSessionProvider`'s test seam (the server never
+     *  passes it). The console's own provider for the same fixture adds nothing beneath it, so this IS what it reads. */
+    streamView?: StreamSessionView | null;
   } = {},
 ): string {
   const status = over.status ?? "in_play";
@@ -103,7 +112,7 @@ function consoleHtml(
     state: {},
     outcome: over.outcome ?? null,
   };
-  return renderToStaticMarkup(
+  const tree = (
     <FixtureConsole
       fixture={{
         id: "f1",
@@ -131,9 +140,48 @@ function consoleHtml(
         identity: { recordedBy: "user-1", deviceLinkId: null },
       }}
       viewerPlan="community"
-    />,
+    />
+  );
+  return renderToStaticMarkup(
+    over.streamView === undefined ? tree : <StreamSessionProvider fixtureId="f1" initialView={over.streamView}>{tree}</StreamSessionProvider>,
   );
 }
+
+/** A minimal session as `current` returns it — what the Stream control and the stop probe read. */
+function streamView(state: StreamSessionView["state"], output: StreamSessionView["output"] = null): StreamSessionView {
+  return {
+    id: `s-${state}`,
+    fixtureId: "f1",
+    state,
+    output,
+    ingest: null,
+    startedAt: state === "live" || state === "ending" ? "2026-09-30T12:00:00.000Z" : null,
+    endedAt: null,
+    target: { id: "t1", kind: "youtube", label: "Club YouTube" },
+  } as unknown as StreamSessionView;
+}
+
+/** The "panel" mount — the whole Stream panel (entitled, not frozen) — with the relay off, so its Phone tab renders the
+ *  switched-off line and fetches nothing. */
+const PANEL_MOUNT: FixtureStreamMount = {
+  mode: "panel",
+  context: {
+    entitled: true,
+    relayEntitled: false,
+    relayDisabled: false,
+    sportKey: "football",
+    overlayDict: {},
+    orgId: "o-1",
+    streamBalance: 2,
+    streamSplit: null,
+    monthlyAllowance: 0,
+    currency: "gbp",
+    overlayKeys: {},
+  } satisfies StreamPanelContext,
+  fixture: { id: "f1", status: "finalized", outcome: null, scheduled_at: null, home_entrant_id: "e-home", away_entrant_id: "e-away" },
+  entrantNames: { "e-home": "Riverside FC", "e-away": "Summit Athletic" },
+  tz: "UTC",
+};
 
 /** The band's own markup, so "outlined only" is asserted about the BAND and
  *  not about a page that happens to have a primary button somewhere else. */
@@ -322,28 +370,64 @@ describe("phone composition — the match strip (spec §3.1)", () => {
   // B3 fix round 1, Minor 6: the OPEN fallback card must show on a phone — the path an organiser at the court takes on a
   // finalized or frozen fixture (the strip icon). Its closed class is pinned above; this pins the open one, anchored on the
   // whole attribute value so a class list that still carries `max-md:hidden` cannot match.
-  // Minor 7: the card's own heading shows only while CLOSED — open, the panel (or the stop probe) inside carries the
-  // title, and at ≥768 "Stream this match" read twice (A7d-fallback.png).
-  it("the OPEN fallback card shows on phones (no max-md:hidden) and drops its own heading; closed, it hides on phones and keeps it", () => {
+  // B3 N-2 (T9b): the card names itself ALWAYS — open or closed, in BOTH mounts. The panel inside no longer carries a
+  // visible title (spec §3.1: no heading, the frame is labelled for assistive tech), and the stop probe never did.
+  it("the OPEN fallback card shows on phones (no max-md:hidden); open or closed, in BOTH mounts, it keeps its own heading", () => {
     const shapes: { name: string; props: Parameters<typeof consoleHtml>[0] }[] = [
       { name: "finalized", props: { status: "finalized" } },
       { name: "cancelled", props: { status: "cancelled" } },
       { name: "read-only", props: { canEdit: false } },
       { name: "TBD side", props: { away: null } },
     ];
+    const mounts: { name: string; stream: FixtureStreamMount }[] = [
+      { name: "stop-only", stream: { mode: "stop-only" } },
+      { name: "panel", stream: PANEL_MOUNT },
+    ];
     const heading = `<h2 class="text-sm font-semibold text-slate-700">${messages["stream.title"]}</h2>`;
     let checked = 0;
-    for (const s of shapes) {
-      const open = consoleHtml({ ...s.props, stream: { mode: "stop-only" }, streamReturn: true });
-      expect(open, `${s.name}: open`).toMatch(/<section class="card p-5 max-md:p-3" data-role="console-stream">/);
-      expect(open, `${s.name}: the body is inside the card`).toMatch(/data-role="console-stream">[\s\S]*data-role="fixture-stream-body"/);
-      expect(open.includes(heading), `${s.name}: open, no second heading`).toBe(false);
-      const closed = consoleHtml({ ...s.props, stream: { mode: "stop-only" } });
-      expect(closed, `${s.name}: closed`).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
-      expect(closed.includes(heading), `${s.name}: closed, the card names itself`).toBe(true);
+    for (const s of shapes) for (const mount of mounts) {
+      const at = `${s.name}, ${mount.name}`;
+      const open = consoleHtml({ ...s.props, stream: mount.stream, streamReturn: true });
+      expect(open, `${at}: open`).toMatch(/<section class="card p-5 max-md:p-3" data-role="console-stream">/);
+      expect(open, `${at}: the body is inside the card`).toMatch(/data-role="console-stream">[\s\S]*data-role="fixture-stream-body"/);
+      expect(open.split(heading).length - 1, `${at}: open, the card names itself once`).toBe(1);
+      const closed = consoleHtml({ ...s.props, stream: mount.stream });
+      expect(closed, `${at}: closed`).toMatch(/<section class="card p-5 max-md:p-3 max-md:hidden" data-role="console-stream">/);
+      expect(closed.split(heading).length - 1, `${at}: closed, the card names itself once`).toBe(1);
       checked++;
     }
-    expect(checked).toBe(shapes.length);
+    expect(checked).toBe(shapes.length * mounts.length);
+    // The panel mount really rendered the panel: its frame carries the name the card's heading shows.
+    const panelOpen = consoleHtml({ status: "finalized", stream: PANEL_MOUNT, streamReturn: true });
+    expect(panelOpen).toContain(`data-testid="stream-panel" aria-label="${messages["stream.title"]}"`);
+    expect(panelOpen, "the panel has no visible heading of its own").not.toMatch(/data-testid="stream-panel"[^>]*>\s*<h3/);
+  });
+
+  // Spec §2 (T9b): the Stream button's dot and label read the page's ONE session — the same one the panel reads.
+  it("the Stream control's dot and label follow the shared session: none idle, red + 'Live' while live, amber while waiting — both twins", () => {
+    const dotOf = (html: string, role: string) => new RegExp(`data-role="${role}"[^>]*data-dot="([a-z]+)"`).exec(html)?.[1] ?? null;
+    const labelOf = (html: string) => /data-role="fixture-stream"[^>]*>(?:<span[^>]*><\/span>)?([^<]*)</.exec(html)?.[1];
+    const ariaOf = (html: string) => /data-role="fixture-stream-phone"[^>]*aria-label="([^"]*)"/.exec(html)?.[1];
+    const rows: { name: string; view: StreamSessionView | null; dot: string | null; label: string }[] = [
+      { name: "no session", view: null, dot: null, label: messages["stream.button"] },
+      { name: "waiting", view: streamView("warming"), dot: "amber", label: messages["stream.button"] },
+      { name: "live", view: streamView("live", { state: "ok", since: "2026-09-30T12:00:00.000Z", elapsedMs: 0 } as never), dot: "red", label: messages["stream.buttonLive"] },
+      { name: "live, D3", view: streamView("live", { state: "connecting", since: "2026-09-30T12:00:00.000Z", elapsedMs: 30_000 } as never), dot: "amber", label: messages["stream.buttonLive"] },
+      { name: "ended", view: streamView("completed"), dot: null, label: messages["stream.button"] },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      const html = consoleHtml({ stream: { mode: "stop-only" }, streamView: r.view });
+      expect(dotOf(html, "fixture-stream"), `${r.name}: desktop dot`).toBe(r.dot);
+      expect(dotOf(html, "fixture-stream-phone"), `${r.name}: phone dot`).toBe(r.dot);
+      expect(labelOf(html), `${r.name}: desktop label`).toBe(r.label);
+      // WCAG 1.4.1: the dot is colour only, so the icon twin's NAME says it too.
+      expect(ariaOf(html), `${r.name}: the phone twin's accessible name`).toBe(r.label);
+      if (r.dot === null) expect(html, `${r.name}: no data-dot at all`).not.toContain('data-dot="');
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+    expect(messages["stream.buttonLive"], "the case can witness the label change").not.toBe(messages["stream.button"]);
   });
 
   it("the fallback card is absent whenever the Scoring section renders (no second Stream button)", () => {

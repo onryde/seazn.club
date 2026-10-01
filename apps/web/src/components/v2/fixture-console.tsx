@@ -28,7 +28,8 @@ import {
   type StreamPanelContext,
   type StreamPanelFixture,
 } from "@/components/v2/fixture-stream-panel";
-import { nextOpenPanel, type OpenPanel } from "@/lib/fixture-stream-mount";
+import { StreamSessionProvider, useSharedPhoneSession } from "@/components/v2/stream-session-provider";
+import { nextOpenPanel, streamButtonState, type OpenPanel } from "@/lib/fixture-stream-mount";
 import { officialLabelKey } from "@/lib/official-label";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
 import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-banner";
@@ -76,6 +77,63 @@ type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 export type FixtureStreamMount =
   | { mode: "panel"; context: StreamPanelContext; fixture: StreamPanelFixture; entrantNames: Record<string, string>; tz: string }
   | { mode: "stop-only" };
+
+/**
+ * Spec 2026-09-30 §2 (T9b): the Stream control — the desktop button or its phone twin. Its dot and label read the page's
+ * ONE session (`useSharedPhoneSession`, under the console's `StreamSessionProvider`), so they can never disagree with
+ * the panel. A component of its own because the provider must sit ABOVE the reader. The dot is colour only, so the
+ * twin's accessible name follows the state too ("Live" while live — WCAG 1.4.1).
+ */
+function StreamControl({
+  variant,
+  fixtureId,
+  open,
+  onToggle,
+}: {
+  variant: "desktop" | "phone";
+  fixtureId: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const msg = useMsg();
+  const { shown } = useSharedPhoneSession(fixtureId);
+  const { dot, labelKey } = streamButtonState(shown);
+  const label = msg(labelKey);
+  const dotClass = dot === "red" ? "bg-red-600" : "bg-amber-500";
+  if (variant === "desktop") {
+    return (
+      <button
+        type="button"
+        data-role="fixture-stream"
+        data-dot={dot ?? undefined}
+        aria-expanded={open}
+        onClick={onToggle}
+        className={`btn btn-ghost min-h-11${open ? " bg-purple-50 ring-1 ring-purple-300" : ""} max-md:hidden`}
+      >
+        {dot && <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />}
+        {label}
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      data-role="fixture-stream-phone"
+      data-dot={dot ?? undefined}
+      aria-label={label}
+      aria-expanded={open}
+      onClick={onToggle}
+      className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+        open ? "border-purple-300 bg-purple-50" : "border-slate-200"
+      } md:hidden`}
+    >
+      <Video aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
+      {dot && (
+        <span aria-hidden className={`absolute right-1.5 top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white ${dotClass}`} />
+      )}
+    </button>
+  );
+}
 
 /** Focus-trapped, Esc-to-close single-field text prompt — replaces the native
  *  browser prompt dialog for the abandon/forfeit reason inputs below (same
@@ -776,7 +834,8 @@ export function FixtureConsole({
   const scoringSection = scoring && !!home && !!away;
   const streamBody =
     stream && streamOpen ? (
-      <div className="mb-4 min-w-0" data-role="fixture-stream-body">
+      // Mockup option-a: on a phone the frame is a sheet across the card's full width (the card's `p-3` taken back).
+      <div className="mb-4 min-w-0 max-md:-mx-3" data-role="fixture-stream-body">
         {stream.mode === "panel" ? (
           <FixtureStreamPanel
             fixture={stream.fixture}
@@ -790,16 +849,9 @@ export function FixtureConsole({
         )}
       </div>
     ) : null;
+  const toggleStream = () => setOpenPanel((p) => nextOpenPanel(p, "stream"));
   const streamButton = stream ? (
-    <button
-      type="button"
-      data-role="fixture-stream"
-      aria-expanded={streamOpen}
-      onClick={() => setOpenPanel((p) => nextOpenPanel(p, "stream"))}
-      className="btn btn-ghost min-h-11 max-md:hidden"
-    >
-      {msg("stream.button")}
-    </button>
+    <StreamControl variant="desktop" fixtureId={fixture.id} open={streamOpen} onToggle={toggleStream} />
   ) : null;
 
   const sides = { home, away };
@@ -913,7 +965,7 @@ export function FixtureConsole({
   const referencedPersons = personIdsInEvents(events);
   const flaggedSuspensions = activeSuspensions.filter((s) => referencedPersons.has(s.personId));
 
-  return (
+  const root = (
     <div className="space-y-6 max-md:space-y-3">
       {/* Scoreline header — on phones this IS the match strip (spec §3.1):
           names on one truncated line, status, a compact score, hand-over as
@@ -940,18 +992,7 @@ export function FixtureConsole({
             {scoreStatusLabel(msg, live.status)}
           </span>
           {/* Spec 2026-09-30 §2 — Stream's phone twin, BEFORE ⇄. Same classes as the hand-over icon. */}
-          {stream && (
-            <button
-              type="button"
-              data-role="fixture-stream-phone"
-              aria-label={msg("stream.button")}
-              aria-expanded={streamOpen}
-              onClick={() => setOpenPanel((p) => nextOpenPanel(p, "stream"))}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-700 transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 md:hidden"
-            >
-              <Video aria-hidden="true" className="h-5 w-5" strokeWidth={1.75} />
-            </button>
-          )}
+          {stream && <StreamControl variant="phone" fixtureId={fixture.id} open={streamOpen} onToggle={toggleStream} />}
           {canHandOver && (
             <button
               type="button"
@@ -1165,10 +1206,10 @@ export function FixtureConsole({
           the card is empty until the strip icon opens the body, so it hides there while closed. */}
       {stream && !scoringSection && (
         <section className={`card p-5 max-md:p-3${streamOpen ? "" : " max-md:hidden"}`} data-role="console-stream">
-          {/* B3 fix round 1, Minor 7: the card names itself only while CLOSED — open, the panel (or the stop probe)
-              inside carries the title, which otherwise read twice at ≥768. */}
-          <div className={`mb-3 flex flex-wrap items-center gap-2 max-md:hidden ${streamOpen ? "justify-end" : "justify-between"}`}>
-            {!streamOpen && <h2 className="text-sm font-semibold text-slate-700">{msg("stream.title")}</h2>}
+          {/* B3 N-2 (T9b): the card ALWAYS names itself, open or closed, in both mounts — the panel inside no longer carries
+              a visible title (spec §3.1), and the stop probe never did. */}
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 max-md:hidden">
+            <h2 className="text-sm font-semibold text-slate-700">{msg("stream.title")}</h2>
             {streamButton}
           </div>
           {streamBody}
@@ -1409,6 +1450,8 @@ export function FixtureConsole({
 
     </div>
   );
+  // Spec §2 (T9b): ONE `current` poller per fixture page — the Stream button's dot and the panel read the same session.
+  return stream ? <StreamSessionProvider fixtureId={fixture.id}>{root}</StreamSessionProvider> : root;
 }
 
 function decidedLock(status: string): boolean {

@@ -33,6 +33,7 @@ import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vite
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { EmbeddedCheckoutProvider } from "@stripe/react-stripe-js";
 import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
@@ -56,8 +57,9 @@ import {
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
-import { platformName } from "@/components/v2/stream-platform-mark";
+import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
 import { DestinationWarning, SignalChain } from "@/components/v2/stream-signal-chain";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import { chainFor } from "@/lib/stream-chain";
 import {
   CheckoutSheetBoundary,
@@ -70,7 +72,6 @@ import {
   CANVAS_W,
   PREVIEW_MAX_W_PX,
   previewScaleFor,
-  stepRadio,
   type PhoneTabBodyProps,
   type TargetsState,
   type StreamPanelContext,
@@ -186,7 +187,14 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
   };
 }
 
+/** The panel ON ITS OBS TAB — what the W1 describes below are about. Since T9b Phone is the default (spec §3.1), so this
+ *  taps OBS overlay first, as an organiser would; `openPanel` renders it as it opens. */
 function open(o: Partial<StreamPanelContext> = {}) {
+  const island = openPanel(o);
+  click(byTestId(island.tree(), "stream-tab-obs"));
+  return island;
+}
+function openPanel(o: Partial<StreamPanelContext> = {}) {
   return renderIsland(FixtureStreamPanel, {
     fixture: FIXTURE,
     entrantNames: ENTRANTS,
@@ -665,8 +673,9 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(src).not.toMatch(/result\.code/);
     // C1: the idle tab's balance has a source when there is no session (m2: a no_credits refusal reads it as 0).
     expect(src).toMatch(/view \? view\.balance : noCredits \? 0 : streamBalance/);
-    // De: the reveal flag exists.
-    expect(src).toMatch(/\?reveal=1/);
+    // De: the reveal flag exists — on the session's read, which T9b moved to the page's one poller.
+    const provider = readFileSync(join(__dirname, "..", "stream-session-provider.tsx"), "utf8");
+    expect(provider).toMatch(/\?reveal=1/);
     // The legacy transport prefixes nothing and drops the extras (404s here) — v1 only.
     expect(src).not.toMatch(/from "@\/lib\/client"/);
   });
@@ -813,25 +822,39 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
   const panel = (openedByReturn?: boolean, relayEntitled = true) =>
     renderIsland(FixtureStreamPanel, { fixture: FIXTURE, entrantNames: ENTRANTS, tz: TZ, stream: ctx({ relayEntitled }), openedByReturn });
 
-  it("T5: `openedByReturn` opens on the PHONE tab and strips the return; without it, OBS (the positive pair)", () => {
+  it("T5: `openedByReturn` opens on the PHONE tab and strips the return; an ordinary open strips nothing", () => {
     searchParamsMock.set(new URLSearchParams(RETURN));
     const here = panel(true).tree();
     expect(attr(byTestId(here, "stream-tab-phone")!, "aria-selected"), "the fixture page's return lands on Phone").toBe(true);
     expect(byTestId(here, "stream-phone-gate"), "the Phone tab body").toBeDefined();
     expect(router.replace, "the return's params are stripped (G5)").toHaveBeenCalledWith(PATHNAME, { scroll: false });
     router.replace.mockReset();
-    // The same URL without the page's word: an ordinary open.
+    // The same URL without the page's word: an ordinary open — still Phone (T9b's default), and nothing stripped.
     const ordinary = panel(false).tree();
-    expect(attr(byTestId(ordinary, "stream-tab-obs")!, "aria-selected"), "no openedByReturn, no Phone tab").toBe(true);
-    expect(byTestId(ordinary, "stream-phone-gate")).toBeUndefined();
+    expect(attr(byTestId(ordinary, "stream-tab-phone")!, "aria-selected")).toBe(true);
     expect(router.replace, "an ordinary open strips nothing").not.toHaveBeenCalled();
+  });
+
+  // Spec §3.1 (T9b): tabs Phone first, the default; OBS overlay second, today's OBS tab.
+  it("T9b: Phone is the FIRST tab and the DEFAULT — first in the markup, selected with no openedByReturn; OBS is one tap away", () => {
+    for (const openedByReturn of [undefined, false]) {
+      const island = panel(openedByReturn);
+      const tree = island.tree();
+      const tabs = tree.filter((el) => attr(el, "role") === "tab" && typeof attr(el, "data-stream-style") !== "string");
+      expect(tabs.map((el) => attr(el, "data-testid")), "the mode tabs, in DOM order").toEqual(["stream-tab-phone", "stream-tab-obs"]);
+      expect(attr(tabs[0]!, "aria-selected"), "Phone is selected").toBe(true);
+      expect(attr(tabs[1]!, "aria-selected"), "OBS is not").toBe(false);
+      expect(byTestId(tree, "stream-phone-gate"), "the Phone tab's body is what shows").toBeDefined();
+      expect(byTestId(tree, "stream-preview"), "…and the OBS preview is not").toBeUndefined();
+      expect(textOf(tabs[1]!)).toBe(m("stream.tab.obs"));
+      click(byTestId(tree, "stream-tab-obs"));
+      expect(byTestId(island.tree(), "stream-preview"), "OBS overlay opens on a tap").toBeDefined();
+    }
   });
 
   it("T6: the old run-sheet return URL (`?stream=open&fixture=<this id>`) opens nothing by itself — the URL is no longer a reader", () => {
     searchParamsMock.set(new URLSearchParams(`tab=fixtures&fixture=${FIXTURE.id}&${RETURN}`));
-    const tree = panel(undefined).tree();
-    expect(attr(byTestId(tree, "stream-tab-obs")!, "aria-selected"), "OBS, as any ordinary open").toBe(true);
-    expect(byTestId(tree, "stream-phone-gate")).toBeUndefined();
+    panel(undefined).tree();
     expect(router.replace, "nothing consumed, nothing stripped").not.toHaveBeenCalled();
   });
 
@@ -889,9 +912,9 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
 const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
-  selectedTargetId: null, mode: "clean", qrDataUrl: null, now: NOW, copied: false, showBuy: false,
+  selectedTargetId: null, qrDataUrl: null, now: NOW, copied: false, showBuy: false,
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
-  onSelectTarget: () => {}, onRetryTargets: () => {}, onMode: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
+  onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onTileIntent: () => {},
 };
 /** A loaded list — what most states render with. */
@@ -931,6 +954,9 @@ const endedChips = (tree: ReactElement[]): string[] => {
 const CREDITS_ONLY = new Set(["idle, balance 0 (the credits card)"]);
 
 /** Every state the body renders, named — the sweeps below iterate THIS list and assert they read all of it. */
+/** A target_in_use refusal's holder — another match, live, with its page (T8). */
+const IN_USE_HOLDER = { sessionId: "s9", fixtureId: "f-9", href: "/o/org/c/comp/d/div/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const, label: "Club YouTube" };
+
 function bodyStates(): [string, ReactElement[]][] {
   return [
     ["idle, balance 0 (the credits card)", body({ view: null, balance: 0 })],
@@ -940,6 +966,7 @@ function bodyStates(): [string, ReactElement[]][] {
     ["idle, the destination list loading", body({ view: null, balance: 2, targets: { status: "loading" }, selectedTargetId: null })],
     ["idle, a refused create", body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } })],
     ["idle, Buy more opened", body({ view: null, balance: 2, showBuy: true, checkoutError: "owner" })],
+    ["idle, the destination in use", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder: IN_USE_HOLDER } })],
     ["provisioning", body({ view: session({ state: "provisioning", qr: null }), balance: 2 })],
     ["warming, the QR", body({ view: session(), balance: 2, qrDataUrl: "data:image/png;base64,AAAA" })],
     ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", qr: null, fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
@@ -998,14 +1025,14 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(bought).toEqual(STREAM_CREDIT_PACKS.map((p) => p.size));
   });
 
-  it("balance 2 and no session: idle controls, opening at clean feed with scorebug DISABLED, the first destination selected", () => {
+  it("balance 2 and no session: idle controls, the first destination selected — and NO feed-mode control (spec §3.1)", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
     expect(textAt(tree, "stream-balance")).toBe(m("stream.phone.credits.other", { n: 2 }));
     expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
-    expect(propsOf(byTestId(tree, "stream-mode-clean")!)["aria-checked"]).toBe(true);
-    expect(propsOf(byTestId(tree, "stream-mode-clean")!).disabled, "the positive pair: clean is enabled").toBeFalsy();
-    expect(propsOf(byTestId(tree, "stream-mode-scorebug")!).disabled).toBe(true); // composed is R2's; the seam is visible
-    expect(propsOf(byTestId(tree, "stream-mode-scorebug")!)["aria-checked"]).toBe(false);
+    // T9b: the disabled "With scorebug — Coming soon" control is gone, and the radiogroup with it (passthrough only).
+    for (const id of ["stream-mode", "stream-mode-clean", "stream-mode-scorebug"]) expect(byTestId(tree, id), id).toBeUndefined();
+    const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={null} balance={2} targets={ok(TARGETS)} selectedTargetId="t1" />);
+    expect(html.includes("Coming soon"), "no Coming soon, in any key").toBe(false);
     expect(byTestId(tree, "stream-go-live")).toBeDefined();
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBeFalsy();
     expect(byTestId(tree, "stream-buy-pack-5")).toBeUndefined();
@@ -1137,11 +1164,21 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(tree, "stream-qr-text")).toBeDefined();
   });
 
-  it("live: REC + elapsed, the health chips led by the INGEST STATE (C6) inside a CLOSED Details, the solid red Stop; the decided chip only when decided", () => {
+  it("live (§3.3, mockup state 3): On air + the elapsed time in mono, a FULL-WIDTH solid red Stop, then a CLOSED Details led by the INGEST STATE (C6); the decided chip only when decided", () => {
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } });
     const tree = body({ view: live, balance: 1 });
-    expect(byTestId(tree, "stream-rec")).toBeDefined();
+    expect(textAt(tree, "stream-on-air")).toBe(m("stream.onAir"));
+    expect(byTestId(tree, "stream-rec"), "T9b: no REC badge in the tab — On air says it").toBeUndefined();
     expect(textAt(tree, "stream-elapsed")).toBe("10:00");
+    const clock = String(attr(byTestId(tree, "stream-elapsed")!, "className")).split(" ");
+    for (const c of ["font-mono", "text-3xl", "tabular-nums"]) expect(clock, c).toContain(c);
+    // The mockup's order: On air, then Stop, then Details.
+    const at = (id: string) => tree.findIndex((el) => attr(el, "data-testid") === id);
+    expect(at("stream-on-air")).toBeLessThan(at("stream-stop"));
+    expect(at("stream-stop")).toBeLessThan(at("stream-details"));
+    const stopClass = String(attr(byTestId(tree, "stream-stop")!, "className")).split(" ");
+    for (const c of ["w-full", "min-h-12", "bg-red-600", "text-white"]) expect(stopClass, c).toContain(c);
+    expect(stopClass, "full width at every width").not.toContain("md:w-auto");
     // T9a (§3.3): the chips moved into Details, closed by default; the chain above carries the state.
     const details = byTestId(tree, "stream-details")!;
     expect(details.type).toBe("details");
@@ -1235,11 +1272,12 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
   });
 
-  it("B3: balance < 1 and no session is the heading and the credits card ONLY — no 'Ready' pill, no chain; a credit brings both back", () => {
+  it("B3: balance < 1 and no session is the credits card ONLY — no 'Ready' pill, no chain, no credits line; a credit brings them back", () => {
     const tree = body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1" });
-    expect(textOf(tree.find((el) => el.type === "h4")!)).toContain(m("stream.phone.title"));
+    // T9b: the tab has no heading of its own any more (the console card names it); the h4 is gone in every state.
+    expect(tree.some((el) => el.type === "h4"), "no tab heading").toBe(false);
     expect(byTestId(tree, "stream-buy-pack-5"), "the credits card").toBeDefined();
-    for (const id of ["stream-state-pill"]) expect(byTestId(tree, id), id).toBeUndefined();
+    for (const id of ["stream-state-pill", "stream-credits-line"]) expect(byTestId(tree, id), id).toBeUndefined();
     expect(chainOf(tree), "no chain while credits-only — even with a destination picked").toBeUndefined();
     // The positive pair, one credit up: the pill and the chain are back (and the tiles are not).
     const funded = body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1" });
@@ -1371,7 +1409,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
     const tree = body({ view: live, balance: 2, planGate: true, showBuy: true });
     expect(byTestId(tree, "stream-stop"), "a plan refusal took Stop away from a live stream").toBeDefined();
-    expect(byTestId(tree, "stream-rec")).toBeDefined();
+    expect(byTestId(tree, "stream-on-air")).toBeDefined();
     const slot = byTestId(tree, "stream-plan-gate")!;
     expect(slot, "no gate in the buy slot").toBeDefined();
     expect(textOf(byTestId(tree, "stream-switched-off")!)).toContain(m("stream.phone.switchedOff"));
@@ -1492,24 +1530,38 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(String(attr(byTestId(tree, "stream-target")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "min-w-0"]));
   });
 
-  it("the state pill: its copy and §8a's colour per state, the live dot only when live", () => {
-    const PILL_CLASS: Record<string, string> = {
-      "idle, balance 2": "bg-slate-100", provisioning: "bg-amber-100", "warming, the QR": "bg-amber-100", live: "bg-red-100",
-      ending: "bg-slate-100", ended: "bg-emerald-100", failed: "bg-red-50",
-    };
-    let checked = 0;
+  // T9b (spec §3.1): the chain says the state, so in the tab the pill is for assistive tech only — still `aria-live`, still
+  // the state's own copy. Ended and failed draw no chain (§3.2): their card shows the pill, in §8a's colour.
+  it("the state pill: sr-only (aria-live, the state's copy) wherever the chain shows; VISIBLE in the ended and failed cards in §8a's colour", () => {
+    const VISIBLE: Record<string, string> = { ended: "bg-emerald-100", failed: "bg-red-50" };
+    let hidden = 0;
+    let shown = 0;
     for (const [name, tree] of bodyStates()) {
-      if (!(name in PILL_CLASS)) continue;
-      const pill = byTestId(tree, "stream-state-pill")!;
-      expect(String(attr(pill, "className")), name).toContain(PILL_CLASS[name]);
-      expect(Boolean(byTestId(tree, "stream-live-dot")), name).toBe(name === "live");
-      checked++;
+      const pill = byTestId(tree, "stream-state-pill");
+      if (name === "idle, balance 0 (the credits card)") {
+        expect(pill, name).toBeUndefined(); // B3: credits only
+        continue;
+      }
+      expect(pill, name).toBeDefined();
+      expect(attr(pill!, "aria-live"), name).toBe("polite");
+      const cls = String(attr(pill!, "className"));
+      if (name in VISIBLE) {
+        expect(cls, name).toContain(VISIBLE[name]);
+        expect(cls.split(" "), name).not.toContain("sr-only");
+        shown++;
+      } else {
+        expect(cls, name).toBe("sr-only");
+        hidden++;
+      }
+      expect(byTestId(tree, "stream-live-dot"), `${name}: no live dot in the tab (the chain's red ring is it)`).toBeUndefined();
     }
-    expect(checked).toBe(Object.keys(PILL_CLASS).length);
+    expect(shown).toBe(Object.keys(VISIBLE).length);
+    expect(hidden, "anti-vacuity: the sr-only states were reached").toBeGreaterThanOrEqual(10);
   });
 
   it("phone first: every stream-* control in every state carries the unprefixed 44px floor", () => {
-    const TAPPABLE = /(^|\s)(min-h-11|h-11)(\s|$)/;
+    // min-h-12 (48 px: the mockup's Go live and Stop stream) clears the floor too.
+    const TAPPABLE = /(^|\s)(min-h-11|min-h-12|h-11)(\s|$)/;
     let seen = 0;
     for (const [name, tree] of bodyStates()) {
       for (const el of tree) {
@@ -1521,26 +1573,6 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       }
     }
     expect(seen, "the sweep found no controls").toBeGreaterThanOrEqual(24);
-  });
-
-  it("the mode control is a radiogroup with arrow keys over the ENABLED options only (composed is disabled this wave)", () => {
-    const both = [{ id: "clean", enabled: true }, { id: "scorebug", enabled: true }] as const;
-    expect(stepRadio(both, "clean", "ArrowRight")).toBe("scorebug");
-    expect(stepRadio(both, "scorebug", "ArrowRight"), "wraps").toBe("clean");
-    expect(stepRadio(both, "clean", "ArrowLeft"), "wraps backwards").toBe("scorebug");
-    expect(stepRadio(both, "clean", "ArrowDown")).toBe("scorebug");
-    expect(stepRadio(both, "clean", "Enter"), "not an arrow").toBe("clean");
-    const oneEnabled = [{ id: "clean", enabled: true }, { id: "scorebug", enabled: false }] as const;
-    expect(stepRadio(oneEnabled, "clean", "ArrowRight"), "a disabled option is skipped").toBe("clean");
-    // The body wires it: an arrow on the group never selects the disabled scorebug.
-    const picked: string[] = [];
-    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", onMode: (x) => picked.push(x) });
-    const group = byTestId(tree, "stream-mode")!;
-    expect(attr(group, "role")).toBe("radiogroup");
-    (propsOf(group).onKeyDown as (e: unknown) => void)({ key: "ArrowRight", preventDefault: () => {}, currentTarget: { querySelector: () => null } });
-    expect(picked).toEqual([]);
-    // Roving tabindex: the checked radio is the one tab stop.
-    expect(attr(byTestId(tree, "stream-mode-clean")!, "tabIndex")).toBe(0);
   });
 });
 
@@ -1733,6 +1765,120 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
   });
 });
 
+// ─── T9b: the frame (spec §3.1 / §3.3, mockup option-a states 1, 3 and 5) ────────────────────────────────────────────
+describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the in-use picker", () => {
+  const SEP = " · ";
+  const localeDict = (locale: "es" | "fr") => uiDict(locale);
+  const balanceIn = (html: string): string => /data-testid="stream-balance"[^>]*>([^<]*)</.exec(html)?.[1] ?? "";
+
+  it("Ready: 'Uses 1 credit · {n} credits · Buy more' — three parts, the balance in the plural key's own text, the split as its title", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    expect(textAt(tree, "stream-credits-line")).toBe(
+      [m("stream.credits.uses"), m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP),
+    );
+    expect(attr(byTestId(tree, "stream-balance")!, "title"), "no split, no title").toBeUndefined();
+    // Both buckets held and adding up: the split is the balance's title, and a visually hidden copy reads it out.
+    const split = { monthly: 2, pack: 3, total: 5 };
+    const both = body({ view: null, balance: 5, split, targets: TARGETS, selectedTargetId: "t1" });
+    const sentence = m("stream.credits.split", { m: 2, p: 3 });
+    expect(attr(byTestId(both, "stream-balance")!, "title")).toBe(sentence);
+    expect(textAt(both, "stream-balance"), "the balance itself is the total, as before").toBe(m("stream.phone.credits.other", { n: 5 }));
+    expect(textAt(both, "stream-credits-split").trim()).toBe(sentence);
+    expect(String(attr(byTestId(both, "stream-credits-split")!, "className"))).toBe("sr-only");
+    // A split that no longer adds up (a session moved the balance) titles nothing.
+    expect(attr(byTestId(body({ view: null, balance: 4, split, targets: TARGETS, selectedTargetId: "t1" }), "stream-balance")!, "title")).toBeUndefined();
+  });
+
+  it("the balance reads the plural key's ONE and OTHER forms in es and fr — never a number dropped into a fixed word", () => {
+    let checked = 0;
+    for (const locale of ["es", "fr"] as const) {
+      const d = localeDict(locale);
+      const one = d["stream.phone.credits.one"]!;
+      const other = d["stream.phone.credits.other"]!;
+      // The case can witness the defect: "{n} credits" at n = 1 is not the singular.
+      expect(other.replace("{n}", "1"), `${locale}: the one form differs from other at n=1`).not.toBe(one);
+      for (const [n, want] of [[1, one], [9, other.replace("{n}", "9")]] as const) {
+        const html = renderToStaticMarkup(
+          <DictProvider dict={d} locale={locale}>
+            <PhoneTabBody {...BODY} view={null} balance={n} targets={ok(TARGETS)} selectedTargetId="t1" />
+          </DictProvider>,
+        );
+        expect(balanceIn(html), `${locale} n=${n}`).toBe(want);
+        expect(html, `${locale}: the uses part`).toContain(`>${d["stream.credits.uses"]}<`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("'Uses 1 credit' only where Go live would spend one: not inside the reuse window, not mid-session; ending disables Buy more", () => {
+    const free = body({ view: null, balance: 2, restartFree: true, targets: TARGETS, selectedTargetId: "t1" });
+    expect(textAt(free, "stream-credits-line")).toBe([m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP));
+    const live = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
+    expect(textAt(live, "stream-credits-line"), "a mid-match top-up stays").toBe([m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP));
+    const ending = body({ view: session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
+    expect(propsOf(byTestId(ending, "stream-buy-more")!).disabled).toBe(true);
+    // The empty case: credits only (balance 0, no free restart) has no line at all — the tiles are the whole tab.
+    expect(byTestId(body({ view: null, balance: 0 }), "stream-credits-line")).toBeUndefined();
+  });
+
+  it("Ready's DOM order (mockup state 1): Manage destinations, the picker, a full-width Go live, then the credits line", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    const order = ["stream-manage-destinations", "stream-target", "stream-go-live", "stream-credits-line"].map((id) => {
+      const i = tree.findIndex((el) => attr(el, "data-testid") === id);
+      expect(i, `${id} rendered`).toBeGreaterThan(-1);
+      return i;
+    });
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    const go = String(attr(byTestId(tree, "stream-go-live")!, "className")).split(" ");
+    for (const c of ["btn-primary", "w-full", "min-h-12"]) expect(go, c).toContain(c);
+    // The picker shows the selected destination's platform mark inside the field, and a chevron at its end.
+    const mark = tree.find((el) => el.type === PlatformMark);
+    expect(mark && propsOf(mark).kind, "the mark is the SELECTED destination's").toBe("youtube");
+    expect(propsOf(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" }), "stream-target")!).value).toBe("t2");
+    const markT2 = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" }).find((el) => el.type === PlatformMark);
+    expect(markT2 && propsOf(markT2).kind).toBe("twitch");
+    const select = String(attr(byTestId(tree, "stream-target")!, "className")).split(" ");
+    for (const c of ["appearance-none", "min-w-0", "pr-9", "truncate"]) expect(select, c).toContain(c);
+  });
+
+  it("in use (mockup state 5): the picker turns red and says why under itself, Open Match beside it, and Go live waits", () => {
+    const createError = { code: "target_in_use" as const, holder: IN_USE_HOLDER };
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError });
+    const select = byTestId(tree, "stream-target")!;
+    expect(String(attr(select, "className"))).toMatch(/(^|\s)border-red-300(\s|$)/);
+    expect(attr(select, "aria-invalid")).toBe(true);
+    const box = tree.find((el) => attr(el, "id") === attr(select, "aria-describedby"))!;
+    expect(box, "aria-describedby names the box").toBeDefined();
+    expect(attr(box, "role")).toBe("alert");
+    const inBox = walk(box);
+    expect(textOf(inBox.find((el) => attr(el, "data-testid") === "stream-create-error")!)).toBe(
+      m("stream.inUse.live", { label: IN_USE_HOLDER.label, match: m("stream.inUse.matchCourt", { match: m("breadcrumb.match", { no: 5 }), court: "Court 1" }) }),
+    );
+    const open = inBox.find((el) => attr(el, "data-testid") === "stream-in-use-open")!;
+    expect(attr(open, "href")).toBe(IN_USE_HOLDER.href);
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "Go live waits for another pick").toBe(true);
+    expect(allTestIds(tree, "stream-create-error"), "said once").toHaveLength(1);
+    // The positive pair: any OTHER refusal leaves the picker alone, Go live tappable, the sentence at the foot.
+    const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
+    expect(attr(byTestId(other, "stream-target")!, "aria-invalid")).toBeUndefined();
+    expect(String(attr(byTestId(other, "stream-target")!, "className"))).not.toContain("border-red-300");
+    expect(propsOf(byTestId(other, "stream-go-live")!).disabled).toBeFalsy();
+    expect(textAt(other, "stream-create-error")).toBe(m("stream.error.storage_exhausted" as MessageKey));
+  });
+
+  it("the no-credit state is the pack tiles, unchanged — every catalogue pack, by its own test id", () => {
+    const tree = body({ view: null, balance: 0 });
+    let checked = 0;
+    for (const pack of STREAM_CREDIT_PACKS) {
+      expect(byTestId(tree, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the catalogue declares packs").toBeGreaterThan(0);
+    expect(byTestId(tree, "stream-go-live")).toBeUndefined();
+  });
+});
+
 describe("PhoneTab — fetch, poll, reveal and every action, through the real v1 paths", () => {
   type Server = {
     current: StreamSessionView | null;
@@ -1882,10 +2028,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "a destination is selected").toBeFalsy();
   });
 
-  it("opens at the FIRST destination (created_at order, as the route returns it) and at clean feed; no destination → none selected", async () => {
+  it("opens at the FIRST destination (created_at order, as the route returns it); no destination → none selected", async () => {
     const two = track(await mount({ current: null, targets: TARGETS }));
     expect(bodyOf(two).selectedTargetId).toBe("t1");
-    expect(bodyOf(two).mode).toBe("clean");
     expect(listOf(bodyOf(two).targets).map((t) => t.id)).toEqual(["t1", "t2"]);
     const none = track(await mount({ current: null, targets: [] }));
     expect(bodyOf(none).selectedTargetId).toBeNull();

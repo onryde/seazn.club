@@ -29,22 +29,22 @@
 //     public endpoint is unreachable still previews instead of showing an
 //     empty strip.
 import {
-  Component, useCallback, useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode,
+  Component, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, RotateCcw, Smartphone, Video } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RotateCcw } from "lucide-react";
 import QRCode from "qrcode";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
-import { useConfirm } from "@/components/ui/confirm-provider";
 import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
-import { platformName } from "./stream-platform-mark";
+import { PlatformMark, platformName } from "./stream-platform-mark";
 import { DestinationWarning, SignalChain } from "./stream-signal-chain";
+import { useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
 import type { MessageKey } from "@/lib/messages";
 import { overlayStartLabel, type OverlaySideInput } from "@/lib/overlay-model";
@@ -59,7 +59,6 @@ import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STATE_PILL_KEYS,
-  STREAM_POLL_MS,
   TARGET_REMOVED,
   createErrorCode,
   createErrorHolder,
@@ -254,7 +253,9 @@ export function FixtureStreamPanel({
   // organiser's own choice afterwards. Read ONCE into state: G5 below strips the params, and the answer must survive it.
   const searchParams = useSearchParams();
   const [returnedHere] = useState(() => !!openedByReturn);
-  const [tab, setTab] = useState<"obs" | "phone">(() => (returnedHere ? "phone" : "obs"));
+  // Spec §3.1 (T9b): Phone is the FIRST tab and the default — on a return and on any ordinary open alike. The return
+  // still strips its params and scrolls (below); it no longer chooses the tab.
+  const [tab, setTab] = useState<"obs" | "phone">("phone");
 
   // G5: the return has done its job once this row is open on the Phone tab, so its params come off the URL — a reload
   // or a shared link must not re-open the panel, or re-run the page's reconcile, on a purchase that is finished. A
@@ -440,53 +441,57 @@ export function FixtureStreamPanel({
     `min-h-11 min-w-[4rem] grow basis-0 rounded-md px-2.5 py-1 text-xs font-medium leading-tight transition md:min-h-0 md:min-w-0 md:grow-0 md:basis-auto ${
       selected
         ? "bg-purple-100 text-purple-800"
-        : "text-slate-500 hover:bg-purple-50 hover:text-purple-700"
+        : "text-slate-600 hover:bg-purple-50 hover:text-purple-700"
+    }`;
+
+  // Spec §3.1 / mockup option-a (T9b): the segmented Phone | OBS overlay switch. 44 px on a phone, 36 at ≥ 768.
+  const modeTabClass = (selected: boolean) =>
+    `min-h-11 rounded-md px-3 text-sm font-medium md:min-h-9 ${
+      selected ? "bg-white text-purple-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
     }`;
 
   return (
-    // §8a: the Phone tab's card drops to `p-4` below 768 (the QR box lives inside it, and `p-5` costs the symbol 8 CSS
-    // px at 320); §8's OBS card keeps `p-5` at every width. The two tabs are never side by side.
+    // Mockup option-a (T9b): a light-violet frame inside the Scoring card. On a phone it bleeds to the card's edges as a
+    // sheet (the console's wrapper takes the card's padding back). The heading is the console's ("Stream this match" on
+    // the fallback card, "Scoring" above it otherwise); the frame names itself to assistive tech.
     <section
       ref={landOn}
       data-testid="stream-panel"
-      className={`card mt-2 scroll-mt-24 ${tab === "phone" ? "p-4 md:p-5" : "p-5"}`}
+      aria-label={msg("stream.title")}
+      className="scroll-mt-24 rounded-xl border border-purple-100 bg-[var(--mk-light-violet)] p-4 max-md:rounded-b-none max-md:rounded-t-2xl max-md:border-0 max-md:border-b max-md:p-3"
     >
-      <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-        <Video className="h-4 w-4 text-purple-500" strokeWidth={1.75} />
-        {msg("stream.title")}
-      </h3>
-      {/* B1: W1's lead line promises a scorebug to paste into OBS — the OBS tab's promise. §8a's Phone frame has no lead. */}
-      {tab === "obs" && (
-        <p data-testid="stream-lead" className="mt-1 text-xs text-slate-500">
-          {msg("stream.line")}
-        </p>
-      )}
 
       {/* Owner 2026-09-07: streaming is bought in the fixture console itself,
           so the panel carries both tiers. Tier B's session controls are R1's;
           W1 ships the tab and §5.3's gate. */}
-      <div role="tablist" aria-label={msg("stream.tabs.label")} className="mt-3 flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "obs"}
-          data-testid="stream-tab-obs"
-          onClick={() => setTab("obs")}
-          className={tabClass(tab === "obs")}
-        >
-          {msg("stream.tab.obs")}
-        </button>
+      <div role="tablist" aria-label={msg("stream.tabs.label")} className="inline-flex rounded-lg bg-slate-100 p-1">
         <button
           type="button"
           role="tab"
           aria-selected={tab === "phone"}
           data-testid="stream-tab-phone"
           onClick={() => setTab("phone")}
-          className={tabClass(tab === "phone")}
+          className={modeTabClass(tab === "phone")}
         >
           {msg("stream.tab.phone")}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "obs"}
+          data-testid="stream-tab-obs"
+          onClick={() => setTab("obs")}
+          className={modeTabClass(tab === "obs")}
+        >
+          {msg("stream.tab.obs")}
+        </button>
       </div>
+      {/* B1: W1's lead line promises a scorebug to paste into OBS — the OBS tab's promise. §8a's Phone frame has no lead. */}
+      {tab === "obs" && (
+        <p data-testid="stream-lead" className="mt-3 text-xs text-slate-600">
+          {msg("stream.line")}
+        </p>
+      )}
 
       {tab === "obs" ? (
         <>
@@ -559,7 +564,7 @@ export function FixtureStreamPanel({
             </div>
           </div>
           {caption !== null && (
-            <p data-testid="stream-preview-note" className="mt-1 text-[11px] text-slate-500">
+            <p data-testid="stream-preview-note" className="mt-1 text-[11px] text-slate-600">
               {caption}
             </p>
           )}
@@ -627,11 +632,11 @@ export function FixtureStreamPanel({
             </button>
           </div>
           {error !== null && (
-            <p data-testid="stream-error" className="mt-1 text-xs text-red-600">
+            <p data-testid="stream-error" className="mt-1 text-xs text-red-700">
               {error}
             </p>
           )}
-          <p className="mt-2 text-[11px] text-slate-500">{msg("stream.footnote")}</p>
+          <p className="mt-2 text-[11px] text-slate-600">{msg("stream.footnote")}</p>
         </>
       ) : (
         <div data-testid="stream-phone-gate" className="mt-3 min-w-0">
@@ -685,172 +690,9 @@ export type TargetsState = { status: "loading" } | { status: "error" } | { statu
 const MANAGE_DESTINATIONS_HREF = "/directory?tab=streaming";
 const LINK = "font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700";
 
-/**
- * Arrow-key movement through a radiogroup (WAI-ARIA radio pattern): Right/Down forward, Left/Up back, wrapping, and
- * over the ENABLED options only — composed ("With scorebug") is disabled this wave, so an arrow never selects it. Any
- * other key leaves the selection where it is. Pure, so the node harness can pin it.
- */
-export function stepRadio(options: readonly { id: string; enabled: boolean }[], current: string, key: string): string {
-  const dir = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
-  if (dir === 0) return current;
-  const enabled = options.filter((o) => o.enabled);
-  const at = enabled.findIndex((o) => o.id === current);
-  if (at === -1) return enabled[0]?.id ?? current;
-  return enabled[(at + dir + enabled.length) % enabled.length]!.id;
-}
-
-type FeedMode = "clean" | "scorebug";
-const MODE_OPTIONS = [
-  { id: "clean", enabled: true },
-  { id: "scorebug", enabled: false },
-] as const;
-const ARROW = /^Arrow(Up|Down|Left|Right)$/;
-
 type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder | null };
 /** D13: which sentence a refused checkout gets — keyed on the route's STATUS (`CheckoutSecretResult` has no code). */
 type CheckoutError = "owner" | "unknown";
-
-/**
- * One fixture's relay session as the organiser sees it — shared by the Phone tab and the unentitled stop probe (G2), so
- * the two cannot disagree about what "stop" means. Reads `current` on mount and polls it at STREAM_POLL_MS while the
- * session is not terminal, or no read has landed yet (m3) (the SERVER flips warming → live on that read; the client
- * never decides), ticks a 1-s clock
- * while live, and owns the two ways out: Stop (confirmed — it is on air) and Cancel (re-read first — m3).
- */
-function usePhoneSession(fixtureId: string) {
-  const msg = useMsg();
-  const confirm = useConfirm();
-  const [view, setView] = useState<StreamSessionView | null>(null);
-  // "Start another" / "Try again" put the tab back to idle WITHOUT forgetting the server's answer. `current` returns
-  // the LATEST session in any state, terminal ones included, so every later read (the refresh after a refused create,
-  // in particular) would otherwise resurrect the finished card over the refusal it was meant to explain.
-  const [dismissedId, setDismissedId] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  // m1: a stop that neither landed nor could be confirmed by a re-read. Its own state and its own sentence — the create
-  // copy ("That did not start") says the opposite of what happened.
-  const [stopFailed, setStopFailed] = useState(false);
-  // m3 (lane-close fix): the mount's read FAILED, so "no view" is not known to mean "nothing is up". Until a read lands,
-  // the idle it shows is a guess and is polled like any other unsettled state — a stream on air behind one dropped
-  // request would otherwise leave the stop probe drawing nothing, and the tab offering Go live, until a reload.
-  const [readFailed, setReadFailed] = useState(false);
-  const [now, setNow] = useState(() => new Date());
-
-  // `reveal` marks a read as the organiser DISCLOSING the credentials rather than the 5-second poll (De). Only two
-  // things set it: the first showing of a session's QR, and a tap on Copy. Mount, poll and post-action reads are polls.
-  const read = useCallback(
-    async (reveal = false) => {
-      const cur = await apiV1<StreamSessionView | null>(
-        `/api/v1/fixtures/${fixtureId}/stream-sessions/current${reveal ? "?reveal=1" : ""}`,
-      );
-      setView(cur);
-      setLoaded(true);
-      setReadFailed(false);
-      setNow(new Date());
-      return cur;
-    },
-    [fixtureId],
-  );
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        await read();
-      } catch {
-        setLoaded(true); // an unreadable first read still leaves the tab usable: idle, from the page's balance
-        setReadFailed(true);
-      }
-    })();
-  }, [read]);
-
-  const shown = view && view.id !== dismissedId ? view : null;
-  const state = phoneTabState(shown);
-  const terminal = state === "idle" || state === "ended" || state === "failed";
-  useEffect(() => {
-    if (terminal && !readFailed) return;
-    const id = setInterval(() => {
-      void read().catch(() => {});
-    }, STREAM_POLL_MS);
-    return () => clearInterval(id);
-  }, [terminal, readFailed, read]);
-
-  // The elapsed clock ticks every second while live, rather than jumping by the poll interval.
-  useEffect(() => {
-    if (state !== "live") return;
-    const id = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(id);
-  }, [state]);
-
-  const stopNow = async (target: StreamSessionView) => {
-    setBusy(true);
-    setStopFailed(false);
-    try {
-      setView(
-        await apiV1<StreamSessionView>(`/api/v1/fixtures/${fixtureId}/stream-sessions/${target.id}/stop`, {
-          method: "POST",
-        }),
-      );
-    } catch {
-      // D14: a refused stop is most often a session that has already ended (409 not_active) — read the server again
-      // and show what is there. Only when that read fails too is there nothing true to show but "tap Stop again".
-      try {
-        await read();
-      } catch {
-        setStopFailed(true);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const confirmThenStop = async (target: StreamSessionView) => {
-    const ok = await confirm({
-      title: msg("stream.phone.stop.title"),
-      body: msg("stream.phone.stop.body"),
-      confirmLabel: msg("stream.phone.stop"),
-      tone: "danger",
-      // P3: the cancel says what it does, in the PAGE's locale — the provider's default reads the `seazn_locale` cookie.
-      cancelLabel: msg("stream.phone.stop.keep"),
-      // P4: the most consequential button in the flow gets the 44-px phone floor.
-      size: "touch",
-    });
-    if (ok) await stopNow(target);
-  };
-
-  const stop = async () => {
-    if (shown) await confirmThenStop(shown);
-  };
-
-  // m3: Cancel is offered on the QR, where nothing is on air — so it asks nothing. But the phone can connect while the
-  // QR is on screen, and a Cancel tapped then is a LIVE stop that must be confirmed like any other. So it reads first:
-  // still provisioning / warming → stop now; live → the confirming stop; anything else (it ended or failed on its own)
-  // → the read already shows it. A read that FAILS leaves nobody knowing whether it is on air, so it asks.
-  const cancel = async () => {
-    if (!shown) return;
-    const target = shown;
-    setBusy(true);
-    let fresh: StreamSessionView | null;
-    try {
-      fresh = await read();
-    } catch {
-      setBusy(false);
-      await confirmThenStop(target);
-      return;
-    }
-    setBusy(false);
-    if (!fresh || fresh.id !== target.id) return;
-    const at = phoneTabState(fresh);
-    if (at === "live") await confirmThenStop(fresh);
-    else if (at === "provisioning" || at === "warming") await stopNow(fresh);
-  };
-
-  const dismiss = () => {
-    setDismissedId(view?.id ?? null);
-    setStopFailed(false);
-  };
-
-  return { view, shown, state, loaded, busy, setBusy, now, read, stop, cancel, stopFailed, dismiss };
-}
 
 /**
  * G2 — the Phone tab's stop controls, for an org that no longer holds `streaming.relay` (a downgrade, an expired
@@ -865,7 +707,7 @@ function usePhoneSession(fixtureId: string) {
  */
 export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?: string }) {
   const msg = useMsg();
-  const s = usePhoneSession(fixtureId);
+  const s = useSharedPhoneSession(fixtureId);
   const v = s.shown;
   if (!v || s.state === "idle" || s.state === "ended" || s.state === "failed") return null;
   return (
@@ -902,7 +744,7 @@ export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?
         </button>
       )}
       {s.state === "ending" && (
-        <p data-testid="stream-ending" className="text-xs text-slate-500">
+        <p data-testid="stream-ending" className="text-xs text-slate-600">
           {msg("stream.phone.ending", { destination: v.target.label })}
         </p>
       )}
@@ -931,13 +773,21 @@ export function PhoneTab({
   currency: Currency;
 }) {
   const msg = useMsg();
-  const session = usePhoneSession(fixtureId);
+  // T9b: the page's ONE session (StreamSessionProvider, mounted by the console) — the Stream button's dot reads it too.
+  const session = useSharedPhoneSession(fixtureId);
   const { view, shown, state, read, setBusy } = session;
+  // The provider read `current` when the PAGE loaded; opening the tab reads it again, as opening it always did — an idle
+  // page does not poll, so a session started elsewhere since then shows now rather than at the next reload. Only when a
+  // read had ALREADY landed: a session still on its first read (the page just loaded, or no provider at all) is about to
+  // answer, and a second request would only race it.
+  const loadedAtOpen = useRef(session.loaded);
+  useEffect(() => {
+    if (loadedAtOpen.current) void read().catch(() => {});
+  }, [read]);
   const [targets, setTargets] = useState<TargetsState>({ status: "loading" });
   // Bumped by Retry: re-runs the list's read.
   const [targetsTry, setTargetsTry] = useState(0);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
-  const [mode, setMode] = useState<FeedMode>("clean");
   const [createError, setCreateError] = useState<CreateError | null>(null);
   const [checkoutError, setCheckoutError] = useState<CheckoutError | null>(null);
   const [checkoutSecret, setCheckoutSecret] = useState<string | null>(null);
@@ -1135,7 +985,7 @@ export function PhoneTab({
   if (planGate && state === "idle") return switchedOff(msg);
   if (!session.loaded) {
     return (
-      <p data-testid="stream-loading" role="status" aria-busy="true" className="text-xs text-slate-500">
+      <p data-testid="stream-loading" role="status" aria-busy="true" className="text-xs text-slate-600">
         <span aria-hidden>…</span>
         <span className="sr-only">{msg("stream.phone.loading")}</span>
       </p>
@@ -1152,7 +1002,6 @@ export function PhoneTab({
         createError={createError}
         checkoutError={checkoutError}
         selectedTargetId={selectedTargetId}
-        mode={mode}
         qrDataUrl={qrDataUrl}
         now={session.now}
         copied={copied}
@@ -1168,7 +1017,6 @@ export function PhoneTab({
         restartFree={view?.restartFree ?? false}
         onSelectTarget={setSelectedTargetId}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
-        onMode={setMode}
         onGoLive={() => void onGoLive()}
         onStop={() => {
           setCreateError(null);
@@ -1234,7 +1082,6 @@ export interface PhoneTabBodyProps {
   createError: CreateError | null;
   checkoutError: CheckoutError | null;
   selectedTargetId: string | null;
-  mode: FeedMode;
   qrDataUrl: string | null;
   now: Date;
   copied: boolean;
@@ -1254,7 +1101,6 @@ export interface PhoneTabBodyProps {
   onSelectTarget: (id: string) => void;
   /** Re-read the destination list after a failed read. */
   onRetryTargets: () => void;
-  onMode: (m: FeedMode) => void;
   onGoLive: () => void;
   onStop: () => void;
   onCancel: () => void;
@@ -1280,12 +1126,17 @@ const CHIP = "rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700";
 /** A select or input: the 44-px phone floor, and `.input`'s own focus ring (globals.css) — no new focus style. `min-w-0`
  *  (B7) so a native select with a long option shrinks to its box instead of setting it. */
 const FIELD =
-  "mt-1 min-h-11 w-full min-w-0 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-800 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200 md:min-h-10";
+  "min-h-11 w-full min-w-0 rounded-md border border-slate-200 bg-white text-sm text-slate-800 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200";
 
 /** §8a: solid red, deliberately NOT `.btn-danger` (a white outline) — the one irreversible control on a panel that is
  *  on air. It opens the repo's confirm dialog. Shared by the tab and the stop probe (G2). */
 const STOP_BUTTON =
   "min-h-11 w-full rounded-md bg-red-600 px-3 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10 md:w-auto";
+/** §3.3 Live (mockup state 3): the tab's Stop stream — full width at every width, the same solid red. */
+const STOP_STREAM =
+  "btn min-h-12 w-full bg-red-600 text-base font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50";
+/** Spec §3.2: ended and failed keep their summary and failure boxes, in the new frame's card. */
+const SUMMARY_CARD = "mt-4 space-y-3 rounded-lg bg-white p-4 ring-1 ring-purple-100";
 
 type Msg = ReturnType<typeof useMsg>;
 
@@ -1319,14 +1170,17 @@ function relayUnavailable(msg: Msg) {
   );
 }
 
-function statePill(msg: Msg, state: PhoneTabState) {
+function statePill(msg: Msg, state: PhoneTabState, srOnly = false) {
   return (
     <span
       data-testid="stream-state-pill"
       aria-live="polite"
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${PILL[state]}`}
+      // T9b: in the Phone tab the Signal path shows the state, so there the pill is for assistive tech only.
+      className={
+        srOnly ? "sr-only" : `inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${PILL[state]}`
+      }
     >
-      {state === "live" && (
+      {state === "live" && !srOnly && (
         <span data-testid="stream-live-dot" aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
       )}
       {msg(STATE_PILL_KEYS[state])}
@@ -1370,7 +1224,7 @@ function stopError(msg: Msg, state: PhoneTabState) {
         : null;
   if (key === null) return null;
   return (
-    <p data-testid="stream-stop-error" role="alert" className="text-xs text-red-600">
+    <p data-testid="stream-stop-error" role="alert" className="text-xs text-red-700">
       {msg(key)}
     </p>
   );
@@ -1413,53 +1267,73 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       : null;
   // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running.
   const warned = p.view !== null && destinationWarning(p.view);
-
-  const onModeKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!ARROW.test(e.key)) return;
-    e.preventDefault();
-    const next = stepRadio(MODE_OPTIONS, p.mode, e.key) as FeedMode;
-    if (next === p.mode) return;
-    p.onMode(next);
-    e.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
-  };
+  // Ended and failed are summary cards that carry their own (visible) pill.
+  const summary = state === "ended" || state === "failed";
+  const pickerId = `stream-target-${p.fixtureId}`;
+  const inUseId = `stream-in-use-${p.fixtureId}`;
+  // Mockup state 5: a target_in_use refusal at Ready is drawn on the picker — the red field, the box under it, and Go
+  // live held until the organiser picks again (or the destination is freed).
+  const inUseBox = state === "idle" && !buyCard && p.createError?.code === "target_in_use";
+  // Spec §3.1: "Uses 1 credit · {n} credits · Buy more" — three parts, never one interpolated sentence (word order and
+  // plural agreement differ by locale). "Uses 1 credit" only while Go live is the action under it and the start would
+  // spend one (not inside the reuse window, I-1). The balance keeps the plural key's own text (`stream.phone.credits.*`
+  // — the mockup's "9 left" reads "9 credits": a plan decision, the plural key is what keeps every locale grammatical);
+  // the monthly/bought split is its `title`, and a visually hidden copy keeps it for screen readers.
+  const usesShown = state === "idle" && !buyCard && !p.restartFree;
+  const creditParts: ReactNode[] = [];
+  if (usesShown) creditParts.push(<span key="uses">{msg("stream.credits.uses")}</span>);
+  if (p.balance >= 1) {
+    const splitText = split ? msg("stream.credits.split", { m: split.monthly, p: split.pack }) : undefined;
+    creditParts.push(
+      <span key="balance">
+        <span data-testid="stream-balance" title={splitText} className="tabular-nums">
+          {credits}
+        </span>
+        {splitText && (
+          // The title is not read by every screen reader, nor shown on touch: the same sentence, visually hidden.
+          <span data-testid="stream-credits-split" className="sr-only">
+            {` ${splitText}`}
+          </span>
+        )}
+      </span>,
+    );
+  }
+  if (p.balance >= 1 && !p.planGate) {
+    creditParts.push(
+      // Opens the CHOOSER, never a pack: a mid-match top-up that picked the 5-pack sent the organiser to a Stripe sheet
+      // for a pack they never chose.
+      <button
+        key="buy"
+        type="button"
+        data-testid="stream-buy-more"
+        aria-expanded={p.showBuy}
+        disabled={frozen}
+        onClick={p.onShowBuy}
+        className="inline-flex min-h-11 items-center font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0"
+      >
+        {msg("stream.phone.buyMore")}
+      </button>,
+    );
+  }
+  const creditsLine =
+    !creditsOnly && creditParts.length > 0 ? (
+      <p data-testid="stream-credits-line" className="mt-2 text-center text-xs text-slate-600">
+        {creditParts.map((part, i) => (
+          <Fragment key={i}>
+            {i > 0 && <span aria-hidden>{" · "}</span>}
+            {part}
+          </Fragment>
+        ))}
+      </p>
+    ) : null;
 
   return (
     // P5: the root marker the chooser's Close looks Buy more up from.
     <div data-phone-body>
-      <div className="flex flex-wrap items-center gap-2">
-        <h4 className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-          <Smartphone aria-hidden className="h-4 w-4 text-purple-500" strokeWidth={1.75} />
-          {msg("stream.phone.title")}
-        </h4>
-        {!creditsOnly && statePill(msg, state)}
-        {p.balance >= 1 && (
-          <span
-            data-testid="stream-balance"
-            className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-800"
-          >
-            {credits}
-          </span>
-        )}
-        {p.balance >= 1 && !p.planGate && (
-          // Opens the CHOOSER, never a pack: a mid-match top-up that picked the 5-pack sent the organiser to a Stripe
-          // sheet for a pack they never chose.
-          <button
-            type="button"
-            data-testid="stream-buy-more"
-            aria-expanded={p.showBuy}
-            disabled={frozen}
-            onClick={p.onShowBuy}
-            className="min-h-11 rounded text-xs text-purple-700 underline hover:text-purple-800 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0"
-          >
-            {msg("stream.phone.buyMore")}
-          </button>
-        )}
-      </div>
-      {split && (
-        <p data-testid="stream-credits-split" className="mt-1 text-right text-[11px] text-slate-500 tabular-nums">
-          {msg("stream.credits.split", { m: split.monthly, p: split.pack })}
-        </p>
-      )}
+      {/* T9b (spec §3.1): no heading and no visible pill — the Signal path below says the state, and the ended and failed
+          cards carry the pill themselves. Here it stays for assistive tech (aria-live announces each change). Credits only
+          (B3) has no state to announce. */}
+      {!creditsOnly && !summary && statePill(msg, state, true)}
 
       {/* §3.2 (T9a): the Signal path replaces §8a's stepper — one drawing at every width; only its destination label
           moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
@@ -1482,97 +1356,17 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         </div>
       )}
 
-      {buyCard && (
-        <div className="mt-3">
-          <h5 className="text-sm font-semibold text-slate-700">{msg("stream.credits.title")}</h5>
-          <p className="mt-1 text-xs text-slate-500">{msg("stream.credits.line")}</p>
-          {p.monthlyAllowance >= 1 && (
-            // Task 14b (R4): why a club with free credits might still buy — and which ones expire.
-            <p data-testid="stream-credits-monthly" className="mt-1 text-xs text-slate-500">
-              {p.monthlyAllowance === 1
-                ? msg("stream.credits.monthlyNote.one")
-                : msg("stream.credits.monthlyNote.other", { n: p.monthlyAllowance })}
-            </p>
-          )}
-          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
-            {STREAM_CREDIT_PACKS.map((pack) => {
-              // P1: the amount the pack's Stripe price charges in the checkout's currency. A currency the price has no
-              // option for quotes NOTHING rather than a GBP number under the wrong sign (the checkout would refuse it).
-              const total = streamPackAmountMinor(pack, p.currency);
-              const perMatch = streamPackPerMatchMinor(pack, p.currency);
-              return (
-              <button
-                key={pack.size}
-                type="button"
-                disabled={p.busy || frozen || p.checkoutOpen}
-                data-testid={`stream-buy-pack-${pack.size}`}
-                onClick={() => p.onBuy(pack.size)}
-                onPointerEnter={p.onTileIntent}
-                onFocus={p.onTileIntent}
-                onTouchStart={p.onTileIntent}
-                // B8: top-aligned, so the three tiles' first lines share a baseline however their text wraps.
-                className={`flex min-h-11 w-full flex-col items-start justify-start rounded-lg border p-3 text-left hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50 ${
-                  pack.popular ? "border-purple-500" : "border-purple-200"
-                }`}
-              >
-                <span className="block text-lg font-semibold text-slate-800">{msg(pack.labelKey)}</span>
-                {total !== undefined && (
-                  <span className="block text-sm text-slate-600">{formatMinor(total, p.currency, locale)}</span>
-                )}
-                {perMatch !== undefined && (
-                  <span className="block text-[11px] text-slate-500">
-                    {msg("stream.credits.perMatch", { price: formatMinor(perMatch, p.currency, locale) })}
-                  </span>
-                )}
-                {pack.popular && (
-                  <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-[10px] text-purple-800">
-                    {msg("stream.credits.popular")}
-                  </span>
-                )}
-              </button>
-              );
-            })}
-          </div>
-          {p.checkoutError && (
-            <p data-testid="stream-checkout-error" role="alert" className="mt-2 text-xs text-red-600">
-              {msg(p.checkoutError === "owner" ? "stream.credits.error.owner" : "stream.credits.error.unknown")}
-            </p>
-          )}
-          {p.showBuy && !forced && (
-            // B6: an OPENED chooser says how to put it away — the same toggle as Buy more, handing back the controls it
-            // covers. A forced one has nothing behind it, so no Close.
-            <button
-              type="button"
-              data-testid="stream-credits-close"
-              disabled={frozen}
-              onClick={(e) => {
-                p.onShowBuy();
-                // P5: this button unmounts with the chooser, which would drop focus to <body>. Hand it back to the
-                // control that opened the chooser — still on screen above it.
-                e.currentTarget
-                  .closest("[data-phone-body]")
-                  ?.querySelector<HTMLButtonElement>('[data-testid="stream-buy-more"]')
-                  ?.focus();
-              }}
-              className="btn btn-ghost mt-2 min-h-11 w-full md:min-h-10 md:w-auto"
-            >
-              {msg("stream.credits.close")}
-            </button>
-          )}
-          <p className="mt-2 text-[11px] text-slate-500">{msg("stream.credits.footnote")}</p>
-        </div>
-      )}
-
       {state === "idle" && !buyCard && (
-        <div className="mt-3 space-y-3">
-          <div>
+        // §3.3 Ready (mockup state 1): the destination, then Go live, then the credits line under it.
+        <div className="mt-4 space-y-4">
+          <div className="min-w-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               {p.targets.status === "ok" && targetList.length > 0 ? (
-                <label htmlFor={`stream-target-${p.fixtureId}`} className="text-xs text-slate-500">
+                <label htmlFor={pickerId} className="text-sm font-medium text-slate-800">
                   {msg("stream.dest.label")}
                 </label>
               ) : (
-                <span className="text-xs text-slate-500">{msg("stream.dest.label")}</span>
+                <span className="text-sm font-medium text-slate-800">{msg("stream.dest.label")}</span>
               )}
               {/* D1: destinations are added, renamed and removed in Directory only — never inline here. */}
               <a
@@ -1580,9 +1374,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 href={MANAGE_DESTINATIONS_HREF}
                 target="_blank"
                 rel="noopener"
-                className={`${LINK} inline-flex min-h-11 items-center text-sm md:min-h-0`}
+                className={`${LINK} inline-flex min-h-11 items-center gap-1 text-sm md:min-h-0`}
               >
                 {msg("stream.dest.manage")}
+                <ExternalLink aria-hidden className="h-3.5 w-3.5" strokeWidth={1.8} />
               </a>
             </div>
             {p.targets.status === "error" ? (
@@ -1597,59 +1392,61 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 {msg("stream.dest.empty")}
               </p>
             ) : p.targets.status === "ok" ? (
-              <select
-                id={`stream-target-${p.fixtureId}`}
-                data-testid="stream-target"
-                // B7: a phone's native select clips a long label — the title still names the selection.
-                title={selected ? optionText(selected) : undefined}
-                value={p.selectedTargetId ?? ""}
-                onChange={(e) => p.onSelectTarget(e.target.value)}
-                className={FIELD}
-              >
-                {targetList.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {optionText(t)}
-                  </option>
-                ))}
-              </select>
+              // Mockup state 1: the platform's mark inside the field, a chevron at its end. `min-w-0` down the chain and
+              // `pr-9` so a long label stops before the chevron instead of running under it (B7, the 320 picker).
+              <div className="relative mt-1 min-w-0">
+                {selected && (
+                  <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2">
+                    <PlatformMark kind={selected.kind} size="sm" />
+                  </span>
+                )}
+                <select
+                  id={pickerId}
+                  data-testid="stream-target"
+                  // B7: a phone's native select clips a long label — the title still names the selection.
+                  title={selected ? optionText(selected) : undefined}
+                  value={p.selectedTargetId ?? ""}
+                  onChange={(e) => p.onSelectTarget(e.target.value)}
+                  aria-invalid={inUseBox || undefined}
+                  aria-describedby={inUseBox ? inUseId : undefined}
+                  className={`${FIELD} appearance-none truncate pr-9 ${selected ? "pl-10" : "pl-3"} ${
+                    inUseBox ? "border-red-300 ring-1 ring-red-200" : ""
+                  }`}
+                >
+                  {targetList.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {optionText(t)}
+                    </option>
+                  ))}
+                </select>
+                <ChevronRight
+                  aria-hidden
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 rotate-90 text-slate-600"
+                  strokeWidth={1.8}
+                />
+              </div>
             ) : null}
-          </div>
-          <div
-            role="radiogroup"
-            aria-label={msg("stream.phone.mode")}
-            data-testid="stream-mode"
-            onKeyDown={onModeKey}
-            className="grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1"
-          >
-            <button
-              type="button"
-              role="radio"
-              aria-checked={p.mode === "clean"}
-              tabIndex={p.mode === "clean" ? 0 : -1}
-              data-mode="clean"
-              data-testid="stream-mode-clean"
-              onClick={() => p.onMode("clean")}
-              className={`min-h-11 rounded text-sm md:min-h-9 ${
-                p.mode === "clean" ? "bg-white font-semibold text-slate-800 shadow-sm" : "text-slate-600"
-              }`}
-            >
-              {msg("stream.phone.mode.clean")}
-            </button>
-            {/* Composed is R2's: the seam is VISIBLE (disabled, captioned) rather than absent. */}
-            <button
-              type="button"
-              role="radio"
-              aria-checked={p.mode === "scorebug"}
-              tabIndex={-1}
-              disabled
-              data-mode="scorebug"
-              data-testid="stream-mode-scorebug"
-              title={msg("stream.phone.mode.soon")}
-              className="min-h-11 cursor-not-allowed rounded px-1 text-sm leading-tight text-slate-400 md:min-h-9"
-            >
-              {msg("stream.phone.mode.scorebug")}
-              <span className="block text-[10px]">{msg("stream.phone.mode.soon")}</span>
-            </button>
+            {inUseBox && p.createError && (
+              // §3.3 / mockup state 5: the refusal sits under the picker it is about, with the holder's page beside it.
+              <div id={inUseId} role="alert" className="mt-2 flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                <CircleAlert aria-hidden className="h-5 w-5 shrink-0" strokeWidth={1.8} />
+                <p className="min-w-0">
+                  <span data-testid="stream-create-error">{createErrorText(p.createError, msg)}</span>
+                  {inUseHolder?.href && inUseHolder.matchNo !== null && (
+                    <>
+                      {" "}
+                      <a
+                        data-testid="stream-in-use-open"
+                        href={inUseHolder.href}
+                        className="inline-flex min-h-11 items-center font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:decoration-red-700 md:min-h-0"
+                      >
+                        {msg("stream.inUse.open", { match: msg("breadcrumb.match", { no: inUseHolder.matchNo }) })}
+                      </a>
+                    </>
+                  )}
+                </p>
+              </div>
+            )}
           </div>
           {p.restartFree && (
             // I-1: why a zero (or unchanged) balance can start — the line Go live stands on, in the chip's emerald.
@@ -1658,17 +1455,21 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               {msg("stream.phone.restartFree")}
             </p>
           )}
-          <button
-            type="button"
-            data-testid="stream-go-live"
-            // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
-            // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
-            disabled={p.busy || !p.selectedTargetId || targetList.length === 0}
-            onClick={p.onGoLive}
-            className="btn btn-primary min-h-11 w-full md:min-h-10"
-          >
-            {msg("stream.phone.goLive")}
-          </button>
+          <div>
+            <button
+              type="button"
+              data-testid="stream-go-live"
+              // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
+              // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
+              // Mockup state 5: a destination another match holds cannot start until it is picked again or freed.
+              disabled={p.busy || !p.selectedTargetId || targetList.length === 0 || inUseBox}
+              onClick={p.onGoLive}
+              className="btn btn-primary min-h-12 w-full text-base"
+            >
+              {msg("stream.phone.goLive")}
+            </button>
+            {creditsLine}
+          </div>
         </div>
       )}
 
@@ -1721,7 +1522,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               </button>
             </div>
           )}
-          <p className="text-xs text-slate-500">{msg("stream.phone.qr.caption")}</p>
+          <p className="text-xs text-slate-600">{msg("stream.phone.qr.caption")}</p>
           <button
             type="button"
             data-testid="stream-cancel"
@@ -1735,8 +1536,27 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       )}
 
       {(state === "live" || state === "ending") && p.view && (
-        <div className="mt-3 space-y-2">
-          <div className="flex flex-wrap items-center gap-2">{recAndElapsed(msg, p.view.startedAt, p.now)}</div>
+        // §3.3 Live (mockup state 3): On air and the elapsed time, a full-width Stop, then the closed Details.
+        <div className="mt-4 space-y-4">
+          {state === "live" ? (
+            <div className="grid items-center gap-3 md:grid-cols-[auto_1fr] md:gap-6">
+              <div className="flex items-center gap-3 md:flex-col md:items-start md:gap-0.5">
+                <span data-testid="stream-on-air" className="text-xs font-medium uppercase tracking-wide text-slate-600">
+                  {msg("stream.onAir")}
+                </span>
+                <span data-testid="stream-elapsed" className="font-mono text-3xl font-semibold tabular-nums text-slate-900">
+                  {elapsedLabel(p.view.startedAt, p.now)}
+                </span>
+              </div>
+              <button type="button" data-testid="stream-stop" disabled={p.busy} onClick={p.onStop} className={STOP_STREAM}>
+                {msg("stream.phone.stop")}
+              </button>
+            </div>
+          ) : (
+            <p data-testid="stream-ending" className="text-xs text-slate-600">
+              {msg("stream.phone.ending", { destination: p.view.target.label })}
+            </p>
+          )}
           {/* §3.3 (T9a): the health chips are Details — closed by default; the chain above carries the state. */}
           <details data-testid="stream-details" className="group rounded-lg border border-slate-200 bg-white">
             <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm font-medium text-slate-700 [&::-webkit-details-marker]:hidden">
@@ -1757,20 +1577,12 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               ))}
             </div>
           </details>
-          {state === "ending" ? (
-            <p data-testid="stream-ending" className="text-xs text-slate-500">
-              {msg("stream.phone.ending", { destination: p.view.target.label })}
-            </p>
-          ) : (
-            <button type="button" data-testid="stream-stop" disabled={p.busy} onClick={p.onStop} className={STOP_BUTTON}>
-              {msg("stream.phone.stop")}
-            </button>
-          )}
         </div>
       )}
 
       {state === "ended" && p.view && (
-        <div data-testid="stream-ended" className="mt-3 space-y-2">
+        <div data-testid="stream-ended" className={SUMMARY_CARD}>
+          {statePill(msg, state)}
           <div className="flex flex-wrap gap-1">
             {/* P6: `startedAt` is stamped only when a session goes live (relay/domain/session.ts), so an ended one
                 without it never went live — a Cancel on the QR, a camera that never connected. "Duration 0:00" read
@@ -1826,7 +1638,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       )}
 
       {state === "failed" && p.view && (
-        <div className="mt-3 space-y-2">
+        <div data-testid="stream-failed" className={SUMMARY_CARD}>
+          {statePill(msg, state)}
           <p
             data-testid="stream-fail-reason"
             className="rounded-lg border border-red-200 bg-red-50 p-3 text-[13px] text-red-800"
@@ -1848,18 +1661,103 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {/* m1: D14's unreadable stop or cancel — only while the session is still up (the guard is `stopError`'s own). */}
       {stopFailure && <div className="mt-3">{stopFailure}</div>}
 
-      {/* A refused create — in whatever state the refusal left the tab. */}
-      {p.createError && (
-        <p data-testid="stream-create-error" role="alert" className="mt-3 text-xs text-red-600">
+      {/* A refused create — in whatever state the refusal left the tab. An in-use refusal at Ready is under the picker. */}
+      {p.createError && !inUseBox && (
+        <p data-testid="stream-create-error" role="alert" className="mt-3 text-xs text-red-700">
           {createErrorText(p.createError, msg)}
         </p>
       )}
       {/* T8: the holding match's page, when it still has one — a deleted fixture has neither a number nor a page. */}
-      {inUseHolder?.href && inUseHolder.matchNo !== null && (
+      {!inUseBox && inUseHolder?.href && inUseHolder.matchNo !== null && (
         <a data-testid="stream-in-use-open" href={inUseHolder.href} className={`${LINK} inline-flex min-h-11 items-center text-xs md:min-h-0`}>
           {msg("stream.inUse.open", { match: msg("breadcrumb.match", { no: inUseHolder.matchNo }) })}
         </a>
       )}
+
+      {/* Spec §3.1: the credits are one line. At Ready it sits under Go live (above); in a session it closes the tab, where
+          Buy more stays a mid-match top-up. */}
+      {!(state === "idle" && !buyCard) && creditsLine}
+      {buyCard && (
+        <div className="mt-3">
+          <h5 className="text-sm font-semibold text-slate-700">{msg("stream.credits.title")}</h5>
+          <p className="mt-1 text-xs text-slate-600">{msg("stream.credits.line")}</p>
+          {p.monthlyAllowance >= 1 && (
+            // Task 14b (R4): why a club with free credits might still buy — and which ones expire.
+            <p data-testid="stream-credits-monthly" className="mt-1 text-xs text-slate-600">
+              {p.monthlyAllowance === 1
+                ? msg("stream.credits.monthlyNote.one")
+                : msg("stream.credits.monthlyNote.other", { n: p.monthlyAllowance })}
+            </p>
+          )}
+          <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-3">
+            {STREAM_CREDIT_PACKS.map((pack) => {
+              // P1: the amount the pack's Stripe price charges in the checkout's currency. A currency the price has no
+              // option for quotes NOTHING rather than a GBP number under the wrong sign (the checkout would refuse it).
+              const total = streamPackAmountMinor(pack, p.currency);
+              const perMatch = streamPackPerMatchMinor(pack, p.currency);
+              return (
+              <button
+                key={pack.size}
+                type="button"
+                disabled={p.busy || frozen || p.checkoutOpen}
+                data-testid={`stream-buy-pack-${pack.size}`}
+                onClick={() => p.onBuy(pack.size)}
+                onPointerEnter={p.onTileIntent}
+                onFocus={p.onTileIntent}
+                onTouchStart={p.onTileIntent}
+                // B8: top-aligned, so the three tiles' first lines share a baseline however their text wraps.
+                className={`flex min-h-11 w-full flex-col items-start justify-start rounded-lg border p-3 text-left hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                  pack.popular ? "border-purple-500" : "border-purple-200"
+                }`}
+              >
+                <span className="block text-lg font-semibold text-slate-800">{msg(pack.labelKey)}</span>
+                {total !== undefined && (
+                  <span className="block text-sm text-slate-600">{formatMinor(total, p.currency, locale)}</span>
+                )}
+                {perMatch !== undefined && (
+                  <span className="block text-[11px] text-slate-600">
+                    {msg("stream.credits.perMatch", { price: formatMinor(perMatch, p.currency, locale) })}
+                  </span>
+                )}
+                {pack.popular && (
+                  <span className="mt-1 inline-block rounded-full bg-purple-100 px-2 text-[10px] text-purple-800">
+                    {msg("stream.credits.popular")}
+                  </span>
+                )}
+              </button>
+              );
+            })}
+          </div>
+          {p.checkoutError && (
+            <p data-testid="stream-checkout-error" role="alert" className="mt-2 text-xs text-red-700">
+              {msg(p.checkoutError === "owner" ? "stream.credits.error.owner" : "stream.credits.error.unknown")}
+            </p>
+          )}
+          {p.showBuy && !forced && (
+            // B6: an OPENED chooser says how to put it away — the same toggle as Buy more, handing back the controls it
+            // covers. A forced one has nothing behind it, so no Close.
+            <button
+              type="button"
+              data-testid="stream-credits-close"
+              disabled={frozen}
+              onClick={(e) => {
+                p.onShowBuy();
+                // P5: this button unmounts with the chooser, which would drop focus to <body>. Hand it back to the
+                // control that opened the chooser — still on screen above it.
+                e.currentTarget
+                  .closest("[data-phone-body]")
+                  ?.querySelector<HTMLButtonElement>('[data-testid="stream-buy-more"]')
+                  ?.focus();
+              }}
+              className="btn btn-ghost mt-2 min-h-11 w-full md:min-h-10 md:w-auto"
+            >
+              {msg("stream.credits.close")}
+            </button>
+          )}
+          <p className="mt-2 text-[11px] text-slate-600">{msg("stream.credits.footnote")}</p>
+        </div>
+      )}
+
     </div>
   );
 }
