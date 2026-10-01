@@ -332,6 +332,8 @@ export const POLL_NEAR_WINDOW_MINUTES = 30;
 export const PHONE_LOST_LIVE_MINUTES = 15;
 /** W10 (§6.10): how long the phone-beat history is kept. */
 export const PHONE_BEAT_RETENTION_HOURS = 24;
+/** W24 (§6.12): the hold before the panel's countdown starts, with no video (and, live, no beat). */
+export const RECONNECT_QUIET_SECONDS = 30;
 /** W9 (§7.4): the phone-health line's thresholds. */
 export const LOW_BATTERY_PERCENT = 20;
 export const HOT_THERMAL_STATUS = 3;

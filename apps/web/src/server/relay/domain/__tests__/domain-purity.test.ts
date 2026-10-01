@@ -11,9 +11,10 @@ const DOMAIN = resolve(import.meta.dirname, "..");
 const files = readdirSync(DOMAIN).filter((f) => f.endsWith(".ts")).map((f) => ({ name: f, text: readFileSync(join(DOMAIN, f), "utf8") }));
 
 describe("server/relay/domain is pure", () => {
-  it("has the nine units (capture QR v2 T4a added stream-code, pairing, slot and poll-seconds)", () => {
+  it("has the twelve units (capture QR v2: T4a's stream-code, pairing, slot, poll-seconds; T4b's beat-answer, end-reason, phone-lost)", () => {
     expect(files.map((f) => f.name).sort()).toEqual([
-      "credits.ts", "expiry.ts", "pairing.ts", "poll-seconds.ts", "retention.ts", "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
+      "beat-answer.ts", "credits.ts", "end-reason.ts", "expiry.ts", "pairing.ts", "phone-lost.ts", "poll-seconds.ts", "retention.ts",
+      "runner.ts", "session.ts", "slot.ts", "stream-code.ts",
     ]);
   });
   it("imports nothing impure and never reads the clock", () => {

@@ -302,6 +302,8 @@ The machine `requested → provisioning → warming → live → ending → comp
 | `armed` | Open session in `warming` with no ingest yet (`first_ingest_at` is null). The beat answers `go-live`. |
 | `live` | Open session with `first_ingest_at` set, in `warming` (a reconnect), `live` or `ending`. The beat answers `live`. |
 | `live·dead` | `live`, and the A14 condition holds (T4). |
+| `live` | Open session in `live` with `first_ingest_at` still null (a composed runner can play before the poll records ingest). (amended, §17.9) |
+| `starting` | Open session in `ending` that never received ingest (stopped while starting or armed). (amended, §17.9) |
 
 ### 5.5 Transition table — every event, including the unhappy paths
 
@@ -804,6 +806,7 @@ exactly one wire value. A test sweeps the DB enums: the count of mapped reasons 
 | fail `no_inbound_timeout` | `no_inbound_timeout` | as today |
 | fail `target_rejected` | `target_rejected` | as today |
 | every other fail reason (`no_credits`, `provision_timeout`, `admission_timeout`, `relay_disabled`, the runner's) | `failed` | as today |
+| neither: a `completed` row with no end reason (`session.ts`'s completion) (amended, §17.8) | `failed` | as today |
 
 The V430 check constraint admits all five end reasons at once. A DB that cannot store `auto_stopped` would leave
 PR-2's writer with no column to write.
@@ -1730,7 +1733,7 @@ The PR-1 plan's pre-flight review (2026-10-01) raised rulings. This section reco
 above. Each changed line carries an "(amended, §17.n)" marker. The plan
 (`docs/superpowers/plans/2026-10-01-capture-qr-v2-pr1.md`, "Pre-flight rulings and amendments") holds the full record.
 
-**Who ruled.** R1–R4, R6–R8 and R10 are the controller's plan-time rulings. They are **not** the seazn.club owner's,
+**Who ruled.** R1–R4, R6–R8, R10, R11 and §17.9's slot rows are the controller's plan-time rulings. They are **not** the seazn.club owner's,
 and §1.1 does not gain them. R5 is a contract detail agreed with capture on 2026-10-01. R9 is the owner's (see the
 close of this section).
 
@@ -1836,10 +1839,26 @@ Amends §11.1.2's `finished_at` bullet, and §11.3's question 4.
 - The test file carries a `// single-sport:` reason, so the single-sport audit stays flat.
 - There is no `forEachSport` sweep: the testkit has no per-sport finishing driver.
 
+### 17.8 A completed session with no end reason (R11)
+
+Amends §6.8.4's table with one row.
+
+- `session.ts` can complete a session with `endReason: null`, when no stop reason was ever chosen. Its wire
+  `endReason` is `failed` (G0-f: a server-side end that is neither a stop nor a timeout).
+- `wireEndReason` throws `TerminalWithoutReason` for a row it cannot map. It never puts a null into an answer whose
+  contract requires `endReason`.
+
+### 17.9 Two slot rows §5.4 did not list
+
+Amends §5.4's table with two rows.
+
+- An open session in `live` with `first_ingest_at` still null is `live`. The phone is publishing, and a `waiting`
+  answer would stop it.
+- An open session in `ending` that never received ingest is `starting`. The phone waits, and does not go live into a
+  stop.
+
 **No spec text changes for these:**
 
 - **R9, the owner's ruling (2026-10-01).** The staging cost of the `*/5` trigger is accepted, including keeping the
   stg machine awake. §6.11 already says what the trigger costs. The merge itself still needs its own owner OK.
 - **R10:** where CI sets the walkthrough tunables. That is plan-only.
-- **R11 (owed, controller):** the wire mapping for a `completed` session with no end reason. The plan recommends
-  `failed`. When it is ruled, it amends §6.8.4 here, as §17.8.

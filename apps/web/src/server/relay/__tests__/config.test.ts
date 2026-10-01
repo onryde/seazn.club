@@ -321,7 +321,7 @@ describe("capture QR v2 constants equal the spec's own figures", () => {
   const NAMES = [
     "CODE_GRACE_AFTER_FINISH_MINUTES", "DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_SILENT_FLOOR_SECONDS", "PHONE_SILENT_SLACK_SECONDS",
     "POLL_STARTING_SECONDS", "POLL_NEAR_SECONDS", "POLL_FAR_SECONDS", "POLL_NEAR_WINDOW_MINUTES", "PHONE_LOST_LIVE_MINUTES",
-    "PHONE_BEAT_RETENTION_HOURS", "LOW_BATTERY_PERCENT", "HOT_THERMAL_STATUS",
+    "PHONE_BEAT_RETENTION_HOURS", "LOW_BATTERY_PERCENT", "HOT_THERMAL_STATUS", "RECONNECT_QUIET_SECONDS",
   ] as const;
 
   it("each named constant matches the figure the spec writes beside its name (`NAME (n)` or `NAME = n`)", () => {
