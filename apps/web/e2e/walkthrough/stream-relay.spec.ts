@@ -20,6 +20,7 @@
 // switched-off state; stream-credits-admin.spec.ts's staff panel. The credit-ledger walkthrough (monthly grant,
 // rollover, upgrade, Stripe packs, event passes) is its own file.
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,7 +41,13 @@ import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
 import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
-import { FAKE_CONNECT_AFTER_MS_DEFAULT, FakeIngest, fakeRecoveringKey } from "../../src/server/relay/fakes";
+import {
+  FAKE_CONNECT_AFTER_MS_DEFAULT,
+  FAKE_CONNECTING_KEY_PREFIX,
+  FAKE_REJECT_KEY_PREFIX,
+  FakeIngest,
+  fakeRecoveringKey,
+} from "../../src/server/relay/fakes";
 import { MAX_DURATION_MINUTES } from "../../src/server/relay/config";
 
 // ===========================================================================
@@ -170,10 +177,11 @@ test.afterEach(async () => {
 
 // Copy, from the dictionaries themselves — never typed here, so a copy edit moves the expectation with it.
 type Dict = Record<string, string>;
-const readDict = (locale: "en" | "es"): Dict =>
+const readDict = (locale: "en" | "es" | "fr"): Dict =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8")) as Dict;
 const EN_UI = readDict("en");
 const ES_UI = readDict("es");
+const FR_UI = readDict("fr");
 function fill(dict: Dict, key: string, vars: Record<string, string | number>): string {
   const raw = dict[key];
   if (raw === undefined) throw new Error(`ui.json has no ${key}`);
@@ -184,6 +192,7 @@ function fill(dict: Dict, key: string, vars: Record<string, string | number>): s
 }
 const en = (key: string, vars: Record<string, string | number> = {}): string => fill(EN_UI, key, vars);
 const es = (key: string, vars: Record<string, string | number> = {}): string => fill(ES_UI, key, vars);
+const fr = (key: string, vars: Record<string, string | number> = {}): string => fill(FR_UI, key, vars);
 /** The balance chip's own words for `n`. */
 const creditsChip = (n: number, t: typeof en = en): string =>
   n === 1 ? t("stream.phone.credits.one") : t("stream.phone.credits.other", { n });
@@ -530,7 +539,8 @@ for (const width of WIDTHS) {
     await expect(streamControl(page)).not.toHaveAttribute("data-dot", /./);
     await expect(streamControl(page)).toHaveAccessibleName(en("stream.button"));
     await expectNoHorizontalScroll(page);
-    if (width === 320) expect(await expectTapTargets(body), "idle controls hit-tested").toBeGreaterThan(3);
+    // T9b: Manage destinations, Go live and Buy more (the feed-mode radios are gone with the mode itself).
+    if (width === 320) expect(await expectTapTargets(body), "idle controls hit-tested").toBeGreaterThanOrEqual(3);
     await shot(panel, `A1-${width}-1-idle.png`);
 
     // ADD A DESTINATION — in Directory → Streaming (D1: the one place destinations are managed), tapped through its form.
@@ -970,7 +980,7 @@ for (const width of [320, 1280] as const) {
   test(`D3 @${width}: live, the destination Connecting → at 30 s (not before) the amber warning, still live, Stop enabled → receiving resumes and it clears → Stop`, async ({
     page,
   }) => {
-    const NAVS = 1; // openPhoneTab
+    const NAVS = 2; // openPhoneTab, then again while live (the one-poller witness)
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + LIVE_WAIT_MS + RECOVER_MS + 4 * POLL_WAIT_MS + POLLER_K * STREAM_POLL_MS + NAVS * NAV_MS);
     await page.setViewportSize({ width, height: 900 });
     // Spec §2 (T9b) — ONE `current` poller per fixture page: every browser GET of it, from the moment the page exists.
@@ -1014,9 +1024,15 @@ for (const width of [320, 1280] as const) {
     await shot(panel, `D3-${width}-1-connecting.png`);
 
     // THE ONE-POLLER WITNESS (spec §2, review #21: the node harness renders no effects, so only a browser can count).
-    // A live session polls every STREAM_POLL_MS; with the button, both twins and the panel all reading ONE provider, K
-    // periods see K GETs, give or take the window's edges. A second poller doubles it; zero means nothing polled.
-    // A measurement window, not a wait for a state: nothing here is waiting for something to happen.
+    // The page is opened AGAIN with the session live — the organiser coming back to the match — so EVERY reader (the
+    // provider, both Stream twins, the Phone tab) mounts on a session that polls. A reader that mounted on an idle
+    // fixture never polls, whoever owns it: counted on the page that tapped Go live, a second poller is invisible
+    // (found by the mutant — `enabled: true` survived a window counted there). K periods see K GETs, give or take the
+    // window's edges; one extra poller per reader multiplies it. A measurement window, not a wait for a state.
+    await openPhoneTab(page, rig, f);
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"));
+    await expect(chain).toHaveAttribute("data-dest", "connecting");
+    await expect(control).toHaveAttribute("data-dot", "red");
     const before = currentGets;
     await page.waitForTimeout(POLLER_K * STREAM_POLL_MS);
     const polled = currentGets - before;
@@ -1581,4 +1597,235 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
       await ctx.close(); // even when the teardown throws
     }
   }
+});
+
+// ===========================================================================
+// B5 — the Signal-path frame in EVERY panel state, at the three widths (T9b Step 5: the visual gate, kept as a walkthrough)
+// ===========================================================================
+// Driven through the product and the fake driver's own key prefixes (`connecting-` dials forever, `reject-` is refused)
+// and `page.route` for the load error. Two chain states the fake cannot reach from a browser — the phone's signal lost
+// while live (§3.2 "No signal") and `ending` (it lasts one read) — are the REAL projection of a live session with one
+// field changed on its way to the page: the page draws exactly what the server would send in that state.
+// Each state: no horizontal scroll, AA contrast in the panel (axe, counted), a crop. 768 is the width the D3 case lacks.
+
+/** AA contrast inside the open Stream panel, by axe's own color-contrast rule. Returns how many nodes axe checked. */
+async function expectPanelContrast(page: Page, state: string): Promise<number> {
+  const axe = await new AxeBuilder({ page }).include('[data-role="fixture-stream-body"]').withRules(["color-contrast"]).analyze();
+  const bad = axe.violations.flatMap((v) => v.nodes.map((n) => `${n.target.join(" ")}: ${n.failureSummary ?? v.id}`));
+  expect(bad, `${state}: every text run in the panel reads at AA`).toEqual([]);
+  const checked = axe.passes.reduce((n, r) => n + r.nodes.length, 0);
+  expect(checked, `${state}: axe checked the panel's text (zero is a vacuous pass)`).toBeGreaterThan(0);
+  return checked;
+}
+
+/** A realistic ~45-character destination name: the 320 picker must stop it before the chevron (B7). */
+const LONG_DEST = "Riverside Badminton Club — Court 1 main feed";
+
+for (const width of WIDTHS) {
+  test(`B5 frame @${width}: no destinations → load error → Ready (a long name) → in use → Waiting → Live connecting → D3 → no signal → ending → Ended → Live ok → Failed → no credits — each fits, reads AA, and is captured`, async ({
+    page,
+  }) => {
+    const NAVS = 9; // openPhoneTab ×8 (no-dest, load error, ready, in-use, D3, ok, failed, no credits) + the reload after the route
+    const SESSIONS = 4; // the holder, D3, ok, failed
+    test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAVS * NAV_MS + SESSIONS * CYCLE_MS + OUTPUT_WARNING_AFTER_MS + 6 * POLL_WAIT_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRelayRig(page, { entrants: 4 });
+    expect(rig.fixtures.length, "premise: a fixture per state that starts a session").toBeGreaterThanOrEqual(6);
+    expect(rig.monthlyRate, "premise (V426): the plan's month pays for the sessions below").toBeGreaterThanOrEqual(SESSIONS);
+    const [fReady, fHold, fD3, fOk, fFail, fBroke] = rig.fixtures as [RelayFixture, RelayFixture, RelayFixture, RelayFixture, RelayFixture, RelayFixture];
+    const captured: string[] = [];
+    let axeNodes = 0;
+    const capture = async (scope: Locator, state: string, opts: { axe?: boolean } = {}) => {
+      await expectNoHorizontalScroll(page);
+      if (opts.axe !== false) axeNodes += await expectPanelContrast(page, state);
+      await shot(scope.getByTestId("stream-panel"), `B5-${width}-${String(captured.length + 1).padStart(2, "0")}-${state}.png`);
+      captured.push(state);
+    };
+
+    // 1. NO DESTINATIONS.
+    let scope = await openPhoneTab(page, rig, fReady);
+    let body = scope.locator("[data-phone-body]");
+    await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
+    await capture(scope, "no-destinations");
+
+    // 2. LOAD ERROR — the list route refused.
+    const LIST = "**/api/v1/orgs/*/stream-targets";
+    await page.route(LIST, (r) => r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "INTERNAL", message: "boom" } }) }));
+    scope = await openPhoneTab(page, rig, fReady);
+    body = scope.locator("[data-phone-body]");
+    await expect(body.getByTestId("stream-dest-load-error")).toContainText(en("stream.dest.loadError"), { timeout: POLL_WAIT_MS });
+    await capture(scope, "load-error");
+    await page.unroute(LIST);
+
+    // 3. READY — the oldest destination offered, a long name stopped before the chevron.
+    const long = await addTargetApi(page, rig.orgId, { label: LONG_DEST });
+    const dialling = await addTargetApi(page, rig.orgId, { label: `Dialling ${width}`, streamKey: `${FAKE_CONNECTING_KEY_PREFIX}${randomBytes(6).toString("hex")}` });
+    const refused = await addTargetApi(page, rig.orgId, { label: `Refused ${width}`, streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomBytes(6).toString("hex")}` });
+    scope = await openPhoneTab(page, rig, fReady);
+    body = scope.locator("[data-phone-body]");
+    const picker = body.getByTestId("stream-target");
+    await expect(picker.locator("option:checked")).toHaveText(optionText(LONG_DEST));
+    await expect(body.getByTestId("stream-go-live")).toBeEnabled();
+    await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "notLive");
+    // B7 at every width: the field, its mark and its chevron stay inside the panel; the select keeps its chevron gutter.
+    const fit = await picker.evaluate((sel: HTMLSelectElement) => {
+      const panel = sel.closest('[data-testid="stream-panel"]')!.getBoundingClientRect();
+      const r = sel.getBoundingClientRect();
+      const chevron = sel.parentElement!.querySelector("svg")!.getBoundingClientRect();
+      return { inside: r.left >= panel.left - 0.5 && r.right <= panel.right + 0.5, chevronInside: chevron.right <= r.right && chevron.left >= r.left, padRight: parseFloat(getComputedStyle(sel).paddingRight), chevronW: chevron.width };
+    });
+    expect(fit.inside, "the picker stays inside the panel").toBe(true);
+    expect(fit.chevronInside, "the chevron sits inside the field").toBe(true);
+    expect(fit.padRight, "the text stops before the chevron").toBeGreaterThan(fit.chevronW);
+    await capture(scope, "ready-long-name");
+
+    // 4. IN USE — another match holds the long-named destination; Go live here is refused on the picker.
+    const holder = await goLiveApi(page, fHold.id, long.id);
+    scope = await openPhoneTab(page, rig, fReady);
+    body = scope.locator("[data-phone-body]");
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(LONG_DEST));
+    await body.getByTestId("stream-go-live").click();
+    await expect(body.getByTestId("stream-in-use-open")).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(body.getByTestId("stream-target")).toHaveAttribute("aria-invalid", "true");
+    await expect(body.getByTestId("stream-go-live"), "held: Go live waits").toBeDisabled();
+    await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "inUse");
+    await capture(scope, "in-use");
+    expect((await page.request.post(`/api/v1/fixtures/${fHold.id}/stream-sessions/${holder.id}/stop`)).status(), "SETUP: the holder stops").toBe(200);
+    await expect
+      .poll(async () => (await sessionsOf({ fixtureId: fHold.id })).every((r) => r.state === "completed" || r.state === "failed"), { timeout: POLL_WAIT_MS })
+      .toBe(true);
+
+    // 5–10. WAITING → LIVE CONNECTING → D3 → (no signal, ending: the real projection, one field changed) → ENDED.
+    scope = await openPhoneTab(page, rig, fD3);
+    body = scope.locator("[data-phone-body]");
+    const chain = body.getByTestId("stream-chain");
+    await body.getByTestId("stream-target").selectOption(dialling.id);
+    await body.getByTestId("stream-go-live").click();
+    await expect(body.getByTestId("stream-qr")).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(chain).toHaveAttribute("data-phone", "waiting");
+    // The QR lasts until the server's first read after the connect: the crop first, axe after it would outlast it.
+    await capture(scope, "waiting", { axe: false });
+    await expect(body.getByTestId("stream-qr"), "the QR state outlasted the crop").toBeVisible({ timeout: 1 });
+    await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+    await expect(chain).toHaveAttribute("data-dest", "connecting");
+    await expect(body.getByTestId("stream-output-warning")).toHaveCount(0);
+    await capture(scope, "live-connecting");
+    await expect(body.getByTestId("stream-output-warning")).toBeVisible({ timeout: OUTPUT_WARNING_AFTER_MS + 2 * POLL_WAIT_MS });
+    await expect(chain).toHaveAttribute("data-dest", "notReceiving");
+    await expect(streamControl(page)).toHaveAttribute("data-dot", "amber");
+    await capture(scope, "d3-warning");
+    const CURRENT = `**/api/v1/fixtures/${fD3.id}/stream-sessions/current`;
+    const reshape = (change: (v: Record<string, unknown>) => void) =>
+      page.route(CURRENT, async (r) => {
+        const res = await r.fetch();
+        const json = (await res.json()) as { data?: Record<string, unknown> | null };
+        if (json.data) change(json.data);
+        await r.fulfill({ response: res, json });
+      });
+    await reshape((v) => {
+      v.ingest = { ...(v.ingest as Record<string, unknown>), state: "disconnected" };
+    });
+    await expect(chain).toHaveAttribute("data-phone", "noSignal", { timeout: POLL_WAIT_MS });
+    await expect(chain).toHaveAttribute("data-link1", "problem");
+    await capture(scope, "live-no-signal");
+    await page.unroute(CURRENT);
+    await reshape((v) => {
+      v.state = "ending";
+    });
+    await expect(chain).toHaveAttribute("data-dest", "ending", { timeout: POLL_WAIT_MS });
+    await expect(body.getByTestId("stream-ending")).toBeVisible();
+    await expect(streamControl(page), "ending: amber, the button says Stream").toHaveAttribute("data-dot", "amber");
+    await capture(scope, "ending");
+    await page.unroute(CURRENT);
+    await expect(chain).toHaveAttribute("data-dest", "notReceiving", { timeout: POLL_WAIT_MS });
+    await body.getByTestId("stream-stop").click();
+    await confirmStop(page);
+    await expect(body.getByTestId("stream-ended")).toBeVisible({ timeout: POLL_WAIT_MS });
+    await expect(body.getByTestId("stream-chain"), "ended draws no chain").toHaveCount(0);
+    await capture(scope, "ended");
+
+    // 11. LIVE OK.
+    scope = await openPhoneTab(page, rig, fOk);
+    body = scope.locator("[data-phone-body]");
+    await expect(body.getByTestId("stream-target").locator("option:checked")).toHaveText(optionText(LONG_DEST));
+    await body.getByTestId("stream-go-live").click();
+    await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "live", { timeout: LIVE_WAIT_MS });
+    await expect(body.getByTestId("stream-on-air")).toHaveText(en("stream.onAir"));
+    await expect(streamControl(page)).toHaveAttribute("data-dot", "red");
+    await capture(scope, "live-ok");
+    await body.getByTestId("stream-stop").click();
+    await confirmStop(page);
+    await expect(body.getByTestId("stream-ended")).toBeVisible({ timeout: POLL_WAIT_MS });
+
+    // 12. FAILED — the destination refuses the key.
+    scope = await openPhoneTab(page, rig, fFail);
+    body = scope.locator("[data-phone-body]");
+    await body.getByTestId("stream-target").selectOption(refused.id);
+    await body.getByTestId("stream-go-live").click();
+    await expect(body.getByTestId("stream-failed")).toBeVisible({ timeout: LIVE_WAIT_MS });
+    await capture(scope, "failed");
+
+    // 13. NO CREDITS — the month spent, nothing bought, a match that never streamed (no free restart): the pack tiles
+    //     alone (B3), no Go live and no chain.
+    await drainMonthlyTo(rig.orgId, 0);
+    expect((await ledger(rig.orgId)).total, "premise: no credit left").toBe(0);
+    scope = await openPhoneTab(page, rig, fBroke);
+    body = scope.locator("[data-phone-body]");
+    await expect(body.locator('[data-testid^="stream-buy-pack-"]')).toHaveCount(STREAM_CREDIT_PACKS.length);
+    await expect(body.getByTestId("stream-go-live")).toHaveCount(0);
+    await expect(body.getByTestId("stream-chain")).toHaveCount(0);
+    await capture(scope, "no-credits");
+
+    test.info().annotations.push({ type: "b5-frame", description: `@${width}: ${captured.length} states, axe nodes ${axeNodes}: ${captured.join(", ")}` });
+    expect(captured, "every state was reached and captured, in order").toEqual([
+      "no-destinations", "load-error", "ready-long-name", "in-use", "waiting", "live-connecting", "d3-warning",
+      "live-no-signal", "ending", "ended", "live-ok", "failed", "no-credits",
+    ]);
+  });
+}
+
+// B3 re-review N-1: the run-sheet row's LINE 2 on a 320 phone in FRENCH — the longest waiting chip of the four locales
+// ("En attente du téléphone") beside the row action, with realistic ~40-character club names. Nothing on the line may
+// pass the row, and the chip keeps its 44-px tap.
+test("B5 N-1 @320 fr: a WAITING chip on a run-sheet row — line 2 fits the row, nothing clipped", async ({ page }) => {
+  const NAVS = 3; // the fixture page (the month's grant), the run sheet in English, then in French
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + NAVS * NAV_MS + POLL_WAIT_MS);
+  await page.setViewportSize({ width: 320, height: 900 });
+  const rig = await seedRelayRig(page, { entrants: 3, names: A12_NAMES });
+  const target = await addTargetApi(page, rig.orgId, { label: "N-1 destination" });
+  const f = rig.fixtures[0]!;
+  await openFixture(page, rig, f); // the month's grant (R3b)
+  await streamSlot();
+  // WAITING, held: made through the API and never read (the server flips it live only on a read of `current`).
+  const made = await apiJson<{ id: string }>(page.request, `/api/v1/fixtures/${f.id}/stream-sessions`, "POST", { mode: "passthrough", targetId: target.id });
+  expect(made.status, `SETUP: create -> ${JSON.stringify(made.error)}`).toBe(201);
+  await page.context().addCookies([{ name: "seazn_locale", value: "fr", url: new URL(page.url()).origin }]);
+  await openRunSheet(page, rig);
+  const row = rowOf(page, f);
+  const chip = row.getByTestId("run-sheet-stream-chip");
+  await expect(chip).toHaveAttribute("data-state", "waiting");
+  await expect(chip).toHaveText(fr("runsheet.stream.waiting"));
+  await expectNoHorizontalScroll(page);
+  const g = await row.evaluate((li) => {
+    const line2 = li.querySelector<HTMLElement>('[data-row-line="2"]')!;
+    const rowBox = li.getBoundingClientRect();
+    const parts = Array.from(line2.children).map((el) => {
+      const r = el.getBoundingClientRect();
+      return { tag: el.tagName.toLowerCase(), l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width };
+    });
+    const lineR = line2.getBoundingClientRect().right;
+    return { rowL: rowBox.left, rowR: rowBox.right, lineR, scroll: line2.scrollWidth, client: line2.clientWidth, parts };
+  });
+  test.info().annotations.push({ type: "n-1", description: JSON.stringify(g) });
+  expect(g.parts.length, "line 2 has parts to measure").toBeGreaterThan(1);
+  expect(g.scroll, "line 2's content fits line 2").toBeLessThanOrEqual(g.client + 1);
+  for (const p of g.parts) expect(p.r, `${p.tag} ends inside the row`).toBeLessThanOrEqual(g.rowR + 0.5);
+  // The action keeps line 2's right edge whether or not the line wrapped, and never sits on the chip.
+  const [, chipPart, actionPart] = g.parts as [unknown, { l: number; r: number; t: number; b: number }, { l: number; r: number; t: number; b: number }];
+  expect(actionPart.r, "the action is right-aligned").toBeGreaterThanOrEqual(g.lineR - 1);
+  const overlap = !(actionPart.l >= chipPart.r || actionPart.r <= chipPart.l || actionPart.t >= chipPart.b || actionPart.b <= chipPart.t);
+  expect(overlap, "the chip and the action do not overlap").toBe(false);
+  const chipBox = await chip.boundingBox();
+  expect(chipBox!.height, "the chip keeps its 44-px tap").toBeGreaterThanOrEqual(43.5);
+  await shot(row, "B5-N1-320-fr-waiting-row.png");
 });
