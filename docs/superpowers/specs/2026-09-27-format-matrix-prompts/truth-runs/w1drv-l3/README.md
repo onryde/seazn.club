@@ -47,13 +47,14 @@ Every ❌ is on one line there. The classes are exclusive:
 
   Their cells were re-run under [`../w1drv-l3-rerun`](../w1drv-l3-rerun): every case of `stepladder_only`, `double_elim` and `mexicano` on 11 sports, 33 runs. **30 of these cases now work.** The other 30 are still red for a product reason and are re-triaged in TRIAGE.md.
 - **product: 134.** With the 30 above, **164 product reds** remain, each judged on its latest committed run (T15 fix round 1 added [`../w1drv-l3-fr1`](../w1drv-l3-fr1): americano/mexicano R4 at the derived policy, the 17 P1 cells, and the P1 draw counts read from that env's DB; fix round 2 added [`../w1drv-l3-fr2`](../w1drv-l3-fr2): americano/mexicano R4 again, with T15-R9's `r4-not-seated-later`, which moved no total):
-  - **W4: 94.** The bracket-draw stall (62), the ko_plate seeding 409 (10), the page-playoff R4 dead final (11) and the stepladder withdraw refusal (11).
+  - **W2: 62.** The bracket-draw stall (`supportsDraws`, design §8 SC-O1/SC-O2), moved from W4 by ruling T15-R4 (applied in Task 16).
+  - **W4: 32.** The ko_plate seeding 409 (10), the page-playoff R4 dead final (11) and the stepladder withdraw refusal (11). Before T15-R4 the draw stall was here too: W4 94.
   - **W7: 56.** The coverage table (44) and mexicano consequences outside it (12).
   - **W5: 11.** group_group_ko F1, seed 1 alone in a pool.
   - **W3: 3.** Swiss R4 round 5 pairs nobody (SW-H1); the fourth case (swiss_playoff boardgame) reached a page-playoff draw stall on its fr1 run instead.
 - **unfit: 0.** One owner recommendation is recorded, not assumed: group_group_ko F1.
 
-**Routing conflict for the controller.** The bracket-draw stall is routed **W4**, per ruling T6-R1. Design §8 puts SC-O1/SC-O2, the `supportsDraws` root cause, under **W2**.
+**Routing conflict, settled.** The bracket-draw stall was routed **W4** per ruling T6-R1, while design §8 puts SC-O1/SC-O2, the `supportsDraws` root cause, under **W2**. Ruling T15-R4 settled it for **W2**, and Task 16 applied it to TRIAGE.md's wave column (62 rows, by script).
 
 ## Predicted product reds, by name
 
