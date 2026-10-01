@@ -2024,8 +2024,8 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
 
 **Owner prerequisites.** The implementer cannot do these; list them in the PR body. Each one that writes to Cloudflare is marked.
 - **STOP: owner OK required (Cloudflare write).** Create a Cloudflare API token scoped to Account "Seazn Club" with Workers Scripts: Edit. If deploys answer 403, use the "Edit Cloudflare Workers" template scoped to the account. Store it as the repo secret `CLOUDFLARE_API_TOKEN`, and add the repo secret `CLOUDFLARE_ACCOUNT_ID` = `ecaa471818e93892078446eae972a543`.
-- Repo secrets `STAGE_CRON_SECRET` / `PROD_CRON_SECRET`, used by the smoke step. They hold the same values as the Fly apps' `CRON_SECRET`. Today they exist only in the workflow repo.
-- Repo variables `CRON_WORKER_URL_STG` / `CRON_WORKER_URL_PROD`: the Workers' `*.workers.dev` URLs, which the first `wrangler deploy` prints. The account's workers.dev subdomain is `ashokhein`, so they will be `https://seazn-cron-stg.ashokhein.workers.dev` and `https://seazn-cron-prod.ashokhein.workers.dev`.
+- Repo secrets `STAGING_CRON_SECRET` / `PROD_CRON_SECRET`, used by the smoke step. They hold the same values as the Fly apps' `CRON_SECRET`. Today they exist only in the workflow repo.
+- Repo variables `STAGING_CRON_WORKER_URL` / `PROD_CRON_WORKER_URL`: the Workers' `*.workers.dev` URLs, which the first `wrangler deploy` prints. The account's workers.dev subdomain is `ashokhein`, so they will be `https://seazn-cron-stg.ashokhein.workers.dev` and `https://seazn-cron-prod.ashokhein.workers.dev`.
 - **STOP: owner OK required (Cloudflare write).** Set the Worker secrets, once per env and **after that env's first deploy**, because `secret put` on a missing script creates the script:
   - `pnpm --filter @seazn/cron-worker exec wrangler secret put CRON_SECRET --env stg`, and the same with `--env prod`;
   - `SENTRY_DSN` for `--env prod` (**required**; without it prod's run lines say `sentry:"off"` and failures reach only the logs), using the Fly prod app's DSN (`fly.toml`);
@@ -2067,11 +2067,11 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
       # ai-previews is idempotent. An unset URL is a WARNING, never a silent skip.
       - name: Smoke — manual run of ai-previews
         env:
-          WORKER_URL: ${{ vars.CRON_WORKER_URL_STG }}
-          CRON_SECRET: ${{ secrets.STAGE_CRON_SECRET }}
+          WORKER_URL: ${{ vars.STAGING_CRON_WORKER_URL }}
+          CRON_SECRET: ${{ secrets.STAGING_CRON_SECRET }}
         run: |
           if [ -z "$WORKER_URL" ]; then
-            echo "::warning::CRON_WORKER_URL_STG is not set, so the cron Worker smoke did NOT run. Set it to the URL the first deploy printed."
+            echo "::warning::STAGING_CRON_WORKER_URL is not set, so the cron Worker smoke did NOT run. Set it to the URL the first deploy printed."
             exit 0
           fi
           curl --silent --show-error --fail-with-body --max-time 90 \
@@ -2080,7 +2080,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && git a
             -H "x-cron-secret: $CRON_SECRET"
 ```
 
-- [ ] **Step 3: Add the prod job** to `.github/workflows/prod.yml`. It is identical except for: name `deploy-cron-worker-prod`, `cancel-in-progress: false`, `--env prod`, `vars.CRON_WORKER_URL_PROD` (and `CRON_WORKER_URL_PROD` in the warning text), and `secrets.PROD_CRON_SECRET`.
+- [ ] **Step 3: Add the prod job** to `.github/workflows/prod.yml`. It is identical except for: name `deploy-cron-worker-prod`, `cancel-in-progress: false`, `--env prod`, `vars.PROD_CRON_WORKER_URL` (and `PROD_CRON_WORKER_URL` in the warning text), and `secrets.PROD_CRON_SECRET`.
 
 - [ ] **Step 4: Validate the YAML**
 
