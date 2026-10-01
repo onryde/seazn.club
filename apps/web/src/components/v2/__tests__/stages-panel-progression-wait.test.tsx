@@ -220,8 +220,9 @@ describe("the early Generate on a waiting stage — amber, named, never raw Engl
   it("generatePreconditionMessage names both stages", () => {
     const named = namedCopy();
     expect(generatePreconditionMessage(notReady(PROGRESSION_REFUSAL), msg, lookup)).toBe(named);
-    // Owner-approved wording, pinned literally once.
-    expect(named).toBe("Spring League hasn't finished — the fixtures for Cup Finals are drawn when it completes.");
+    // The owner chose the wording 2026-10-01 (option 1, name the source
+    // again). Pinned literally once.
+    expect(named).toBe("Spring League hasn't finished — the fixtures for Cup Finals are drawn once Spring League completes.");
   });
 
   it("classifyActError makes it an amber warning that does not refresh", () => {

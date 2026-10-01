@@ -149,12 +149,25 @@ test.describe("Add stage: a stage waiting on its source says so", () => {
         stageId: rig.finalsId,
         previousStageId: rig.leagueId,
       });
+      // The server's own English sentence, which the page must NOT show. It
+      // has to be a real, non-empty string that differs from the localized
+      // copy, or the absence check below would hunt for "undefined" (or for
+      // the notice itself) and prove nothing.
+      const serverMessage = body.error?.message;
+      expect(typeof serverMessage, `press ${press}: the envelope carries the server's sentence`).toBe("string");
+      expect(String(serverMessage).trim(), `press ${press}: a non-empty server sentence`).not.toBe("");
+      expect(expected, "the localized copy is not the server's sentence").not.toContain(String(serverMessage));
       const warning = page.getByTestId("schedule-warning");
       await expect(warning, `press ${press}: one amber notice`).toHaveCount(1);
+      await expect(warning, `press ${press}: the amber notice is on screen`).toBeVisible();
       await expect(warning).toHaveText(expected);
       await expect(warning).toHaveClass(/\bbg-amber-50\b/);
       await expect(page.getByTestId("schedule-error"), `press ${press}: no red banner`).toHaveCount(0);
-      await expect(page.getByText(String(body.error?.message), { exact: false })).toHaveCount(0);
+      // Same state, same page: the localized notice is visible (above), and
+      // the raw server sentence is nowhere on the page beside it.
+      await expect(page.locator("body"), `press ${press}: the server's raw sentence is not shown`).not.toContainText(
+        String(serverMessage),
+      );
     }
 
     // ---- 3. the source completes: the server seeds and draws the finals, and
