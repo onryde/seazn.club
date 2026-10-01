@@ -42,7 +42,8 @@ import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, FakeSwissDriver } from "./fake-driver.ts";
 import { FOREIGN_NEXT_MATCH, ModelFakeDriver, type ModelFakeOpts } from "./model-fake-driver.ts";
-import { bracketRoundNoText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalPendingText, withdrawalReason } from "./product-text.ts";
+import { loadRegressions } from "../lib/scenario-catalogue.ts";
+import { bracketRoundNoText, bracketWalkoverKindsText, nextMatchStartedText, rosterLockText, roundRobinKindsText, withdrawalPendingText, withdrawalReason } from "./product-text.ts";
 
 const I7 = "I7-rr-no-pair-over-legs";
 const I8 = "I8-generate-named";
@@ -377,9 +378,22 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
   });
 });
 
-describe("final batch F-1(b): the knockout fences steer the walk off MB-002..005's triggers, and nothing else", () => {
+describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk off MB-002..005, MB-007 and MB-008's triggers, and nothing else", () => {
   const KO_TBD = "ko-withdraw-waiting-on-tbd";
   const KO_GEN = "ko-generate-after-roster-change";
+  /** The stage kinds the OPEN committed cases naming `fence` build: each
+   *  case's row has one stage (the model admits single-stage rows), read from
+   *  the builder's own bodies. A fence guards exactly what a committed case
+   *  witnesses (fences.ts header, final batch F-1), so the expectation comes
+   *  from regressions.json — never a list typed here. */
+  const witnessed = (fence: string): string[] => {
+    const kinds = loadRegressions().filter((r) => r.status === "open" && r.fence === fence).map((r) => {
+      const bodies = stagesForRow(r.cell.split("|")[0]!);
+      expect(bodies.length, `${r.id}: ${r.cell} is not a single-stage row`).toBe(1);
+      return bodies[0]!.kind;
+    });
+    return [...new Set(kinds)].sort();
+  };
   /** A started knockout, as the product lists it: e1 beat e4 and waits in the
    *  final for the winner of e2 v e3 (a TBD seat). */
   async function ko(finalStatus = "scheduled", side: "home" | "away" = "home"): Promise<ModelState> {
@@ -413,7 +427,32 @@ describe("final batch F-1(b): the knockout fences steer the walk off MB-002..005
     expect(checked).toBe(2 * PENDING_STATUSES.length);
     expect(PENDING_STATUSES.length).toBeGreaterThan(0);
   });
-  it("MB-002/003: …and offered for everyone else — a seated pending match (e2), a decided one only (e4), a TBD final no longer pending, fences off, and any stage kind but knockout", async () => {
+  it("G-1 (T15-R8): each bracket fence applies on exactly the stage kinds its committed cases witness — knockout (MB-002..005), stepladder (MB-008), double elim (MB-007) — each one a kind the product's bracket withdrawal and generation share (stages.ts BRACKET_WALKOVER_KINDS)", async () => {
+    const walkover = bracketWalkoverKindsText();
+    expect(walkover.length, "BRACKET_WALKOVER_KINDS read empty").toBeGreaterThan(0);
+    // A started knockout where e1 waits on a TBD seat in the final: each
+    // fence's trigger holds there (Withdraw e1; Generate after a late entry),
+    // so the stage kind is the only thing that varies.
+    const s = await ko();
+    const KINDS = [...new Set([...BRACKET_STAGE_KINDS, ...roundRobinKindsText(), "swiss", "ladder", "americano"])];
+    const triggered: Record<string, ModelState> = { [KO_TBD]: s, [KO_GEN]: { ...s, lateEntry: true } };
+    let checked = 0;
+    for (const [id, state] of Object.entries(triggered)) {
+      const want = witnessed(id);
+      expect(want.length, `${id}: no open committed case witnesses it`).toBeGreaterThan(0);
+      const fence = FENCES.find((f) => f.id === id);
+      if (fence === undefined) throw new Error(`no fence ${id}`);
+      const subject = fence.blocks === "Withdraw" ? (s.entrants[0] ?? null) : null;
+      // The fence's own predicate, so an earlier fence on the same command never shadows it.
+      const applies = KINDS.filter((stageKind) => fence.applies({ ...state, stageKind, fenced: new Map() }, subject)).sort();
+      expect(applies, id).toEqual(want);
+      for (const k of want) expect(walkover, `${id} on ${k}: not a bracket walkover kind`).toContain(k);
+      checked += KINDS.length;
+    }
+    expect(checked).toBe(2 * KINDS.length);
+    expect(KINDS.length).toBeGreaterThan(BRACKET_STAGE_KINDS.size);
+  });
+  it("MB-002/003: …and offered for everyone else — a seated pending match (e2), a decided one only (e4), a TBD final no longer pending, fences off, and any stage kind no committed case witnesses", async () => {
     const s = await ko();
     expect(commandOf("Withdraw", 1, 0, true).check(s), "e2: seated opponent").toBe(true);
     expect(commandOf("Withdraw", 3, 0, true).check(s), "e4: out, decided only").toBe(true);
@@ -424,7 +463,8 @@ describe("final batch F-1(b): the knockout fences steer the walk off MB-002..005
       expect(commandOf("Withdraw", 0, 0, true).check(await ko(status)), status).toBe(true);
       checked++;
     }
-    for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "league", "swiss"]) {
+    const fencedOn = witnessed(KO_TBD);
+    for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => !fencedOn.includes(k)), "league", "swiss"]) {
       expect(commandOf("Withdraw", 0, 0, true).check({ ...s, stageKind }), stageKind).toBe(true);
       checked++;
     }
@@ -444,13 +484,15 @@ describe("final batch F-1(b): the knockout fences steer the walk off MB-002..005
     expect(withdrawn.fenced.get(KO_GEN)).toBe(1);
     expect(fenceBlocking(withdrawn, "Generate", false)).toBeNull();
   });
-  it("MB-004/005: …and offered with no fixtures yet, and on every other stage kind but the round robins (#879's own fence)", async () => {
+  it("MB-004/005: …and offered with no fixtures yet; on the other kinds a committed case witnesses (MB-007) it is this fence, on the round robins #879's own, and on every other kind none", async () => {
     const s: ModelState = { ...(await ko()), lateEntry: true };
     expect(commandOf("Generate", 0, 0, true).check({ ...s, fixtures: new Map(), fenced: new Map() }), "no fixtures").toBe(true);
     const rr = roundRobinKindsText();
+    const fencedOn = witnessed(KO_GEN);
     let checked = 0;
     for (const stageKind of [...[...BRACKET_STAGE_KINDS].filter((k) => k !== "knockout"), "swiss", ...rr]) {
-      expect(fenceBlocking({ ...s, stageKind }, "Generate", true)?.id ?? null, stageKind).toBe(rr.includes(stageKind) ? "late-entry-then-generate" : null);
+      const want = rr.includes(stageKind) ? "late-entry-then-generate" : fencedOn.includes(stageKind) ? KO_GEN : null;
+      expect(fenceBlocking({ ...s, stageKind }, "Generate", true)?.id ?? null, stageKind).toBe(want);
       checked++;
     }
     expect(checked).toBeGreaterThan(rr.length);

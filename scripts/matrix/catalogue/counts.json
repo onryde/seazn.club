@@ -29,8 +29,8 @@
     "variantCasesScorable": 1025,
     "variantCasesUnscorable": 40,
     "denied": 7,
-    "regressions": 5,
-    "value": 16514
+    "regressions": 7,
+    "value": 16516
   },
   "drops": {
     "total": 4851,

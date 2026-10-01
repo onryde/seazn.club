@@ -368,6 +368,39 @@ describe("regression cases (R29)", () => {
     }
     expect(checked).toBe(cases.length);
   });
+  // T15-R5 (W1-driving Task 16): a NEW product failure in committed W1-driving
+  // model evidence is committed as a regression case (R29), so the next model
+  // run judges it instead of rediscovering it. Scoped to the W1-driving runs
+  // (run id `w1drv-…`): W1b's first reports (w1b-model-0928a/b) hold failures
+  // found before W1b's own shrinks and harness fixes, committed as history.
+  // Expected values are the finding report's, never the catalogue's.
+  it("T15-R5: every new failure in a committed W1-driving model report is a committed open case — its cell, check, seed, path, replayPath, bound and fences", () => {
+    type Cell = { cell: string; verdict: string; maxCommands: number; fences: boolean; failure: { check: string; seed: number; path: string; replayPath: string | null } | null };
+    const found: { runId: string; cell: Cell; failure: NonNullable<Cell["failure"]> }[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as { runId: string; cells: Cell[] };
+          if (!rep.runId.startsWith("w1drv-")) continue;
+          for (const c of rep.cells) if (c.verdict === "new-failure" && c.failure !== null) found.push({ runId: rep.runId, cell: c, failure: c.failure });
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
+    expect(found.length, "no NEW failure in W1-driving model evidence — the pin would be vacuous").toBeGreaterThan(0);
+    const cases = loadRegressions();
+    let checked = 0;
+    for (const { runId, cell, failure } of found) {
+      const r = cases.find((c) => c.cell === cell.cell && c.check === failure.check && c.seed === failure.seed && c.path === failure.path);
+      expect(r, `${runId} ${cell.cell}: NEW ${failure.check} (seed ${failure.seed}, path ${failure.path}) is not a committed case`).toBeDefined();
+      expect({ replayPath: r?.replayPath, maxCommands: r?.maxCommands, fencesOn: r?.fencesOn, runId: r?.runId, status: r?.status }, r?.id)
+        .toEqual({ replayPath: failure.replayPath, maxCommands: cell.maxCommands, fencesOn: cell.fences, runId, status: "open" });
+      checked++;
+    }
+    expect(checked).toBe(found.length);
+    console.info(`T15-R5: ${checked} W1-driving NEW failure(s), each a committed case`);
+  });
   // Controller ruling Q1 (W1c Task 2): a fence named for a case post-dates its
   // finding, so honouring it would fence out the very command the case exists
   // to reproduce. Expected values are the ruling's three branches, not the code.
@@ -386,27 +419,38 @@ describe("regression cases (R29)", () => {
     }
     expect(checked).toBe(FENCES.length);
   });
-  it("under the replay rule the committed cases replay with the fences the committed 5/5-known replays ran (truth-runs w1b-model-final, ruling Q1)", () => {
-    // The evidence: w1b-model-final's --regressions reports, every committed
-    // case known-failure. The rule must reproduce the fences those replays
-    // ran with — a replay that fences out a case's own command goes NOT REPRODUCED.
-    const dir = resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1b-model-final");
+  // W1-driving Task 16 (T15-R5): the catalogue grew past the 5 cases
+  // w1b-model-final replayed, so the check reads EVERY committed --regressions
+  // report rather than that one directory: a replay that fences out a case's
+  // own command goes NOT REPRODUCED, whichever run made it.
+  it("under the replay rule, every replay in every committed --regressions report ran with the fences the rule gives its case, and was known (truth-runs, ruling Q1)", () => {
     type Rep = { runId: string; settings: { regressions: boolean }; cells: { replayOf: string | null; verdict: string; fences: boolean }[] };
-    const reps = readdirSync(dir).filter((n) => /^model-report-regressions.*\.json$/.test(n)).map((n) => JSON.parse(readFileSync(join(dir, n), "utf8")) as Rep);
+    const reps: Rep[] = [];
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name));
+        else if (/^model-report.*\.json$/.test(e.name)) {
+          const rep = JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Rep;
+          if (rep.settings.regressions) reps.push(rep);
+        }
+      }
+    };
+    walk(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs"));
     expect(reps.length, "no committed replay report — the check would be vacuous").toBeGreaterThan(0);
-    const cases = loadRegressions();
-    expect(cases.length).toBeGreaterThan(0);
+    const cases = new Map(loadRegressions().map((r) => [r.id, r]));
+    expect(cases.size).toBeGreaterThan(0);
     let checked = 0;
     for (const rep of reps) {
-      expect(rep.settings.regressions, rep.runId).toBe(true);
-      for (const r of cases) {
-        const cell = rep.cells.find((c) => c.replayOf === r.id);
-        if (cell === undefined) throw new Error(`${rep.runId}: no replay of ${r.id}`);
+      for (const cell of rep.cells) {
+        if (cell.replayOf === null) continue;
+        const r = cases.get(cell.replayOf);
+        if (r === undefined) throw new Error(`${rep.runId}: replays ${cell.replayOf}, which is no committed case`);
         expect([cell.verdict, replayFences(r)], `${rep.runId} ${r.id}`).toEqual(["known-failure", cell.fences]);
         checked++;
       }
     }
-    expect(checked).toBe(reps.length * cases.length);
+    expect(checked, "no replay read across the committed reports").toBeGreaterThan(0);
+    console.info(`replay rule: ${checked} replays across ${reps.length} committed --regressions reports`);
   });
   it("a stray key or another schema version is refused (the file is reviewed, so drift is loud)", () => {
     expect(() => parseRegressions(file({ ...base, extra: 1 }))).toThrow();
