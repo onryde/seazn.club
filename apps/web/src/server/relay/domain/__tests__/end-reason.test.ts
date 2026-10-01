@@ -17,16 +17,19 @@ const TABLE = SPEC.slice(SPEC.indexOf("#### 6.8.4 End reasons"), SPEC.indexOf("#
 const NAMED = [...TABLE.matchAll(/^\| (end|fail) `([a-z_]+)`[^|]*\| `([a-z_]+)`/gm)].map((m) => ({ kind: m[1]!, db: m[2]!, wire: m[3]! }));
 /** `| every other fail reason (…) | \`failed\` |`. */
 const OTHER_FAIL = /^\| every other fail reason[^|]*\| `([a-z_]+)`/m.exec(TABLE)?.[1];
+/** R11's amended row (§17.8): `| neither: a \`completed\` row with no end reason (…) | \`failed\` |`. */
+const NEITHER = /^\| neither:[^|]*\| `([a-z_]+)`/m.exec(TABLE)?.[1];
 const FAIL_REASONS = StreamFailReason.options as readonly FailReason[];
 
 const expectedFor = (kind: "end" | "fail", db: string): string | undefined =>
   NAMED.find((r) => r.kind === kind && r.db === db)?.wire ?? (kind === "fail" ? OTHER_FAIL : undefined);
 
 describe("the declarations this table is checked against", () => {
-  it("the spec's §6.8.4 table parses: five end rows, two named fail rows, and the catch-all", () => {
+  it("the spec's §6.8.4 table parses: five end rows, two named fail rows, the catch-all and R11's neither row", () => {
     expect(NAMED.filter((r) => r.kind === "end")).toHaveLength(5);
     expect(NAMED.filter((r) => r.kind === "fail")).toHaveLength(2);
     expect(OTHER_FAIL).toBe("failed");
+    expect(NEITHER, "§6.8.4's amended neither row").toBeDefined();
   });
 
   it("DB_END_REASONS is exactly the end_reason list the V430 fold leaves on the column", () => {
@@ -63,8 +66,8 @@ describe("wireEndReason (§6.8.4)", () => {
     for (const failReason of unnamed) expect(wireEndReason({ endReason: null, failReason }), failReason).toBe("failed");
   });
 
-  it("R11: a terminal row with NEITHER reason (session.ts's completion with endReason null) → failed", () => {
-    expect(wireEndReason({ endReason: null, failReason: null })).toBe("failed");
+  it("R11: a terminal row with NEITHER reason (session.ts's completion with endReason null) → the spec's neither row", () => {
+    expect(wireEndReason({ endReason: null, failReason: null })).toBe(NEITHER);
   });
 
   it("every wire value is a CaptureEndReason, and all seven are reached", () => {
@@ -80,7 +83,7 @@ describe("wireEndReason (§6.8.4)", () => {
     expect(() => wireEndReason({ endReason: null, failReason: "storage_exhausted" as FailReason })).toThrow(TerminalWithoutReason);
   });
 
-  it("a row carrying BOTH reasons is refused by name (session.ts's fail() clears endReason; V410 keeps them apart)", () => {
+  it("a row carrying BOTH reasons is refused by name (session.ts's fail() clears endReason; V410 checks end_reason by state, nothing checks fail_reason, so this guard is what keeps them apart)", () => {
     expect(() => wireEndReason({ endReason: "stopped", failReason: "no_credits" })).toThrow(TerminalWithoutReason);
   });
 });

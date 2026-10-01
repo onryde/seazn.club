@@ -93,29 +93,29 @@ describe("deadForTakeover — A14's three conjuncts (§6.5)", () => {
   const dead = { lastBeatAt: ago(DEAD_MS), freshReadConnected: false, lastConnectedAt: ago(DEAD_MS), liveSince: ago(DEAD_MS * 5) };
 
   it("all three hold → dead, at the boundary exactly", () => {
-    expect(deadForTakeover(dead, NOW)).toBe(true);
+    expect(deadForTakeover(dead, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(true);
   });
 
   it("conjunct 1 fails alone: a beat inside the window (1 ms short) — not dead", () => {
-    expect(deadForTakeover({ ...dead, lastBeatAt: ago(DEAD_MS - 1) }, NOW)).toBe(false);
+    expect(deadForTakeover({ ...dead, lastBeatAt: ago(DEAD_MS - 1) }, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(false);
   });
 
   it("conjunct 2 fails alone: a fresh Cloudflare read says the input IS connected — not dead (the phone still pushes video)", () => {
-    expect(deadForTakeover({ ...dead, freshReadConnected: true }, NOW)).toBe(false);
+    expect(deadForTakeover({ ...dead, freshReadConnected: true }, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(false);
   });
 
   it("conjunct 3 fails alone: a poll sample read connected inside the window (1 ms short) — not dead", () => {
-    expect(deadForTakeover({ ...dead, lastConnectedAt: ago(DEAD_MS - 1) }, NOW)).toBe(false);
+    expect(deadForTakeover({ ...dead, lastConnectedAt: ago(DEAD_MS - 1) }, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(false);
   });
 
   it("no connected sample at all: the clock runs from liveSince (first ingest), as §6.8.5 words it", () => {
-    expect(deadForTakeover({ ...dead, lastConnectedAt: null, liveSince: ago(DEAD_MS - 1) }, NOW)).toBe(false);
-    expect(deadForTakeover({ ...dead, lastConnectedAt: null, liveSince: ago(DEAD_MS) }, NOW)).toBe(true);
+    expect(deadForTakeover({ ...dead, lastConnectedAt: null, liveSince: ago(DEAD_MS - 1) }, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(false);
+    expect(deadForTakeover({ ...dead, lastConnectedAt: null, liveSince: ago(DEAD_MS) }, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(true);
   });
 
   it("the window is a parameter, so tunable() can shorten it (§6.15): at 3 s, a phone silent 3 s is dead", () => {
     const short = { lastBeatAt: ago(3 * S), freshReadConnected: false, lastConnectedAt: ago(3 * S), liveSince: ago(3 * S) };
-    expect(deadForTakeover(short, NOW)).toBe(false);
+    expect(deadForTakeover(short, NOW, DEAD_PHONE_TAKEOVER_SECONDS)).toBe(false);
     expect(deadForTakeover(short, NOW, 3)).toBe(true);
   });
 });
@@ -126,16 +126,16 @@ describe("isSilent / isPresent / isNotResponding (§6.9)", () => {
   it("silent at the boundary for each answered cadence: 1 ms short is not silent, the threshold exactly is", () => {
     let checked = 0;
     for (const c of CADENCES) {
-      expect(isSilent(ago(silentAfter(c) - 1), c, NOW), `${c}s: 1 ms short`).toBe(false);
-      expect(isSilent(ago(silentAfter(c)), c, NOW), `${c}s: at the threshold`).toBe(true);
+      expect(isSilent(ago(silentAfter(c) - 1), c, NOW, PHONE_SILENT_FLOOR_SECONDS), `${c}s: 1 ms short`).toBe(false);
+      expect(isSilent(ago(silentAfter(c)), c, NOW, PHONE_SILENT_FLOOR_SECONDS), `${c}s: at the threshold`).toBe(true);
       checked++;
     }
     expect(checked).toBe(3);
   });
 
   it("ordering differential: 60 s without a beat is silent on a 10 s cadence but NOT on a 60 s one (not yet due)", () => {
-    expect(isSilent(ago(60 * S), POLL_NEAR_SECONDS, NOW)).toBe(true);
-    expect(isSilent(ago(60 * S), POLL_FAR_SECONDS, NOW)).toBe(false);
+    expect(isSilent(ago(60 * S), POLL_NEAR_SECONDS, NOW, PHONE_SILENT_FLOOR_SECONDS)).toBe(true);
+    expect(isSilent(ago(60 * S), POLL_FAR_SECONDS, NOW, PHONE_SILENT_FLOOR_SECONDS)).toBe(false);
   });
 
   it("the floor is a parameter, so tunable() can shorten it; the slack is not (plan R10)", () => {
@@ -146,9 +146,9 @@ describe("isSilent / isPresent / isNotResponding (§6.9)", () => {
   it("present = current AND not silent, at each cadence's boundary", () => {
     let checked = 0;
     for (const c of CADENCES) {
-      expect(isPresent({ current: true, lastBeatAt: ago(silentAfter(c) - 1), answeredPoll: c }, NOW), `${c}s fresh`).toBe(true);
-      expect(isPresent({ current: true, lastBeatAt: ago(silentAfter(c)), answeredPoll: c }, NOW), `${c}s silent`).toBe(false);
-      expect(isPresent({ current: false, lastBeatAt: NOW, answeredPoll: c }, NOW), `${c}s not current`).toBe(false);
+      expect(isPresent({ current: true, lastBeatAt: ago(silentAfter(c) - 1), answeredPoll: c }, NOW, PHONE_SILENT_FLOOR_SECONDS), `${c}s fresh`).toBe(true);
+      expect(isPresent({ current: true, lastBeatAt: ago(silentAfter(c)), answeredPoll: c }, NOW, PHONE_SILENT_FLOOR_SECONDS), `${c}s silent`).toBe(false);
+      expect(isPresent({ current: false, lastBeatAt: NOW, answeredPoll: c }, NOW, PHONE_SILENT_FLOOR_SECONDS), `${c}s not current`).toBe(false);
       checked++;
     }
     expect(checked).toBe(3);
@@ -166,9 +166,21 @@ describe("isSilent / isPresent / isNotResponding (§6.9)", () => {
     expect(checked).toBe(3);
   });
 
+  it("m-1: every tunable threshold is REQUIRED, so a use-case cannot fall back to the constant and skip tunable(…) — tsc reds an unused @ts-expect-error", () => {
+    const omitted = [
+      // @ts-expect-error — floorSeconds has no default (§6.15, D1)
+      () => isSilent(NOW, POLL_NEAR_SECONDS, NOW),
+      // @ts-expect-error — floorSeconds has no default
+      () => isPresent({ current: true, lastBeatAt: NOW, answeredPoll: POLL_NEAR_SECONDS }, NOW),
+      // @ts-expect-error — windowSeconds has no default
+      () => deadForTakeover({ lastBeatAt: NOW, freshReadConnected: false, lastConnectedAt: null, liveSince: NOW }, NOW),
+    ];
+    expect(omitted).toHaveLength(3);   // never called: the check is the type errors above
+  });
+
   it("an answered cadence that is not a positive number is refused by name, never read as instantly silent", () => {
     for (const bad of [0, -10, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => isSilent(NOW, bad, NOW), String(bad)).toThrow(/answeredPoll/);
+      expect(() => isSilent(NOW, bad, NOW, PHONE_SILENT_FLOOR_SECONDS), String(bad)).toThrow(/answeredPoll/);
       expect(() => isNotResponding({ held: true, lastBeatAt: NOW, answeredPoll: bad }, NOW), String(bad)).toThrow(/answeredPoll/);
     }
   });

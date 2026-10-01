@@ -6,24 +6,29 @@ import {
   POLL_STARTING_SECONDS, RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "../../config";
 import { livePhoneLost, lostCountdown, warmingPhoneLost } from "../phone-lost";
+import { OPEN_SESSION_MAX_POLL_SECONDS, pollSecondsFor } from "../poll-seconds";
+import { ACTIVE_STATES } from "../session";
 
 const NOW = new Date("2026-10-01T12:00:00Z");
 const S = 1000, MIN = 60_000;
 const ago = (ms: number): Date => new Date(NOW.getTime() - ms);
 const LOST_MS = PHONE_LOST_LIVE_MINUTES * MIN;
 const QUIET_MS = RECONNECT_QUIET_SECONDS * S;
+const FLOOR = PHONE_SILENT_FLOOR_SECONDS;
+/** The cadence an OPEN session is answered at, read from the §6.6 table itself (every active state, no window). */
+const OPEN_CADENCES = [...new Set(ACTIVE_STATES.map((open) => pollSecondsFor({ open, fixtureStatus: "scheduled", scheduledAt: null, finished: false }, NOW)))];
 
 describe("warmingPhoneLost — ask 10 (§6.8.3)", () => {
   const warming = { state: "warming" as const, firstIngestAt: null, hasCurrentPairing: true, lastBeatAt: NOW, answeredPollSeconds: POLL_NEAR_SECONDS, heardGoLive: true };
   const silentAfter = (c: number): number => Math.max(PHONE_SILENT_FLOOR_SECONDS, c + PHONE_SILENT_SLACK_SECONDS) * S;
 
   it("the empty case first: a phone that just beat, on a session that never had video, is not lost", () => {
-    expect(warmingPhoneLost(warming, NOW)).toBe(false);
+    expect(warmingPhoneLost(warming, NOW, FLOOR)).toBe(false);
   });
 
   it("no current pairing → lost, in each pre-video state", () => {
     for (const state of ["requested", "provisioning", "warming"] as const) {
-      expect(warmingPhoneLost({ ...warming, state, hasCurrentPairing: false, lastBeatAt: null }, NOW), state).toBe(true);
+      expect(warmingPhoneLost({ ...warming, state, hasCurrentPairing: false, lastBeatAt: null }, NOW, FLOOR), state).toBe(true);
     }
   });
 
@@ -31,8 +36,8 @@ describe("warmingPhoneLost — ask 10 (§6.8.3)", () => {
     let checked = 0;
     for (const c of [POLL_STARTING_SECONDS, POLL_NEAR_SECONDS, POLL_FAR_SECONDS]) {
       const i = { ...warming, heardGoLive: false, answeredPollSeconds: c };
-      expect(warmingPhoneLost({ ...i, lastBeatAt: ago(silentAfter(c) - 1) }, NOW), `${c}s short`).toBe(false);
-      expect(warmingPhoneLost({ ...i, lastBeatAt: ago(silentAfter(c)) }, NOW), `${c}s at`).toBe(true);
+      expect(warmingPhoneLost({ ...i, lastBeatAt: ago(silentAfter(c) - 1) }, NOW, FLOOR), `${c}s short`).toBe(false);
+      expect(warmingPhoneLost({ ...i, lastBeatAt: ago(silentAfter(c)) }, NOW, FLOOR), `${c}s at`).toBe(true);
       checked++;
     }
     expect(checked).toBe(3);
@@ -40,34 +45,76 @@ describe("warmingPhoneLost — ask 10 (§6.8.3)", () => {
 
   it("a 60 s-cadence phone that has not heard go-live is NOT ended at 60 s, and IS ended at 90 s", () => {
     const i = { ...warming, heardGoLive: false, answeredPollSeconds: POLL_FAR_SECONDS };
-    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(60 * S) }, NOW)).toBe(false);
-    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(90 * S) }, NOW)).toBe(true);
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(60 * S) }, NOW, FLOOR)).toBe(false);
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(90 * S) }, NOW, FLOOR)).toBe(true);
   });
 
-  it("a phone that has heard go-live beats at least every 10 s, so silent is exactly the floor (ask 10's 60 s)", () => {
+  it("an open session is answered at most every OPEN_SESSION_MAX_POLL_SECONDS — the §6.6 table's own value", () => {
+    expect(OPEN_CADENCES.length).toBeGreaterThan(0);
+    expect(OPEN_SESSION_MAX_POLL_SECONDS).toBe(Math.max(...OPEN_CADENCES));
+  });
+
+  it("a phone that has heard go-live is judged on an open session's cadence, never a stale waiting one: silent at ask 10's 60 s, not at 90 s", () => {
+    // In production the go-live answer stores the open cadence, so this pair is a stale row; the cap keeps §6.8.3's
+    // "silent is exactly 60 s" for it instead of stretching to the waiting cadence's 90 s.
     const i = { ...warming, heardGoLive: true, answeredPollSeconds: POLL_FAR_SECONDS };
-    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(PHONE_SILENT_FLOOR_SECONDS * S - 1) }, NOW)).toBe(false);
-    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(PHONE_SILENT_FLOOR_SECONDS * S) }, NOW)).toBe(true);
+    const at = Math.max(FLOOR, OPEN_SESSION_MAX_POLL_SECONDS + PHONE_SILENT_SLACK_SECONDS) * S;
+    expect(at).toBe(60 * S);   // ask 10's number, typed from the spec: the declarations must still produce it
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(at - 1) }, NOW, FLOOR)).toBe(false);
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(at) }, NOW, FLOOR)).toBe(true);
+  });
+
+  // I-3 (B3 review; plan §T12: only the floor shortens, PHONE_SILENT_SLACK_SECONDS is not tunable, and the threshold
+  // stays max(floor, poll + slack)). T12's walkthroughs run with the floor shortened to seconds. A phone beating on
+  // its answered cadence must never be ended between two beats, heard go-live or not.
+  it("a SHORTENED floor never ends a healthily beating phone: lost only at max(floor, cadence + slack), heard go-live or not", () => {
+    let checked = 0;
+    for (const floor of [1, 3, 5]) {
+      for (const heardGoLive of [true, false]) {
+        for (const c of OPEN_CADENCES) {
+          const i = { ...warming, heardGoLive, answeredPollSeconds: c };
+          const label = `floor ${floor}s, cadence ${c}s, heard ${heardGoLive}`;
+          expect(warmingPhoneLost({ ...i, lastBeatAt: ago((c - 1) * S) }, NOW, floor), `${label}: beat 1 s before the next is due`).toBe(false);
+          const at = Math.max(floor, c + PHONE_SILENT_SLACK_SECONDS) * S;
+          expect(warmingPhoneLost({ ...i, lastBeatAt: ago(at - 1) }, NOW, floor), `${label}: 1 ms short`).toBe(false);
+          expect(warmingPhoneLost({ ...i, lastBeatAt: ago(at) }, NOW, floor), `${label}: at the threshold`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(3 * 2 * OPEN_CADENCES.length);
   });
 
   it("first_ingest_at set → never (that is W19's case), however silent and even with no pairing", () => {
-    expect(warmingPhoneLost({ ...warming, firstIngestAt: ago(MIN), lastBeatAt: ago(LOST_MS * 4) }, NOW)).toBe(false);
-    expect(warmingPhoneLost({ ...warming, firstIngestAt: ago(MIN), hasCurrentPairing: false, lastBeatAt: null }, NOW)).toBe(false);
+    expect(warmingPhoneLost({ ...warming, firstIngestAt: ago(MIN), lastBeatAt: ago(LOST_MS * 4) }, NOW, FLOOR)).toBe(false);
+    expect(warmingPhoneLost({ ...warming, firstIngestAt: ago(MIN), hasCurrentPairing: false, lastBeatAt: null }, NOW, FLOOR)).toBe(false);
   });
 
   it("only requested, provisioning and warming are checked: ending, live, completed and failed never are", () => {
     for (const state of ["ending", "live", "completed", "failed"] as const) {
-      expect(warmingPhoneLost({ ...warming, state, hasCurrentPairing: false, lastBeatAt: null }, NOW), state).toBe(false);
+      expect(warmingPhoneLost({ ...warming, state, hasCurrentPairing: false, lastBeatAt: null }, NOW, FLOOR), state).toBe(false);
     }
   });
 
-  it("the floor is a parameter, so tunable() can shorten it (§6.15)", () => {
-    expect(warmingPhoneLost({ ...warming, lastBeatAt: ago(5 * S) }, NOW)).toBe(false);
-    expect(warmingPhoneLost({ ...warming, lastBeatAt: ago(5 * S) }, NOW, 5)).toBe(true);
+  it("the floor is a parameter, so tunable() can shorten it (§6.15): it moves the threshold down to cadence + slack, no further", () => {
+    const i = { ...warming, answeredPollSeconds: POLL_NEAR_SECONDS };
+    const cadenceAt = (POLL_NEAR_SECONDS + PHONE_SILENT_SLACK_SECONDS) * S;
+    expect(cadenceAt).toBeLessThan(FLOOR * S);   // or a shortened floor could not be witnessed here
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(cadenceAt) }, NOW, FLOOR)).toBe(false);
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(cadenceAt) }, NOW, 5)).toBe(true);
+    // …and a longer one lengthens it.
+    expect(warmingPhoneLost({ ...i, lastBeatAt: ago(FLOOR * S) }, NOW, FLOOR * 2)).toBe(false);
+  });
+
+  it("m-1: the floor is REQUIRED, so a use-case cannot fall back to the constant and skip tunable(…) — tsc reds an unused @ts-expect-error", () => {
+    const omitted = () =>
+      // @ts-expect-error — floorSeconds has no default (§6.15, D1)
+      warmingPhoneLost(warming, NOW);
+    expect(omitted).toBeTypeOf("function");   // never called: the check is the type error above
   });
 
   it("a current pairing with no last beat is refused by name (the column is NOT NULL)", () => {
-    expect(() => warmingPhoneLost({ ...warming, lastBeatAt: null }, NOW)).toThrow(/lastBeatAt/);
+    expect(() => warmingPhoneLost({ ...warming, lastBeatAt: null }, NOW, FLOOR)).toThrow(/lastBeatAt/);
   });
 });
 

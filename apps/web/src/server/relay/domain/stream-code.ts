@@ -10,7 +10,6 @@
 //                                      ▼
 //                                ENDED(expired)
 import { CAPTURE_CODE_RE } from "@/server/api-v1/capture-schemas";
-import { CODE_GRACE_AFTER_FINISH_MINUTES } from "../config";
 
 /** Trims, lower-cases and tests the published code shape (Crockford base-32, 12 characters). null = not a code. */
 export function normaliseCode(raw: string): string | null {
@@ -32,9 +31,10 @@ const STATUS_ROWS: readonly { when: (i: StatusInput) => boolean; status: CodeSta
   { when: () => true, status: "finishing" },                                                                // an open session defers
 ];
 
-/** C2: expiry is evaluated, never scheduled. `graceMinutes` is a parameter so the use-case can pass
- *  `tunable("CODE_GRACE_AFTER_FINISH_MINUTES", …)` (§6.15). */
-export function codeStatus(v: CodeView, now: Date, hasOpenSession: boolean, graceMinutes: number = CODE_GRACE_AFTER_FINISH_MINUTES): CodeStatus {
+/** C2: expiry is evaluated, never scheduled. `graceMinutes` is REQUIRED (no default): the use-case passes
+ *  `tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES)` (§6.15), and tsc refuses a call site
+ *  that forgets. */
+export function codeStatus(v: CodeView, now: Date, hasOpenSession: boolean, graceMinutes: number): CodeStatus {
   const i = { v, now, hasOpenSession, graceMs: graceMinutes * 60_000 };
   return STATUS_ROWS.find((r) => r.when(i))!.status;   // the last row always matches
 }

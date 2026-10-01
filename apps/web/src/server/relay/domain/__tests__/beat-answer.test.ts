@@ -105,17 +105,52 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
   const BRANCH_KEYS = new Map(CaptureBeatAnswer.options.map((o) => [o.shape.state.value, Object.keys(o.shape).sort()]));
   const COMMON_KEYS = Object.keys(COMMON).sort();
 
-  it("every reachable input lands on a valid wire answer, and all six states are reached", () => {
-    const claims: (ClaimOutcome | null)[] = [null, accepted, { result: "takeover", row: "T4" }, { result: "none", row: "T8" }, taken, refusedResume];
+  // I-1 (B3 review). The sweep used to drop every throw into an unbounded `refused` bucket, so a guard that refused a
+  // VALID input (a 500 on the beat right after a takeover) stayed green. Now each input's fate is decided first, from
+  // the two declared refusals, and the code must agree input by input: refused iff a rule says so, by that rule's name.
+  //   - §5.5's claim outcomes say who is current AFTER the claim: accept / takeover / none leave the caller current,
+  //     taken / replaced do not. A caller that contradicts its own claim is refused (/contradicts callerCurrent/).
+  //   - §5.4: armed, live and live_dead are derived FROM an open session, so §6.3.3 rows 6–7 answer with its sid; with
+  //     no open session they are refused (/needs the open session/). Rows 1–3 answer before the slot is read
+  //     (G0-g: who holds the slot first), so they never reach this refusal.
+  // Typed from the spec, never imported from beat-answer.ts.
+  const CURRENT_AFTER_RULE: Record<ClaimOutcome["result"], boolean> = { accept: true, takeover: true, none: true, taken: false, replaced: false };
+  const OPEN_SLOTS: readonly SlotState[] = ["armed", "live", "live_dead"];
+  /** §5.5's declared (row, result) pairs, and no claim at all. */
+  const CLAIMS: readonly (ClaimOutcome | null)[] = [
+    null,
+    { result: "accept", row: "T1" }, { result: "takeover", row: "T2" }, { result: "taken", row: "T3" }, { result: "takeover", row: "T4" },
+    { result: "accept", row: "T5" }, { result: "replaced", row: "T6" }, { result: "replaced", row: "T7" }, { result: "none", row: "T8" },
+  ];
+  const OPENS = [null, ...CaptureStartedBy.options.map((startedBy) => ({ sid: S, startedBy }))];
+  const refusalOf = (i: BeatAnswerInput): RegExp | null => {
+    if (i.claim !== null && CURRENT_AFTER_RULE[i.claim.result] !== i.callerCurrent) return /contradicts callerCurrent/;
+    const answeredBeforeTheSlot = i.claim?.result === "taken" || !i.callerCurrent || i.namedEnded !== null;
+    if (!answeredBeforeTheSlot && OPEN_SLOTS.includes(i.slot) && i.open === null) return /needs the open session/;
+    return null;
+  };
+
+  it("every input is answered or refused exactly as the declared rules say — refused by NAME, and every answer is a valid wire answer; all six states are reached", () => {
     const reached = new Map<string, number>();
-    let parsed = 0, refused = 0;
-    for (const claim of claims) {
+    const tally = { parsed: 0, contradiction: 0, open: 0 };
+    const expected = { parsed: 0, contradiction: 0, open: 0 };
+    let takeoversAnswered = 0;
+    for (const claim of CLAIMS) {
       for (const callerCurrent of [true, false]) {
         for (const namedEnded of [null, ENDED_X]) {
           for (const slot of SLOTS) {
-            for (const open of [null, OPEN]) {
+            for (const open of OPENS) {
+              const input: BeatAnswerInput = { claim, callerCurrent, namedEnded, slot, open };
+              const label = JSON.stringify(input);
+              const rule = refusalOf(input);
+              expected[rule === null ? "parsed" : rule.source.startsWith("contradicts") ? "contradiction" : "open"]++;
+              if (rule !== null) {
+                expect(() => beatAnswer(input), label).toThrow(rule);
+                tally[rule.source.startsWith("contradicts") ? "contradiction" : "open"]++;
+                continue;
+              }
               let core: BeatAnswerCore;
-              try { core = beatAnswer({ claim, callerCurrent, namedEnded, slot, open }); } catch { refused++; continue; }
+              try { core = beatAnswer(input); } catch (e) { throw new Error(`refused an input no rule refuses: ${label} — ${String(e)}`); }
               const wire = wireBeatAnswer(core, COMMON);
               const r = CaptureBeatAnswer.safeParse(wire);
               expect(r.success, `${JSON.stringify(core)} → ${JSON.stringify(r.error?.issues)}`).toBe(true);
@@ -123,16 +158,39 @@ describe("the wire (R5): wireBeatAnswer(beatAnswer(…)) parses with the real Ca
               // and the common fields ride on EVERY 2xx, replaced and taken included (ask 1). `device` is PR-2's.
               expect(Object.keys(wire).sort(), wire.state).toEqual(BRANCH_KEYS.get(wire.state)!.filter((k) => k !== "device"));
               for (const k of COMMON_KEYS) expect(wire, `${wire.state} carries ${k}`).toHaveProperty(k);
+              // go-live carries the open session's own startedBy, for every CaptureStartedBy option.
+              if (wire.state === "go-live") expect(wire.startedBy, label).toBe(open!.startedBy);
+              if (claim?.result === "takeover") takeoversAnswered++;
               reached.set(wire.state, (reached.get(wire.state) ?? 0) + 1);
-              parsed++;
+              tally.parsed++;
             }
           }
         }
       }
     }
-    expect(parsed + refused).toBe(claims.length * 2 * 2 * SLOTS.length * 2);
-    expect(parsed).toBeGreaterThan(0);
+    const total = CLAIMS.length * 2 * 2 * SLOTS.length * OPENS.length;
+    expect(tally).toEqual(expected);
+    expect(tally.parsed + tally.contradiction + tally.open).toBe(total);
+    // Anti-vacuity: each fate is non-empty, and the takeover claims are among the answered.
+    expect(expected.parsed).toBeGreaterThan(0);
+    expect(expected.contradiction).toBeGreaterThan(0);
+    expect(expected.open).toBeGreaterThan(0);
+    expect(takeoversAnswered).toBeGreaterThan(0);
     expect([...reached.keys()].sort()).toEqual([...BRANCH_KEYS.keys()].sort());
+  });
+
+  it("the beat right after a takeover is answered (§5.5 T2, T4): armed → go-live S with its startedBy; live_dead → live S", () => {
+    let checked = 0;
+    for (const open of OPENS.filter((o) => o !== null)) {
+      const t2 = wireBeatAnswer(beatAnswer({ ...base, claim: { result: "takeover", row: "T2" }, callerCurrent: true, slot: "armed", open }), COMMON);
+      expect(t2).toEqual({ state: "go-live", sid: S, startedBy: open.startedBy, ...COMMON });
+      expect(CaptureBeatAnswer.safeParse(t2).success).toBe(true);
+      const t4 = wireBeatAnswer(beatAnswer({ ...base, claim: { result: "takeover", row: "T4" }, callerCurrent: true, slot: "live_dead", open }), COMMON);
+      expect(t4).toEqual({ state: "live", sid: S, ...COMMON });
+      expect(CaptureBeatAnswer.safeParse(t4).success).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(CaptureStartedBy.options.length);
   });
 
   it("live never carries startedBy; go-live always does; over always carries endReason", () => {

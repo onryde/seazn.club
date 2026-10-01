@@ -13,15 +13,15 @@ const CALLS: readonly CodeCall[] = ["get", "beat", "claim", "start"];
 
 describe("codeStatus (C2, C3, C5)", () => {
   it("the empty case first: never ended, never finished → active, with or without an open session", () => {
-    expect(codeStatus({ endedAt: null, finishedAt: null }, NOW, false)).toBe("active");
-    expect(codeStatus({ endedAt: null, finishedAt: null }, NOW, true)).toBe("active");
+    expect(codeStatus({ endedAt: null, finishedAt: null }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("active");
+    expect(codeStatus({ endedAt: null, finishedAt: null }, NOW, true, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("active");
   });
 
   it("ended outranks everything: a reissued or expired code reads ended whatever finished_at and the session say", () => {
     let checked = 0;
     for (const finishedAt of [null, ago(1000), ago(GRACE_MS * 2)]) {
       for (const open of [false, true]) {
-        expect(codeStatus({ endedAt: ago(5000), finishedAt }, NOW, open)).toBe("ended");
+        expect(codeStatus({ endedAt: ago(5000), finishedAt }, NOW, open, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("ended");
         checked++;
       }
     }
@@ -29,21 +29,28 @@ describe("codeStatus (C2, C3, C5)", () => {
   });
 
   it(`expiry at the grace (${CODE_GRACE_AFTER_FINISH_MINUTES} min, read from CODE_GRACE_AFTER_FINISH_MINUTES): grace − 1 s is finishing, the grace exactly is expiry_due`, () => {
-    expect(codeStatus({ endedAt: null, finishedAt: ago(0) }, NOW, false)).toBe("finishing");
-    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS - 1000) }, NOW, false)).toBe("finishing");
-    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS) }, NOW, false)).toBe("expiry_due");
-    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS + 1000) }, NOW, false)).toBe("expiry_due");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(0) }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("finishing");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS - 1000) }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("finishing");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS) }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("expiry_due");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS + 1000) }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("expiry_due");
   });
 
   it("an open session DEFERS expiry (W2: never ends a live session): at and past the grace it is still finishing", () => {
-    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS) }, NOW, true)).toBe("finishing");
-    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS * 10) }, NOW, true)).toBe("finishing");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS) }, NOW, true, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("finishing");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS * 10) }, NOW, true, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("finishing");
   });
 
   it("C5: a reverted result (finishedAt cleared to null) reads active — the stamp it had is gone, so nothing expires", () => {
     // The same code, before and after the revert: past the grace it was due; with the stamp cleared it is active.
-    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS * 3) }, NOW, false)).toBe("expiry_due");
-    expect(codeStatus({ endedAt: null, finishedAt: null }, NOW, false)).toBe("active");
+    expect(codeStatus({ endedAt: null, finishedAt: ago(GRACE_MS * 3) }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("expiry_due");
+    expect(codeStatus({ endedAt: null, finishedAt: null }, NOW, false, CODE_GRACE_AFTER_FINISH_MINUTES)).toBe("active");
+  });
+
+  it("m-1: the grace is REQUIRED, so a use-case cannot fall back to the constant and skip tunable(…) — tsc reds an unused @ts-expect-error", () => {
+    const omitted = () =>
+      // @ts-expect-error — graceMinutes has no default (§6.15, D1)
+      codeStatus({ endedAt: null, finishedAt: null }, NOW, false);
+    expect(omitted).toBeTypeOf("function");   // never called: the check is the type error above
   });
 
   it("the grace is a parameter, so tunable() can shorten it (§6.15): at a 1-minute grace, 60 s after finishing is due", () => {

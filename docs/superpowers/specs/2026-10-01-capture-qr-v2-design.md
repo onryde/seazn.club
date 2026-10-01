@@ -1856,6 +1856,11 @@ Amends §5.4's table with two rows.
   answer would stop it.
 - An open session in `ending` that never received ingest is `starting`. The phone waits, and does not go live into a
   stop.
+  - Its cadence (B3 review m-4). §6.3.3 row 5 answers every `starting` slot with `POLL_STARTING_SECONDS` (5 s), so
+    this row's phone is told 5 s although §6.6's table gives an `ending` session 10 s. The beat answer is the one
+    authority: the use-case sends `wireBeatAnswer`'s `pollSeconds` and stores that value as the answered cadence,
+    and §6.9 judges silence against what was stored. Either value gives the same 60 s silent threshold
+    (max(60, 5 + 30) = max(60, 10 + 30) = 60).
 
 **No spec text changes for these:**
 

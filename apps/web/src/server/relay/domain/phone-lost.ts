@@ -1,7 +1,8 @@
 // Capture QR v2 §6.8.3 (ask 10), §6.8.5 (W19) and §6.12 (W24, O5): when a session's phone is lost, and the panel's
-// countdown to that end. Pure: `now` passed in; the tunable timings are parameters (§6.15), never the environment.
-import { PHONE_SILENT_FLOOR_SECONDS } from "../config";
+// countdown to that end. Pure: `now` passed in; the tunable timings are REQUIRED parameters (§6.15), never the
+// environment and never a default, so tsc forces each use-case call site to pass `tunable(…)`.
 import { isSilent } from "./pairing";
+import { OPEN_SESSION_MAX_POLL_SECONDS } from "./poll-seconds";
 import type { SessionState } from "./session";
 
 const since = (at: Date, now: Date): number => now.getTime() - at.getTime();
@@ -10,17 +11,20 @@ const PRE_VIDEO: readonly SessionState[] = ["requested", "provisioning", "warmin
 const LIVE_FOR_W19: readonly SessionState[] = ["live", "warming"];
 
 /** Ask 10 (§6.8.3): a session that never received ingest, in requested/provisioning/warming, whose phone is silent
- *  (§6.9) or which no longer has a current pairing, is ended `phone_lost` (no credit is spent). A phone that has heard
- *  go-live beats at least every 10 s, so its silence is exactly the floor; one that has not is still on its waiting
- *  cadence, so its clock is max(floor, cadence + slack) and an organiser Go live is never ended before it could hear. */
+ *  (§6.9) or which no longer has a current pairing, is ended `phone_lost` (no credit is spent). The clock is always
+ *  §6.9's max(floor, cadence + slack): a phone that has not heard go-live is on its waiting cadence, so an organiser
+ *  Go live is never ended before it could hear; one that has heard it is answered at an open session's cadence (at
+ *  most OPEN_SESSION_MAX_POLL_SECONDS), so a stale waiting cadence never stretches its clock past ask 10's 60 s. Only
+ *  the floor is tunable (I-3): a shortened floor never ends a phone between two healthy beats. */
 export function warmingPhoneLost(i: {
   state: SessionState; firstIngestAt: Date | null; hasCurrentPairing: boolean;
   lastBeatAt: Date | null; answeredPollSeconds: number; heardGoLive: boolean;
-}, now: Date, floorSeconds: number = PHONE_SILENT_FLOOR_SECONDS): boolean {
+}, now: Date, floorSeconds: number): boolean {
   if (i.firstIngestAt !== null || !PRE_VIDEO.includes(i.state)) return false;
   if (!i.hasCurrentPairing) return true;
   if (i.lastBeatAt === null) throw new RangeError("warmingPhoneLost: a current pairing always has lastBeatAt (last_beat_at is NOT NULL)");
-  return i.heardGoLive ? since(i.lastBeatAt, now) >= floorSeconds * 1000 : isSilent(i.lastBeatAt, i.answeredPollSeconds, now, floorSeconds);
+  const cadence = i.heardGoLive ? Math.min(i.answeredPollSeconds, OPEN_SESSION_MAX_POLL_SECONDS) : i.answeredPollSeconds;
+  return isSilent(i.lastBeatAt, cadence, now, floorSeconds);
 }
 
 /** W19 (§6.8.5): all three — no beat for lostMinutes (from first ingest if none), a fresh read not connected, and no

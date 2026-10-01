@@ -1,7 +1,7 @@
 // Capture QR v2 §5.2, §5.5 (T1–T8), §6.5 (A14's clock) and §6.9 (present / silent / not responding). Pure: no I/O,
-// `now` passed in. Thresholds that tunable() may shorten (§6.15) are trailing parameters defaulting to the declared
-// constant, so the use-case passes `tunable(…)` and this file never reads the environment.
-import { DEAD_PHONE_TAKEOVER_SECONDS, NOT_RESPONDING_BEATS, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS } from "../config";
+// `now` passed in. Thresholds that tunable() may shorten (§6.15) are REQUIRED trailing parameters with no default, so
+// tsc forces every use-case call site to pass `tunable(…)` and this file never reads the environment.
+import { NOT_RESPONDING_BEATS, PHONE_SILENT_SLACK_SECONDS } from "../config";
 import type { SlotState } from "./slot";
 
 export type ClaimInput = { kind: "new" | "resume" | null; caller: string; current: { phone: string } | null; slot: SlotState };
@@ -36,13 +36,13 @@ function cadenceMs(answeredPoll: number): number {
 }
 
 /** §6.9: `now − last_beat_at ≥ max(floor, answered_poll_seconds + slack)`. */
-export function isSilent(lastBeatAt: Date, answeredPoll: number, now: Date, floorSeconds: number = PHONE_SILENT_FLOOR_SECONDS): boolean {
+export function isSilent(lastBeatAt: Date, answeredPoll: number, now: Date, floorSeconds: number): boolean {
   const threshold = Math.max(floorSeconds * 1000, cadenceMs(answeredPoll) + PHONE_SILENT_SLACK_SECONDS * 1000);
   return since(lastBeatAt, now) >= threshold;
 }
 
 /** §6.9: current, and not silent. What gates Go live (T10). */
-export function isPresent(i: { current: boolean; lastBeatAt: Date; answeredPoll: number }, now: Date, floorSeconds: number = PHONE_SILENT_FLOOR_SECONDS): boolean {
+export function isPresent(i: { current: boolean; lastBeatAt: Date; answeredPoll: number }, now: Date, floorSeconds: number): boolean {
   return i.current && !isSilent(i.lastBeatAt, i.answeredPoll, now, floorSeconds);
 }
 
@@ -60,7 +60,7 @@ export function isNotResponding(i: { held: boolean; lastBeatAt: Date; answeredPo
 export function deadForTakeover(
   i: { lastBeatAt: Date; freshReadConnected: boolean; lastConnectedAt: Date | null; liveSince: Date },
   now: Date,
-  windowSeconds: number = DEAD_PHONE_TAKEOVER_SECONDS,
+  windowSeconds: number,
 ): boolean {
   const windowMs = windowSeconds * 1000;
   return since(i.lastBeatAt, now) >= windowMs

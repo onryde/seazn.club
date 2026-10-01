@@ -17,6 +17,10 @@ const POLL_ROWS: readonly { when: (i: PollInput, now: Date) => boolean; seconds:
   { when: () => true, seconds: POLL_FAR_SECONDS },   // no scheduled_at, far from the start, or finished
 ];
 
+/** The slowest cadence an OPEN session is answered at (rows 1–2): a phone that holds a broadcast beats at least this
+ *  often (§6.8.3, "at least every 10 s"). phone-lost.test.ts pins it against this table over every active state. */
+export const OPEN_SESSION_MAX_POLL_SECONDS = Math.max(POLL_STARTING_SECONDS, POLL_NEAR_SECONDS);
+
 export function pollSecondsFor(i: PollInput, now: Date): number {
   if (i.open !== null && !isActive(i.open)) {
     throw new RangeError(`pollSecondsFor: a ${i.open} session is not open — pass null when there is no open session`);
