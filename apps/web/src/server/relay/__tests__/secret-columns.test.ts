@@ -426,6 +426,22 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(await sql.begin((tx) => lockStreamTarget(tx, a.orgId, t.id))).toBe(false);
   });
 
+  it("m-8 (final review): a RESTORE re-seals the envelope with the submitted key — an archived row whose envelope was damaged (same fingerprint) opens again after re-adding the same key", async () => {
+    const { orgId } = await rig();
+    const d = dest();
+    const t = await put(orgId, d);
+    expect(await sql.begin((tx) => archiveStreamTarget(tx, orgId, t.id))).toBe(true);
+    const [row] = await sql<{ rtmp_enc: Uint8Array; dest_fingerprint: string }[]>`select rtmp_enc, dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    const damaged = Buffer.from(row!.rtmp_enc);
+    damaged[damaged.length - 1] ^= 0xff;                        // the auth tag's last byte: the envelope no longer opens
+    await sql`update org_stream_targets set rtmp_enc = ${damaged} where id = ${t.id}`;
+    const back = await put(orgId, d, "Re-added");
+    expect(back, "PREMISE: the same fingerprint restores the same row").toMatchObject({ id: t.id, outcome: "restored", label: "Re-added" });
+    expect(await sql.begin((tx) => readTargetSecret(tx, orgId, t.id)), "the restore re-sealed what was typed").toEqual(d);
+    const [after] = await sql<{ dest_fingerprint: string }[]>`select dest_fingerprint from org_stream_targets where id = ${t.id}`;
+    expect(after!.dest_fingerprint, "the fingerprint is unchanged (same url and key)").toBe(row!.dest_fingerprint);
+  });
+
   it("M-1 (final review): readTargetSecret opens an ACTIVE row only — an archived (removed) destination's key reads as absent, exactly like another org's id; restoring it opens it again", async () => {
     const { orgId } = await rig();
     const d = dest();

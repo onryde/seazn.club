@@ -120,7 +120,9 @@ export type InsertOutcome = "existing" | "restored" | "inserted";
  *  D2 (spec 2026-09-30 §5.2), in this order, per org and fingerprint:
  *   1. an ACTIVE row is the destination — returned as `existing`, nothing written (A19: the first row's kind, label,
  *      watch link and envelope stand);
- *   2. else the most recently ARCHIVED row is un-archived with the SUBMITTED label and watch link (`restored`);
+ *   2. else the most recently ARCHIVED row is un-archived with the SUBMITTED label and watch link (`restored`), and
+ *      re-sealed with the submitted url + key — the same destination by fingerprint, so this costs nothing and repairs
+ *      an envelope that was damaged while archived (m-8, final review);
  *   3. else a new row (`inserted`).
  *  A concurrent create or restore of the same destination makes the losing write a no-op or a 23505 on the partial
  *  index; the loop then re-reads, and step 1 — a new statement, so a new READ COMMITTED snapshot — returns the
@@ -142,7 +144,8 @@ export async function insertStreamTarget(
     if (archived) {
       const restored = await tx
         .savepoint((sp) => sp<TargetRow[]>`
-          update org_stream_targets set archived_at = null, label = ${args.label}, watch_url = ${args.watchUrl}
+          update org_stream_targets set archived_at = null, label = ${args.label}, watch_url = ${args.watchUrl},
+                 rtmp_enc = ${seal(JSON.stringify(args.rtmp))}
            where id = ${archived.id} and archived_at is not null
           returning id, kind, label, watch_url, created_at`)
         .catch((err: unknown) => {
