@@ -38,6 +38,7 @@ import {
   setEntitlementOverrideSql,
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
+import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, installWakeLockStub, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
 import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "../../src/lib/stream-session-view";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import { STREAM_CREDIT_PACKS } from "../../src/lib/stream-credit-packs";
@@ -589,7 +590,8 @@ for (const width of WIDTHS) {
     const session = await latestSession(f.id);
     const payload = JSON.parse(await body.getByTestId("stream-qr-text").inputValue()) as { v?: number; sid?: string };
     expect(payload.sid, "the paste code IS the QR payload, for THIS session").toBe(session.id);
-    await expect(body.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/png;base64,/);
+    // T10 (D7): the Seazn QR — an SVG with the logo, drawn by `renderSeaznQr` — never the old raster PNG.
+    await expect(body.getByTestId("stream-qr")).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
     await expect(chain).toHaveAttribute("data-phone", "waiting");
     await expect(chain).toHaveAttribute("data-link1", "connecting");
     // Everything that reads the QR state goes first — it lasts only until the server's first read after the connect.
@@ -1689,7 +1691,10 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
       };
     });
     expect(fit.vw, "the zoomed viewport").toBe(256);
+    test.info().annotations.push({ type: "A11 qr", description: `${fit.qr.w} CSS px at 256 CSS px (320 @ 125 %)` });
     expect(fit.qr.w, "the symbol is drawn at a scannable size").toBeGreaterThan(100);
+    // §8a's QR size row records this width (amended 2026-09-30, measured on the fixture page): read, never typed.
+    expect(Math.abs(fit.qr.w - qrSizeRow().at125), "the sheet's 320 @ 125 % fixture-page figure").toBeLessThanOrEqual(1);
     expect(Math.abs(fit.qr.w - fit.qr.h), "square").toBeLessThan(1);
     expect(fit.qr.l, "the QR starts inside its box").toBeGreaterThanOrEqual(fit.box.l - 0.5);
     expect(fit.qr.r, "the QR ends inside its box").toBeLessThanOrEqual(fit.box.r + 0.5);
@@ -1741,6 +1746,210 @@ test("A11: at 320 px zoomed to 125% (a 256-px CSS viewport at 1.25 device px per
     } finally {
       await ctx.close(); // even when the teardown throws
     }
+  }
+});
+
+// ===========================================================================
+// A14 / A15 — the Seazn QR (T10): the stream QR's painted size, and tap to enlarge on the stream and check-in QRs
+// ===========================================================================
+// D7 (every QR carries the Seazn logo, at EC H) moved the stream QR from v16 to v22, so spec §7 put it at ≥ 320 CSS px
+// on desktop and full width on a phone; the binding sheet's `QR size` row was amended to match, and both numbers below
+// are READ from that row. D10: one tap opens the QR full screen — checked by the shared helper at each viewport, in an
+// ordered sequence (open → close, reopen, rotate while open, close each of the three ways, the QR leaving while open).
+
+/** The binding sheet itself (the same file `fixture-stream-panel.test.tsx` reads). */
+const THEMES_PATH = fileURLToPath(new URL("../../../../docs/superpowers/specs/2026-09-05-stream-overlay-prompts/_THEMES.md", import.meta.url));
+/** §8a's `QR size` row: its `min(Npx, available)` cap and the fixture-page measurements it records. */
+function qrSizeRow(): { cap: number; at320: number; at125: number } {
+  const row = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"));
+  if (!row) throw new Error("§8a lost its QR size row");
+  const num = (re: RegExp, what: string): number => {
+    const m = re.exec(row);
+    if (!m) throw new Error(`§8a's QR size row no longer states ${what}`);
+    return Number(m[1]);
+  };
+  return {
+    cap: num(/min\((\d+)px, available\)/, "min(Npx, available)"),
+    at320: num(/\*\*(\d+) CSS px at 320 \(fixture page\)\*\*/, "the 320 fixture-page figure"),
+    at125: num(/\*\*(\d+) CSS px at 320 @ 125 % zoom \(fixture page\)\*\*/, "the 125 % fixture-page figure"),
+  };
+}
+
+/**
+ * Hold WAITING for as long as a case needs it, deterministically: the server flips warming → live only on a read of
+ * `current` after the fake's connect delay, so once the tab has seen the waiting projection (with its QR), every
+ * further read is answered with THAT projection and never reaches the server. `release` hands the reads back; the
+ * next one is the server's tick. Without this the QR state lasts FAKE_CONNECT_MS, too short for four viewports.
+ */
+async function holdWaiting(page: Page, fixtureId: string): Promise<{ release: () => Promise<void>; captured: () => boolean; served: () => number }> {
+  const url = new RegExp(`/api/v1/fixtures/${fixtureId}/stream-sessions/current(\\?.*)?$`);
+  let held: string | null = null;
+  let served = 0;
+  const handler = async (route: import("@playwright/test").Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    if (held !== null) {
+      served++;
+      return route.fulfill({ status: 200, contentType: "application/json", body: held });
+    }
+    const res = await route.fetch();
+    const text = await res.text();
+    const v = (JSON.parse(text) as { data?: { state?: string; qr?: unknown } | null }).data;
+    if (res.ok() && (v?.state === "provisioning" || v?.state === "warming") && v.qr) held = text;
+    return route.fulfill({ response: res, body: text });
+  };
+  await page.route(url, handler);
+  return { release: () => page.unroute(url, handler), captured: () => held !== null, served: () => served };
+}
+
+test("A14: the stream QR paints at the sheet's 320 CSS px on desktop and its fixture-page width on a phone; ONE tap enlarges it — at 320×568, rotated to 568×320 while open, at 768×1024 and 1280×800 — closed by Esc, ✕ and a tap, the wake lock held while open and released every time, and it closes itself when the phone connects", async ({
+  page,
+}) => {
+  const NAVS = 1; // openPhoneTab
+  const PASSES = 5; // the enlarge passes: 320×568 (+ rotation), 768×1024, 1280×800, the helper, and the one the connect closes
+  test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + 60_000 + NAVS * NAV_MS + PASSES * NAV_MS);
+  await installWakeLockStub(page, "counting"); // before the first navigation (review R5)
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const rig = await seedRelayRig(page);
+  await addTargetApi(page, rig.orgId, { label: "A14 destination" });
+  const f = rig.fixtures[0]!;
+  const row = await openPhoneTab(page, rig, f);
+  const body = row.locator("[data-phone-body]");
+  await expect(body.getByTestId("stream-go-live")).toBeEnabled();
+  expect(await wakeLockCounts(page), "nothing holds the screen before a QR is enlarged").toEqual({ requests: 0, releases: 0 });
+
+  const hold = await holdWaiting(page, f.id);
+  await streamSlot(); // this test's share of the deployment's stream capacity
+  await body.getByTestId("stream-go-live").click();
+  const qr = body.getByTestId("stream-qr");
+  await expect(qr, "the QR is drawn in the browser").toBeVisible({ timeout: POLL_WAIT_MS });
+  await expect.poll(() => hold.captured(), { message: "the hold has the waiting projection", timeout: POLL_WAIT_MS }).toBe(true);
+  await expect(qr).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
+  // D10a: the paste code is the same payload as text, and carries the same replay block.
+  await expect(body.getByTestId("stream-qr-text")).toHaveClass(/\bph-no-capture\b/);
+
+  // §8a (amended, spec §7): the painted width — the cap on desktop, the sheet's fixture-page figure on a phone.
+  const painted: Record<number, number> = {};
+  for (const [w, h] of [[1280, 800], [768, 1024], [320, 568]] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    await qr.scrollIntoViewIfNeeded();
+    painted[w] = (await qr.boundingBox())!.width;
+    await expectNoHorizontalScroll(page);
+    await shotQr(page, row.getByTestId("stream-qr-box"), `b6-stream-qr-${w}-normal.png`);
+  }
+  test.info().annotations.push({ type: "A14 painted", description: JSON.stringify(painted) });
+  const sheet = qrSizeRow();
+  expect(sheet.cap, "spec §7: ≥ 320 CSS px on desktop").toBeGreaterThanOrEqual(320);
+  expect(painted[1280], "1280: the symbol is the sheet's cap, ≥ 320 CSS px").toBeGreaterThanOrEqual(sheet.cap - 0.5);
+  expect(painted[1280]).toBeLessThanOrEqual(sheet.cap + 0.5);
+  expect(painted[768], "768: the cap, where the column has room for it").toBeGreaterThanOrEqual(sheet.cap - 0.5);
+  expect(Math.abs(painted[320]! - sheet.at320), `320: the sheet's fixture-page figure (${sheet.at320})`).toBeLessThanOrEqual(1);
+  expect(await expectTapTargets(body), "the enlarge trigger joins the QR state's controls at 320").toBeGreaterThan(1);
+
+  // D10, in order. 320×568: one tap opens it; Esc closes it; the lock is held while open and released on close.
+  const trigger = body.getByTestId("stream-qr-enlarge");
+  let opens = 0;
+  const open = async () => {
+    await trigger.click(); // one tap
+    opens++;
+    await expect.poll(() => wakeLockCounts(page), { message: "open holds the screen" }).toEqual({ requests: opens, releases: opens - 1 });
+  };
+  const closed = async () => {
+    await expect.poll(() => wakeLockCounts(page), { message: "close releases it" }).toEqual({ requests: opens, releases: opens });
+  };
+  await open();
+  await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
+  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-stream-qr-320-enlarged.png");
+  // ROTATE while open: the size re-derives from the new viewport, and the caption moves beside the QR.
+  await page.setViewportSize({ width: 568, height: 320 });
+  await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
+  await shotQr(page, page.getByTestId("qr-enlarged"), "b6-stream-qr-568x320-enlarged.png", 0);
+  await closeQrEnlarged(page, "stream-qr", "escape");
+  await closed();
+  // REOPEN at 768×1024, closed by the ✕.
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await open();
+  await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
+  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-stream-qr-768-enlarged.png");
+  await closeQrEnlarged(page, "stream-qr", "x");
+  await closed();
+  // 1280×800, closed by a tap on the QR itself ("any tap").
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await open();
+  await expectQrEnlargedOpen(page, "stream-qr", { sensitive: true });
+  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-stream-qr-1280-enlarged.png");
+  await closeQrEnlarged(page, "stream-qr", "tap");
+  await closed();
+  // The same helper end to end once more (open, check, Esc), as the other call sites run it.
+  await expectQrEnlarges(page, "stream-qr", { sensitive: true });
+  opens++;
+  await closed();
+  expect((await latestSession(f.id)).state, "every check above ran inside the WAITING state").toMatch(/^(provisioning|warming)$/);
+
+  // The QR LEAVES while enlarged: open it, hand the reads back, and the phone's connect (the server's tick on the next
+  // read) takes the QR — and its overlay, and the wake lock — away. Nothing is left over the live tab.
+  await open();
+  test.info().annotations.push({ type: "A14 hold", description: `${hold.served()} poll(s) answered from the held waiting projection` });
+  await hold.release();
+  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.live"), { timeout: LIVE_WAIT_MS });
+  await expect(page.getByTestId("qr-enlarged"), "the overlay went with the QR").toHaveCount(0);
+  await expect(qr, "live: the QR is gone").toHaveCount(0);
+  await closed();
+  expect(opens, "every pass opened the overlay: 320 (+ rotation), 768, 1280, the helper, and the one the connect closed").toBe(5);
+
+  await body.getByTestId("stream-stop").click();
+  await confirmStop(page);
+  await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
+});
+
+test("A15: the CHECK-IN QR on a scheduled fixture — minted by a tap, ph-no-capture on the QR, its enlarged view and its link text; ONE tap enlarges it at 320×568 (Esc), again (✕), again (a tap), at 768 and 1280 — with NO Wake Lock API — and the check-in dialog behind it stays open", async ({
+  page,
+}) => {
+  const NAVS = 1; // openFixture
+  test.setTimeout(SEED_MS + NAVS * NAV_MS + 3 * NAV_MS);
+  await installWakeLockStub(page, "absent"); // the no-API path: it must open and close all the same
+  await page.setViewportSize({ width: 320, height: 568 });
+  const rig = await seedRelayRig(page);
+  const f = rig.fixtures[0]!;
+  const status = await withDb((sql) => sql<{ status: string }[]>`select status from fixtures where id = ${f.id}`);
+  // page.tsx renders CheckinQr only for a fixture that has not started — a missing trigger must red HERE, not as D10.
+  expect(status[0]?.status, "PREMISE: the fixture is scheduled (never started)").toBe("scheduled");
+  await openFixture(page, rig, f);
+  expect(await page.evaluate(() => (navigator as Navigator & { wakeLock?: unknown }).wakeLock), "PREMISE: no Wake Lock API").toBeUndefined();
+  const mint = page.getByTestId("checkin-open");
+  await expect(mint, "PREMISE: the organiser is offered the check-in QR").toBeVisible();
+  await mint.click();
+  const dialog = page.getByRole("dialog", { name: en("checkinQr.dialogAria") });
+  await expect(dialog).toBeVisible({ timeout: POLL_WAIT_MS });
+  await expect(page.getByTestId("checkin-qr")).toBeVisible();
+  await expect(page.getByTestId("checkin-qr")).toHaveAttribute("src", /^data:image\/svg\+xml;charset=utf-8,/);
+  // D10a: the link text is the same bearer token as the QR.
+  await expect(page.getByTestId("checkin-link")).toHaveClass(/\bph-no-capture\b/);
+  // The check-in QR is a fixed 176 px inside a fixed max-w-sm dialog, so a crop of the QR alone is pixel-identical at
+  // 320 and 768: the crop is the dialog with the page behind it, which is what differs by width (AGENTS.md class 10).
+  await shotQr(page, dialog.locator("> div"), "b6-checkin-qr-320-normal.png", 24);
+
+  // 320×568: open → Esc; reopen → ✕; reopen → a tap. Each time the dialog behind it is still open (the overlay stops
+  // the tap that closed it from also reaching the dialog's backdrop).
+  await expectQrEnlarges(page, "checkin-qr", { sensitive: true, close: "escape" });
+  await expect(dialog, "Esc closed the QR, not the check-in dialog").toBeVisible();
+  await page.getByTestId("checkin-qr-enlarge").click();
+  await expectQrEnlargedOpen(page, "checkin-qr", { sensitive: true });
+  await shotQr(page, page.getByTestId("qr-enlarged-img"), "b6-checkin-qr-320-enlarged.png");
+  await closeQrEnlarged(page, "checkin-qr", "x");
+  await expect(dialog).toBeVisible();
+  await expectQrEnlarges(page, "checkin-qr", { sensitive: true, close: "tap" });
+  await expect(dialog, "a tap on the enlarged QR closed only the QR").toBeVisible();
+  await expect(page.getByTestId("checkin-link")).toBeVisible();
+
+  for (const [w, h] of [[768, 1024], [1280, 800]] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    await expectNoHorizontalScroll(page);
+    await shotQr(page, dialog.locator("> div"), `b6-checkin-qr-${w}-normal.png`, 24);
+    await page.getByTestId("checkin-qr-enlarge").click();
+    await expectQrEnlargedOpen(page, "checkin-qr", { sensitive: true });
+    await shotQr(page, page.getByTestId("qr-enlarged-img"), `b6-checkin-qr-${w}-enlarged.png`);
+    await closeQrEnlarged(page, "checkin-qr", "escape");
+    await expect(dialog).toBeVisible();
   }
 });
 

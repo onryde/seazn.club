@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { activeOrg, apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "../helpers";
 import { waitForHydration } from "../directory-kit";
+import { closeQrEnlarged, expectQrEnlargedOpen, expectQrEnlarges, installWakeLockStub, shotQr, wakeLockCounts } from "../helpers/qr-enlarge";
 
 const dict = (locale: "en" | "fr") =>
   JSON.parse(
@@ -134,8 +135,10 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   context,
 }, testInfo) => {
   // Navs: seed, 5 panel opens, 2 device-page loads. Acts: ~30 clicks and
-  // polls. Captures: 13 panel states (7 en, 6 fr).
-  test.setTimeout(budgetFor(8, 30, 13));
+  // polls, plus the QR's tap-to-enlarge passes (T10: 3 widths × open/check/close
+  // and the 320 reopen-by-✕ = ~12). Captures: 13 panel states (7 en, 6 fr).
+  test.setTimeout(budgetFor(8, 42, 13));
+  await installWakeLockStub(page, "counting"); // before the first navigation (review R5)
   const fx = await seedRosteredFixture(page.request, {
     label: `Sheets Panel ${TAG}`,
     sportKey: "football",
@@ -166,6 +169,31 @@ test("the hand-over panel in every state, en + fr: Show QR re-shows, Revoke and 
   await expect(panel).toContainText(EN["dlink.sameQr"]!);
   const first = await tokenIn(panel);
   await capture(page, panel, testInfo, "en-2-qr");
+
+  // 2b. T10 (D10, D10a): the Remote scoring QR opens full screen on ONE tap, where the organiser sees it — at each
+  // width, with the replay block on the QR, its enlarged view and the URL text that paints the same secret; the wake
+  // lock held while open and released on every close; the panel still there behind it.
+  await expect(panel.getByTestId("device-link-url")).toHaveClass(/\bph-no-capture\b/);
+  let wakeOpens = 0;
+  for (const [w, h] of [[320, 568], [768, 1024], [1280, 800]] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    await shotQr(page, panel.getByTestId("dlink-qr"), `b6-dlink-qr-${w}-normal.png`);
+    await panel.getByTestId("dlink-qr-enlarge").click();
+    wakeOpens++;
+    await expectQrEnlargedOpen(page, "dlink-qr", { sensitive: true });
+    await expect.poll(() => wakeLockCounts(page), { message: "open holds the screen" }).toEqual({ requests: wakeOpens, releases: wakeOpens - 1 });
+    await shotQr(page, page.getByTestId("qr-enlarged-img"), `b6-dlink-qr-${w}-enlarged.png`);
+    await closeQrEnlarged(page, "dlink-qr", w === 320 ? "x" : w === 768 ? "tap" : "escape");
+    await expect.poll(() => wakeLockCounts(page), { message: "close releases it" }).toEqual({ requests: wakeOpens, releases: wakeOpens });
+    await expect(panel, `${w}: the hand-over panel is still open behind the QR`).toBeVisible();
+  }
+  // The shared helper end to end, as every call site runs it — and a reopen at 320 after it.
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expectQrEnlarges(page, "dlink-qr", { sensitive: true });
+  await expectQrEnlarges(page, "dlink-qr", { sensitive: true, close: "tap" });
+  expect(await wakeLockCounts(page), "every open took the lock and every close gave it back").toEqual({ requests: wakeOpens + 2, releases: wakeOpens + 2 });
+  expect(await tokenIn(panel), "enlarging never re-mints: the same secret").toBe(first);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   // 3. Reload → the live line: until-over copy, three controls, no 1970.
   panel = await openPanel(page, path);
