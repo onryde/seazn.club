@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
 
 export function CheckinQr({ fixtureId }: { fixtureId: string }) {
   const msg = useMsg();
@@ -23,8 +24,9 @@ export function CheckinQr({ fixtureId }: { fixtureId: string }) {
         method: "POST",
       });
       setLink(out.url);
-      const QRCode = (await import("qrcode")).default;
-      setQr(await QRCode.toDataURL(out.url, { width: 240, margin: 1 }));
+      // The Seazn QR (D7), loaded on the tap like the encoder before it.
+      const { renderSeaznQr } = await import("@/lib/seazn-qr");
+      setQr(await renderSeaznQr(out.url, { size: 240 }));
     } catch (err) {
       setError(err instanceof Error ? err.message : msg("checkinQr.failed"));
     } finally {
@@ -63,19 +65,21 @@ export function CheckinQr({ fixtureId }: { fixtureId: string }) {
             </button>
           </div>
           {qr && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            // `sensitive` (D10a): the link is a signed bearer token — anyone holding it can check in — so neither the
+            // QR nor its enlarged view may land in a session replay.
+            <SeaznQrImage
+              testId="checkin-qr"
+              sensitive
               src={qr}
               alt={msg("checkinQr.alt")}
               className="mx-auto rounded-lg border border-slate-200 p-1"
               width={176}
               height={176}
-              data-testid="checkin-qr"
             />
           )}
           <div className="flex items-center gap-2">
             <code
-              className="min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1.5 text-xs text-slate-700"
+              className="ph-no-capture min-w-0 flex-1 truncate rounded bg-slate-100 px-2 py-1.5 text-xs text-slate-700"
               data-testid="checkin-link"
             >
               {link}
@@ -104,6 +108,7 @@ export function CheckinQr({ fixtureId }: { fixtureId: string }) {
     <span className="inline-flex items-center gap-2">
       <button
         type="button"
+        data-testid="checkin-open"
         disabled={busy}
         onClick={mint}
         className="btn btn-ghost px-3 py-1.5 text-xs"

@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
+import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { messages } from "@/lib/messages";
 import { t as tRuntime } from "@/lib/i18n-runtime";
@@ -63,15 +64,25 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   };
 });
 
+// The Seazn QR helper (T10, D7) is doubled so its INPUT — the pad URL and the size — is what the test reads; the symbol
+// itself (EC H, the logo, a decode) is `src/lib/__tests__/seazn-qr.test.ts`'s.
+const seaznQr = vi.hoisted(() => ({
+  renderSeaznQr: vi.fn<(text: string, opts: { size: number }) => Promise<string>>(async () => "data:image/svg+xml;charset=utf-8,DLINK"),
+}));
+vi.mock("@/lib/seazn-qr", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seazn-qr")>()),
+  renderSeaznQr: seaznQr.renderSeaznQr,
+}));
+
 const SEALED: Link = { id: "l1", label: null, expires_at: null, created_at: "2026-09-23T09:00:00.000Z" };
 const ORIGIN = "https://sheets.example";
 const PROPS = { fixtureId: "f1", sportKey: "badminton", viewerPlan: "pro" as const };
 const t = (key: Parameters<typeof tRuntime>[1], vars?: Record<string, string | number>) =>
   tRuntime(messages, key, vars);
 
-/** Settle the mount GET, the POST, the real QR encoder and the refresh GET.
- *  Macrotask turns, not microtasks: `qrcode`'s node build encodes the PNG
- *  through a stream, which completes on later event-loop turns. */
+/** Settle the mount GET, the POST, the QR encoder and the refresh GET.
+ *  Macrotask turns, not microtasks: each await in the chain lands on its own
+ *  turn, and a microtask-only flush would read the tree mid-chain. */
 async function flush() {
   for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -83,8 +94,12 @@ const click = (el: ReactElement | undefined) => {
   (propsOf(el).onClick as () => void)();
 };
 const buttons = (tree: ReactElement[]) => tree.filter((el) => el.type === "button");
+/** The Remote scoring QR as the panel hands it to the shared component — an element the harness does not expand, so it
+ *  is found by TYPE and its `testId` PROP (D10). */
+const dlinkQr = (tree: ReactElement[]) => tree.find((el) => el.type === SeaznQrImage && propsOf(el).testId === "dlink-qr");
 
 beforeEach(() => {
+  seaznQr.renderSeaznQr.mockClear();
   api.posts = [];
   api.deletes = [];
   api.active = SEALED;
@@ -270,8 +285,16 @@ describe("device-link panel — what it says about a sealed link (null expiry)",
     const url = byTestId(island.tree(), "device-link-url");
     expect(url, "the pad URL paragraph carries its hook").toBeDefined();
     expect(textOf(url!)).toContain(`${ORIGIN}/score/dl_sealed_secret`);
-    const img = island.tree().find((el) => el.type === "img");
-    expect(String(propsOf(img!).src)).toMatch(/^data:image\/png;base64,/);
+    // T10: the QR is the Seazn QR (D7) of exactly the pad URL the text shows, painted through the shared component.
+    expect(seaznQr.renderSeaznQr).toHaveBeenCalledWith(`${ORIGIN}/score/dl_sealed_secret`, { size: 280 });
+    const qr = dlinkQr(island.tree());
+    expect(qr, "the QR renders through SeaznQrImage").toBeDefined();
+    expect(propsOf(qr!).src).toBe("data:image/svg+xml;charset=utf-8,DLINK");
+    expect(propsOf(qr!).alt).toBe(t("dlink.alt"));
+    // The raster is never smaller than the box that paints it (`w-N` is N × 4 CSS px).
+    const painted = 4 * Number(/\bw-(\d+)\b/.exec(String(propsOf(qr!).className))![1]);
+    expect(280, "the symbol is drawn at least as large as it is painted").toBeGreaterThanOrEqual(painted);
+    expect(island.tree().find((el) => el.type === "img"), "no bare img bypasses the component").toBeUndefined();
     expect(island.text()).toContain(t("dlink.sameQr"));
     expect(island.text()).not.toMatch(/19(69|70)/);
   });
@@ -301,9 +324,12 @@ describe("device-link panel — the live link never reaches a session replay (fi
     const url = byTestId(island.tree(), "device-link-url");
     expect(textOf(url!), "the element holds the live secret").toContain("dl_sealed_secret");
     expect(classTokens(url), "pad URL text").toContain("ph-no-capture");
-    const img = island.tree().find((el) => el.type === "img");
-    expect(String(propsOf(img!).src), "the QR image is rendered").toMatch(/^data:image\/png;base64,/);
-    expect(classTokens(img), "QR image").toContain("ph-no-capture");
+    // The QR: the shared component owns the class (on the inline image AND the enlarged overlay — seazn-qr-image.test),
+    // so what THIS panel owes is to mark it sensitive. A bare <img> here would bypass both.
+    const qr = dlinkQr(island.tree());
+    expect(qr, "the QR image is rendered").toBeDefined();
+    expect(propsOf(qr!).sensitive, "QR image is sensitive").toBe(true);
+    expect(island.tree().find((el) => el.type === "img"), "no bare img bypasses the component").toBeUndefined();
     // The positive pair: the controls around them stay recordable, so a
     // replay still shows what the organiser tapped.
     for (const button of buttons(island.tree())) {

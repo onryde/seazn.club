@@ -32,7 +32,6 @@ import {
   Component, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode,
 } from "react";
 import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RotateCcw } from "lucide-react";
-import QRCode from "qrcode";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
@@ -44,6 +43,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import { DestinationWarning, SignalChain } from "./stream-signal-chain";
+import { SeaznQrImage } from "./seazn-qr-image";
 import { useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
 import type { MessageKey } from "@/lib/messages";
@@ -52,6 +52,7 @@ import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { decidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { formatMinor, type Currency } from "@/lib/currency";
 import { chainFor } from "@/lib/stream-chain";
+import { renderSeaznQr } from "@/lib/seazn-qr";
 import {
   STREAM_CREDIT_PACKS, streamPackAmountMinor, streamPackPerMatchMinor, type StreamPackSize,
 } from "@/lib/stream-credit-packs";
@@ -674,13 +675,10 @@ export function FixtureStreamPanel({
 // every state is a function of its props). Destinations are managed in Directory → Streaming (T8, D1): the tab only
 // PICKS one, and links there.
 
-/** §7.6 via §8a's `QR encoding` row: EC-M and a 4-module quiet zone. `width` is the RASTER size — twice §8a's 264 CSS
- *  px box, so the symbol stays crisp on a 2× screen; the box, not this number, decides the painted size. */
-export const QR_RENDER_OPTIONS = { errorCorrectionLevel: "M", margin: 4, width: 528 } as const;
-
-/** §8a's QR box: 264 CSS px of symbol + its `p-3` twice + its 1-px border twice. The paste-code field takes the SAME
- *  class, which is what "the QR box's own width, not the card's" means — two elements that cannot drift apart. */
-const QR_COLUMN_W = "w-full max-w-[290px]";
+/** §8a's QR box (amended 2026-09-30, spec §7): 320 CSS px of symbol + its `p-3` twice + its 1-px border twice. The
+ *  paste-code field takes the SAME class, which is what "the QR box's own width, not the card's" means — two elements
+ *  that cannot drift apart. The symbol's EC level, quiet zone and logo are `lib/seazn-qr`'s (§8a's `QR encoding` row). */
+const QR_COLUMN_W = "w-full max-w-[346px]";
 
 /** The org's destinations as the picker knows them (spec §3.3): a failed read is an ERROR with Retry, never "none" —
  *  "none" told an organiser with five saved destinations to go and add one. */
@@ -899,7 +897,8 @@ export function PhoneTab({
       void read(true).catch(() => {});
     }
     let cancelled = false;
-    void QRCode.toDataURL(qrPayload, QR_RENDER_OPTIONS)
+    // Twice §8a's 320 CSS px, so the symbol stays crisp on a 2× screen (the SVG scales; the box decides the painted size).
+    void renderSeaznQr(qrPayload, { size: 640 })
       .then((url) => {
         if (!cancelled) setQrImage({ text: qrPayload, url });
       })
@@ -1519,30 +1518,32 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         <div data-testid="stream-qr-column" className="mt-3 flex flex-col items-center gap-2 text-center">
           <div data-testid="stream-qr-box" className={`${QR_COLUMN_W} rounded-lg border border-purple-100 bg-white p-3`}>
             {p.qrDataUrl ? (
-              // A data: URL encoded in the browser — nothing for next/image to optimise, and never in page HTML.
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                data-testid="stream-qr"
+              // A data: URL encoded in the browser, never in page HTML — through the shared Seazn QR (D7, D10): tap to
+              // enlarge, and `sensitive` because it paints the capture credentials (D10a).
+              <SeaznQrImage
+                testId="stream-qr"
+                sensitive
                 src={p.qrDataUrl}
                 alt={msg("stream.phone.qr.alt")}
-                className="mx-auto block aspect-square h-auto w-[min(264px,100%)]"
+                className="mx-auto block aspect-square h-auto w-[min(320px,100%)]"
               />
             ) : (
               <div
                 aria-hidden
-                className="mx-auto aspect-square w-[min(264px,100%)] animate-pulse rounded bg-slate-100 motion-reduce:animate-none"
+                className="mx-auto aspect-square w-[min(320px,100%)] animate-pulse rounded bg-slate-100 motion-reduce:animate-none"
               />
             )}
           </div>
           {p.view?.qr && (
             <div data-testid="stream-qr-field" className={`relative ${QR_COLUMN_W}`}>
+              {/* D10a: the paste code IS the capture payload, so it carries the replay block the QR does. */}
               <input
                 data-testid="stream-qr-text"
                 readOnly
                 aria-label={msg("stream.phone.qr.field")}
                 value={qrText(p.view.qr)}
                 onFocus={(e) => e.currentTarget.select()}
-                className="h-11 w-full rounded-lg border border-purple-100 bg-slate-950 px-3 font-mono text-[11px] text-slate-100 outline-none focus:ring-2 focus:ring-purple-200 md:h-10 md:pr-10"
+                className="ph-no-capture h-11 w-full rounded-lg border border-purple-100 bg-slate-950 px-3 font-mono text-[11px] text-slate-100 outline-none focus:ring-2 focus:ring-purple-200 md:h-10 md:pr-10"
               />
               {/* §8's copy-button rule: 28 px inside the field at ≥ 768 (its name is the sr-only label), full width
                   and 44 px beneath it below. */}

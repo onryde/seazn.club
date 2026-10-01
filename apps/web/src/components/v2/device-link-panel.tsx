@@ -11,11 +11,12 @@
 // asks first too, with the same on-screen question (owner ruling, T3 fix
 // round 2). One question at a time.
 import { useCallback, useEffect, useState } from "react";
-import QRCode from "qrcode";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
+import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
+import { renderSeaznQr } from "@/lib/seazn-qr";
 import { officialLabelKey } from "@/lib/official-label";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
@@ -92,7 +93,7 @@ export function DeviceLinkPanel({
 
   async function showLink(link: ActiveLink & { secret: string }) {
     const url = `${window.location.origin}/score/${link.secret}`;
-    const qr = await QRCode.toDataURL(url, { width: 280, margin: 1 });
+    const qr = await renderSeaznQr(url, { size: 280 });
     setMinted({ secret: link.secret, qr, expires_at: link.expires_at });
   }
 
@@ -238,9 +239,10 @@ export function DeviceLinkPanel({
           {/* `ph-no-capture` on the QR and the URL text: both paint the live
               secret, and PostHog replay compresses its DOM frames before the
               `before_send` scrub can see them — its recorder blocks this class
-              outright (no children, no src). */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={minted.qr} alt={msg("dlink.alt")} className="ph-no-capture mx-auto h-56 w-56" />
+              outright (no children, no src). The QR's class is the shared
+              component's, applied because it is `sensitive` — on the inline
+              image and on the tap-to-enlarge overlay (D10). */}
+          <SeaznQrImage testId="dlink-qr" sensitive src={minted.qr} alt={msg("dlink.alt")} className="mx-auto h-56 w-56" />
           <p
             data-testid="device-link-url"
             className="ph-no-capture break-all rounded bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500"
