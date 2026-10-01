@@ -114,7 +114,7 @@ export function findings(rows: readonly TriageRow[], load: (run: string) => RunL
     if (m === null) throw new FindingsRefused(`row ${r.n}: judged-on not parsed: ${r.judged}`);
     const [, run, sha] = m as unknown as [string, string, string];
     const wave = r.wave.split(" ")[0] ?? "";
-    if (!PRODUCT_WAVE.test(wave)) throw new FindingsRefused(`row ${r.n}: wave '${wave}' is not a product wave (W2..W10)`);
+    if (!PRODUCT_WAVE.test(wave)) throw new FindingsRefused(`row ${r.n}: wave '${wave}' is not a product wave (one a product red routes to, PRODUCT_WAVE)`);
     let res = runs.get(run);
     if (res === undefined) { res = load(run); runs.set(run, res); }
     if (res.harnessCommit !== sha) throw new FindingsRefused(`row ${r.n}: ${run} ran at ${res.harnessCommit}, TRIAGE says ${sha}`);
