@@ -2011,6 +2011,51 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
   });
 });
 
+// B3 N-3 (re-review): DB-FREE — hoisted out of the DB-gated describe it sat in, so the I-1 kill tests run in EVERY
+// run, the sharded unit job's included, not only where DATABASE_URL is set.
+// Spec 2026-09-30 §2 (T6): `openStreamStates` feeds the run sheet's chip (the division's path to Stop) and the fixture
+// page's Stop-only mount. ONE guard decides "active" — the SQL `state in ACTIVE_STATES` filter. The fold after it
+// (`holdStatesOf`) REPORTS a row that got past it and skips it — B3 fix round 1, I-1 (controller ruling): the guard
+// must never block the organiser's page or its Stop, so it reports to Sentry instead of throwing.
+describe("holdStatesOf — the fold after the SQL filter (I-1: report and skip, never throw)", () => {
+  const row = (id: string, fixtureId: string, state: string) => ({ id, fixture_id: fixtureId, state: state as SessionState });
+  const reports = () =>
+    sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.open_stream_states");
+
+  it("every ACTIVE row maps to the hold state the domain declares; none is reported", () => {
+    sentry.captureError.mockClear();
+    let checked = 0;
+    for (const state of ACTIVE_STATES) {
+      expect(holdStatesOf([row(`s-${state}`, "fx", state)]), state).toEqual({ fx: holdStateOf(state) });
+      checked++;
+    }
+    expect(checked).toBe(ACTIVE_STATES.length);
+    expect(checked, "anti-vacuity: the declared ACTIVE set is not empty").toBeGreaterThan(0);
+    expect(reports(), "an active row is never an alarm").toEqual([]);
+    expect(holdStatesOf([]), "the empty case").toEqual({});
+  });
+
+  it("a TERMINAL or UNKNOWN row is skipped AND reported — session id and state only — and the page still gets every other row", () => {
+    const strays = [...TERMINAL_STATES, "archived_by_a_future_migration"];
+    let checked = 0;
+    for (const state of strays) {
+      sentry.captureError.mockClear();
+      const out = holdStatesOf([row("s-ok", "fx-ok", "live"), row(`s-${state}`, "fx-stray", state)]);
+      expect(out, `${state}: skipped, and the good row still maps`).toEqual({ "fx-ok": "live" });
+      expect(Object.prototype.hasOwnProperty.call(out, "fx-stray"), `${state}: no key at all (not a null value)`).toBe(false);
+      const sent = reports();
+      expect(sent, `${state}: reported once`).toHaveLength(1);
+      const [err, ctx] = sent[0]! as [Error, { orgId?: string; route: string; extra: Record<string, unknown> }];
+      expect(err).toBeInstanceOf(Error);
+      expect(ctx.extra, `${state}: the session id and state, nothing else`).toEqual({ sessionId: `s-${state}`, state });
+      expect(Object.keys(ctx).sort(), `${state}: no other context`).toEqual(["extra", "route"]);
+      checked++;
+    }
+    expect(checked).toBe(strays.length);
+    expect(TERMINAL_STATES.length, "anti-vacuity: the declared TERMINAL set is not empty").toBeGreaterThan(0);
+  });
+});
+
 describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every timed exit", () => {
   it("G7 (A22(d)): Cloudflare's FRACTIONAL storage minutes are admitted — used rounds UP and the limit DOWN into the integer columns — instead of 22P02-ing every start", async () => {
     const r = await rig({ credits: 1 });
@@ -2498,49 +2543,6 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     const after = await relayCredits(r.auth, r.auth.orgId);
     expect(after.monthly, "\"Your plan includes N free\" above \"N free this month\" — the same N").toBe(after.monthlyAllowance);
     expect(after).toEqual({ monthly: pro, pack: 2, total: pro + 2, monthlyAllowance: pro });
-  });
-
-  // Spec 2026-09-30 §2 (T6): `openStreamStates` feeds the run sheet's chip (the division's path to Stop) and the fixture
-  // page's Stop-only mount. ONE guard decides "active" — the SQL `state in ACTIVE_STATES` filter. The fold after it
-  // (`holdStatesOf`) REPORTS a row that got past it and skips it — B3 fix round 1, I-1 (controller ruling): the guard
-  // must never block the organiser's page or its Stop, so it reports to Sentry instead of throwing.
-  describe("holdStatesOf — the fold after the SQL filter (I-1: report and skip, never throw)", () => {
-    const row = (id: string, fixtureId: string, state: string) => ({ id, fixture_id: fixtureId, state: state as SessionState });
-    const reports = () =>
-      sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.open_stream_states");
-
-    it("every ACTIVE row maps to the hold state the domain declares; none is reported", () => {
-      sentry.captureError.mockClear();
-      let checked = 0;
-      for (const state of ACTIVE_STATES) {
-        expect(holdStatesOf([row(`s-${state}`, "fx", state)]), state).toEqual({ fx: holdStateOf(state) });
-        checked++;
-      }
-      expect(checked).toBe(ACTIVE_STATES.length);
-      expect(checked, "anti-vacuity: the declared ACTIVE set is not empty").toBeGreaterThan(0);
-      expect(reports(), "an active row is never an alarm").toEqual([]);
-      expect(holdStatesOf([]), "the empty case").toEqual({});
-    });
-
-    it("a TERMINAL or UNKNOWN row is skipped AND reported — session id and state only — and the page still gets every other row", () => {
-      const strays = [...TERMINAL_STATES, "archived_by_a_future_migration"];
-      let checked = 0;
-      for (const state of strays) {
-        sentry.captureError.mockClear();
-        const out = holdStatesOf([row("s-ok", "fx-ok", "live"), row(`s-${state}`, "fx-stray", state)]);
-        expect(out, `${state}: skipped, and the good row still maps`).toEqual({ "fx-ok": "live" });
-        expect(Object.prototype.hasOwnProperty.call(out, "fx-stray"), `${state}: no key at all (not a null value)`).toBe(false);
-        const sent = reports();
-        expect(sent, `${state}: reported once`).toHaveLength(1);
-        const [err, ctx] = sent[0]! as [Error, { orgId?: string; route: string; extra: Record<string, unknown> }];
-        expect(err).toBeInstanceOf(Error);
-        expect(ctx.extra, `${state}: the session id and state, nothing else`).toEqual({ sessionId: `s-${state}`, state });
-        expect(Object.keys(ctx).sort(), `${state}: no other context`).toEqual(["extra", "route"]);
-        checked++;
-      }
-      expect(checked).toBe(strays.length);
-      expect(TERMINAL_STATES.length, "anti-vacuity: the declared TERMINAL set is not empty").toBeGreaterThan(0);
-    });
   });
 
   /** SETUP: a session row in `state` on `fixtureId`, created `ageSec` seconds ago (so a case controls which is newest). Two

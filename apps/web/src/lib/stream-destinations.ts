@@ -228,11 +228,3 @@ function parseDestination(url: string): ParsedDestination {
   if (!/^\/[\x21-\x7e]+$/.test(path)) return refuse("path");
   return { ok: true, scheme: scheme[1] as "rtmp" | "rtmps", host, port, portPart, path };
 }
-
-/** `null` when `url` is an ingest URL the relay may dial; otherwise the rule
- *  that refused it. The panel's inline check; the writer uses checkDestination
- *  and stores ITS url. */
-export function destinationRefusal(url: string): DestinationRefusal | null {
-  const verdict = checkDestination(url);
-  return verdict.ok ? null : verdict.rule;
-}

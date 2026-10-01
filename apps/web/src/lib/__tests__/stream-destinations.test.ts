@@ -19,11 +19,18 @@ import {
   STREAM_PLATFORM_PRESETS,
   checkDestination,
   destinationIdentity,
-  destinationRefusal,
   isStreamPlatform,
   type DestinationRefusal,
 } from "../stream-destinations";
 import { StreamTargetKind } from "@/server/api-v1/schemas";
+
+/** The rule `checkDestination` refused `url` for, or null when it admits it — the ONE validator's verdict, read as a rule.
+ *  (n4, B4 re-review: the lib's `destinationRefusal` wrapper had no production caller and was deleted; the tests keep
+ *  asking the validator itself.) */
+const destinationRefusal = (url: string): DestinationRefusal | null => {
+  const v = checkDestination(url);
+  return v.ok ? null : v.rule;
+};
 
 /** U+212A KELVIN SIGN — the one non-ASCII code point whose toLowerCase() is ASCII ("k"). Built, not typed. */
 const KELVIN = String.fromCharCode(0x212a);
@@ -158,7 +165,7 @@ describe("the URL that is sealed and dialled is the URL that was checked", () =>
     expect(checked).toBe(15);
   });
 
-  it("a refused URL yields its rule and no URL at all, in agreement with destinationRefusal", () => {
+  it("a refused URL yields its rule and no URL at all", () => {
     const refused: [string, DestinationRefusal][] = [
       ["rtmp://localhost/live", "host"],
       [`rtmps://live-api-s.faceboo${KELVIN}.com:443/rtmp/`, "host"],
@@ -167,7 +174,6 @@ describe("the URL that is sealed and dialled is the URL that was checked", () =>
     let checked = 0;
     for (const [url, rule] of refused) {
       expect(checkDestination(url), url).toEqual({ ok: false, rule });
-      expect(destinationRefusal(url)).toBe(rule);
       checked++;
     }
     expect(checked).toBe(3);

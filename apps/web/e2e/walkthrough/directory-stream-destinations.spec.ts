@@ -917,7 +917,7 @@ async function returnTo(page: Page): Promise<void> {
 for (const width of [320, 1280] as const) {
   test(`I1 @${width}: no destinations → add in the NEW Directory tab → back: offered, Go live enabled → remove there → back: gone → a choice removed while the tab stayed open: Go live says it was removed and drops it`, async ({ page }) => {
     const NAVS = 3; // the rig's sign-in, the fixture page, the Directory tab
-    const SAVES = 5; // add, remove, add, the API remove, the refused Go live
+    const SAVES = 9; // add, remove, add, the API remove, the refused Go live; n1: two adds, the API remove, the refused Go live
     test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVES * SAVE_MS + 3 * SAVE_MS /* three returns */);
     const height = width < 768 ? 700 : 900;
     await page.setViewportSize({ width, height });
@@ -983,6 +983,31 @@ for (const width of [320, 1280] as const) {
     expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
     await expectNoHorizontalScroll(page);
     await shot(page.locator('[data-role="fixture-stream-body"]'), `fix1-I1-${width}-removed.png`);
+
+    // 6. B4 re-review n1 — removed while OTHERS are listed: the picker is EMPTY, never the other destination in its place.
+    //    Go live waits for a pick; a later return keeps it empty and keeps the sentence; the pick clears both.
+    const keep = await addTargetApi(page, rig.orgId, { label: `Keep ${rig.tag}` });
+    const gone = await addTargetApi(page, rig.orgId, { label: `Gone ${rig.tag}`, kind: "twitch", streamKey: twitchKey() });
+    await returnTo(page);
+    await expect(picker(body).locator("option"), "the return read both").toHaveCount(2, { timeout: SAVE_MS });
+    await picker(body).selectOption(gone.id);
+    expect((await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${gone.id}`)).status(), "SETUP: removed elsewhere").toBe(200);
+    await goLive(body).click();
+    await expect(body.getByTestId("stream-create-error")).toHaveText(en("stream.error.target_removed"), { timeout: SAVE_MS });
+    await expect(picker(body), "cleared — NOT the other destination in its place").toHaveValue("");
+    await expect(picker(body).locator("option:checked")).toHaveText(en("stream.dest.pick"));
+    await expect(picker(body).locator("option")).toHaveText([en("stream.dest.pick"), `Keep ${rig.tag} (${BRAND.youtube})`]);
+    await expect(goLive(body), "no destination picked, nothing to start").toBeDisabled();
+    await expectNoHorizontalScroll(page);
+    await shot(page.locator('[data-role="fixture-stream-body"]'), `n1-${width}-removed-placeholder.png`);
+    await returnTo(page);
+    await expect(picker(body), "a later return picks nothing for them").toHaveValue("");
+    await expect(body.getByTestId("stream-create-error"), "…and keeps the explanation").toHaveText(en("stream.error.target_removed"));
+    await picker(body).selectOption(keep.id);
+    await expect(body.getByTestId("stream-create-error"), "the pick answers it").toHaveCount(0);
+    await expect(picker(body).locator("option"), "and the placeholder goes").toHaveText([`Keep ${rig.tag} (${BRAND.youtube})`]);
+    await expect(goLive(body)).toBeEnabled();
+    expect(await sessionsOf(rig.orgId), "still nothing started").toEqual([]);
     await dir.close();
   });
 }

@@ -820,6 +820,14 @@ export function PhoneTab({
   // Resolves to the list it applied, or null (failed, or superseded).
   const listSeq = useRef(0);
   const listInFlight = useRef(false);
+  // B4 re-review n1: a choice removed in Directory is CLEARED, never swapped for another destination — and nothing is
+  // picked for the organiser again until they pick (`holdEmpty`). Streaming to a destination nobody chose is the worse
+  // mistake. The read answers against the selection as it is THEN (the ref), not as it was when the read was asked.
+  const holdEmpty = useRef(false);
+  const selectedRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedRef.current = selectedTargetId;
+  }, [selectedTargetId]);
   const readTargets = useCallback(
     async (loud: boolean): Promise<StreamTarget[] | null> => {
       const seq = ++listSeq.current;
@@ -830,8 +838,23 @@ export function PhoneTab({
         const list = await apiV1<StreamTarget[]>(`/api/v1/orgs/${orgId}/stream-targets`);
         if (seq !== listSeq.current) return null;
         setTargets({ status: "ok", list });
-        // A selection that is still listed stays; one removed in Directory falls to the oldest remaining.
-        setSelectedTargetId((cur) => (cur && list.some((t) => t.id === cur) ? cur : list[0]?.id ?? null));
+        // A selection still listed stays. One removed in Directory while OTHERS are listed is cleared, and holds the
+        // picker empty (n1). An empty list holds nothing — there is nothing to fall to, so the next destination added
+        // is a first one. With nothing ever picked (the first list, a first destination) the oldest is offered.
+        const cur = selectedRef.current;
+        let next: string | null;
+        if (cur !== null && list.some((t) => t.id === cur)) next = cur;
+        else {
+          if (list.length === 0) holdEmpty.current = false;
+          else if (cur !== null) holdEmpty.current = true;
+          next = holdEmpty.current ? null : (list[0]?.id ?? null);
+        }
+        selectedRef.current = next;
+        setSelectedTargetId(next);
+        // A destination another match held (`target_in_use`) that this read finds FREE — or gone — no longer explains
+        // anything: the hold is lifted and Go live may try again. One still held keeps it.
+        const picked = next === null ? undefined : list.find((t) => t.id === next);
+        setCreateError((e) => (e?.code === "target_in_use" && !picked?.inUse ? null : e));
         return list;
       } catch {
         if (seq !== listSeq.current) return null;
@@ -903,9 +926,6 @@ export function PhoneTab({
         json: { mode: "passthrough", targetId: chosen },
       });
     } catch (err) {
-      // I1: a 404 may be the destination removed in Directory while this tab stayed open (D2 answers an archived target
-      // with the plain not-found shape). The list is read again: gone from it → say so, and the stale choice falls away
-      // with it; still listed → the 404 was about something else, and it is the generic refusal.
       const code = createErrorCode(err);
       // D12: "your plan, not your credits" is the upgrade surface, never a retry sentence.
       if (code === "plan_lacks_relay") {
@@ -919,8 +939,9 @@ export function PhoneTab({
         setShowBuy(true);
       }
       // I1: a 404 may be the destination removed in Directory while this tab stayed open (D2 answers an archived target
-      // with the plain not-found shape). The list is read again: gone from it → say so, and the stale choice falls away
-      // with it; still listed → the 404 was about something else, and it is the generic refusal.
+      // with the plain not-found shape). The list is read again: gone from it → say so, and the stale choice is cleared
+      // (n1: never another destination in its place); still listed → the 404 was about something else, the generic
+      // refusal.
       const removed =
         createErrorIsNotFound(err) && (await readTargets(false).then((list) => list !== null && !list.some((t) => t.id === chosen)));
       setCreateError({ code: removed ? TARGET_REMOVED : code, holder: createErrorHolder(err) });
@@ -1015,7 +1036,14 @@ export function PhoneTab({
         // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window.
         restartFree={view?.restartFree ?? false}
-        onSelectTarget={setSelectedTargetId}
+        // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, or held by
+        // another match) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
+        // selection only empties again through another removal, which holds it again.)
+        onSelectTarget={(id) => {
+          selectedRef.current = id;
+          setSelectedTargetId(id);
+          setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use") ? null : e));
+        }}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
         onGoLive={() => void onGoLive()}
         onStop={() => {
@@ -1413,6 +1441,13 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                     inUseBox ? "border-red-300 ring-1 ring-red-200" : ""
                   }`}
                 >
+                  {!selected && (
+                    // n1: nothing picked (the choice was removed in Directory) — a placeholder, never a destination
+                    // chosen for them. Disabled, so it cannot be picked back.
+                    <option value="" disabled>
+                      {msg("stream.dest.pick")}
+                    </option>
+                  )}
                   {targetList.map((t) => (
                     <option key={t.id} value={t.id}>
                       {optionText(t)}

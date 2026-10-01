@@ -1842,6 +1842,21 @@ describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the i
     for (const c of ["appearance-none", "min-w-0", "pr-9", "truncate"]) expect(select, c).toContain(c);
   });
 
+  it("n1: with a list and NO selection the picker shows a placeholder 'Pick a destination', no platform mark, Go live disabled; a selection has no placeholder", () => {
+    const none = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: null });
+    const select = byTestId(none, "stream-target")!;
+    expect(attr(select, "value")).toBe("");
+    const options = walk(select).filter((el) => el.type === "option");
+    expect(options.map((o) => attr(o, "value"))).toEqual(["", "t1", "t2"]);
+    expect(textOf(options[0]!)).toBe(m("stream.dest.pick"));
+    expect(attr(options[0]!, "disabled"), "the placeholder cannot be chosen back").toBe(true);
+    expect(none.some((el) => el.type === PlatformMark), "no mark for nothing").toBe(false);
+    expect(propsOf(byTestId(none, "stream-go-live")!).disabled).toBe(true);
+    // The positive pair: a selection, no placeholder.
+    const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
+    expect(walk(byTestId(picked, "stream-target")!).filter((el) => el.type === "option").map((o) => attr(o, "value"))).toEqual(["t1", "t2"]);
+  });
+
   it("in use (mockup state 5): the picker turns red and says why under itself, Open Match beside it, and Go live waits", () => {
     const createError = { code: "target_in_use" as const, holder: IN_USE_HOLDER };
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError });
@@ -2732,7 +2747,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).view?.state).toBe("live");
   });
 
-  it("the list's first read is LOADING, then ok; a FAILED read is the error state (never 'none'), and Retry re-reads it and selects the first destination", async () => {
+  it("the list's first read is LOADING, then ok; a FAILED read is the error state (never 'none'), and Retry re-reads it and selects the first destination (never a removed one's replacement)", async () => {
     const s = serve({ current: null, targets: TARGETS, failTargets: true });
     const island = track(renderIsland(PhoneTab, TAB));
     await settle();
@@ -2754,7 +2769,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     s.targets = [TARGETS[0]!];
     bodyOf(island).onRetryTargets();
     await settle();
-    expect(bodyOf(island).selectedTargetId, "t2 was removed in Directory: the first remaining").toBe("t1");
+    // B4 re-review n1 (reverses the old "falls to the first remaining"): the removed choice is cleared, nothing chosen.
+    expect(bodyOf(island).selectedTargetId, "t2 was removed in Directory: cleared, t1 NOT picked for them").toBeNull();
     expect(reads()).toBe(4);
   });
 
@@ -2823,14 +2839,15 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(listReads(), "no read on the hide").toBe(3);
     doc.visibilityState = "visible";
 
-    // Removed in Directory: the return drops it, and the stale selection falls to the oldest remaining.
+    // Removed in Directory: the return drops it, and the stale selection is CLEARED — never a silent fall to another
+    // destination (B4 re-review n1): streaming to one the organiser did not pick is the worse mistake.
     bodyOf(island).onSelectTarget("t2");
     s.targets = [TARGETS[0]!];
     doc.dispatchEvent(new Event("visibilitychange"));
     await settle();
     expect(listReads()).toBe(4);
     expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
-    expect(bodyOf(island).selectedTargetId, "the removed choice is cleared").toBe("t1");
+    expect(bodyOf(island).selectedTargetId, "the removed choice is cleared, and nothing is picked for them").toBeNull();
 
     // A return whose read FAILS keeps the picker the organiser already has — a quiet read never turns it into an error.
     s.failTargets = true;
@@ -2843,6 +2860,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
     // With a session up there is no picker to refresh: a return reads nothing.
     s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+    bodyOf(island).onSelectTarget("t1");
     bodyOf(island).onGoLive();
     await settle();
     expect(bodyOf(island).view?.state).toBe("warming");
@@ -2867,10 +2885,11 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(listReads(), "the 404 re-read the list").toBe(before + 1);
     expect(bodyOf(island).createError).toEqual({ code: TARGET_REMOVED, holder: null });
     expect(listOf(bodyOf(island).targets).map((t) => t.id)).toEqual(["t1"]);
-    expect(bodyOf(island).selectedTargetId, "the stale choice is cleared").toBe("t1");
-    expect(bodyOf(island).busy, "Go live is free again").toBe(false);
+    expect(bodyOf(island).selectedTargetId, "the stale choice is cleared — and t1 is NOT picked for them (n1)").toBeNull();
+    expect(bodyOf(island).busy, "the tap is over").toBe(false);
 
     // The positive pair: a 404 whose chosen destination IS still listed is not "removed".
+    bodyOf(island).onSelectTarget("t1");
     s.create = () => { throw new ApiV1Error("fixture not found", 404, "NOT_FOUND"); };
     bodyOf(island).onGoLive();
     await settle();
@@ -2883,6 +2902,103 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     bodyOf(island).onGoLive();
     await settle();
     expect(listReads(), "a 409 reads no list").toBe(before + 2);
+  });
+
+  // B4 re-review n1: after a "removed" answer the picker is EMPTY until the organiser picks — Go live cannot start, and
+  // nothing is picked for them on any later read. The sentence explaining it stays until that pick, however many
+  // returns come between.
+  it("n1: removed → no selection, Go live held, the 'removed' line kept across a later return; the next PICK clears it and starts again", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: TARGETS });
+    const island = track(await mount(s));
+    bodyOf(island).onSelectTarget("t2");
+    s.targets = [TARGETS[0]!];
+    s.create = () => { throw new ApiV1Error("stream target not found", 404, "NOT_FOUND"); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError).toEqual({ code: TARGET_REMOVED, holder: null });
+    expect(bodyOf(island).selectedTargetId).toBeNull();
+    // What the organiser sees: the placeholder, and Go live disabled.
+    const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(attr(byTestId(shown, "stream-target")!, "value")).toBe("");
+    expect(propsOf(byTestId(shown, "stream-go-live")!).disabled, "no destination, no start").toBe(true);
+
+    // A LATER return re-reads the list (t1 still there): still nothing picked, still the sentence.
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "a later read never picks for them").toBeNull();
+    expect(bodyOf(island).createError, "the explanation outlives the return").toEqual({ code: TARGET_REMOVED, holder: null });
+
+    // The pick — after that return — clears the sentence and lets Go live start.
+    s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+    bodyOf(island).onSelectTarget("t1");
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    expect(bodyOf(island).createError, "the pick answers the removed line").toBeNull();
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(apiV1.mock.calls.some(([u, o]) => o?.method === "POST" && /stream-sessions$/.test(u) && (o.json as { targetId?: string }).targetId === "t1")).toBe(true);
+  });
+
+  it("n1's edge: a removal that EMPTIES the list holds nothing — there is nothing to fall to, so the next destination added is a first one, offered (directory-stream-destinations I1, steps 4→5)", async () => {
+    const { doc } = stubPage();
+    const s = serve({ current: null, targets: [TARGETS[0]!] });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    s.targets = [];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "removed, and nothing left").toBeNull();
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "the only destination, added after the list emptied: offered").toBe("t2");
+    // …while a removal that leaves OTHERS listed still holds (the positive pair of n1).
+    s.targets = [TARGETS[0]!, TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    bodyOf(island).onSelectTarget("t1");
+    s.targets = [TARGETS[1]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId, "t1 removed, t2 still there: NOT picked for them").toBeNull();
+    // …and emptying it from there, then adding, offers again.
+    s.targets = [];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    s.targets = [TARGETS[0]!];
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+  });
+
+  it("n1 (in use): a pick clears the target_in_use hold; a return that finds the picked destination FREE clears it too — one still held does not", async () => {
+    const { doc } = stubPage();
+    const holder = { sessionId: "s9", fixtureId: "f-9", href: "/x/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const };
+    const held = { ...TARGETS[0]!, inUse: holder };
+    const s = serve({ current: null, targets: [held, TARGETS[1]!] });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    s.create = () => { throw new ApiV1Error("in use", 409, "target_in_use", { holder: { ...holder, label: "Club" } }); };
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError?.code).toBe("target_in_use");
+    // A return while t1 is STILL held: the hold stands.
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError?.code, "still held — the line stays").toBe("target_in_use");
+    // f-9 stopped; the next return finds t1 free: the hold is lifted, the selection kept.
+    s.targets = TARGETS;
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await settle();
+    expect(bodyOf(island).createError, "freed — Go live may try again").toBeNull();
+    expect(bodyOf(island).selectedTargetId).toBe("t1");
+    // And a PICK clears it outright.
+    s.targets = [held, TARGETS[1]!];
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(bodyOf(island).createError?.code).toBe("target_in_use");
+    bodyOf(island).onSelectTarget("t2");
+    expect(bodyOf(island).createError, "picking another destination answers it").toBeNull();
   });
 
   it("m2: an OLDER read that answers LATE never overwrites a newer one — neither its list nor its failure", async () => {

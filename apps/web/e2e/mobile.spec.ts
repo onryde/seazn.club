@@ -1650,6 +1650,9 @@ test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async
     `/o/${orgSlug}/c/${compSlug}/registration?tab=settings`,
     `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants`,
     statusPath,
+    // B4 re-review n3: Directory → Streaming (spec 2026-09-30 §4) — its scrolling tab strip's axe ruling (class 23's
+    // scrollable-region-focusable) was resting on a read of the rule, not a run.
+    "/directory?tab=streaming",
   ];
   for (const path of routes) {
     const response = await page.goto(path, { waitUntil: "load" });
