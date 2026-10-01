@@ -12,9 +12,10 @@
 // classed (`steps`), and informativeSteps() fails a cell with none that told
 // the model anything (R25).
 // W1-driving Task 14 (ruling 49, D6): a team division fields full catalog
-// rosters and PUTs a lineup per fixture side before its first post — the
-// scenario harness's ensureLineups, twinned (ensureModelLineups) — and a row
-// the model does not drive is refused by family (ModelUnsupported).
+// rosters and PUTs a lineup per fixture side before its first post — by the
+// scenario harness's own rule (lineup-plan.ts, shared with ensureLineups;
+// fix round 1, T14-R3) — and a row the model does not drive is refused by
+// family (ModelUnsupported).
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
@@ -22,8 +23,8 @@ import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
 import { sameOutcome, toObservedOutcome, type GenerateObs, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import { NotAWave, WAVE_ID, type Route } from "../routing.ts";
-import { SIDE_SIZE_KIND, lineupWarningKind } from "../scenarios/common.ts";
-import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "../scenarios/rosters.ts";
+import { lineupItems, lineupWarningLine, putOwedLineups, type LineupSink } from "../scenarios/lineup-plan.ts";
+import { rosterMembers, rosterSize } from "../scenarios/rosters.ts";
 import { entrantKindFor, resolveSportCfg } from "../sport-cfg.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "./ledger-fold.ts";
 
@@ -140,18 +141,23 @@ export const ROSTER_LOCK_FINDING = "CD-T13b";
  *  candidates instead (W1c Task 2, ruling Q2). */
 export const NEXT_MATCH_UNHELD_FINDING = "model-next-match-unheld";
 export const VACUITY_CHECK = "model-informative-steps";
-/** T45-R1 twinned (assertions.ts lineupsPut, "life-lineups-put"): every side
- *  of every team fixture the model posted to had its lineup PUT, one item per
- *  side, re-judged after every step. A team cell owes > 0 (vacuityOf). */
+/** T45-R1 (assertions.ts lineupsPut, "life-lineups-put"), on the shared
+ *  items (lineup-plan.ts lineupItems): every side of every team fixture the
+ *  model posted to had its lineup PUT, one item per side, re-judged after
+ *  every step. A team cell owes > 0 (vacuityOf). */
 export const LINEUPS_CHECK = "model-lineups-put";
 /** The product warned on a lineup the model PUT, and the warning is not the
- *  known side-size finding (common.ts LineupWarned, twinned). */
+ *  known side-size finding (the harness's LineupWarned, in the same words). */
 export const LINEUP_WARNED_CHECK = "model-lineup-warned";
 /** The known side-size finding on its own row (rosters.ts SIDE_SIZE_FOUND,
  *  routed by SIDE_SIZE_ROUTE): counted, never a stop. */
 export const LINEUP_SIDE_SIZE_FINDING = "lineup-side-size-warning";
 /** A team fixture already past scheduled when the model came to post to it:
- *  the product locks its lineups, so none is PUT (ensureLineups' note). */
+ *  the product locks its lineups, so none is PUT (the harness's note). Counted
+ *  — and not a stop on its own, but not a pass either: the post still goes
+ *  ahead, so the same step's model-lineups-put reds on that fixture's sides,
+ *  as the harness's note is followed by life-lineups-put's red (review m-8;
+ *  model-core.test.ts drives it through a Score). */
 export const LINEUP_LOCKED_FINDING = "model-lineup-past-scheduled";
 
 /** entrants.ts createEntrants: once the division is `active` or `completed`
@@ -380,47 +386,30 @@ export async function newModelState(input: { driver: OrganiserDriver; row: RowKe
   };
 }
 
-/** T3-R1 twinned (common.ts judgeLineupWarnings): the known side-size finding
- *  on its own row is a finding; any other warning is a named violation. */
-function judgeLineupWarnings(m: ModelState, fixtureId: string, entrantId: string, warnings: readonly string[]): void {
-  const row = `${m.sport}/${m.variant}`;
-  for (const w of warnings) {
-    const kind = lineupWarningKind(w);
-    if (kind !== SIDE_SIZE_KIND || !SIDE_SIZE_FOUND.includes(row)) {
-      throw new ModelViolation(LINEUP_WARNED_CHECK, [`fixture ${fixtureId}: the product warned on the ${row} lineup for entrant ${entrantId} — [${kind ?? "unclassified"}] ${w}; only a ${SIDE_SIZE_KIND} warning on a known side-size row (${SIDE_SIZE_FOUND.join(", ")}) is expected`]);
-    }
-    recordFinding(m, LINEUP_SIDE_SIZE_FINDING, `${row} [${kind}] ${w} — the known side-size finding (rosters.ts SIDE_SIZE_ROUTE) → ${SIDE_SIZE_ROUTE.wave}`);
-  }
+/** The model's sinks for the shared lineup planner: every message a finding,
+ *  every unexpected warning a model-lineup-warned violation. An americano
+ *  stage cannot reach the model (D6 refuses the ladder family), so a
+ *  product-minted pair side is a named refusal here, never a skip. */
+function modelLineupSink(m: ModelState): LineupSink {
+  return {
+    prefix: "model", actor: "model",
+    locked: (line) => recordFinding(m, LINEUP_LOCKED_FINDING, line),
+    pairSideSkipped: (line) => { throw new Error(`model: ${line} — the model drives no americano stage (D6 refuses the ladder family before any run)`); },
+    knownWarning: (line) => recordFinding(m, LINEUP_SIDE_SIZE_FINDING, line),
+    warned: (w) => new ModelViolation(LINEUP_WARNED_CHECK, [lineupWarningLine(w.row, w.fixtureId, w.entrantId, w.kind, w.warning)]),
+  };
 }
 
-/** The scenario harness's ensureLineups (common.ts), twinned for the model —
- *  same rule, same order, same keys (model-core.test.ts runs both over one
- *  sequence): on a team division, each side of `f` gets its lineup PUT once,
- *  keyed on fixture AND side (T45-R2), while `f` is still scheduled, before
- *  the model posts to it. A side met empty is owed once it is seated. A
- *  fixture already past scheduled takes no PUT and is a finding; a side that
- *  is no division entrant (the model's single stage mints none) or a division
- *  entrant with no recorded roster is refused by name. `f.status` is the
- *  status the model last read. */
+/** The scenario harness's lineup rule (lineup-plan.ts putOwedLineups — the
+ *  one ensureLineups runs, T14-R3) over the model's own division, ledger and
+ *  sinks: each side of `f` gets its lineup PUT once, keyed on fixture AND
+ *  side, while `f` is still scheduled, before the model posts to it.
+ *  `f.status` is the status the model last read. */
 export async function ensureModelLineups(m: ModelState, d: OrganiserDriver, f: FixtureModel): Promise<void> {
-  if (m.kind !== "team") return;
-  const done = m.lineupSides.get(f.id) ?? new Set<string>();
-  const owed = [f.home, f.away].filter((side): side is string => side !== null && !done.has(side));
-  if (owed.length === 0) return;
-  if (f.status !== "scheduled") {
-    recordFinding(m, LINEUP_LOCKED_FINDING, `${f.id} was ${f.status} when the model came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`);
-    return;
-  }
-  for (const side of owed) {
-    if (!m.entrants.includes(side)) throw new Error(`model: fixture ${f.id} seats ${side}, which is not a division entrant — the model's single stage mints no entrant of its own`);
-    const members = m.rosters.get(side);
-    if (members === undefined) throw new Error(`model: fixture ${f.id} seats division entrant ${side}, which has no recorded roster`);
-    const check = await d.putLineup(f.id, side, lineupFor(m.sport, m.cfg, members));
-    m.lineupsPut++;
-    done.add(side);
-    m.lineupSides.set(f.id, done);
-    judgeLineupWarnings(m, f.id, side, check.warnings);
-  }
+  await putOwedLineups(d, {
+    sport: m.sport, variant: m.variant, cfg: m.cfg, kind: m.kind, rosterless: false,
+    entrantIds: new Set(m.entrants), rosters: m.rosters, stageKindOf: (id) => (id === m.stageId ? m.stageKind : undefined),
+  }, m, { id: f.id, stageId: m.stageId, home: f.home, away: f.away, status: f.status }, modelLineupSink(m));
 }
 
 /** Folds the product's fixture list into the model. A fixture first seen
@@ -485,18 +474,11 @@ function orientationCheck(m: ModelState, meetings: readonly FixtureRow[]): { che
   return { checked: pairs.size, fails: fails.slice(0, 12) };
 }
 
-/** assertions.ts lineupsPut, twinned: one item per side of every team fixture
- *  the model posted to, ok iff that side's lineup was PUT. */
+/** assertions.ts lineupsPut's items (lineup-plan.ts lineupItems) over the
+ *  model's posts: one per side posted to, ok iff that side's lineup was PUT. */
 function lineupsCheck(m: ModelState): { checked: number; fails: string[] } {
-  let checked = 0;
-  const fails: string[] = [];
-  for (const [fixtureId, sides] of m.teamPosts) {
-    for (const side of sides) {
-      checked++;
-      if (m.lineupSides.get(fixtureId)?.has(side) !== true) fails.push(`${fixtureId}: posted to with no lineup PUT for side ${side}`);
-    }
-  }
-  return { checked, fails: fails.slice(0, 12) };
+  const items = lineupItems(m.teamPosts, m.lineupSides);
+  return { checked: items.length, fails: items.filter((i) => !i.ok).map((i) => i.note).slice(0, 12) };
 }
 
 /** The engine's fold of a known ledger, or why it refused one. */

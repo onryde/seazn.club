@@ -6,6 +6,7 @@ import { cascadeWrote, isBye, isNamedRefusal, isTerminal, sameOutcome, type Conf
 import type { CheckResult } from "../results.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
+import { lineupItems } from "./lineup-plan.ts";
 
 export interface Item { ok: boolean; note: string }
 
@@ -280,9 +281,7 @@ export function lineupsPut(rec: Recorder, setup: Pick<DivisionSetup, "kind" | "r
   if (setup.stages !== undefined && setup.stages.length > 0 && setup.stages.every((s) => s.kind === "americano")) {
     return assertion("life-lineups-put", [], "an americano stage seats product-minted pair entrants, which carry no lineup");
   }
-  const items: Item[] = [...rec.teamPosts].flatMap(([fixtureId, sides]) => sides.map((side) => ({
-    ok: rec.lineupSides.get(fixtureId)?.has(side) === true,
-    note: `${fixtureId}: scored with no lineup PUT for side ${side}`,
-  })));
+  // The items are the shared planner's (lineup-plan.ts lineupItems, T14-R3): the model's lineup check counts the same ones.
+  const items: Item[] = lineupItems(rec.teamPosts, rec.lineupSides);
   return assertion("life-lineups-put", items);
 }

@@ -22,7 +22,8 @@ import { START, type RequestedOutcome, type StreamEvent } from "../streams/types
 import { confirmAdvance, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
-import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
+import { lineupWarningLine, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
+import { rosterMembers, rosterSize } from "./rosters.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
 import type { ScenarioContext } from "./types.ts";
 
@@ -305,40 +306,10 @@ function templateCase(ctx: ScenarioContext, kind: EntrantKind, key: string, entr
   return templateBodies(key);
 }
 
-/** The product's text for each engine lineup issue (fixtures.ts
- *  formatLineupIssue, one template per LineupIssue kind; scenarios.test.ts
- *  renders every template from the product's source and pins each to its
- *  kind). */
-export const LINEUP_ISSUE_TEXT: Readonly<Record<string, RegExp>> = Object.freeze({
-  starting_size: /^Starting lineup has \d+ player\(s\), expected \d+$/,
-  bench_size: /^Bench has \d+ player\(s\), maximum is \d+$/,
-  duplicate_person: /^Person .+ appears more than once in the lineup$/,
-  unknown_position: /^Person .+ is assigned an unknown position ".*"$/,
-  role_unknown: /^Person .+ is assigned an unknown role ".*"$/,
-  role_duplicate: /^Role ".*" is held by more than one person \(.*\)$/,
-  role_missing: /^Required role ".*" is not filled by a starting player$/,
-  group_min: /^Position group ".*" has \d+ starting player\(s\), minimum is \d+$/,
-  group_max: /^Position group ".*" has \d+ starting player\(s\), maximum is \d+$/,
-});
-
-/** T3-R1: a lineup warning's issue KIND, never its words. The product formats
- *  each issue (LINEUP_ISSUE_TEXT); the fake answers the engine's issue as
- *  JSON (fake-driver.ts putLineup). null: a warning in neither shape. */
-export function lineupWarningKind(warning: string): string | null {
-  try {
-    const issue: unknown = JSON.parse(warning);
-    if (issue !== null && typeof issue === "object" && typeof (issue as { kind?: unknown }).kind === "string") return (issue as { kind: string }).kind;
-  } catch {
-    // Not JSON: the product's text.
-  }
-  for (const [kind, text] of Object.entries(LINEUP_ISSUE_TEXT)) if (text.test(warning)) return kind;
-  return null;
-}
-
-/** The engine issue that states a side's starting count (catalog.ts
- *  LineupIssue): the one kind the side-size finding can show up as. Exported
- *  for the model's lineup twin (lib/model/state.ts, W1-driving Task 14). */
-export const SIDE_SIZE_KIND = "starting_size";
+/** The lineup-issue text and its kind reader live in rosters.ts beside the
+ *  side-size finding (W1-driving Task 14 fix round 1, m-4); re-exported for
+ *  the harness's own callers. */
+export { LINEUP_ISSUE_TEXT, lineupWarningKind } from "./rosters.ts";
 
 /** T3-R1: the product checked a lineup the harness PUT and warned, and the
  *  warning is not the known side-size finding. The lineup was built to pass
@@ -351,24 +322,12 @@ export class LineupWarned extends Error {
   readonly kind: string | null;
   readonly warning: string;
   constructor(row: string, fixtureId: string, entrantId: string, kind: string | null, warning: string) {
-    super(redact(`scenario: the product warned on the ${row} lineup for entrant ${entrantId} on fixture ${fixtureId} — [${kind ?? "unclassified"}] ${warning}; only a ${SIDE_SIZE_KIND} warning on a known side-size row (${SIDE_SIZE_FOUND.join(", ")}) is expected`));
+    super(redact(`scenario: ${lineupWarningLine(row, fixtureId, entrantId, kind, warning)}`));
     this.name = "LineupWarned";
     this.fixtureId = fixtureId;
     this.entrantId = entrantId;
     this.kind = kind;
     this.warning = redact(warning);
-  }
-}
-
-/** T3-R1: the known side-size finding is a named note (once per case per
- *  warning); every other warning is a LineupWarned red. */
-function judgeLineupWarnings(ctx: ScenarioContext, rec: Recorder, fixtureId: string, entrantId: string, warnings: readonly string[]): void {
-  const row = `${ctx.spec.sport}/${ctx.spec.variant}`;
-  for (const w of warnings) {
-    const kind = lineupWarningKind(w);
-    if (kind !== SIDE_SIZE_KIND || !SIDE_SIZE_FOUND.includes(row)) throw new LineupWarned(row, fixtureId, entrantId, kind, w);
-    const note = `lineup-side-size-warning: ${row} [${kind}] ${w} — the known side-size finding (rosters.ts SIDE_SIZE_ROUTE) → ${SIDE_SIZE_ROUTE.wave}`;
-    if (!rec.notes.includes(note)) rec.notes.push(note);
   }
 }
 
@@ -390,35 +349,25 @@ function judgeLineupWarnings(ctx: ScenarioContext, rec: Recorder, fixtureId: str
  *  (a foreign write started it) takes no PUT — the product would refuse it —
  *  and is noted; its parity is already the unjudgeable item. */
 export async function ensureLineups(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow): Promise<void> {
-  // D3: a PADPROOF rosterless setup scores team fixtures with no lineup (W1c D-T9-2), so it returns first.
-  if (setup.rosterless || setup.kind !== "team") return;
-  const done = rec.lineupSides.get(f.id) ?? new Set<string>();
-  const owed = [f.home_entrant_id, f.away_entrant_id].filter((side): side is string => side !== null && !done.has(side));
-  if (owed.length === 0) return;
-  if (f.status !== "scheduled") {
-    const note = `lineups: ${f.id} was ${f.status} when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`;
-    if (!rec.notes.includes(note)) rec.notes.push(note);
-    return;
-  }
-  for (const side of owed) {
-    if (!setup.entrantIds.has(side)) {
-      // T45-R3: only an americano stage mints entrants of its own (pair
-      // entrants); a foreign side on any other kind is a harness or product
-      // fault, named — never skipped.
-      const kind = setup.stages.find((s) => s.id === f.stage_id)?.kind;
-      if (kind !== "americano") throw new Error(`scenario: fixture ${f.id} seats ${side}, which is not a division entrant, on ${kind === undefined ? `stage ${f.stage_id}, which the setup never built` : `a ${kind} stage`} — only an americano stage mints its own (pair) entrants`);
-      const note = `lineups: stage ${f.stage_id} seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side`;
-      if (!rec.notes.includes(note)) rec.notes.push(note);
-      continue;
-    }
-    const members = setup.rosters.get(side);
-    if (members === undefined) throw new Error(`scenario: fixture ${f.id} seats division entrant ${side}, which has no recorded roster`);
-    const check = await ctx.driver.putLineup(f.id, side, lineupFor(ctx.spec.sport, ctx.cfg, members));
-    rec.lineupsPut++;
-    done.add(side);
-    rec.lineupSides.set(f.id, done);
-    judgeLineupWarnings(ctx, rec, f.id, side, check.warnings);
-  }
+  // The rule is the shared planner's (lineup-plan.ts, T14-R3); the harness
+  // supplies its division and its sinks — notes, once each, and LineupWarned.
+  // D3: a PADPROOF rosterless setup scores team fixtures with no lineup (W1c D-T9-2): the planner returns first.
+  await putOwedLineups(ctx.driver, {
+    sport: ctx.spec.sport, variant: ctx.spec.variant, cfg: ctx.cfg, kind: setup.kind, rosterless: setup.rosterless,
+    entrantIds: setup.entrantIds, rosters: setup.rosters, stageKindOf: (id) => setup.stages.find((s) => s.id === id)?.kind,
+  }, rec, { id: f.id, stageId: f.stage_id, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status }, harnessLineupSink(rec));
+}
+
+/** The harness's sinks: every message a note (once per case), every unexpected warning a LineupWarned. */
+function harnessLineupSink(rec: Recorder): LineupSink {
+  const noteOnce = (note: string) => { if (!rec.notes.includes(note)) rec.notes.push(note); };
+  return {
+    prefix: "scenario", actor: "harness",
+    locked: (line) => noteOnce(`lineups: ${line}`),
+    pairSideSkipped: (line) => noteOnce(`lineups: ${line}`),
+    knownWarning: (line) => noteOnce(`lineup-side-size-warning: ${line}`),
+    warned: (w) => new LineupWarned(w.row, w.fixtureId, w.entrantId, w.kind, w.warning),
+  };
 }
 
 /** Records each generate run-wide AND on the stage's own track (W1-driving

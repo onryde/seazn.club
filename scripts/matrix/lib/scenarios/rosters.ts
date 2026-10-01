@@ -22,9 +22,43 @@ export const ROSTER_MAX = 40;
 export const SIDE_SIZE_ROUTE = routeTo("W2", "a variant whose side size differs from its catalog's lineup.size; the roster follows the catalog (D2), so the variant's own side size is the engine's to declare");
 /** The `<sport>/<preset>` rows of that finding — exactly the list
  *  rosters.test.ts derives from the cited rulebooks. A starting-size lineup
- *  warning on one of them is the known finding (common.ts ensureLineups
- *  notes it, T3-R1), never a red. */
+ *  warning on one of them is the known finding (lineup-plan.ts
+ *  judgeLineupWarnings reports it to each caller's sink, T3-R1), never a red. */
 export const SIDE_SIZE_FOUND: readonly string[] = Object.freeze(["volleyball/beach", "hockey/youth"]);
+
+/** The engine issue that states a side's starting count (catalog.ts
+ *  LineupIssue): the one kind the side-size finding can show up as. */
+export const SIDE_SIZE_KIND = "starting_size";
+
+/** The product's text for each engine lineup issue (fixtures.ts
+ *  formatLineupIssue, one template per LineupIssue kind; scenarios.test.ts
+ *  renders every template from the product's source and pins each to its
+ *  kind). */
+export const LINEUP_ISSUE_TEXT: Readonly<Record<string, RegExp>> = Object.freeze({
+  starting_size: /^Starting lineup has \d+ player\(s\), expected \d+$/,
+  bench_size: /^Bench has \d+ player\(s\), maximum is \d+$/,
+  duplicate_person: /^Person .+ appears more than once in the lineup$/,
+  unknown_position: /^Person .+ is assigned an unknown position ".*"$/,
+  role_unknown: /^Person .+ is assigned an unknown role ".*"$/,
+  role_duplicate: /^Role ".*" is held by more than one person \(.*\)$/,
+  role_missing: /^Required role ".*" is not filled by a starting player$/,
+  group_min: /^Position group ".*" has \d+ starting player\(s\), minimum is \d+$/,
+  group_max: /^Position group ".*" has \d+ starting player\(s\), maximum is \d+$/,
+});
+
+/** T3-R1: a lineup warning's issue KIND, never its words. The product formats
+ *  each issue (LINEUP_ISSUE_TEXT); the fake answers the engine's issue as
+ *  JSON (fake-driver.ts putLineup). null: a warning in neither shape. */
+export function lineupWarningKind(warning: string): string | null {
+  try {
+    const issue: unknown = JSON.parse(warning);
+    if (issue !== null && typeof issue === "object" && typeof (issue as { kind?: unknown }).kind === "string") return (issue as { kind: string }).kind;
+  } catch {
+    // Not JSON: the product's text.
+  }
+  for (const [kind, text] of Object.entries(LINEUP_ISSUE_TEXT)) if (text.test(warning)) return kind;
+  return null;
+}
 
 /** The catalog that governs a cfg; injectable so a test can hand one in. */
 export type CatalogOf = (sport: string, cfg: unknown) => PositionCatalog;

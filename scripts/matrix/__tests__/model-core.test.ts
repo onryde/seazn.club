@@ -1640,6 +1640,12 @@ describe("Task 14: modelCommands and SWISS_BIAS (ruling 49)", () => {
     expect(kindsOf(modelCommands({ fences: true }))).toEqual([...COMMAND_KINDS]);
   });
   it("SWISS_BIAS is the brief's weights, frozen: Start, Generate and Score ×3", () => {
+    // Review m-2: a committed case records its seed and path, never the bias it
+    // was found under — and a replay regenerates its commands from those with
+    // the cell's CURRENT generator. So changing these weights makes every
+    // committed swiss case NOT REPRODUCED (and every swiss truth run before
+    // T14 reproduces only at its recorded harnessCommit). Change them only
+    // with the swiss cases re-found.
     expect(SWISS_BIAS).toEqual({ Start: 3, Generate: 3, Score: 3 });
     expect(Object.isFrozen(SWISS_BIAS)).toBe(true);
   });
@@ -1838,7 +1844,7 @@ describe("Task 14: a lineup per side before the first post — ensureLineups' mo
     m.lineupSides.delete(f!.id);
     const e = await violation(play(m, d, [["Score", 0, 0]]));
     expect(e.check).toBe(LINEUPS_CHECK);
-    expect(e.evidence.join(" ")).toContain(`${f!.id}: posted to with no lineup PUT for side ${f!.home}`);
+    expect(e.evidence.join(" ")).toContain(`${f!.id}: scored with no lineup PUT for side ${f!.home}`);
   });
   it("a lineup warning that is not the known side-size finding is a named violation; the known one on its own row is a finding, counted", async () => {
     class Warns extends ModelFakeDriver {
@@ -1878,7 +1884,7 @@ describe("Task 14: a lineup per side before the first post — ensureLineups' mo
     await ensureModelLineups(m, d, { ...f, status: "in_play" });
     expect(putsOn(d, f.id)).toEqual([]);
     expect(m.findings.get(LINEUP_LOCKED_FINDING)?.count).toBe(1);
-    await expect(ensureModelLineups(m, d, { ...f, home: "x9" })).rejects.toThrow(`model: fixture ${f.id} seats x9, which is not a division entrant — the model's single stage mints no entrant of its own`);
+    await expect(ensureModelLineups(m, d, { ...f, home: "x9" })).rejects.toThrow(`model: fixture ${f.id} seats x9, which is not a division entrant, on a league stage — only an americano stage mints its own (pair) entrants`);
     m.rosters.delete(f.away!);
     await expect(ensureModelLineups(m, d, f)).rejects.toThrow(`model: fixture ${f.id} seats division entrant ${f.away}, which has no recorded roster`);
   });
@@ -1935,7 +1941,7 @@ describe("Task 14: the model's lineup twin and the harness's ensureLineups PUT t
     await ensureModelLineups(m, b.driver, asModel(f));
     expect([a.puts, b.puts, h.rec.lineupsPut, m.lineupsPut]).toEqual([[], [], 0, 0]);
   });
-  it("one sequence through both — a first call, a second, a side met empty then seated under the same id, a fixture past scheduled then back — the same PUTs, keys and count", async () => {
+  it("one sequence through both — a first call, a second, a seated side re-filled by another entrant under the same id, a side met empty then seated, a fixture past scheduled then back — the same PUTs, keys and count", async () => {
     const { m } = await teamFresh();
     const [e1, e2, e3, e4] = m.entrants as [string, string, string, string];
     const a = recorder();
@@ -1943,6 +1949,8 @@ describe("Task 14: the model's lineup twin and the harness's ensureLineups PUT t
     const h = harnessOver(m, a.driver);
     const SEQ = [
       row(m, "g1", e1, e2, "scheduled"), row(m, "g1", e1, e2, "scheduled"),
+      // Review m-1: a take-back re-fills a fed seat under the same id — the new side is owed its own lineup.
+      row(m, "g1", e1, e3, "scheduled"),
       row(m, "g2", e3, null, "scheduled"), row(m, "g2", e3, e4, "scheduled"),
       row(m, "g3", e1, e3, "in_play"), row(m, "g3", e1, e3, "scheduled"),
     ];
@@ -1950,9 +1958,10 @@ describe("Task 14: the model's lineup twin and the harness's ensureLineups PUT t
       await ensureLineups(h.ctx, h.rec, h.setup, f);
       await ensureModelLineups(m, b.driver, asModel(f));
     }
-    // The rule's own expectation (common.ts ensureLineups, T45-R2): once per
+    // The rule's own expectation (ensureLineups' docblock, T45-R2): once per
     // SIDE, a null side skipped, nothing PUT past scheduled.
-    expect(a.puts.map(([f, e]) => `${f} ${e}`)).toEqual([`g1 ${e1}`, `g1 ${e2}`, `g2 ${e3}`, `g2 ${e4}`, `g3 ${e1}`, `g3 ${e3}`]);
+    expect(a.puts.map(([f, e]) => `${f} ${e}`)).toEqual([`g1 ${e1}`, `g1 ${e2}`, `g1 ${e3}`, `g2 ${e3}`, `g2 ${e4}`, `g3 ${e1}`, `g3 ${e3}`]);
+    expect([...(m.lineupSides.get("g1") ?? [])]).toEqual([e1, e2, e3]);
     expect(b.puts).toEqual(a.puts);
     expect(m.lineupsPut).toBe(h.rec.lineupsPut);
     expect(sides(m.lineupSides)).toEqual(sides(h.rec.lineupSides));
@@ -1974,5 +1983,41 @@ describe("Task 14: the model's lineup twin and the harness's ensureLineups PUT t
     const bare = row(m, "g2", m.entrants[1]!, m.entrants[2]!, "scheduled");
     await expect(ensureLineups(h.ctx, new Recorder(), h.setup, bare)).rejects.toThrow(/which has no recorded roster/);
     await expect(ensureModelLineups(m, b.driver, asModel(bare))).rejects.toThrow(/which has no recorded roster/);
+  });
+});
+
+// W1-driving Task 14 fix round 1 (T14-R3, review m-8): the model's lineups go
+// through the harness's own planner (lineup-plan.ts), with the model's sinks.
+describe("Task 14 fix round 1: the model's sinks on the shared lineup planner", () => {
+  it("assumptions are guards: a product-minted pair side, which the harness skips on an americano stage, is a named refusal in the model — D6 keeps americano out of it", async () => {
+    // single-sport: the guard is sport-blind (the planner reads the stage kind, not the sport).
+    const { m, d } = await teamFresh();
+    await play(m, d, [["Start", 0]]);
+    const [f] = openOf(m);
+    if (f === undefined) throw new Error("test: no open fixture");
+    // The positive pair: on its own league stage the same side is the T45-R3 refusal.
+    await expect(ensureModelLineups(m, d, { ...f, away: "x9" })).rejects.toThrow("on a league stage — only an americano stage mints its own (pair) entrants");
+    (m as { stageKind: string }).stageKind = "americano";
+    await expect(ensureModelLineups(m, d, { ...f, away: "x9" })).rejects.toThrow(`model: stage ${m.stageId} seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side — the model drives no americano stage`);
+  });
+  it("m-8: a fixture the product moved past scheduled under the model is a finding with no PUT — and, posted to through a Score, the same step reds model-lineups-put", async () => {
+    // single-sport: the lock is the product's, sport-blind; football is a team sport at its builder default.
+    /** From its second listing on, the first fixture reads in_play: someone else started it after the model first saw it scheduled. */
+    class StartedUnderTheModel extends ModelFakeDriver {
+      listings = 0;
+      override listFixtures(): Promise<FixtureRow[]> {
+        return super.listFixtures().then((rows) => (++this.listings < 2 ? rows : rows.map((r, i) => (i === 0 && r.status === "scheduled" ? { ...r, status: "in_play" } : r))));
+      }
+    }
+    const { m, d } = await teamFresh("football", new StartedUnderTheModel());
+    await play(m, d, [["Start", 0]]);
+    const [f] = openOf(m);
+    expect(f?.status).toBe("in_play");
+    const e = await violation(play(m, d, [["Score", 0, 0]]));
+    expect(e.check).toBe(LINEUPS_CHECK);
+    expect(e.evidence.join(" ")).toContain(`${f!.id}: scored with no lineup PUT for side ${f!.home}`);
+    expect(putsOn(d, f!.id)).toEqual([]);
+    expect(m.findings.get(LINEUP_LOCKED_FINDING)?.count).toBe(1);
+    expect(m.findings.get(LINEUP_LOCKED_FINDING)?.evidence[0]).toContain(`${f!.id} was in_play when the model came to it`);
   });
 });

@@ -228,6 +228,14 @@ describe("every shipped scripts/matrix module loads under --experimental-strip-t
     expect(missing).toEqual([]);
   });
 
+  // W1-driving Task 14 fix round 1 (T14-R3): the lineup planner the harness and the model share.
+  const W1DRV_T14 = ["lib/scenarios/lineup-plan.ts"];
+  it("W1-driving Task 14's modules are all in the walk", () => {
+    const missing = W1DRV_T14.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1DRV_T14.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
