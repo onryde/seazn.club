@@ -14,10 +14,17 @@
 // W1-driving Task 8 (D14, ruling 51): on an americano stage (either mode)
 // seed 3 holds no fixture of its own — the pair entrants the product minted
 // do — so the product answers policy "none" and those pairs play on. That is
-// a PREDICTED product red: r4-policy-reported still reds, and the case
-// carries the signature r4-withdrawn-player-kept-playing (→ W7) only when
-// its second leg is SEEN — seed 3's person seated after the withdrawal round
-// through any entrant.
+// a PREDICTED product red: the case carries the signature
+// r4-withdrawn-player-kept-playing (→ W7) only when its second leg is SEEN —
+// seed 3's person seated after the withdrawal round through any entrant.
+//
+// T15-R6 (ruling 53's shape): r4-policy-reported on americano is DERIVED
+// from the games the withdrawn PLAYER had pending when the withdrawal
+// answered — through any entrant, since the pair entrants hold them; reading
+// only the entrant's own rows would copy the product's filter — and it
+// abstains by name while the second leg is unseen. Americano plans every
+// round at Start, so its later games are pending ("walkover" expected, the
+// product's "none" reds); mexicano has generated nothing yet ("none").
 import type { CheckResult } from "../results.ts";
 import type { FixtureRow } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
@@ -141,12 +148,48 @@ export const KEPT_PLAYING_ROUTE = routeTo("W7", "r4-withdrawn-player-kept-playin
  *  entrant, personsNeeded): it is thrown by name (m-5), never a silent null. */
 export function keptPlayingNote(w: Pick<WithdrawalObs, "entrantId" | "afterRound" | "policy" | "before">, mine: readonly string[], stage: Pick<ObservedStage, "fixtures" | "persons">): string | null {
   if (w.policy !== "none" || w.before.length > 0) return null;
-  if (mine.length === 0) throw new Error(`scenario: R4 on an americano stage, but the withdrawn entrant ${w.entrantId} has no linked person — the setup reads one for every entrant (personsNeeded)`);
-  const persons = stage.persons ?? {};
-  const holds = (side: string | null) => side !== null && (side === w.entrantId || (persons[side] ?? []).some((p) => mine.includes(p)));
-  const later = stage.fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && (holds(f.home) || holds(f.away)));
+  const later = secondLeg(w, mine, stage);
   if (later.length === 0) return null;
   return `r4-withdrawn-player-kept-playing: ${mine.join("+")} still seated in ${later.length} later fixture(s) — predicted product red → ${KEPT_PLAYING_ROUTE.wave}`;
+}
+
+/** Whether a side holds the withdrawn player: their own entrant, or a side
+ *  whose recorded members (the stage's observed `persons`) hold their person. */
+function holdsPlayer(entrantId: string, mine: readonly string[], persons: Readonly<Record<string, readonly string[]>>): (side: string | null) => boolean {
+  return (side) => side !== null && (side === entrantId || (persons[side] ?? []).some((p) => mine.includes(p)));
+}
+
+/** The second leg (ruling 51, D14): the fixtures after the withdrawal round
+ *  that seat the withdrawn player through ANY entrant. An americano entrant
+ *  with no linked person cannot reach here (setUpDivision reads one for every
+ *  entrant, personsNeeded): thrown by name (m-5), never a silent []. */
+function secondLeg(w: Pick<WithdrawalObs, "entrantId" | "afterRound">, mine: readonly string[], stage: Pick<ObservedStage, "fixtures" | "persons">): ObservedFixture[] {
+  if (mine.length === 0) throw new Error(`scenario: R4 on an americano stage, but the withdrawn entrant ${w.entrantId} has no linked person — the setup reads one for every entrant (personsNeeded)`);
+  const holds = holdsPlayer(w.entrantId, mine, stage.persons ?? {});
+  return stage.fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && (holds(f.home) || holds(f.away)));
+}
+
+/** A stage row as it stood immediately before the withdrawal call. */
+export interface RowAtWithdrawal { readonly id: string; readonly home: string | null; readonly away: string | null; readonly status: string }
+export type AmericanoPolicyExpectation = { readonly want: "walkover" | "none"; readonly pending: number } | { readonly abstain: string };
+
+/** T15-R6 (ruling 53's shape, withdrawal.ts:213-217): the policy an americano
+ *  withdrawal owes — "walkover" when the withdrawn PLAYER had a pending game
+ *  through any entrant when it answered, else "none" — or an abstain by name:
+ *  while the second leg is unseen (what the withdrawal left cannot be
+ *  judged), or when a pending game seats a side whose members were never
+ *  recorded (it may or may not hold the player). */
+export function americanoPolicyExpectation(w: Pick<WithdrawalObs, "entrantId" | "afterRound">, mine: readonly string[], atWithdrawal: readonly RowAtWithdrawal[], stage: Pick<ObservedStage, "fixtures" | "persons">): AmericanoPolicyExpectation {
+  if (secondLeg(w, mine, stage).length === 0) return { abstain: `second leg unseen: ${mine.join("+")} is seated in no fixture after round ${w.afterRound}, so what the withdrawal left cannot be judged (T15-R6)` };
+  const persons = stage.persons ?? {};
+  const pendingRows = atWithdrawal.filter((f) => PENDING_STATUSES.includes(f.status));
+  for (const f of pendingRows) {
+    const unknown = [f.home, f.away].find((side) => side !== null && side !== w.entrantId && persons[side] === undefined);
+    if (unknown !== undefined) return { abstain: `cannot derive the policy: pending fixture ${f.id} seats ${unknown}, whose members were never recorded` };
+  }
+  const holds = holdsPlayer(w.entrantId, mine, persons);
+  const pending = pendingRows.filter((f) => holds(f.home) || holds(f.away)).length;
+  return { want: pending > 0 ? "walkover" : "none", pending };
 }
 
 export interface NotChallengedLaterInput {
@@ -209,12 +252,16 @@ export const r4Withdrawal: Scenario = {
     const family = familyOf(setup.stage.kind);
     let withdrawal: WithdrawalObs | null = null;
     let heldAt = -1;
+    /** T15-R6: the stage's rows immediately before the withdrawal call. */
+    let atWithdrawal: RowAtWithdrawal[] = [];
     // D12: the withdrawal hook runs on stage 1 only (playDivision).
     const plays = await playDivision(ctx, rec, setup, {
       afterRound: async (round, batch) => {
         if (withdrawal !== null || !R4_TRIGGER[family](round, batch, seed3)) return;
-        const before = (await ctx.driver.listFixtures(setup.division.id))
-          .filter((f) => f.stage_id === setup.stage.id && (f.home_entrant_id === seed3 || f.away_entrant_id === seed3))
+        const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === setup.stage.id);
+        atWithdrawal = rows.map((f) => ({ id: f.id, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status }));
+        const before = rows
+          .filter((f) => f.home_entrant_id === seed3 || f.away_entrant_id === seed3)
           .map((f) => snap({ id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome), declared: null }));
         const out = await ctx.driver.withdraw(seed3);
         rec.facts.add("withdrawn");
@@ -252,14 +299,21 @@ export const r4Withdrawal: Scenario = {
     const opposite = w.policy === "walkover" ? "expunge" : "walkover";
     const later = observed.stages[0].fixtures.filter((f) => (f.roundNo ?? 0) > w.afterRound && f.home !== null && f.away !== null);
     // Ruling 53: on a ladder the policy is the open-format rule over what was pending; the canary also judges the other one.
-    const want = expectedPolicy(w.before);
-    const policyItems: Item[] = family === "ladder"
-      ? withCanary(
-        [{ ok: w.policy === want, note: `policy ${w.policy}, expected ${want} (${w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length} pending at withdrawal; withdrawal.ts open-format rule)` }],
-        [{ ok: w.policy === (want === "none" ? "walkover" : "none"), note: `policy ${w.policy}, expected ${want === "none" ? "walkover" : "none"}` }],
-        ctx.spec.canary,
-      )
-      : [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }];
+    // T15-R6: on americano the same rule over what the withdrawn PLAYER had pending, or an abstain by name.
+    const derived: AmericanoPolicyExpectation = kind === "americano"
+      ? americanoPolicyExpectation(w, setup.persons.get(w.entrantId) ?? [], atWithdrawal, observed.stages[0])
+      : { want: expectedPolicy(w.before), pending: w.before.filter((b) => PENDING_STATUSES.includes(b.status)).length };
+    const policyAbstain = "abstain" in derived ? derived.abstain : null;
+    const policyItems: Item[] = "abstain" in derived ? []
+      : family === "ladder" || kind === "americano"
+        ? withCanary(
+          [{ ok: w.policy === derived.want, note: kind === "americano"
+            ? `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending game(s) of ${(setup.persons.get(w.entrantId) ?? []).join("+")} at withdrawal, through any entrant; withdrawal.ts open-format rule)`
+            : `policy ${w.policy}, expected ${derived.want} (${derived.pending} pending at withdrawal; withdrawal.ts open-format rule)` }],
+          [{ ok: w.policy === (derived.want === "none" ? "walkover" : "none"), note: `policy ${w.policy}, expected ${derived.want === "none" ? "walkover" : "none"}` }],
+          ctx.spec.canary,
+        )
+        : [{ ok: w.policy !== "none", note: `policy ${w.policy} on a started division` }];
     const challenged = family === "ladder"
       ? notChallengedLater({
         kind, seed3: w.entrantId, heldAt,
@@ -276,7 +330,7 @@ export const r4Withdrawal: Scenario = {
         builtAsPosted(setup.built, observed),
         foldParity(rec),
         resultsAsPosted(rec, observed),
-        assertion("r4-policy-reported", policyItems),
+        assertion("r4-policy-reported", policyItems, policyAbstain),
         assertion("r4-cascade-consistent", withCanary(
           [...cascadeItems(w.policy, w.entrantId, w.before, mine, w.walkovers, w.voided, kind), skippedItem(w.policy, w.before, w.skippedFinalized)],
           [...cascadeItems(opposite, w.entrantId, w.before, mine, w.walkovers, w.voided, kind), skippedItem(opposite, w.before, w.skippedFinalized)],
