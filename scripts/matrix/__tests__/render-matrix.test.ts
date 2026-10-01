@@ -213,3 +213,27 @@ describe("renderMatrix — the header names the layer, driver and plan (W1c Task
     expect(line(renderMatrix(run([])))).toBeUndefined();
   });
 });
+
+// W1-driving fix round 2 (ruling T12-R3): an aborted run's grid holds only the
+// cases that finished, so MATRIX.md must not read as a complete run. The
+// banner names the turn and its case (or worker), from results.json alone.
+describe("renderMatrix — an aborted run says so above the grid (W1-driving fix round 2, T12-R3)", () => {
+  const small = { rows: ["league"], sports: ["generic"] };
+  const v3 = (p: Partial<RunResults>): RunResults => ({ schemaVersion: 3, runId: "r3", harnessCommit: "abc1234", startedAt: "s", finishedAt: "f", grid: small, layer: "L3", driver: "http", cases: [], ...p });
+  const banner = (md: string) => lineStarting(md, "> **Run aborted**");
+  const k = { ...kase({}), layer: "L3" as const, driver: "http" as const, width: null };
+  it("empty case first: a run that was not aborted has no banner, with or without cases", () => {
+    expect(banner(renderMatrix(v3({})))).toBeUndefined();
+    expect(banner(renderMatrix(v3({ cases: [k] })))).toBeUndefined();
+  });
+  it("a case's timed-out turn: the banner names the turn, the deadline, the case and how many cases the grid keeps — above the grid", () => {
+    const md = renderMatrix(v3({ cases: [k], aborted: { turn: "case-org provision (the owner's staff window)", deadlineMs: 120000, caseId: "league|generic|score|M1", worker: null } }));
+    expect(banner(md)).toBe("> **Run aborted** — `case-org provision (the owner's staff window)` held its turn past the 120000ms deadline (case `league|generic|score|M1`). No further turn was admitted and no later case started; that case has no result, and the grid shows the 1 case(s) that finished.");
+    expect(md.indexOf("> **Run aborted**")).toBeLessThan(md.indexOf("| row"));
+  });
+  it("a worker's timed-out sign-in names the worker, and an aborted run with no finished case still says why above the empty banner", () => {
+    const md = renderMatrix(v3({ aborted: { turn: "workers' sign-in", deadlineMs: 40, caseId: null, worker: 2 } }));
+    expect(banner(md)).toBe("> **Run aborted** — `workers' sign-in` held its turn past the 40ms deadline (worker 2's sign-in). No further turn was admitted and no later case started; the grid shows the 0 case(s) that finished.");
+    expect(md.indexOf("> **Run aborted**")).toBeLessThan(md.indexOf("**No cases run.**"));
+  });
+});

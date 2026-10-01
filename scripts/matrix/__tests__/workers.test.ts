@@ -10,7 +10,7 @@
 //   a second call on the same inputs → the same answer (no state carried over).
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_WORKERS, TurnDeadlineExceeded, WorkersOutOfRange, oneAtATime, runQueue } from "../lib/workers.ts";
+import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, oneAtATime, runQueue, sharedTurns } from "../lib/workers.ts";
 
 /** A deadline no task in these tests comes near: they settle in microtasks. */
 const ROOMY_MS = 60_000;
@@ -260,11 +260,17 @@ describe("oneAtATime — a run-wide lock for a resource the workers share", () =
 
 // Fix round 1 m-2: a task that never settles (a hung fetch inside the staff
 // window or a sign-in) used to hold the turn forever and park every other
-// worker behind it. Transitions, empty case first: a task settles inside its
+// worker behind it. Fix round 2 (ruling T12-R3): the timed-out request is not
+// aborted and may still land — inside the NEXT holder's window, where its 401
+// would be read as that case's red. So the family fails CLOSED: a deadline on
+// any turn trips every lock made by the same sharedTurns, and no further turn
+// is admitted. Transitions, empty case first: a task settles inside its
 // deadline (its own answer, its timer cleared); a task outlives it (ITS caller
-// gets TurnDeadlineExceeded by name, the turn passes on); the next task after
-// a deadline (runs, with a fresh deadline of its own); a bad deadline (refused).
-describe("oneAtATime — m-2: a task past its deadline fails by name and releases the turn", () => {
+// gets TurnDeadlineExceeded by name, the family trips); a task queued behind
+// it, a later call, and a task on the family's other lock (each refused with
+// TurnsClosed, never run); a turn already running on another lock when the
+// trip fires (admitted before it: it finishes); a bad deadline (refused).
+describe("sharedTurns / oneAtATime — m-2 + T12-R3: a task past its deadline fails by name and closes the family", () => {
   afterEach(() => { vi.useRealTimers(); });
   const never = <T>(): Promise<T> => new Promise<T>(() => {});
   it("empty case first: a task that settles inside its deadline answers as before and leaves no timer behind — value, rejection and a synchronous throw alike", async () => {
@@ -275,43 +281,81 @@ describe("oneAtATime — m-2: a task past its deadline fails by name and release
     await expect(lock((() => { throw new Error("sync"); }) as () => Promise<never>)).rejects.toThrow("sync");
     expect(vi.getTimerCount()).toBe(0);
   });
-  it("a task that never settles rejects ITS caller with TurnDeadlineExceeded at the deadline, naming the turn; the task queued behind it then runs", async () => {
+  it("a task that never settles rejects ITS caller with TurnDeadlineExceeded at the deadline, naming the turn; the family trips and the task queued behind it is refused by name, never run", async () => {
     vi.useFakeTimers();
-    const lock = oneAtATime("case-org provision", 1_000);
+    const turns = sharedTurns(1_000);
+    expect(turns.deadlineMs).toBe(1_000);
+    expect(turns.tripped()).toBeNull();
+    const lock = turns.lock("case-org provision");
     const hung = lock(never);
     const caught = hung.catch((e: unknown) => e);
     let nextRan = false;
-    const next = lock(async () => { nextRan = true; return "next"; });
+    const next = lock(async () => { nextRan = true; return "next"; }).catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(999);
-    expect(nextRan).toBe(false);
+    expect(turns.tripped()).toBeNull();
     await vi.advanceTimersByTimeAsync(1);
     const e = await caught;
     expect(e).toBeInstanceOf(TurnDeadlineExceeded);
     expect(e).toMatchObject({ name: "TurnDeadlineExceeded", label: "case-org provision", ms: 1_000 });
     expect(String(e)).toMatch(/^TurnDeadlineExceeded: case-org provision: held its turn past the 1000ms deadline/);
-    expect(await next).toBe("next");
-    expect(nextRan).toBe(true);
-    // The task after a deadline gets a full deadline of its own, not what is left of the last one.
-    const third = lock(never).catch((x: unknown) => x);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await third).toBeInstanceOf(TurnDeadlineExceeded);
+    expect(turns.tripped()).toBe(e);
+    const refused = await next;
+    expect(refused).toBeInstanceOf(TurnsClosed);
+    expect(refused).toMatchObject({ name: "TurnsClosed", label: "case-org provision", tripped: e });
+    expect(String(refused)).toMatch(/^TurnsClosed: case-org provision: refused — the run's shared turns closed when case-org provision held its turn past the 1000ms deadline/);
+    expect(nextRan).toBe(false);
+    // A later call is refused too, and starts no timer.
+    let laterRan = false;
+    await expect(lock(async () => { laterRan = true; })).rejects.toBeInstanceOf(TurnsClosed);
+    expect(laterRan).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it("on three workers, an item whose turn hangs is that item's named failure, and every other worker's items complete", async () => {
-    const lock = oneAtATime("staff window", 40);
+  it("one family, two locks: a deadline on one closes the other — a turn already running there finishes, every later one is refused", async () => {
+    vi.useFakeTimers();
+    const turns = sharedTurns(1_000);
+    const provision = turns.lock("case-org provision");
+    const signIn = turns.lock("workers' sign-in");
+    let release: (v: string) => void = () => {};
+    const hung = provision(never).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(500);
+    // Admitted at 500ms, so its own deadline (1500ms) is still ahead when the provision trips at 1000ms.
+    const running = signIn(() => new Promise<string>((r) => { release = r; }));
+    const queuedSignIn = signIn(async () => "never admitted").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(turns.tripped()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await hung).toBeInstanceOf(TurnDeadlineExceeded);
+    release("admitted before the trip");
+    expect(await running).toBe("admitted before the trip");
+    const q = await queuedSignIn;
+    expect(q).toBeInstanceOf(TurnsClosed);
+    expect(q).toMatchObject({ label: "workers' sign-in", tripped: { label: "case-org provision" } });
+    await expect(signIn(async () => "late")).rejects.toBeInstanceOf(TurnsClosed);
+    // A second family is untouched: each run gets its own.
+    expect(await sharedTurns(1_000).lock("other run")(async () => "free")).toBe("free");
+  });
+  it("on three workers sharing one lock, a hung turn closes it: no task queued behind it or called after it runs, each is refused by name, and the queue aborts on the first", async () => {
+    const turns = sharedTurns(40);
+    const lock = turns.lock("staff window");
     const items = [0, 1, 2, 3, 4, 5, 6];
     const HUNG = 2;
-    const out = await runQueue(
+    const ran: number[] = [];
+    const refusedItems: number[] = [];
+    const err = await runQueue(
       items, 3, async (n) => n,
-      async (_w, item) => lock(async () => { if (item === HUNG) return never<string>(); await yields(2); return `done ${item}`; }),
-      (_item, _i, e) => (e instanceof TurnDeadlineExceeded ? `failed ${e.name} ${e.label}` : `other ${String(e)}`),
-    );
-    expect(out[HUNG]).toBe("failed TurnDeadlineExceeded staff window");
-    let completed = 0;
-    for (const i of items.filter((x) => x !== HUNG)) { expect(out[i]).toBe(`done ${i}`); completed++; }
-    expect(completed).toBe(items.length - 1);
+      async (_w, item) => lock(async () => { if (item === HUNG) return never<string>(); ran.push(item); await yields(2); return `done ${item}`; }),
+      (item, _i, e) => { if (e instanceof TurnsClosed) refusedItems.push(item); throw e; },
+    ).catch((e: unknown) => e);
+    // The first error to reach the queue is the deadline or a refusal it caused; either names the hung turn.
+    const named = err instanceof TurnsClosed ? err.tripped : err;
+    expect(named).toBeInstanceOf(TurnDeadlineExceeded);
+    expect(named).toMatchObject({ label: "staff window", ms: 40 });
+    expect(turns.tripped()).toBe(named);
+    // Items 0 and 1 took their turns before the hung one; nothing ran after it.
+    expect(ran).toEqual([0, 1]);
+    expect(ran.every((i) => i < HUNG)).toBe(true);
+    expect(refusedItems.length).toBeGreaterThan(0);
+    expect(refusedItems.every((i) => i > HUNG)).toBe(true);
   });
   it("a deadline that is not a positive whole number of ms is refused by name, before any task runs", () => {
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {

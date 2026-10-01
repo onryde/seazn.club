@@ -117,7 +117,22 @@ export interface RunResults {
    *  committed v3 evidence) and every one-worker run is a single sign-in, so
    *  absent means one. */
   workers?: number;
+  /** W1-driving fix round 2 (ruling T12-R3): written only when a shared turn
+   *  outlived its deadline and the run aborted. `cases` then holds the cases
+   *  that finished; the case whose turn it was is named here and gets no red. */
+  aborted?: RunAbort;
   cases: CaseResult[];
+}
+
+/** Why a run aborted (T12-R3). Exactly one of `caseId` and `worker` is set:
+ *  a case-org provision belongs to a case, a worker's sign-in to no case. */
+export interface RunAbort {
+  /** The shared turn that outlived its deadline, by its lock's label. */
+  turn: string;
+  deadlineMs: number;
+  caseId: string | null;
+  /** 0-based: worker 0 signs in before the queue, so a timed-out sign-in is 1..N-1. */
+  worker: number | null;
 }
 
 /** What parseResults reads: committed v2 evidence, or a v3 run. */
@@ -187,6 +202,12 @@ export const RunResultsSchemaV3 = z.strictObject({
   driver: z.enum(DRIVER_KINDS),
   plan: z.string().min(1).optional(),
   workers: z.number().int().min(1).max(MAX_WORKERS).optional(),
+  aborted: z.strictObject({
+    turn: z.string().min(1),
+    deadlineMs: z.number().int().min(1),
+    caseId: z.string().min(1).nullable(),
+    worker: z.number().int().min(0).max(MAX_WORKERS - 1).nullable(),
+  }).refine((a) => (a.caseId === null) !== (a.worker === null), "an abort names the case whose turn it was or the worker whose sign-in it was — exactly one").optional(),
   cases: z.array(CaseSchemaV3),
 });
 

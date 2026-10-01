@@ -118,7 +118,7 @@ import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
-import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunResults } from "./lib/results.ts";
+import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunAbort, type RunResults } from "./lib/results.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
@@ -130,7 +130,7 @@ import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkCellFilter, checkSliceFil
 import { W1_DRIVING_SET, w1DrivingPlanner } from "./lib/w1-driving-set.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
-import { MAX_WORKERS, WorkersOutOfRange, oneAtATime, runQueue } from "./lib/workers.ts";
+import { MAX_WORKERS, TurnDeadlineExceeded, TurnsClosed, WorkersOutOfRange, runQueue, sharedTurns, type SharedTurns } from "./lib/workers.ts";
 
 export const EXIT = Object.freeze({ OK: 0, NO_SIGNAL: 1, REFUSED: 2, ABORTED: 3 });
 
@@ -156,9 +156,11 @@ export interface RunDeps {
   preflight(base: string): Promise<{ ok: boolean; refusals: { reason: string; detail: string }[] }>;
   openDb(): Promise<RunDb>;
   signIn(base: string, email: string): Promise<Session>;
-  /** Fix round 1 m-2: how long one sign-in may hold the workers' sign-in
-   *  turn (default TURN_DEADLINE_MS). realDeps sets it; a test shortens it. */
-  turnDeadlineMs?: number;
+  /** The run's shared turns (fix round 1 m-2, fix round 2 T12-R3): realDeps
+   *  makes them and holds the provision's staff window on them; the workers'
+   *  sign-ins take turns on them too, so a deadline on either closes both.
+   *  Absent (a test's deps): the run makes its own, at TURN_DEADLINE_MS. */
+  turns?: SharedTurns;
   /** `deny` (ruling 24): feature keys the case org is denied after provisioning;
    *  `denied` is what was applied, and it is what the scenario judges. */
   prepareCaseOrg(ctx: { base: string; session: Session; userId: string; plan: string }, input: { name: string; slug: string; deny?: readonly string[] }): Promise<{ orgId: string; orgSlug: string; denied: readonly string[] }>;
@@ -611,10 +613,12 @@ const redactCheck = (c: CheckResult): CheckResult => ({ ...c, reason: redact(c.r
  *  the worker running the case (W1-driving T11: one per worker). */
 interface RunCtx { base: string; session: Session; userId: string; plan: string; runId: string; reportDir: string }
 
-/** The environment, never a case: the DB stopped proving it is ours, or a
- *  case's browser could not be set up. runCase rethrows these, and the worker
- *  queue aborts the whole run on them rather than record a product red. */
-const abortsRun = (e: unknown): boolean => e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted;
+/** The environment, never a case: the DB stopped proving it is ours, a
+ *  case's browser could not be set up, or (T12-R3) a shared turn outlived its
+ *  deadline or was refused because one did. runCase rethrows these, and the
+ *  worker queue aborts the whole run on them rather than record a product red. */
+const abortsRun = (e: unknown): boolean => e instanceof DataDirMismatch || e instanceof DataDirUnset || e instanceof BrowserCaseAborted
+  || e instanceof TurnDeadlineExceeded || e instanceof TurnsClosed;
 
 /** The run's browser could not be opened (no chromium, a hold mismatch): the
  *  environment. Carries the original error so the abort reads exactly as it
@@ -798,6 +802,11 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // Fix round 1 m-1: the workers the queue actually opened (never more than
   // the cases), counted where they open — the header records these.
   const lanes = { opened: 0 };
+  // T12-R3: the shared turn that outlived its deadline, and whose turn it was
+  // (a case's, or a worker's sign-in), set where the timeout reaches its holder.
+  const timedOut: { abort: RunAbort | null } = { abort: null };
+  // Every case that finished, by plan index: what an aborted run keeps.
+  const finished = new Map<number, CaseResult>();
   const db = await deps.openDb();
   try {
     // LOAD-BEARING (final review gap hunt): the data-dir guard proves the
@@ -863,6 +872,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     };
     const progress = (i: number, result: CaseResult): CaseResult => {
       say(`[${i + 1}/${items.length}] ${result.caseId} → ${result.state} ${result.reason}`);
+      finished.set(i, result);
       return result;
     };
     // Today's loop body, on the worker's own session. A browser plan runs
@@ -883,6 +893,9 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // exactly as the sequential loop's did.
     const crashed = (item: RunItem, i: number, e: unknown): CaseResult => {
       if (e instanceof BrowserOpenFailed) throw e.original;
+      // T12-R3: this case held the turn that timed out. It is named in the
+      // run's abort, never given a result: its request may still land.
+      if (e instanceof TurnDeadlineExceeded && item.kind === "driven") timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: item.spec.caseId, worker: null };
       if (abortsRun(e) || item.kind === "planned") throw e;
       return progress(i, crashResult(item.spec, item.layer, item.width, e));
     };
@@ -890,15 +903,31 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // owner's unused ones (apps/web/src/lib/login-link.ts), so workers signing
     // in at once deleted each other's links before they were consumed. The
     // sign-ins take turns; the cases still run concurrently.
-    // m-2: a sign-in that never answers fails by name at the deadline — its
-    // open throws, so the queue aborts as for any refused sign-in — instead of
-    // parking every worker behind it.
-    const signInTurn = oneAtATime("workers' sign-in", deps.turnDeadlineMs ?? TURN_DEADLINE_MS);
+    // m-2 + T12-R3: the sign-ins take turns on the run's shared turns (the
+    // provision's staff window is on them too). A sign-in that never answers
+    // closes them at the deadline; its open throws and the queue aborts, as
+    // for any refused sign-in, naming the worker — never parking the others.
+    const turns = deps.turns ?? sharedTurns(TURN_DEADLINE_MS);
+    const signInTurn = turns.lock("workers' sign-in");
     const open = async (n: number): Promise<Session> => {
       lanes.opened++;
-      return n === 0 ? first : signInTurn(() => deps.signIn(base, owner));
+      if (n === 0) return first;
+      try {
+        return await signInTurn(() => deps.signIn(base, owner));
+      } catch (e) {
+        if (e instanceof TurnDeadlineExceeded) timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: null, worker: n };
+        throw e;
+      }
     };
-    cases.push(...await runQueue(items, cli.workers, open, runOne, crashed));
+    try {
+      cases.push(...await runQueue(items, cli.workers, open, runOne, crashed));
+    } catch (e) {
+      // T12-R3: a turn timeout aborts the run but keeps the cases that
+      // finished, in plan order, and names the holder. A turn error that names
+      // no holder is filed against nothing: it aborts as before, writing nothing.
+      if (!(e instanceof TurnDeadlineExceeded || e instanceof TurnsClosed) || timedOut.abort === null) throw e;
+      cases.push(...[...finished.entries()].sort(([a], [b]) => a - b).map(([, r]) => r));
+    }
   } finally {
     // A failed close must not throw away the cases that already ran. The
     // browser is closed exactly once, after the last case or the abort.
@@ -921,11 +950,12 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // Ruling 46: written only when more than one worker RAN (m-1: a --workers 8
     // run of one case ran one), so a one-worker run's header is today's.
     ...(lanes.opened > 1 ? { workers: lanes.opened } : {}),
+    ...(timedOut.abort !== null ? { aborted: timedOut.abort } : {}),
     cases,
   };
   const { path: resultsPath, written } = writeResults(dir, results, base);
   say(`results → ${resultsPath}`);
-  if (cli.canary !== undefined) return canaryVerdict(cli.canary, cases[0]);
+  if (cli.canary !== undefined && timedOut.abort === null) return canaryVerdict(cli.canary, cases[0]);
   // The summary is printed before MATRIX.md is rendered, so a render failure
   // (renderMatrix refuses a case off the run's grid) cannot lose it.
   printSummary(summariseRun(cases, refusals));
@@ -933,6 +963,12 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     writeFileSync(join(dir, "MATRIX.md"), deps.render(written));
   } catch (e) {
     warn(`matrix: results.json kept at ${resultsPath}; MATRIX.md failed — ${errText(e)}`);
+    return EXIT.ABORTED;
+  }
+  const a = timedOut.abort;
+  if (a !== null) {
+    const whose = a.caseId !== null ? `case ${a.caseId}` : `worker ${a.worker}'s sign-in`;
+    warn(`matrix: aborted — TurnDeadlineExceeded: ${a.turn}: held its turn past the ${a.deadlineMs}ms deadline (${whose}); its request was not aborted and may still land, so no further turn was admitted and no later case started — results.json keeps the ${cases.length} case(s) that finished`);
     return EXIT.ABORTED;
   }
   return cases.length === 0 ? EXIT.NO_SIGNAL : EXIT.OK;
@@ -1048,7 +1084,8 @@ export function describeCommit(git: (args: string[]) => string): string {
  *  bench's raw(), so neither has HttpDriver's per-request timeout. */
 export const TURN_REQUESTS = 2;
 /** How long a task may hold a shared turn before it fails by name and the
- *  turn passes on: the driver's allowance for one request, per request. */
+ *  run's turns close (T12-R3): the driver's allowance for one request, per
+ *  request. */
 export const TURN_DEADLINE_MS = TURN_REQUESTS * REQUEST_TIMEOUT_MS;
 
 export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TURN_DEADLINE_MS): RunDeps {
@@ -1058,12 +1095,15 @@ export function realDeps(dbf: DbFactories = REAL_DB, turnDeadlineMs: number = TU
   // windows overlapped, one's demotion landed between the other's calls, and
   // the admin route answered 401 "Staff access required". The owner's staff
   // flag is per USER, not per session, so the provisions take turns.
-  // m-2: a provision that hangs inside the window fails ITS case by name
-  // (runCase records the throw as that case's error) and the turn passes on.
-  const ownerStaffWindow = oneAtATime("case-org provision (the owner's staff window)", turnDeadlineMs);
+  // m-2 + T12-R3: a provision that hangs inside the window outlives the
+  // deadline, its request may still land in the next holder's window, so the
+  // turns close and the run aborts naming that case (execute) — no red is
+  // filed against it, and no further turn is admitted.
+  const turns = sharedTurns(turnDeadlineMs);
+  const ownerStaffWindow = turns.lock("case-org provision (the owner's staff window)");
   return {
     env: process.env,
-    turnDeadlineMs,
+    turns,
     // harnessCommit and openDb do no async work. Each body runs inside a
     // Promise executor, whose throw REJECTS — exactly what the `async` arrow
     // with no `await` did — so a failing git or handle open still reaches the

@@ -432,6 +432,59 @@ describe("results v3 — the run's worker count (W1-driving T11, ruling 46)", ()
   });
 });
 
+// W1-driving fix round 2 (ruling T12-R3): a shared turn that outlived its
+// deadline aborts the run, and the results say why — the turn and the case
+// whose turn it was, or the worker whose sign-in it was. The case gets no red;
+// the cases that finished are kept. Absent on every run that was not aborted.
+describe("results v3 — an aborted run says why (W1-driving fix round 2, T12-R3)", () => {
+  const PROVISION = { turn: "case-org provision (the owner's staff window)", deadlineMs: 120_000, caseId: "league|generic|score|LIFECYCLE", worker: null };
+  const SIGN_IN = { turn: "workers' sign-in", deadlineMs: 120_000, caseId: null, worker: 2 };
+  it("empty case first: a run with no aborted field (every run that finished) parses, and carries none; no committed v3 file carries one", () => {
+    expect("aborted" in parseResults(V3_RUN)).toBe(false);
+    let v3Files = 0;
+    for (const f of COMMITTED_RESULTS) {
+      const raw = JSON.parse(readFileSync(f, "utf8")) as { schemaVersion: number };
+      if (raw.schemaVersion !== 3) continue;
+      expect("aborted" in parseResults(raw), f).toBe(false);
+      v3Files++;
+    }
+    expect(v3Files).toBeGreaterThan(0);
+  });
+  it("a case's turn and a worker's sign-in each parse and round-trip through writeResults unchanged", () => {
+    let checked = 0;
+    for (const aborted of [PROVISION, SIGN_IN]) {
+      const run: RunResults = { ...V3_RUN, aborted };
+      expect(parseResults(run)).toEqual(run);
+      const { path, written } = writeResults(mkdtempSync(join(tmpdir(), "fm-")), run, RUN_BASE);
+      expect(written.aborted).toEqual(aborted);
+      expect((JSON.parse(readFileSync(path, "utf8")) as { aborted: unknown }).aborted).toEqual(aborted);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+  it("an abort that names both a case and a worker, or neither, or no turn, or a bad deadline or worker, is refused on the field", () => {
+    const bad: unknown[] = [
+      { ...PROVISION, worker: 0 },
+      { ...PROVISION, caseId: null },
+      { ...PROVISION, turn: "" },
+      { ...PROVISION, deadlineMs: 0 },
+      { ...SIGN_IN, worker: -1 },
+      { ...SIGN_IN, worker: MAX_WORKERS },
+      { ...PROVISION, why: "extra key" },
+    ];
+    let checked = 0;
+    for (const aborted of bad) {
+      expect(issuesOf({ ...V3_RUN, aborted }).some((i) => i.startsWith("aborted")), JSON.stringify(aborted)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+  });
+  it("v2 evidence carries no abort: the v2 schema refuses one", () => {
+    const v2: RunResultsV2 = { schemaVersion: 2, runId: "r", harnessCommit: "abc", startedAt: "x", finishedAt: "y", grid: { rows: ["league"], sports: ["generic"] }, cases: [] };
+    expect(() => parseResults({ ...v2, aborted: PROVISION })).toThrow();
+  });
+});
+
 describe("redaction (R14a)", () => {
   it("scrubs tokens, JWTs, device-link secrets, DB URLs, stripe keys", () => {
     const dirty = 'token=abc123def cookie: sb-access=xyz eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.c2lnbmF0dXJl dl_ABCDEFGH12345 postgres://u:p@h/db sk_test_ABCDEFGHIJ';
