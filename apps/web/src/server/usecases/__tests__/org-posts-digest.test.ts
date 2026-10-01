@@ -5,10 +5,12 @@
 // matching this repo's convention of splitting a large usecase's tests
 // across several files once one feature within it grows its own fixture
 // shape (e.g. competition-schedule-*.test.ts for schedule-ai.ts).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
+import { isoWeekKeyUtc } from "@/server/news/enrichment";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { generateWeeklyDigest, sweepWeeklyDigests, listPosts } from "../org-posts";
@@ -380,6 +382,49 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     expect(activeDigests).toHaveLength(1); // entitled + active -> created
     expect(communityDigests).toHaveLength(0); // not entitled -> skipped
     expect(idleDigests).toHaveLength(0); // entitled but nothing to report -> skipped (cron only)
+  });
+
+  it("sweepWeeklyDigests: at most ONE cron digest per org per ISO week; console presses stay unlimited", async () => {
+    // single-sport: badminton via seedDivision; the guard keys on org and ISO week, never on sport.
+    const org = await seedOrg("pro");
+    const div = await seedDivision(org);
+    await decideWithRally(org, div, div.entrantA, div.entrantB);
+    const now = Date.now();
+    const digests = async () => (await listPosts(org.auth, org.orgId)).filter((p) => p.kind === "weekly_digest");
+
+    // 1. First cron firing drafts one, stamped with this ISO week. The expected
+    // key comes from isoWeekKeyUtc, which is code under test (TEST-STRATEGY
+    // rule 3). That is accepted here because iso-week.test.ts pins it to
+    // ISO-8601 facts, and pre-flight checked it against an independent oracle
+    // (7/7 cases; a 52,598-point sweep over 1999-2040 with 0 differences).
+    await sweepWeeklyDigests(now);
+    const first = await digests();
+    expect(first).toHaveLength(1);
+    expect(first[0]!.autoSource).toMatchObject({ trigger: "weekly_digest", origin: "cron", cron_week: isoWeekKeyUtc(now) });
+
+    // 2. A double fire / retry in the same week drafts nothing more, and is a
+    // quiet no-op for this org rather than a swallowed failure (m4: the
+    // per-org catch would hide a throw behind the same count of 1).
+    const warn = vi.spyOn(log, "warn");
+    try {
+      await sweepWeeklyDigests(now);
+      expect(await digests()).toHaveLength(1);
+      expect(warn.mock.calls.filter(([o]) => (o as { orgId?: string } | undefined)?.orgId === org.orgId)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+
+    // 3. The console button is untouched by the guard (P3/D7): still a fresh draft.
+    const pressed = await generateWeeklyDigest(org.auth, org.orgId);
+    expect(pressed.autoSource).not.toHaveProperty("cron_week");
+    expect(await digests()).toHaveLength(2);
+
+    // 4. A later week is a new identity: age the cron row, sweep again, one more draft.
+    await sql`
+      update org_posts set auto_source = jsonb_set(auto_source, '{cron_week}', '"2000-W01"')
+      where org_id = ${org.orgId} and auto_source ? 'cron_week'`;
+    await sweepWeeklyDigests(now);
+    expect(await digests()).toHaveLength(3);
   });
 
   it("digest window respects a non-UTC org timezone without throwing", async () => {
