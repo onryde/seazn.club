@@ -19,6 +19,11 @@
 //   pnpm run matrix:l3 --
 //     [--base URL] [--run-id ID] [--report-dir DIR] [--workers N]
 //     [--only row|sport] [--scenario KEY]   |   [--canary KEY]   |   [--set NAME]
+//
+// `--only` takes any catalogue cell (W1-driving Task 12): a slice cell plans
+// as the slice always has; any other cell is planned by the w1-driving set
+// (lib/w1-driving-set.ts). `--set w1-driving` is the one named set that also
+// takes `--only` and `--scenario`.
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
 //   pnpm run matrix:browser -- --layer L1|L2 [--only row|sport] [--scenario KEY (L1)]
 //
@@ -40,7 +45,7 @@
 //      cannot see the deliberate break (R17).
 //   2  refused, reason on stderr, nothing written: a usage error (unknown
 //      flag, a positional, --canary with --only/--scenario, --set with any
-//      filter, a run id that is empty or too long once slugged; a --workers
+//      filter but --set w1-driving with --only/--scenario, a run id that is empty or too long once slugged; a --workers
 //      that is not an integer in 1..MAX_WORKERS, or above 1 on a browser run
 //      (D10); an unknown
 //      --driver, --driver browser without --width, a --width outside
@@ -121,7 +126,8 @@ import {
   DataDirMismatch, DataDirUnset, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
 } from "./lib/seed-org.ts";
 import { resolveSportCfg } from "./lib/sport-cfg.ts";
-import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkSliceFilter, planCanaryCase, planSliceCases } from "./lib/slice.ts";
+import { CANARY_CHECK, SLICE_SPORTS, checkCanary, checkCellFilter, checkSliceFilter, isSliceCell, planCanaryCase, planSliceCases } from "./lib/slice.ts";
+import { W1_DRIVING_SET, w1DrivingPlanner } from "./lib/w1-driving-set.ts";
 import { offlineBuilderDefault } from "./lib/variants.ts";
 import { BROWSER_WIDTHS, type BrowserWidth } from "./lib/widths.ts";
 import { MAX_WORKERS, WorkersOutOfRange, oneAtATime, runQueue } from "./lib/workers.ts";
@@ -246,19 +252,28 @@ export class UndeclaredPlannerSport extends Error {
   }
 }
 
-export const slicePlanner: PlanCases = (cli) => ({
-  sports: SLICE_SPORTS,
-  deniesFeatures: false,
-  plan: (variantFor) => (cli.canary !== undefined
-    ? [planCanaryCase(variantFor, cli.canary)]
-    : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario })),
-});
+export const slicePlanner: PlanCases = (cli) => {
+  // W1-driving Task 12: an --only cell outside the slice is planned by the
+  // w1-driving set, restricted to that cell; a slice cell plans exactly as
+  // before (the committed plans stay frozen).
+  if (cli.canary === undefined && cli.only !== undefined && !isSliceCell(cli.only)) return w1DrivingPlanner({ only: cli.only, scenario: cli.scenario });
+  return {
+    sports: SLICE_SPORTS,
+    deniesFeatures: false,
+    plan: (variantFor) => (cli.canary !== undefined
+      ? [planCanaryCase(variantFor, cli.canary)]
+      : planSliceCases(variantFor, { only: cli.only, scenario: cli.scenario })),
+  };
+};
 
 /** The named sets `--set` chooses from. */
 export const SETS: Readonly<Record<string, PlanCases | PlanLayers>> = Object.freeze({
   [PROBE_SET]: probePlanner, [PAD_PROOF_SET]: padProofPlanner,
   // W1c Task 12 (ruling 39 / D7): layered — each places its own widths.
   [WIDTH_SWEEP_SET]: widthSweepPlanner, [API_ONLY_BROWSER_SET]: apiOnlyBrowserPlanner,
+  // W1-driving Task 12 (ruling 48): every catalogue cell × the four scripts,
+  // plus cricket's test cases — and it takes --only / --scenario.
+  [W1_DRIVING_SET]: w1DrivingPlanner,
 });
 
 export class UnknownSet extends Error {
@@ -424,7 +439,7 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME]`;
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)`;
 
 /** D10 (ruling 52): browser workers are not this wave's — one chromium per
  *  run, one context per case, one case at a time. */
@@ -459,9 +474,10 @@ function parseWorkers(v: string | undefined): { workers: number } | { usage: str
  *  this does not name (--set or --canary beside a filter or a layer). The
  *  driver and width are recorded apart (D9). */
 export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario">): string {
-  if (cli.set !== undefined) return `--set ${cli.set}`;
-  if (cli.canary !== undefined) return `--canary ${cli.canary}`;
   const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
+  // Only --set w1-driving takes filters (Task 12); for every other set they are refused, so this is `--set NAME`.
+  if (cli.set !== undefined) return [`--set ${cli.set}`, ...filters].join(" ");
+  if (cli.canary !== undefined) return `--canary ${cli.canary}`;
   return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}`, ...filters].join(" ");
 }
 
@@ -532,7 +548,9 @@ function parseCli(argv: string[]): Cli | { usage: string } {
     if (values.layer === "L2" && values.scenario !== undefined) return { usage: "--layer L2 plans the committed l2-pairs.json runs; it takes no --scenario" };
     layer = values.layer;
   }
-  if (values.set !== undefined && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
+  // W1-driving Task 12: the w1-driving set takes --only/--scenario, never --canary.
+  if (values.set === W1_DRIVING_SET && values.canary !== undefined) return { usage: `--set ${W1_DRIVING_SET} takes --only and --scenario; it takes no --canary` };
+  if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
     return { usage: "--set runs a named set; it takes no --only, --scenario or --canary" };
   }
   if (values.canary !== undefined && (values.only !== undefined || values.scenario !== undefined)) {
@@ -913,7 +931,12 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
   // PF13: the keys are static, so a typo is refused before anything touches the DB or the server.
   try {
     if (cli.canary !== undefined) checkCanary(cli.canary);
-    else checkSliceFilter({ only: cli.only, scenario: cli.scenario });
+    else {
+      // Task 12: --only takes any catalogue cell here. A layered plan keeps
+      // the slice's cells: its planner refuses any other when it is built, below.
+      checkSliceFilter({ scenario: cli.scenario });
+      if (cli.only !== undefined) checkCellFilter(cli.only);
+    }
   } catch (e) {
     warn(`matrix: ${errText(e)}`);
     return EXIT.REFUSED;

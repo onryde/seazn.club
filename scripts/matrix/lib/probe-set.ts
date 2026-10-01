@@ -33,10 +33,12 @@ export class ProbeRowUnderivable extends Error {
 }
 
 export interface ProbeRows {
-  /** The API-only rows driven LIFECYCLE: single-stage (a multi-stage row needs
-   *  seed-proposal handling, deferred to W1-driving), gated or not — a gated
-   *  row's ALLOWED path is driven here, its refusal by its DENIED case (fix
-   *  round 1, I-1: a 402 alone proves only that the body parses). */
+  /** The API-only rows driven LIFECYCLE: single-stage only — `w1b-probe` is
+   *  W1b's frozen probe; the multi-stage API-only row (`group_group_ko`) is
+   *  driven by the `w1-driving` set (`lib/w1-driving-set.ts`), which
+   *  W1-driving added — gated or not: a gated row's ALLOWED path is driven
+   *  here, its refusal by its DENIED case (fix round 1, I-1: a 402 alone
+   *  proves only that the body parses). */
   readonly api: readonly RowKey[];
   /** Every row the product gates, with its gate, in registry order — from the
    *  gate map, never a typed list, so a product change to the gates moves
