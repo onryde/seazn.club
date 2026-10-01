@@ -15,7 +15,8 @@ The build branches for PR-1 and PR-2 are cut from `main` after #908 merges.
   (§6.2), and the v1 QR contract (§7.6), which this design retires.
 - The capture repo's S1 spec (`seazn.club.capture`, `docs/specs/2026-09-30-s1-live-stream-design.md`) and its
   amendment `docs/specs/2026-10-01-s1-amendment-stable-code-design.md`. The amendment was **approved by capture's
-  owner on 2026-10-01** (capture commit `93d629a`, branch `feat/s1-plan-c`).
+  owner on 2026-10-01** (capture commit `93d629a`, branch `feat/s1-plan-c`). Its revision `69ef359` (2026-10-01)
+  folds in our replies to its asks, G0-d to G0-g, and its A18. **This spec is diffed against `69ef359`.**
   - **Its wire shapes are the base of our contract:** the QR, `GET code`, `POST start`, `POST beat` and the answer
     table.
   - Our replies to its ten asks are in §4.
@@ -72,6 +73,7 @@ owner accepted the web-side consequences recorded in the log, and those conseque
 | A14 | A dead live phone may be taken over once there has been **no beat AND no video for 60 s**. The new phone rejoins the open broadcast, on the same credit. | §6.5, rule T4. |
 | A16 | Auto start fires once per match: at match start or on a late pairing, whichever comes first. | §7.2. |
 | A17 | The operator's Stop wins. The phone re-sends the stop on its next pairing. The server closes that sid even late, idempotently, and never a newer one. | §6.8. |
+| A18 | `cred.srt` may be null, with `preferred:"rtmps"`, **as a safety net only**. The target stays SRT on `live.seazn.club` / `live.stg.seazn.club`. With `srt` null the phone publishes RTMPS only, with no SRT→RTMPS fallback. | `STREAM_SRT_ENABLED` (§6.4). Its initial value is set by the staging ffmpeg SRT test (G0, S2). |
 
 ---
 
@@ -117,48 +119,74 @@ re-scanning, and see from the panel whether the phone is healthy.
 
 ## 4. The contract and its publish gate (G0) — binding on PR-1
 
-**Where the contract comes from.** It is capture's approved amendment (`93d629a`, its "Contract shapes" and "The
-answer table"), with our replies to its asks:
+**Where the contract comes from.** It is capture's approved amendment (`93d629a`, revised `69ef359`: its "Contract
+shapes", "The answer table" and "Asks for the web side"), with our replies to its asks:
 
 - **Spelling:** the phone's words are kebab-case and the server's snake_case. `mode` is `"automatic" | "operator"`.
 - **Names become final only when we publish the schemas** in `docs/contracts/` (§6.14). Until then PR-1 builds and
   tests the server behaviour against zod shapes in `schemas.ts` that use exactly these names.
+- **Optional versus null.** A field written `x?` in the shapes is **omitted** when it does not apply, never sent as
+  `null`. A field written `x | null` is **always present**. This matters because the two sides' parsers are strict:
+  `scheduledStart` is `?` on the waiting shape and `| null` on the beat answer (§6.4); `sid`, `startedBy` and
+  `endReason` on the beat answer, and `endReason` and `cred` on the session shape, are `?`.
+- **The body envelope.** Every 2xx is the bare shape, never the house `{ok, data}` envelope. Every refusal is the
+  bare object `{ code: "<word>", ...fields }`, for example `409 {code: "already_live", sid, startedBy}` and
+  `401 {code: "code_ended"}`. No refusal carries an English sentence. The phone routes therefore return their own
+  `NextResponse` through `handler()` (it passes a `Response` through unchanged) and never throw a bare `HttpError`
+  for a refusal, because `handler()` drops `HttpError.extra` and would lose `sid` and `startedBy`. A test pins the
+  raw body of every answer, success and refusal, against the contract fixtures.
 
 ### 4.1 Our replies to capture's asks (adopted)
 
 | Ask | Reply |
 |---|---|
 | 1 — the beat answer carries what the phone shows; `auto_stopped` in both vocabularies | Agreed as written (§6.3.3). |
-| 2 — the claim per phone, `new \| resume`; answers `replaced` and `taken` | Agreed as written (§6.5, T1–T7). |
+| 2 — the claim per phone, `new \| resume`; answers `replaced` and `taken` | Agreed as written (§6.5, T1–T7). A claim of either kind for a slot with **no** current phone is accepted. |
 | 3 — `go-live` and `live` told apart; an ended sid is answered `over` first | Agreed as written (§6.3.3). |
 | 4 — `409 already_live {sid, startedBy}` | Agreed as written. |
 | 5 — the waiting shape gains `overlayUrl` | Agreed as written. |
 | 6 — the server applies auto start and auto stop | Agreed as written (§7.2, §7.3). |
 | 7 — a stop from the phone closes its `sid`, and only that one | Agreed as written (T23, T24). |
-| 8 — beats and 410 | **Beats never answer 410.** A sid that has ended, named by a beat (its `sid` or its `stopped`), gets `200 {state:"over", sid, endReason}`. 410 is reserved to `GET code`. This server answers an ended broadcast on `GET` with the waiting shape, so **no route of ours sends 410** today. |
+| 8 — beats and 410 | **Beats never answer 410.** A sid that has ended, named by a beat (its `sid` or its `stopped`), gets `200 {state:"over", sid, endReason}`. 410 is reserved to `GET code`. This server answers an ended broadcast on `GET` with the session shape in `completed` or `failed` (to the phone) or the waiting shape (to the scan), so **no route of ours sends 410** today. |
 | 9 — `POST start` carries `{phone}`; a phone that is not current gets `409 replaced` | Agreed as written. |
 | 10 — a warming broadcast whose phone has gone quiet is ended | **Required, agreed.** The new end reason `phone_lost` (not `stopped`), with no credit spent. §6.8.3 gives the exact clock. |
-| New from us | **`cred.srt` may be `null`, with `preferred: "rtmps"`,** until SRT on the custom ingest host is proven on staging (§6.4, S2). |
+| New from us (capture's A18) | **`cred.srt` may be `null`, with `preferred: "rtmps"`, as a safety net only.** The target is SRT on `live.*`. The staging ffmpeg SRT test (S2) sets the initial `STREAM_SRT_ENABLED` (§6.4). |
 
 ### 4.2 G0 — the publish gate
 
 **The schemas and fixtures in `docs/contracts/` are written and published only when capture has confirmed every item
-below in writing.** The confirmation is recorded in this file, with the date and capture's commit.
+below in writing, and the staging SRT test has a result.** Each confirmation is recorded here with its date and
+capture's commit.
 
 | # | Item | Status |
 |---|---|---|
-| G0-a | Ask 8 as replied: beats never 410, and an ended sid named by `sid` or `stopped` gets `over`. | sent |
-| G0-b | Ask 10 with the end reason `phone_lost`. | sent |
-| G0-c | `cred.srt` nullable, with `preferred: "rtmps"`. | sent |
-| G0-d | **`GET code` carries `?phone=`.** It is additive. Native already holds the phone id at Arming. Without it the server cannot tell the current phone from anyone holding a photo of the QR, and would serve publish secrets to both. That would undo W3's purpose (§6.3.1, §10.2). The JS scan's GET may omit it, and then receives the waiting shape, which is all JS reads. | **to send** |
-| G0-e | **`device: {model} \| null` on claim beats.** It is additive and optional. PR-2 shows the paired phone's model and the takeover notice (§7.5). | **to send** |
-| G0-f | **The end-reason value `failed`**, for every end that is neither a stop nor one of capture's named reasons, for example the credit running out at the live transition. Without it such an end would have to be sent as `stopped`, which capture's `lastEnd` renders "Organiser stopped it", a false sentence. Capture's own "any other → `stopped` line" already has the slot for it. | **to send** |
-| G0-g | **Answer precedence for a claim refused while it carries `stopped`.** The answer is `taken`, not `over X`, so the phone hears the refusal ("This camera is live on another phone"). The stop is still applied, and any 2xx delivers it under capture's rule. | **to send** |
+| G0-a | Ask 8 as replied: beats never 410, and an ended sid named by `sid` or `stopped` gets `over`. | **agreed**, `69ef359`, 2026-10-01 |
+| G0-b | Ask 10 with the end reason `phone_lost`, and no credit spent (the credit is spent at the first ingest). | **agreed**, `69ef359`, 2026-10-01 |
+| G0-c | `cred.srt` nullable, with `preferred: "rtmps"`, as A18's safety net only. | **agreed**, `69ef359`, 2026-10-01 |
+| G0-d | **`GET code` carries `?phone=`.** `cred` goes only to the slot's current phone (§6.3.1, §10.2). Any other caller gets the waiting or session shape with `cred` absent. The JS scan's GET omits `phone` and receives the waiting shape. | **agreed**, `69ef359`, 2026-10-01 |
+| G0-e | **`device: {model} \| null` on claim beats**, `Build.MODEL` only. PR-2 shows the paired phone's model and the takeover notice (§7.5). | **agreed**, `69ef359`, 2026-10-01 |
+| G0-f | **The end-reason value `failed`**, for a server-side end that is neither a stop nor a timeout (a credit running out at the live transition, a provider fault). Capture reads it "Stream ended by Seazn — ask the organiser". | **agreed**, `69ef359`, 2026-10-01 |
+| G0-g | **A claim and a stop are independent.** A claim refused while it carries `stopped` is answered `taken` or `replaced` by the claim rules, not `over X`. The stop is still applied, and that 2xx delivers it. | **agreed**, `69ef359`, 2026-10-01 |
+| G0-h | **The staging ffmpeg SRT test** on `srt://live.stg.seazn.club:778` (S2), run once our owner OKs it. Its result sets the initial `STREAM_SRT_ENABLED` (§6.4). | **the only open item** |
 
 - **PR-1 does not merge until G0 is closed.** Staging deploys from `main`, so G0 sits on the staging critical path.
   The plan schedules the contract task last, and builds every server behaviour before it.
 - **G0 settles names and confirmations, not behaviour.** If capture's answer to any item changes behaviour (a state,
   a refusal, a status code), the change comes back to this file and to our owner. It is not absorbed in the plan.
+- **G0-h does not wait on PR-1.** The test needs only a Cloudflare input and the staging custom host, so it runs
+  against a hand-provisioned staging input before PR-1 merges. S2 repeats it through PR-1's own descriptor.
+- **Points for capture, from the diff against `69ef359`** (their document; we did not change ours to match):
+  1. The refusal body is unspecified there. We send `{code: "<word>", ...fields}` and bare 2xx shapes (§4 above);
+     their "Contract shapes" should say so.
+  2. G0-d's "a hint to claim" has no field in the shapes. We send none: an absent `cred` is the hint.
+  3. Their `pollSeconds` "from the latest 2xx answer, beat or descriptor": the session shape carries no
+     `pollSeconds`, nor `code`, `scheduledStart` or `destinationName`. Their parser must treat those as absent there,
+     not as an error.
+  4. _Known gaps_ ("Closed if lane D agrees ask 10") and the round-3 disposition of ask 10 are stale: ask 10 is
+     agreed.
+  5. `GET code` sends no `slot`. We default it to 0; S3's court phones will need it on the GET.
+  6. An A17 stop that closes a broadcast another phone has since taken over reaches that phone as `over X stopped`,
+     which their `lastEnd` reads "Organiser stopped it". The vocabulary has no "stopped from another phone" value.
 
 ---
 
@@ -275,11 +303,11 @@ unless a status is shown.
 | T2 | claim `new` from P ≠ C | slot `paired`, `starting` or `armed` | C → ENDED(replaced). P becomes current **and the session's phone**. Event `phone_takeover`. | answer for the slot (`go-live S` when armed) |
 | T3 | claim `new` from P ≠ C | slot `live` and C is not dead | refused. No row is written. Event `claim_refused`. | `taken` |
 | T4 | claim `new` from P ≠ C | slot `live·dead`: C has sent **no beat for ≥ 60 s** AND a fresh Cloudflare read says the input is **not connected** AND no poll sample has read it connected for ≥ 60 s | C → ENDED(replaced). P becomes current and the session's phone. Same sid, same credit. Event `phone_takeover {dead: true}`. | `live S` (P rejoins) |
-| T5 | claim `resume` from P | C = P, or slot `empty` with P's last ended pairing **not** ENDED(replaced) | as T1 | answer for the slot |
-| T6 | claim `resume` from P | C ≠ P, or P was ENDED(replaced) | nothing changes (resume never steals) | `replaced` |
+| T5 | claim `resume` from P | C = P, or the slot has no current pairing (ask 2: "a claim of either kind … for a slot with none") | as T1 | answer for the slot |
+| T6 | claim `resume` from P | another phone C ≠ P is current | nothing changes (resume never steals) | `replaced` |
 | T7 | beat with no claim from P | P is not current | nothing changes | `replaced` |
 | T8 | beat from current P | — | latest beat stored (§6.10). Session ticked (§6.11). | per §6.3.3 |
-| T9 | beat from P naming an ended sid X, by its `sid` or its `stopped` | X is terminal | — | `200 over X` with X's endReason (ask 8; **first**, whatever has opened since, except T3's `taken`, G0-g). Never 410. |
+| T9 | beat from P naming an ended sid X, by its `sid` or its `stopped` | X is terminal | — | `200 over X` with X's endReason (ask 8; **first**, whatever has opened since, except a refused claim's `taken` or `replaced` and a non-current caller's `replaced`, G0-g). Never 410. |
 | T10 | organiser Go live | no current present phone | refused | `409 phone_not_paired` (panel) |
 | T11 | organiser Go live | current phone present | session created, `startCause organiser`, phone = C | current phone's next beat: `waiting` (5 s) while starting, then `go-live S` |
 | T12 | `POST start` from P | P is not current | refused | `409 replaced` |
@@ -293,7 +321,7 @@ unless a status is shown.
 | T20 | organiser Stop (A3) | open session | `stop(stopped)`. **The pairing stays current.** PR-2: auto start is blocked for the match. | `over S stopped`. The phone returns to paired-waiting on the same code. |
 | T21 | `ended` beat (the operator's Stop, A3/A8) from the session's phone | session open | `stop(operator_stopped)`. **P → ENDED(operator_stopped): the pairing ends**, and the next broadcast needs a rescan. Event `phone_stop`. | `over S stopped` |
 | T22 | `ended` beat from a phone that is not current | S open | nothing (ask 2: a beat from a phone that is not current changes nothing) | `replaced` |
-| T23 | `stopped: X` on a paired beat (sid null) | X is still open | `stop(operator_stopped)`, after the beat's claim is applied (ask 7, as written) | `over X stopped` (or `taken` per G0-g) |
+| T23 | `stopped: X` on a paired beat (sid null) | X is still open | `stop(operator_stopped)`, after the beat's claim is applied (ask 7, as written) | `over X stopped` (or `taken` / `replaced` per G0-g) |
 | T24 | `stopped: X` | X has already ended (a newer sid may be open) | nothing: idempotent, and it never touches another sid | `over X` with X's endReason (T9) |
 | T25 | phone silent while live (W8) | slot `live` | nothing ends. The panel warns (PR-2). | — |
 | T26 | Cloudflare input drops while live | — | nothing ends. The chain shows "No signal", as today. | `live S` |
@@ -379,19 +407,34 @@ unknown there, so it answers 401.
 
 The org is pinned with `withTenant` after resolution, which is the `resolveDeviceLinkToken` superuser-read pattern.
 
-#### 6.3.1 `GET /api/v1/capture/codes/{code}?slot=0&phone=<id>`
+#### 6.3.1 `GET /api/v1/capture/codes/{code}?phone=<id>`
 
-- `200` **session** shape if and only if: the fixture has an open session in `warming`, `live` or `ending`; the
-  `phone` (G0-d) is that session's phone; and C1 passes.
-- `200` **waiting** shape otherwise. This includes:
-  - `requested` or `provisioning` (with `pollSeconds: 5`);
-  - a phone that is not current;
-  - a missing `phone` (capture's JS scan, which reads only the waiting fields);
-  - an ended broadcast. Capture's ServerWord reads a waiting shape at Arming as NoBroadcast.
-- `401 code_ended` for a well-formed code that is unknown, has the wrong tok, or is ended (C1).
-- `404` for a code that is not well-formed (T41a).
-- `422`, `429` with `Retry-After`, `503`.
-- **This route never sends 410.** The contract reserves 410 to it (ask 8), and this server has no case for it.
+`slot` is optional on the query and defaults to `0`; capture's GET sends only `phone`. Any other slot is `422` (T41).
+
+**With `phone`** (native, at Arming and on every reconnect), the answer is decided by the fixture's latest session
+for the slot:
+
+- open in `warming`, `live` or `ending` → the **session** shape. `cred` is present **only** when `phone` is the
+  slot's current phone, which is also the session's phone (G0-d). Any other phone gets the same shape with `cred`
+  **absent**; capture's ServerWord reads that as "open, not current", sends a `resume` claim and is answered
+  `replaced`. `endReason` is present only in `ending`.
+- ended → the **session** shape in `completed` (an end reason) or `failed` (a fail reason), with its wire
+  `endReason` (§6.8.4) and **no `cred`**, so a phone that fetches after the end reads the right line ("the line for
+  its `endReason`" in capture's answer table). Served until a newer session is created. A session that ended before
+  reaching `warming` has no `warmingDeadline` and was never named to a phone, so it answers the **waiting** shape.
+- `requested` or `provisioning` → the **waiting** shape, with `pollSeconds: 5`. A phone holding an older sid reads it
+  as NoBroadcast, which is correct: one open session per fixture means its sid has ended.
+- no session ever → the **waiting** shape.
+
+**Without `phone`** (capture's JS scan, which reads only the waiting fields): always the **waiting** shape.
+
+**Statuses:**
+
+- `401 {code: "code_ended"}` for a well-formed code that is unknown, has the wrong tok, or is ended (C1).
+- `404 {code: "not_a_stream_code"}` for a code that is not well-formed (T41a).
+- `422`, `429` with `Retry-After`, `503`. Capture counts each as NoEvidence.
+- **This route never sends 410.** The contract reserves 410 to it (ask 8), and this server has no case for it: an
+  ended broadcast is the `completed` / `failed` session shape above.
 
 **Waiting shape:**
 
@@ -403,17 +446,16 @@ The org is pinned with `withTenant` after resolution, which is the `resolveDevic
 **Session shape:**
 
 ```
-{ state: "warming" | "live" | "ending", endReason?: <§6.8.4>, sid,
-  cred: { srt: { url, streamId, passphrase, latencyMs } | null, rtmps: { url, streamKey } }, preferred: "srt" | "rtmps",
+{ state: "warming" | "live" | "ending" | "completed" | "failed", endReason?: <§6.8.4>, sid,
+  cred?: { srt: { url, streamId, passphrase, latencyMs } | null, rtmps: { url, streamKey } }, preferred: "srt" | "rtmps",
   playbackUrl, overlayUrl: string | null, holdWindowSeconds: { srt, rtmps }, maxDurationMinutes,
   warmingDeadline: epoch-s, label, venueTimezone, scoreUpdates: "realtime" | "polled", autoAllowed,
   heartbeatUrl, startUrl }
 ```
 
-Capture's shape admits `completed` and `failed`, but **this server never serves them**. Serving them would hand out
-publish credentials for a broadcast that is over. Once the session ends, GET answers waiting, and the beat carries
-the end reason (T9). `endReason` is present only in `ending`. `cred.srt` is `null`, and `preferred` is `"rtmps"`,
-while `STREAM_SRT_ENABLED` is off (§6.4).
+`cred` is present only in `warming`, `live` and `ending`, and only to the current phone. `endReason` is present in
+`ending`, `completed` and `failed`, and omitted otherwise. `cred.srt` is `null`, and `preferred` is `"rtmps"`, while
+`STREAM_SRT_ENABLED` is off (A18; §6.4).
 
 #### 6.3.2 `POST /api/v1/capture/codes/{code}/beats`
 
@@ -462,15 +504,19 @@ while `STREAM_SRT_ENABLED` is off (§6.4).
 
 | # | Situation (for the caller) | Answer |
 |---|---|---|
-| 1 | the beat's claim was refused (T3) | `taken` (G0-g) |
-| 2 | the beat names an ended sid X, by its `sid` or its `stopped`, including one this beat just closed (T9, T21, T23, T24) | `over X` + endReason (ask 8) |
-| 3 | the caller is not current (T6, T7, T22) | `replaced` |
+| 1 | the beat's `new` claim was refused (T3) | `taken` (G0-g) |
+| 2 | the caller is not current, judged **before** this beat's own `ended` is applied: a refused `resume` claim (T6), or no claim (T7, T22) | `replaced` (ask 2, G0-g) |
+| 3 | the beat names an ended sid X, by its `sid` or its `stopped`, including one this beat just closed (T9, T21, T23, T24) | `over X` + endReason (ask 8) |
 | 4 | slot `empty` or `paired` | `waiting` |
 | 5 | slot `starting` | `waiting`, with `pollSeconds: 5` |
 | 6 | slot `armed` | `go-live S` + `startedBy` |
 | 7 | slot `live` or `live·dead` | `live S` |
 
-- The waiting fields and `pollSeconds` are on **every** 2xx answer (ask 1).
+- Rows 1–2 before row 3 is G0-g: who holds the slot is answered first, and a `stopped` the same beat carries is
+  still applied and is delivered by that 2xx. The operator's own `ended` beat (T21) is judged current, so it hears
+  `over S stopped`.
+- The waiting fields and `pollSeconds` are on **every** 2xx answer (ask 1). `sid`, `startedBy` and `endReason` are
+  omitted where they do not apply, never `null`.
 - **A beat never answers 410** (ask 8).
 - `401` means the code has ended. `422` and `429` are counted by the phone and change nothing.
 
@@ -479,14 +525,14 @@ while `STREAM_SRT_ENABLED` is off (§6.4).
 The body is `{phone}`. The answers are T12–T15 and §6.7.2.
 
 - `200 {sid}`
-- `409 already_live {sid, startedBy}`
-- `409 replaced`
-- `409 no_destination`
-- `402 no_credit`
-- `403 not_entitled`
-- `503` (storage exhausted, ingest unavailable, relay disabled). Capture reads it as "Couldn't start the stream — try
-  again".
-- `401`, `422`, `429`
+- `409 {code: "already_live", sid, startedBy}`
+- `409 {code: "replaced"}`
+- `409 {code: "no_destination"}`
+- `402 {code: "no_credit"}`
+- `403 {code: "not_entitled"}`
+- `503 {code: "unavailable"}` (storage exhausted, ingest unavailable, relay disabled). Capture reads it as "Couldn't
+  start the stream — try again".
+- `401 {code: "code_ended"}`, `422`, `429` with `Retry-After`
 
 **Not idempotent by design.** A retry after a lost `200` meets `409 already_live` naming the same sid. The phone
 treats that as success (capture's answer table).
@@ -497,13 +543,13 @@ treats that as success (capture's answer table).
 |---|---|
 | `label` | "{side A} v {side B}". It falls back to "Match {n}" while a side is not yet known. Entrant names are user data, not translated. |
 | `venueTimezone` | Venue lane V305: division override → org timezone → UTC (the `checkin-token.ts` query). |
-| `scheduledStart` | `fixtures.scheduled_at`, as epoch seconds, or null. |
+| `scheduledStart` | `fixtures.scheduled_at`, as epoch seconds. With no `scheduled_at` it is **omitted** from the waiting shape (`scheduledStart?`) and `null` on the beat answer (`scheduledStart \| null`), per capture's shapes. |
 | `pollSeconds` | §6.9. |
 | `autoAllowed` | PR-1: always `false`. PR-2: the fixture's switch (§7.1). |
 | `destinationName` | The pre-picked target's `label` (§6.7.3), or null when there is none or it is archived (T36). |
 | `heartbeatUrl`, `startUrl` | `${captureOrigin()}/api/v1/capture/codes/{code}/beats` and `…/start`. |
 | `cred.rtmps.url`, `cred.srt.url` | The stored Cloudflare values with the **hostname** replaced by `STREAM_INGEST_HOST` (W15). See below. |
-| `cred.srt` | `null` while `STREAM_SRT_ENABLED` is off for the environment (our reply to the asks, §4.1). |
+| `cred.srt` | Present while `STREAM_SRT_ENABLED` is on, which is the target. `null` while it is off: A18's safety net (§4.1). |
 | `cred.*` secrets | `readFirstInput` (secret-columns.ts), opened only inside this request. |
 | `preferred`, `latencyMs` | `preferred` is `QR_PREFERRED_DEFAULT` (`srt`) when SRT is enabled, otherwise `"rtmps"`. A guard ties the two: `preferred` never names a null shape. `latencyMs` is `SRT_LATENCY_MS` (2000), unchanged. |
 | `playbackUrl` | `https://${STREAM_PLAYBACK_HOST}/${ingest_input_uid}/manifest/video.m3u8`, a bare manifest with no query (W14). |
@@ -519,12 +565,12 @@ treats that as success (capture's answer table).
 - **Any other hostname answers `503`** (`ingest_host_unexpected`) and is logged as an error. Capture refuses a `cred`
   that is not on its environment's ingest host, so serving it would only fail the start on the phone.
 - With `STREAM_INGEST_HOST` unset (local or CI), Cloudflare's values are served.
-- **SRT is off until it is proven.** `STREAM_SRT_ENABLED` is off in every environment when PR-1 ships, so the
-  descriptor carries `cred.srt: null` and `preferred: "rtmps"`.
-  - Staging step S2 proves SRT on `live.stg.seazn.club`. Only then is the setting turned on, first in
-    `fly.stg.toml`, then in `fly.toml`.
-  - Each flip is recorded in this file with the S2 evidence.
-  - A failed S2 leaves SRT off: phones stream over RTMPS only, and nothing else changes.
+- **SRT on `live.*` is the target; `srt: null` is A18's safety net only.**
+  - G0-h's ffmpeg SRT test on `srt://live.stg.seazn.club:778` sets the initial `STREAM_SRT_ENABLED`: on in
+    `fly.stg.toml` and `fly.toml` if it passed, off if it did not. It runs before the schemas are published.
+  - With the flag off the descriptor carries `cred.srt: null` and `preferred: "rtmps"`. The phone publishes RTMPS
+    only, with no SRT→RTMPS fallback, so a hold window ends the broadcast.
+  - Each value, and each later flip, is recorded in this file with its test evidence (S2).
 
 **`captureOrigin()`** is `OAUTH_BASE_URL || NEXT_PUBLIC_BASE_URL`. Both are set in `fly.toml` and `fly.stg.toml`. Only
 when neither is set (local or CI) does it fall back to `deps.appUrl`. It is **never header-derived** where the
@@ -645,8 +691,8 @@ stopped` and waits on the same code.
 - **A `stopped: X` on a later paired beat** (A17, ask 7 as written) closes X if X is still open. It applies after the
   beat's claim, whatever that claim's outcome (T23). If X has already ended, it is a no-op (T24). It never touches
   any sid but X.
-- **Every answer is 200 `over X`** (ask 8), or `taken` when the same beat's claim was refused (G0-g). The phone
-  treats any 2xx as delivered, so a resend is harmless.
+- **Every answer is 200 `over X`** (ask 8), or `taken` / `replaced` when the same beat's claim was refused or its
+  phone is not current (G0-g). The phone treats any 2xx as delivered, so a resend is harmless.
 - **A consequence of "the operator's Stop wins".** A phone whose operator stopped X closes X when it pairs again, even
   if another phone has since taken X over through A14. This follows capture's ruling. Nothing in our design narrows
   it.
@@ -825,7 +871,7 @@ files are the cross-repo authority. The zod schemas mirror them, and parity is a
 |---|---|---|---|
 | `STREAM_INGEST_HOST` | `live.seazn.club` | `live.stg.seazn.club` | unset (Cloudflare's own hosts) |
 | `STREAM_PLAYBACK_HOST` | `customer-vv7totdc7j19biah.cloudflarestream.com` | same | the fake driver's value |
-| `STREAM_SRT_ENABLED` | off until S2 passes, then on | off until S2 passes, then on | on (the fake driver) |
+| `STREAM_SRT_ENABLED` | set by G0-h's SRT test: on if it passed, off (A18's safety net) if not | the same, after staging has run on it | on (the fake driver) |
 | `RELAY_KEK` | existing Fly secret | existing | `.env` |
 
 - **A real-driver deployment without `STREAM_PLAYBACK_HOST`** answers a session GET with `503` (`playback_unconfigured`)
@@ -1151,7 +1197,7 @@ alter table fixture_stream_settings
 | no-store | `Cache-Control: private, no-store`, `Pragma: no-cache` on every phone answer | header asserted on all three routes, success and error |
 | never logged | No route logs a header or a body. The pino logger gains `redact` paths: `req.headers.authorization`, `*.tok`, `*.cred`, `*.streamKey`, `*.passphrase`. Sentry capture on these routes drops the request body. | A spy-logger test drives each route, including its error paths, and asserts that no captured line contains the tok, the stream key or the passphrase |
 | constant-time | §10.1 | The compare's call is asserted, and a mutation to `===` must be killed by a structural test that pins `timingSafeEqual` |
-| valid tok only | C1 | wrong tok, ended code, unknown code, a non-current phone and a missing `phone` (G0-d) all receive **no `cred`** |
+| valid tok only | C1 | wrong tok, ended code, unknown code, a non-current phone, a missing `phone` (G0-d) and an ended session (`completed` / `failed`) all receive **no `cred`** |
 | current phone only | §6.3.1 | Two phones on one code: only the session's phone gets `cred`. After a takeover, only the new one does. |
 | decrypted per request | `readFirstInput` inside the request, never cached | covered by enc-boundary.test.ts, unchanged |
 
@@ -1205,7 +1251,7 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
     constants;
   - an ordering-differential case: a phone silent at 60 s but due at 90 s.
 - `slot.ts`: every row of §5.4. **The empty case is stated first:** no pairing and no session → `empty`.
-- Beat answer: every row of §6.3.3, including T9's precedence over every other row.
+- Beat answer: every row of §6.3.3, including its precedence: `taken`, then `replaced`, then T9's `over X` over every slot row.
 - pollSeconds: every row of §6.6, at T−30 min ± 1 s, with and without `scheduled_at`.
 - End-reason mapping: §6.8.4, both directions, swept over the declared DB enums. Anti-vacuity: the count of mapped
   reasons must equal the enum length.
@@ -1232,6 +1278,16 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
   session with `first_ingest_at`.
 - Descriptor: every field from its source (§6.4); the `overlayUrl` entitlement both ways; `captureOrigin` ignores a
   forged `X-Forwarded-Host`; `cred` absent for every non-qualifying caller.
+- GET per latest session (§6.3.1): open → session shape, `cred` only to the current phone and **absent** (not null)
+  for another; ended after `warming` → `completed` / `failed` with its wire `endReason` and no `cred`; ended before
+  `warming`, `requested`, `provisioning` or none → waiting; no `phone` → waiting in every case.
+- Wire bodies (§4): every 2xx is the bare shape (no `ok`, no `data`); every refusal is `{code, ...}` with
+  `already_live` carrying `sid` and `startedBy`; `?` fields are omitted, never `null` (`scheduledStart` on waiting,
+  `sid` / `startedBy` / `endReason` on the beat answer). Mutant: route a refusal through a bare `HttpError` → the
+  `already_live` case loses `sid` → red.
+- Claim edges (ask 2): a `resume` for a slot with no current pairing is accepted, including from a phone once
+  replaced; a refused claim carrying `stopped: X` (X ended) answers `taken` / `replaced`, applies the stop, and
+  never `over X` (G0-g).
 - **Money** (programme §5.4 style, against the Stripe sandbox where purchase is involved):
   - an operator-started session consumes exactly once, at live;
   - a takeover (T4) consumes nothing;
@@ -1249,7 +1305,7 @@ tests covering changed files run (owner, 2026-09-28). Expected values come from 
 | C2 drop "no open session" | T34: a live session's phone gets 401 → red |
 | A9 refusal removed (T3) | the live-slot claim case |
 | T4: drop the beat conjunct / drop the CF conjunct / drop the sample conjunct (three mutants) | each its own case |
-| T6 `resume` treated as `new` | a resume from a replaced phone steals the slot → red |
+| T6 `resume` treated as `new` | a resume from a phone that is not current steals the slot from the current one → red |
 | T24: on `stopped: X`, close the fixture's open sid instead of X | `stopped: X` (X ended) while a newer Y is open → Y is closed → red |
 | `phone_not_paired` gate removed | the organiser Go live with no phone → red |
 | pollSeconds near window off by one | T−30 boundary |
@@ -1403,8 +1459,8 @@ Each step records the evidence (a command and its output, or a screenshot) in th
 
 | # | Step |
 |---|---|
-| S1 | Deploy with `STREAM_INGEST_HOST=live.stg.seazn.club`, `STREAM_PLAYBACK_HOST` set and `STREAM_SRT_ENABLED` off. `GET` a session descriptor as the current phone. Confirm that `cred.rtmps.url` carries the staging host, `cred.srt` is `null`, `preferred` is `"rtmps"`, and `playbackUrl` carries the customer host. |
-| S2 | **Gate (W15).** First, publish with ffmpeg over **RTMPS** to the descriptor's `rtmps://live.stg.seazn.club:443/live/` and stream key. The input must reach `connected` (Cloudflare status read). Then turn `STREAM_SRT_ENABLED` on **for staging only**, and publish over **SRT** to `srt://live.stg.seazn.club:778` with the descriptor's streamid and passphrase. A pass leaves SRT on for staging, and production follows in its own deploy, with the evidence recorded in §6.4. A failure turns staging back off: phones keep RTMPS only. |
+| S1 | Deploy with `STREAM_INGEST_HOST=live.stg.seazn.club`, `STREAM_PLAYBACK_HOST` set and `STREAM_SRT_ENABLED` at G0-h's value. `GET` a session descriptor as the current phone. Confirm that `cred.rtmps.url` carries the staging host and `playbackUrl` the customer host. With SRT on: `cred.srt.url` is `srt://live.stg.seazn.club:778` and `preferred` is `"srt"`. With SRT off: `cred.srt` is `null` and `preferred` is `"rtmps"`. As a second phone, the same GET has no `cred`. |
+| S2 | **Gate (W15, G0-h).** SRT on `live.*` is the target. G0-h's ffmpeg SRT test runs first, before PR-1 merges, against a hand-provisioned staging input, once our owner OKs it; its result sets the initial `STREAM_SRT_ENABLED`. After deploy, repeat through PR-1's descriptor: publish with ffmpeg over **RTMPS** to `rtmps://live.stg.seazn.club:443/live/` with the stream key, and, with SRT on, over **SRT** to `srt://live.stg.seazn.club:778` with the streamid and passphrase. Each must reach `connected` (Cloudflare status read). The evidence is recorded in §6.4. A failed SRT run turns the flag off (A18's safety net: phones publish RTMPS only, with no fallback) until a rerun passes. |
 | S3 | Measure the SRT hold window (disconnect, then time until the manifest ends) against the declared 183 s. A difference beyond the slack changes the constant before production. |
 | S4 | `playbackUrl` returns a manifest while live. |
 | S5 | `curl -i` on all three phone routes through the public host: `Cache-Control: private, no-store`, and `cf-cache-status` not `HIT` across two requests. |
@@ -1443,8 +1499,8 @@ These were not ruled in conversation. Each is decided here with its reason, and 
    is read as `cancelled`.
 3. **The C1b/C3 deferral.** A reissued or expired code keeps serving only its open session's phone, until that
    session ends.
-4. **Credentials go only to the current phone.** Every other valid-tok caller gets the waiting shape. This needs
-   `phone` on GET (G0-d).
+4. **Credentials go only to the current phone.** Another phone gets the session shape with `cred` absent, and the
+   JS scan (no `phone`) gets the waiting shape. This needs `phone` on GET (G0-d, agreed).
 5. **Auto stop applies only to a session created before the result.** A post-match broadcast is never auto-stopped
    (§7.3).
 6. **Auto start and auto stop both require the phone's mode to be `automatic`**, following capture's A4.
@@ -1457,12 +1513,13 @@ These were not ruled in conversation. Each is decided here with its reason, and 
     phone.
 11. **Retry-After** and the warming re-anchor stay in PR-1. The original split had them there, and the task brief
     did not list them.
-12. **No route sends 410, and GET never serves a `completed` or `failed` session shape.** A terminal broadcast's
-    reason travels on the beat's `over`, so no publish secret is served for a broadcast that has ended (§6.3.1).
+12. **No route sends 410.** An ended broadcast is served to the phone as the session shape in `completed` or
+    `failed`, with its `endReason` and **never `cred`**, so no publish secret is served for a broadcast that has
+    ended (§6.3.1).
 13. **A malformed code is `404`, and an unknown code is `401`.** Capture's 404 row ("not a stream code") stays
     meaningful, and no existence oracle is created (T41a).
-14. **G0-d to G0-g are this spec's additions** to capture's approved shapes. Each is additive or a clarification,
-    and each is listed for the coordinator to send.
+14. **G0-d to G0-g were this spec's additions** to capture's approved shapes. Capture agreed all four in `69ef359`
+    (2026-10-01). Points still for capture are listed under §4.2.
 
 ---
 
@@ -1479,7 +1536,7 @@ These were not ruled in conversation. Each is decided here with its reason, and 
 | X7 | `mode: auto` (brainstorm) **vs** `automatic` (capture amendment) | `automatic` (coordinator reply). |
 | X8 | A17 "phone treats 200\|410 as delivered" **vs** capture's ask 8 (may beats answer 410?) | Beats never answer 410. An ended sid named by a beat gets `200 over` (§4.1, G0-a). |
 | X9 | Q4 "our timeouts still end silent sessions" | **False for a live passthrough session.** Its only timeout is the 300-min wall clock (`expiry.ts` `evaluate`: no stale-beat arm for passthrough). It is true for warming (10 min). This is put to the owner as §16 O2, not silently fixed. |
-| X10 | Capture's amendment, Known gaps: "the credit was spent at the start" | False. The credit is consumed at the `live` transition (programme §5.2), so a broadcast ended by ask 10 costs nothing. To be told to capture with the G0 items. |
+| X10 | Capture's amendment, Known gaps: "the credit was spent at the start" | False. The credit is consumed at the `live` transition (programme §5.2), so a broadcast ended by ask 10 costs nothing. **Agreed by capture** in `69ef359`: the credit is spent at the first ingest. |
 | X11 | Brainstorm ask-10 wording "over with stopped" (capture's draft) **vs** the coordinator's reply | `phone_lost` (coordinator reply, G0-b). |
 | X12 | Brainstorm "A17 late stop: 200/410" and the draft's "no-op answered 200" **vs** the coordinator's ask-8 reply | `200 over X` for an ended X (§6.3.3 row 2). |
 
