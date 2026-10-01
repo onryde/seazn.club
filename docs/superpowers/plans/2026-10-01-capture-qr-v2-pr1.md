@@ -228,10 +228,10 @@ authority, and never on a peer session's word.
 - **W25:** the "Match {n}" fallback on the wire is in the competition's locale, which is
   `organizations.default_locale`.
 
-**B0 interfaces (A27; merged in #908, 58e8103e3, not #909: FP28). No task edits their text, and an extraction moves
+**B0 interfaces (A27; split across two merges, FP28: coalescing + V428 via #908 58e8103e3; B0's four fixes via #909 81d1f3d73). No task edits their text, and an extraction moves
 them verbatim:**
 
-> B0 (in #908; the preflight wrote #909, FP28) owns four things: the single-statement coalesced read (`latestPollSampleWithSince`,
+> B0 (its four fixes merged in #909 81d1f3d73 on top of #908's coalescing; FP28) owns four things: the single-statement coalesced read (`latestPollSampleWithSince`,
 > `stream-sessions.ts:580`), the one-tx sample+event, `expireTargetHolders`' per-holder catch (`:1759`), and the
 > ingest-cf output word map (`server/relay/ingest-cf.ts`). No task edits their text; extraction moves them verbatim.
 
@@ -423,7 +423,7 @@ does about it.
 | FP25 | A7's rig helper pairs "through the real T5 ensure and claim path" | T5 has ensure but **no claim**. The pairing row is first written by T8b's `postBeat` (B6). | T6 helper, T8b re-point |
 | FP26 | A15's `CounterFn` change reaches `rate-limit.test.ts` only | `__setRateLimitCounterForTests` is also called by `competitions/[id]/exports/scorer-sheets/__tests__/route.test.ts`, `scoring-durable-idempotency.test.ts`, `scoring-idem-cache-version.test.ts` and `scoring-replay-is-free.test.ts`. | T8c |
 | FP27 | Every `completed` session has an end reason | `session.ts:230` completes with `s.endReason ?? signal.endReason ?? null`. Spec §6.8.4 has no row for a null. | T4b (R11) |
-| FP28 | A27 (preflight): "B0 (in #909)" | B0's coalescing (`COALESCED_SAMPLE_MAX_AGE_MS`, first added in 8fd00ec18) and `V428__stream_poll_claim.sql` reached main through **#908** (58e8103e3, `feat/fixture-page-stream`). #909 (81d1f3d73) is the cron Worker, and brought `V429__weekly_digest_cron_once.sql`. The constraints are unchanged; only the attribution moves. | Global Constraints (A27 block) |
+| FP28 | A27 (preflight): "B0 (in #909)"; first amendment pass: "in #908" | **Both, split.** The coalescing itself (`COALESCED_SAMPLE_MAX_AGE_MS`, 8fd00ec18) and `V428__stream_poll_claim.sql` reached main through **#908** (58e8103e3). B0's four fixes — the single-statement coalesced read (b3eeb5b79), the one-transaction sample+event (9a1994b7b), `expireTargetHolders`' per-holder catch (b73abe309, 54059e0c0) and the `disconnected` output word (9c14e2909, 946b04913) — reached main through **#909** (81d1f3d73), with V429. Verified with `git merge-base --is-ancestor`. The constraints are unchanged. | Global Constraints (A27 block) |
 
 **Correct premises, kept by the pre-flight:** P3 (`_stream-migration.ts` reads only V410), P5 (`fakes.ts:125`), P7
 (`V214__fixtures.sql:21`), P10 (`stream-contract.test.ts:220`, `:224`), P13 (V281), and P14's `stream-credits.ts:125`
