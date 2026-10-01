@@ -862,7 +862,13 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       if (abortsRun(e) || item.kind === "planned") throw e;
       return progress(i, crashResult(item.spec, item.layer, item.width, e));
     };
-    cases.push(...await runQueue(items, cli.workers, async (n) => (n === 0 ? first : deps.signIn(base, owner)), runOne, crashed));
+    // Found live (w1drv-t11-w3b, -w8): requesting a sign-in link deletes the
+    // owner's unused ones (apps/web/src/lib/login-link.ts), so workers signing
+    // in at once deleted each other's links before they were consumed. The
+    // sign-ins take turns; the cases still run concurrently.
+    const signInTurn = oneAtATime();
+    const open = async (n: number): Promise<Session> => (n === 0 ? first : signInTurn(() => deps.signIn(base, owner)));
+    cases.push(...await runQueue(items, cli.workers, open, runOne, crashed));
   } finally {
     // A failed close must not throw away the cases that already ran. The
     // browser is closed exactly once, after the last case or the abort.

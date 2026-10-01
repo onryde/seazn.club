@@ -2197,6 +2197,36 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     expect(activeAtDispose).toBe(0);
     expect(d.order.at(-1)).toBe("dispose");
   });
+  // Found live (w1drv-t11-w3b, w1drv-t11-w8): a sign-in requests a magic link
+  // and consumes it, and requesting a link deletes the owner's unused ones
+  // (apps/web/src/lib/login-link.ts:13, `delete from login_links where
+  // user_id = … and used = false`). Workers opened at once raced: one's
+  // request deleted another's link before it was consumed, and the run
+  // aborted "This sign-in link is invalid or has expired". The fake below
+  // models exactly that: a sign-in fails when another was requested while it
+  // was in flight.
+  it("the workers' sign-ins take turns: an overlapping magic-link request would delete another worker's link (the live abort)", async () => {
+    capture();
+    let requested = 0;
+    let overlapping = 0;
+    let active = 0;
+    const d = workerDeps();
+    const signIn = d.signIn;
+    d.signIn = async (b, e) => {
+      const mine = ++requested;
+      active++;
+      if (active > 1) overlapping++;
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      if (mine !== requested) throw new Error("/api/auth/magic-link/consume: This sign-in link is invalid or has expired");
+      return signIn(b, e);
+    };
+    const dir = dirFor();
+    expect(await runSlice(d, ["--workers", "3", "--run-id", "wks", "--report-dir", dir])).toBe(0);
+    expect(d.order.filter((x) => x === "signIn")).toHaveLength(3);
+    expect(overlapping).toBe(0);
+    expect(resultsIn(dir, "wks").cases.map((c) => c.caseId)).toEqual(planIds);
+  });
   it("--workers above the case count opens only as many workers as cases", async () => {
     capture();
     const d = workerDeps({ planCases: undefined });
