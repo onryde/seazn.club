@@ -4,8 +4,11 @@
 // reachability from supportsDraws.
 import type { MatchOutcome, StageCtx, StageKind } from "@seazn/engine/core";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
-import { RefusedCall, type CompetitionRef, type DivisionRef, type EntrantRow, type FixtureRow, type StageRef } from "../driver/types.ts";
+import {
+  RefusedCall, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type StageRef,
+} from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
+import { redact } from "../redact.ts";
 import { routeTo } from "../routing.ts";
 import {
   isTerminal, snap, toObservedOutcome,
@@ -15,6 +18,7 @@ import {
 import { drawsAllowed, entrantKindFor, sportModule } from "../sport-cfg.ts";
 import { generateStream, matchesRequest, type RequestMatch } from "../streams/index.ts";
 import { START, type RequestedOutcome, type StreamEvent } from "../streams/types.ts";
+import { SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
 import { ScenarioUnsupported, type ScenarioContext } from "./types.ts";
 
 /** Final review I-2: what the harness POSTED beside what the product says it
@@ -39,6 +43,19 @@ export interface DivisionSetup {
   built: BuiltReadback;
   seedOf: (id: string) => number;
   idOfSeed: (seed: number) => string;
+  /** The division's entrant kind (entrantKindFor on the case cfg). */
+  kind: EntrantKind;
+  /** The ids addEntrants answered: the division's own entrants. A fixture
+   *  side outside it is one the product minted (an americano pair entrant,
+   *  stages.ts pairEntrantsFor). */
+  entrantIds: ReadonlySet<string>;
+  /** PADPROOF's rosterless team entrants (SetUpOptions.rosterlessTeams, D3):
+   *  no members posted, no lineup PUT. */
+  rosterless: boolean;
+  /** TEAM entrant → its roster as the product stored it (entrantMembers, in
+   *  squad order): what ensureLineups builds each lineup from. Empty for a
+   *  non-team or rosterless division; never an individual's persons. */
+  rosters: ReadonlyMap<string, readonly EntrantMember[]>;
 }
 
 export interface ParityObs {
@@ -81,13 +98,19 @@ export class Recorder {
    *  fixture it decides to be one. */
   readonly storedFixtures = new Set<string>();
   readonly notes: string[] = [];
+  /** W1-driving Task 4: the fixtures ensureLineups has PUT lineups on — once
+   *  per fixture, since a second PUT is a replacement nobody meant. */
+  readonly lineupFixtures = new Set<string>();
+  /** W1-driving Task 4: lineup PUTs made, one per division-entrant side. */
+  lineupsPut = 0;
   drawsPosted = 0;
   decided = 0;
   events = 0;
 }
 
 /** Ruling 28 (Q-A): driving breadth W1a deferred — ladder /
- *  americano / mexicano, multi-stage seeding, team rosters — is its own wave.
+ *  americano / mexicano, multi-stage seeding (team rosters landed in
+ *  W1-driving Task 4) — is its own wave.
  *  A deferral names a wave that is not done (scenario-catalogue.test.ts). */
 export const DRIVING_ROUTE = routeTo("W1-driving", "L3 driving breadth deferred from the first slice (ruling 28)");
 /** The deferral sites' wave argument (the Q-A guard reads it by value); kept
@@ -101,10 +124,10 @@ export const MAX_ITERATIONS = 64;
 const BYE_PHANTOM = "__bye__";
 
 /** `rosterlessTeams`: a team-kind sport plays on team entrants with no members
- *  instead of deferring. Only PADPROOF asks for it (W1c Tasks 9–11): Step 0
- *  saw the pad score a rosterless team fixture (volleyball beach), and the
- *  plan's D3 proves the team sports' pads there. Rosters (members, lineups)
- *  stay W1-driving's for every other scenario. */
+ *  and no lineups. Only PADPROOF asks for it (W1c Tasks 9–11): Step 0 saw the
+ *  pad score a rosterless team fixture (volleyball beach), and the plan's D3
+ *  proves the team sports' pads there. Every other scenario seats full
+ *  rosters and PUTs lineups (W1-driving Task 4). */
 export interface SetUpOptions { readonly rosterlessTeams?: boolean }
 
 export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrantCount: number, o: SetUpOptions = {}): Promise<DivisionSetup> {
@@ -113,7 +136,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const bodies = stagesForRow(ctx.spec.row);
   if (bodies.length > 1) throw new ScenarioUnsupported(DRIVING_WAVE, "multi-stage rows need seed-proposal handling");
   const kind = entrantKindFor(ctx.spec.sport, ctx.cfg);
-  if (kind === "team" && o.rosterlessTeams !== true) throw new ScenarioUnsupported(DRIVING_WAVE, "team rosters");
+  const rosterless = o.rosterlessTeams === true;
   const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
   const competition = await ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug });
   // The override crosses the wire as the division's config, as the editor sends it.
@@ -121,7 +144,28 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   const division = await ctx.driver.createDivision(competition.id, { name: `Matrix ${ctx.spec.sport}`, slug: "d", sportKey: ctx.spec.sport, variantKey: ctx.spec.variant, config });
   await ctx.driver.postStages(division.id, bodies);
   const inputs = Array.from({ length: entrantCount }, (_, i) => ({ displayName: `Matrix Player ${i + 1}`, seed: i + 1 }));
-  const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => ({ ...e, kind })));
+  // Task 4 (fold-in beneath ruling 49): a team entrant carries the catalog's
+  // full roster (D2); an entrant with none carries no `members` key at all,
+  // so an individual's add is byte for byte what it was.
+  const seated = kind === "team" && !rosterless;
+  const membersOf = (seed: number): readonly MemberInput[] | undefined => (seated ? rosterMembers(ctx.spec.sport, ctx.cfg, seed) : undefined);
+  const entrants = await ctx.driver.addEntrants(division.id, inputs.map((e) => {
+    const members = membersOf(e.seed);
+    return { ...e, kind, ...(members !== undefined ? { members } : {}) };
+  }));
+  // The rosters are the PRODUCT's person ids, read back for every entrant it
+  // answered — never the inputs. A roster that is not the full declared size
+  // would play short, so it is refused by name. (An entrant the product never
+  // stored is life-built-as-posted's red, not this guard's.)
+  const rosters = new Map<string, readonly EntrantMember[]>();
+  const size = seated ? rosterSize(ctx.spec.sport, ctx.cfg) : 0;
+  if (seated) {
+    for (const e of entrants) {
+      const stored = await ctx.driver.entrantMembers(e.id);
+      if (stored.length !== size) throw new Error(`scenario: entrant ${e.id} (seed ${e.seed ?? "none"}) reads back ${stored.length} roster member(s), ${size} posted — a short roster would play short`);
+      rosters.set(e.id, stored);
+    }
+  }
   await ctx.driver.start(division.id);
   const stages = await ctx.driver.listStages(division.id);
   const stage = stages[0];
@@ -137,6 +181,7 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   rec.notes.push(`stage ${stage.kind} status after start: ${stage.status}`);
   return {
     competition, division, stage, entrants, built,
+    kind, entrantIds: new Set(entrants.map((e) => e.id)), rosterless, rosters,
     seedOf: (id) => seeds.get(id) ?? Number.MAX_SAFE_INTEGER,
     idOfSeed: (seed) => {
       const e = entrants.find((x) => x.seed === seed);
@@ -144,6 +189,110 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
       return e.id;
     },
   };
+}
+
+/** The product's text for each engine lineup issue (fixtures.ts
+ *  formatLineupIssue, one template per LineupIssue kind; scenarios.test.ts
+ *  renders every template from the product's source and pins each to its
+ *  kind). */
+export const LINEUP_ISSUE_TEXT: Readonly<Record<string, RegExp>> = Object.freeze({
+  starting_size: /^Starting lineup has \d+ player\(s\), expected \d+$/,
+  bench_size: /^Bench has \d+ player\(s\), maximum is \d+$/,
+  duplicate_person: /^Person .+ appears more than once in the lineup$/,
+  unknown_position: /^Person .+ is assigned an unknown position ".*"$/,
+  role_unknown: /^Person .+ is assigned an unknown role ".*"$/,
+  role_duplicate: /^Role ".*" is held by more than one person \(.*\)$/,
+  role_missing: /^Required role ".*" is not filled by a starting player$/,
+  group_min: /^Position group ".*" has \d+ starting player\(s\), minimum is \d+$/,
+  group_max: /^Position group ".*" has \d+ starting player\(s\), maximum is \d+$/,
+});
+
+/** T3-R1: a lineup warning's issue KIND, never its words. The product formats
+ *  each issue (LINEUP_ISSUE_TEXT); the fake answers the engine's issue as
+ *  JSON (fake-driver.ts putLineup). null: a warning in neither shape. */
+export function lineupWarningKind(warning: string): string | null {
+  try {
+    const issue: unknown = JSON.parse(warning);
+    if (issue !== null && typeof issue === "object" && typeof (issue as { kind?: unknown }).kind === "string") return (issue as { kind: string }).kind;
+  } catch {
+    // Not JSON: the product's text.
+  }
+  for (const [kind, text] of Object.entries(LINEUP_ISSUE_TEXT)) if (text.test(warning)) return kind;
+  return null;
+}
+
+/** The engine issue that states a side's starting count (catalog.ts
+ *  LineupIssue): the one kind the side-size finding can show up as. */
+const SIDE_SIZE_KIND = "starting_size";
+
+/** T3-R1: the product checked a lineup the harness PUT and warned, and the
+ *  warning is not the known side-size finding. The lineup was built to pass
+ *  the engine's validateLineup on the case cfg (rosters.test.ts sweeps every
+ *  team preset), so a warning means the product judged it against something
+ *  else — red, by name. */
+export class LineupWarned extends Error {
+  readonly fixtureId: string;
+  readonly entrantId: string;
+  readonly kind: string | null;
+  readonly warning: string;
+  constructor(row: string, fixtureId: string, entrantId: string, kind: string | null, warning: string) {
+    super(redact(`scenario: the product warned on the ${row} lineup for entrant ${entrantId} on fixture ${fixtureId} — [${kind ?? "unclassified"}] ${warning}; only a ${SIDE_SIZE_KIND} warning on a known side-size row (${SIDE_SIZE_FOUND.join(", ")}) is expected`));
+    this.name = "LineupWarned";
+    this.fixtureId = fixtureId;
+    this.entrantId = entrantId;
+    this.kind = kind;
+    this.warning = redact(warning);
+  }
+}
+
+/** T3-R1: the known side-size finding is a named note (once per case per
+ *  warning); every other warning is a LineupWarned red. */
+function judgeLineupWarnings(ctx: ScenarioContext, rec: Recorder, fixtureId: string, entrantId: string, warnings: readonly string[]): void {
+  const row = `${ctx.spec.sport}/${ctx.spec.variant}`;
+  for (const w of warnings) {
+    const kind = lineupWarningKind(w);
+    if (kind !== SIDE_SIZE_KIND || !SIDE_SIZE_FOUND.includes(row)) throw new LineupWarned(row, fixtureId, entrantId, kind, w);
+    const note = `lineup-side-size-warning: ${row} [${kind}] ${w} — the known side-size finding (rosters.ts SIDE_SIZE_ROUTE) → ${SIDE_SIZE_ROUTE.wave}`;
+    if (!rec.notes.includes(note)) rec.notes.push(note);
+  }
+}
+
+/** Fold-in beneath ruling 49: a team fixture's lineups are PUT while it is
+ *  still scheduled, before the harness posts anything to it — members alone
+ *  never reach the engine, which reads per-fixture lineups only (engine-db
+ *  loadLineupPair). Once per fixture (rec.lineupFixtures), because a second
+ *  PUT is a replacement the scenario never meant. `f.status` is the status
+ *  the caller just read (decideFixture's fixtureState).
+ *  Plan review 1 I-1: gated on TEAM kind AND the side being one of the
+ *  division's own entrants. An americano/mexicano fixture seats ephemeral
+ *  PAIR entrants the product minted (stages.ts pairEntrantsFor), which are in
+ *  no roster; such a side is skipped with a named note — once per stage
+ *  (PF-5) — never thrown and never PUT. A DIVISION entrant with no recorded
+ *  roster is still a harness bug, named. A fixture already past scheduled
+ *  (a foreign write started it) takes no PUT — the product would refuse it —
+ *  and is noted; its parity is already the unjudgeable item. */
+export async function ensureLineups(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow): Promise<void> {
+  // D3: a PADPROOF rosterless setup scores team fixtures with no lineup (W1c D-T9-2), so it returns first.
+  if (setup.rosterless || setup.kind !== "team" || rec.lineupFixtures.has(f.id)) return;
+  if (f.status !== "scheduled") {
+    const note = `lineups: ${f.id} was ${f.status} when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`;
+    if (!rec.notes.includes(note)) rec.notes.push(note);
+    return;
+  }
+  for (const side of [f.home_entrant_id, f.away_entrant_id]) {
+    if (side === null) continue;
+    if (!setup.entrantIds.has(side)) {
+      const note = `lineups: stage ${f.stage_id} seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side`;
+      if (!rec.notes.includes(note)) rec.notes.push(note);
+      continue;
+    }
+    const members = setup.rosters.get(side);
+    if (members === undefined) throw new Error(`scenario: fixture ${f.id} seats division entrant ${side}, which has no recorded roster`);
+    const check = await ctx.driver.putLineup(f.id, side, lineupFor(ctx.spec.sport, ctx.cfg, members));
+    rec.lineupsPut++;
+    judgeLineupWarnings(ctx, rec, f.id, side, check.warnings);
+  }
+  rec.lineupFixtures.add(f.id);
 }
 
 export async function recordGenerate(ctx: ScenarioContext, rec: Recorder, stageId: string): Promise<FixtureRow[] | null> {
@@ -182,6 +331,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     rec.notes.push(`${f.id}: already ${state.status} before the harness posted`);
     return;
   }
+  // Task 4: a team fixture's lineups go in first, on the score branch and the
+  // forfeit branch alike (M1's walkover comes through here).
+  await ensureLineups(ctx, rec, setup, { ...f, status: state.status });
   const generated = generateStream({ sportKey: ctx.spec.sport, cfg: ctx.cfg, stageKind: setup.stage.kind as StageKind, home, away, outcome });
   // What the driver actually sends: a forfeit on a fixture already under way
   // is the bare core.forfeit (http-driver.ts forfeit), so START only when the

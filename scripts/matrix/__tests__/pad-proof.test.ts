@@ -10,9 +10,11 @@ import { PAD_SPORTS, noPadReason } from "../lib/pad-sports.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
+import type { EntrantInput } from "../lib/driver/types.ts";
 import { CANARY_MARK } from "../lib/scenarios/assertions.ts";
+import { Recorder, decideFixture, setUpDivision } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
-import { NoPadAdapter } from "../lib/scenarios/pad-proof.ts";
+import { NoPadAdapter, PAD_PROOF_ENTRANTS } from "../lib/scenarios/pad-proof.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext } from "../lib/scenarios/types.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import { drawsAllowed, entrantKindFor, resolveSportCfg } from "../lib/sport-cfg.ts";
@@ -136,22 +138,31 @@ describe("PADPROOF", () => {
     expect(r.byId("life-loop-bounded").verdict).toBe("fail");
   });
 
-  it("a team-kind pad sport plays on rosterless team entrants (Tasks 9–11 Step 0: the pad scored volleyball beach with no roster), while every other scenario still defers team rosters to W1-driving", async () => {
+  it("D3: a team-kind pad sport plays PADPROOF on rosterless team entrants (Tasks 9–11 Step 0: the pad scored volleyball beach with no roster) — no members, no roster read, no lineup PUT — while LIFECYCLE on the same sport now seats full rosters and PUTs lineups (W1-driving Task 4)", async () => {
     const team = PAD_SPORTS.filter((s) => entrantKindFor(s, resolveSportCfg(s, offlineBuilderDefault(s))) === "team");
     expect(team.length).toBeGreaterThan(0);
     let checked = 0;
     for (const sport of team) {
       const d = new FakePadDriver();
-      const kinds: string[] = [];
+      const sent: EntrantInput[] = [];
       const add = d.addEntrants.bind(d);
-      d.addEntrants = (id, es) => { kinds.push(...es.map((e) => e.kind)); return add(id, es); };
+      d.addEntrants = (id, es) => { sent.push(...es); return add(id, es); };
       const r = await run(d, sport);
-      expect(kinds, sport).toEqual(["team", "team", "team"]);
+      expect(sent.map((e) => e.kind), sport).toEqual(["team", "team", "team"]);
+      expect(sent.filter((e) => e.members !== undefined), sport).toEqual([]);
+      expect(d.calls.filter((c) => c === "putLineup" || c === "entrantMembers"), sport).toEqual([]);
+      expect(d.memberCount(), sport).toBe(0);
       expect(r.state, sport).toBe("works");
-      // The other direction: LIFECYCLE on the same sport is still the W1-driving deferral, before any driver call.
-      const l = new FakePadDriver();
-      await expect(SCENARIOS.LIFECYCLE.run({ ...ctxOf(l, sport), spec: { ...ctxOf(l, sport).spec, scenario: "LIFECYCLE" } }), sport).rejects.toMatchObject({ name: "ScenarioUnsupported", message: "team rosters" });
-      expect(l.calls, sport).toEqual([]);
+      // The other direction: LIFECYCLE on the same sport is no longer deferred — it posts full rosters and PUTs a lineup per side.
+      const l = new FakeLeagueDriver();
+      const base = ctxOf(l, sport);
+      const ctx = { ...base, spec: { ...base.spec, scenario: "LIFECYCLE" as const } };
+      const rec = new Recorder();
+      const setup = await setUpDivision(ctx, rec, PAD_PROOF_ENTRANTS);
+      expect([setup.rosterless, setup.rosters.size], sport).toEqual([false, PAD_PROOF_ENTRANTS]);
+      const f = l.rows()[0]!;
+      await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
+      expect(l.trace.filter((c) => c.startsWith(`putLineup ${f.id} `)), sport).toHaveLength(2);
       checked++;
     }
     expect(checked).toBe(team.length);

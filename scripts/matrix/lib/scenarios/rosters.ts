@@ -20,6 +20,11 @@ export const ROSTER_MAX = 40;
  *  correct: the engine declares a variant's side. rosters.test.ts pins the
  *  found list against cited rulebooks and reads its owner from here. */
 export const SIDE_SIZE_ROUTE = routeTo("W2", "a variant whose side size differs from its catalog's lineup.size; the roster follows the catalog (D2), so the variant's own side size is the engine's to declare");
+/** The `<sport>/<preset>` rows of that finding — exactly the list
+ *  rosters.test.ts derives from the cited rulebooks. A starting-size lineup
+ *  warning on one of them is the known finding (common.ts ensureLineups
+ *  notes it, T3-R1), never a red. */
+export const SIDE_SIZE_FOUND: readonly string[] = Object.freeze(["volleyball/beach", "hockey/youth"]);
 
 /** The catalog that governs a cfg; injectable so a test can hand one in. */
 export type CatalogOf = (sport: string, cfg: unknown) => PositionCatalog;

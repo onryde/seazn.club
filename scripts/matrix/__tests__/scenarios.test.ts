@@ -1,30 +1,34 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { generatePagePlayoff } from "@seazn/engine/scheduling";
+import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { describe, expect, it } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules.ts";
 import { RULES, decide } from "../lib/applicability.ts";
 import { SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { NoFieldSize } from "../lib/field-size.ts";
-import { RefusedCall } from "../lib/driver/types.ts";
+import { NoFieldSize, fieldSizeFor } from "../lib/field-size.ts";
+import { RefusedCall, type EntrantInput, type EntrantRow, type LineupSlotWire } from "../lib/driver/types.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { isTerminal, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../lib/observed.ts";
 import { decideState } from "../lib/results.ts";
-import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import {
   CANARY_MARK, FORMAT_LOCK, assertion, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, loopBounded, publicStandingsMatch, resultsAsPosted, stageCompleted,
 } from "../lib/scenarios/assertions.ts";
 import {
-  DRIVING_WAVE, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, finishStage, playStage, setUpDivision, snapshot, type BuiltReadback, type DivisionSetup, type ParityObs,
+  DRIVING_WAVE, LINEUP_ISSUE_TEXT, LineupWarned, MAX_ITERATIONS, Recorder, byeDeclared, decideFixture, defaultPolicy, ensureLineups, finishStage, lineupWarningKind, playStage, setUpDivision, snapshot,
+  type BuiltReadback, type DivisionSetup, type ParityObs,
 } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { cascadeItems, skippedItem } from "../lib/scenarios/r4-withdrawal.ts";
+import { SIDE_SIZE_ROUTE, rosterSize } from "../lib/scenarios/rosters.ts";
 import { ScenarioUnsupported, type CaseSpec, type ScenarioContext, type ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
-import type { VariantCase } from "../lib/variants.ts";
+import { offlineBuilderDefault, type VariantCase } from "../lib/variants.ts";
 import { FakeKnockoutDriver, FakeLeagueDriver, FakeSwissDriver, type FakeFixture } from "./fake-driver.ts";
+import { wireCodeFor } from "./product-text.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** Task 8 m-7: the status api-v1 answers STAGE_NOT_READY with, read from the
@@ -1013,11 +1017,336 @@ describe("deferrals are named", () => {
     await expect(runOn(driver, "LIFECYCLE", { row })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: `${row}: challenge/rotation driving lands in ${DRIVING_WAVE}` });
     expect(driver.calls).toEqual([]);
   });
-  it("a team sport is ScenarioUnsupported(DRIVING_WAVE, team rosters) before any driver call", async () => {
+});
+
+// --- W1-driving Task 4: team rosters and per-fixture lineups (fold-in beneath ruling 49) ---------------
+/** The wire slots as the engine reads them (fixtures.ts putLineup stores `order_no ?? i + 1`). */
+const toEngine = (entrantId: string, slots: readonly LineupSlotWire[]) => ({
+  entrantId,
+  slots: slots.map((s, i) => ({ personId: s.person_id, slot: s.slot, ...(s.position_key !== undefined ? { positionKey: s.position_key } : {}), roles: [...(s.roles ?? [])], orderNo: s.order_no ?? i + 1 })),
+});
+const catalogOf = (sport: string, cfg: unknown) => resolvePositions(sportModule(sport) as never, cfg as never);
+/** The lineup PUTs on fixture `f`, each with its place in the fake's id trace. */
+const putsOn = (d: FakeLeagueDriver, f: string) => d.trace.flatMap((c, at) => (c.startsWith(`putLineup ${f} `) ? [{ entrant: c.split(" ")[2]!, at }] : []));
+/** Every team sport at its builder default (ruling 24), read from the registry: the sweep's set. */
+const TEAM_AT_DEFAULT = SPORT_KEYS.filter((s) => entrantKindFor(s, resolveSportCfg(s, offlineBuilderDefault(s))) === "team");
+/** For every fixture a posted stream finished: one lineup PUT per side, both
+ *  before the fixture's first post. Answers how many fixtures it judged. */
+function expectLineupsFirst(d: FakeLeagueDriver, label: string): number {
+  const decided = d.decidedFixtureIds();
+  for (const id of decided) {
+    const f = d.fixtures.find((x) => x.id === id)!;
+    const first = d.trace.indexOf(`postStream ${id}`);
+    expect(first, `${label} ${id}: posted`).toBeGreaterThan(-1);
+    const puts = putsOn(d, id);
+    expect(puts.map((p) => p.entrant).sort(), `${label} ${id}: one PUT per side`).toEqual([f.home_entrant_id!, f.away_entrant_id!].sort());
+    for (const p of puts) expect(p.at, `${label} ${id}: ${p.entrant}'s lineup precedes the first post`).toBeLessThan(first);
+  }
+  return decided.length;
+}
+/** The league fake answering extra warnings on every lineup it checks. */
+class WarnsToo extends FakeLeagueDriver {
+  extra: readonly string[] = [];
+  override putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]) {
+    return super.putLineup(fixtureId, entrantId, slots).then((c) => ({ checked: true as const, warnings: [...c.warnings, ...this.extra] }));
+  }
+}
+const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
+
+describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49)", () => {
+  // State transitions, the empty case first: an individual sport (no members,
+  // no lineups, nothing thrown); the first team fixture; a second fixture with
+  // the same entrants (a PUT per fixture); a second call on one fixture (no
+  // second PUT); a side that is not a division entrant (skipped, one note per
+  // stage); a bye (no PUT for the phantom seat); a withdrawn entrant's cascade
+  // walkovers (no harness event, so no PUT); M1's own forfeit (lineups first);
+  // a fixture a foreign write already started (no PUT); every team sport.
+  const football = offlineBuilderDefault("football");
+
+  it("empty case: an individual sport sends no members and reads no roster — the W1a path is byte-identical — and PUTs no lineup", async () => {
     const driver = new FakeLeagueDriver();
-    const football = Object.keys(sportModule("football").variants as object)[0]!;
-    await expect(runOn(driver, "LIFECYCLE", { sport: "football", variant: football })).rejects.toMatchObject({ name: "ScenarioUnsupported", wave: DRIVING_WAVE, message: "team rosters" });
-    expect(driver.calls).toEqual([]);
+    const sent: EntrantInput[] = [];
+    const add = driver.addEntrants.bind(driver);
+    driver.addEntrants = (d, es) => { sent.push(...es); return add(d, es); };
+    const { state } = await runOn(driver, "LIFECYCLE");
+    expect(sent.length).toBe(fieldSizeFor("league", "LIFECYCLE"));
+    expect(sent.filter((e) => Object.prototype.hasOwnProperty.call(e, "members"))).toEqual([]);
+    expect(driver.calls.filter((c) => c === "putLineup" || c === "entrantMembers")).toEqual([]);
+    expect(driver.memberCount()).toBe(0);
+    expect(state).toMatchObject({ state: "works" });
+  });
+
+  it("ensureLineups: an individual sport (rosters empty, kind individual) PUTs nothing and throws nothing", async () => {
+    const driver = new FakeLeagueDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { sport: "badminton", variant: offlineBuilderDefault("badminton") });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    expect([setup.kind, setup.rosters.size, setup.rosterless]).toEqual(["individual", 0, false]);
+    const rows = driver.rows();
+    expect(rows.length).toBeGreaterThan(0);
+    for (const f of rows) await ensureLineups(ctx, rec, setup, f);
+    expect(driver.calls.filter((c) => c === "putLineup")).toEqual([]);
+    expect(rec.lineupsPut).toBe(0);
+    expect(rec.notes.filter((n) => /lineup/i.test(n))).toEqual([]);
+  });
+
+  it("a team sport plays with full rosters: members at add, a lineup per side before each fixture's first event", async () => {
+    const driver = new FakeLeagueDriver();
+    const { state } = await runOn(driver, "LIFECYCLE", { sport: "football", variant: football });
+    const cfg = resolveSportCfg("football", football);
+    const n = fieldSizeFor("league", "LIFECYCLE");
+    expect(driver.calls.filter((c) => c === "addEntrants")).toHaveLength(1);
+    expect(driver.memberCount()).toBe(n * rosterSize("football", cfg));
+    // A single round robin of n: n(n-1)/2 fixtures, each decided by a post.
+    expect(expectLineupsFirst(driver, "football")).toBe((n * (n - 1)) / 2);
+    // A second fixture with the same entrants is PUT again: each entrant's lineup once per fixture it plays (n - 1).
+    for (const e of driver.entrants) expect(driver.trace.filter((c) => c.startsWith("putLineup ") && c.endsWith(` ${e.id}`)).length, e.id).toBe(n - 1);
+    // The seam is real: what was PUT is the product's people as it stored them (never the inputs), and the engine takes it.
+    expect(driver.lineups.size).toBe(n * (n - 1));
+    for (const [key, slots] of driver.lineups) {
+      const entrant = key.split("|")[1]!;
+      const roster = new Set(driver.members.get(entrant)!.map((m) => m.person_id));
+      expect(slots.every((s) => roster.has(s.person_id)), key).toBe(true);
+      expect(validateLineup(catalogOf("football", cfg), toEngine(entrant, slots)), key).toEqual([]);
+    }
+    expect(state, JSON.stringify(state)).toMatchObject({ state: "works" });
+  });
+
+  it("every team sport at its builder default plays LIFECYCLE with a lineup per side before each fixture's first post — counted", async () => {
+    expect(TEAM_AT_DEFAULT.length, "team sports in the registry").toBeGreaterThan(0);
+    const n = fieldSizeFor("league", "LIFECYCLE");
+    let fixtures = 0;
+    for (const sport of TEAM_AT_DEFAULT) {
+      const driver = new FakeLeagueDriver();
+      const { state } = await runOn(driver, "LIFECYCLE", { sport, variant: offlineBuilderDefault(sport) });
+      const judged = expectLineupsFirst(driver, sport);
+      expect(judged, sport).toBeGreaterThan(0);
+      fixtures += judged;
+      expect(state, `${sport}: ${JSON.stringify(state)}`).toMatchObject({ state: "works" });
+    }
+    // Each sport's single round robin of n decides n(n-1)/2 fixtures.
+    expect(fixtures).toBe((TEAM_AT_DEFAULT.length * n * (n - 1)) / 2);
+  });
+
+  it("ensureLineups: a second call on a fixture PUTs nothing more; a second fixture with the same entrant gets its own PUTs", async () => {
+    const driver = new FakeLeagueDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { sport: "football", variant: football });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    const [f, ...rest] = driver.rows();
+    await ensureLineups(ctx, rec, setup, f!);
+    await ensureLineups(ctx, rec, setup, f!);
+    expect(putsOn(driver, f!.id)).toHaveLength(2);
+    expect(rec.lineupsPut).toBe(2);
+    const g = rest.find((x) => x.home_entrant_id === f!.home_entrant_id || x.away_entrant_id === f!.home_entrant_id)!;
+    await ensureLineups(ctx, rec, setup, g);
+    expect(putsOn(driver, g.id)).toHaveLength(2);
+    expect(rec.lineupsPut).toBe(4);
+    expect([...rec.lineupFixtures]).toEqual([f!.id, g.id]);
+  });
+
+  it("ensureLineups: a side that is not a division entrant (a product-minted pair entrant) is skipped with one note per stage, never thrown", async () => {
+    // Two fixtures of the stage seat a foreign side: still one note.
+    class SeatsForeign extends FakeLeagueDriver {
+      override start() {
+        return super.start().then((o) => {
+          this.fixtures[0]!.away_entrant_id = "pair-x";
+          this.fixtures[1]!.away_entrant_id = "pair-y";
+          return o;
+        });
+      }
+    }
+    const driver = new SeatsForeign();
+    const ctx = ctxFor(driver, "LIFECYCLE", { sport: "football", variant: football });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    const [f1, f2] = driver.rows();
+    for (const f of [f1!, f2!]) await decideFixture(ctx, rec, setup, f, { kind: "win", winner: "home" });
+    expect(putsOn(driver, f1!.id).map((p) => p.entrant)).toEqual([f1!.home_entrant_id]);
+    expect(putsOn(driver, f2!.id).map((p) => p.entrant)).toEqual([f2!.home_entrant_id]);
+    expect(rec.lineupsPut).toBe(2);
+    expect(rec.notes.filter((n) => /not a division entrant/.test(n))).toEqual([
+      `lineups: stage ${setup.stage.id} seats a side that is not a division entrant (a product-minted pair entrant) — no lineup PUT for such a side`,
+    ]);
+  });
+
+  it("a bye: the phantom seat gets no PUT, and every fixture the harness decided, later rounds included, has its two lineups first", async () => {
+    const driver = new FakeKnockoutDriver();
+    const r = await runOn(driver, "F1", { row: "knockout", sport: "football", variant: football });
+    const n = fieldSizeFor("knockout", "F1");
+    const byes = driver.fixtures.filter((f) => (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    // An n-field bracket over the next power of two leaves that many seats empty.
+    expect(byes.length).toBe(2 ** Math.ceil(Math.log2(n)) - n);
+    for (const b of byes) expect(driver.trace.filter((c) => c.startsWith(`putLineup ${b.id} `)), b.id).toEqual([]);
+    // A single elimination of n is decided by n - 1 eliminations; a bye eliminates nobody.
+    expect(expectLineupsFirst(driver, "knockout")).toBe(n - 1);
+    expect(r.state.reason).not.toMatch(/^error/);
+  });
+
+  it("a withdrawn entrant's cascade walkovers carry no harness event, so no lineup PUT", async () => {
+    // The walkover policy (not the table fake's early expunge): the product forfeits every pending fixture itself.
+    class WalksOver extends FakeLeagueDriver { override expungesEarly() { return false; } }
+    const driver = new WalksOver();
+    const r = await runOn(driver, "R4", { sport: "football", variant: football });
+    const seed3 = driver.entrants.find((e) => e.seed === 3)!.id;
+    const walked = driver.fixtures.filter((f) => (f.home_entrant_id === seed3 || f.away_entrant_id === seed3) && (f.round_no ?? 0) > 1);
+    // Seed 3 meets n - 1 entrants and plays round 1 before withdrawing.
+    expect(walked.length).toBe(fieldSizeFor("league", "R4") - 2);
+    for (const f of walked) {
+      expect(f.status, f.id).toBe("forfeited");
+      expect(driver.trace, `${f.id}: the cascade's own forfeit`).toContain(`postStream ${f.id}`);
+      expect(putsOn(driver, f.id), f.id).toEqual([]);
+    }
+    expect(r.state.reason).not.toMatch(/^error/);
+  });
+
+  it("M1's walkover: the harness's own forfeit gets its lineups first, because decideFixture covers the forfeit branch (Step 0: the product needs none)", async () => {
+    const driver = new FakeLeagueDriver();
+    const r = await runOn(driver, "M1", { sport: "football", variant: football });
+    const forfeited = driver.fixtures.filter((f) => f.events.some((e) => e.type === "core.forfeit"));
+    expect(forfeited.length).toBe(1);
+    const f = forfeited[0]!;
+    const first = driver.trace.indexOf(`postStream ${f.id}`);
+    expect(putsOn(driver, f.id).map((p) => p.at < first)).toEqual([true, true]);
+    expect(r.state, JSON.stringify(r.state)).toMatchObject({ state: "works" });
+  });
+
+  it("a team fixture a foreign write already started gets no PUT (the product locks lineups past scheduled): noted, and parity stays the unjudgeable item", async () => {
+    const driver = new FakeLeagueDriver();
+    const ctx = ctxFor(driver, "LIFECYCLE", { sport: "football", variant: football });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 4);
+    const f = driver.rows()[0]!;
+    await driver.postStream(f.id, [START], "foreign"); // not recorded: a foreign write
+    // A forfeit on a live fixture posts only core.forfeit (decideFixture), so the engine takes it.
+    await decideFixture(ctx, rec, setup, f, { kind: "forfeit", by: "away", reason: "walkover" });
+    expect(putsOn(driver, f.id)).toEqual([]);
+    expect(rec.lineupsPut).toBe(0);
+    expect(rec.notes).toContain(`lineups: ${f.id} was in_play when the harness came to it — the product locks a lineup once a fixture is past scheduled; no lineup PUT`);
+    expect(foldParity(rec)).toMatchObject({ verdict: "fail", checked: 1 });
+  });
+
+  it("roster guard: a product that stores one member fewer than posted is refused by name before the division starts", async () => {
+    class DropsOne extends FakeLeagueDriver {
+      override addEntrants(d: string, es: readonly EntrantInput[]) {
+        return super.addEntrants(d, es).then((rows) => {
+          this.members.set("e2", this.members.get("e2")!.slice(0, -1));
+          return rows;
+        });
+      }
+    }
+    const driver = new DropsOne();
+    const size = rosterSize("football", resolveSportCfg("football", football));
+    await expect(setUpDivision(ctxFor(driver, "LIFECYCLE", { sport: "football", variant: football }), new Recorder(), 4))
+      .rejects.toThrow(`scenario: entrant e2 (seed 2) reads back ${size - 1} roster member(s), ${size} posted — a short roster would play short`);
+    // The read stops at the first short roster: e1 read, e2 refused.
+    expect(driver.calls.filter((c) => c === "entrantMembers")).toHaveLength(2);
+    expect(driver.calls).not.toContain("start");
+  });
+
+  it("roster guard, the other direction: an entrant the product never stored is life-built-as-posted's red, never a roster error — and one answered with no seed still has its roster read", async () => {
+    // Stores (and answers) 7 of the 8 posted team entrants.
+    class StoresSeven extends FakeLeagueDriver {
+      override addEntrants(d: string, es: readonly EntrantInput[]) { return super.addEntrants(d, es.slice(0, -1)); }
+    }
+    const r = await runOn(new StoresSeven(), "LIFECYCLE", { sport: "football", variant: football });
+    expect(r.state.state).toBe("red");
+    expect(r.checks.find((c) => c.id === "life-built-as-posted")!.evidence).toEqual(["7 entrant(s) stored, 8 posted", "add answered 7 entrant(s), 8 posted", "posted seed 8 (Matrix Player 8) stored 0 time(s)"]);
+    // An answer that drops an entrant's seed loses nothing the roster read needs.
+    class AnswersNoSeed extends FakeLeagueDriver {
+      override addEntrants(d: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
+        return super.addEntrants(d, es).then((rows) => rows.map((e) => (e.seed === 3 ? { ...e, seed: null } : e)));
+      }
+    }
+    const setup = await setUpDivision(ctxFor(new AnswersNoSeed(), "LIFECYCLE", { sport: "football", variant: football }), new Recorder(), 4);
+    expect(setup.rosters.size).toBe(4);
+  });
+
+  it("warnings (T3-R1): a starting-size warning on a known side-size row is ONE named note routed to its wave — the fake's issue JSON and the product's text alike", async () => {
+    const forms = [JSON.stringify({ kind: "starting_size", expected: 2, actual: 6 }), "Starting lineup has 6 player(s), expected 2"];
+    for (const w of forms) {
+      const driver = new WarnsToo();
+      driver.extra = [w];
+      const { out, state } = await runOn(driver, "LIFECYCLE", { sport: "volleyball", variant: "beach" });
+      expect(driver.calls.filter((c) => c === "putLineup").length, w).toBeGreaterThan(1);
+      expect(out.notes.filter((x) => x.startsWith("lineup-side-size-warning: ")), w).toEqual([
+        `lineup-side-size-warning: volleyball/beach [starting_size] ${w} — the known side-size finding (rosters.ts SIDE_SIZE_ROUTE) → ${SIDE_SIZE_ROUTE.wave}`,
+      ]);
+      expect(state, w).toMatchObject({ state: "works" });
+    }
+  });
+
+  it("warnings (T3-R1): any other warning reds by name — another kind, the same kind on another row, or text in neither shape", async () => {
+    const cases = [
+      { sport: "volleyball", variant: "beach", w: JSON.stringify({ kind: "group_min", groupKey: "x", min: 1, actual: 0 }), kind: "group_min" },
+      { sport: "volleyball", variant: "beach", w: 'Position group "x" has 0 starting player(s), minimum is 1', kind: "group_min" },
+      { sport: "football", variant: football, w: JSON.stringify({ kind: "starting_size", expected: 7, actual: 11 }), kind: "starting_size" },
+      { sport: "volleyball", variant: "beach", w: "the product said something new", kind: null },
+    ];
+    for (const c of cases) {
+      const driver = new WarnsToo();
+      driver.extra = [c.w];
+      const err = await runOn(driver, "LIFECYCLE", { sport: c.sport, variant: c.variant }).catch((e: unknown) => e);
+      expect(err, c.w).toBeInstanceOf(LineupWarned);
+      expect(err, c.w).toMatchObject({ name: "LineupWarned", kind: c.kind, warning: c.w });
+      expect((err as LineupWarned).message, c.w).toContain(`${c.sport}/${c.variant}`);
+    }
+  });
+
+  it("lineupWarningKind reads the product's formatLineupIssue templates and the engine's issue JSON, kind for kind", () => {
+    const engineKinds = [...(/\nexport type LineupIssue =([\s\S]*?);\n/.exec(read("packages/engine/src/sport/catalog.ts"))?.[1] ?? "").matchAll(/kind: "([a-z_]+)"/g)].map((m) => m[1]!);
+    const fmt = /\nfunction formatLineupIssue\(issue: LineupIssue\): string \{([\s\S]*?)\n\}\n/.exec(read("apps/web/src/server/usecases/fixtures.ts"))?.[1] ?? "";
+    // Every placeholder rendered as "7": a count, an id or a key alike.
+    const rendered = [...fmt.matchAll(/case "([a-z_]+)":\s*return `([^`]*)`;/g)].map((m) => ({ kind: m[1]!, text: m[2]!.replace(/\$\{[^}]*\}/g, "7") }));
+    expect(engineKinds.length, "engine LineupIssue kinds").toBeGreaterThan(0);
+    expect(rendered.map((r) => r.kind).sort()).toEqual([...engineKinds].sort());
+    expect(Object.keys(LINEUP_ISSUE_TEXT).sort()).toEqual([...engineKinds].sort());
+    for (const r of rendered) {
+      expect(lineupWarningKind(r.text), r.text).toBe(r.kind);
+      expect(Object.values(LINEUP_ISSUE_TEXT).filter((re) => re.test(r.text)).length, `${r.text}: one template`).toBe(1);
+    }
+    for (const kind of engineKinds) expect(lineupWarningKind(JSON.stringify({ kind, actual: 1 })), kind).toBe(kind);
+    expect(lineupWarningKind("nothing the product says")).toBeNull();
+    expect(lineupWarningKind(JSON.stringify({ kind: 3 }))).toBeNull();
+    expect(lineupWarningKind("[]")).toBeNull();
+  });
+
+  it("Step 0: the product's lineup PUT, pinned from its source — the refusal codes, replace-not-append, a warning-only check, no event-time assertLineup", () => {
+    const fixtures = read("apps/web/src/server/usecases/fixtures.ts");
+    const put = /\nexport async function putLineup\([\s\S]*?\n\}\n/.exec(fixtures)?.[0] ?? "";
+    expect(put, "putLineup").not.toBe("");
+    // The structural refusals are codeless 422s, in this order, so the wire code is http.ts's for a 422.
+    expect([...put.matchAll(/throw new HttpError\(422, ["`]([^"`]*)["`]\);/g)].map((m) => m[1])).toEqual([
+      "entrant is not a side of this fixture", "lineup is locked once a fixture is ${fixture.status}", "duplicate person in lineup", "lineup contains a person who is not a member of the entrant",
+    ]);
+    expect(wireCodeFor(422)).toBe("ERROR");
+    // Then the two roster gates, each with its own code.
+    const gateElig = put.indexOf("await gateRosterEligibility(tx,");
+    expect(gateElig).toBeGreaterThan(put.indexOf("not a member of the entrant"));
+    expect(put.indexOf("await gateLineupSuspensions(tx,")).toBeGreaterThan(gateElig);
+    expect(/\nexport async function gateRosterEligibility\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/registration-eligibility.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"ELIGIBILITY_VIOLATION"/);
+    expect(/\nexport async function gateLineupSuspensions\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/discipline.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"SUSPENDED_PLAYER"/);
+    // A malformed person id never reaches the usecase: a Uuid in the schema, a ZodError answered 400 VALIDATION.
+    expect(read("apps/web/src/server/api-v1/schemas.ts")).toMatch(/export const LineupSlotInput = z\.object\(\{\s*person_id: Uuid,/);
+    expect(read("apps/web/src/server/api-v1/http.ts")).toMatch(/if \(err instanceof ZodError\) \{\s*return errorResponse\(requestId, 400, "VALIDATION"/);
+    // A second PUT replaces the first: delete, then insert.
+    const del = put.indexOf("delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}");
+    expect(del).toBeGreaterThan(-1);
+    expect(put.indexOf("insert into lineups")).toBeGreaterThan(del);
+    // A lineup validateLineup flags is SAVED, then warned: the check reads the stored rows and never throws.
+    expect(put.indexOf("checkStoredLineup(")).toBeGreaterThan(put.indexOf("insert into lineups"));
+    const check = /\nfunction checkStoredLineup\([\s\S]*?\n\}\n/.exec(fixtures)?.[0] ?? "";
+    expect(check).toMatch(/return \{ checked: true, warnings: issues\.map\(formatLineupIssue\) \};/);
+    expect(check).toMatch(/catch \(err\) \{[\s\S]*return \{ checked: false, warnings: \[\], reason:/);
+    expect(check).not.toMatch(/\bthrow\b/);
+    // No event refuses through assertLineup: nothing outside its own definition (and the engine's tests) calls it,
+    // so no lineup is required to post — a forfeit or a walkover needs none, and M1's hook is left alone.
+    const sources = ["apps/web/src", "packages/engine/src"].flatMap((root) => (readdirSync(resolve(REPO, root), { recursive: true }) as string[])
+      .filter((p) => /\.tsx?$/.test(p) && !/\.test\.tsx?$|__tests__/.test(p)).map((p) => `${root}/${p}`));
+    expect(sources.length, "product and engine sources scanned").toBeGreaterThan(100);
+    const callers = sources.filter((p) => /\bassertLineup\(/.test(read(p)));
+    expect(callers).toEqual(["packages/engine/src/sport/catalog.ts"]);
+    expect(read("packages/engine/src/sport/catalog.ts").match(/\bassertLineup\(/g)).toHaveLength(1);
   });
 });
 

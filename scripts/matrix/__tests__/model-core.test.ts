@@ -18,7 +18,7 @@ import { generateDoubleElim, generatePagePlayoff, generateRoundRobin, generateSi
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
-import { BUILDER_DEFAULT_KNOBS, SPORT_KEYS } from "../lib/catalogue.ts";
+import { BUILDER_DEFAULT_KNOBS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type FixtureRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
 import { foldStream } from "../lib/fold.ts";
 import { COMMAND_KINDS, ModelViolation, checkStep, commandOf, modelCommands, newModelState, type CommandKind, type ModelState } from "../lib/model/commands.ts";
@@ -30,6 +30,7 @@ import {
   absorbFixtures, fedCandidates, fedMatchStarted, informativeSteps, orientationBound, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
+import { rosterMembers } from "../lib/scenarios/rosters.ts";
 import { entrantKindFor, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { START, type RequestedOutcome } from "../lib/streams/types.ts";
@@ -1357,6 +1358,27 @@ describe("carry (d): a void fixture is not a meeting — its ad-hoc replay is no
     for (const s of all) expect(VOID_STATUSES.includes(s), s).toBe(engineFixtureStatus(s) === "void");
     expect(all.length).toBe(7);
     expect(VOID_STATUSES.length).toBeGreaterThan(0);
+  });
+});
+
+describe("ModelFakeDriver carries inline members (W1-driving Task 4 carry; the model sends none until Task 14)", () => {
+  it("empty case first: an entrant added with no members reads back none; members ride the add, a late add keeps them, and a new division starts empty", async () => {
+    // football: the one sport whose builder default fields teams that the carry needs; the fake's store is sport-blind.
+    const d = new ModelFakeDriver();
+    const variant = "11-a-side";
+    const cfg = resolveSportCfg("football", variant);
+    await d.createDivision("c1", { name: "Matrix", slug: "d", sportKey: "football", variantKey: variant });
+    await d.postStages("d1", stagesForRow("league"));
+    const [a] = await d.addEntrants("d1", [{ displayName: "Matrix Team 1", seed: 1, kind: "team" }]);
+    expect(await d.entrantMembers(a!.id)).toEqual([]);
+    expect(d.memberCount()).toBe(0);
+    const roster = rosterMembers("football", cfg, 2);
+    const [b] = await d.addEntrants("d1", [{ displayName: "Matrix Team 2", seed: 2, kind: "team", members: roster }]);
+    expect((await d.entrantMembers(b!.id)).map((m) => [m.squad_number, m.is_captain])).toEqual(roster.map((m) => [m.squadNumber, m.isCaptain]));
+    expect(await d.entrantMembers(a!.id)).toEqual([]);
+    expect(d.memberCount()).toBe(roster.length);
+    await d.createDivision("c1", { name: "Matrix", slug: "d2", sportKey: "football", variantKey: variant });
+    expect(d.memberCount()).toBe(0);
   });
 });
 

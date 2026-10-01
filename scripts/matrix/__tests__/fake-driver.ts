@@ -18,7 +18,7 @@ import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
+  DriverMisuse, LineupUnchecked, RefusedCall, idempotencyKey, inSquadOrder,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type WithdrawOut,
@@ -62,6 +62,11 @@ function settle<T>(body: () => T): Promise<T> {
 
 export class FakeLeagueDriver implements OrganiserDriver {
   readonly calls: string[] = [];
+  /** PF-4 (W1-driving Task 4): `calls` one for one, each line the bare method
+   *  name followed by the ids the call named where the method passes them
+   *  (`postStream <fixture>`, `putLineup <fixture> <entrant>`). Additive:
+   *  `calls` keeps its bare names, so every assert written against it holds. */
+  readonly trace: string[] = [];
   readonly orgId: string;
   sport = "";
   variant = "";
@@ -75,7 +80,22 @@ export class FakeLeagueDriver implements OrganiserDriver {
   completed = false;
   constructor(orgId = "org-fake") { this.orgId = orgId; }
   get callCount(): number { return this.calls.length; }
-  log(m: string): void { this.calls.push(m); }
+  log(m: string, ...ids: string[]): void {
+    this.calls.push(m);
+    this.trace.push([m, ...ids].join(" "));
+  }
+  /** Roster members stored across every entrant (W1-driving Task 4). */
+  memberCount(): number {
+    let n = 0;
+    for (const ms of this.members.values()) n += ms.length;
+    return n;
+  }
+  /** The fixtures a posted stream finished, in fixture order: a terminal
+   *  status reached through events. A bye's award, written at generation with
+   *  no event, is not one (W1-driving Task 4). */
+  decidedFixtureIds(): string[] {
+    return this.fixtures.filter((f) => DECIDED.has(f.status) && f.events.length > 0).sort((a, b) => (a.fixture_no ?? 0) - (b.fixture_no ?? 0)).map((f) => f.id);
+  }
 
   createCompetition(i: { name: string; slug: string }): Promise<CompetitionRef> { return settle(() => { this.log("createCompetition"); return { id: "c1", slug: i.slug, orgId: this.orgId }; }); }
   createDivision(_c: string, i: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef> {
@@ -154,7 +174,10 @@ export class FakeLeagueDriver implements OrganiserDriver {
    *  fixtures.ts formatLineupIssue. */
   putLineup(fixtureId: string, entrantId: string, slots: readonly LineupSlotWire[]): Promise<LineupChecked> {
     return settle(() => {
-      this.log("putLineup");
+      // Carry n-1: HttpDriver refuses an empty lineup before any call (the
+      // product would DELETE the stored one and answer 2xx); so does the fake.
+      if (slots.length === 0) throw new DriverMisuse(`driver: putLineup for entrant ${entrantId} on fixture ${fixtureId} with no slots — the product would delete its lineup and answer 2xx, never refuse`);
+      this.log("putLineup", fixtureId, entrantId);
       const path = `/api/v1/fixtures/${fixtureId}/lineups/${entrantId}`;
       const f = this.#f(fixtureId);
       if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) throw new RefusedCall("PUT", path, 422, LINEUP_REFUSAL, "entrant is not a side of this fixture");
@@ -221,7 +244,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
   readonly keys = new Map<string, Map<string, PostedEvent>>();
   postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     return settle(() => {
-      this.log("postStream");
+      this.log("postStream", id);
       const f = this.#f(id);
       const seen = this.keys.get(id) ?? new Map<string, PostedEvent>();
       this.keys.set(id, seen);

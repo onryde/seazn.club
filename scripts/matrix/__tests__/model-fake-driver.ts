@@ -35,7 +35,7 @@
 import { EngineError } from "@seazn/engine/core";
 import { generateRoundRobin } from "@seazn/engine/scheduling";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
-import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantKind, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut } from "../lib/driver/types.ts";
+import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut } from "../lib/driver/types.ts";
 import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-fold.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import { FakeLeagueDriver, type FakeFixture } from "./fake-driver.ts";
@@ -127,9 +127,14 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     this.completed = false;
     this.#lateEntrant = false;
     this.#divisionStatus = "setup";
+    // Entrant ids restart at e1 per division: a roster must not leak into the next one.
+    this.members = new Map();
     return super.createDivision(c, i);
   }
-  override addEntrants(divisionId: string, es: readonly { displayName: string; seed: number; kind: EntrantKind }[]): Promise<EntrantRow[]> {
+  /** Inline members ride the add, as the base fake and the product's create
+   *  store them (W1-driving Task 4 carry). The model sends none until Task 14
+   *  gives it rosters; a late add keeps them too. */
+  override addEntrants(divisionId: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
     return Promise.resolve().then(() => {
       this.log("addEntrants");
       const locked = LOCK.statuses.includes(this.#divisionStatus) && !LOCK.openKinds.includes(this.stage?.kind ?? "");
@@ -140,6 +145,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       if (es.length > 0 && this.fixtures.length > 0) this.#lateEntrant = true;
       const made = es.map((e, i) => ({ id: `e${this.entrants.length + i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered" }));
       this.entrants = [...this.entrants, ...made];
+      es.forEach((e, i) => { if (e.members !== undefined) this.members.set(made[i].id, this.rosterOf(made[i].id, e.members)); });
       return made.map((e) => ({ ...e }));
     });
   }

@@ -25,9 +25,9 @@ import { resolvePositions, validateLineup, type PositionCatalog } from "@seazn/e
 import { forEachSport, forEachSportAsync } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
 import { stagesForRow } from "../lib/catalogue.ts";
-import { LineupUnchecked, RefusedCall, type EntrantMember, type LineupSlotWire } from "../lib/driver/types.ts";
+import { DriverMisuse, LineupUnchecked, RefusedCall, type EntrantMember, type LineupSlotWire } from "../lib/driver/types.ts";
 import { WAVE_ID } from "../lib/routing.ts";
-import { ROSTER_MAX, RosterTooLarge, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "../lib/scenarios/rosters.ts";
+import { ROSTER_MAX, RosterTooLarge, SIDE_SIZE_FOUND, SIDE_SIZE_ROUTE, lineupFor, rosterMembers, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantKindFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
@@ -277,6 +277,10 @@ describe("rosters — players per side against the catalog (a W2 finding, plan r
       { id: "volleyball/beach", sideSize: 2, lineupSize: 6 },
       { id: "hockey/youth", sideSize: 7, lineupSize: 11 },
     ]);
+    // The list the harness reads (common.ts ensureLineups: a starting-size
+    // lineup warning on one of these is the known finding, never a red) is
+    // exactly the one the rulebook finds (W1-driving Task 4, T3-R1).
+    expect([...SIDE_SIZE_FOUND]).toEqual(found.map((m) => m.id));
     expect(excluded).toEqual(["football/mini-soccer", "football/small-sided", "football/youth", "icehockey/recreational"]);
   });
 
@@ -355,6 +359,23 @@ describe("rosters — the seam through the fake product (members stored, read ba
     const before = d.calls.filter((c) => c === "putLineup").length;
     expect(() => lineupFor("football", d.cfg, [])).toThrow(/no members/);
     expect(d.calls.filter((c) => c === "putLineup").length).toBe(before);
+  });
+
+  it("empty case (carry n-1): a PUT with no slots is refused by name (DriverMisuse) before anything is stored, as HttpDriver refuses it — never an empty lineup", async () => {
+    const { d, cfg } = await seeded("football");
+    const f = d.fixtures[0]!;
+    const home = f.home_entrant_id!;
+    const before = d.calls.length;
+    const e = await d.putLineup(f.id, home, []).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(DriverMisuse);
+    expect((e as Error).message).toMatch(/with no slots/);
+    expect(d.lineups.has(`${f.id}|${home}`)).toBe(false);
+    expect(d.calls.length).toBe(before);
+    // ...and a lineup already stored is not cleared by one.
+    const slots = lineupFor("football", cfg, await d.entrantMembers(home));
+    await d.putLineup(f.id, home, slots);
+    await d.putLineup(f.id, home, []).catch(() => undefined);
+    expect(d.lineups.get(`${f.id}|${home}`)).toEqual(slots);
   });
 
   it("a second PUT for the same fixture and entrant replaces the first, never appends", async () => {
