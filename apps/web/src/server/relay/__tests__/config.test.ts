@@ -2,7 +2,14 @@
 // And the money guard: a process that was never told RELAY_DRIVERS=live runs the fake drivers — outside production. In
 // production (Task 14b, R5) it runs NO drivers: "disabled", and createSession refuses. Explicit fake is refused on stg/prod.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME, buildShaOf, liveRunnerIdentity, relayDriverMode, relayEnvironment } from "../config";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import * as config from "../config";
+import {
+  CODE_GRACE_AFTER_FINISH_MINUTES, DEAD_PHONE_TAKEOVER_SECONDS, FLY_RELAY_APP_RETIRED_DEFAULT, LOCAL_ENV_NAME,
+  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, TUNABLE_NAMES, buildShaOf, liveRunnerIdentity, relayDriverMode,
+  relayEnvironment, tunable,
+} from "../config";
 
 describe("buildShaOf (Da)", () => {
   it("a 40-hex tag → the sha; a deployment-… tag → null; unset → null", () => {
@@ -239,5 +246,98 @@ describe("R5: the boot hook refuses a faking deployment", () => {
     vi.stubEnv("RELAY_DRIVERS", "fake");
     vi.stubEnv("ENV_NAME", "prod");
     await expect(register()).resolves.toBeUndefined();
+  });
+});
+
+// Capture QR v2 §6.15 / AGENTS.md #20: the four timings a walkthrough shortens. An override is honoured ONLY under
+// ENV_NAME local or ci; every guard below pins the DEFAULT constant, never the value a process happens to run with.
+describe("tunable — honoured only when ENV_NAME is local or ci", () => {
+  // The declared defaults, from the spec's own figures (§5.1 C2, §6.5, §6.8.5, §6.9) — never from config.ts.
+  const SPEC_DEFAULTS = {
+    DEAD_PHONE_TAKEOVER_SECONDS: 60, PHONE_LOST_LIVE_MINUTES: 15, PHONE_SILENT_FLOOR_SECONDS: 60, CODE_GRACE_AFTER_FINISH_MINUTES: 120,
+  } as const;
+  const DEFAULTS = { DEAD_PHONE_TAKEOVER_SECONDS, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, CODE_GRACE_AFTER_FINISH_MINUTES };
+
+  it("the guard pins the DEFAULTS: 60 s takeover, 15 min lost, 60 s silent floor, 120 min grace", () => {
+    expect(DEFAULTS).toEqual(SPEC_DEFAULTS);
+    expect([...TUNABLE_NAMES].sort()).toEqual(Object.keys(SPEC_DEFAULTS).sort());
+  });
+
+  it("ENV_NAME=stg with DEAD_PHONE_TAKEOVER_SECONDS=1 → 60: a deployment never runs a shortened timing", () => {
+    expect(tunable("DEAD_PHONE_TAKEOVER_SECONDS", DEAD_PHONE_TAKEOVER_SECONDS, { ENV_NAME: "stg", DEAD_PHONE_TAKEOVER_SECONDS: "1" })).toBe(60);
+  });
+
+  it("ENV_NAME=ci with DEAD_PHONE_TAKEOVER_SECONDS=1 → 1; ENV_NAME=local → 1", () => {
+    expect(tunable("DEAD_PHONE_TAKEOVER_SECONDS", DEAD_PHONE_TAKEOVER_SECONDS, { ENV_NAME: "ci", DEAD_PHONE_TAKEOVER_SECONDS: "1" })).toBe(1);
+    expect(tunable("DEAD_PHONE_TAKEOVER_SECONDS", DEAD_PHONE_TAKEOVER_SECONDS, { ENV_NAME: "local", DEAD_PHONE_TAKEOVER_SECONDS: "1" })).toBe(1);
+  });
+
+  it("every tunable, under every environment: honoured under local and ci, ignored under stg, prod, unset and blank", () => {
+    let checked = 0;
+    for (const name of TUNABLE_NAMES) {
+      const fallback = SPEC_DEFAULTS[name];
+      for (const ENV_NAME of ["local", "ci", " ci "]) {
+        expect(tunable(name, fallback, { ENV_NAME, [name]: "7" }), `${name} ${ENV_NAME}`).toBe(7);
+        checked++;
+      }
+      for (const ENV_NAME of ["stg", "prod", "CI", "", "   ", undefined]) {
+        expect(tunable(name, fallback, { ENV_NAME, [name]: "7" }), `${name} ${String(ENV_NAME)}`).toBe(fallback);
+        checked++;
+      }
+    }
+    expect(checked).toBe(TUNABLE_NAMES.length * 9);
+  });
+
+  it("under ci, an unset or EMPTY variable is the fallback — never Number(\"\") = 0", () => {
+    expect(tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS, { ENV_NAME: "ci" })).toBe(60);
+    expect(tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS, { ENV_NAME: "ci", PHONE_SILENT_FLOOR_SECONDS: "" })).toBe(60);
+    expect(tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS, { ENV_NAME: "ci", PHONE_SILENT_FLOOR_SECONDS: "  " })).toBe(60);
+  });
+
+  it("under ci, a malformed override is refused by name (a typo must not silently run the 60 s default and blow a walkthrough budget)", () => {
+    for (const bad of ["abc", "0", "-1", "1.5", "1e3", "3s"]) {
+      expect(() => tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES, { ENV_NAME: "ci", PHONE_LOST_LIVE_MINUTES: bad }), bad)
+        .toThrow(/PHONE_LOST_LIVE_MINUTES/);
+    }
+    // ... and outside local/ci it is never even read.
+    expect(tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES, { ENV_NAME: "prod", PHONE_LOST_LIVE_MINUTES: "abc" })).toBe(15);
+  });
+
+  it("the default environment is process.env", () => {
+    vi.stubEnv("ENV_NAME", "ci");
+    vi.stubEnv("CODE_GRACE_AFTER_FINISH_MINUTES", "2");
+    try {
+      expect(tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES)).toBe(2);
+      vi.stubEnv("ENV_NAME", "stg");
+      expect(tunable("CODE_GRACE_AFTER_FINISH_MINUTES", CODE_GRACE_AFTER_FINISH_MINUTES)).toBe(120);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("capture QR v2 constants equal the spec's own figures", () => {
+  const SPEC = readFileSync(resolve(import.meta.dirname, "../../../../../../docs/superpowers/specs/2026-10-01-capture-qr-v2-design.md"), "utf8");
+  const NAMES = [
+    "CODE_GRACE_AFTER_FINISH_MINUTES", "DEAD_PHONE_TAKEOVER_SECONDS", "PHONE_SILENT_FLOOR_SECONDS", "PHONE_SILENT_SLACK_SECONDS",
+    "POLL_STARTING_SECONDS", "POLL_NEAR_SECONDS", "POLL_FAR_SECONDS", "POLL_NEAR_WINDOW_MINUTES", "PHONE_LOST_LIVE_MINUTES",
+    "PHONE_BEAT_RETENTION_HOURS", "LOW_BATTERY_PERCENT", "HOT_THERMAL_STATUS",
+  ] as const;
+
+  it("each named constant matches the figure the spec writes beside its name (`NAME (n)` or `NAME = n`)", () => {
+    let checked = 0;
+    for (const name of NAMES) {
+      const m = new RegExp(`\`?${name}\`?\\s*(?:\\(|=)\\s*\`?(\\d+)`).exec(SPEC);
+      expect(m, `the spec names ${name} with a figure`).not.toBeNull();
+      expect((config as Record<string, unknown>)[name], name).toBe(Number(m![1]));
+      checked++;
+    }
+    expect(checked).toBe(NAMES.length);
+  });
+
+  it("NOT_RESPONDING_BEATS is §6.9's multiplier (`≥ n × answered_poll_seconds`)", () => {
+    const m = /now − last_beat_at ≥ (\d+) × answered_poll_seconds/.exec(SPEC);
+    expect(m).not.toBeNull();
+    expect(config.NOT_RESPONDING_BEATS).toBe(Number(m![1]));
   });
 });
