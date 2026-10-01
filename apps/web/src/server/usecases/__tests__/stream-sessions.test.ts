@@ -17,7 +17,7 @@
 // because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -65,6 +65,16 @@ import {
 // The house Sentry helper, spied (relay-internal-routes.test.ts precedent): every FAILED forced destroy is an alarm, at
 // each of its four sites (r2-m3).
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+// m-5 (B0 re-review): this file's pool connections carry an application_name of their OWN, so a test can tell its own
+// parked query from another suite's in pg_stat_activity — CI runs files in parallel against one database. postgres.js
+// reads PGAPPNAME once, when the pool is created (lazily, on the first query — after this hoisted line); the I-1
+// straddle test asserts the name actually landed. Put back in afterAll.
+const POOL_APP = vi.hoisted(() => {
+  const saved = process.env.PGAPPNAME;
+  const name = `stream-sessions.test ${globalThis.crypto.randomUUID().slice(0, 8)}`;
+  process.env.PGAPPNAME = name;
+  return { name, saved };
+});
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 // N4 (Task 14b re-review): apply's POOLED rate read, switchable so one test can make it throw. A pass-through otherwise —
@@ -92,6 +102,8 @@ beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
 afterAll(() => {
   if (savedKek === undefined) delete process.env.RELAY_KEK;
   else process.env.RELAY_KEK = savedKek;
+  if (POOL_APP.saved === undefined) delete process.env.PGAPPNAME;
+  else process.env.PGAPPNAME = POOL_APP.saved;
 });
 
 
@@ -5002,6 +5014,229 @@ describe.skipIf(!HAS_DB)("I-1: Cloudflare reads are coalesced across tabs, viewe
     }
   });
 
+  // R-1 (re-review): a poll that READ writes a sample and — when the word changed — an ingest_status event. A coalesced
+  // poll (above) serves the latest poll sample's word and computes D3's `since` from those events, so a reader landing
+  // BETWEEN two separate commits was served the NEW word with no event behind it: `since` fell back to live_at and the
+  // stream-key box flashed for one poll. The two now commit together. Here the poll is HELD mid-write — a trigger on its
+  // ingest_status insert waits on an advisory lock this test holds — and the database is read exactly as a coalesced
+  // poll reads it (the latest poll sample; the ingest_status events), through the pool. A real coalesced currentSession
+  // cannot run at that instant: its expiry tick takes the session row lock the held poll owns.
+  it("R-1: a reader that looks while a poll is MID-WRITE never sees the new sample without its event — it is served the previous reading; once the poll commits it sees both, together", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    let out: OutputState = "ok";
+    const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+    const key = randomInt(1, 2 ** 31 - 1);
+    const fn = `r1_hold_${randomBytes(4).toString("hex")}`;
+    const holder = await sql.reserve();
+    let held = false;
+    let poll: Promise<{ v?: Awaited<ReturnType<typeof currentSession>>; e?: unknown }> | null = null;
+    const latestWord = async () => (await sql<{ word: string }[]>`
+      select output_state as word from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`)[0]?.word;
+    try {
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output?.state, "PREMISE: live, the destination receiving").toBe("ok");
+      const before = await counts(sessionId);
+      await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+        begin
+          if new.session_id = '${sessionId}'::uuid and new.type = 'ingest_status' then perform pg_advisory_xact_lock(${key}); end if;
+          return new;
+        end $$`);
+      await sql.unsafe(`create trigger ${fn} before insert on fixture_stream_events for each row execute function ${fn}()`);
+      await holder`select pg_advisory_lock(${key})`;
+      held = true;
+      out = "connecting";   // a CHANGED word: this poll owes a sample AND an event
+      r.tick(STREAM_POLL_MS);
+      poll = currentSession(r.auth, r.fixtureId, r.deps).then((v) => ({ v }), (e: unknown) => ({ e }));
+      // Wait until the poll is parked on its event insert — the instant the old code had already committed its sample.
+      const deadline = Date.now() + 15_000;
+      let waiting = 0;
+      while (waiting === 0 && Date.now() < deadline) {
+        [{ waiting }] = await sql<{ waiting: number }[]>`
+          select count(*)::int as waiting from pg_locks where locktype = 'advisory' and not granted and classid = 0 and objid = ${key}`;
+        if (waiting === 0) await new Promise((res) => setTimeout(res, 20));
+      }
+      expect(waiting, "PREMISE: the poll reached its event write and is held there").toBe(1);
+      expect(await latestWord(), "mid-write: the previous reading is still the one served").toBe("ok");
+      expect(await counts(sessionId), "mid-write: no half of the new reading is visible — never the sample without its event").toEqual(before);
+      await holder`select pg_advisory_unlock(${key})`;
+      held = false;
+      const done = await poll;
+      expect(done.e, "the held poll completes").toBeUndefined();
+      expect(done.v!.output?.state).toBe("connecting");
+      expect(await counts(sessionId), "after the commit: both, together").toEqual({ samples: before.samples + 1, events: before.events + 1 });
+      expect(await latestWord()).toBe("connecting");
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixture_stream_events
+         where session_id = ${sessionId} and type = 'ingest_status' and payload->>'outputState' = 'connecting'`;
+      expect(n, "the served word has its event").toBe(1);
+    } finally {
+      // Order matters: release the poll before dropping its trigger (a DROP waits on the held insert's table lock).
+      if (held) await holder`select pg_advisory_unlock(${key})`;
+      if (poll) await poll;
+      holder.release();
+      await sql.unsafe(`drop trigger if exists ${fn} on fixture_stream_events`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+      outSpy.mockRestore();
+    }
+  });
+
+  // R-1, the failure half: all-or-nothing in BOTH directions, so neither write order can be split back apart unseen —
+  // the event refused (the old order committed its sample first) and the sample refused (an event-first split would
+  // commit its event first).
+  it("R-1: the pair is all-or-nothing — when EITHER write is refused (the event, then the sample), the poll fails and neither row lands, the previous reading is still the one served, and the next window writes both", async () => {
+    let checked = 0;
+    for (const refused of ["fixture_stream_events", "fixture_stream_samples"] as const) {
+      const r = await rig({ credits: 1 });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      r.tick(3000);
+      let out: OutputState = "ok";
+      const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => out);
+      const fn = `r1_refuse_${randomBytes(4).toString("hex")}`;
+      const which = refused === "fixture_stream_events" ? "new.type = 'ingest_status'" : "new.source = 'poll'";
+      try {
+        expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output?.state, `${refused}: PREMISE: live, the destination receiving`).toBe("ok");
+        const before = await counts(sessionId);
+        await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+          begin
+            if new.session_id = '${sessionId}'::uuid and ${which} then raise exception 'R1: write refused'; end if;
+            return new;
+          end $$`);
+        await sql.unsafe(`create trigger ${fn} before insert on ${refused} for each row execute function ${fn}()`);
+        out = "connecting";   // a CHANGED word: this poll owes a sample AND an event
+        r.tick(STREAM_POLL_MS);
+        await expect(currentSession(r.auth, r.fixtureId, r.deps), `${refused}: the refused write fails the poll`).rejects.toThrow(/R1: write refused/);
+        expect(await counts(sessionId), `${refused} refused: neither row of the new reading landed`).toEqual(before);
+        const [{ word }] = await sql<{ word: string }[]>`
+          select output_state as word from fixture_stream_samples where session_id = ${sessionId} and source = 'poll' order by id desc limit 1`;
+        expect(word, `${refused}: a coalesced reader is still served the word whose event exists`).toBe("ok");
+        await sql.unsafe(`drop trigger ${fn} on ${refused}`);
+        await sql.unsafe(`drop function ${fn}()`);
+        r.tick(STREAM_POLL_MS);
+        expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output?.state, `${refused}: the next window reads`).toBe("connecting");
+        expect(await counts(sessionId), `${refused}: and writes both`).toEqual({ samples: before.samples + 1, events: before.events + 1 });
+      } finally {
+        outSpy.mockRestore();
+        await sql.unsafe(`drop trigger if exists ${fn} on ${refused}`);
+        await sql.unsafe(`drop function if exists ${fn}()`);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // B0 fix round 1, I-1 (review 2026-10-01): R-1 made the WRITE atomic, but the coalesced READER read its pair in two
+  // snapshots — the latest poll sample near the top, the ingest_status events for D3's `since` several statements later —
+  // so a reading poll whose commit landed between them served the OLD word timed by the NEW event. The reviewer's probe,
+  // as a test: the destination stopped receiving at +65 s; at +80 s poll A claims the read and is held inside outputState
+  // (it will read ok); coalesced poll B runs and is parked at its credits read by an ACCESS EXCLUSIVE lock on
+  // org_stream_credits — after its sample read; A is released and commits its pair; then the lock goes.
+  //
+  // m-5 (B0 re-review): the park is witnessed on B's OWN query — this file's application_name (POOL_APP) AND the spend
+  // read's text — never "any waiter on org_stream_credits". CI runs files in parallel on one database, and another
+  // suite's credits read queued behind the lock satisfied the old witness before B had read anything; B then read after
+  // A's commit, and an either-view assertion passed with no straddle at all. That case is BUILT here: a decoy under a
+  // foreign application_name, running the spend read's own text, waits on the lock before B starts, and B starts late
+  // (B_LATE_MS) — slower than the foreign waiter, as on a loaded runner. Witnessed this way, B has read its sample before
+  // A was released, so its ONE right answer is the old view, pinned exactly.
+  it("I-1 (fix round 1): a coalesced poll that straddles a reading poll's commit is served the snapshot it read BEFORE the commit — the old word with its own since — never the old word timed by the new event (the stream-key box flash); B's park is witnessed on B's own query, not on another suite's waiter", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    r.tick(3000);
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const until = async (done: () => Promise<boolean> | boolean, what: string) => {
+      const deadline = Date.now() + 15_000;
+      while (!(await done())) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting: ${what}`);
+        await new Promise((res) => setTimeout(res, 20));
+      }
+    };
+    const SPEND_READ = "%as net from org_stream_credits%";   // the spend read's own text (stream-sessions.ts currentSession)
+    const FOREIGN_APP = "m5 another suite";
+    const B_LATE_MS = 750;
+    const anyWaiters = async () => (await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks where relation = 'org_stream_credits'::regclass and not granted`)[0]!.n;
+    const parkedAtSpend = async (app: string) => (await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_locks l join pg_stat_activity act on act.pid = l.pid
+       where l.relation = 'org_stream_credits'::regclass and not l.granted
+         and act.application_name = ${app} and act.query like ${SPEND_READ}`)[0]!.n;
+    const [{ app: ownApp }] = await sql<{ app: string }[]>`select current_setting('application_name') as app`;
+    expect(ownApp, "PREMISE: this file's pool carries its own application_name (PGAPPNAME, hoisted)").toBe(POOL_APP.name);
+    let out: OutputState = "ok";
+    let hold: Promise<void> | null = null;
+    const outSpy = vi.spyOn(r.ingest, "outputState").mockImplementation(async () => { if (hold) await hold; return out; });
+    let releaseA = () => {};
+    let releaseLock = () => {};
+    let locker: Promise<unknown> | null = null;
+    type Answer = { v?: Awaited<ReturnType<typeof currentSession>>; e?: unknown };
+    let a: Promise<Answer> | null = null;
+    let b: Promise<Answer> | null = null;
+    const decoy = await sql.reserve();
+    let decoyRead: Promise<unknown> | null = null;
+    try {
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "PREMISE: live, the destination receiving").toBe("live");
+      const tLive = r.deps.now().getTime();
+      r.tick(65_000);
+      out = "connecting";
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "+65 s: it stops receiving").toEqual({ state: "connecting", since: iso(tLive + 65_000), elapsedMs: 0 });
+      r.tick(10_000);
+      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.output, "+75 s: the sample B will be served").toEqual({ state: "connecting", since: iso(tLive + 65_000), elapsedMs: 10_000 });
+      const before = await counts(sessionId);
+      // +80 s: A claims the read and is held inside outputState.
+      r.tick(5_000);
+      out = "ok";
+      hold = new Promise<void>((res) => { releaseA = res; });
+      const readsBefore = outSpy.mock.calls.length;
+      a = currentSession(r.auth, r.fixtureId, r.deps).then((v) => ({ v }), (e: unknown) => ({ e }));
+      await until(() => outSpy.mock.calls.length > readsBefore, "A is inside outputState");
+      let lockTaken = () => {};
+      const taken = new Promise<void>((res) => { lockTaken = res; });
+      const gate = new Promise<void>((res) => { releaseLock = res; });
+      // Bounded: behind another suite's open transaction on the table, fail in 5 s rather than at the test timeout.
+      locker = sql.begin(async (tx) => {
+        await tx`set local lock_timeout = '5s'`;
+        await tx`lock table org_stream_credits in access exclusive mode`;
+        lockTaken();
+        await gate;
+      });
+      await taken;
+      // The decoy: another suite's credits read, the spend read's own text under a foreign application_name.
+      await decoy`select set_config('application_name', ${FOREIGN_APP}, false)`;
+      decoyRead = decoy`select coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`.then(() => undefined);
+      await until(async () => (await parkedAtSpend(FOREIGN_APP)) === 1, "the decoy waits on the lock");
+      expect(await anyWaiters(), "PREMISE: a waiter the old witness would have taken for B").toBeGreaterThanOrEqual(1);
+      expect(await parkedAtSpend(ownApp), "PREMISE: and it is not B, who has not started").toBe(0);
+      b = new Promise<void>((res) => setTimeout(res, B_LATE_MS))
+        .then(() => currentSession(r.auth, r.fixtureId, elsewhere(r)))
+        .then((v) => ({ v }), (e: unknown) => ({ e }));
+      await until(async () => (await parkedAtSpend(ownApp)) >= 1, "B is parked at ITS spend read");
+      expect(await parkedAtSpend(ownApp), "B alone: A is still held inside outputState").toBe(1);
+      hold = null;
+      releaseA();
+      await until(async () => (await counts(sessionId)).events === before.events + 1, "A committed its sample and event");
+      releaseLock();
+      await locker;
+      const [ra, rb] = await Promise.all([a, b]);
+      expect(ra.e, "A completes").toBeUndefined();
+      expect(rb.e, "B completes").toBeUndefined();
+      expect(outSpy.mock.calls.length, "PREMISE: A read the destination, B was served").toBe(readsBefore + 1);
+      expect(ra.v!.output, "A: the new pair").toEqual({ state: "ok", since: iso(tLive + 80_000), elapsedMs: 0 });
+      expect(rb.v!.output, "B: the snapshot it read before A's commit — the old word with its own since").toEqual({ state: "connecting", since: iso(tLive + 65_000), elapsedMs: 15_000 });
+      expect(d3Warning(rb.v!), "no stream-key box from a straddled commit").toBeNull();
+    } finally {
+      hold = null;
+      releaseA();
+      releaseLock();
+      if (locker) await locker.catch(() => undefined);
+      if (decoyRead) await decoyRead.catch(() => undefined);
+      await decoy`reset application_name`.catch(() => undefined);
+      decoy.release();
+      if (a) await a;
+      if (b) await b;
+      outSpy.mockRestore();
+    }
+  });
+
   it("a claimed read that FAILS still holds the window (a 429 storm is coalesced too): one call and one report for two polls inside the window; the poll after it reads again", async () => {
     const r = await rig({ credits: 1 });
     await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
@@ -5050,8 +5285,120 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
 
     await expireTargetHolders(r.auth.orgId, null, r.deps);
     expect((await r.row(fresh.sessionId)).state, "second call: still nothing due").toBe("warming");
-    // The empty case: an org with no holder at all.
+    // The empty case: an org with no holder at all — nothing expired, nothing failed.
     const none = await rig({ credits: 1 });
-    await expect(expireTargetHolders(none.auth.orgId, null, none.deps)).resolves.toBeUndefined();
+    await expect(expireTargetHolders(none.auth.orgId, null, none.deps)).resolves.toEqual({ expired: [], failed: [] });
+  });
+
+  // B0 (R-3's routed item, coordinator 2026-10-01): one holder whose tick THROWS — a provider failure recordEffect
+  // rethrows, or the apply's own write — used to end the loop, so every LATER holder kept its "In use" lock until the next
+  // load. Each holder now has its own catch: the failure is reported once and the rest are still ticked. Here the middle
+  // holder's state write is refused at the database (a trigger on ITS row only), which makes its applyExpiry throw.
+  it("three due holders, the MIDDLE one's tick throws: the first and the third are still expired, the middle is reported once and left holding, and the answer names both sets; a second call, the fault gone, expires the middle", async () => {
+    const r = await rig({ credits: 3, fixtures: 2, connectAfterMs: 24 * 60 * 60_000 });
+    const extra = await startedDivisionWithFixture(r.auth);
+    const targets = [
+      r.target,
+      await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` }),
+      await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Third", streamKey: `yt-${randomUUID()}` }),
+    ];
+    const fixtures = [r.fixtureIds[0]!, r.fixtureIds[1]!, extra.fixtureId];
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await createSession(r.auth, fixtures[i]!, body(targets[i]!.id), r.deps)).sessionId);
+    const [first, middle, third] = ids as [string, string, string];
+    // All three abandoned past the warming timeout, in this order (holderRows ticks oldest first).
+    const due = r.deps.now().getTime() - (WARMING_TIMEOUT_MINUTES + 1) * 60_000;
+    for (let i = 0; i < 3; i++) await sql`update fixture_stream_sessions set created_at = ${new Date(due - (3 - i) * 1000)} where id = ${ids[i]!}`;
+    const held = async () => new Map((await listStreamTargets(r.auth, r.auth.orgId)).map((t) => [t.id, t.inUse !== null]));
+    expect(await held(), "PREMISE: all three destinations show In use").toEqual(new Map(targets.map((t) => [t.id, true])));
+    const tickReports = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.expire_target_holders");
+    const fn = `b0_refuse_${randomBytes(4).toString("hex")}`;
+    await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$
+      begin
+        if new.id = '${middle}'::uuid and new.state is distinct from old.state then raise exception 'B0: the middle holder tick is refused'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger ${fn} before update on fixture_stream_sessions for each row execute function ${fn}()`);
+    sentry.captureError.mockClear();
+    try {
+      const result = await expireTargetHolders(r.auth.orgId, null, r.deps);
+      expect(result, "the first and the third expired; the middle failed").toEqual({ expired: [first, third], failed: [middle] });
+      let checked = 0;
+      for (const sid of [first, third]) {
+        expect(await r.row(sid), "expired past the middle's throw").toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+        checked++;
+      }
+      expect(checked).toBe(2);
+      expect((await r.row(middle)).state, "the refused tick left the middle as it was").toBe("warming");
+      expect(tickReports(), "the middle's failure is reported once").toHaveLength(1);
+      const [err, ctx] = tickReports()[0]!;
+      expect(String(err)).toMatch(/B0: the middle holder tick is refused/);
+      expect(ctx).toMatchObject({ orgId: r.auth.orgId, extra: { sessionId: middle, targetId: null } });
+      expect(await held(), "only the middle's destination is still locked").toEqual(new Map([[targets[0]!.id, false], [targets[1]!.id, true], [targets[2]!.id, false]]));
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on fixture_stream_sessions`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    // The second call, the fault gone: only the middle is left to tick, and it expires; nothing more is reported.
+    expect(await expireTargetHolders(r.auth.orgId, null, r.deps)).toEqual({ expired: [middle], failed: [] });
+    expect((await r.row(middle)).state).toBe("failed");
+    expect(tickReports(), "a clean tick reports nothing").toHaveLength(1);
+    expect(await held()).toEqual(new Map(targets.map((t) => [t.id, false])));
+  });
+
+  // B0 fix round 1, m-2 (review 2026-10-01): `apply` COMMITS the decision before `runEffects`, so a tick can throw AFTER
+  // the holder is already terminal — an effect recordEffect rethrows. That holder no longer holds the destination; it is
+  // `expired`, not `failed`. The answer classifies by what COMMITTED (the row re-read), and the throw is still reported.
+  // Two LIVE holders on one tick, both past the wall clock (a live passthrough ends max_duration → completed, whose
+  // `fill_replay` — owed only to a session that went live — runs after commit): A's fill_replay is refused (its `ok`
+  // effect row, on A only), so A's tick throws with A completed; B's state write is refused (on B only), so B's tick
+  // throws with nothing committed — the positive pair.
+  it("m-2: a holder whose EFFECT throws after its expiry committed is `expired` (reported); one whose write throws before is `failed` (reported) — classified by what committed", async () => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const second = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Second", streamKey: `yt-${randomUUID()}` });
+    const a = (await createSession(r.auth, r.fixtureIds[0]!, body(r.target.id), r.deps)).sessionId;
+    r.tick(1000);
+    const b = (await createSession(r.auth, r.fixtureIds[1]!, body(second.id), r.deps)).sessionId;
+    r.tick(3001);
+    for (const f of [r.fixtureIds[0]!, r.fixtureIds[1]!]) expect((await currentSession(r.auth, f, r.deps))!.state, "PREMISE: live").toBe("live");
+    r.tick((MAX_DURATION_MINUTES + 1) * 60_000);   // both past their wall clock
+    const tickReports = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string } | undefined)?.route === "relay.expire_target_holders");
+    const fx = `m2_effect_${randomBytes(4).toString("hex")}`;
+    const fw = `m2_write_${randomBytes(4).toString("hex")}`;
+    await sql.unsafe(`create function ${fx}() returns trigger language plpgsql as $$
+      begin
+        if new.session_id = '${a}'::uuid and new.kind = 'effect' and new.type = 'fill_replay' and new.result = 'ok' then raise exception 'm-2: A fill_replay is refused after commit'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger ${fx} before insert on fixture_stream_events for each row execute function ${fx}()`);
+    await sql.unsafe(`create function ${fw}() returns trigger language plpgsql as $$
+      begin
+        if new.id = '${b}'::uuid and new.state is distinct from old.state then raise exception 'm-2: B expiry write is refused'; end if;
+        return new;
+      end $$`);
+    await sql.unsafe(`create trigger ${fw} before update on fixture_stream_sessions for each row execute function ${fw}()`);
+    sentry.captureError.mockClear();
+    try {
+      const result = await expireTargetHolders(r.auth.orgId, null, r.deps);
+      expect(await r.row(a), "A: its expiry committed before the effect threw").toMatchObject({ state: "completed", end_reason: "max_duration" });
+      const effects = await sql<{ type: string; result: string }[]>`
+        select type, result from fixture_stream_events where session_id = ${a} and kind = 'effect' and type = 'fill_replay' order by seq`;
+      expect(effects, "PREMISE: A's throw was its post-commit fill_replay").toEqual([{ type: "fill_replay", result: "failed" }]);
+      expect((await r.row(b)).state, "B: nothing committed").toBe("live");
+      expect(result, "A expired (terminal), B failed (still holding)").toEqual({ expired: [a], failed: [b] });
+      const reports = tickReports();
+      expect(reports.map(([err]) => String(err)), "both throws are reported, once each").toEqual([
+        expect.stringMatching(/m-2: A fill_replay is refused after commit/), expect.stringMatching(/m-2: B expiry write is refused/),
+      ]);
+      expect(reports.map(([, ctx]) => (ctx as { extra?: { sessionId?: string } }).extra?.sessionId)).toEqual([a, b]);
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fx} on fixture_stream_events`);
+      await sql.unsafe(`drop function if exists ${fx}()`);
+      await sql.unsafe(`drop trigger if exists ${fw} on fixture_stream_sessions`);
+      await sql.unsafe(`drop function if exists ${fw}()`);
+    }
+    // The second call, the faults gone: A is no holder any more (terminal), B expires.
+    expect(await expireTargetHolders(r.auth.orgId, null, r.deps)).toEqual({ expired: [b], failed: [] });
+    expect(tickReports(), "a clean tick reports nothing more").toHaveLength(2);
   });
 });

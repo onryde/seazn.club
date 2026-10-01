@@ -25,3 +25,9 @@ build/
 **/.pytest_cache/
 venv/
 .venv/
+# apps/cron-worker never ships in the Fly image, and the builder stage never
+# installs its devDependencies (wrangler, workers-types): the Dockerfile copies
+# only the web/engine/reference manifests before `pnpm install`. Left in the
+# context, ci.yml's container job (`turbo run typecheck` inside the image)
+# would fail on it with TS2688.
+apps/cron-worker

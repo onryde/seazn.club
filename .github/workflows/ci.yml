@@ -76,6 +76,12 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # apps/cron-worker is a workspace no other test step collects
+      # (ci.yml runs apps/web and packages/engine by name). Its typecheck is
+      # covered by `npx turbo run typecheck` below; the container job's
+      # in-image typecheck never sees it (.dockerignore).
+      - name: Cron worker tests
+        run: pnpm --filter @seazn/cron-worker test
       # Both workspaces in one graph-ordered pass, restored from the Remote
       # Cache when neither TS tree changed. turbo.json's globalDependencies
       # pull in scripts/** + tsconfig.scripts.json, which apps/web's typecheck

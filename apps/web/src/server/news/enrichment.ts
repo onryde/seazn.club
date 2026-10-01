@@ -50,6 +50,23 @@ export function digestWindow(nowMs: number, orgTz: string): DigestWindow {
   };
 }
 
+/**
+ * ISO-8601 week key in UTC, e.g. "2026-W40" — the cron digest's
+ * once-per-week identity (`auto_source.cron_week`, V429). `digestWindow` is a
+ * rolling `[now-7d, now)` so its `start` cannot serve as that key.
+ */
+export function isoWeekKeyUtc(nowMs: number): string {
+  const DAY = 86_400_000;
+  const d = new Date(nowMs);
+  const mondayIndex = (d.getUTCDay() + 6) % 7; // Mon=0 … Sun=6
+  const monday = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - mondayIndex);
+  const isoYear = new Date(monday + 3 * DAY).getUTCFullYear(); // the week's Thursday decides the year
+  const jan4 = Date.UTC(isoYear, 0, 4);
+  const week1Monday = jan4 - ((new Date(jan4).getUTCDay() + 6) % 7) * DAY;
+  const week = Math.round((monday - week1Monday) / (7 * DAY)) + 1;
+  return `${isoYear}-W${String(week).padStart(2, "0")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Upcoming fixtures, grouped by org-local day
 // ---------------------------------------------------------------------------

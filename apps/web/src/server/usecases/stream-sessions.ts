@@ -12,6 +12,7 @@ import "server-only";
 // the daily cron. Network calls (ingest, runner) happen OUTSIDE transactions;
 // the replay fill (setFixtureStreamUrl, a withTenant caller) runs after every
 // transaction has closed. E5: storage_exhausted is a REFUSAL (503, no row).
+import type postgres from "postgres";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
@@ -552,6 +553,38 @@ async function latestPollSample(sessionId: string): Promise<PollSample | undefin
   return prev;
 }
 type PollSample = { ingest_state: string | null; output_state: string | null; sampled_at: Date; protocol: string | null };
+
+/** D3's `since` as ONE SQL expression — the rule `currentSession` explains above its use: the first ingest_status event
+ *  after the last one on the other side of ok, clamped to `live_at` and, for a non-ok word, to the phone's latest
+ *  reconnect. `ok` says which side of ok the timed word is on: a literal for a poll that READ, or the sample's own column
+ *  for a coalesced poll, so one rule serves both and the coalesced word and its since share a statement (I-1). */
+function outputSinceExpr(sessionId: string, ok: boolean | postgres.Fragment): postgres.Fragment {
+  return sql`greatest(
+    (select occurred_at from fixture_stream_events
+      where session_id = ${sessionId} and type = 'ingest_status'
+        and seq > coalesce((select max(seq) from fixture_stream_events
+                             where session_id = ${sessionId} and type = 'ingest_status'
+                               and (coalesce(payload->>'outputState', '') = 'ok') <> ${ok}), 0)
+      order by seq asc limit 1),
+    (select live_at from fixture_stream_sessions where id = ${sessionId}),
+    (select max(occurred_at) from fixture_stream_events
+      where not ${ok} and session_id = ${sessionId} and type = 'ingest_status'
+        and to_state = 'connected' and coalesce(from_state, '') <> 'connected'))`;
+}
+
+/** B0 fix round 1 (I-1): a coalesced poll's whole reading — the latest poll sample AND D3's `since` for its word — in ONE
+ *  statement, so ONE snapshot. Read in two (the sample at the top of currentSession, the events several statements
+ *  later), a reading poll's sample-and-event commit (R-1) landing between them served the OLD word timed by the NEW
+ *  event: `since` fell back to live_at and the stream-key box flashed. A statement sees one snapshot under any isolation
+ *  level, so nothing here depends on the transaction mode. */
+async function latestPollSampleWithSince(sessionId: string): Promise<(PollSample & { since: Date | null }) | undefined> {
+  const [s] = await sql<(PollSample & { since: Date | null })[]>`
+    select p.ingest_state, p.output_state, p.sampled_at, p.raw->>'protocol' as protocol,
+           ${outputSinceExpr(sessionId, sql`coalesce(p.output_state = 'ok', false)`)} as since
+      from (select ingest_state, output_state, sampled_at, raw from fixture_stream_samples
+             where session_id = ${sessionId} and source = 'poll' order by id desc limit 1) p`;
+  return s;
+}
 
 /** I-1 (final review; controller ruling 2026-10-01): coalesce the organiser poll's Cloudflare reads ACROSS tabs, viewers
  *  and processes. Every open organiser fixture page polls `current` every STREAM_POLL_MS, and each poll read the input
@@ -1412,6 +1445,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // connected; a rejected destination fails it. The client never decides.
   let ingestState: StreamSessionCurrent["ingest"] = null;
   let outputObserved: OutputState | null = null;   // D3: what THIS poll read of the destination; null when it read nothing
+  let coalescedSince: Date | null | undefined;      // I-1 (B0 fix round 1): a served sample's own since; undefined = not served
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
@@ -1432,12 +1466,15 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     if (coalesced) {
       // I-1: no provider call — the view is the latest poll sample's, when it is recent enough to be this interval's
       // reading. Nothing is recorded and nothing is decided: the poll that read decided on what it read. D3's `since`
-      // below is computed exactly as for a read (events, clamps, this response's clock), from the sampled word.
-      const sample = await latestPollSample(row.id);
+      // is computed exactly as for a read (events, clamps, this response's clock), from the sampled word — and, B0 fix
+      // round 1 (I-1), in the SAME statement as the sample (`latestPollSampleWithSince`): read apart, a reading poll's
+      // commit could land between them and serve the old word timed by the new event.
+      const sample = await latestPollSampleWithSince(row.id);
       if (sample && deps.now().getTime() - new Date(sample.sampled_at).getTime() < COALESCED_SAMPLE_MAX_AGE_MS) {
         const phone = carriedIngest(sample);
         ingestState = phone === null ? null : { state: phone, protocol: sampledProtocol(sample.protocol) };
         outputObserved = sampledOutput(sample.output_state);
+        coalescedSince = sample.since;
       }
     }
     if (read) {
@@ -1456,19 +1493,27 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       // still answers the projection and still drives warming → live below. G-a: a carried word is recorded as the
       // reading it carries (the raw status keeps the no-evidence read itself); an unseen phone records nothing.
       if (output !== null && phone !== null) {
-        // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
-        // on the status read). It is the one field that says WHY an input is disconnected, so a poll
-        // sample without it records that something was wrong and drops the only explanation.
-        await recordSample(sql, { sessionId: row.id, source: "poll", ingestState: phone, outputState: output,
-          ingestReason: status.reason, sampledAt: deps.now(), raw: status });
-        if (!prev || prev.ingest_state !== phone || prev.output_state !== output) {
-          const sid = row.id, orgId = row.org_id;
-          await sql.begin(async (tx) => {
+        // R-1 (re-review): the sample and its event commit in ONE transaction. A coalesced poll serves the latest poll
+        // sample's word and computes D3's `since` from these events; as two commits, a reader landing between them was
+        // served the NEW word with no event behind it, `since` fell back to live_at, and the stream-key box flashed for
+        // one poll. Both Cloudflare reads are already done above: this transaction holds a connection for the row lock
+        // and the two inserts only, never across a provider call. Inside it the order is invisible to a reader; neither
+        // half alone is safe to serve (an event without its sample moves `since` under the previous word), so they must
+        // never be split — stream-sessions.test.ts "R-1" holds a poll mid-write and refuses each write in turn.
+        const changed = !prev || prev.ingest_state !== phone || prev.output_state !== output;
+        const sid = row.id, orgId = row.org_id;
+        await sql.begin(async (tx) => {
+          if (changed) {
             await lockRow(tx, sid);
             await recordEvent(tx, { sessionId: sid, orgId, source: "ingest", kind: "observed", type: "ingest_status", from: prev?.ingest_state ?? null, to: phone, occurredAt: deps.now(),
               payload: { protocol: status.protocol, outputState: output, connected: phone === "connected" } });
-          });
-        }
+          }
+          // Dh: `ingest_reason` is Cloudflare's own `status.current.reason`, verbatim (Task 4 exposes it
+          // on the status read). It is the one field that says WHY an input is disconnected, so a poll
+          // sample without it records that something was wrong and drops the only explanation.
+          await recordSample(tx, { sessionId: sid, source: "poll", ingestState: phone, outputState: output,
+            ingestReason: status.reason, sampledAt: deps.now(), raw: status });
+        });
       }
       if (phone === "connected") {
         await sql`update fixture_stream_sessions set first_ingest_at = coalesce(first_ingest_at, ${deps.now()}), ingest_protocol = coalesce(ingest_protocol, ${status.protocol}) where id = ${row.id}`;
@@ -1543,20 +1588,9 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // without the destination ever stopping never restarted its receiving.
   let output: StreamSessionCurrent["output"] = null;
   if (row.mode === "passthrough" && outputObserved !== null) {
-    const [first] = await sql<{ since: Date | null }[]>`
-      select greatest(
-        (select occurred_at from fixture_stream_events
-          where session_id = ${row.id} and type = 'ingest_status'
-            and seq > coalesce((select max(seq) from fixture_stream_events
-                                 where session_id = ${row.id} and type = 'ingest_status'
-                                   and (coalesce(payload->>'outputState', '') = 'ok') <> ${outputObserved === "ok"}), 0)
-          order by seq asc limit 1),
-        (select live_at from fixture_stream_sessions where id = ${row.id}),
-        (select max(occurred_at) from fixture_stream_events
-          where ${outputObserved !== "ok"} and session_id = ${row.id} and type = 'ingest_status'
-            and to_state = 'connected' and coalesce(from_state, '') <> 'connected')
-      ) as since`;
-    const since = new Date(first?.since ?? deps.now());
+    const sinceAt = coalescedSince !== undefined ? coalescedSince
+      : ((await sql<{ since: Date | null }[]>`select ${outputSinceExpr(row.id, outputObserved === "ok")} as since`)[0]?.since ?? null);
+    const since = new Date(sinceAt ?? deps.now());
     // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.
     output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
   }
@@ -1710,7 +1744,30 @@ export async function fillReplayUrl(sessionId: string): Promise<void> {
  *  M-3 (final review): `targetId: null` ticks every holder of the ORG's destinations — the Directory's Streaming tab,
  *  before it lists them. Its "In use" lock disables exactly the Replace and Remove buttons whose routes tick a single
  *  target, so an abandoned Go live otherwise kept the lock up until someone opened that match or the daily sweep ran.
- *  A holder that is not due is untouched (applyExpiry reads it and finds nothing to do). */
-export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<void> {
-  for (const h of await holderRows(sql, targetId === null ? { orgId } : { orgId, targetId })) await applyExpiry(h.sessionId, deps);
+ *  A holder that is not due is untouched (applyExpiry reads it and finds nothing to do).
+ *
+ *  B0 (R-3's routed item, 2026-10-01): EACH holder is best-effort. A tick that throws — a provider failure recordEffect
+ *  rethrows, or the apply's own write — is reported (captureError, route relay.expire_target_holders) and the loop goes
+ *  on; it used to end the loop, so every LATER holder kept its lock until the next load. The answer names what the
+ *  tick did: `expired` — the holders it left no longer holding the destination (a terminal state); `failed` — the holders
+ *  whose tick threw and that STILL hold it. A holder that was not due is in neither.
+ *
+ *  B0 fix round 1 (m-2): a throw is classified by what COMMITTED, not by the throw. `apply` commits the decision before
+ *  `runEffects`, so an effect that throws after commit (a post-completion `fill_replay` recordEffect rethrows) leaves the
+ *  holder terminal — `expired`, and still reported. The row is re-read to tell; a re-read that itself fails says nothing
+ *  about what committed, so the holder stays `failed`. */
+export async function expireTargetHolders(orgId: string, targetId: string | null, deps: SessionDeps): Promise<{ expired: string[]; failed: string[] }> {
+  const expired: string[] = [];
+  const failed: string[] = [];
+  for (const h of await holderRows(sql, targetId === null ? { orgId } : { orgId, targetId })) {
+    try {
+      const after = await applyExpiry(h.sessionId, deps);
+      if (after && isTerminal(after.state)) expired.push(h.sessionId);
+    } catch (err) {
+      captureError(err, { orgId, route: "relay.expire_target_holders", extra: { sessionId: h.sessionId, targetId } });
+      const now = await readRow(h.sessionId).catch(() => null);
+      (now && isTerminal(now.state) ? expired : failed).push(h.sessionId);
+    }
+  }
+  return { expired, failed };
 }

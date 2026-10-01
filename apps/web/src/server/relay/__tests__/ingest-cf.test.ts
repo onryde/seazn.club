@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { CLOUDFLARE_STREAM_BASE, CloudflareIngest, LIST_VIDEOS_PAGE_LIMIT, type ErrorReporter } from "../ingest-cf";
-import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS } from "@/lib/stream-session-view";
+import { OUTPUT_WARNING_AFTER_MS, STREAM_POLL_MS, d3Warning } from "@/lib/stream-session-view";
 import { FakeIngest, FakeRecorder } from "../fakes";
 import { pathTemplate } from "../sanitise";
 import type { IngestState, OutputState, ProviderCallRecord } from "../ports";
@@ -571,13 +571,14 @@ describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
     reported.mockClear();
     const reports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_state");
     let checked = 0;
-    // The four words the adapter maps on purpose (staging check B, plus `error`), alone and together: no report.
-    for (const s of [["connected"], ["connecting"], ["reconnecting"], ["error"], ["connected", "connecting", "reconnecting", "error"], []]) {
+    // The five words the adapter maps on purpose (staging check B, plus `error`, plus stg 2026-10-01's `disconnected`),
+    // alone and together: no report.
+    for (const s of [["connected"], ["connecting"], ["reconnecting"], ["error"], ["disconnected"], ["connected", "connecting", "reconnecting", "error", "disconnected"], []]) {
       stubOutputs(s);
       await adapter.outputState("in_abc", { sessionId: "sess-seen" });
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(7);
     expect(reports(), "a seen word is never reported").toHaveLength(0);
     stubOutputs(["connected", "reconnected"]);
     expect(await adapter.outputState("in_abc", { sessionId: "sess-a" }), "still unknown, never ok").toBe("unknown");
@@ -617,6 +618,109 @@ describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
     await adapter.outputState("in_abc");
     await flush();
     expect(port.calls.at(-1), "no meta: the row says so").toMatchObject({ operation: "outputState", sessionId: null });
+  });
+});
+
+// Staging, 2026-10-01 14:29 BST, Sentry SEAZN-CLUB-STG-A: the phone STOPPED sending and the output's
+// `result[].status.current.state` read `disconnected` — reported as an unseen word (`words: ["disconnected"]`) and read
+// as `unknown`. Controller ruling (B0, 2026-10-01): it is a not-receiving word — the SAME OutputState as `connecting`
+// ("not receiving right now") — and it is a SEEN word. Every expected value below is that ruling, or I-1's (owner
+// 2026-10-01, option a: phone first), transcribed — never read back from the adapter.
+describe("stg 2026-10-01 (SEAZN-CLUB-STG-A): the output word `disconnected` reads not-receiving, and is never reported as unseen", () => {
+  let inputWord = "connected";
+  let outputWords: string[] = [];
+  const reported = vi.fn<ErrorReporter>();
+  const cf = new CloudflareIngest({
+    fetchImpl: recorder((c) => {
+      if (c.init.method === "GET" && /\/live_inputs\/in_stg\/outputs$/.test(c.url))
+        return { status: 200, body: { success: true, result: outputWords.map((s, i) => ({ uid: `out_${i}`, enabled: true, status: { current: { state: s } } })) } };
+      if (c.init.method === "GET" && /\/live_inputs\/in_stg$/.test(c.url))
+        return { status: 200, body: { success: true, result: { uid: "in_stg", status: { current: { ingestProtocol: "srt", state: inputWord, reason: null } } } } };
+      return { status: 500, body: { success: false, errors: [{ message: `unexpected ${String(c.init.method)} ${c.url}` }] } };
+    }).fetchImpl,
+    accountId: "acct", token: "tok", reportError: reported,
+  });
+  const wordReports = () => reported.mock.calls.filter(([, ctx]) => ctx?.route === "relay.output_state");
+  beforeEach(() => { reported.mockClear(); });
+
+  it("`disconnected` is CONNECTING (the ruling: the same OutputState as `connecting`) — alone and beside a connected output, where it used to read unknown; beside `connecting` too; and `error` still wins", async () => {
+    const rows: [string[], OutputState][] = [
+      [["disconnected"], "connecting"],
+      [["connected", "disconnected"], "connecting"],
+      [["disconnected", "connecting"], "connecting"],
+      [["disconnected", "error"], "rejected"],
+    ];
+    let checked = 0;
+    for (const [words, want] of rows) {
+      outputWords = words;
+      expect(await cf.outputState("in_stg", { sessionId: "sess-stg-map" }), words.join(",")).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("`disconnected` is NOT reported through the unseen-word reporter — alone, beside a connected output, or beside every other seen word, in three sessions", async () => {
+    const reads: [string, string[]][] = [
+      ["sess-stg-1", ["disconnected"]],
+      ["sess-stg-2", ["connected", "disconnected"]],
+      ["sess-stg-3", ["connected", "connecting", "reconnecting", "error", "disconnected"]],
+    ];
+    let checked = 0;
+    for (const [sessionId, words] of reads) {
+      outputWords = words;
+      await cf.outputState("in_stg", { sessionId });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(wordReports(), "the staging report does not recur").toHaveLength(0);
+  });
+
+  it("the positive pair: a genuinely NEW word is still reported, once per session — and beside `disconnected` the report names the new word alone", async () => {
+    outputWords = ["streaming"];
+    expect(await cf.outputState("in_stg", { sessionId: "sess-stg-new-1" }), "an unseen word alone is still unknown").toBe("unknown");
+    expect(wordReports(), "the first read in a session reports").toHaveLength(1);
+    // B0 fix round 1, m-4: the title's "once per session", asserted — the same session's next poll reads the same word
+    // and reports nothing more.
+    expect(await cf.outputState("in_stg", { sessionId: "sess-stg-new-1" })).toBe("unknown");
+    expect(wordReports(), "once per session: the second poll in sess-stg-new-1 does not report again").toHaveLength(1);
+    outputWords = ["disconnected", "streaming"];
+    await cf.outputState("in_stg", { sessionId: "sess-stg-new-2" });
+    expect(wordReports(), "a second session reports again").toHaveLength(2);
+    await cf.outputState("in_stg", { sessionId: "sess-stg-new-2" });
+    expect(wordReports(), "once per session: the second poll in sess-stg-new-2 does not report again").toHaveLength(2);
+    expect(wordReports()[0]![1]?.extra?.words).toEqual(["streaming"]);
+    expect(wordReports()[1]![1]?.extra).toMatchObject({ sessionId: "sess-stg-new-2", inputUid: "in_stg" });
+    expect(wordReports()[1]![1]?.extra?.words, "`disconnected` is not among the unseen").toEqual(["streaming"]);
+  });
+
+  it("D3 through the real adapter and the real view helper: the phone silent and the output reading `disconnected` → the PHONE box past the hold, no box under it; the phone sending again → the stream-key box", async () => {
+    const W = OUTPUT_WARNING_AFTER_MS;
+    // The projection's own fold of a READ (stream-sessions.ts currentSession): ingest {state, protocol} — null for a
+    // no-evidence word — and output {state, since, elapsedMs}, the state verbatim from outputState.
+    const viewAt = async (elapsedMs: number): Promise<Parameters<typeof d3Warning>[0]> => {
+      const status = await cf.inputStatus("in_stg", { sessionId: "sess-stg-d3" });
+      const output = await cf.outputState("in_stg", { sessionId: "sess-stg-d3" });
+      return {
+        state: "live",
+        ingest: status.state === null ? null : { state: status.state, protocol: status.protocol },
+        output: output === null ? null : { state: output, since: "2026-10-01T13:29:00.000Z", elapsedMs },
+      };
+    };
+    outputWords = ["disconnected"];
+    let checked = 0;
+    // R0's measured idle-input word, and Cloudflare's documented word for a phone that hung up.
+    for (const silent of ["disconnected", "client_disconnect"]) {
+      inputWord = silent;
+      const due = await viewAt(W);
+      expect(due!.ingest?.state, `PREMISE: Cloudflare's ${silent} is a silent phone on the port`).toBe("disconnected");
+      expect(d3Warning(due), `phone ${silent}, output disconnected, at the hold`).toBe("phone");
+      expect(d3Warning(await viewAt(W - 1)), `phone ${silent}, one ms under the hold`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+    inputWord = "connected";
+    expect(d3Warning(await viewAt(W)), "the phone sending, the destination still not receiving: the stream-key box").toBe("destination");
+    expect(wordReports(), "and nothing was reported along the way").toHaveLength(0);
   });
 });
 

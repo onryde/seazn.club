@@ -48,6 +48,7 @@ import {
   computeStreak,
   digestWindow,
   groupUpcomingByDay,
+  isoWeekKeyUtc,
   type DigestWindow,
   type RankedEntrantRow,
   type ResultOutcome,
@@ -666,6 +667,9 @@ async function insertGeneratedPost(
     title: string;
     bodyMd: string;
     autoSource: Record<string, unknown>;
+    /** Names the conflict arbiter. Absent = the auto-draft index (V358). The
+     *  cron weekly digest names its own once-per-ISO-week index (V429). */
+    arbiter?: "digest_cron_once";
   },
 ): Promise<{ id: string } | null> {
   return withUniqueSlug(
@@ -682,7 +686,19 @@ async function insertGeneratedPost(
       // from "already drafted" — a draft raced out of its slug was silently
       // dropped instead of retried. Naming the arbiter lets 23505 reach
       // `withUniqueSlug`, which suffixes and tries again.
-      const rows = await q<{ id: string }[]>`
+      const rows =
+        params.arbiter === "digest_cron_once"
+          ? await q<{ id: string }[]>`
+        insert into org_posts
+          (org_id, competition_id, division_id, author_user_id, kind, status, slug,
+           title, body_md, auto_source)
+        values (${params.orgId}, ${params.competitionId}, ${params.divisionId}, null, ${params.kind}, 'draft',
+                ${slug}, ${params.title}, ${params.bodyMd}, ${q.json(params.autoSource as never)})
+        on conflict (org_id, (auto_source ->> 'cron_week'))
+          where (auto_source ->> 'trigger') = 'weekly_digest' and auto_source ? 'cron_week'
+        do nothing
+        returning id`
+          : await q<{ id: string }[]>`
         insert into org_posts
           (org_id, competition_id, division_id, author_user_id, kind, status, slug,
            title, body_md, auto_source)
@@ -1525,7 +1541,8 @@ export async function assembleDigestUpcoming(
  * them apart: the button caller never sets it (a human asked, they get an
  * answer, even an empty one — "a missing DRAFT is a defect"); the cron
  * sweep sets it so a silent org's automated weekly run creates nothing
- * rather than a blank post every week.
+ * rather than a blank post every week. `cronWeek` is also cron-only: it makes
+ * the insert once-per-ISO-week per org (V429) and a repeat returns null.
  */
 async function digestForOrg(
   tx: Tx,
@@ -1536,7 +1553,7 @@ async function digestForOrg(
   // rather than defaulted: a digest that quietly covered the whole org would
   // be a $29 pass publishing about competitions it never paid for.
   competitionIds: readonly string[],
-  opts: { skipIfEmpty?: boolean } = {},
+  opts: { skipIfEmpty?: boolean; cronWeek?: string } = {},
 ): Promise<OrgPost | null> {
   const [org] = await tx<{ name: string; timezone: string | null; default_locale: string | null }[]>`
     select name, timezone, default_locale from organizations where id = ${orgId}`;
@@ -1595,7 +1612,14 @@ async function digestForOrg(
     ...(claimedHighlight ? { claimedHighlight } : {}),
   });
 
-  const autoSource = { trigger: TRIGGER_DIGEST, window_start: window.start, window_end: window.end };
+  const autoSource = {
+    trigger: TRIGGER_DIGEST,
+    window_start: window.start,
+    window_end: window.end,
+    // Cron path only (V429): the once-per-ISO-week identity. The console
+    // button never passes cronWeek, so its drafts stay unlimited (P3/D7).
+    ...(opts.cronWeek ? { origin: "cron", cron_week: opts.cronWeek } : {}),
+  };
   const inserted = await insertGeneratedPost(tx, {
     orgId,
     competitionId: null,
@@ -1604,13 +1628,19 @@ async function digestForOrg(
     title,
     bodyMd,
     autoSource,
+    ...(opts.cronWeek ? { arbiter: "digest_cron_once" as const } : {}),
   });
-  // Unreachable in practice: V358 exempts weekly_digest from the only unique
-  // index `on conflict do nothing` guards against, so this insert has no
-  // constraint left to collide with. Guarded rather than asserted with `!`
-  // so a future re-introduction of a digest uniqueness rule fails loud here
-  // instead of a silent `mapPost(undefined)`.
-  if (!inserted) throw new HttpError(500, "digest draft insert failed unexpectedly");
+  if (!inserted) {
+    // Cron path: this org already has this week's cron digest (a double
+    // fire, or a manual /run re-run under R2): a no-op, not a failure.
+    if (opts.cronWeek) return null;
+    // Console path: still unreachable. V358 exempts weekly_digest from the
+    // auto-draft index and V429's index only sees rows carrying `cron_week`,
+    // so a console insert has no constraint left to collide with. Guarded
+    // rather than asserted with `!` so a future re-introduction of a digest
+    // uniqueness rule fails loud here instead of a silent `mapPost(undefined)`.
+    throw new HttpError(500, "digest draft insert failed unexpectedly");
+  }
   log.info(
     { orgId, fixtureId: null, divisionId: null, kind: "weekly_digest" as const, enriched },
     "post_drafted",
@@ -1679,6 +1709,7 @@ export async function sweepWeeklyDigests(
   const activityTo = new Date(nowMs + DAY).toISOString();
   const upcomingTo = new Date(nowMs + 8 * DAY).toISOString();
   const nowIso = new Date(nowMs).toISOString();
+  const cronWeek = isoWeekKeyUtc(nowMs);
 
   const [totals] = await superuser<{ count: number }[]>`select count(*)::int as count from organizations`;
   const orgsTotal = totals?.count ?? 0;
@@ -1712,7 +1743,7 @@ export async function sweepWeeklyDigests(
     if (!scope.permitted) continue;
     try {
       const post = await withTenant(orgId, (tx) =>
-        digestForOrg(tx, orgId, nowMs, scope.allowed, { skipIfEmpty: true }),
+        digestForOrg(tx, orgId, nowMs, scope.allowed, { skipIfEmpty: true, cronWeek }),
       );
       if (post) {
         digestsCreated += 1;

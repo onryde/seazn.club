@@ -32,6 +32,10 @@
 // holds it. The property assertions are kept rather than deleted, behind a
 // runIf, so that a copy re-added here is still held to them instead of
 // arriving unguarded.
+//
+// Since then the schedule moved again, to apps/cron-worker/src/schedule.ts (the
+// Cloudflare cron Worker). The onryde/seazn.club.workflow legs fire the
+// endpoint only until each environment's GitHub schedule is switched off.
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";

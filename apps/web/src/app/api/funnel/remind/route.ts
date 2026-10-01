@@ -7,9 +7,13 @@ import { sendFunnelReminderEmail } from "@/lib/email";
 import { funnelPayloadSchema } from "@/lib/funnel";
 
 /** POST /api/funnel/remind — sweep unclaimed drafts older than 24h and send
- *  the single reminder (v3/07 §6). No scheduler exists in-repo, so this is a
- *  cron-shaped endpoint: wire it to Vercel Cron / any scheduler with the
- *  x-cron-secret header (CRON_SECRET env). Idempotent — reminded_at marks
+ *  the single reminder (v3/07 §6). A cron-shaped endpoint: x-cron-secret
+ *  header (CRON_SECRET env).
+ *  Schedule: apps/cron-worker/src/schedule.ts (the Cloudflare cron Worker,
+ *  live while ACTIVE is "true" in apps/cron-worker/wrangler.json). The
+ *  onryde/seazn.club.workflow leg also fires it until that schedule is
+ *  switched off, so both may fire it meanwhile.
+ *  Idempotent — reminded_at marks
  *  each draft, and expired drafts are never revived. */
 export async function POST(req: Request) {
   return handler(async () => {

@@ -7,9 +7,12 @@ import { sweepExpiredPreviews } from "@/server/usecases/ai-preview-sweep";
  *  previews that are past their life. The row holds the organiser's raw
  *  sentence, which can carry personal data about individuals, so it is retained
  *  to a stated policy rather than kept until the org is deleted. Cron-shaped
- *  like /api/cron/billing-events: wire it to any scheduler with the
- *  x-cron-secret header (CRON_SECRET env). Idempotent — a delete of rows that
- *  are already gone is a no-op. */
+ *  like /api/cron/billing-events: x-cron-secret header (CRON_SECRET env).
+ *  Schedule: apps/cron-worker/src/schedule.ts (the Cloudflare cron Worker,
+ *  live while ACTIVE is "true" in apps/cron-worker/wrangler.json). The
+ *  onryde/seazn.club.workflow leg also fires it until that schedule is
+ *  switched off, so both may fire it meanwhile.
+ *  Idempotent — a delete of rows that are already gone is a no-op. */
 export async function POST() {
   return handler(async () => {
     const secret = process.env.CRON_SECRET;

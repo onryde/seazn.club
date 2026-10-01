@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "seazn-cron",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-28",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "env": {
+    "stg": {
+      "name": "seazn-cron-stg",
+      "triggers": { "crons": ["17 * * * *"] },
+      "vars": { "ENV_NAME": "stg", "BASE_URL": "https://stg.seazn.club", "ACTIVE": "true" }
+    },
+    "prod": {
+      "name": "seazn-cron-prod",
+      "triggers": { "crons": ["17 * * * *"] },
+      "vars": { "ENV_NAME": "prod", "BASE_URL": "https://seazn.club", "ACTIVE": "true" }
+    }
+  }
+}
