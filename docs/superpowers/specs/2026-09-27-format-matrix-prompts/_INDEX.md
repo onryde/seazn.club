@@ -946,6 +946,10 @@ Elsewhere the text is the controller's record.
     - **Out entirely:** `testkit/`, which is test helpers. That is the controller's call; testkit is not product.
     - **Size, as the controller measured it on `dfe8132da`:** about 33k non-test lines, of which `sports/` is 21.5k.
       The weekly mutation job is sharded by group to fit the job limits.
+    - **The unclassified `src/scheduling/` files** (owner "apply your rec", 2026-10-04). `index.ts` is a barrel and
+      `logger.ts` holds no logic; `solver-test-bounds.ts` is a test helper; `placement-client.ts` is the gRPC client
+      that only the integration tests cover; `payload-fixtures.ts` is excluded if it only builds the placement
+      request, which fix round 3 checks. All five are excluded by name, with reasons. `generated/**` is excluded too.
 
 ## Recommendations (mine — not rulings)
 
