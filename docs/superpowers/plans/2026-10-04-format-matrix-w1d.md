@@ -227,7 +227,7 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" under
 18. **"The Cloudflare cron worker can fire the weekly run."** It can only `POST ${BASE_URL}${path}` with `x-cron-secret` (`apps/cron-worker/src/call.ts:92-94`). It has no GitHub API target. This was moot after ruling 60; it is recorded so the option is not re-offered.
 19. **Design §7.5's "scheduling, competition and tiebreaker modules" are three directories.** They are two: `tiebreakers.ts` lives in `packages/engine/src/competition/`.
 20. **W2 prompt trap 2** ("declared 3/0 loses to the FIH 2/1 the rulebook adopts", SC-P4) contradicts the SC-P4 false premise (`_INDEX.md:1362-1366`) and design §8 ("FIH 2/1 is Pro League only"). It is not W1d's to fix. Task 22 records it beside the W2 backlog for W2's planner.
-21. **(Found in review fix round 1.) "The 11 `RefusedCall` reds in `w1drv-l3` are a harness-seeding shape"** (plan review 1, m7). They are not. All 11 are `POST /api/v1/entrants/<id>/withdraw → 422`, the R4 scenario's withdraw action (P5 → W4), counted at HEAD with Task 6 Step 0's one-liner. They are the product answering a scenario action, so they stay data. The setup-call guard the review proposed is adopted anyway (`SETUP_CALLS`, D6), because a refused SETUP call would be a harness fault, and none exists today to witness it.
+21. **(Found in review fix round 1.) "The 11 `RefusedCall` reds in `w1drv-l3` are a harness-seeding shape"** (plan review 1, m7). They are not. All 11 are `POST /api/v1/entrants/<id>/withdraw → 422`, the R4 scenario's withdraw action (P5 → W4), counted at HEAD with Task 6 Step 0's one-liner. They are the product answering a scenario action, so they stay data. The setup-call guard the review proposed is adopted anyway (`SetupRefused`, tagged by phase at the setup seam; D6, review 2 R2-I2), because a refused SETUP call would be a harness fault, and none exists today to witness it.
 22. **(Found in review fix round 1.) "bench.yml builds the placement image with a `type=gha` cache"** (bench.yml:141's comment; ci.yml:594, 1080 and e2e.yml:612 say the same; plan review 1, I13). No workflow at HEAD sets `cache-from:` or `cache-to:`. `rtk proxy grep -an "cache-from:\|cache-to:" .github/workflows/*.yml` matches comments only. What IS load-bearing is `docker/setup-buildx-action@v3` before `build-push-action` (bench.yml:143, e2e.yml:614). Task 9 copies bench's step unchanged and adds buildx, and does not invent a cache the source never had.
 
 ---
@@ -306,7 +306,11 @@ Each job is one shard on a fresh Postgres with `sync:sports`, about 12 shards, w
 - **crash:** a red whose reason starts `error: crashed —` (`run.ts` `crashResult`);
 - **harness error:** a red whose reason starts `error: ` but not `error: RefusedCall:`. A `RefusedCall` is the product answering, so it is data (for example P5's `422 WRONG_PHASE`). Anything else (`DriverMisuse`, a timeout, a TypeError) is the harness or the environment;
 - **vacuous:** a red whose reason is one of `decideState`'s three vacuity reasons (`results.ts:256,260,262`). They are matched as `decideState` writes them: two exact strings, and `checked zero items (vacuous): <ids>` by PREFIX, because it carries a suffix (review I3). The strings are exported from `results.ts` as `VACUOUS_REASONS` and imported by the judge, never retyped;
-- **setup refused:** a red reading `error: RefusedCall: <METHOD> <path> …` whose path is a SETUP call the harness makes before the scenario acts. That means signing in, creating the org/competition/division/stage/entrants, provisions and fillers (`SETUP_CALLS` in `lib/judge.ts`, read from `seed-org.ts` and the drivers' setup methods at Task 6 Step 0). A refused setup call means the harness asked wrongly (review m7). A RefusedCall on a scenario ACTION stays data. All 11 RefusedCall reds in `TR/w1drv-l3` are `POST /api/v1/entrants/<id>/withdraw` (the R4 action; P5 → W4), so they stay data;
+- **setup refused:** a red reading `error: SetupRefused: …`. The tag is set by PHASE, never by route (review 2, R2-I2). Route shape cannot tell setup from action: DENIED's action is `POST /api/v1/divisions/<id>/stages` (`scenarios/denied.ts:64-77`), which is exactly a setup route elsewhere.
+  - `setUpDivision` (`scenarios/common.ts:196`) runs every driver call it makes BEFORE `driver.start` inside one `inSetup(…)` wrapper. Those are `createFromTemplate`, `createCompetition`, `createDivision`, `postStages`, `addEntrants` and `entrantMembers`.
+  - The wrapper rethrows a `RefusedCall` as `SetupRefused`, a SUBCLASS of `RefusedCall`. Every existing `instanceof RefusedCall` catch therefore behaves as before, while `run.ts:458`'s `errText` writes the subclass's name into the reason.
+  - `driver.start` stays OUTSIDE the wrapper. Start is the product's own generate act (STAGE_NOT_READY and the like), so its refusal is data. DENIED does not call `setUpDivision`, so its gated `postStages` stays data.
+  - A refused setup call means the harness asked wrongly (review m7). A RefusedCall anywhere else stays data. All 11 RefusedCall reds in `TR/w1drv-l3` are `POST /api/v1/entrants/<id>/withdraw` (the R4 action; P5 → W4), so they stay data;
 - **unplanned ░:** `not_run` without the `planned: true` marker (Task 2);
 - **run-level:** a missing, partial or aborted shard (`merge-shards.ts` refuses).
 
@@ -915,7 +919,7 @@ Re-pinned against `layers.ts` at HEAD (review I1). A `LayerCase` is either a `Dr
 
 **Files:**
 - Modify:
-  - `tools/matrix/lib/layers.ts`: `planL1Grid`, `l1GridPlanner`, `l2GridPlanner`, `ALL_CELLS`, and a NEW `LAYER_GRID_PLANNERS` beside the existing `LAYER_PLANNERS`, which stays unchanged;
+  - `tools/matrix/lib/layers.ts`: `planL1Grid`, `l1GridPlanner`, `l2GridPlanner`, `ALL_CELLS`, and a NEW `LAYER_GRID_PLANNERS` beside the existing `LAYER_PLANNERS`, which stays unchanged. Its catalogue import (`:35`, today `API_ONLY_ROWS, cellId, type RowKey`) gains `ROW_KEYS`, `SPORT_KEYS` and `type ApiOnlyRowKey` (`catalogue.ts:32,35,37`; review 2, R2-m5). `apiOnlyUiPath` and `templateField` are already imported (`:36-37`);
   - `tools/matrix/run.ts`: `parseCli` `--scope`, planner selection `:1020`, `planOf`, USAGE;
   - `tools/matrix/lib/counts.ts:99`;
   - `tools/matrix/catalogue/counts.json` (regenerated through `pnpm matrix:catalogue`, never hand-edited);
@@ -951,10 +955,11 @@ Expected: `1731`, then one line per pair naming its `n` and width. False premise
 ```ts
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, type ApiOnlyRowKey } from "../lib/catalogue.ts";
+import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { TEMPLATE_ROW } from "../lib/templates.ts";
 import { HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
-import { L1_WIDTH, LAYER_GRID_PLANNERS, layerCaseId, planL1Grid, type LayerCase } from "../lib/layers.ts";
+import { L1_WIDTH, LAYER_GRID_PLANNERS, identityOf, layerCaseId, planL1Grid, type LayerCase } from "../lib/layers.ts";
 import { loadL2Pairs } from "../lib/pairs.ts";          // pairs.ts:216
 // variantFor is (sport) => string (run.ts:225); offlineBuilderDefault (variants.ts:34) is that signature, read from the
 // committed builder defaults with no DB — the committed-plans judge's stand-in.
@@ -979,7 +984,8 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39)", () => {
     expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length + TEMPLATE_REACHED);   // 178
     const p = planned(cases);
     expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - TEMPLATE_REACHED);                   // 53
-    expect(p.every((c) => c.noPath !== null && /^W\d+$/.test(c.noPath.wave))).toBe(true);
+    // review 2, R2-m4: the wave each 🚫 names is the declaration's, API_ONLY_UI_WAVE[row].wave (api-only-ui.ts:16)
+    for (const c of p) expect(c.noPath?.wave, layerCaseId(c)).toBe(API_ONLY_UI_WAVE[identityOf(c).row as ApiOnlyRowKey].wave);
   });
   it("a template-reached cell carries its template and the template's own variant (ruling 47, D11 of W1-driving)", () => {
     const t = driven(cases).filter((c) => c.spec!.template !== undefined);
@@ -1478,15 +1484,18 @@ Then run scoped tsc and eslint, and commit `feat(matrix): NoLayerForWidth and a 
   - `tools/matrix/parity.ts:58,70` (3 → 2);
   - `tools/matrix/findings-table.ts` (refused 1 → 2, unreadable 3 → 2, and its header);
   - `tools/matrix/draw-counts.ts` (the same);
+  - `tools/matrix/lib/driver/types.ts`: `class SetupRefused extends RefusedCall`, beside `RefusedCall` (`:236`), with `name = "SetupRefused"` set in the constructor body (strip-types rule);
+  - `tools/matrix/lib/scenarios/common.ts`: `inSetup<T>(f: () => Promise<T>): Promise<T>`, wrapping `setUpDivision`'s pre-start calls (D6);
   - `package.json` (`"matrix:judge": …`).
 - Test:
   - `tools/matrix/__tests__/judge.test.ts`, `tools/matrix/__tests__/exit-codes.test.ts` (create);
+  - `tools/matrix/__tests__/scenarios.test.ts` (extend: the phase tag, through the real `setUpDivision`);
   - extend the three CLIs' existing tests where they pin an exit code.
 
 **Interfaces:**
 - Produces:
-  - `harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }): { caseId: string; kind: "crash" | "harness-error" | "setup-refused" | "vacuous" | "unplanned-not-run" | "planned-not-run"; reason: string }[]`. Ruling 65 fixes `plannedNotRun` at `allow` (the default) for every caller. `refuse` exists only so a test can show what the option changes.
-  - `SETUP_CALLS: readonly RegExp[]`: the method+path shapes of the harness's setup calls, read at Step 0 from `seed-org.ts` and the drivers' setup methods. Examples are sign-in (`/api/auth/magic-link`), `POST /api/v1/orgs…`, `/competitions`, `/divisions`, `/stages` creation, entrant creation and the FILLER calls. They never include a scenario action (withdraw, forfeit, score, generate, start, complete). Each entry is written as a comment with its source line.
+  - `harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }): { caseId: string; kind: "crash" | "harness-error" | "setup-refused" | "vacuous" | "unplanned-not-run" | "planned-not-run" | "marker-on-driven"; reason: string }[]`. Ruling 65 fixes `plannedNotRun` at `allow` (the default) for every caller. `refuse` exists only so a test can show what the option changes.
+  - `SetupRefused extends RefusedCall` (driver/types.ts) and `inSetup` (scenarios/common.ts). There is no route list: the phase is the authority (review 2, R2-I2, which also retires the round-1 `SETUP_CALLS` examples, R2-m7). The org itself is seeded in SQL (`seed-org.ts:225-235`), so no HTTP refusal can come from it. Sign-in (`tools/bench/lib/http.ts:80`) refuses before any case exists, which is a run-level abort, not a case red.
   - `statesAcross(runs: readonly RunResults[]): { compared: number; differing: { caseId: string; states: string[] }[]; missing: { caseId: string; inRuns: number[] }[] }`
   - `regressions(baseline: RunResults, now: RunResults): { compared: number; regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[]; absent: string[] }`
   - `EXIT_CODES: Record<0 | 1 | 2 | 3, string>`
@@ -1494,16 +1503,17 @@ Then run scoped tsc and eslint, and commit `feat(matrix): NoLayerForWidth and a 
     - `across <runA.json> <runB.json> <runC.json> [--planned-not-run allow|refuse]`: exit 0 harness-green; 1 not green (faults or differences listed); 2 refused (fewer than 2 runs, unreadable, different layer, plan or `harnessCommit` — three runs of two products are not a flakiness measure (D21) — or zero cases compared);
     - `regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>]`: exit 0 none; 1 reproduced regressions; 2 refused (an expected case absent from `now`, a `now` case not in `--expect`, unreadable, zero compared). `--expect` is the exact case-id list the sample PLANNED (written by `run-sample.ts` from `planPrSample`), and the baseline is restricted to exactly those ids (review C3c). Never use a cell filter.
     - `faults <run.json> [--planned-not-run allow|refuse]`: one merged run's harness faults (D6), used by the workflow's merge job on every run. Exit 0 none; 1 faults listed; 2 refused (unreadable, zero cases).
+    - The `planned` marker is trusted only in the shape it can be checked without a plan (review 2, R2-m6). A `planned: true` case with `durationMs > 0` or any check is a driven result relabelled, so it is a `marker-on-driven` fault, the same shape as `judgeRun`'s I-2 check. Whether a marked case is in the plan's planned SET is not checked in CI. The backstop is `committed-plans-frozen.test.ts`'s `judgeRun` (Task 2's second check), which runs on PR-B's committed baseline, and the task report says so.
 
-- [ ] **Step 0: Read the setup routes**
+- [ ] **Step 0: Read the setup seam**
 
-`rtk proxy grep -an "post(\|put(\|\"/api/" tools/matrix/lib/seed-org.ts tools/matrix/lib/driver/http-driver.ts`, plus `FILLER` (`lib/driver/mixed.ts:29`). List every route the harness calls BEFORE a scenario's first action, each with its line, and write them as `SETUP_CALLS`. Then check the committed L3 evidence:
+Open `scenarios/common.ts:196-285` and list every `ctx.driver.*` call before `ctx.driver.start(division.id)`, each with its line. Then confirm that no caller depends on catching a refusal from inside setup: `rtk proxy grep -an "setUpDivision(" tools/matrix/lib -r`, opening each hit for an enclosing `try`. Because `SetupRefused` extends `RefusedCall`, such a catch still works, but record any you find. Then check the committed L3 evidence:
 
 ```bash
 cd <exec> && node -e 'const r=require("./docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-l3/results.json");const m={};for(const c of r.cases){const x=/^error: RefusedCall: ([A-Z]+ \S+) →/.exec(c.reason||"");if(x){const k=x[1].replace(/[0-9a-f-]{36}/g,"<id>");m[k]=(m[k]||0)+1}}console.log(m)'
 ```
 
-Expected at HEAD: `{ "POST /api/v1/entrants/<id>/withdraw": 11 }`. That is the R4 action (P5 → W4), so it must NOT match `SETUP_CALLS`. A test pins it: "the 11 committed RefusedCall reds are data".
+Expected at HEAD: `{ "POST /api/v1/entrants/<id>/withdraw": 11 }`. That is the R4 action (P5 → W4), raised after setup, so it stays `RefusedCall`. A test pins it: "the 11 committed RefusedCall reds are data", run over the real `TR/w1drv-l3/results.json`, which expects 11 checked and zero setup-refused faults.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1527,7 +1537,7 @@ describe("harnessFaults (D6)", () => {
       ok("g", "later", "W4 owes the path"),
       ok("h", "red", "standings: expected 3, saw 2"),
       ok("i", "needs_ruling", "the rulebook is silent on …"),
-      ok("j", "red", "error: RefusedCall: POST /api/v1/orgs → HTTP 409 SLUG_TAKEN: taken"),
+      ok("j", "red", "error: SetupRefused: POST /api/v1/divisions/0b2c/entrants → HTTP 422 VALIDATION: members"),
       ok("k", "red", "error: RefusedCall: POST /api/v1/entrants/0b2c/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant"),
     ]), { plannedNotRun: "allow" });
     expect(f.map((x) => [x.caseId, x.kind])).toEqual([["a", "crash"], ["b", "harness-error"], ["d", "vacuous"], ["e", "unplanned-not-run"], ["j", "setup-refused"]]);
@@ -1539,6 +1549,16 @@ describe("harnessFaults (D6)", () => {
   it("ruling 65: a planned ░ (L2's 1,505) is not a fault, and a ░ on a driven case still is", () => {
     const f = harnessFaults(run([{ ...ok("p", "not_run", "no scenario script yet (atom M7)"), planned: true }, ok("q", "not_run", "lost result")]), { plannedNotRun: "allow" });
     expect(f).toEqual([{ caseId: "q", kind: "unplanned-not-run", reason: "lost result" }]);
+  });
+  it("the 11 committed RefusedCall reds are data: zero setup-refused over the real w1drv-l3 run, 11 RefusedCall reds checked", () => {
+    const real = parseResults(JSON.parse(readFileSync(TR_W1DRV_L3, "utf8")));
+    const refused = real.cases.filter((c) => (c.reason ?? "").startsWith("error: RefusedCall:"));
+    expect(refused).toHaveLength(11);
+    expect(harnessFaults(real, { plannedNotRun: "allow" }).filter((x) => x.kind === "setup-refused")).toEqual([]);
+  });
+  it("a planned marker on a case that ran (durationMs > 0 or checks) is a fault under allow too (review 2, R2-m6)", () => {
+    const f = harnessFaults(run([{ ...ok("m", "works"), planned: true, durationMs: 1200 }, { ...ok("n", "not_run", "x"), planned: true, durationMs: 0 }]), { plannedNotRun: "allow" });
+    expect(f.map((x) => [x.caseId, x.kind])).toEqual([["m", "marker-on-driven"]]);
   });
   it("the refuse lever (rejected alternative (c)) is what makes a planned ░ a fault — so allow is doing the work", () => {
     const f = harnessFaults(run([{ ...ok("f", "not_run", "x"), planned: true }]), { plannedNotRun: "refuse" });
@@ -1586,6 +1606,12 @@ describe("regressions (D13; Review Focus 4)", () => {
 });
 ```
 
+`scenarios.test.ts` gains the phase tag's tests, through the REAL `setUpDivision` with a fake driver in the file's existing `override` pattern (`:982`):
+- positive control: "a driver refusing `addEntrants` surfaces as `SetupRefused`, and is still `instanceof RefusedCall`";
+- the same for `createDivision` and `postStages`;
+- the negative pair: "a driver refusing `start` surfaces as a plain `RefusedCall`, not `SetupRefused`" (start is the product's act);
+- the end-to-end case: one fake-driver case run through `execute` (the `run-cli.test.ts` deps pattern) whose `addEntrants` refuses. Its `results.json` reason starts `error: SetupRefused:`, and `harnessFaults` names it `setup-refused`. Each test counts the calls the fake answered, so a setup that never reached the refusing call fails rather than passing empty.
+
 `f(run)` writes the run to a temp file, `ids(list)` writes a JSON id list, and `judgeCli` calls `main(argv)` with stdout/stderr captured.
 
 `exit-codes.test.ts` reads each CLI's header comment as text: `run.ts`, `render.ts`, `parity.ts`, `findings-table.ts`, `draw-counts.ts`, `gen-catalogue.ts`, `single-sport.ts`, `model.ts`, `merge-shards.ts`, `judge.ts` and `lock-append-only.ts`. For each, it asserts:
@@ -1608,22 +1634,22 @@ Expected: the modules are missing, and exit-codes fails on `parity.ts` (3 for un
 // are data. States must be identical across runs, per case.
 import { VACUOUS_REASONS, type CaseState, type RunResults } from "./results.ts";
 
-export type FaultKind = "crash" | "harness-error" | "setup-refused" | "vacuous" | "unplanned-not-run" | "planned-not-run";
+export type FaultKind = "crash" | "harness-error" | "setup-refused" | "vacuous" | "unplanned-not-run" | "planned-not-run" | "marker-on-driven";
 // results.ts: { none: "no checks ran (vacuous)", abstained: "every check abstained (vacuous)",
 //               zeroItemsPrefix: "checked zero items (vacuous):" } — the third carries a suffix of check ids.
 const isVacuous = (r: string): boolean => r === VACUOUS_REASONS.none || r === VACUOUS_REASONS.abstained || r.startsWith(VACUOUS_REASONS.zeroItemsPrefix);
-// D6: a RefusedCall on a SETUP call is the harness asking wrongly; on a scenario action it is the product answering.
-export const SETUP_CALLS: readonly RegExp[] = [/* Step 0: one entry per setup route, each with its source line */];
-const refusedPath = (r: string): string | null => /^error: RefusedCall: ([A-Z]+ \S+) →/.exec(r)?.[1] ?? null;
+// D6: a refusal raised inside setUpDivision's setup phase is tagged SetupRefused at the seam
+// (scenarios/common.ts inSetup) — the harness asked wrongly. A RefusedCall anywhere else is the product answering.
 
 export function harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }) {
   const out: { caseId: string; kind: FaultKind; reason: string }[] = [];
   for (const c of run.cases) {
     const reason = c.reason ?? "";
     let kind: FaultKind | null = null;
-    if (c.state === "red" && reason.startsWith("error: crashed —")) kind = "crash";
+    if (c.planned === true && (c.durationMs > 0 || c.checks.length > 0)) kind = "marker-on-driven";   // R2-m6
+    else if (c.state === "red" && reason.startsWith("error: crashed —")) kind = "crash";
+    else if (c.state === "red" && reason.startsWith("error: SetupRefused:")) kind = "setup-refused";
     else if (c.state === "red" && reason.startsWith("error: ") && !reason.startsWith("error: RefusedCall:")) kind = "harness-error";
-    else if (c.state === "red" && SETUP_CALLS.some((re) => re.test(refusedPath(reason) ?? ""))) kind = "setup-refused";
     else if (c.state === "red" && isVacuous(reason)) kind = "vacuous";
     else if (c.state === "not_run" && c.planned !== true) kind = "unplanned-not-run";
     else if (c.state === "not_run" && opts.plannedNotRun === "refuse") kind = "planned-not-run";
@@ -1703,17 +1729,21 @@ Find each one's tests that pin the old code (`rtk proxy grep -an "status).toBe(3
 Run the vitest template on:
 
 ```
-judge.test.ts exit-codes.test.ts parity.test.ts findings-table.test.ts draw-counts.test.ts strip-types-loadable.test.ts
+judge.test.ts exit-codes.test.ts parity.test.ts findings-table.test.ts draw-counts.test.ts scenarios.test.ts run-cli.test.ts strip-types-loadable.test.ts
 ```
 
-Step 0 confirms the exact test filenames for the three CLIs with `ls tools/matrix/__tests__ | grep -a "parity\|findings\|draw"`. Pass every file the ls names.
+All eight exist at HEAD except the two created here (re-pinned 2026-10-04: `parity`, `findings-table`, `draw-counts`, `scenarios`, `run-cli`, `strip-types-loadable`). `.testResults[].name` must list exactly 8 files.
 
 - [ ] **Step 6: Mutate**
 
 | Mutant | Killing test |
 |---|---|
 | In `harnessFaults`, drop `&& !reason.startsWith("error: RefusedCall:")` | "names each class once" (c would be a fault) |
-| `SETUP_CALLS` emptied | "names each class once" (j) |
+| Drop the `inSetup` wrapper around `addEntrants` | "a driver refusing `addEntrants` surfaces as `SetupRefused`" |
+| Move `driver.start` inside `inSetup` | "a driver refusing `start` surfaces as a plain `RefusedCall`" |
+| `SetupRefused` no longer extends `RefusedCall` | "…and is still `instanceof RefusedCall`" |
+| Drop the `marker-on-driven` branch | "a planned marker on a case that ran … is a fault under allow too" |
+| Delete the `setup-refused` branch in `harnessFaults` | "names each class once" (j would read `harness-error`) |
 | `isVacuous` back to exact match only | the `zeroItems` row of "every vacuity reason decideState writes" |
 | `regressions` ignoring `expected` | "an EXPECTED case missing from now is absent" (e would be absent) |
 | `c.planned !== true` → `true` | the same test (f would be a fault) |
@@ -1778,6 +1808,9 @@ describe("the sample against the real baseline (review C3c)", () => {
     expect(r.absent).toEqual([]);
     expect(r.compared).toBeGreaterThan(0);
     expect(r.compared).toBe(now.cases.length);
+    // review 2, R2-m3: every planned sample case has a baseline twin — a sample case the baseline lacks protects nothing.
+    // 33 at HEAD (24 slice + 9 league LIFECYCLE), derived here, not typed in.
+    expect(r.compared).toBe(expected.length);
   });
   it("…and the cell filter it replaced WOULD have reported the cricket test cases absent (the regression this guards)", () => {
     const baseline = parseResults(JSON.parse(readFileSync(baselineL3Path(), "utf8")));
@@ -1803,7 +1836,7 @@ describe("planPrSample", () => {
 });
 ```
 
-`rowsFromBody` and `decide` are exported from `ci/pr-rows.ts`. The expected-count line derives from the slice constants and `SPORT_KEYS` (rule 2), not from `FIXED_SAMPLE.length`.
+`rowsFromBody` and `decide` are exported from `ci/pr-rows.ts`. The expected-count line derives from the slice constants and `SPORT_KEYS` (rule 2), not from `fixedSample(offlineBuilderDefault).length`.
 
 - [ ] **Step 2: Run and see them fail**
 
@@ -2063,6 +2096,10 @@ Check whether a reusable workflow may declare top-level `concurrency:`. Read Git
 
 Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report.
 
+Read every greedy-fallback `log.warn` in `packages/engine/src/scheduling/build.ts` (`rtk proxy grep -an "greedy" packages/engine/src/scheduling/build.ts`). Widen `PLACEMENT_FALLBACK_RE` until it matches each message, and list each one with its line in the step's comment.
+
+Then record which matrix paths reach the solver at all. `buildSchedule`'s production callers are the `schedule*.ts` / `court-candidates.ts` usecases. At HEAD, `tools/matrix/lib/driver/http-driver.ts` calls no `/schedule/` route (checked 2026-10-04). Name the browser pages that do, if any. The fallback guard stays either way, because it is cheap and it is the only thing between a mis-wired secret and a quietly greedy board once a scenario schedules. But the task report says plainly whether today's run exercised it, and never implies that it did.
+
 - [ ] **Step 1: Write the failing tests**
 
 The deliberate change to `ci-wiring.test.ts:244-252`. It replaces the test "no scheduled matrix workflow exists in W1a" with:
@@ -2161,12 +2198,36 @@ describe("the build and shard jobs carry what bench.yml needed to build and serv
     for (const k of benchServerEnv) expect(server, k).toContain(k);
     for (const k of server) expect(shardEnv, `${k} set at job AND step level`).not.toContain(k);
   });
+  it("the placement container and the server share ONE secret literal (review 2, R2-I1)", () => {
+    const container = /-e PLACEMENT_SERVICE_SECRET=(\S+)/.exec(stepOf(JOBS.shard, "Start the placement service").script ?? "")?.[1];
+    const server = /^\s+PLACEMENT_SERVICE_SECRET: (\S+)$/m.exec(stepOf(JOBS.shard, "Start the server").body)?.[1];
+    expect(container).toBeDefined();
+    expect(server).toBeDefined();
+    expect(container).toBe(server);
+    expect(container).not.toMatch(/\$\{\{/);   // a literal, never a secret expression (R14a)
+  });
+  it("a greedy fallback in the server log reds the shard; a clean log passes; an empty log is refused", () => {
+    const step = stepOf(JOBS.shard, "The solver never fell back to greedy (R2-I1)");
+    const re = /PLACEMENT_FALLBACK_RE: "([^"]+)"/.exec(step.body)![1];
+    const buildTs = readFileSync("packages/engine/src/scheduling/build.ts", "utf8");
+    expect(buildTs.match(new RegExp(re, "g"))?.length ?? 0).toBeGreaterThan(0);   // the pattern names real messages
+    const run = (log: string | null) => {
+      const dir = mkdtempSync(join(tmpdir(), "srv-"));
+      if (log !== null) writeFileSync(join(dir, "server.log"), log);
+      return spawnSync("bash", ["-c", step.script!], { env: { ...process.env, RUNNER_TEMP: dir, PLACEMENT_FALLBACK_RE: re }, encoding: "utf8" }).status;
+    };
+    expect(run('{"level":40,"msg":"buildSchedule: placement service unavailable, falling back to greedy"}\n')).toBe(1);
+    expect(run('{"level":30,"msg":"listening on 3200"}\n')).toBe(0);
+    expect(run("")).toBe(1);
+    expect(run(null)).toBe(1);
+  });
   it("buildx is set up before the placement image is built, and the build step is bench.yml's, unchanged", () => {
     const heads = stepHeads(JOBS.build);
     const buildx = heads.findIndex((h) => h.includes("docker/setup-buildx-action@v3"));
     expect(buildx).toBeGreaterThan(-1);
     expect(buildx).toBeLessThan(heads.indexOf("      - name: Build the placement service image"));
-    expect(stepOf(JOBS.build, "Build the placement service image").body).toBe(stepOf(benchJob, "Build the placement service image").body);
+    // trimEnd: stepOf keeps trailing blank lines, and bench.yml:152 is blank where ours is not (review 2, R2-m1)
+    expect(stepOf(JOBS.build, "Build the placement service image").body.trimEnd()).toBe(stepOf(benchJob, "Build the placement service image").body.trimEnd());
   });
 });
 
@@ -2473,10 +2534,18 @@ jobs:
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
       - name: Start the placement service
+        # The secret is a CI-only literal and must be IDENTICAL to the server step's: a mismatch
+        # answers UNAUTHENTICATED (placement-client.ts:663-665) and build.ts falls back to greedy
+        # with nothing red (bench.yml:134-141, "the false green"). matrix-workflow.test.ts compares
+        # the two literals (review 2, R2-I1).
         run: |
           set -euo pipefail
           gunzip -c placement.tgz | docker load
-          # … e2e.yml:670-690 verbatim (container placement-e2e on 50051, its 15 s TCP wait) …
+          docker run -d --name placement-matrix -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-matrix-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
+            placement-service:ci
+          # … bench.yml:153-170's 15 s TCP wait, verbatim (container name placement-matrix) …
       - name: Start the server
         env:
           # bench.yml's "Start server" env (bench.yml:176-195), every key, and no job-level key repeated.
@@ -2488,7 +2557,8 @@ jobs:
         run: |
           set -euo pipefail
           tar -xzf web.tgz
-          # … bench.yml's health loop on :3200 — reading from ./standalone/apps/web/server.js …
+          # … bench.yml's health loop on :3200 — reading from ./standalone/apps/web/server.js,
+          #   with its output to "$RUNNER_TEMP/server.log" (the next-but-one step reads it) …
       - name: Run the shard
         env:
           MATRIX_ARGS: ${{ matrix.args }}
@@ -2510,6 +2580,25 @@ jobs:
           echo "$code" > "$dir/exit.txt"
           echo "EXIT=$code"
           exit "$code"
+      - name: The solver never fell back to greedy (R2-I1)
+        if: always()
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/server.log"
+          lines=$(wc -l < "$log" 2>/dev/null || echo 0)
+          # anti-vacuity: an empty or missing log checked nothing, which is a failure, not a pass
+          if [ "$lines" -eq 0 ]; then echo "::error::server log is empty or missing; the fallback check read nothing"; exit 1; fi
+          hits=$(grep -acE "$PLACEMENT_FALLBACK_RE" "$log" || true)
+          echo "checked $lines server log line(s); placement fallbacks: $hits"
+          if [ "$hits" -ne 0 ]; then
+            grep -aE "$PLACEMENT_FALLBACK_RE" "$log" | head -5
+            echo "::error title=Placement fell back to greedy::the solver was unreachable or refused this server; every board in this shard is greedy"
+            exit 1
+          fi
+        env:
+          # Every greedy-fallback log message in packages/engine/src/scheduling/build.ts, read at Step 0
+          # (e.g. :2150-2153 "buildSchedule: placement service unavailable, falling back to greedy").
+          PLACEMENT_FALLBACK_RE: "falling back to greedy"
       - name: Upload shard results
         uses: actions/upload-artifact@v4
         if: always()
@@ -2703,6 +2792,9 @@ All green, with `.testResults[].name` listing exactly these 5 files (review I15:
 | `run-sample.ts` reads `--args` again instead of `MATRIX_ARGS` | "a dash-leading MATRIX_ARGS reaches run.ts intact" (C3a) |
 | Drop `--expect` from the judge call | "the run id the workflow builds…" (judge argv) and Task 6's expect refusal |
 | Remove the buildx step | "buildx is set up before the placement image is built" (I13) |
+| Container secret back to `ci-e2e-secret` | "the placement container and the server share ONE secret literal" (R2-I1) |
+| `PLACEMENT_FALLBACK_RE` set to a string build.ts never logs | "a greedy fallback in the server log reds the shard" (pattern check) |
+| Drop the empty-log refusal | the same test's `run("")` |
 | Remove `NEXT_PUBLIC_SUPABASE_URL` from the build job | "every env key bench.yml sets at job level…" (I13) |
 
 Mutate the guard's three branches one at a time; they partly cover for each other. Each mutant is applied to EVERY job's copy, or the identity test reds first and proves nothing about the guard.
@@ -2730,6 +2822,7 @@ Commit `feat(ci): matrix-truth.yml — sharded weekly/dispatch truth run with vi
   - `scripts/__tests__/stripe-connect-fixture.test.ts:137`;
   - `scripts/__tests__/tools-import-guard.test.ts:23` (TS7016: add `scripts/lib/tools-import-guard.d.mts`);
   - `.github/workflows/ci.yml` (`gates` step);
+  - `tools/matrix/__tests__/ci-wiring.test.ts` (a case pinning that step; review 2, R2-I3);
   - `_INDEX.md` (the bench carry, Task 16).
 
 **Interfaces:**
@@ -2779,6 +2872,22 @@ it("…and none of bench's TESTS (bench's lib is allowed: HM/run.ts imports it, 
 
 The type-check ITSELF is not a vitest test (review m12): a full `tsc -p` inside the unit step would duplicate the gates step's minutes against `ci.yml`'s unit-step timeout. The gates step below is the check, and Step 4 runs it locally.
 
+Because the gate now lives only in YAML, a test must pin the step, or deleting it would leave everything green (review 2, R2-I3; classes 1 and 3). In `ci-wiring.test.ts`, in the line style of the reference-boundary case (`:355-362`):
+
+```ts
+it("the tools-tests type-check runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d item 7)", () => {
+  const STEP = "      - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json";
+  const at = lines.indexOf(STEP);
+  expect(at).toBeGreaterThan(0);
+  expect(lines.filter((l) => l.includes("tsconfig.tools-tests.json") && !isComment(l))).toEqual([STEP]);
+  // a key under the step (`if:`, `continue-on-error:`, `env:`, …) would sit at indent 8
+  expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);
+  expect(jobAt(at)).toBe("  gates:");
+});
+```
+
+It reuses that `describe`'s `lines`/`isComment`/`jobAt` helpers. Move them to the file's top level if the new case sits outside that block.
+
 - [ ] **Step 2: See it fail on the 8 errors. Step 3: Fix them.**
 
 Open each error line and fix the test's types. Do not change what a test asserts (class 4): a `TS2554` (wrong arg count) means the test calls a helper whose signature moved; follow the helper. Add the `.d.mts` for `scripts/lib/tools-import-guard.mjs`, declaring exactly what the `.mjs` exports (read it: 47 lines).
@@ -2787,7 +2896,7 @@ Then run `pnpm add -D -w vitest@^4.1.11`. The lockfile diff must ADD only a root
 
 - [ ] **Step 4: Pass, mutate, commit**
 
-Run the vitest template on `tools-tests-typecheck.test.ts scenarios.test.ts`. Plus run `cd <exec> && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t10s.json" scripts/__tests__/seed-demo-templates.test.ts scripts/__tests__/stripe-connect-fixture.test.ts; echo EXIT=$?`, judged the same way.
+Run the vitest template on `tools-tests-typecheck.test.ts scenarios.test.ts ci-wiring.test.ts` (3 files in `.testResults[].name`). Plus run `cd <exec> && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t10s.json" scripts/__tests__/seed-demo-templates.test.ts scripts/__tests__/stripe-connect-fixture.test.ts; echo EXIT=$?`, judged the same way.
 
 The guard test is Task 11's. It does not collect from a nested worktree (vite import analysis on `typescript.js`), which is environmental and noted in facts. Run it from the exec worktree; if it fails to collect there too, that is the same environment fault, and CI is the arbiter.
 
@@ -2795,7 +2904,9 @@ Run the gates step's command locally: `cd <exec> && node node_modules/typescript
 
 Mutate:
 - re-introduce one `scenarios.test.ts` error (an extra argument): that command exits non-zero, naming the file;
-- drop `scripts/**` from the tsconfig's `include`: "covers every tracked … scripts test" reds.
+- drop `scripts/**` from the tsconfig's `include`: "covers every tracked … scripts test" reds;
+- delete the gates step: the new `ci-wiring` case reds (R2-I3);
+- add `continue-on-error: true` under it: the same case reds on its indent check.
 
 Commit `chore(matrix): type-check tools/matrix and scripts tests in CI; vitest is a root devDependency (W1d item 7, D9)`.
 
@@ -3136,7 +3247,7 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
 **Files:**
 - Create:
   - `packages/engine/stryker.config.mjs`;
-  - `packages/engine/stryker.groups.mjs`, and `packages/engine/stryker.groups.d.mts` declaring exactly its two exports (review I11d: the engine tsconfig includes `test/**`, and a `.ts` test importing an untyped `.mjs` is TS7016);
+  - `packages/engine/stryker.groups.mjs`, and `packages/engine/stryker.groups.d.mts` declaring exactly its four exports, `STRYKER_GROUPS`, `STRYKER_EXCLUDED`, `STRYKER_VITEST_WORKERS` and `strykerConcurrency` (review I11d: the engine tsconfig includes `test/**`, and a `.ts` test importing an untyped `.mjs` is TS7016);
   - `packages/engine/stryker-floor.json` (`{"note": "...", "groups": {}}`: empty until PR-B, Task 20);
   - `packages/engine/stryker-equivalent.json` (`{"note": "...", "equivalent": []}`);
   - `packages/engine/scripts/stryker-floor.ts`;
@@ -3209,10 +3320,24 @@ it("no group's mutate list reaches a test file (review I11a)", () => {
   }
   expect(checked).toBeGreaterThan(35);
 });
-it("concurrency derives from memory the way vitest.config.ts bounds workers, never above it (review I11b)", () => {
-  expect(strykerConcurrency({ cores: 4, memBytes: 16 * GB })).toBe(2);   // ubuntu-latest: 4 vCPU, 16 GB
-  expect(strykerConcurrency({ cores: 16, memBytes: 8 * GB })).toBe(2);   // memory-bound floor
-  expect(strykerConcurrency({ cores: 16, memBytes: 64 * GB })).toBe(15);
+// GB = 1024 ** 3, as vitest.config.ts:42. Each expected value is hand-derived from vitest.config.ts:43-46,
+// bound = max(2, min(cores − 1, floor(mem / 3 GiB))), then divided by the vitest workers ONE sandbox runs
+// (Step 0 pins W = STRYKER_VITEST_WORKERS from the runner's own override; review 2, R2-I4).
+it("concurrency = vitest's own bound ÷ the workers one sandbox runs, from the formula's inputs (review I11b, R2-I4)", () => {
+  // 4 cores, 16 GiB: bound = max(2, min(3, 5)) = 3
+  expect(strykerConcurrency({ cores: 4, memBytes: 16 * GB, workersPerSandbox: 1 })).toBe(3);
+  expect(strykerConcurrency({ cores: 4, memBytes: 16 * GB, workersPerSandbox: 3 })).toBe(1);   // 3 ÷ 3
+  // 16 cores, 8 GiB: bound = max(2, min(15, 2)) = 2 (memory-bound)
+  expect(strykerConcurrency({ cores: 16, memBytes: 8 * GB, workersPerSandbox: 1 })).toBe(2);
+  // 16 cores, 64 GiB: bound = max(2, min(15, 21)) = 15; ÷ 2 = 7
+  expect(strykerConcurrency({ cores: 16, memBytes: 64 * GB, workersPerSandbox: 2 })).toBe(7);
+  // never below one sandbox, however many workers each runs
+  expect(strykerConcurrency({ cores: 2, memBytes: 4 * GB, workersPerSandbox: 4 })).toBe(1);
+});
+it("vitest.config.ts's bound is still the formula this copy was taken from (a moved formula reds here, not in an OOM)", () => {
+  const cfg = readFileSync(join(ENGINE, "vitest.config.ts"), "utf8");
+  expect(cfg).toContain("Math.min(availableParallelism() - 1, Math.floor(totalmem() / (3 * GB)))");
+  expect(cfg).toMatch(/Math\.max\(\s*2,/);
 });
 
 // stryker-floor.test.ts
@@ -3241,7 +3366,7 @@ The `mutation.json` fixture uses Stryker's mutation-testing-elements schema (`fi
 // scheduling and competition code. One group per CI job (STRYKER_GROUP);
 // incremental across weeks via the cached incremental file.
 import { availableParallelism, totalmem } from "node:os";
-import { STRYKER_GROUPS, strykerConcurrency } from "./stryker.groups.mjs";
+import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "./stryker.groups.mjs";
 const group = process.env.STRYKER_GROUP;
 if (!group || !(group in STRYKER_GROUPS)) throw new Error(`STRYKER_GROUP must be one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
 export default {
@@ -3255,14 +3380,18 @@ export default {
   jsonReporter: { fileName: `reports/mutation/${group}.json` },
   thresholds: { high: 80, low: 60, break: null },   // the floor file, not Stryker's break, gates (D14)
   timeoutMS: 60000,
-  // Each Stryker sandbox runs the engine's vitest, z3-WASM files included. Same bound as
-  // vitest.config.ts:43-45, max(2, min(cores − 1, mem / 3 GB)); a fixed 4 would OOM a 16 GB runner (review I11b).
-  concurrency: strykerConcurrency({ cores: availableParallelism(), memBytes: totalmem() }),
+  // Each Stryker sandbox runs the engine's vitest, z3-WASM files included. Total vitest workers across
+  // sandboxes stay within vitest.config.ts:43-46's own bound; a fixed 4 would OOM a 16 GB runner (I11b, R2-I4).
+  concurrency: strykerConcurrency({ cores: availableParallelism(), memBytes: totalmem(), workersPerSandbox: STRYKER_VITEST_WORKERS }),
   tempDirName: ".stryker-tmp",
 };
 ```
 
-`stryker.groups.mjs` also exports `strykerConcurrency({ cores, memBytes }) = Math.max(2, Math.min(cores - 1, Math.floor(memBytes / (3 * GB))))`, a copy of `vitest.config.ts:43-45`'s formula. The test pins it against three machines, and a comment in each file names the other.
+`stryker.groups.mjs` also exports two things:
+- `strykerConcurrency({ cores, memBytes, workersPerSandbox }) = Math.max(1, Math.floor(bound / workersPerSandbox))`, where `bound = Math.max(2, Math.min(cores - 1, Math.floor(memBytes / (3 * GB))))` is a copy of `vitest.config.ts:43-46`'s formula. The quantity is TOTAL vitest workers, not sandboxes, so it stays within the bound the engine's own suite was sized for.
+- `STRYKER_VITEST_WORKERS`: the vitest workers one Stryker sandbox runs. Step 0 reads it from the vitest runner's config override (its docs, and `node_modules/@stryker-mutator/vitest-runner/dist/**`), and the comment cites the line. If the runner forces one worker per sandbox it is 1, and concurrency equals vitest's bound (3 on a 4-core, 16 GiB `ubuntu-latest`). If it does not, set it to vitest's own `maxWorkers` for that machine, and say so.
+
+The tests pin the function against machines whose expected values are worked from the formula's INPUTS in comments, never typed from the function's output. A second test pins `vitest.config.ts`'s formula text, so a change there reds this copy rather than an OOM on a Sunday. A comment in each file names the other.
 
 `stryker-floor.ts` follows the interfaces above, with a D8 exit header.
 
@@ -3298,7 +3427,8 @@ Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest r
 | `floorDiff` ignoring removed groups | its test |
 | Put `rest-floor.ts` in two groups | the groups test |
 | Drop `!src/competition/**/*.test.ts` | "no group's mutate list reaches a test file" |
-| `strykerConcurrency` returning `cores - 1` | "concurrency derives from memory" |
+| `strykerConcurrency` returning `cores - 1` | "concurrency = vitest's own bound ÷ …" (16 cores, 8 GiB → 2, not 15) |
+| `strykerConcurrency` ignoring `workersPerSandbox` | the same test's `÷ 3` and `÷ 2` rows |
 
 - [ ] **Step 6: Commit**
 
@@ -3335,7 +3465,7 @@ Expected: `compared` equals the slice size (24), and `differ: []`. A difference 
 1. Run the vitest template over EVERY test file this PR touched (the union from Tasks 1–15), plus the engine's two files. Paste the counts.
 2. Run eslint on every changed `.ts`/`.mjs` through `rtk proxy`, and tsc on `tsconfig.tools-tests.json`.
 3. Dispatch the `reviewer` agent on `git diff origin/main...HEAD`, at most 25 findings. Fix every Critical and Important finding inline (the no-new-issues rule), then re-review the fixes.
-4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D11's recommendation, the line "the merge job judges with `--planned-not-run allow` per owner ruling 65", and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after."
+4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D11's recommendation, the line "the merge job judges with `--planned-not-run allow` per owner ruling 65", and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after." It does NOT yet carry `Matrix rows: none — harness infrastructure; engine change is Stryker config only`. Step 5 opens without it on purpose, to see the R27 gate red once, and then adds it. The PR is not ready for review until that line is in the body and `matrix-rows` is green (review 2, R2-m2).
 
 - [ ] **Step 5: Watch the self-proof (D3)**
 
@@ -3764,9 +3894,33 @@ Plan review 1 (3 Critical, 15 Important, 13 Minor; findings in the session's scr
 
 **Disagreed, with reasons:**
 - **m5 (evidence directories in PR-A): kept in PR-A.** Ruling 62 gives PR-B "three harness-green dispatches, the triaged baseline committed, the Stryker floor". Those are the dispatched evidence, and they all land in PR-B (Tasks 17–21). The only evidence PR-A commits is Task 14's `TR/w1d-carry/`. Those are LOCAL runs that close "W1d first tasks" items 15c–15f, and ruling 62 puts those items in PR-A. Moving them would split one item's proof from its code across two PRs, and would leave Task 1's append-only gate without a real addition to witness before merge.
-- **m7 (RefusedCall as a seeding shape): premise false, guard adopted.** See false premise 21. The 11 reds are scenario withdraw actions, so they stay data. `SETUP_CALLS` is added so that a refused setup call would be a fault.
+- **m7 (RefusedCall as a seeding shape): premise false, guard adopted.** See false premise 21. The 11 reds are scenario withdraw actions, so they stay data. A setup-phase tag is added so that a refused setup call would be a fault (`SetupRefused` since fix round 2).
 
 **New false premises:** 21 and 22 above.
+
+---
+
+## Review response (fix round 2)
+
+Re-review 2 (0 Critical, 4 Important, 7 Minor) was taken against `653e62ee2`. The reviewer withdrew m5 and m7 and verified false premises 21 and 22.
+
+**All 4 Important are fixed:**
+- **R2-I1 (placement secret).** One literal, `ci-matrix-secret`, sits on both sides. The container step is written out instead of "e2e verbatim", whose `ci-e2e-secret` was the mismatch. Two tests are added: one compares the two literals, and one, "The solver never fell back to greedy", fails the shard when the server log carries build.ts's `falling back to greedy` warning. It also refuses an empty log, and checks its pattern against `build.ts`'s real text. Task 9 Step 0 records whether a matrix path reaches the solver at all. At HEAD `http-driver.ts` calls no `/schedule/` route, so the report must not imply the guard fired.
+- **R2-I2 (setup refusals).** The route list is gone. `setUpDivision` wraps its pre-`start` calls in `inSetup`, which rethrows a `RefusedCall` as `SetupRefused extends RefusedCall`. The judge reads the `error: SetupRefused:` prefix. Tests:
+  - the positive control (`addEntrants`, `createDivision`, `postStages` refused) and the negative pair (`start` refused stays data), through the real `setUpDivision`;
+  - an end-to-end case through `execute`;
+  - the real `w1drv-l3` run, with 11 RefusedCall reds checked and 0 setup-refused.
+
+  Mutation rows are added.
+- **R2-I3 (unpinned type-check gate).** A `ci-wiring.test.ts` case pins the `tsc -p tsconfig.tools-tests.json` step, in the reference-boundary line style: exactly once, in `gates`, with no key beneath it. Mutants: delete the step; add `continue-on-error`.
+- **R2-I4 (Stryker concurrency).** The quantity is now stated: TOTAL vitest workers stay within `vitest.config.ts:43-46`'s bound, divided by the workers one sandbox runs (`STRYKER_VITEST_WORKERS`, pinned at Step 0 from the runner). Expected values are worked from the formula's inputs in comments (4 cores, 16 GiB → 3). A second test pins the vitest formula's text.
+
+**Minors fixed:** R2-m1 (`trimEnd`), R2-m2 (`fixedSample`, `LAYER_GRID_PLANNERS`; see below for the PR body), R2-m3 (`compared === expected.length`), R2-m4 (`API_ONLY_UI_WAVE[row].wave`), R2-m5 (the `layers.ts` import list), R2-m6 (a `marker-on-driven` fault in `faults`; set membership is backstopped by `judgeRun` on PR-B's evidence, as stated), and R2-m7 (folded into R2-I2).
+
+**Disagreed in part:**
+- **R2-m2, third bullet (move the `Matrix rows:` line into Step 4).** PR-A deliberately opens WITHOUT it. Step 5 uses that red as the R27 gate's first live witness, then adds the line. Moving the line into Step 4 would lose the only live proof that the gate reds. Step 4 now says this explicitly: the line is added in Step 5, and the PR is not ready for review until it is in and `matrix-rows` is green.
+
+**New false premises:** none.
 
 ---
 
@@ -3817,9 +3971,9 @@ Three YAML steps are elided with `# … verbatim from e2e.yml/bench.yml …`. Th
 - `shardMatrix(cfg, scope, plans: driven flags per layer, ceilingS, rows?)` → `include {layer, id, k, of, args, timeout}` (Task 8), as used in Task 9's YAML (`matrix.id`, `matrix.k`, `matrix.of`, `matrix.args`, `matrix.timeout`);
 - `slugRunId` (Task 4), used by run.ts, `merge-shards.ts`, `run-sample.ts` and Tasks 8–9's tests;
 - `regressions(baseline, now, expected)` and `judge.ts regression --expect` (Task 6), fed by `run-sample.ts`'s expect file from `planPrSample` (Tasks 7, 9);
-- `VACUOUS_REASONS` (results.ts) and `SETUP_CALLS` (judge.ts), Task 6;
+- `VACUOUS_REASONS` (results.ts) and `SetupRefused`/`inSetup` (driver/types.ts, scenarios/common.ts), Task 6;
 - `planned` / `l2` / `fillers` / `shard` / `shards` (Task 2), as read in Tasks 4, 6 and 21;
-- `LAYER_PLANNERS[layer][scope]` (Task 3);
+- `LAYER_GRID_PLANNERS[layer]` beside the unchanged `LAYER_PLANNERS` (Task 3);
 - `voidLast` (Task 14).
 
 All consistent.
