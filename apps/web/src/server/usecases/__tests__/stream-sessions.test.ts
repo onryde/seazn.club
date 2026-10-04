@@ -53,6 +53,7 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
   creditBalance, grantCredits, orgMoneyLockKey, refundCredits, revokeCredits, streamMonthlyGrantKey, streamMonthlyPeriod,
 } from "../stream-credits";
+import { reissueStreamCode } from "../stream-codes";
 import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
@@ -5469,6 +5470,42 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     await sql`update fixture_stream_pairings set ended_at = now(), end_cause = 'replaced' where id = ${pairingId}`;   // the phone is gone
     await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps))
       .rejects.toMatchObject({ status: 409, code: "active_session", extra: { sessionId: running.sessionId } });
+  });
+
+  it("W5 after Revoke & reissue (T30, C3): the REVOKED code's pairing is left current and beating by design, yet it is not this fixture's phone — Go live answers phone_not_paired; a phone paired on the NEW code is admitted and the session rides that code", async () => {
+    const r = await rig({ credits: 1, phone: false });
+    const old = await pairPresentPhone(r.fixtureId, { at: r.deps.now(), phone: "phone-before-revoke" });
+    const { qr } = await reissueStreamCode(r.auth, r.fixtureId);   // the REAL Revoke & reissue
+    // T30's premise, read from the rows rather than assumed: the old code ENDED(reissued); its pairing untouched — still
+    // current, last beat fresh. So the code's own currency is the only thing that can keep that phone out.
+    const [oldCode] = await sql<{ ended_at: Date | null; end_cause: string | null }[]>`select ended_at, end_cause from fixture_stream_codes where id = ${old.codeId}`;
+    expect(oldCode!.end_cause).toBe("reissued");
+    expect(oldCode!.ended_at).toBeInstanceOf(Date);
+    const [oldPairing] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_stream_pairings where id = ${old.pairingId}`;
+    expect(oldPairing!.ended_at, "T30: a reissue never ends the old code's pairings").toBeNull();
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    const fresh = await pairPresentPhone(r.fixtureId, { at: r.deps.now(), phone: "phone-after-revoke" });
+    const [{ id: newCodeId }] = await sql<{ id: string }[]>`select id from fixture_stream_codes where code = ${qr.code}`;
+    expect(fresh.codeId).toBe(newCodeId);
+    const { sessionId } = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const [row] = await sql<{ code_id: string; pairing_id: string }[]>`select code_id, pairing_id from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row).toEqual({ code_id: newCodeId, pairing_id: fresh.pairingId });
+  });
+
+  it("W5: a SUPERSEDED pairing is not current — ended (replaced) with no phone in its place and no session running, Go live answers phone_not_paired however fresh its last beat; the phone that replaces it is admitted and recorded", async () => {
+    const r = await rig({ credits: 1, phone: false });
+    const first = await pairPresentPhone(r.fixtureId, { at: r.deps.now(), phone: "first-phone-on-the-slot" });
+    // T8b's claim ends the slot's pairing as `replaced` when another phone takes it; that writer does not exist yet, so the
+    // row is ended here — its last beat left at the start's own instant, so silence cannot be what refuses it.
+    await sql`update fixture_stream_pairings set ended_at = ${r.deps.now()}, end_cause = 'replaced' where id = ${first.pairingId}`;
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    const second = await pairPresentPhone(r.fixtureId, { at: r.deps.now(), phone: "second-phone-on-the-slot" });
+    expect(second.pairingId).not.toBe(first.pairingId);
+    const { sessionId } = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const [row] = await sql<{ pairing_id: string }[]>`select pairing_id from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row!.pairing_id).toBe(second.pairingId);
   });
 
   it("with a present phone: the row records start_cause 'organiser', the pairing it rode on and that pairing's code; the create action row is the organiser's (source client) and names both; the destination is saved as the fixture's pre-pick", async () => {

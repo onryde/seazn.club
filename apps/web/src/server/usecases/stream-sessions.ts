@@ -1169,7 +1169,10 @@ const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain"
 
 /** W5 / T10 (§6.7.1, §6.9): slot 0's CURRENT pairing on the fixture's ACTIVE stream code, and whether it is present —
  *  current and not silent on `now` (admission's clock). Through the non-tenant `sql` (R1): V430's tables are FORCE RLS
- *  with no policy. At most one row: one active code per fixture, one current pairing per (code, slot) — V430's indexes. */
+ *  with no policy. At most one row: one active code per fixture, one current pairing per (code, slot) — V430's indexes.
+ *  Both filters are load-bearing, and `c.ended_at is null` is the ONLY authority for a revoked code: T30 leaves a reissued
+ *  code's pairings current "until they call", so without it the revoked phone would read present (witnesses: "W5 after
+ *  Revoke & reissue" and "a SUPERSEDED pairing is not current"). */
 async function currentPhoneOf(fixtureId: string, now: Date): Promise<{ pairingId: string; present: boolean } | null> {
   const [p] = await sql<{ id: string; last_beat_at: Date; answered_poll_seconds: number }[]>`
     select p.id, p.last_beat_at, p.answered_poll_seconds
