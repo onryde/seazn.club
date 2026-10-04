@@ -49,6 +49,8 @@ export {
   CaptureStartFailed, CaptureWaiting, CaptureCred, CaptureSession, CaptureDescriptor, CaptureBeat, CaptureBeatAnswer,
   CaptureStartBody, CaptureStartOk, CaptureRefusalCode, CaptureRefusal,
 } from "./capture-schemas.ts";
+// T9: the panel's read model (StreamPhone) reuses the beat's own field shapes, so it cannot drift from the contract.
+import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } from "./capture-schemas.ts";
 // m2 — the ONE Intl-backed zone validator, reused rather than restated, so
 // `schedule_settings.tz` refuses exactly what `users.timezone` (lib/types.ts)
 // and `organizations.timezone` (api/orgs/[id]/route.ts) already refuse.
@@ -1396,6 +1398,12 @@ export const StreamRestartAllowance = z
   .object({ windowOpen: z.boolean(), used: z.number().int().nonnegative(), limit: z.number().int().positive(), free: z.boolean() })
   .strict();
 
+/** W24 (§6.12): `lostCountdown`'s answer — both durations on the server's clock, never below 0. */
+export const StreamLostCountdown = z
+  .object({ kind: z.enum(["warming", "live"]), elapsedMs: z.number().int().nonnegative(), remainingMs: z.number().int().nonnegative() })
+  .strict();
+export type StreamLostCountdown = z.infer<typeof StreamLostCountdown>;
+
 export const StreamSessionCurrent = z
   .object({
     id: z.string(),
@@ -1435,6 +1443,12 @@ export const StreamSessionCurrent = z
     /** Capture QR v2 §5.3 (T6): who started this session — the organiser's Go live, the phone operator's start, or
      *  the automatic start. V430's start_cause; set at creation and never changed. */
     startCause: z.enum(["organiser", "operator", "automatic"]),
+    /** W24 (§6.12, T9): the server-computed countdown to the end the tick will make — `live`: W19's phone-lost end, from
+     *  the SHORTER of the two silences (no beat, no video), shown after RECONNECT_QUIET_SECONDS; `warming`: the warming
+     *  deadline. `lostCountdown` (domain/phone-lost.ts) on the server's clock, from the same clocks the tick judges.
+     *  null when there is nothing to count down — and always for a session with no phone (pairing_id null: today's
+     *  rules, controller ruling C-1). */
+    countdown: StreamLostCountdown.nullable(),
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
@@ -1449,6 +1463,58 @@ export const PutStreamSettings = z.object({ targetId: z.string().uuid().nullable
 export type PutStreamSettings = z.infer<typeof PutStreamSettings>;
 export const StreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
 export type StreamSettings = z.infer<typeof StreamSettings>;
+
+/** Capture QR v2 §9 / §6.12 (T9): the phone's latest beat as the panel reads it — each field picked by name from the
+ *  stored beat (§6.10's allowlisted `raw`), null when the beat carried none. The beat's own shapes, never re-typed. */
+export const StreamPhoneBeat = z
+  .object({
+    battery: CaptureBeat.shape.battery,
+    bitrateKbps: CaptureBeat.shape.bitrateKbps,
+    delivery: CaptureBeat.shape.delivery.nullable(),
+    thermal: CaptureBeat.shape.thermal,
+    dataUsedMB: CaptureBeat.shape.dataUsedMB,
+  })
+  .strict();
+/** Capture QR v2 §9 / §6.12 (T9): `GET /api/v1/fixtures/{id}/stream-phone`, the organiser panel's phone read model. It
+ *  carries NO secret — never the tok or its hash, never `cred`, never a destination's stream key: every field is picked
+ *  by name. `code` is the fixture's stream code (the active one, else the latest ended); `phone` the slot's phone (§6.9's
+ *  present / silent / not responding, on the server's clock); `destination` the pre-pick, null when archived (T36);
+ *  `lastTakeover` the latest time another phone took the slot (§7.5); `auto` is PR-2's, always null here. */
+export const StreamPhone = z
+  .object({
+    code: z
+      .object({
+        issuedAt: z.string(),
+        state: z.enum(["active", "finishing", "ended"]),
+        endCause: z.enum(["reissued", "expired"]).nullable(),
+      })
+      .strict()
+      .nullable(),
+    phone: z
+      .object({
+        present: z.boolean(),
+        silent: z.boolean(),
+        notResponding: z.boolean(),
+        model: z.string().nullable(),
+        appVersion: z.string().nullable(),
+        mode: CaptureBeat.shape.mode.nullable(),
+        state: CapturePhoneState.nullable(),
+        notReady: CaptureNotReady.nullable(),
+        startFailed: CaptureStartFailed.nullable(),
+        lastBeatAt: z.string(),
+        /** `now − lastBeatAt` on the SERVER's clock at this response (the D3 M6 rule): the panel never compares its own
+         *  clock with a server timestamp. */
+        elapsedMs: z.number().int().nonnegative(),
+        beat: StreamPhoneBeat,
+      })
+      .strict()
+      .nullable(),
+    destination: z.object({ id: z.string(), label: z.string() }).strict().nullable(),
+    lastTakeover: z.object({ at: z.string(), model: z.string().nullable() }).strict().nullable(),
+    auto: z.null(),
+  })
+  .strict();
+export type StreamPhone = z.infer<typeof StreamPhone>;
 
 /** D6: the platforms a NEW destination may name — a subset of `StreamTargetKind`, which stays whole for stored rows. */
 export const StreamPlatform = z.enum(STREAM_PLATFORMS);

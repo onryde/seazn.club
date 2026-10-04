@@ -25,8 +25,8 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP,
-  SRT_LATENCY_MS, relayEnvironment, tunable,
+  MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
+  RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
@@ -35,7 +35,7 @@ import {
 import { isPresent } from "@/server/relay/domain/pairing";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
 import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
-import { livePhoneLost, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
+import { livePhoneLost, lostCountdown, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
@@ -1902,6 +1902,17 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
   }
   const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
+  // W24 (§6.12, T9): the countdown to the end the tick will make, from the clocks the tick judges (phoneFactsOf: the
+  // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock. A
+  // session with no phone (C-1: pairing_id null) has no phone rules, so it has no countdown either.
+  const facts = await phoneFactsOf(sql, row.id);
+  const countdown = facts?.has_phone ? lostCountdown({
+    state: row.state, firstIngestAt: facts.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts.phone_beat_at,
+    ingestConnected: ingestState?.state === "connected", lastConnectedSampleAt: facts.last_connected_at,
+  }, deps.now(), {
+    lostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES), warmingMinutes: WARMING_TIMEOUT_MINUTES,
+    quietSeconds: RECONNECT_QUIET_SECONDS,
+  }) : null;
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
@@ -1920,6 +1931,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     restart: allowance.windowOpen ? allowance : null,
     restartFree: allowance.windowOpen && allowance.free,
     startCause: row.start_cause,
+    countdown,
   };
 }
 

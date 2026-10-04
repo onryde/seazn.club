@@ -18,7 +18,8 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
-  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, WARMING_TIMEOUT_MINUTES,
+  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, RECONNECT_QUIET_SECONDS,
+  WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
@@ -573,6 +574,109 @@ describe.skipIf(!HAS_DB)("m-5 (controller ruling): a PASSTHROUGH session live wi
     r.tick(warming_at.getTime() + WARMING_TIMEOUT_MINUTES * MIN + MIN - r.deps.now().getTime());
     await heartbeat(r.sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);   // the Machine is healthy
     expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "live", failReason: null });
+  });
+});
+
+// T9 (W24, §6.12): `current` carries the countdown to the end the tick will make. It lives HERE, beside the tick it must
+// agree with (the brief named stream-sessions.test.ts; this file holds the W19 rig and its clocks — one rig, not two).
+// Every expected value is the spec's arithmetic over the clocks this file wrote (PHONE_LOST_LIVE_MINUTES,
+// RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES); the AGREEMENT is checked against the real tick, never lostCountdown.
+describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the tick's own end", () => {
+  const QUIET_MS = RECONNECT_QUIET_SECONDS * 1000;
+  const countdownOf = async (r: Rig) => (await currentSession(r.auth, r.fixtureId, r.deps))!.countdown;
+
+  it("LIVE, input down, phone silent: none inside RECONNECT_QUIET_SECONDS of the SHORTER silence; at it, a live countdown — and a tick at now + remainingMs ends it phone_lost, one 1 s earlier does not", async () => {
+    const r = await rig();
+    const live = await goLive(r);
+    r.ingest.setState(r.inputId, "disconnected");
+    // Video last seen 30 s after go-live; the phone beat for another minute, so the BEAT clock is the shorter silence.
+    await connectedSampleAt(r.sessionId, new Date(live.getTime() + 30_000));
+    const lastBeat = new Date(live.getTime() + 90_000);
+    await sql`update fixture_stream_sessions set phone_beat_at = ${lastBeat} where id = ${r.sessionId}`;
+    r.tick(lastBeat.getTime() + QUIET_MS - 1 - r.deps.now().getTime());
+    expect(await countdownOf(r), "1 ms inside the quiet hold").toBeNull();
+    r.tick(STREAM_POLL_MS);   // a fresh claim window: this poll reads the input again
+    const elapsedMs = r.deps.now().getTime() - lastBeat.getTime();
+    const c = await countdownOf(r);
+    expect(c).toEqual({ kind: "live", elapsedMs, remainingMs: LOST_MS - elapsedMs });
+    r.tick(c!.remainingMs - 1000);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 s before the countdown's end").toBe("live");
+    r.tick(1000);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session, "at the countdown's end").toMatchObject({ state: "completed", endReason: "phone_lost" });
+  });
+
+  it("O5: a phone that still BEATS while the input is down has no countdown, even 20 min on (W19 cannot fire); a connected input has none either", async () => {
+    const r = await rig();
+    await goLive(r);
+    r.ingest.setState(r.inputId, "disconnected");
+    for (let m = 1; m <= 20; m++) {
+      r.tick(MIN);
+      await sql`update fixture_stream_sessions set phone_beat_at = ${r.deps.now()} where id = ${r.sessionId}`;
+    }
+    expect(await countdownOf(r), "beating").toBeNull();
+    const silentButStreaming = await rig();
+    await goLive(silentButStreaming);
+    silentButStreaming.tick(20 * MIN);
+    expect(await countdownOf(silentButStreaming), "the input is connected").toBeNull();
+    // The read ITSELF holds it, not only the sample it records: a connected read whose outputs read failed records no
+    // sample (m-2), so both stored silences are 5 min old (past the quiet hold, short of W19's limit, which would end the
+    // session on this very poll) — still no countdown; the same read saying disconnected shows one (the positive pair).
+    let checked = 0;
+    for (const word of ["connected", "disconnected"] as const) {
+      const q = await rig();
+      await goLive(q);
+      q.ingest.setState(q.inputId, word);
+      const outs = vi.spyOn(q.ingest as IngestProvider, "outputState").mockResolvedValue(null);   // m-2: no sample recorded
+      try {
+        q.tick(5 * MIN);
+        const c = await countdownOf(q);
+        if (word === "connected") expect(c, "a fresh connected read, no sample").toBeNull();
+        else expect(c?.kind, "a fresh disconnected read").toBe("live");
+        const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_samples where session_id = ${q.sessionId} and source = 'poll'`;
+        expect(n, "PREMISE: only the go-live read recorded a sample").toBe(1);
+        checked++;
+      } finally {
+        outs.mockRestore();
+      }
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("WARMING (no video yet): after the quiet hold, remainingMs runs to warming_at + WARMING_TIMEOUT_MINUTES — and the tick fails it no_inbound_timeout exactly there, not 1 ms before", async () => {
+    const r = await rig({ connectAfterMs: 60 * MIN });
+    const [{ warming_at }] = await sql<{ warming_at: Date }[]>`select warming_at from fixture_stream_sessions where id = ${r.sessionId}`;
+    const deadline = warming_at.getTime() + WARMING_TIMEOUT_MINUTES * MIN;
+    // The phone keeps beating (ask 10 must not end it first): its pairing's last beat moves with the clock.
+    const keepBeating = () => sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;
+    r.tick(warming_at.getTime() + QUIET_MS - 1 - r.deps.now().getTime());
+    await keepBeating();
+    expect(await countdownOf(r), "1 ms inside the quiet hold").toBeNull();
+    r.tick(1);
+    await keepBeating();
+    const c = await countdownOf(r);
+    expect(c).toEqual({ kind: "warming", elapsedMs: QUIET_MS, remainingMs: deadline - r.deps.now().getTime() });
+    r.tick(c!.remainingMs - 1);
+    await keepBeating();
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms before the countdown's end").toBe("warming");
+    r.tick(1);
+    await keepBeating();
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
+  });
+
+  it("C-1: a LEGACY live session (no phone) shows NO countdown where the same session WITH its phone shows one (the positive pair)", async () => {
+    let checked = 0;
+    for (const legacy of [false, true]) {
+      const r = await rig();
+      await goLive(r);
+      r.ingest.setState(r.inputId, "disconnected");
+      if (legacy) await asLegacy(r);
+      r.tick(5 * MIN);
+      const c = await countdownOf(r);
+      if (legacy) expect(c, "no phone: today's panel, no countdown").toBeNull();
+      else expect(c?.kind, "with its phone: the live countdown").toBe("live");
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 

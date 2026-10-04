@@ -38916,6 +38916,41 @@
                                 "operator",
                                 "automatic"
                               ]
+                            },
+                            "countdown": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string",
+                                      "enum": [
+                                        "warming",
+                                        "live"
+                                      ]
+                                    },
+                                    "elapsedMs": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "remainingMs": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "kind",
+                                    "elapsedMs",
+                                    "remainingMs"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             }
                           },
                           "required": [
@@ -38939,7 +38974,8 @@
                             "creditUsed",
                             "restartFree",
                             "restart",
-                            "startCause"
+                            "startCause",
+                            "countdown"
                           ],
                           "additionalProperties": false
                         },
@@ -39015,7 +39051,12 @@
                       "limit": 1,
                       "free": true
                     },
-                    "startCause": "organiser"
+                    "startCause": "organiser",
+                    "countdown": {
+                      "kind": "warming",
+                      "elapsedMs": 0,
+                      "remainingMs": 0
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -39666,6 +39707,41 @@
                             "operator",
                             "automatic"
                           ]
+                        },
+                        "countdown": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "warming",
+                                    "live"
+                                  ]
+                                },
+                                "elapsedMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "remainingMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "elapsedMs",
+                                "remainingMs"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -39689,7 +39765,8 @@
                         "creditUsed",
                         "restartFree",
                         "restart",
-                        "startCause"
+                        "startCause",
+                        "countdown"
                       ],
                       "additionalProperties": false
                     },
@@ -39760,7 +39837,12 @@
                       "limit": 1,
                       "free": true
                     },
-                    "startCause": "organiser"
+                    "startCause": "organiser",
+                    "countdown": {
+                      "kind": "warming",
+                      "elapsedMs": 0,
+                      "remainingMs": 0
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -44102,6 +44184,624 @@
         "security": [
           {
             "captureTok": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/stream-phone": {
+      "get": {
+        "summary": "The organiser panel's phone read model (editor session only): the fixture's stream code (active, finishing or ended, with its end cause), its paired phone — present, silent and not responding judged on the server's clock, its model, app version, mode, state, readiness and latest beat (battery, bitrate, delivery, thermal, data used), with elapsedMs since that beat on the server's clock — the destination pre-pick (null when archived), and the last time another phone took the slot. A session with no phone (opened before stream codes) shows no phone. Carries no secret. Served private, no-store",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "issuedAt": {
+                                  "type": "string"
+                                },
+                                "state": {
+                                  "type": "string",
+                                  "enum": [
+                                    "active",
+                                    "finishing",
+                                    "ended"
+                                  ]
+                                },
+                                "endCause": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "reissued",
+                                        "expired"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "issuedAt",
+                                "state",
+                                "endCause"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "phone": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "present": {
+                                  "type": "boolean"
+                                },
+                                "silent": {
+                                  "type": "boolean"
+                                },
+                                "notResponding": {
+                                  "type": "boolean"
+                                },
+                                "model": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "appVersion": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "mode": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "automatic",
+                                        "operator"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "state": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "paired",
+                                        "arming",
+                                        "armed",
+                                        "connecting",
+                                        "publishing",
+                                        "degraded",
+                                        "reconnecting",
+                                        "ended"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "notReady": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "camera",
+                                        "sound",
+                                        "network",
+                                        "held"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "startFailed": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "not-found",
+                                        "cred-host",
+                                        "config",
+                                        "start-error"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "lastBeatAt": {
+                                  "type": "string"
+                                },
+                                "elapsedMs": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "beat": {
+                                  "type": "object",
+                                  "properties": {
+                                    "battery": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "percent": {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 100
+                                            },
+                                            "charging": {
+                                              "type": "boolean"
+                                            },
+                                            "drainPctPerHour": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "number",
+                                                  "minimum": 0,
+                                                  "maximum": 1000
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "percent",
+                                            "charging",
+                                            "drainPctPerHour"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "bitrateKbps": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 100000
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "delivery": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "ok",
+                                            "stalled",
+                                            "unknown"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "thermal": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 6
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "dataUsedMB": {
+                                      "anyOf": [
+                                        {
+                                          "type": "number",
+                                          "minimum": 0,
+                                          "maximum": 1000000
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "battery",
+                                    "bitrateKbps",
+                                    "delivery",
+                                    "thermal",
+                                    "dataUsedMB"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": [
+                                "present",
+                                "silent",
+                                "notResponding",
+                                "model",
+                                "appVersion",
+                                "mode",
+                                "state",
+                                "notReady",
+                                "startFailed",
+                                "lastBeatAt",
+                                "elapsedMs",
+                                "beat"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "destination": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "label"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "lastTakeover": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "at": {
+                                  "type": "string"
+                                },
+                                "model": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "at",
+                                "model"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "auto": {
+                          "type": "null"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "phone",
+                        "destination",
+                        "lastTakeover",
+                        "auto"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "code": {
+                      "issuedAt": "example",
+                      "state": "active",
+                      "endCause": "reissued"
+                    },
+                    "phone": {
+                      "present": true,
+                      "silent": true,
+                      "notResponding": true,
+                      "model": "example",
+                      "appVersion": "example",
+                      "mode": "automatic",
+                      "state": "paired",
+                      "notReady": "camera",
+                      "startFailed": "not-found",
+                      "lastBeatAt": "example",
+                      "elapsedMs": 0,
+                      "beat": {
+                        "battery": {
+                          "percent": 0,
+                          "charging": true,
+                          "drainPctPerHour": null
+                        },
+                        "bitrateKbps": 0,
+                        "delivery": "ok",
+                        "thermal": 0,
+                        "dataUsedMB": 0
+                      }
+                    },
+                    "destination": {
+                      "id": "example",
+                      "label": "example"
+                    },
+                    "lastTakeover": {
+                      "at": "example",
+                      "model": "example"
+                    },
+                    "auto": null
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
           }
         ]
       }

@@ -606,6 +606,7 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   qr: QR, balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
   restartFree: false, startCause: "organiser", restart: null,   // T6/T6b: the wire's new required fields (tsc), no behaviour read here
+  countdown: null,   // T9 (W24): the wire's new required field (tsc); the panel reads it from T11
   ...over,
 });
 

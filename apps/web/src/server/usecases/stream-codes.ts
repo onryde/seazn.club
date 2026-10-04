@@ -48,8 +48,9 @@ export type ResolvedCode = {
 const KEK_MISSING = "Stream codes are not configured on this server (RELAY_KEK missing or malformed)";
 const FIXTURE_FINISHED = "The match is over — there is nothing left to stream";
 
-/** Editors only, session only (§6.1 "Who") — never an API key and never a device link (the device-links idiom). */
-function requireSessionEditor(auth: AuthCtx): void {
+/** Editors only, session only (§6.1 "Who") — never an API key and never a device link (the device-links idiom). The
+ *  panel's phone read model (stream-phone.ts, §9 "Session login") asks the same. */
+export function requireSessionEditor(auth: AuthCtx): void {
   if (auth.via !== "session" || !auth.userId) {
     throw new HttpError(403, "Stream codes can only be managed with a session login");
   }

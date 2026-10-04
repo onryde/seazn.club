@@ -247,9 +247,24 @@ describe("relay request schemas refuse what they must", () => {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-      restartFree: false, startCause: "organiser", restart: null,
+      restartFree: false, startCause: "organiser", restart: null, countdown: null,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // T9 (W24): countdown is REQUIRED (null when there is none) and closed — a kind the panel has no copy for, a
+    // negative or fractional duration, or an extra key is refused.
+    const withoutCountdown: Record<string, unknown> = { ...current };
+    delete withoutCountdown.countdown;
+    expect(S.StreamSessionCurrent.safeParse(withoutCountdown).success).toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: { kind: "live", elapsedMs: 31_000, remainingMs: 869_000 } }).success).toBe(true);
+    let refusedCountdowns = 0;
+    for (const bad of [
+      { kind: "lost", elapsedMs: 0, remainingMs: 0 }, { kind: "live", elapsedMs: -1, remainingMs: 0 },
+      { kind: "warming", elapsedMs: 0, remainingMs: 1.5 }, { kind: "live", elapsedMs: 0, remainingMs: 0, at: "x" },
+    ]) {
+      expect(S.StreamSessionCurrent.safeParse({ ...current, countdown: bad }).success, JSON.stringify(bad)).toBe(false);
+      refusedCountdowns++;
+    }
+    expect(refusedCountdowns).toBe(4);
     // T6: startCause is REQUIRED and closed — the panel names who started the broadcast from it.
     const withoutStartCause: Record<string, unknown> = { ...current };
     delete withoutStartCause.startCause;
@@ -350,9 +365,10 @@ describe("the phone's capture routes are never key-reachable (A16)", () => {
 });
 
 describe("the relay's routes are never key-reachable", () => {
-  it("ROUTES declares exactly the TEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove; capture QR v2 T5 adds the stream code, its reissue and the stream settings)", () => {
+  it("ROUTES declares exactly the ELEVEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove; capture QR v2 T5 adds the stream code, its reissue and the stream settings; T9 the panel's stream-phone read model — spec §9 \"7 to 11\")", () => {
     expect(streamRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
       "DELETE /orgs/:id/stream-targets/:targetId",
+      "GET /fixtures/:id/stream-phone",
       "GET /fixtures/:id/stream-sessions/current",
       "GET /orgs/:id/stream-targets",
       "PATCH /orgs/:id/stream-targets/:targetId",
