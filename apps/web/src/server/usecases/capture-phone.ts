@@ -1,7 +1,7 @@
 import "server-only";
 // server/usecases/capture-phone.ts — the phone-facing use-cases of capture QR v2 (§6.3): the descriptor (`getCode`,
-// T8a), the beat (`postBeat`, T8b), and the waiting-fields builder both answers share, so the two never disagree (R7:
-// ONE owner of the length fit).
+// T8a), the beat (`postBeat`, T8b), the phone's own start (`postStart`, T8c), and the waiting-fields builder both
+// answers share, so the two never disagree (R7: ONE owner of the length fit).
 //
 // R1 (§17.1): the V430 tables are FORCE RLS with no policy, so every read here goes through the non-tenant `sql` —
 // never `withTenant` — and the org is the code row's (`resolveStreamCode`). Each answer is built field by field, never
@@ -9,13 +9,16 @@ import "server-only";
 // inside this request, and never logged.
 import { sql, type Tx } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { defaultThemeFor } from "@/components/overlay/theme-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import {
-  CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartedBy,
+  CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartBody,
+  type CaptureStartedBy, type CaptureStartOk,
 } from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
@@ -37,7 +40,7 @@ import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { recordEvent } from "@/server/relay/telemetry";
 import { resolveStreamCode, type ResolvedCode } from "./stream-codes";
-import { apply, lastConnectedSampleAt, tickSession, type SessionDeps } from "./stream-sessions";
+import { apply, lastConnectedSampleAt, startBroadcast, tickSession, type SessionDeps } from "./stream-sessions";
 
 type Descriptor = z.infer<typeof CaptureDescriptor>;
 
@@ -580,4 +583,90 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     await sql`update fixture_stream_pairings set answered_poll_seconds = ${answer.pollSeconds} where id = ${decided.mine.id}`;
   }
   return answer;
+}
+
+// ---------------------------------------------------------------------------
+// T8c — the phone's own start (§6.3.4, §6.7)
+// ---------------------------------------------------------------------------
+
+const alreadyLive = (open: { id: string; start_cause: CaptureStartedBy }): CaptureRefusalError =>
+  new CaptureRefusalError(409, "already_live", "a session is already running for this match", { sid: open.id, startedBy: open.start_cause });
+const noDestination = (why: string): CaptureRefusalError => new CaptureRefusalError(409, "no_destination", why);
+
+/**
+ * §6.7.2: the one start path's refusal → the phone's answer. The phone keys its copy on `code` and never shows the
+ * message (a developer string). `{alreadyLive}` asks the caller to name the running session (its sid AND who started
+ * it); `null` is not a phone refusal, and the caller rethrows it (a logged 500).
+ */
+export function phoneStartRefusal(err: unknown): CaptureRefusalError | { alreadyLive: string | null } | null {
+  if (err instanceof PaymentRequiredError) return new CaptureRefusalError(403, "not_entitled", `the plan lacks ${err.featureKey}`);
+  if (!(err instanceof HttpError)) return null;
+  switch (err.code) {
+    case "overlay_required": return new CaptureRefusalError(403, "not_entitled", "phone streaming needs the overlay tier");
+    case "active_session": {
+      const sid = err.extra?.sessionId;
+      return { alreadyLive: typeof sid === "string" ? sid : null };
+    }
+    case "no_credits": return new CaptureRefusalError(402, "no_credit", "this organisation has no match credits");
+    // The pre-pick is held by another match, refused by the allowlist, or its key will not open: the organiser picks or
+    // fixes the destination (the panel names which).
+    case "target_in_use": return noDestination("the picked destination is streaming another match");
+    case DESTINATION_NOT_ALLOWED: return noDestination("the picked destination is no longer allowed");
+    case TARGET_UNREADABLE: return noDestination("the picked destination's saved key cannot be read");
+    case "storage_exhausted":
+    case "ingest_unavailable": return new CaptureRefusalError(503, "unavailable", `the stream cannot start: ${err.code}`);
+    // An assumption made a guard: a phone start passes phonePresent: true because the caller IS the current phone (T12,
+    // checked first), so W5 cannot answer it. Refused by name, never mapped to an answer the phone would act on.
+    case "phone_not_paired":
+      throw new Error("postStart: startBroadcast answered phone_not_paired to a phone start, which passes phonePresent: true");
+  }
+  // admit's target_not_found (the pre-pick vanished between the read and the row lock) has no code.
+  if (err.status === 404 && err.code === undefined && err.message === "stream target not found") return noDestination("the picked destination is gone");
+  return null;
+}
+
+/**
+ * `POST /capture/codes/{code}/start` (§6.3.4): the CURRENT phone starts its match on the organiser's pre-pick, through
+ * the ONE start path (`startBroadcast`, cause `operator`, phonePresent: true, the claim's pairing, attributed to the
+ * code's `issued_by` — T6 m-2). In order:
+ *  - resolve as a `start` call: an ENDED code starts nothing, even for its open session's phone (C1b) → 401;
+ *  - T12: a phone that is not slot 0's current pairing on this code → 409 replaced (first, so it is never told a sid);
+ *  - the pre-pick (§6.7.3): none, or archived → 409 no_destination — unless a session is already running, which answers
+ *    first (F-A5, T13: already_live {sid, startedBy});
+ *  - startBroadcast; its refusals through §6.7.2's table (`phoneStartRefusal`).
+ * Not idempotent by design: a retry after a lost 200 meets 409 already_live naming the same sid.
+ */
+export async function postStart(rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date): Promise<CaptureStartOk> {
+  const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
+  const [current] = await sql<{ id: string; phone: string }[]>`
+    select id, phone from fixture_stream_pairings where code_id = ${resolved.codeId} and slot = ${SLOT} and ended_at is null`;
+  if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the code's current phone");
+  const [pick] = await sql<{ id: string }[]>`
+    select t.id from fixture_stream_settings st
+      join org_stream_targets t on t.id = st.target_id and t.org_id = ${resolved.orgId} and t.archived_at is null
+     where st.fixture_id = ${resolved.fixtureId}`;
+  if (!pick) {
+    const open = await openSessionOf(sql, resolved.fixtureId);
+    if (open) throw alreadyLive(open);
+    throw noDestination("this match has no destination picked");
+  }
+  try {
+    const { sessionId } = await startBroadcast(
+      { userId: resolved.issuedBy, orgId: resolved.orgId, source: "phone", pairingId: current.id },
+      resolved.fixtureId,
+      { targetId: pick.id, startCause: "operator", phonePresent: true },
+      deps,
+    );
+    return { sid: sessionId };
+  } catch (err) {
+    const mapped = phoneStartRefusal(err);
+    if (mapped === null) throw err;
+    if (mapped instanceof CaptureRefusalError) throw mapped;
+    const [named] = mapped.alreadyLive === null ? [] : await sql<{ id: string; start_cause: CaptureStartedBy }[]>`
+      select id, start_cause from fixture_stream_sessions where id = ${mapped.alreadyLive}`;
+    const open = named ?? await openSessionOf(sql, resolved.fixtureId);
+    if (open) throw alreadyLive(open);
+    // The running session ended between admission and this read: nothing to name — the phone's "try again".
+    throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");
+  }
 }

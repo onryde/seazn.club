@@ -32,7 +32,7 @@ vi.mock("@/lib/cache", () => ({
   cacheGet: async () => null,
   cacheSet: async () => {},
   cacheDelPattern: async () => {},
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 // Purchase-route tests (Task 3): stub the group-payer gate so a non-payer can

@@ -7,6 +7,8 @@
 // The `code` is the contract's closed `CaptureRefusalCode` list, so a refusal the phone cannot key its copy on does not
 // compile.
 import { HttpError, handler } from "@/lib/http";
+import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit, rateLimitPeek } from "@/lib/rate-limit";
+import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRefusalCode } from "./capture-schemas";
 
 export class CaptureRefusalError extends Error {
@@ -59,8 +61,7 @@ export async function captureRoute(fn: () => Promise<Response>): Promise<Respons
     } catch (e) {
       if (e instanceof CaptureRefusalError) return captureRefusal(e);
       if (e instanceof HttpError && e.status === 429) {
-        const headers = (e as HttpError & { headers?: Record<string, string> }).headers;
-        return captureJson(429, { code: "rate_limited", message: e.message }, headers);
+        return captureJson(429, { code: "rate_limited", message: e.message }, e.headers);
       }
       throw e;
     }
@@ -76,4 +77,39 @@ export function captureBearer(req: Request): string {
   const m = /^Bearer ([^\s]+)$/.exec(req.headers.get("authorization") ?? "");
   if (!m) throw codeEnded();
   return m[1]!;
+}
+
+/** The client IP the failed-401 budget is keyed on: the first X-Forwarded-For hop (Fly / Cloudflare set it), else
+ *  X-Real-IP — the idiom every per-IP limiter in this app uses. */
+function clientIpOf(req: Request): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "unknown";
+}
+
+/**
+ * A phone route with its rate limits (§10.4, amended §17.4), inside `captureRoute`, in this order:
+ *  1. an IP already past its failed-401 budget is refused BEFORE anything is read (`rateLimitPeek`): every request,
+ *     the right tok included, so a guess cannot be told from a hit;
+ *  2. the code's own budget is spent — ONE budget across the three routes — and a start spends its own on top. Only a
+ *     well-formed code has a budget (a malformed one is the use-case's 404, read from nothing);
+ *  3. the route runs; a 401 it answers spends the IP's failure budget, and the one that crosses it answers 429.
+ * Every 429 is the bare `{code: rate_limited, message}` with `Retry-After` = the window's true remaining seconds.
+ */
+export async function capturePhoneRoute(
+  req: Request, rawCode: string, route: "get" | "beats" | "start", fn: () => Promise<Response>,
+): Promise<Response> {
+  return captureRoute(async () => {
+    const failKey = `capture-fail:${clientIpOf(req)}`;
+    await rateLimitPeek(failKey, CAPTURE_FAIL_LIMIT);
+    const code = normaliseCode(rawCode);
+    if (code !== null) {
+      await rateLimit(`capture-code:${code}`, CAPTURE_CODE_LIMIT);
+      if (route === "start") await rateLimit(`capture-start:${code}`, CAPTURE_START_LIMIT);
+    }
+    try {
+      return await fn();
+    } catch (e) {
+      if (e instanceof CaptureRefusalError && e.status === 401) await rateLimit(failKey, CAPTURE_FAIL_LIMIT);
+      throw e;
+    }
+  });
 }

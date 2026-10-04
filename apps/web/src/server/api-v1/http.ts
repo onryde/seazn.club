@@ -109,9 +109,12 @@ function errorResponse(
   code: string,
   message: string,
   extra?: Record<string, unknown>,
+  headers?: Record<string, string>,
 ): NextResponse {
   const body: ErrorBody = { ok: false, error: { code, message, ...extra }, requestId };
-  return NextResponse.json(body, { status, headers: rateLimitHeaders() });
+  // A15 (capture QR v2 §17.4): the error's own headers (the limiter's Retry-After) are MERGED with this request's
+  // X-RateLimit-* — neither replaces the other.
+  return NextResponse.json(body, { status, headers: { ...rateLimitHeaders(), ...headers } });
 }
 
 /**
@@ -250,6 +253,7 @@ async function v1Inner<T>(
         err.code ?? statusCode(err.status),
         err.message,
         err.extra,
+        err.headers,
       );
     }
     Sentry.captureException(err);

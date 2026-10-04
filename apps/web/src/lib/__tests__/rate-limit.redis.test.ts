@@ -5,7 +5,7 @@
 // provides a redis:7 service container.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { incrWindow } from "@/lib/cache";
+import { incrWindow, peekWindow } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { HttpError } from "@/lib/errors";
 
@@ -35,18 +35,56 @@ describe.skipIf(!HAS_REDIS)("rate limiter (real Redis)", () => {
 
   it("incrWindow counts up within a window", async () => {
     const key = uniq();
-    expect(await incrWindow(key, 60)).toBe(1);
-    expect(await incrWindow(key, 60)).toBe(2);
-    expect(await incrWindow(key, 60)).toBe(3);
+    expect((await incrWindow(key, 60))?.count).toBe(1);
+    expect((await incrWindow(key, 60))?.count).toBe(2);
+    expect((await incrWindow(key, 60))?.count).toBe(3);
   });
 
   it("sets a TTL on the first hit so the window self-resets", async () => {
     const key = uniq();
-    expect(await incrWindow(key, 1)).toBe(1);
-    expect(await incrWindow(key, 1)).toBe(2);
+    expect((await incrWindow(key, 1))?.count).toBe(1);
+    expect((await incrWindow(key, 1))?.count).toBe(2);
     // Wait past the 1s window — the key should expire and the counter restart.
     await sleep(1200);
-    expect(await incrWindow(key, 1)).toBe(1);
+    expect((await incrWindow(key, 1))?.count).toBe(1);
+  });
+
+  // A15 / R4: the ONE Lua script answers the count AND the key's PTTL, so Retry-After is the window's true remainder.
+  it("the Lua answers {count, ttlMs}: the first increment's TTL is the window; a later one's is what remains of it", async () => {
+    const key = uniq();
+    const first = await incrWindow(key, 60);
+    expect(first?.count).toBe(1);
+    expect(first!.ttlMs).toBeGreaterThan(59_000);
+    expect(first!.ttlMs).toBeLessThanOrEqual(60_000);
+    await sleep(1100);
+    const second = await incrWindow(key, 60);
+    expect(second?.count).toBe(2);
+    expect(second!.ttlMs).toBeLessThan(first!.ttlMs - 1000);
+    expect(second!.ttlMs).toBeGreaterThan(0);
+  });
+
+  it("peekWindow reads the count and TTL WITHOUT spending; a key never hit reads count 0", async () => {
+    const key = uniq();
+    expect((await peekWindow(key))?.count).toBe(0);
+    await incrWindow(key, 60);
+    await incrWindow(key, 60);
+    const peeked = await peekWindow(key);
+    expect(peeked?.count).toBe(2);
+    expect(peeked!.ttlMs).toBeGreaterThan(0);
+    expect((await peekWindow(key))?.count, "a peek spends nothing").toBe(2);
+    expect((await incrWindow(key, 60))?.count).toBe(3);
+  });
+
+  it("rateLimit's 429 over real Redis carries Retry-After = ceil(remaining TTL) — within the window, never 0", async () => {
+    const key = uniq();
+    const cfg = { max: 1, windowSeconds: 30 };
+    await rateLimit(key, cfg);
+    const err = (await rateLimit(key, cfg).catch((e: unknown) => e)) as HttpError;
+    expect(err).toBeInstanceOf(HttpError);
+    const secs = Number(err.headers?.["Retry-After"]);
+    expect(Number.isInteger(secs)).toBe(true);
+    expect(secs).toBeGreaterThanOrEqual(1);
+    expect(secs).toBeLessThanOrEqual(30);
   });
 
   it("rateLimit passes up to max then throws 429", async () => {

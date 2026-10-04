@@ -200,7 +200,7 @@ describe.skipIf(!HAS_DB)("scoreEvent — durable idempotency, with no cache at a
     const seen: string[] = [];
     __setRateLimitCounterForTests(async (k: string) => {
       seen.push(k);
-      return 1;
+      return { count: 1, ttlMs: 60_000 };
     });
     await scoreEvent(auth, fixtureId, {
       expected_seq: 1,

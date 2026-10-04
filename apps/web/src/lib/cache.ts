@@ -310,23 +310,59 @@ export async function cacheLeaseRelease(key: string, token: string): Promise<voi
 // INCR + set-TTL-on-first-hit as one atomic server-side step. Done as a single
 // Lua EVAL rather than INCR then EXPIRE so (a) a crash/error can't strand a key
 // with no TTL — which would lock that identifier out forever — and (b) it bills
-// as one Upstash command instead of two on pay-as-you-go.
+// as one Upstash command instead of two on pay-as-you-go. The key's PTTL rides
+// back in the SAME script (capture QR v2 §17.4, R4): a 429's Retry-After is
+// then the window's true remainder, at no extra command.
 const INCR_WINDOW_LUA = `
 local n = redis.call('INCR', KEYS[1])
 if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
-return n`;
+return {n, redis.call('PTTL', KEYS[1])}`;
+
+// The count and TTL WITHOUT spending (capture QR v2 §10.4: an IP already past
+// its failed-401 budget is refused before anything is read). A key never hit
+// reads count 0 (PTTL -2).
+const PEEK_WINDOW_LUA = `
+local n = redis.call('GET', KEYS[1])
+if not n then return {0, -2} end
+return {tonumber(n), redis.call('PTTL', KEYS[1])}`;
+
+/** A fixed window's count and the milliseconds left in it (PTTL: -1 no TTL, -2 no key). */
+export interface WindowCount {
+  count: number;
+  ttlMs: number;
+}
+
+/** The Lua's `{n, pttl}` pair. Anything else is a broken script or client — read as "Redis gave no answer" (null), the
+ *  caller's documented fallback, never a made-up count. */
+function windowCountOf(r: unknown): WindowCount | null {
+  if (!Array.isArray(r) || r.length !== 2) return null;
+  const count = Number(r[0]);
+  const ttlMs = Number(r[1]);
+  return Number.isFinite(count) && Number.isFinite(ttlMs) ? { count, ttlMs } : null;
+}
 
 /**
- * Fixed-window counter. Returns the new count for `key` within the window, or
- * null if Redis is unavailable (caller decides the fallback policy). The TTL is
- * set atomically on the first increment of a window.
+ * Fixed-window counter. Returns the new count for `key` within the window and
+ * the window's remaining TTL, or null if Redis is unavailable (caller decides
+ * the fallback policy). The TTL is set atomically on the first increment of a
+ * window.
  */
-export async function incrWindow(key: string, windowSeconds: number): Promise<number | null> {
+export async function incrWindow(key: string, windowSeconds: number): Promise<WindowCount | null> {
   const c = client();
   if (!c) return null;
   try {
-    const n = await c.eval(INCR_WINDOW_LUA, 1, key, String(windowSeconds));
-    return Number(n);
+    return windowCountOf(await c.eval(INCR_WINDOW_LUA, 1, key, String(windowSeconds)));
+  } catch {
+    return null;
+  }
+}
+
+/** The window's count and TTL, spending nothing; null if Redis is unavailable. */
+export async function peekWindow(key: string): Promise<WindowCount | null> {
+  const c = client();
+  if (!c) return null;
+  try {
+    return windowCountOf(await c.eval(PEEK_WINDOW_LUA, 1, key));
   } catch {
     return null;
   }

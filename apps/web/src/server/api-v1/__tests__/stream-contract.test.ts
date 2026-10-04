@@ -326,6 +326,29 @@ const keyForm = (method: string, path: string) => `${method.toUpperCase()} ${pat
 const STREAM_ROUTE = /\/(stream-sessions|stream-targets|stream-code|stream-phone|stream-settings)(\/|$)/;
 const streamRoutes = ROUTES.filter((r) => STREAM_ROUTE.test(r.path));
 
+// The relay pin's sibling for the PHONE's routes (capture QR v2 A16): the internal `capture` tag holds exactly the three
+// operations the capture app calls, each banned from API keys by name, never merely unlisted.
+const captureRoutes = ROUTES.filter((r) => r.tag === "capture");
+
+describe("the phone's capture routes are never key-reachable (A16)", () => {
+  it("the `capture` tag holds exactly the THREE phone operations; each is an explicit NEVER_KEY_ROUTES entry AND resolves to no key rule on a concrete path", () => {
+    expect(captureRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
+      "GET /capture/codes/:code",
+      "POST /capture/codes/:code/beats",
+      "POST /capture/codes/:code/start",
+    ]);
+    let checked = 0;
+    for (const r of captureRoutes) {
+      const entry = keyForm(r.method, r.path);
+      expect(NEVER_KEY_ROUTES, entry).toContain(entry);
+      const concrete = `/api/v1${r.path.replace("{code}", "0123456789ab")}`;
+      expect(matchKeyRoute(r.method, concrete), `${r.method.toUpperCase()} ${concrete}`).toBeNull();
+      checked++;
+    }
+    expect(checked, "capture routes checked").toBe(3);
+  });
+});
+
 describe("the relay's routes are never key-reachable", () => {
   it("ROUTES declares exactly the TEN relay operations (design §6.3 / §6.1; spec §5.2 adds rename/replace + remove; capture QR v2 T5 adds the stream code, its reissue and the stream settings)", () => {
     expect(streamRoutes.map((r) => keyForm(r.method, r.path)).sort()).toEqual([
@@ -470,7 +493,8 @@ describe("the relay's routes are never key-reachable", () => {
   // so the create route's 409 documents it (next to active_session's `sessionId`), SCOPED to that route.
   it("POST stream-sessions documents 409 `sessionId` and `holder { fixtureId, href, matchNo, courtName, label, state }`; the Directory's PATCH/DELETE 409 document TARGET_IN_USE's `holder`, and PATCH alone DESTINATION_DUPLICATE's `other`; no other route's 409 gains `holder`", () => {
     type Prop = { type?: string | string[]; properties?: Record<string, Prop> };
-    type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop } } } } }> }>> };
+    // A bare capture route's refusal is the capture-refusal union (anyOf), not the `{ok, error}` envelope.
+    type Doc = { paths: Record<string, Record<string, { responses: Record<string, { content: { "application/json": { schema: { properties: { error: Prop }; anyOf?: Prop[] } } } }> }>> };
     const doc = buildOpenApiDocument() as Doc;
     const err409 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["409"]!.content["application/json"].schema.properties.error;
     expect(Object.keys(err409.properties ?? {}).sort()).toEqual(["code", "current_seq", "holder", "message", "sessionId"]);
@@ -506,9 +530,11 @@ describe("the relay's routes are never key-reachable", () => {
     for (const [path, ops] of Object.entries(doc.paths)) {
       for (const [method, o] of Object.entries(ops)) {
         if (documentsHolder.has(`${method} ${path}`)) continue;
-        const e = o.responses["409"]?.content["application/json"].schema.properties.error;
-        if (!e) continue;
-        expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");
+        const schema = o.responses["409"]?.content["application/json"].schema;
+        if (!schema) continue;
+        const bodies = schema.properties?.error ? [schema.properties.error] : (schema.anyOf ?? []);
+        expect(bodies.length, `${method} ${path}: a 409 with no body to read`).toBeGreaterThan(0);
+        for (const e of bodies) expect(Object.keys(e.properties ?? {}), `${method} ${path}`).not.toContain("holder");
         others++;
       }
     }

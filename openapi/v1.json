@@ -43401,6 +43401,641 @@
         ]
       }
     },
+    "/api/v1/capture/codes/{code}/start": {
+      "post": {
+        "summary": "The phone's own start (Bearer: the stream code's tok), body {phone}: the CURRENT phone starts its match on the organiser's pre-picked destination, cause operator, through the one start path. 200 {sid}. 409 already_live {sid, startedBy} (a session is running — a retry after a lost 200 meets this with the same sid), 409 replaced (not the current phone), 409 no_destination (no pre-pick, archived, held by another match, not allowed, or its key unreadable), 402 no_credit, 403 not_entitled, 503 unavailable (storage exhausted, the ingest unavailable, the relay disabled). 401 code_ended (an ended code starts nothing), 404 not_a_stream_code, 422 invalid, 429 rate_limited with Retry-After. Served private, no-store. Not idempotent. Never 410",
+        "tags": [
+          "capture"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-hjkmnp-tv-z]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "phone": {
+                    "type": "string",
+                    "minLength": 16,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "phone"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "phone": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sid": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    }
+                  },
+                  "required": [
+                    "sid"
+                  ],
+                  "additionalProperties": false
+                },
+                "example": {
+                  "sid": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "captureTok": []
+          }
+        ]
+      }
+    },
     "/api/v1/fixtures/{id}/stream-settings": {
       "put": {
         "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it). 404 when the target is not this org's, is archived, or does not exist",

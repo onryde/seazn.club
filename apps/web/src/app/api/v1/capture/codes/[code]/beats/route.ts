@@ -1,5 +1,5 @@
 import { baseUrl } from "@/lib/oauth";
-import { CaptureRefusalError, captureBearer, captureJson, captureRoute } from "@/server/api-v1/capture-http";
+import { CaptureRefusalError, captureBearer, captureJson, capturePhoneRoute } from "@/server/api-v1/capture-http";
 import { CaptureBeat } from "@/server/api-v1/capture-schemas";
 import { postBeat } from "@/server/usecases/capture-phone";
 import { defaultDeps } from "@/server/usecases/stream-sessions";
@@ -10,10 +10,11 @@ type Ctx = { params: Promise<{ code: string }> };
  *  malformed Bearer is the uniform `401 code_ended` (A17). The body is the STRICT contract (`CaptureBeat`, its D16
  *  cross-field rules included): anything else — not JSON, an unknown key, an over-long string — is `422 invalid`, which
  *  the phone counts as a failed beat and which changes nothing. The 2xx is the BARE answer; every answer is
- *  `private, no-store`. The message names the offending fields, never their values. */
+ *  `private, no-store`. The message names the offending fields, never their values. Rate-limited per §10.4
+ *  (`capturePhoneRoute`). */
 export async function POST(req: Request, { params }: Ctx) {
-  return captureRoute(async () => {
-    const { code } = await params;
+  const { code } = await params;
+  return capturePhoneRoute(req, code, "beats", async () => {
     const tok = captureBearer(req);
     let json: unknown;
     try {

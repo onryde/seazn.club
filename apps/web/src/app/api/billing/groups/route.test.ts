@@ -26,7 +26,7 @@ vi.mock("@/lib/cache", () => ({
     store.set(key, JSON.stringify(value));
   },
   cacheDelPattern: async () => {},
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 import { sql } from "@/lib/db";

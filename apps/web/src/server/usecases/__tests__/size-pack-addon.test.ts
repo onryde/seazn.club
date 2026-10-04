@@ -22,7 +22,7 @@ vi.mock("@/lib/cache", () => ({
   cacheGet: async () => null,
   cacheSet: async () => {},
   cacheDelPattern: async () => {},
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 // Checkout gate (IDOR) test: control the active org + org-role gate so we can

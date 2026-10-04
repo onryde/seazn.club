@@ -298,11 +298,12 @@ export const THROTTLE_MAX_MS = THROTTLE_BASE_MS * 8;
  * more informed number than our exponential, because it comes from whatever
  * actually refused the write.
  *
- * It is still bounded, and the bound is not paranoia. Verified 2026-09-21:
- * NOTHING under `src/server/api-v1` sets `Retry-After`
- * (`__tests__/transport.test.ts`'s own note), so every value this branch can
- * ever receive today comes from an edge, proxy or WAF we do not configure in
- * this repo and cannot fix without an infrastructure change. Honouring such a
+ * It is still bounded, and the bound is not paranoia. Since capture QR v2
+ * (T8c, 2026-10) this app's own limiter sends `Retry-After` on its 429 — the
+ * window's true remaining seconds (lib/rate-limit.ts), at most the bucket's
+ * window — and that is obeyed exactly. Any LONGER value can only come from an
+ * edge, proxy or WAF we do not configure in this repo and cannot fix without
+ * an infrastructure change. Honouring such a
  * header without limit would let a number we do not own park a courtside
  * scorer's queue for as long as it likes — silently, behind a "Catching up"
  * chip. That is the same customer-visible wedge this wave exists to close,

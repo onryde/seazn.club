@@ -32,7 +32,7 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
   incrWindow: async (key: string) => {
     const next = (counters.get(key) ?? 0) + 1;
     counters.set(key, next);
-    return next;
+    return { count: next, ttlMs: 60_000 };
   },
 }));
 const usecase = vi.hoisted(() => ({

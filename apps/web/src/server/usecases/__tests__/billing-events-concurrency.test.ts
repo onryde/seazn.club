@@ -20,7 +20,7 @@ vi.mock("@/lib/cache", () => ({
   cacheGet: async () => null,
   cacheSet: async () => {},
   cacheDelPattern: async () => {},
-  incrWindow: async () => 1,
+  incrWindow: async () => ({ count: 1, ttlMs: 60_000 }),
 }));
 
 import { sql } from "@/lib/db";

@@ -12,6 +12,11 @@
 // panel copies (`/overlay/fixtures/{id}?…&key=…`) and the overlay's token request (`/realtime-token?purpose=overlay&
 // key=…`). It grants a realtime subscription to one public fixture, retired only by rotating AUTH_SECRET, so it is
 // scrubbed with the same care: every `key=` QUERY PARAMETER value becomes `[key]`, plain or URL-encoded.
+//
+// Capture QR v2 §10.2 (A18): the phone routes `/api/v1/capture/codes/{code}…` carry half their credential in the path
+// (the code) and the other half as `Authorization: Bearer <tok>`; the beat's body names the code again. Every string's
+// `/capture/codes/<code>` becomes `/capture/codes/[code]` (plain or encoded), and a capture route's Sentry event also
+// loses its Bearer (`Bearer [tok]`) and its request body. Every other event keeps its headers and body.
 import type * as Sentry from "@sentry/nextjs";
 import type { CaptureResult } from "posthog-js";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
@@ -46,11 +51,16 @@ const BARE_TOKEN = /dl_[A-Za-z0-9_-]{32,}/g;
 const OVERLAY_KEY_QUERY = new RegExp(`((?:^|[?&])${OVERLAY_KEY_PARAM}=)[^&#\\s"'<>]+`, "g");
 /** The same parameter URL-ENCODED inside another URL: `%3Fkey%3D` / `%26key%3D`, at any encoding depth, either hex case. */
 const ENCODED_OVERLAY_KEY = new RegExp(`(%(?:25)*(?:3[Ff]|26)${OVERLAY_KEY_PARAM}%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
+/** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
+const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
+/** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
+const ENCODED_CAPTURE_PATH = /(%(?:25)*2[Ff]capture%(?:25)*2[Ff]codes%(?:25)*2[Ff])[^%&/?#\s"'<>]+/g;
 /** Cheap pre-check: nothing any of the patterns could match. */
-const MAYBE_TOKEN = new RegExp(`\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%`);
+const MAYBE_TOKEN = new RegExp(`\\/score\\/|%(?:25)*2[Ff]score%|dl_|${OVERLAY_KEY_PARAM}=|${OVERLAY_KEY_PARAM}%|\\/capture\\/codes\\/|capture%(?:25)*2[Ff]codes%`);
 
 /** One string: `/score/<token>` (plain or encoded) becomes `/score/[token]`, a bare `dl_…` secret becomes `dl_[token]`,
- *  and an overlay `key=` query value (plain or encoded) becomes `[key]`. */
+ *  an overlay `key=` query value (plain or encoded) becomes `[key]`, and a capture code in `/capture/codes/<code>`
+ *  (plain or encoded) becomes `[code]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
@@ -58,7 +68,9 @@ export function scrubScoreUrl(value: string): string {
     .replace(ENCODED_SCORE_PATH, "$1[token]")
     .replace(BARE_TOKEN, "dl_[token]")
     .replace(OVERLAY_KEY_QUERY, "$1[key]")
-    .replace(ENCODED_OVERLAY_KEY, "$1[key]");
+    .replace(ENCODED_OVERLAY_KEY, "$1[key]")
+    .replace(CAPTURE_PATH, "$1[code]")
+    .replace(ENCODED_CAPTURE_PATH, "$1[code]");
 }
 
 /**
@@ -127,13 +139,34 @@ export function posthogBeforeSend(event: CaptureResult | null): CaptureResult | 
   return scrubScoreTokens(event);
 }
 
+/** A phone route's event (capture QR v2 §6.3): its request URL or its transaction names `/api/v1/capture/`. */
+const CAPTURE_ROUTE = /\/api\/v1\/capture\//;
+function isCaptureEvent(event: Event): boolean {
+  return [event.request?.url, event.transaction].some((v) => typeof v === "string" && CAPTURE_ROUTE.test(v));
+}
+
+/** A capture route's request loses its body and its Bearer (A18). A copy: the input is never mutated. */
+function dropCaptureSecrets<E extends Event>(event: E): E {
+  if (!event.request) return event;
+  const request = { ...event.request };
+  delete request.data;
+  if (request.headers) {
+    request.headers = Object.fromEntries(
+      Object.entries(request.headers).map(([k, v]) => [k, k.toLowerCase() === "authorization" ? "Bearer [tok]" : v]),
+    );
+  }
+  return { ...event, request };
+}
+
 /**
  * Sentry `beforeSend` / `beforeSendTransaction`: scrubs the request URL and
  * headers (the Bearer secret), the transaction name, breadcrumbs, tags, stack
- * frames and span data.
+ * frames and span data. A capture route's event also loses its Bearer and its
+ * request body (A18).
  */
 export function scrubSentryEvent<E extends Event>(event: E): E {
-  return scrubScoreTokens(event);
+  const scrubbed = scrubScoreTokens(event);
+  return isCaptureEvent(event) ? dropCaptureSecrets(scrubbed) : scrubbed;
 }
 
 /**

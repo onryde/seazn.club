@@ -18,7 +18,7 @@ vi.mock("@/lib/cache", async (importOriginal) => ({
     redis.windows.push(windowSeconds);
     const next = (redis.counters.get(key) ?? 0) + 1;
     redis.counters.set(key, next);
-    return next;
+    return { count: next, ttlMs: windowSeconds * 1000 };
   },
 }));
 const db = vi.hoisted(() => ({ sql: vi.fn(async () => []) }));
