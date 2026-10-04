@@ -18,8 +18,8 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
-  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, RECONNECT_QUIET_SECONDS,
-  WARMING_TIMEOUT_MINUTES,
+  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
+  RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
@@ -908,6 +908,34 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
     expect(seen.phone_lost, "anti-vacuity: ask 10 was named").toBeGreaterThan(0);
     expect(seen.none, "anti-vacuity: some case named none").toBeGreaterThan(0);
     expect(seen.no_inbound_timeout + seen.phone_lost + seen.none).toBe(cases.length);
+  });
+
+  it("m-a through the poll: a far-cadence phone right after Go live, its go-live beat in flight → NO countdown; the same beat a full near poll late → phone_lost at its deadline; the beat lands → gone, and nothing ends there", async () => {
+    const r = await rig({ connectAfterMs: 60 * MIN });
+    const [{ warming_at, created_at }] = await sql<{ warming_at: Date; created_at: Date }[]>`
+      select warming_at, created_at from fixture_stream_sessions where id = ${r.sessionId}`;
+    // Polled 2 s after warming entry. The phone has not heard go-live, so it is on its waiting (far) cadence: its last beat
+    // was one cadence plus a 3 s round trip before the poll, and the beat that hears go-live is due now.
+    const poll = warming_at.getTime() + 2000;
+    const lastBeat = new Date(poll - (POLL_FAR_SECONDS + 3) * 1000);
+    await sql`update fixture_stream_pairings set last_beat_at = ${lastBeat}, answered_poll_seconds = ${POLL_FAR_SECONDS} where id = ${r.paired.pairingId}`;
+    expect(lastBeat.getTime(), "PREMISE: the last beat predates creation, so the phone has not heard go-live").toBeLessThan(created_at.getTime());
+    const at = async (t: number) => {
+      r.tick(t - r.deps.now().getTime());
+      await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+    };
+    await at(poll);
+    const inFlight = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect([inFlight.state, inFlight.countdown], "the go-live beat in flight: no countdown").toEqual(["warming", null]);
+    await at(lastBeat.getTime() + (POLL_FAR_SECONDS + POLL_NEAR_SECONDS) * 1000);
+    const late = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    expect(late.countdown?.reason, "a full near poll late: ask 10 is armed").toBe("phone_lost");
+    expect(r.deps.now().getTime() + late.countdown!.remainingMs, "it names ask 10's deadline").toBe(lastBeat.getTime() + ASK10_SILENT_MS);
+    await sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;   // the beat lands
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.countdown, "the beat landed: nothing armed, inside the warming hold").toBeNull();
+    await at(lastBeat.getTime() + ASK10_SILENT_MS);
+    const kept = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+    expect([kept?.state, kept?.endReason ?? null], "the old deadline passes: nothing ends").toEqual(["warming", null]);
   });
 
   it("ask 10 reads no ingest word: under every read condition a warming session whose phone stops beating ends phone_lost at its silence deadline, and the same session whose phone beats does not (the pair) — so no read gate touches it", async () => {

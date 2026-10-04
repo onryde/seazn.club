@@ -1905,7 +1905,9 @@ Amends §6.12's Waiting row and W24. Recorded 2026-10-04. These are controller r
   reads. The live countdown (W19) shows only on a FRESH `disconnected` read (m-3). The warming timeout fires whatever
   the read's word is, so it is withheld only by a status read that threw (N1).
 - **It names the EARLIEST end that will fire, with that end's `reason`.** In warming, once the phone's beats have
-  stopped (no beat for the longer of its own cadence and `RECONNECT_QUIET_SECONDS`), ask 10's end is a candidate:
+  stopped (no beat for the longer of its own cadence plus `POLL_NEAR_SECONDS` and `RECONNECT_QUIET_SECONDS`; the
+  near poll keeps a far-cadence go-live beat's round trip from flashing a countdown, re-review m-a), ask 10's end is a
+  candidate:
   the last beat + §6.9's silence threshold, `phone_lost`. The earlier of that and the warming timeout is shown. A tie
   goes to the timeout, because the tick expires a session before it judges ask 10. The panel's copy for a warming
   `phone_lost` countdown is owed by T11 and is not chosen here.

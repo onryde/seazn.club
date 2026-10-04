@@ -293,7 +293,9 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
       /** §6.8.3: the cadence ask 10 judges on, and §6.9's threshold over it. */
       const judged = (answered: number, heard: boolean) => (heard ? Math.min(answered, OPEN_SESSION_MAX_POLL_SECONDS) : answered);
       const thresholdMs = (answered: number, heard: boolean) => Math.max(FLOOR, judged(answered, heard) + PHONE_SILENT_SLACK_SECONDS) * S;
-      const armMs = (answered: number, heard: boolean) => Math.max(QUIET_MS, judged(answered, heard) * S);
+      /** Armed once a beat the phone owed is a full near poll late (B7 re-review m-a): the go-live beat's round trip
+       *  never arms it. */
+      const armMs = (answered: number, heard: boolean) => Math.max(QUIET_MS, (judged(answered, heard) + POLL_NEAR_SECONDS) * S);
 
       it("armed exactly when beats have stopped: 1 s short → the warming timeout; at it → phone_lost, remaining = the silence threshold − the beat's age (each cadence the phone can be on)", () => {
         let checked = 0;
@@ -308,6 +310,20 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
           checked++;
         }
         expect(checked).toBe(5);
+      });
+
+      it("m-a: a far-cadence phone right after Go live shows NO countdown while its go-live beat is in flight; the pair: a beat a full near poll late arms it", () => {
+        let checked = 0;
+        // The phone has not heard go-live, so it beats on its waiting (far) cadence: its previous beat was one cadence plus
+        // the round trip ago, and the beat that hears go-live is due now. Go live was 2 s ago.
+        for (const rtt of [S, 5 * S, POLL_NEAR_SECONDS * S - S]) {
+          const p = phone(POLL_FAR_SECONDS * S + rtt, POLL_FAR_SECONDS, false);
+          expect(lostCountdown({ ...warming(2 * S), phone: p }, NOW, cfg), `round trip ${rtt / S} s`).toBeNull();
+          checked++;
+        }
+        expect(checked).toBe(3);
+        const late = phone((POLL_FAR_SECONDS + POLL_NEAR_SECONDS) * S, POLL_FAR_SECONDS, false);
+        expect(lostCountdown({ ...warming(2 * S), phone: late }, NOW, cfg)?.reason, "the pair").toBe("phone_lost");
       });
 
       it("ordering differential: an armed ask 10 that lands AFTER the warming deadline does not displace it; the same phone 1 min earlier in warming lands before it and does", () => {

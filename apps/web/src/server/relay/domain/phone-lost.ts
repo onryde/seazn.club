@@ -1,6 +1,7 @@
 // Capture QR v2 §6.8.3 (ask 10), §6.8.5 (W19) and §6.12 (W24, O5): when a session's phone is lost, and the panel's
 // countdown to that end. Pure: `now` passed in; the tunable timings are REQUIRED parameters (§6.15), never the
 // environment and never a default, so tsc forces each use-case call site to pass `tunable(…)`.
+import { POLL_NEAR_SECONDS } from "../config";
 import { isSilent, silentAfterMs } from "./pairing";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "./poll-seconds";
 import type { SessionState } from "./session";
@@ -70,7 +71,8 @@ export type CountdownRead = { fresh: Word | undefined; served: Word | null; fail
  *    - the warming timeout at warmingAt + warmingMinutes, shown after `quietSeconds` in warming. It fires whatever the
  *      WORD (M-4), so it is withheld only by a status read that THREW (N1: `heldByUnknownIngest` holds it).
  *    - ask 10 at the last beat + §6.9's silence threshold, once beats have STOPPED: no beat for the longer of the
- *      phone's own cadence (a beat it owed is missing) and `quietSeconds` (O5's measure of a phone gone quiet). It reads
+ *      phone's own cadence plus one near poll (a beat it owed is missing, not merely in flight) and `quietSeconds`
+ *      (O5's measure of a phone gone quiet). It reads
  *      no ingest word. A pairing that is no longer current owes it now (the next tick makes it): 0 and 0, since there
  *      is no beat to time it from.
  *    A `connected` word shows neither: the observation takes the session live instead.
@@ -99,12 +101,16 @@ export function lostCountdown(i: {
   return { kind: "warming", reason: "no_inbound_timeout", elapsedMs: warmingElapsed, remainingMs: timeoutLeft };
 }
 
+/** How late an owed beat runs before it counts as missing (B7 re-review m-a): one near poll. Without it a far-cadence
+ *  phone's go-live beat, due one cadence after its last, armed a countdown for its round trip right after Go live. */
+const BEAT_LATE_SECONDS = POLL_NEAR_SECONDS;
+
 /** Ask 10's countdown once it is armed (see lostCountdown), else null. */
 function ask10Countdown(p: Ask10Phone, now: Date, cfg: { quietSeconds: number; silentFloorSeconds: number }): { elapsedMs: number; remainingMs: number } | null {
   if (!p.hasCurrentPairing) return { elapsedMs: 0, remainingMs: 0 };
   if (p.lastBeatAt === null) throw new RangeError("lostCountdown: a current pairing always has lastBeatAt (last_beat_at is NOT NULL)");
   const cadence = ask10CadenceSeconds(p);
   const beatAge = since(p.lastBeatAt, now);
-  if (beatAge < Math.max(cfg.quietSeconds, cadence) * 1000) return null;
+  if (beatAge < Math.max(cfg.quietSeconds, cadence + BEAT_LATE_SECONDS) * 1000) return null;
   return { elapsedMs: beatAge, remainingMs: Math.max(0, silentAfterMs(cadence, cfg.silentFloorSeconds) - beatAge) };
 }
