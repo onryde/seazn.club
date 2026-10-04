@@ -28,6 +28,15 @@ export function withinReuseWindow(lastConsumeAt: Date | null, now: Date, hours =
   return now.getTime() - lastConsumeAt.getTime() < hours * 3_600_000;
 }
 
+/** W23 (capture QR v2): a restart is free iff a reuse window is open AND fewer than `limit` restarts that reached video
+ *  have been counted since the window's anchor. A closed window is never free (the empty case). A count or limit that is
+ *  not a whole number in range is refused by name — read as "free" it would give a stream away. */
+export function restartIsFree(a: { windowOpen: boolean; used: number }, limit: number): boolean {
+  if (!Number.isInteger(a.used) || a.used < 0) throw new RangeError(`restartIsFree: used must be a whole non-negative count, got ${a.used}`);
+  positiveInt(limit, "restartIsFree: limit");
+  return a.windowOpen && a.used < limit;
+}
+
 /** C3: limit − used − Σ reservations. Poll-then-admit is unsound, not imprecise. */
 export function headroomAfterReservations(
   usage: { totalStorageMinutes: number; totalStorageMinutesLimit: number },

@@ -247,7 +247,7 @@ describe("relay request schemas refuse what they must", () => {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
       health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-      restartFree: false, startCause: "organiser",
+      restartFree: false, startCause: "organiser", restart: null,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
     // T6: startCause is REQUIRED and closed — the panel names who started the broadcast from it.
@@ -261,6 +261,18 @@ describe("relay request schemas refuse what they must", () => {
       causes++;
     }
     expect(causes).toBe(3);
+    // T6b (A9(a)): restart is REQUIRED — null (no window open) or the allowance, strict, its count a whole non-negative
+    // number and its limit a positive one. restartFree stays beside it, derived.
+    const withoutRestart: Record<string, unknown> = { ...current };
+    delete withoutRestart.restart;
+    expect(S.StreamSessionCurrent.safeParse(withoutRestart).success, "absent").toBe(false);
+    const allowance = { windowOpen: true, used: 2, limit: 3, free: true };
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: allowance }).success, "the positive pair").toBe(true);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, used: -1 } }).success, "negative used").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, used: 1.5 } }).success, "fractional used").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, limit: 0 } }).success, "zero limit").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: { ...allowance, extra: 1 } }).success, "strict").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, restart: {} }).success, "never a default object").toBe(false);
     // T6: every DB end reason is a legal wire value on a completed session's projection.
     let reasons = 0;
     for (const endReason of DB_END_REASONS) {

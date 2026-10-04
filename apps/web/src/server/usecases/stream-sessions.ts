@@ -45,7 +45,7 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
-  lockOrg, reuseWindowOpen, streamMonthlyRate, type StreamCreditBreakdown,
+  lockOrg, restartAllowance, streamMonthlyRate, type StreamCreditBreakdown,
 } from "./stream-credits";
 import { DestinationNotAllowedError, TargetUnreadableError } from "./stream-targets";
 import { holderHref, holderRows, wireHolder, type TargetHolder } from "./stream-target-holders";
@@ -1303,9 +1303,10 @@ export async function startBroadcast(
     hasFeature(orgId, "streaming.overlay", competitionId),
     hasFeature(orgId, "streaming.relay", competitionId),
     creditBalance(sql, orgId),
-    // I2 (§5.2): a restart of THIS fixture inside the reuse window costs nothing, so `admit` waives the balance gate for
-    // it. The same authority consumeForSession asks at go-live, on the same clock (deps.now()).
-    reuseWindowOpen(sql, { orgId, fixtureId }, deps.now()),
+    // I2 (§5.2) + W23 (T6b): a FREE restart of THIS fixture — inside the reuse window, fewer than three counted since its
+    // anchor — costs nothing, so `admit` waives the balance gate for it. The same authority consumeForSession asks at
+    // go-live, on the same clock (deps.now()). A 4th is an ordinary paid start: the balance gate answers it.
+    restartAllowance(sql, { orgId, fixtureId, excludeSessionId: null }, deps.now()).then((a) => a.free),
     // Dc: HOW the org got `streaming.relay` — a live staff override, or the plan. `overrideRow` is the
     // existing single authority (it already filters expired overrides); no resolver edit. Since V426 every
     // plan grants the relay, so the FALSE branch (plan-granted) is the common one; stream-sessions.test.ts
@@ -1688,6 +1689,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     // M6: the elapsed on THIS clock, at this response — the client judges D3 on it, never on the browser's clock.
     output = { state: outputObserved, since: since.toISOString(), elapsedMs: Math.max(0, deps.now().getTime() - since.getTime()) };
   }
+  const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
@@ -1700,9 +1702,11 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     endReason: row.end_reason,
     creditUsed: spend!.net < 0,
-    // I-1: admission's own question, on admission's own clock (createSession asks `reuseWindowOpen` with deps.now()), so
-    // the tab's "free restart" and the gate that waives the balance cannot disagree.
-    restartFree: await reuseWindowOpen(sql, { orgId: row.org_id, fixtureId }, deps.now()),
+    // I-1 + W23 (T6b, A9(a)): admission's own question, on admission's own clock (startBroadcast asks `restartAllowance`
+    // with deps.now()), so the tab's "free restart" and the gate that waives the balance cannot disagree. `restart` is the
+    // allowance (null while no window is open); `restartFree` is DERIVED from the same call until T11 retires it.
+    restart: allowance.windowOpen ? allowance : null,
+    restartFree: allowance.windowOpen && allowance.free,
     startCause: row.start_cause,
   };
 }

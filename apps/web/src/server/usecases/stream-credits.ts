@@ -37,7 +37,8 @@ import { HttpError } from "@/lib/errors";
 import { utcMonthStart } from "@/lib/credits";
 import { orgPlanKey } from "@/lib/entitlements";
 import { isPassKey, type PassKey } from "@/lib/currency";
-import { InsufficientCredits, credit, debit, withinReuseWindow } from "@/server/relay/domain/credits";
+import { InsufficientCredits, credit, debit, restartIsFree, withinReuseWindow } from "@/server/relay/domain/credits";
+import { FREE_RESTARTS_PER_WINDOW } from "@/server/relay/config";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 // TYPE-ONLY, as lib/credits.ts does: admin-adjustments-log.ts VALUE-imports
@@ -127,9 +128,18 @@ export async function reuseWindowOpen(
   args: { orgId: string; fixtureId: string | null },
   now: Date,
 ): Promise<boolean> {
-  if (args.fixtureId === null) return false;
-  const [last] = await exec<{ created_at: string }[]>`
-    select c.created_at from org_stream_credits c
+  const last = await standingConsume(exec, args);
+  return withinReuseWindow(last ? new Date(last.created_at) : null, now);   // the pure 24 h rule (domain/credits.ts)
+}
+
+/** The fixture's LATEST consume that still stands — `reuseWindowOpen`'s query, unchanged, also naming the session that
+ *  consumed (W23's anchor). Null for a fixture-less session and for a fixture with none. */
+async function standingConsume(
+  exec: Executor, args: { orgId: string; fixtureId: string | null },
+): Promise<{ created_at: string; session_id: string } | null> {
+  if (args.fixtureId === null) return null;
+  const [last] = await exec<{ created_at: string; session_id: string }[]>`
+    select c.created_at, c.session_id from org_stream_credits c
       join fixture_stream_sessions s on s.id = c.session_id
      where c.org_id = ${args.orgId} and c.reason = 'consume' and s.fixture_id = ${args.fixtureId}
        and (select coalesce(sum(r.delta), 0) from org_stream_credits r
@@ -137,7 +147,37 @@ export async function reuseWindowOpen(
          < (select coalesce(-sum(k.delta), 0) from org_stream_credits k
              where k.org_id = c.org_id and k.session_id = c.session_id and k.reason = 'consume')
      order by c.created_at desc limit 1`;
-  return withinReuseWindow(last ? new Date(last.created_at) : null, now);   // the pure 24 h rule (domain/credits.ts)
+  return last ?? null;
+}
+
+/** W23 (capture QR v2 T6b): how many free restarts this fixture has left in its reuse window. */
+export type RestartAllowance = { windowOpen: boolean; used: number; limit: number; free: boolean };
+
+/** W23 — the ONE authority admission, `consumeForSession` and the organiser's projection all ask (A9), so the three can
+ *  never disagree. The window is `reuseWindowOpen`'s: a consume that stands, inside CREDIT_REUSE_HOURS; that consume's
+ *  session is the ANCHOR. `used` counts this fixture's sessions created after the anchor that REACHED VIDEO
+ *  (first_ingest_at set) — a restart stopped before its phone sent anything never counts, and a session counts once
+ *  however often its phone changes or its ingest drops. `excludeSessionId` is the session asking about itself
+ *  (`consumeForSession` at its own go-live): it is not one of its own restarts. A paid 4th consumes and so becomes the
+ *  next anchor (O4). */
+export async function restartAllowance(
+  exec: Executor,
+  args: { orgId: string; fixtureId: string | null; excludeSessionId: string | null },
+  now: Date,
+): Promise<RestartAllowance> {
+  const limit = FREE_RESTARTS_PER_WINDOW;
+  const anchor = await standingConsume(exec, args);
+  const windowOpen = withinReuseWindow(anchor ? new Date(anchor.created_at) : null, now);
+  if (!anchor || !windowOpen) return { windowOpen: false, used: 0, limit, free: false };
+  const [counted] = await exec<{ used: number }[]>`
+    select count(*)::int as used from fixture_stream_sessions s
+     where s.org_id = ${args.orgId} and s.fixture_id = ${args.fixtureId}
+       and s.first_ingest_at is not null
+       and s.id <> ${anchor.session_id}
+       and (${args.excludeSessionId}::uuid is null or s.id <> ${args.excludeSessionId})
+       and s.created_at > (select created_at from fixture_stream_sessions where id = ${anchor.session_id})`;
+  const used = counted?.used ?? 0;   // count(*) always answers one row
+  return { windowOpen, used, limit, free: restartIsFree({ windowOpen, used }, limit) };
 }
 
 export async function consumeForSession(
@@ -166,11 +206,12 @@ export async function consumeForSession(
       captureError(err, { orgId: args.orgId, route: "relay.credits.consume_rollover", extra: { sessionId: args.sessionId } });
     }
   }
-  const reuse = await reuseWindowOpen(tx, args, now);
+  // W23: a FREE restart (an open window, fewer than three counted since its anchor) consumes nothing; a 4th pays below.
+  const restart = await restartAllowance(tx, { orgId: args.orgId, fixtureId: args.fixtureId, excludeSessionId: args.sessionId }, now);
   const split = await creditBreakdown(tx, args.orgId);
   const balance = split.total;
-  if (reuse) {
-    log.info({ orgId: args.orgId, fixtureId: args.fixtureId, sid: args.sessionId, reason: "reuse_24h" }, "stream credits: restart within the reuse window, no consume");
+  if (restart.free) {
+    log.info({ orgId: args.orgId, fixtureId: args.fixtureId, sid: args.sessionId, reason: "reuse_24h", used: restart.used, limit: restart.limit }, "stream credits: a free restart within the reuse window, no consume");
     return { consumed: false, balance, ledgerId: null };   // no row written, so no id
   }
   let balanceAfter: number;

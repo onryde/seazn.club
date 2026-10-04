@@ -38866,6 +38866,41 @@
                             "restartFree": {
                               "type": "boolean"
                             },
+                            "restart": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "windowOpen": {
+                                      "type": "boolean"
+                                    },
+                                    "used": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "limit": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "free": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "windowOpen",
+                                    "used",
+                                    "limit",
+                                    "free"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "startCause": {
                               "type": "string",
                               "enum": [
@@ -38895,6 +38930,7 @@
                             "endReason",
                             "creditUsed",
                             "restartFree",
+                            "restart",
                             "startCause"
                           ],
                           "additionalProperties": false
@@ -38965,6 +39001,12 @@
                     "endReason": "stopped",
                     "creditUsed": true,
                     "restartFree": true,
+                    "restart": {
+                      "windowOpen": true,
+                      "used": 0,
+                      "limit": 1,
+                      "free": true
+                    },
                     "startCause": "organiser"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -39574,6 +39616,41 @@
                         "restartFree": {
                           "type": "boolean"
                         },
+                        "restart": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "windowOpen": {
+                                  "type": "boolean"
+                                },
+                                "used": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "limit": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "free": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "windowOpen",
+                                "used",
+                                "limit",
+                                "free"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "startCause": {
                           "type": "string",
                           "enum": [
@@ -39603,6 +39680,7 @@
                         "endReason",
                         "creditUsed",
                         "restartFree",
+                        "restart",
                         "startCause"
                       ],
                       "additionalProperties": false
@@ -39668,6 +39746,12 @@
                     "endReason": "stopped",
                     "creditUsed": true,
                     "restartFree": true,
+                    "restart": {
+                      "windowOpen": true,
+                      "used": 0,
+                      "limit": 1,
+                      "free": true
+                    },
                     "startCause": "organiser"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"

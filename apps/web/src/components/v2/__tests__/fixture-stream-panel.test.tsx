@@ -605,7 +605,7 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
   qr: QR, balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-  restartFree: false, startCause: "organiser",   // T6: the wire's new required field (tsc), no behaviour read here
+  restartFree: false, startCause: "organiser", restart: null,   // T6/T6b: the wire's new required fields (tsc), no behaviour read here
   ...over,
 });
 

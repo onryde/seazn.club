@@ -1390,6 +1390,12 @@ export const StreamOutput = z.object({
 });
 export type StreamOutput = z.infer<typeof StreamOutput>;
 
+/** W23: `restartAllowance`'s answer (stream-credits.ts) — inside one reuse window, `limit` restarts that reached video
+ *  are free; `used` have been counted since the window's anchor. */
+export const StreamRestartAllowance = z
+  .object({ windowOpen: z.boolean(), used: z.number().int().nonnegative(), limit: z.number().int().positive(), free: z.boolean() })
+  .strict();
+
 export const StreamSessionCurrent = z
   .object({
     id: z.string(),
@@ -1421,6 +1427,10 @@ export const StreamSessionCurrent = z
      *  the one authority admission asks (`reuseWindowOpen`), so the Phone tab never sells a pack for a restart the server
      *  would admit at balance 0. A fixture fact, not this session's: a restart that consumed nothing still reads true. */
     restartFree: z.boolean(),
+    /** W23 (capture QR v2 T6b, A9(a)): the fixture's free-restart allowance in its reuse window — null while no window is
+     *  open (never a default object). `restartFree` above is derived from the SAME read (`restart !== null &&
+     *  restart.free`) until T11 moves its readers here and retires it. */
+    restart: StreamRestartAllowance.nullable(),
     /** Capture QR v2 §5.3 (T6): who started this session — the organiser's Go live, the phone operator's start, or
      *  the automatic start. V430's start_cause; set at creation and never changed. */
     startCause: z.enum(["organiser", "operator", "automatic"]),

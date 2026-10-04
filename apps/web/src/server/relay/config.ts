@@ -147,6 +147,9 @@ export const RUNNER_MAX_ATTEMPTS = 2;
 export const RUNNER_STOP_SIGNAL = "SIGINT" as const;
 /** §5.2: a consume row for the same fixture within 24 h → no second consume. */
 export const CREDIT_REUSE_HOURS = 24;
+/** W23 (capture QR v2, owner 2026-10-01): inside one reuse window, the first THREE restarts that reach video are free;
+ *  the 4th pays at live and opens a new window (O4). domain/credits.ts `restartIsFree` is the rule. */
+export const FREE_RESTARTS_PER_WINDOW = 3;
 /** §9.1: SRT buffer 1.5–2.5 s, pinned; carried in the QR payload as latencyMs. */
 export const SRT_LATENCY_MS = 2000;
 /** m-c (B5 re-review 3; controller ruling 2026-10-01): how many CONSECUTIVE failed outputs reads (`outputState` → null,
