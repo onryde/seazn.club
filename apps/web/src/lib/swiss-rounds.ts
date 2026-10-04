@@ -6,7 +6,7 @@
 // moved here moves every reader with it).
 //
 // Client-safe on purpose: the format catalogue (config/format-gallery.tsx,
-// components/v2/format-templates.ts) and the server generator
+// lib/format-templates.ts) and the server generator
 // (server/usecases/stages.ts's swissGen) must agree on the number, and a
 // `server-only` module could not be imported by the first two.
 

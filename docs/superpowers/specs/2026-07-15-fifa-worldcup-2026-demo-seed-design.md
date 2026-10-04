@@ -15,7 +15,7 @@ authentic tournament data.
 
 No engine changes needed. Verified capabilities:
 
-- **`groups_ko` stage template** (`apps/web/src/components/v2/format-templates.ts`) — a `group`
+- **`groups_ko` stage template** (`apps/web/src/lib/format-templates.ts`) — a `group`
   stage with `config.pools.count = 12` feeding a `knockout` stage.
 - **`bestOfRank` qualification** (`packages/engine/src/competition/qualification.ts`) — exactly
   FIFA's "8 best third-placed teams across unequal pools", including the UEFA-style normalisation

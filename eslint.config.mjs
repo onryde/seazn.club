@@ -1,5 +1,8 @@
 // Lint config for the repo-root `scripts/` tree — the bench (`scripts/bench`),
-// smoke, and the seed/sync/openapi generators.
+// smoke, and the seed/sync/openapi generators — and for `tools/`, the dev-only
+// harnesses (`tools/matrix`, @seazn/matrix; ruling 56). The harness is a
+// workspace but has no lint script of its own: it was linted here under
+// scripts/ before the move and keeps exactly the same rules.
 //
 // It exists because nothing linted these at all. Root `lint` chained the two
 // WORKSPACES (`apps/web`, `packages/engine`) and `scripts/` is not a workspace,
@@ -14,6 +17,7 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import { defineConfig, globalIgnores } from "eslint/config";
+import { toolsImportRules } from "./scripts/lib/tools-import-guard.mjs";
 
 export default defineConfig([
   globalIgnores([
@@ -37,7 +41,15 @@ export default defineConfig([
   ...tseslint.configs.recommendedTypeChecked,
 
   {
-    files: ["scripts/**/*.ts"],
+    // Ruling 56: nothing here may import a dev-only harness under tools/ (not
+    // in the image). One source for the rule: scripts/lib/tools-import-guard.mjs;
+    // scripts/__tests__/tools-import-guard.test.ts resolves every import exactly.
+    files: ["scripts/**/*.{ts,mjs,cjs,js}"],
+    rules: toolsImportRules,
+  },
+
+  {
+    files: ["scripts/**/*.ts", "tools/**/*.ts"],
     languageOptions: {
       parserOptions: {
         // `tsconfig.scripts.json` is the same project `typecheck:scripts` uses,
@@ -119,7 +131,7 @@ export default defineConfig([
     // renamed field ship as `sport_key: undefined` with the suite green. Lint
     // narrows that gap (unused vars, undefined identifiers) but does not close
     // it — asserting request bodies in the tests themselves is what closes it.
-    files: ["scripts/**/*.test.ts"],
+    files: ["scripts/**/*.test.ts", "tools/**/*.test.ts"],
     extends: [tseslint.configs.disableTypeChecked],
     rules: {
       "@typescript-eslint/no-unused-vars": [
@@ -136,7 +148,7 @@ export default defineConfig([
     // (only `scripts/**/*.ts` is included). `recommendedTypeChecked` still
     // matches them via `eslint scripts`, and typed rules then crash without
     // parserOptions.project — same failure mode as the test-file block above.
-    files: ["scripts/**/*.{mjs,cjs,js}"],
+    files: ["scripts/**/*.{mjs,cjs,js}", "tools/**/*.{mjs,cjs,js}"],
     extends: [tseslint.configs.disableTypeChecked],
     rules: {
       "no-console": "off",

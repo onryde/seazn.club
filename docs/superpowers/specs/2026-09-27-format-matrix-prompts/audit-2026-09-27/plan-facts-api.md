@@ -135,7 +135,7 @@ export const PointsRule = z.object({
 ```
 
 ### A4. Stages from a format template — `POST|PUT /api/v1/divisions/:id/stages`
-- **There is no server endpoint that takes a format-template key.** The 16 keys live client-side in `components/v2/format-templates.ts:65-297` (`STAGE_TEMPLATES`) and are expanded by `buildTemplateStages(key, knobs)` (format-templates.ts:333-341). The division builder then POSTs the resulting array: `division-builder.tsx:429-448` does `POST /competitions/:id/divisions`, then `POST /divisions/:id/stages` with `stages.map((s,i)=>({...s, seq:i+1}))`. **The harness should import `buildTemplateStages` (and `applyStandingsCarry`) or copy the table below, and add `seq`.**
+- **There is no server endpoint that takes a format-template key.** The 16 keys live client-side in `lib/format-templates.ts:65-297` (`STAGE_TEMPLATES`) and are expanded by `buildTemplateStages(key, knobs)` (format-templates.ts:333-341). The division builder then POSTs the resulting array: `division-builder.tsx:429-448` does `POST /competitions/:id/divisions`, then `POST /divisions/:id/stages` with `stages.map((s,i)=>({...s, seq:i+1}))`. **The harness should import `buildTemplateStages` (and `applyStandingsCarry`) or copy the table below, and add `seq`.**
 - Routes: `divisions/[id]/stages/route.ts`. GET is at 8-14 (read, ks:157). **PUT (replaceStages) is at 18-25** and returns the array. **POST (createStages) is at 28-35** and returns 201 with one stage object or an array, mirroring the input shape. Scope is `manage` for both (ks:158-159).
 ```ts
 // schemas.ts:1063-1074

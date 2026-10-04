@@ -360,7 +360,7 @@ dedupe are orthogonal to `TakeRule` and apply uniformly across all five kinds
   `TemplateStageSeeding` → `TemplateStageProgression`.
 - **Modify** the three catalogue JSON files that carry `.seeding`:
   `league-playoff.json`, `euro24.json`, `t20-super8.json`.
-- **Modify** `apps/web/src/components/v2/format-templates.ts` — `StageDraft`,
+- **Modify** `apps/web/src/lib/format-templates.ts` — `StageDraft`,
   all `qualification:` emit sites, `detectTemplate`'s `topN`/`losersOfRound`
   reads.
 - **Modify** `apps/web/e2e/mobile.spec.ts:1504` — `seeding:` → `progression:`.
@@ -1975,12 +1975,12 @@ git commit -m "db(F2): drop stages.qualification/seeding, add stages.progression
   `:280-333`)
 - Modify: `apps/web/src/server/templates/catalog/league-playoff.json`,
   `euro24.json`, `t20-super8.json`
-- Modify: `apps/web/src/components/v2/format-templates.ts` (`StageDraft`
+- Modify: `apps/web/src/lib/format-templates.ts` (`StageDraft`
   `:6-11`, five `qualification:`/`topN`/`losersOfRound` sites at `:39,72,81,
   156,196-198`)
 - Modify: `apps/web/e2e/mobile.spec.ts:1504`
 - Test: `apps/web/src/server/usecases/__tests__/catalog-progression.test.ts`
-  (create); `apps/web/src/components/v2/__tests__/format-templates.test.ts`
+  (create); `apps/web/src/lib/__tests__/format-templates.test.ts`
   (extend if it exists, else create alongside the file per repo convention)
 
 - [ ] **Step 1: Write the failing tests**
@@ -2015,7 +2015,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
 ```
 
 ```ts
-// apps/web/src/components/v2/__tests__/format-templates.test.ts
+// apps/web/src/lib/__tests__/format-templates.test.ts
 import { describe, expect, it } from "vitest";
 import { buildTemplateStages, detectTemplate } from "../format-templates";
 
@@ -2324,7 +2324,7 @@ shape correctly.
 - [ ] **Step 8: Run and confirm green**
 
 ```bash
-cd <worktree> && npm run test --workspace apps/web -- run apps/web/src/components/v2/__tests__/format-templates.test.ts --reporter=json --outputFile=/tmp/f2-t5a.json > /tmp/f2-t5a.log 2>&1; echo "EXIT=$?"
+cd <worktree> && npm run test --workspace apps/web -- run apps/web/src/lib/__tests__/format-templates.test.ts --reporter=json --outputFile=/tmp/f2-t5a.json > /tmp/f2-t5a.log 2>&1; echo "EXIT=$?"
 ```
 The DB-backed `catalog-progression.test.ts` needs `validateStageProgression`
 from Task 6 to exist first — run it at the end of Task 6's gate instead of
@@ -2333,7 +2333,7 @@ here; do not block this task's commit on it.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add apps/web/src/server/usecases/stages.ts apps/web/src/server/usecases/templates.ts apps/web/src/server/templates/catalog apps/web/src/components/v2/format-templates.ts apps/web/src/components/v2/__tests__/format-templates.test.ts apps/web/src/server/usecases/__tests__/catalog-progression.test.ts apps/web/e2e/mobile.spec.ts
+git add apps/web/src/server/usecases/stages.ts apps/web/src/server/usecases/templates.ts apps/web/src/server/templates/catalog apps/web/src/lib/format-templates.ts apps/web/src/lib/__tests__/format-templates.test.ts apps/web/src/server/usecases/__tests__/catalog-progression.test.ts apps/web/e2e/mobile.spec.ts
 git commit -m "writers(F2): createStages, instantiateTemplate, the picker and catalogue templates emit progression"
 ```
 

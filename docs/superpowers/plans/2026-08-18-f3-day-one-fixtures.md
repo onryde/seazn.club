@@ -72,7 +72,7 @@ Playwright, Postgres via Flyway (`db/migration/deltas`).
 
 | File | Responsibility after F3 |
 |---|---|
-| `apps/web/src/components/v2/format-templates.ts` | 14 templates; `timing: "setup"` on the six; knob-aware `build(knobs)`; i18n key refs instead of English literals |
+| `apps/web/src/lib/format-templates.ts` | 14 templates; `timing: "setup"` on the six; knob-aware `build(knobs)`; i18n key refs instead of English literals |
 | `apps/web/src/config/format-gallery.tsx` | gallery `cannedStages` — same `setup` timing as the picker |
 | `apps/web/src/components/v2/division-builder.tsx` | renders template label/help via `useMsg()`; mexicano mapping comment |
 | `apps/web/src/components/v2/division-settings.tsx` | same, on the settings surface |
@@ -122,9 +122,9 @@ same minute the division exists — with "Winner of Group A" style placeholders
 rather than TBD, because labelling only ever runs on the `setup` path.
 
 **Files:**
-- Modify: `apps/web/src/components/v2/format-templates.ts:63,98,112,125,194,208`
+- Modify: `apps/web/src/lib/format-templates.ts:63,98,112,125,194,208`
 - Modify: `apps/web/src/config/format-gallery.tsx:278,309,322`
-- Test: `apps/web/src/components/v2/__tests__/format-templates.test.ts`
+- Test: `apps/web/src/lib/__tests__/format-templates.test.ts`
 - Test: `apps/web/src/server/usecases/__tests__/format-catalogue.test.ts` (+ its snapshot)
 
 **Interfaces:**
@@ -137,7 +137,7 @@ rather than TBD, because labelling only ever runs on the `setup` path.
   asserts every non-null `progression.timing` is `"setup"`; plus the same walk
   over `format-gallery.tsx`'s `cannedStages`. It must fail listing all nine.
 - [ ] **Step 2: Run it, confirm it fails**
-  `cd <worktree> && npx vitest run --root apps/web --reporter=json --outputFile=/tmp/f3-t1.json src/components/v2/__tests__/format-templates.test.ts`
+  `cd <worktree> && npx vitest run --root apps/web --reporter=json --outputFile=/tmp/f3-t1.json src/lib/__tests__/format-templates.test.ts`
 - [ ] **Step 3: Flip the nine `timing` literals.** Update the file-header
   comment in `format-templates.ts:11-13` — it currently states that every writer
   emits `on_complete` as a deliberate F2 decision; it must now say F3 flipped
@@ -162,11 +162,11 @@ so group-mates meet as late as the bracket allows — the standard convention,
 instead of a two-pool assumption that silently ignored groups C and D.
 
 **Files:**
-- Modify: `apps/web/src/components/v2/format-templates.ts` (`StageDraft` build
+- Modify: `apps/web/src/lib/format-templates.ts` (`StageDraft` build
   signature, `groups_ko` at `:67-99`, `buildTemplateStages` at `:215-224`)
 - Modify: `apps/web/src/config/format-gallery.tsx:265-278` (the `picks` entry —
   same 2-pool assumption)
-- Test: `apps/web/src/components/v2/__tests__/format-templates.test.ts`
+- Test: `apps/web/src/lib/__tests__/format-templates.test.ts`
 - Test: `apps/web/src/server/usecases/__tests__/format-catalogue.test.ts`
 
 **Interfaces:**
@@ -316,7 +316,7 @@ picker in their own language instead of English — the first screen of the
 product, and the last hardcoded-English surface in it.
 
 **Files:**
-- Modify: `apps/web/src/components/v2/format-templates.ts` (14 × `label`/`help`
+- Modify: `apps/web/src/lib/format-templates.ts` (14 × `label`/`help`
   → key refs, e.g. `labelKey: "wizard.format.league_ko.label"`)
 - Modify: `apps/web/src/components/v2/division-builder.tsx:672-673`
 - Modify: `apps/web/src/components/v2/division-settings.tsx:539,544`

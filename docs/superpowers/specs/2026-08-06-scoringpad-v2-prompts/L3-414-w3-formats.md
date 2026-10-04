@@ -53,7 +53,7 @@ page_playoff is layout-only.
    individual entrant. Carry-over guard (`points.ts`): only from true table kinds.
 5. **Schemas / UI**: `RoundLosersS` added to the `QualificationSpecSchema` union;
    `qualifierCount` handles it. New templates in
-   `components/v2/format-templates.ts`: `ko_plate` (main KO → plate via
+   `lib/format-templates.ts`: `ko_plate` (main KO → plate via
    `losersOfRound:{round:1}`) and `qualifying_main` (KO → KO topN); extend
    `detectTemplate`. Template names and descriptions in all 4 dictionaries.
 

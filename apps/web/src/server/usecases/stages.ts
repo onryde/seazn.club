@@ -338,7 +338,7 @@ function assertNoRulesKey(inputs: readonly StageInput[]): void {
  * the last line of defence for a row written around the usecase.
  *
  * `swiss` is the only `StageKind` involved. `swiss_playoff` / `swiss_knockout`
- * are TEMPLATE keys (components/v2/format-templates.ts) that each BUILD a
+ * are TEMPLATE keys (lib/format-templates.ts) that each BUILD a
  * `swiss` stage plus a bracket stage — checking them here would test a value
  * `kind` can never hold.
  *

@@ -5,7 +5,7 @@ Method: read the generators (`packages/engine/src/scheduling/{roundrobin,bracket
 `competition/{progression,stage}.ts`) and the persistence and orchestration layer
 (`apps/web/src/server/usecases/stages.ts` generate/rebuild/seed/addFixture/issueChallenge,
 `withdrawal.ts`, `scoring.ts onDecided`, `engine-db/{competition,fed-seats}.ts`,
-`components/v2/board/round-codes.ts`, `components/v2/format-templates.ts`). I also ran pure-engine
+`components/v2/board/round-codes.ts`, `lib/format-templates.ts`). I also ran pure-engine
 simulations (scratchpad `p1.ts`…`p6.ts`, `node` on the engine's own `.ts`). Nothing was driven
 in a browser or against a DB, so every "customer impact" line is reasoned from code plus an engine
 run, not observed on screen.

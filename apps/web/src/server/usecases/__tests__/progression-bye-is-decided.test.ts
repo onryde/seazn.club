@@ -29,7 +29,7 @@ import { isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { appendEvent } from "@/server/engine-db";
-import { buildTemplateStages } from "@/components/v2/format-templates";
+import { buildTemplateStages } from "@/lib/format-templates";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";

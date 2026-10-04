@@ -1692,7 +1692,7 @@ Re-read the lines around the insertion point first. Anchor on `pnpm install --fr
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron/apps/web && npx vitest run --reporter=json --outputFile=/tmp/cw-t6-wiring.json src/__tests__/toolchain.test.ts src/lib/__tests__/db-suite-ci-wiring.test.ts src/lib/__tests__/e2e-ci-wiring.test.ts src/lib/__tests__/redis-suite-ci-wiring.test.ts src/lib/__tests__/device-link-kek-wiring.test.ts; jq '.numPassedTests, .numTotalTests, .numFailedTestSuites, (.testResults | length)' /tmp/cw-t6-wiring.json
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/cw-t6-scripts.json scripts/__tests__/check-vitest-collection.test.ts scripts/matrix/__tests__/ci-wiring.test.ts; jq '.numPassedTests, .numTotalTests, .numFailedTestSuites, (.testResults | length)' /tmp/cw-t6-scripts.json
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/cw-t6-scripts.json scripts/__tests__/check-vitest-collection.test.ts tools/matrix/__tests__/ci-wiring.test.ts; jq '.numPassedTests, .numTotalTests, .numFailedTestSuites, (.testResults | length)' /tmp/cw-t6-scripts.json
 ```
 Expected: in each report the passed and total counts are equal, `numFailedTestSuites` is `0`, and the file counts are `5` and `2`. A smaller file count means a path was silently ignored.
 
@@ -2099,7 +2099,7 @@ Expected: `stg ok`, `prod ok`, `ci ok`. If the `yaml` package is not resolvable 
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron/apps/web && npx vitest run --reporter=json --outputFile=/tmp/cw-t9-wiring.json src/__tests__/toolchain.test.ts src/lib/__tests__/relay-drivers-ci-wiring.test.ts src/lib/__tests__/relay-sweep-workflow.test.ts src/lib/__tests__/stg-base-url.test.ts; jq '.numPassedTests, .numTotalTests, .numFailedTestSuites, (.testResults | length)' /tmp/cw-t9-wiring.json
-cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/cw-t9-scripts.json scripts/matrix/__tests__/ci-wiring.test.ts; jq '.numPassedTests, .numTotalTests, .numFailedTestSuites, (.testResults | length)' /tmp/cw-t9-scripts.json
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/cloudflare-cron && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile=/tmp/cw-t9-scripts.json tools/matrix/__tests__/ci-wiring.test.ts; jq '.numPassedTests, .numTotalTests, .numFailedTestSuites, (.testResults | length)' /tmp/cw-t9-scripts.json
 ```
 Expected: in each report the passed and total counts are equal, `numFailedTestSuites` is `0`, and the file counts are `4` and `1`.
 

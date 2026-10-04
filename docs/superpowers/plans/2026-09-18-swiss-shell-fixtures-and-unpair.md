@@ -33,7 +33,7 @@
 | `apps/web/src/server/usecases/__tests__/swiss-shell-fixtures.test.ts` (new) | DB tests: mint, pair readiness, unpair gates |
 | `apps/web/src/app/api/v1/stages/[id]/unpair/route.ts` (new) | `POST` → `unpairSwissRound` |
 | `apps/web/src/server/api-v1/openapi.ts` | Register `/stages/{id}/unpair` |
-| `apps/web/src/components/v2/format-templates.ts` | Put `rounds` on swiss_playoff / swiss_knockout drafts; knob always applies |
+| `apps/web/src/lib/format-templates.ts` | Put `rounds` on swiss_playoff / swiss_knockout drafts; knob always applies |
 | `apps/web/src/components/v2/division-settings.tsx` | Show editable rounds for all Swiss templates (stop “derived only” branch as authority) |
 | `apps/web/src/components/v2/desk/stage-rail.tsx` | Generate vs Pair vs Unpair labels/actions |
 | `apps/web/src/components/v2/stages-panel.tsx` | Wire `unpair` action |
@@ -488,8 +488,8 @@ EOF
 ### Task 5: Templates + Settings — organiser-set rounds everywhere
 
 **Files:**
-- Modify: `apps/web/src/components/v2/format-templates.ts`
-- Modify: `apps/web/src/components/v2/__tests__/format-templates.test.ts`
+- Modify: `apps/web/src/lib/format-templates.ts`
+- Modify: `apps/web/src/lib/__tests__/format-templates.test.ts`
 - Modify: `apps/web/src/components/v2/division-settings.tsx`
 - Modify: `apps/web/src/components/v2/division-builder.tsx` if copy still says “derived”
 
@@ -517,8 +517,8 @@ it("swiss_playoff stamps knobs.swissRounds onto the swiss stage", () => {
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/components/v2/format-templates.ts \
-  apps/web/src/components/v2/__tests__/format-templates.test.ts \
+git add apps/web/src/lib/format-templates.ts \
+  apps/web/src/lib/__tests__/format-templates.test.ts \
   apps/web/src/components/v2/division-settings.tsx \
   apps/web/src/components/v2/division-builder.tsx
 git commit -m "$(cat <<'EOF'

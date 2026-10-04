@@ -20,7 +20,7 @@
 - **Every change ships a test that fails without it.** All four test types this session: unit, E2E, smoke, regression.
 - **No new user-facing strings are owed.** Verified: `schedule.tbd` and every `slot.*` key already exist in all four dictionaries (`apps/web/src/dictionaries/{en,fr,es,nl}/ui.json`). If a task finds itself adding a key, it goes into all four — never hardcoded English.
 - **Never hand-build a slot label string.** `apps/web/src/lib/slot-label.ts` is deliberately the only place a `SlotLabel` becomes display text.
-- **Do not touch** `apps/web/src/components/v2/format-templates.ts`, `packages/engine/src/competition/progression.ts`, or the seeding region of `apps/web/src/server/usecases/stages.ts` — those belong to F3, which may run in parallel.
+- **Do not touch** `apps/web/src/lib/format-templates.ts`, `packages/engine/src/competition/progression.ts`, or the seeding region of `apps/web/src/server/usecases/stages.ts` — those belong to F3, which may run in parallel.
 - **Do not file GitHub issues.** A defect found mid-task is fixed inline; if the fix widens the blast radius beyond this plan's file list, stop and ask. Record every such fix in the PR body under `Unplanned fixes`.
 - Pre-commit: `npm run openapi:gen && git status --porcelain` must be empty afterwards.
 - CI gate is `turbo run lint typecheck` from the repo root — `npm run lint` alone is not it.

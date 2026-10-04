@@ -5,7 +5,7 @@
 // format produces has to be a deliberate, reviewed diff.
 import { describe, expect, it } from "vitest";
 import { previewDivisionFixtures } from "../stages";
-import { STAGE_TEMPLATES } from "@/components/v2/format-templates";
+import { STAGE_TEMPLATES } from "@/lib/format-templates";
 
 describe("previewDivisionFixtures — bye label (F1 Task 5)", () => {
   it("labels an unfilled first-round slot in a bye pairing as Bye, not TBD", () => {

@@ -17,7 +17,9 @@
   //     — the second half type-checks the whole of scripts/.
   //
   // Without these, editing scripts/ leaves a stale typecheck cached green.
-  "globalDependencies": ["tsconfig.scripts.json", "scripts/**"],
+  // tools/** for the same reason: tsconfig.scripts.json includes tools/ (the
+  // dev-only harnesses, ruling 56).
+  "globalDependencies": ["tsconfig.scripts.json", "scripts/**", "tools/**"],
 
   "tasks": {
     // apps/web is the only package with a build; @seazn/engine ships raw TS via

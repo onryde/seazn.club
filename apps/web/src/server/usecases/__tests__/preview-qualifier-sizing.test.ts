@@ -6,7 +6,7 @@
 // no DB.
 import { describe, expect, it } from "vitest";
 import { previewDivisionFixtures } from "../stages";
-import { buildTemplateStages } from "@/components/v2/format-templates";
+import { buildTemplateStages } from "@/lib/format-templates";
 
 describe("previewDivisionFixtures — qualifier sizing (bestNth / multi-rule / roundLosers)", () => {
   it("sizes a bestNth spec by its own count, not the old 4-entrant default", () => {

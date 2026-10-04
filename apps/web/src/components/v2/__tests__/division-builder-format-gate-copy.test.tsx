@@ -22,7 +22,7 @@ import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hoo
 import { ApiV1Error } from "@/lib/client-v1";
 import { featureReason } from "@/lib/feature-copy";
 import { DivisionBuilder, paywallReasonForStages, type SportOption } from "@/components/v2/division-builder";
-import type { StageDraft } from "@/components/v2/format-templates";
+import type { StageDraft } from "@/lib/format-templates";
 import uiEn from "@/dictionaries/en/ui.json";
 
 const LEAGUE_STAGE: StageDraft = { kind: "league", name: "League", config: {}, progression: null };

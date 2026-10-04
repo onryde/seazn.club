@@ -46,7 +46,7 @@ import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { appendEvent } from "@/server/engine-db";
-import { buildTemplateStages } from "@/components/v2/format-templates";
+import { buildTemplateStages } from "@/lib/format-templates";
 import { swissRoundsForFieldSize } from "@/lib/swiss-rounds";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";

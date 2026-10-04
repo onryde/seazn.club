@@ -7,7 +7,7 @@
 // re-duplication in either call site is caught two ways.
 import { describe, expect, it } from "vitest";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "../format-gates";
-import { buildTemplateStages } from "@/components/v2/format-templates";
+import { buildTemplateStages } from "@/lib/format-templates";
 
 describe("stageNeedsDoubleElimGate", () => {
   it.each(["double_elim", "page_playoff"])("gates on kind '%s'", (kind) => {

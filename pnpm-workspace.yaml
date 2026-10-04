@@ -1,6 +1,12 @@
+# tools/* holds dev-only harnesses that CONSUME the packages and are imported
+# by nothing in apps/ or packages/ (ruling 56): tools/matrix (@seazn/matrix)
+# today, the scheduler bench later. Never in the Fly image (.dockerignore).
+# Keep the list itself contiguous: tools/matrix/__tests__/workspace-wiring.test.ts
+# reads it line by line and stops at the first line that is not an entry.
 packages:
   - "apps/*"
   - "packages/*"
+  - "tools/*"
 
 # Hoist exactly the three packages named in apps/web/next.config.js's
 # `serverExternalPackages`, and nothing else.

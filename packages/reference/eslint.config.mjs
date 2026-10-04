@@ -15,12 +15,20 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import { defineConfig, globalIgnores } from "eslint/config";
+import { toolsImportRules } from "../../scripts/lib/tools-import-guard.mjs";
 
 export default defineConfig([
   globalIgnores(["node_modules/**", "coverage/**", ".vite/**", ".vite-temp/**"]),
 
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
+
+  {
+    // Ruling 56: nothing here may import a dev-only harness under tools/ (not
+    // in the image). One source for the rule: scripts/lib/tools-import-guard.mjs;
+    // scripts/__tests__/tools-import-guard.test.ts resolves every import exactly.
+    rules: toolsImportRules,
+  },
 
   {
     languageOptions: {

@@ -8,6 +8,9 @@ import { z } from "zod";
 // does, so the wire schema reuses the engine's zod rather than restating it —
 // a second declaration is a second thing to drift.
 import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/scheduling";
+// Type-only (erased under strip-types, so openapi-gen.ts still loads this
+// file bare): the TakeRuleSchema tie below compares against it.
+import type { TakeRule } from "@seazn/engine/competition";
 // RS007 review fix L1 — the SAME every-year-safe days-per-month predicate
 // ageBandEligibilityIssues (registration-rules.ts) uses to fail loudly on
 // the read side; pure and DB-free, so it is safe to reuse here. RELATIVE,
@@ -877,8 +880,9 @@ export const CheckinLink = z.object({ url: z.string(), expires_at: z.string() })
 // placement/map, TBD-at-setup + propose/confirm). Mirrors the plain-TS shape
 // in @seazn/engine/competition (TakeRule/ProgressionSource/SeededMapEntry)
 // field-for-field — usecases import THOSE types, not these zod schemas, so a
-// shape drift here would 400 at the edge without tripping tsc. Keep them in
-// lockstep by hand.
+// shape drift here would 400 at the edge. TakeRule is no longer kept in step
+// by hand: the compile-time tie under TakeRuleSchema fails tsc on a drift in
+// either direction (ruling 55, CL-R2).
 //
 // Collapse (owner ruling 4, F2 plan Decision 2): `rankRange` survives `topN`
 // (topN:n IS rankRange{from:1,to:n}); `bestNth` survives `bestOfRank`,
@@ -916,6 +920,42 @@ const RoundLosersTakeS = z
   .object({ kind: z.literal("roundLosers"), round: z.number().int().min(1), count: z.number().int().min(1) })
   .strict();
 export const TakeRuleSchema = z.union([RankRangeTakeS, TopNPerGroupTakeS, BestNthTakeS, PicksTakeS, RoundLosersTakeS]);
+
+// The single-source tie (ruling 55, CL-R2): what this schema parses and the
+// engine's TakeRule must be assignable BOTH ways. One direction alone is not
+// enough — wire→engine fails only for a schema that is too LOOSE (a wider
+// field, an extra kind); engine→wire fails only for one that is too STRICT
+// (a missing kind, a required field the engine has as optional).
+//
+// Compared twice. (1) Deep-readonly on both sides, because zod infers
+// mutable arrays where the engine declares `readonly PoolRankPick[]` —
+// mutability is not a wire property. (2) Additionally with every optional
+// made required, because plain assignability cannot see an OPTIONAL field
+// that exists on one side only (`normaliseUnequalPools` dropped from the
+// schema would pass (1) in both directions).
+//
+// Value-level rules (min/max/int, .strict(), the rankRange refine) are
+// runtime and invisible here; __tests__/take-rule-schema.test.ts parses every
+// shipped template's take rules through this schema for that half.
+type WireDeepReadonly<T> = T extends readonly (infer E)[]
+  ? readonly WireDeepReadonly<E>[]
+  : T extends object
+    ? { readonly [K in keyof T]: WireDeepReadonly<T[K]> }
+    : T;
+type WireDeepRequired<T> = T extends readonly (infer E)[]
+  ? readonly WireDeepRequired<E>[]
+  : T extends object
+    ? { readonly [K in keyof T]-?: WireDeepRequired<Exclude<T[K], undefined>> }
+    : T;
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type AssertTrue<T extends true> = T;
+type TakeRuleWire = z.infer<typeof TakeRuleSchema>;
+export type TakeRuleSchemaMatchesEngine = AssertTrue<
+  MutuallyAssignable<WireDeepReadonly<TakeRuleWire>, WireDeepReadonly<TakeRule>>
+>;
+export type TakeRuleSchemaMatchesEngineFields = AssertTrue<
+  MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<TakeRule>>
+>;
 
 const SeededMapEntryS = z.object({ slot: z.string().min(1).max(20), source: z.string().min(1).max(40) }).strict();
 

@@ -3,7 +3,7 @@
 // randomness. Run with: node --experimental-strip-types scripts/engine-boundary.ts
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { isMainModule } from "./matrix/lib/main-module.ts";
+import { isMainModule } from "./lib/main-module.ts";
 
 const BANNED_IMPORTS = [
   "postgres",

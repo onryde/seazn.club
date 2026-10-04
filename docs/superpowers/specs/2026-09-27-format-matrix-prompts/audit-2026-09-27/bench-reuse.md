@@ -65,7 +65,7 @@ owner escalation in a PR, `schemaVersion` bump; `bench.yml` is `workflow_dispatc
   standalone), real Postgres, real placement gRPC, magic-link auth via dev-exposed `login_url`
   (`AUTH_DEV_LINKS=1`). Plus real Chromium for `play: "tap"` divisions. Not in-process. Stages are
   created directly via `POST /divisions/{id}/stages` with verbatim `config`/`progression` — it does
-  NOT go through the format-template picker (`components/v2/format-templates.ts`, client-side).
+  NOT go through the format-template picker (`lib/format-templates.ts`, client-side).
   Fixture generation is ONE `POST /stages/{id}/generate` per stage — **no per-round generation**, so
   swiss / mexicano / ladder dynamic rounds are unsupported.
 - **Asserts [read]:** per-match outcomes, stage standings incl. exact tie order, qualifier order from

@@ -10,7 +10,8 @@ the moment the ~150 audit hypotheses become a list of reproduced problems.
 ## Read first
 
 - `_RULES.md` (R5, R10, R12, R14, R14a, R25) and `_INDEX.md` (rulings 16, 19,
-  20, 21 and the "going private" recommendation — **not** a ruling).
+  20, 21, 58 as clarified 2026-10-04, and the "going private" recommendation —
+  **not** a ruling).
 - `_INDEX.md` "W1d first tasks": the harness items the W1c final review routed
   to this wave by name, starting with the frozen-plan rule for every new
   committed run (`truth-runs/plans.lock.json`).
@@ -28,8 +29,12 @@ W1a, W1b, W1c merged; W1-driving merged (ruling 28). Order: design §8, R1.
 ## Scope
 
 - Shards, fresh DB per shard with `sync:sports`, per-case timing.
-- Weekly scheduled + `workflow_dispatch` workflow with the visibility guard;
-  per-PR sample (L3 for touched rows + a fixed sample, R27).
+- Weekly + `workflow_dispatch` workflow with the visibility guard; per-PR
+  sample (L3 for touched rows + a fixed sample, R27). The weekly trigger is
+  **not** GitHub `schedule:` (ruling 58, clarified 2026-10-04: it drops and
+  delays runs). A weekly run keeps its results as CI artifacts; only a
+  triaged baseline is committed to `truth-runs/` (`_INDEX.md` "W1d first
+  tasks" item 27).
 - Weekly Stryker run on engine scheduling, competition and tiebreaker modules;
   mutation-score floor set from the first measured run, only allowed to rise.
 - **The first full truth run** and triage of its reds into waves.
@@ -52,7 +57,7 @@ the §8 preamble, put the assignment to the owner as a recommendation.
 
 ## Done when
 
-- Three consecutive green manual dispatches before the schedule is enabled
+- Three consecutive green manual dispatches before the weekly trigger is enabled
   (`bench.yml` R84 precedent). The design does not say what "green" means for a
   run whose purpose is to find reds — put a definition to the owner as a
   recommendation before the first dispatch (suggested: the harness completed

@@ -7,7 +7,7 @@
     // does: `^build` puts @seazn/engine#build (whose inputs are the engine
     // package's files) in the hash. Without it an engine type change could
     // restore a stale green lint from the remote cache (review M-4).
-    // Pinned by scripts/matrix/__tests__/workspace-wiring.test.ts.
+    // Pinned by tools/matrix/__tests__/workspace-wiring.test.ts.
     "lint": {
       "dependsOn": ["^build"]
     }
