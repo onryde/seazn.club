@@ -39,3 +39,9 @@ apps/cron-worker
 # build context, so the Dockerfile never COPYs it, exactly like
 # apps/cron-worker above.
 tools/
+# The format-matrix truth-run evidence (ruling 56): ~12 MB of committed run
+# results that only the harness's tests read. It stays in git as W1d's
+# baseline; the image never needs it. scripts/__tests__/dockerignore.test.ts
+# pins this line and tools/ above, and that neither reaches what the image
+# builds from.
+docs/superpowers/specs/**/truth-runs/
