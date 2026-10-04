@@ -106,7 +106,7 @@ goals/cards with minutes, tennis slam PBP, hockey/icehockey goals and
 penalties, chess results) are `real`. The report shows provenance % per
 suite; suite 10 (carrom) is deliberately the thin-data resilience case.
 
-Builders: `tools/bench/build-packs/<suite>.ts` — run at authoring time
+Builders: `tools/bench/packs/build-packs/<suite>.ts` — run at authoring time
 only, never by the bench. Sources cited in pack meta.
 
 **Entitlement provisioning**: deep tiers are paid bands enforced on the
@@ -255,7 +255,7 @@ knob (1), draws + half points (4).
 
 ## 10. Runner, report, repo placement
 
-- `tools/bench/` (`scripts/bench/` until 2026-10-04): `bench.ts` entry; `packs/`; `build-packs/`; `lib/`
+- `tools/bench/` (`scripts/bench/` until 2026-10-04): `bench.ts` entry; `packs/` (its builders in `packs/build-packs/`); `lib/`
   (thin HTTP client + cookie jar of its own, independent checker, oracle
   differ, pino structured logging — owner logging rule; engine-side family
   is pino). **No smoke.ts refactor** — 13k-line monolith stays untouched.
