@@ -162,12 +162,12 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
   const cfg = { lostMinutes: PHONE_LOST_LIVE_MINUTES, warmingMinutes: WARMING_TIMEOUT_MINUTES, quietSeconds: RECONNECT_QUIET_SECONDS };
   const live = (beatMs: number, videoMs: number) => ({
     state: "live" as const, firstIngestAt: ago(LOST_MS * 2), warmingAt: ago(LOST_MS * 3), phoneBeatAt: ago(beatMs),
-    ingestConnected: false, lastConnectedSampleAt: ago(videoMs),
+    ingestDisconnected: true, lastConnectedSampleAt: ago(videoMs),
   });
 
-  it("the empty case first: the input is connected → null (live and warming alike)", () => {
-    expect(lostCountdown({ ...live(LOST_MS, LOST_MS), ingestConnected: true }, NOW, cfg)).toBeNull();
-    expect(lostCountdown({ state: "warming", firstIngestAt: null, warmingAt: ago(5 * MIN), phoneBeatAt: null, ingestConnected: true, lastConnectedSampleAt: null }, NOW, cfg)).toBeNull();
+  it("the empty case first: a read that is not `disconnected` (connected, unknown, or no read at all) → null (live and warming alike)", () => {
+    expect(lostCountdown({ ...live(LOST_MS, LOST_MS), ingestDisconnected: false }, NOW, cfg)).toBeNull();
+    expect(lostCountdown({ state: "warming", firstIngestAt: null, warmingAt: ago(5 * MIN), phoneBeatAt: null, ingestDisconnected: false, lastConnectedSampleAt: null }, NOW, cfg)).toBeNull();
   });
 
   it("live, no video and no beat for RECONNECT_QUIET_SECONDS − 1 s → null; at the quiet hold → the countdown", () => {
@@ -210,7 +210,7 @@ describe("lostCountdown — W24 on the server clock (§6.12, O5)", () => {
   describe("warming (no video yet)", () => {
     const warming = (sinceMs: number | null) => ({
       state: "warming" as const, firstIngestAt: null, warmingAt: sinceMs === null ? null : ago(sinceMs), phoneBeatAt: ago(S),
-      ingestConnected: false, lastConnectedSampleAt: null,
+      ingestDisconnected: true, lastConnectedSampleAt: null,
     });
     const WARMING_MS = WARMING_TIMEOUT_MINUTES * MIN;
 

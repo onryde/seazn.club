@@ -43,6 +43,9 @@ export function livePhoneLost(i: {
 export type LostCountdown = { kind: "warming" | "live"; elapsedMs: number; remainingMs: number };
 
 /** W24: the panel's countdown, on the server clock. null = nothing to show.
+ *  - only while the latest ingest read says `disconnected` (B7 review I-1, controller ruling 2026-10-04): an `unknown`
+ *    word (claimed or carried), a failed read and a connected input show nothing — W19 ends a session only on a read
+ *    that is not connected and not unknown (m-3), so a countdown there would promise an end that never comes.
  *  - live (first ingest set, live or a warming reconnect): after `quietSeconds` with no video AND no beat, it counts
  *    down to W19's end from the SHORTER of the two silences, because W19 needs both (§6.12). While the phone still
  *    beats (inside the quiet hold) W19 cannot fire, so there is no countdown (O5).
@@ -50,9 +53,9 @@ export type LostCountdown = { kind: "warming" | "live"; elapsedMs: number; remai
  *  remainingMs never goes below 0: past the end, the next tick ends the session. */
 export function lostCountdown(i: {
   state: SessionState; firstIngestAt: Date | null; warmingAt: Date | null; phoneBeatAt: Date | null;
-  ingestConnected: boolean; lastConnectedSampleAt: Date | null;
+  ingestDisconnected: boolean; lastConnectedSampleAt: Date | null;
 }, now: Date, cfg: { lostMinutes: number; warmingMinutes: number; quietSeconds: number }): LostCountdown | null {
-  if (i.ingestConnected) return null;
+  if (!i.ingestDisconnected) return null;
   const quietMs = cfg.quietSeconds * 1000;
   if (i.firstIngestAt !== null) {
     if (!LIVE_FOR_W19.includes(i.state)) return null;

@@ -1904,11 +1904,12 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   const allowance = await restartAllowance(sql, { orgId: row.org_id, fixtureId, excludeSessionId: null }, deps.now());
   // W24 (§6.12, T9): the countdown to the end the tick will make, from the clocks the tick judges (phoneFactsOf: the
   // phone's beat, the last connected sample, first ingest) and the row's warming entry, on this response's clock. A
-  // session with no phone (C-1: pairing_id null) has no phone rules, so it has no countdown either.
+  // session with no phone (C-1: pairing_id null) has no phone rules, so it has no countdown either; nor does a read that
+  // is not `disconnected` (I-1: an unknown word or a failed read never ends anything, m-3).
   const facts = await phoneFactsOf(sql, row.id);
   const countdown = facts?.has_phone ? lostCountdown({
     state: row.state, firstIngestAt: facts.first_ingest_at, warmingAt: d(row.warming_at), phoneBeatAt: facts.phone_beat_at,
-    ingestConnected: ingestState?.state === "connected", lastConnectedSampleAt: facts.last_connected_at,
+    ingestDisconnected: ingestState?.state === "disconnected", lastConnectedSampleAt: facts.last_connected_at,
   }, deps.now(), {
     lostMinutes: tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES), warmingMinutes: WARMING_TIMEOUT_MINUTES,
     quietSeconds: RECONNECT_QUIET_SECONDS,

@@ -330,7 +330,17 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
   it("org scope: another club's organiser reads club A's fixture as 404 — the same as an unknown fixture — and nothing is written; a non-session caller is 403", async () => {
     const a = await captureRig();
     await beat(a, phoneId("a"), { claim: "new" });
+    expect((await readRig(a)).phone?.present, "the positive pair: its own organiser reads it").toBe(true);
     const b = await captureRig();
+    // A's code is made DUE for C2's lazy expiry, so a read that reached it WOULD write (the positive pair, last).
+    await sql`update fixtures set finished_at = ${new Date(a.now().getTime() - CODE_GRACE_AFTER_FINISH_MINUTES * MIN - MIN)} where id = ${a.fixtureId}`;
+    const rows = async () => ({
+      codes: await sql`select id, ended_at, end_cause, tok_hash from fixture_stream_codes where fixture_id = ${a.fixtureId} order by id`,
+      pairings: await sql`select p.id, p.ended_at, p.end_cause, p.last_beat_at from fixture_stream_pairings p
+                            join fixture_stream_codes c on c.id = p.code_id where c.fixture_id = ${a.fixtureId} order by p.id`,
+    });
+    const before = await rows();
+    expect([before.codes.length, before.pairings.length], "PREMISE: a code and its pairing to write to").toEqual([1, 1]);
     const refusal = async (auth: AuthCtx, fixtureId: string) => {
       try {
         await streamPhone(auth, fixtureId, { now: a.now });
@@ -344,7 +354,9 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     expect(await refusal(b.auth, randomUUID()), "an unknown fixture reads the same").toEqual(foreign);
     const key: AuthCtx = { ...a.auth, via: "api_key", userId: null, keyId: randomUUID() };
     expect((await refusal(key, a.fixtureId) as [number, string])[0], "session only (§9)").toBe(403);
-    expect((await readRig(a)).phone?.present, "the positive pair: its own organiser reads it").toBe(true);
+    expect(await rows(), "the three refused reads wrote nothing").toEqual(before);
+    expect((await readRig(a)).code, "the positive pair: A's own read reaches the code and writes C2's expiry").toEqual({ issuedAt: expect.any(String), state: "ended", endCause: "expired" });
+    expect((await rows()).codes[0]!.ended_at, "written").not.toBeNull();
   });
 
   it("anti-vacuity: this file read the model and parsed every answer through the strict schema", () => {

@@ -678,6 +678,77 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
     }
     expect(checked).toBe(2);
   });
+
+  it("I-1 (B7 review, controller ruling): an UNKNOWN read shows NO countdown — CLAIMED by this poll or CARRIED from another's sample — where the same read `disconnected` shows the live one; past the limit the unknown session stays live through a poll and a sweep and still shows none (m-3: W19 will not end it)", async () => {
+    let checked = 0;
+    for (const path of ["claimed", "carried"] as const) {
+      for (const word of ["unknown", "disconnected"] as const) {
+        const label = `${path} ${word}`;
+        const r = await rig();
+        await goLive(r);
+        r.ingest.setState(r.inputId, word);
+        if (path === "claimed") {
+          r.tick(5 * MIN);
+        } else {
+          r.tick(5 * MIN - 1000);
+          expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, `PREMISE ${label}: short of the limit`).toBe("live");
+          r.tick(1000);
+          await sql`update fixture_stream_sessions set ingest_polled_at = ${r.deps.now()} where id = ${r.sessionId}`;   // another caller holds the claim
+        }
+        const before = await inputStatusCalls(r);
+        const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+        expect(await inputStatusCalls(r) - before, `PREMISE ${label}: ${path === "claimed" ? "this poll read" : "served, not read"}`).toBe(path === "claimed" ? 1 : 0);
+        expect(cur.ingest?.state, `PREMISE ${label}: current carries the word`).toBe(word);
+        if (word === "unknown") expect(cur.countdown, label).toBeNull();
+        else expect(cur.countdown, label).toMatchObject({ kind: "live" });
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+    const r = await rig();
+    await goLive(r);
+    r.ingest.setState(r.inputId, "unknown");
+    r.tick(LOST_MS + MIN);
+    expect(await countdownOf(r), "unknown, a minute past W19's limit: nothing to count down to").toBeNull();
+    expect((await tickSession(r.sessionId, r.deps, "poll")).session?.state, "the poll does not end it").toBe("live");
+    await tickOpenSessions(r.deps, { orgIds: [r.auth.orgId] });
+    const [{ state }] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(state, "nor does the sweep").toBe("live");
+    expect(await countdownOf(r), "still none").toBeNull();
+  });
+
+  it("I-1: a FAILED read (inputStatus throws: `ingest` null) shows NO countdown, live or warming, where the same sessions read `disconnected` show one (the positive pair)", async () => {
+    let checked = 0;
+    for (const kind of ["live", "warming"] as const) {
+      for (const fails of [false, true]) {
+        const label = `${kind}${fails ? ", the read throws" : ", disconnected"}`;
+        const r = kind === "live" ? await rig() : await rig({ connectAfterMs: 60 * MIN });
+        if (kind === "live") {
+          await goLive(r);
+          r.ingest.setState(r.inputId, "disconnected");
+        }
+        r.tick(5 * MIN);
+        // ask 10 must not end the warming one first: its phone keeps beating.
+        await sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;
+        const read = fails ? vi.spyOn(r.ingest as IngestProvider, "inputStatus").mockRejectedValue(new Error("cloudflare: 503")) : null;
+        try {
+          const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+          expect(cur.state, `PREMISE ${label}`).toBe(kind);
+          if (fails) {
+            expect(read!.mock.calls.length, `PREMISE ${label}: the read was attempted`).toBeGreaterThan(0);
+            expect(cur.ingest, `PREMISE ${label}: no word`).toBeNull();
+            expect(cur.countdown, label).toBeNull();
+          } else {
+            expect(cur.countdown, label).toMatchObject({ kind });
+          }
+        } finally {
+          read?.mockRestore();
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
 });
 
 describe.skipIf(!HAS_DB)("another sport: the tick reads no sport — W19 and ask 10 end every catalogued sport's session alike", () => {
