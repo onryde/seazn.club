@@ -330,7 +330,7 @@ unless a status is shown.
 | T16 | Cloudflare input connects | slot `armed` | `warming → live`, credit consumed (or the reuse window applies) | next beat: `live S` |
 | T17 | phone not ready (A11) | slot `armed` | `notReady` stored. Nothing ends. | `go-live S` (repeated) |
 | T18 | warming passes 10 min with no ingest | — | `failed(no_inbound_timeout)` | `over S no_inbound_timeout` |
-| T19 | warming phone lost (ask 10) | slot `starting` or `armed`, no ingest ever, and the session's phone silent (§6.8.3) or no current pairing | `stop(phone_lost)`. No credit spent. | `over S phone_lost` |
+| T19 | warming phone lost (ask 10) | slot `starting` or `armed`, no ingest ever, and the session's phone silent (§6.8.3) or no current pairing (a session with no phone at all is not judged; amended, §17.11) | `stop(phone_lost)`. No credit spent. | `over S phone_lost` |
 | T20 | organiser Stop (A3) | open session | `stop(stopped)`. **The pairing stays current.** PR-2: auto start is blocked for the match. | `over S stopped`. The phone returns to paired-waiting on the same code. |
 | T21 | `ended` beat (the operator's Stop, A3/A8) from the session's phone | session open | `stop(operator_stopped)`. **P → ENDED(operator_stopped): the pairing ends**, and the next broadcast needs a rescan. Event `phone_stop`. | `over S stopped` |
 | T22 | `ended` beat from a phone that is not current | S open | nothing (ask 2: a beat from a phone that is not current changes nothing) | `replaced` |
@@ -757,7 +757,8 @@ stopped` and waits on the same code.
 - **The rule.** Every tick (§6.11) checks an open session that has **never received ingest** (`first_ingest_at` is
   null) and is in `requested`, `provisioning` or `warming`. If its phone is **silent** (§6.9), or it no longer has a
   current pairing, the session is ended with `stop(phone_lost)`. **No credit is spent**, because the credit is
-  consumed only at the live transition.
+  consumed only at the live transition. A session that never had a phone (`pairing_id` null) is not judged, and a
+  reissued code does not make its open session's phone non-current (amended, §17.11).
 - **The clock.**
   - Once the phone holds the broadcast it beats at least every 10 s, and silent is exactly ask 10's **60 s with no
     beat**.
@@ -772,8 +773,8 @@ stopped` and waits on the same code.
 
 #### 6.8.5 A live phone stream whose phone is gone (W19, O2)
 
-- **The rule.** Every tick (§6.11) checks an open session in `live` (`first_ingest_at` is not null). It is ended with
-  `stop(phone_lost)` when **all three** hold:
+- **The rule.** Every tick (§6.11) checks an open session in `live` (`first_ingest_at` is not null) that has a phone
+  (`pairing_id` set; amended, §17.11). It is ended with `stop(phone_lost)` when **all three** hold:
   1. **no beat** from the session's phone for `PHONE_LOST_LIVE_MINUTES` (15): `now − coalesce(phone_beat_at,
      first_ingest_at) ≥ 15 min`;
   2. a **fresh** `inputStatus` read (through `claimIngestPoll`) is not `connected`;
@@ -1876,6 +1877,22 @@ controller ruling.
 - **W5 is answered before the storage-usage read.** A Go live with no phone asks Cloudflare nothing. The check is
   `admit` itself, asked without storage, so the plan gates and `active_session` (F-A5) still outrank it. Nothing was
   measured, so this refusal records no storage snapshot. Every other admission refusal keeps its snapshot (ruling 13).
+
+### 17.11 Which sessions the phone rules judge (B5 fix round)
+
+Amends §6.8.3, §6.8.5 and T19. Recorded in the B5 fix round (2026-10-04). Both points are controller rulings (C-1,
+C-2), not the seazn.club owner's.
+
+- **A session with no phone keeps today's rules (C-1).** `pairing_id` is null for every session open when V430
+  deploys, and for one whose fixture was deleted (T35: the code and its pairings cascade, `on delete set null`). Ask
+  10, W19 and m-5 never judge such a session. It ends as it does today: the warming timeout from
+  `coalesce(warming_at, created_at)`, the max-duration deadline, and the runner's own ends. "No longer has a current
+  pairing" means the session's pairing has ENDED. It does not mean the session never had one.
+- **A reissue never ends the open session's phone (C-2, C1b/C3).** A session's pairing is current while the pairing
+  has not ended. The state of its CODE is not read. A Revoke & reissue ends the code, and the old code still serves
+  the open session's phone until the session ends. That phone is judged by the same silence clock as before the
+  reissue. The code-active filter applies only to NEW claims and to the Go-live lookup, so a new Go live after a
+  reissue still answers `phone_not_paired` until a phone claims the new code.
 
 **No spec text changes for these:**
 

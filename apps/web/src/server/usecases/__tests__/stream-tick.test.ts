@@ -20,6 +20,7 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
+import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, ProviderCallRecord } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
@@ -60,6 +61,10 @@ const LOST_MS = PHONE_LOST_LIVE_MINUTES * MIN;
 /** §6.9 + §6.8.3: a phone that has not heard go-live is silent at max(floor, its waiting cadence + slack). The rig pairs
  *  on the far cadence (pairPresentPhone), so this is the spec's figure for it. */
 const ASK10_SILENT_MS = Math.max(PHONE_SILENT_FLOOR_SECONDS, POLL_FAR_SECONDS + PHONE_SILENT_SLACK_SECONDS) * 1000;
+/** §6.8.3's other clock: a phone that has beaten SINCE the session was created has heard the go-live and is answered at
+ *  an open session's cadence (at most OPEN_SESSION_MAX_POLL_SECONDS), so its stale far cadence no longer stretches the
+ *  silence — "silent is exactly ask 10's 60 s with no beat". */
+const HEARD_SILENT_MS = Math.max(PHONE_SILENT_FLOOR_SECONDS, Math.min(POLL_FAR_SECONDS, OPEN_SESSION_MAX_POLL_SECONDS) + PHONE_SILENT_SLACK_SECONDS) * 1000;
 
 /** One frozen, tickable clock and the fakes that read it: the deps every session of a rig (or a fleet) shares. */
 function clockedDeps(connectAfterMs = CONNECT_AFTER_MS) {
@@ -108,6 +113,21 @@ async function rig(o: { mode?: "passthrough" | "composed"; sport?: string; conne
   return { ...(await seedSession(c, o)), ...c };
 }
 type Rig = Awaited<ReturnType<typeof rig>>;
+
+/** The session's phone beats 1 s after the session's OWN created_at (the database's clock, which the rig's clock trails),
+ *  and the rig's clock moves there: the phone has now beaten since the session was created (heard_go_live). */
+async function beatAfterCreation(r: Rig): Promise<Date> {
+  const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${r.sessionId}`;
+  const at = new Date(created_at.getTime() + 1000);
+  const gap = at.getTime() - r.deps.now().getTime();
+  expect(gap, "PREMISE: the rig's clock is still before the beat").toBeGreaterThan(0);
+  r.tick(gap);
+  await sql`update fixture_stream_pairings set last_beat_at = ${at} where id = ${r.paired.pairingId}`;
+  return at;
+}
+
+/** A row as every session open when V430 deploys reads: no phone (`pairing_id`), no warming entry, no phone beat. */
+const asLegacy = (r: Rig) => sql`update fixture_stream_sessions set pairing_id = null, warming_at = null, phone_beat_at = null where id = ${r.sessionId}`;
 
 /** The recorder is best-effort and asynchronous (FakeIngest.record defers to a microtask): drain before counting. */
 const settle = () => new Promise<void>((res) => setImmediate(res));
@@ -182,7 +202,7 @@ describe.skipIf(!HAS_DB)("tickSession — the tick (§6.11)", () => {
     expect(checked).toBe(2);
   });
 
-  it("T35: a session whose fixture was DELETED (fixture_id set null) ticks without a throw, and the deletion does not move its state", async () => {
+  it("T35: a LIVE session whose fixture was DELETED (fixture_id set null) ticks without a throw, and the deletion does not move its state", async () => {
     const r = await rig();
     await goLive(r);
     await sql`delete from fixtures where id = ${r.fixtureId}`;
@@ -224,27 +244,54 @@ describe.skipIf(!HAS_DB)("ask 10 (§6.8.3): a warming broadcast whose phone is l
     expect((await r.row()).end_reason).toBeNull();
   });
 
-  it("T30: after Revoke & reissue the session's phone is no longer CURRENT (its code ended), so a beating phone's warming session is ended — and without the reissue, the same tick leaves it", async () => {
+  it("C1b/C3 (T30): after Revoke & reissue the old code still serves the open session's phone — beating, its warming session stays OPEN; falling silent, it is ended at §6.9's boundary and not 1 ms before — exactly as with no reissue", async () => {
     let checked = 0;
     for (const reissue of [false, true]) {
+      const label = reissue ? "reissued" : "no reissue";
       const r = await rig({ connectAfterMs: 10 * MIN });
-      r.tick(1000);
-      await sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;   // fresh: not silent
-      if (reissue) await reissueStreamCode(r.auth, r.fixtureId);
+      await beatAfterCreation(r);
+      if (reissue) {
+        await reissueStreamCode(r.auth, r.fixtureId);
+        const [c] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_stream_codes where id = ${r.paired.codeId}`;
+        expect(c!.ended_at, "PREMISE (C3): the old code ENDED").not.toBeNull();
+      }
       const [p] = await sql<{ ended_at: Date | null }[]>`select ended_at from fixture_stream_pairings where id = ${r.paired.pairingId}`;
-      expect(p!.ended_at, "PREMISE (T30): a reissue leaves the old code's pairing current").toBeNull();
-      const t = await tickSession(r.sessionId, r.deps, "sweep");
-      if (reissue) expect(t.session).toMatchObject({ state: "completed", endReason: "phone_lost" });
-      else expect(t.session?.state).toBe("warming");
+      expect(p!.ended_at, "PREMISE (C1): the old code's pairing is untouched until it calls").toBeNull();
+      expect((await tickSession(r.sessionId, r.deps, "poll")).session?.state, `${label}: the organiser's poll, phone beating`).toBe("warming");
+      r.tick(HEARD_SILENT_MS - 1);
+      expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, `${label}: 1 ms short of silent`).toBe("warming");
+      r.tick(1);
+      expect((await tickSession(r.sessionId, r.deps, "sweep")).session, `${label}: silent`).toMatchObject({ state: "completed", endReason: "phone_lost" });
       checked++;
     }
     expect(checked).toBe(2);
   });
 
-  it("a session with NO pairing at all (pairing_id null) has no current pairing and is ended at the next tick", async () => {
+  it("heard_go_live: a phone that has beaten SINCE the session was created is ended HEARD_SILENT_MS after its beat (not 1 ms before) — its stale 60 s waiting cadence no longer stretches the clock to ASK10_SILENT_MS", async () => {
+    expect(HEARD_SILENT_MS, "PREMISE: the two clocks differ, so this case can tell them apart").toBeLessThan(ASK10_SILENT_MS);
     const r = await rig({ connectAfterMs: 10 * MIN });
-    await sql`update fixture_stream_sessions set pairing_id = null where id = ${r.sessionId}`;
+    await beatAfterCreation(r);
+    const [p] = await sql<{ answered_poll_seconds: number }[]>`select answered_poll_seconds from fixture_stream_pairings where id = ${r.paired.pairingId}`;
+    expect(p!.answered_poll_seconds, "PREMISE: the stale far cadence is what is stored").toBe(POLL_FAR_SECONDS);
+    r.tick(HEARD_SILENT_MS - 1);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms short").toBe("warming");
+    r.tick(1);
     expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "completed", endReason: "phone_lost" });
+  });
+
+  it("a session whose pairing has ENDED (each end_cause) no longer has a current phone (§6.8.3) — a fresh beat does not hold it: ended phone_lost; the same fresh beat on a CURRENT pairing holds it", async () => {
+    const causes = [null, "replaced", "operator_stopped", "code_ended"] as const;
+    let checked = 0;
+    for (const cause of causes) {
+      const r = await rig({ connectAfterMs: 10 * MIN });
+      await beatAfterCreation(r);
+      if (cause) await sql`update fixture_stream_pairings set ended_at = ${r.deps.now()}, end_cause = ${cause} where id = ${r.paired.pairingId}`;
+      const t = await tickSession(r.sessionId, r.deps, "sweep");
+      if (cause) expect(t.session, `ended ${cause}`).toMatchObject({ state: "completed", endReason: "phone_lost" });
+      else expect(t.session?.state, "current").toBe("warming");
+      checked++;
+    }
+    expect(checked).toBe(causes.length);
   });
 
   it("two ticks in a row are idempotent: the second finds the session ended and ends nothing again", async () => {
@@ -255,6 +302,66 @@ describe.skipIf(!HAS_DB)("ask 10 (§6.8.3): a warming broadcast whose phone is l
     const again = await tickSession(r.sessionId, r.deps, "sweep");
     expect(again.session?.state).toBe("completed");
     expect(await ends(r.sessionId)).toEqual({ transitions: 1, ended: 1 });
+  });
+});
+
+// C-1 (controller ruling, B5 review): a session with NO phone — `pairing_id` null: every row open when V430 deploys, and a
+// session whose fixture was deleted (T35: the code and its pairings cascade, `on delete set null`) — keeps TODAY's rules.
+// Ask 10, W19 and m-5 judge a session's phone; with none they never judge it. Every expected value is a BASE rule's: the
+// warming timeout from (warming_at ?? created_at), the max-duration deadline from started_at — never the tick's own.
+describe.skipIf(!HAS_DB)("C-1: a session with NO phone (pairing_id null) keeps today's rules — the phone rules never judge it", () => {
+  it("LEGACY warming: the organiser polls at 5 s and it is still warming (the bug ended it here); its phone connects at 30 s and the next poll takes it live", async () => {
+    const r = await rig({ connectAfterMs: 30_000 });
+    await asLegacy(r);
+    r.tick(5000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))?.state, "the 5 s poll").toBe("warming");
+    expect((await r.row()).end_reason).toBeNull();
+    r.tick(30_000 - 5000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))?.state, "the poll once the phone sends").toBe("live");
+  });
+
+  it("LEGACY warming whose phone never sends: still warming past ask 10's silence; failed no_inbound_timeout at created_at + WARMING_TIMEOUT_MINUTES (no warming_at: the base fallback), not 1 ms before", async () => {
+    const r = await rig({ connectAfterMs: 24 * 60 * MIN });
+    await asLegacy(r);
+    r.tick(ASK10_SILENT_MS);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "silent as long as ask 10's boundary").toBe("warming");
+    const [{ created_at }] = await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${r.sessionId}`;
+    r.tick(created_at.getTime() + WARMING_TIMEOUT_MINUTES * MIN - 1 - r.deps.now().getTime());
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms before the base warming timeout").toBe("warming");
+    r.tick(1);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "failed", failReason: "no_inbound_timeout", endReason: null });
+  });
+
+  it("LEGACY live, input down and no beat ever: still LIVE past PHONE_LOST_LIVE_MINUTES (W19 never judges it); the base max-duration deadline still ends it — max_duration, not phone_lost", async () => {
+    const r = await rig();
+    await asLegacy(r);
+    await goLive(r);
+    r.ingest.setState(r.inputId, "disconnected");
+    r.tick(LOST_MS);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "no video and no beat for the W19 limit").toBe("live");
+    r.tick(LOST_MS);
+    expect((await tickSession(r.sessionId, r.deps, "poll")).session?.state, "twice the limit, the organiser's poll").toBe("live");
+    const [{ started_at, max_duration_minutes }] = await sql<{ started_at: Date; max_duration_minutes: number }[]>`
+      select started_at, max_duration_minutes from fixture_stream_sessions where id = ${r.sessionId}`;
+    r.tick(started_at.getTime() + max_duration_minutes * MIN - 1 - r.deps.now().getTime());
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms before the base deadline").toBe("live");
+    r.tick(1);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.endReason).toBe("max_duration");
+    expect(await ends(r.sessionId), "one end").toEqual({ transitions: 1, ended: 1 });
+  });
+
+  it("T35 while WARMING: the fixture is deleted, its code and pairing cascade and pairing_id is nulled — not ended at ask 10's silence; failed no_inbound_timeout at warming_at + WARMING_TIMEOUT_MINUTES, not 1 ms before", async () => {
+    const r = await rig({ connectAfterMs: 24 * 60 * MIN });
+    await sql`delete from fixtures where id = ${r.fixtureId}`;
+    const [after] = await sql<{ fixture_id: string | null; pairing_id: string | null }[]>`select fixture_id, pairing_id from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(after, "PREMISE: V410 nulled the fixture, V430 the pairing").toEqual({ fixture_id: null, pairing_id: null });
+    r.tick(ASK10_SILENT_MS);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "silent as long as ask 10's boundary").toBe("warming");
+    const deadline = await warmingDeadline(r.sessionId);
+    r.tick(deadline - 1 - r.deps.now().getTime());
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session?.state, "1 ms before the base warming timeout").toBe("warming");
+    r.tick(1);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "failed", failReason: "no_inbound_timeout" });
   });
 });
 
@@ -525,7 +632,7 @@ describe.skipIf(!HAS_DB)("tickOpenSessions (W22, T7b): the stream-tick job's pas
     expect(await netSpend(stuck.sessionId)).toBe(0);
   });
 
-  it("a session whose tick THROWS is counted in failed, and the pass goes on to tick the next (oldest first)", async () => {
+  it("a session whose tick THROWS is counted in failed, and the pass goes on to tick the next", async () => {
     const f = fleet();
     const first = await f.add();
     const bad = await f.add();

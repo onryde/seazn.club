@@ -1674,29 +1674,35 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
 }
 
 /** The facts ask 10, W19 and m-5 judge, in ONE statement (one snapshot). The session's phone is its `pairing_id`
- *  (§6.5: a takeover moves it). T30 (controller ruling): a Revoke & reissue leaves the old code's pairings `current`
- *  "until they call", so the pairing is current only while it has not ended AND its code is still ACTIVE
- *  (`c.ended_at is null`) — without that join filter a reissued code's phone would read present forever (witness:
- *  stream-tick.test.ts "T30: after Revoke & reissue …"). `heard_go_live`: the phone has beaten since the session was
- *  created, so its cadence is an open session's (§6.8.3). `exec` is apply's tx when re-taken under the row lock. */
+ *  (§6.5: a takeover moves it).
+ *  - `has_phone` (C-1, controller ruling): the session HAS a phone at all. `pairing_id` is null for every session open
+ *    when V430 deploys and for one whose fixture was deleted (T35: the pairings cascade, `on delete set null`). Such a
+ *    session keeps TODAY's rules: the phone rules never judge it (`phoneLostEnd`).
+ *  - `has_current`: that pairing has not ended. Its CODE's state is deliberately not read (C-2, controller ruling, spec
+ *    C1b/C3): a Revoke & reissue ends the code, and the old code still serves the open session's phone until the
+ *    session ends. The code-active filter belongs to NEW claims and the Go-live lookup (`currentPhoneOf`), never here.
+ *  - `heard_go_live`: the phone has beaten since the session was created, so it is answered at an open session's
+ *    cadence (§6.8.3).
+ *  `exec` is apply's tx when re-taken under the row lock. */
 type PhoneFacts = {
-  first_ingest_at: Date | null; phone_beat_at: Date | null; has_current: boolean; last_beat_at: Date | null;
+  first_ingest_at: Date | null; phone_beat_at: Date | null; has_phone: boolean; has_current: boolean; last_beat_at: Date | null;
   answered_poll_seconds: number | null; heard_go_live: boolean; last_connected_at: Date | null;
 };
 async function phoneFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<PhoneFacts | null> {
   const [f] = await exec<PhoneFacts[]>`
-    select s.first_ingest_at, s.phone_beat_at, c.id is not null as has_current, p.last_beat_at, p.answered_poll_seconds,
-           coalesce(c.id is not null and p.last_beat_at > s.created_at, false) as heard_go_live,
+    select s.first_ingest_at, s.phone_beat_at, s.pairing_id is not null as has_phone, p.id is not null as has_current,
+           p.last_beat_at, p.answered_poll_seconds,
+           coalesce(p.id is not null and p.last_beat_at > s.created_at, false) as heard_go_live,
            (select max(x.sampled_at) from fixture_stream_samples x
              where x.session_id = s.id and x.source = 'poll' and x.ingest_state = 'connected') as last_connected_at
       from fixture_stream_sessions s
       left join fixture_stream_pairings p on p.id = s.pairing_id and p.ended_at is null
-      left join fixture_stream_codes c on c.id = p.code_id and c.ended_at is null
      where s.id = ${sessionId}`;
   return f ?? null;
 }
 
 /** Which phone-lost end, if any, a session owes now. `fresh` = this tick's fresh read (undefined: W19 cannot judge).
+ *  - C-1 (controller ruling): a session with no phone (`has_phone` false) is judged by none of the rules below.
  *  - m-5 (controller ruling): a PASSTHROUGH session live with no first ingest recorded is judged by the warming rule —
  *    expire warming_timeout at warming_at + WARMING_TIMEOUT_MINUTES (`warmingTimedOut`, evaluate's own clock). Composed
  *    is excluded by name: a composed session never records first ingest (only the passthrough poll writes it), so the
@@ -1704,6 +1710,7 @@ async function phoneFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<P
  *  - ask 10 (§6.8.3) and W19 (§6.8.5): the domain's own predicates, with the tunable timings (§6.15). */
 function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined, now: Date): { command: Command; rule: "m-5" | "ask-10" | "w19" } | null {
   if (isTerminal(s.state)) return null;
+  if (!f.has_phone) return null;   // C-1: no phone, no phone rules — the session keeps today's expiry and runner ends
   if (s.mode === "passthrough" && s.state === "live" && f.first_ingest_at === null && warmingTimedOut(s, now)) {
     return { command: { type: "expire", expiry: { kind: "warming_timeout" } }, rule: "m-5" };
   }
@@ -1747,7 +1754,11 @@ export type StreamTickResult = { ticked: number; ended: number; failed: number; 
 
 /** T7b: the pass stops STARTING ticks once this much wall-clock time has gone. The cron Worker abandons a job at 60 s
  *  (JOB_TIMEOUT_MS, apps/cron-worker/src/call.ts) and records a timeout; stopping here leaves the tick in flight 15 s to
- *  finish, so an overrun reads `deferred` instead. stream-tick/route.test.ts pins it below the Worker's figure. */
+ *  finish, so an overrun usually reads `deferred` instead. stream-tick/route.test.ts pins it below the Worker's figure.
+ *  RESIDUAL (B5 review m-2), a flat figure because no derived one exists: one tick's worst case is unbounded — a Fly
+ *  observation can take ~43.5 s across its attempts (config.ts), and the Cloudflare calls set no request timeout
+ *  (ingest-cf.ts) — so a tick started just inside the budget can still outlive the Worker's 60 s. That reads as a Worker
+ *  timeout (status error, one Sentry event an hour under R2), never as silence, and the next firing ticks the rest. */
 export const STREAM_TICK_BUDGET_MS = 45_000;
 
 /** T7b (§6.11, W22): the stream-tick job's pass — `tickSession` on every OPEN session (ACTIVE_STATES, the one definition
