@@ -630,26 +630,26 @@ export function phoneStartRefusal(err: unknown): CaptureRefusalError | { already
  * the ONE start path (`startBroadcast`, cause `operator`, phonePresent: true, the claim's pairing, attributed to the
  * code's `issued_by` — T6 m-2). In order:
  *  - resolve as a `start` call: an ENDED code starts nothing, even for its open session's phone (C1b) → 401;
- *  - T12: a phone that is not slot 0's current pairing on this code → 409 replaced (first, so it is never told a sid);
- *  - the pre-pick (§6.7.3): none, or archived → 409 no_destination — unless a session is already running, which answers
- *    first (F-A5, T13: already_live {sid, startedBy});
- *  - startBroadcast; its refusals through §6.7.2's table (`phoneStartRefusal`).
+ *  - T12: a phone that is not §5.5's C → 409 replaced (first, so it is never told a sid). C is `holderOf`, the SAME
+ *    holder a beat decides by: while a session is open, the phone holding it, wherever its code (C-2 — after a
+ *    reissue the session's phone is still current on the new code); else the current pairing on this code;
+ *  - T13: a session already running → 409 already_live {sid, startedBy} (F-A5: before the destination);
+ *  - the pre-pick (§6.7.3): none, or archived → 409 no_destination;
+ *  - startBroadcast; its refusals through §6.7.2's table (`phoneStartRefusal`) — a session that opened between this
+ *    read and the admission is its active_session, named the same way.
  * Not idempotent by design: a retry after a lost 200 meets 409 already_live naming the same sid.
  */
 export async function postStart(rawCode: string, tok: string, body: CaptureStartBody, deps: SessionDeps, now: Date): Promise<CaptureStartOk> {
   const resolved = await resolveStreamCode(rawCode, tok, "start", body.phone, now);
-  const [current] = await sql<{ id: string; phone: string }[]>`
-    select id, phone from fixture_stream_pairings where code_id = ${resolved.codeId} and slot = ${SLOT} and ended_at is null`;
-  if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the code's current phone");
+  const open = await openSessionOf(sql, resolved.fixtureId);
+  const current = await holderOf(sql, resolved.codeId, open);
+  if (!current || current.phone !== body.phone) throw new CaptureRefusalError(409, "replaced", "this phone is not the slot's current phone");
+  if (open) throw alreadyLive(open);
   const [pick] = await sql<{ id: string }[]>`
     select t.id from fixture_stream_settings st
       join org_stream_targets t on t.id = st.target_id and t.org_id = ${resolved.orgId} and t.archived_at is null
      where st.fixture_id = ${resolved.fixtureId}`;
-  if (!pick) {
-    const open = await openSessionOf(sql, resolved.fixtureId);
-    if (open) throw alreadyLive(open);
-    throw noDestination("this match has no destination picked");
-  }
+  if (!pick) throw noDestination("this match has no destination picked");
   try {
     const { sessionId } = await startBroadcast(
       { userId: resolved.issuedBy, orgId: resolved.orgId, source: "phone", pairingId: current.id },

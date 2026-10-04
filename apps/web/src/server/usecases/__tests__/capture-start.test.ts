@@ -240,6 +240,21 @@ describe.skipIf(!HAS_DB)("postStart — the phone's own start (§6.3.4, T12–T1
     expect(await refused(start(r, B, fresh))).toMatchObject({ status: 409, body: { code: "already_live", sid } });
   });
 
+  // Found by the rule-10 sequence (capture-sequence.test.ts, seed 424242): T12's "current" is §5.5's C — while a session
+  // is open, the phone that HOLDS it, WHEREVER its code (C-2). After a reissue the session's phone scans the new QR: its
+  // claim there is T1 (nothing moves — its pairing stays on the old code), and its start on the new code is T13, never
+  // T12's replaced. The stranger on the new code is still replaced.
+  it("C-2: across a reissue the open session's phone is still current — its start on the NEW code is already_live, not replaced", async () => {
+    const { r, A } = await ready();
+    const { sid } = await start(r, A);
+    const shown = await reissueStreamCode(r.auth, r.fixtureId);
+    const fresh = { code: shown.qr.code, tok: shown.qr.tok };
+    const answer = await claim(r, A, fresh);
+    expect(["taken", "replaced"], "T1: the holder re-claiming is accepted").not.toContain(answer.state);
+    expect(await refused(start(r, A, fresh))).toMatchObject({ status: 409, body: { code: "already_live", sid, startedBy: "operator" } });
+    expect(await refused(start(r, phoneId("x"), fresh))).toMatchObject({ status: 409, body: { code: "replaced" } });
+  });
+
   it("a wrong tok → 401 code_ended; nothing written", async () => {
     const { r, A } = await ready();
     const err = await start(r, A, { code: r.code, tok: "not-the-tok" }).then(() => null, (e: unknown) => e);
