@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `tools/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
@@ -128,7 +128,7 @@ PostHog and Sentry keys blanked; `show data_directory` equal to
 
 ## W1b counts (design §6.2)
 
-Every value is quoted from `tools/matrix/catalogue/counts.json` (schema v1)
+Every value is quoted from `scripts/matrix/catalogue/counts.json` (schema v1)
 as committed at `7c42d0ec2`, and each formula is that file's own text,
 verbatim. The drop split is quoted from `drop-list.json` and the floors from
 `floors.json`, beside it. `gen-catalogue.ts --check` keeps all five generated
@@ -840,11 +840,11 @@ Elsewhere the text is the controller's record.
     `components/v2`, single-source `TakeRuleSchema`) is owed after this wave and is outside W1-driving's scope.
     - **Landed 2026-10-04** (the cleanup PR, branch `chore/matrix-cleanup`). The file is
       `apps/web/src/lib/format-templates.ts`, its test `apps/web/src/lib/__tests__/format-templates.test.ts`; every
-      importer moved with it, with no re-export shim (`2a12391f4`). `TakeRuleSchema` is tied to the engine's
+      importer moved with it, with no re-export shim (`eb536d4b4`). `TakeRuleSchema` is tied to the engine's
       `TakeRule` at compile time in both directions — `TakeRuleSchemaMatchesEngine` and
       `TakeRuleSchemaMatchesEngineFields` in `server/api-v1/schemas.ts` — and
       `server/api-v1/__tests__/take-rule-schema.test.ts` parses every template's take rules at runtime (builder
-      grid, format families and the catalog JSON; `b85b1ea14`).
+      grid, format families and the catalog JSON; `b84d3cc28`).
 56. **The matrix harness gets a boundary, not a separate repo** (2026-10-01). The controller's record (T16-R4): the
     harness moves to its own workspace package, behind an import guard, with its evidence moved out and a
     `.dockerignore` entry. It is NOT a separate repo. The owner raised the concern ("I a thinking as we are making
@@ -864,9 +864,11 @@ Elsewhere the text is the controller's record.
       `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
       `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
     - **Old paths.** The committed evidence still spells `scripts/matrix` and is never rewritten.
-      `tools/matrix/lib/harness-path.ts` is the one map from the old directory to the new one; the single-sport
-      ratchet's `--against` reads a pre-move base through it. The paths elsewhere in this index were updated to
-      `tools/matrix` in the same PR, so a path here names today's file.
+      `tools/matrix/lib/harness-path.ts` is the one map from the old paths to the new ones (the directory, and
+      the two files that left the harness for `scripts/lib`); the single-sport ratchet's `--against` reads a
+      pre-move base through it. In this index a citation pinned to a SHA (a line number "at `<sha>`", a file "as
+      committed at", a run's tree, a command a past review ran) keeps the path that existed at that SHA, as the
+      executed plans do. Every other path was updated to `tools/matrix` in the same PR and names today's file.
 57. **The W9 stage delete stays with W9** (2026-10-01). The owner: "W9 is fine". A refused format change deletes the
     division's stages first: `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature`
     gates. This is read-derived: the controller read it on `main` `58e8103e3`, and no committed run drives it. It
@@ -1397,9 +1399,9 @@ Record each audit gap that fails to hold, with who found it.
 "False premises found in planning"). Each was found by reading, and 8 and 11
 were hypotheses that Task 15 then drove live. Line numbers are at the branch
 base `64e009f2d`, the tree the plan was written against. Outside
-`tools/matrix/` no cited line has moved since (the only other cited file the
+`scripts/matrix/` no cited line has moved since (the only other cited file the
 branch changed is the root `package.json`, cited without a line). The
-`tools/matrix/` cites have moved: for example, I1's `late_entry` is at
+`scripts/matrix/` cites have moved: for example, I1's `late_entry` is at
 `invariants.ts:40` at `7c42d0ec2`.
 
 1. **"fast-check is already a dependency — no setup is owed"**
@@ -1417,16 +1419,16 @@ branch changed is the root `package.json`, cited without a line). The
    `SPORT_RULES` (badminton `setTo` 11–30, `:227-233`). Task 5 takes its
    classes from `SPORT_RULES` and validates each through the engine.
 3. **Design §7.5: checking every invariant after every step would catch
-   #879.** I1 abstains on `late_entry` (`tools/matrix/lib/invariants.ts:32`;
+   #879.** I1 abstains on `late_entry` (`scripts/matrix/lib/invariants.ts:32`;
    the plan said `:31`), I4 fails by construction mid-sequence, and I2 needs a
    completed stage. Task 2 added I7 (no pair over `legs`) and the `stepSafe`
    subset.
 4. **W1b prompt: "Routed gaps: none".** W1a routed four deferrals to "W1b":
-   `tools/matrix/lib/scenarios/common.ts:90`, `:92` and `:94`, and
-   `tools/matrix/lib/catalogue.ts:101`. Task 3 closed the last (API-only row
+   `scripts/matrix/lib/scenarios/common.ts:90`, `:92` and `:94`, and
+   `scripts/matrix/lib/catalogue.ts:101`. Task 3 closed the last (API-only row
    bodies), and ruling 28 re-routed the other three to W1-driving.
 5. **A "⛔ refused" state exists in the harness.** `CASE_STATES` listed it
-   (`tools/matrix/lib/results.ts:16`), but `decideState` could never return
+   (`scripts/matrix/lib/results.ts:16`), but `decideState` could never return
    it (`:117-128`; `:121-133` at `7c42d0ec2`). Task 9 gave it a producer, a
    mandated refusal.
 6. **"Order is not significant"** (`packages/engine/src/sports/index.ts:22`).
@@ -2046,7 +2048,7 @@ product changes (D4).
   branch ran. Record it as a check or note → **W1d**.
 - **Void is never driven in any browser run.** "Void last entry" is only noted as greyed → **W1d**.
 - **`committed-matrix` was missing from the wave's earlier review gates** (`c609f9cd4`..`0f3deface`), so its CI red
-  went unseen until Task 14. The final review ran it: 2692/2692 over `tools/matrix/__tests__`. Its two Important findings, I-1 and I-2,
+  went unseen until Task 14. The final review ran it: 2692/2692 over `scripts/matrix/__tests__`. Its two Important findings, I-1 and I-2,
   are fixed in `0532d0cb6`.
 
 ## Findings routed (W1-driving)
