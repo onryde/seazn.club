@@ -549,8 +549,11 @@ async function checkoutGroupId(
     const [row] = await sql<{ id: string }[]>`
       select id from subscriptions where id = ${stamped}`;
     if (row) return row.id;
-    const log_ = session.livemode ? log.error : log.warn;
-    log_(
+    // Call through the logger object — extracting log.error/log.warn and
+    // invoking unbound loses `this`, and pino then throws
+    // "Cannot read properties of undefined (reading 'Symbol(pino.msgPrefix)')",
+    // which aborted the Stripe webhook with 500 on this path.
+    log[session.livemode ? "error" : "warn"](
       { sessionId: session.id, stamped },
       "billing: checkout session stamped with unknown group",
     );
@@ -667,8 +670,11 @@ async function resolveGroupForStripeSub(
     // DB (CI's own e2e suite stamps against its ephemeral Postgres, and stg
     // shares the same Stripe test-mode account) — not the corruption this
     // check exists for. Live traffic still errors loudly.
-    const log_ = stripeSub.livemode ? log.error : log.warn;
-    log_(
+    // Call through the logger object — extracting log.error/log.warn and
+    // invoking unbound loses `this`, and pino then throws
+    // "Cannot read properties of undefined (reading 'Symbol(pino.msgPrefix)')",
+    // which aborted the Stripe webhook with 500 on this path.
+    log[stripeSub.livemode ? "error" : "warn"](
       { stripeSubscriptionId: stripeSub.id, stamped },
       "billing: subscription stamped with unknown group",
     );
