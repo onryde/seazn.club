@@ -40,7 +40,7 @@ import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
-  PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
+  PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
   RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
   TOKEN_GRACE_MINUTES, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
@@ -5424,6 +5424,19 @@ describe.skipIf(!HAS_DB)("M-3: expireTargetHolders(org, null) — the Directory'
 // call `organiserStart` (the real createSession) directly, bypassing this file's re-beating helper. ONE SPORT (rule 6):
 // no step of the start path reads the sport.
 // ---------------------------------------------------------------------------
+/** Runs `body` with `vars` set (undefined deletes one), then puts each back exactly as it was — removed when it was
+ *  absent, never assigned `undefined` (which Node stores as the string). */
+async function withEnv<T>(vars: Record<string, string | undefined>, body: () => Promise<T>): Promise<T> {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const put = (k: string, v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  for (const [k, v] of Object.entries(vars)) put(k, v);
+  try {
+    return await body();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) put(k, v);
+  }
+}
+
 describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, the operator through the same code", () => {
   const sessionsOf = async (orgId: string) =>
     (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${orgId}`)[0]!.n;
@@ -5445,6 +5458,26 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
     const { sessionId } = await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect((await r.row(sessionId)).state).toBe("warming");
+  });
+
+  it("§6.15 (D1): PHONE_SILENT_FLOOR_SECONDS is the floor Go live's presence reads — under ENV_NAME=ci a SHORTENED floor makes a phone that has been quiet a while silent (phone_not_paired); with the variable unset the same phone at the same instant is present and admitted (the positive pair)", async () => {
+    // §6.9: silent when quiet for max(floor, answered cadence + slack). At the lowest cadence V430 lets a pairing store
+    // (answered_poll_seconds 5..300) the cadence term is small, so the FLOOR decides — the default's and the shortened one.
+    const CADENCE = 5;
+    const SHORT = CADENCE + PHONE_SILENT_SLACK_SECONDS + 1;
+    const quiet = Math.floor((SHORT + PHONE_SILENT_FLOOR_SECONDS) / 2);
+    expect(quiet, "past the shortened threshold").toBeGreaterThanOrEqual(Math.max(SHORT, CADENCE + PHONE_SILENT_SLACK_SECONDS));
+    expect(quiet, "short of the default threshold").toBeLessThan(Math.max(PHONE_SILENT_FLOOR_SECONDS, CADENCE + PHONE_SILENT_SLACK_SECONDS));
+    const r = await rig({ credits: 1, phone: false });
+    const { pairingId } = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    // The cadence the beat answer last stored (T7's beat writes it; T8b's claim seeds it).
+    await sql`update fixture_stream_pairings set answered_poll_seconds = ${CADENCE} where id = ${pairingId}`;
+    r.tick(quiet * 1000);
+    await withEnv({ ENV_NAME: "ci", PHONE_SILENT_FLOOR_SECONDS: String(SHORT) }, () =>
+      expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" }));
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    await withEnv({ PHONE_SILENT_FLOOR_SECONDS: undefined }, () =>
+      expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) }));
   });
 
   it("W5: a SILENT phone (current, but no beat for longer than §6.9's threshold on the start's clock) is not present → phone_not_paired; its next beat makes the same Go live admitted", async () => {

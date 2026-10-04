@@ -103,6 +103,19 @@ const finishedAgo = (fixtureId: string, ms: number) =>
 
 const refusalOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
 
+/** Runs `body` with `vars` set (undefined deletes one), then puts each back exactly as it was — removed when it was
+ *  absent, never assigned `undefined` (which Node stores as the string). */
+async function withEnv<T>(vars: Record<string, string | undefined>, body: () => Promise<T>): Promise<T> {
+  const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+  const put = (k: string, v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  for (const [k, v] of Object.entries(vars)) put(k, v);
+  try {
+    return await body();
+  } finally {
+    for (const [k, v] of Object.entries(saved)) put(k, v);
+  }
+}
+
 describe.skipIf(!HAS_DB)("stream codes — ensure (§6.1, C4)", () => {
   it("EMPTY first: a fixture with no code mints one — a v2 QR on slot 0 whose tok hashes to the row, shown once, the org written from the fixture's org, issued by the organiser", async () => {
     const r = await rig();
@@ -499,6 +512,38 @@ describe.skipIf(!HAS_DB)("stream codes — resolve (C1, C1b, C2)", () => {
     expect(await refusalOf(resolveStreamCode(qr.code, qr.tok, "get", null, due))).toMatchObject({ status: 401, code: "code_ended" });
     expect(vi.mocked(wipeStreamCodeTok)).toHaveBeenCalledTimes(1);
     expect((await codes(r.fixtureId))[0]!.ended_at).toEqual(endedAt);
+  });
+
+  it("§6.15 (D1): CODE_GRACE_AFTER_FINISH_MINUTES is the grace resolve AND ensure read — under ENV_NAME=ci a SHORTENED grace ends the code at its own boundary, well inside the default; with the variable unset the same instant is still finishing (the positive pair)", async () => {
+    const SHORT_MINUTES = 10;
+    expect(SHORT_MINUTES, "the shortened grace sits inside the default one").toBeLessThan(CODE_GRACE_AFTER_FINISH_MINUTES);
+    const shortened = { ENV_NAME: "ci", CODE_GRACE_AFTER_FINISH_MINUTES: String(SHORT_MINUTES) };
+    const unset = { CODE_GRACE_AFTER_FINISH_MINUTES: undefined };
+    const r = await rig();
+    // resolve: on the caller's clock, exactly at the shortened boundary.
+    const { qr } = await ensureStreamCode(r.auth, r.fixtureId);
+    await finish(r.fixtureId);
+    const [{ finished_at }] = await sql<{ finished_at: Date }[]>`select finished_at from fixtures where id = ${r.fixtureId}`;
+    const due = new Date(finished_at.getTime() + SHORT_MINUTES * 60_000);
+    await withEnv(unset, async () => {
+      expect(await resolveStreamCode(qr.code, qr.tok, "get", null, due)).toMatchObject({ status: "finishing" });
+    });
+    await withEnv(shortened, async () => {
+      expect(await resolveStreamCode(qr.code, qr.tok, "get", null, new Date(due.getTime() - 1))).toMatchObject({ status: "finishing" });
+      expect(await refusalOf(resolveStreamCode(qr.code, qr.tok, "get", null, due))).toMatchObject({ status: 401, code: "code_ended" });
+    });
+    expect((await codes(r.fixtureId))[0]).toMatchObject({ end_cause: "expired" });
+    // ensure: on the wall clock, a minute past the shortened boundary.
+    const shown = await ensureStreamCode(r.auth, r.other);
+    await finish(r.other);
+    await finishedAgo(r.other, (SHORT_MINUTES + 1) * 60_000);
+    await withEnv(unset, async () => {
+      expect(await ensureStreamCode(r.auth, r.other), "re-shown: still finishing").toEqual(shown);
+    });
+    await withEnv(shortened, async () => {
+      expect(await refusalOf(ensureStreamCode(r.auth, r.other))).toMatchObject({ status: 422, code: "fixture_finished" });
+    });
+    expect((await codes(r.other))[0]).toMatchObject({ end_cause: "expired" });
   });
 
   it("C2: an open session DEFERS the expiry on resolve too — past the grace the code is finishing and served", async () => {
