@@ -6,6 +6,7 @@
 //    descriptor carries live ingest credentials, and a cached refusal would outlive the state it describes.
 // The `code` is the contract's closed `CaptureRefusalCode` list, so a refusal the phone cannot key its copy on does not
 // compile.
+import { createHash } from "node:crypto";
 import * as Sentry from "@sentry/nextjs";
 import { HttpError, handler } from "@/lib/http";
 import { log } from "@/server/logger";
@@ -80,10 +81,21 @@ export async function captureRoute(fn: () => Promise<Response>): Promise<Respons
 /** A17: the capture Bearer. A missing header and a malformed one ("Bearer" with no token, another scheme, extra parts)
  *  all throw `codeEnded()` — the same body as a wrong tok or an ended code, so the wire never tells them apart. NOT
  *  relay/bearer.ts's `bearerOf`, which answers `HttpError(401, …, "RELAY_TOKEN_INVALID")`. */
+const BEARER = /^Bearer ([^\s]+)$/;
 export function captureBearer(req: Request): string {
-  const m = /^Bearer ([^\s]+)$/.exec(req.headers.get("authorization") ?? "");
+  const m = BEARER.exec(req.headers.get("authorization") ?? "");
   if (!m) throw codeEnded();
   return m[1]!;
+}
+
+/**
+ * The rate-limit identity of the caller's CREDENTIAL (B6 re-review R-1): the first 16 hex characters of sha256 of the
+ * Bearer token — "" (one shared bucket, every caller in it fails) when there is no well-formed Bearer. It only names a
+ * Redis counter: it is never logged, never put on the wire, and the limiter's 429 carries a fixed message. It is not
+ * a check of the tok — that stays the use-case's one constant-time compare.
+ */
+function credentialKeyOf(req: Request): string {
+  return createHash("sha256").update(BEARER.exec(req.headers.get("authorization") ?? "")?.[1] ?? "").digest("hex").slice(0, 16);
 }
 
 /**
@@ -102,7 +114,10 @@ export function clientIpOf(req: Request): string {
 /**
  * A phone route with its rate limits (§10.4, amended §17.4), inside `captureRoute`, in this order:
  *  1. the code's own budget is spent — ONE budget across the three routes — and a start spends its own on top. Only a
- *     well-formed code has a budget (a malformed one is the use-case's 404, read from nothing);
+ *     well-formed code has a budget (a malformed one is the use-case's 404, read from nothing). Both are keyed on the
+ *     code AND the caller's credential (`credentialKeyOf`, B6 re-review R-1): a code has one tok, so for every real
+ *     caller this is exactly §10.4's "per code", while a wrong tok spends only its own throwaway bucket — a flood that
+ *     names the code (it is in every URL and beside the tok in the QR) can never refuse the phone holding the tok;
  *  2. the route runs. A 401 it answers spends the client IP's FAILED-attempt budget, and a failure past it answers 429
  *     instead of 401. The budget is consulted ONLY for a failure: a valid tok is always admitted, whatever the bucket
  *     holds (B6 review I-1 — the tok is 128 bits, so throttling hits buys nothing, and refusing them let anyone sharing
@@ -115,8 +130,9 @@ export async function capturePhoneRoute(
   return captureRoute(async () => {
     const code = normaliseCode(rawCode);
     if (code !== null) {
-      await rateLimit(`capture-code:${code}`, CAPTURE_CODE_LIMIT);
-      if (route === "start") await rateLimit(`capture-start:${code}`, CAPTURE_START_LIMIT);
+      const who = credentialKeyOf(req);
+      await rateLimit(`capture-code:${code}:${who}`, CAPTURE_CODE_LIMIT);
+      if (route === "start") await rateLimit(`capture-start:${code}:${who}`, CAPTURE_START_LIMIT);
     }
     try {
       return await fn();

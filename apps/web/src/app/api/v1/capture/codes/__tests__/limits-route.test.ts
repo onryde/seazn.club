@@ -3,6 +3,9 @@
 // clock (the shape the Lua answers: {count, ttlMs}), so the 429s are executed, not assumed:
 //   - CAPTURE_CODE_LIMIT: 120 per 60 s per code, ONE budget across the three routes; the 121st is 429;
 //   - CAPTURE_START_LIMIT: 6 starts per 60 s per code, on top;
+//   - both are keyed on the code AND the caller's credential (B6 re-review R-1): each code has one tok, so a real
+//     caller's budget is exactly "per code", while a wrong tok spends only its own bucket — a flood naming the code can
+//     never refuse the phone that holds the right tok;
 //   - CAPTURE_FAIL_LIMIT: 30 FAILED 401s per 60 s per client IP; a failure past it is 429 instead of 401 — and a VALID
 //     tok from that IP is still admitted, whatever the bucket holds (B6 review I-1: the tok is 128 bits; refusing hits
 //     let anyone sharing or forging a phone's IP lock it out);
@@ -142,6 +145,61 @@ describe.skipIf(!HAS_DB)("the phone routes' rate limits (§10.4, R4)", () => {
     expect((await get(r.code, { tok: r.tok })).status, "the start budget is the start's own").toBe(200);
     redis.advance(SPEC.start.windowSeconds * 1000);
     expect((await start(r.code, A, { tok: r.tok })).status, "recovered: already_live again").toBe(409);
+  });
+
+  it("R-1: a wrong-tok FLOOD naming the code from rotating forged IPs never spends the valid phone's budget — its GET, beat AND start answer normally; one wrong tok repeated still meets 429 with Retry-After on ITS own bucket; the valid tok's own 121st request is 429", async () => {
+    const redis = windowedRedis();
+    const r = await captureRig();
+    const A = phoneId("a");
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
+    let valid = 0;
+    expect((await beat(r, A, "new", { tok: r.tok })).status).toBe(200);
+    valid++;
+    const forged = (i: number) => ({ "cf-connecting-ip": `198.51.${Math.floor(i / 250)}.${i % 250}` });
+    // The flood: more requests than the code's whole budget, each a different guess from its own address.
+    const flood = SPEC.code.max + 5;
+    const seen = new Map<number, number>();
+    for (let i = 0; i < flood; i++) {
+      const res = await get(r.code, { tok: `guess-${i}`, extra: forged(i) });
+      seen.set(res.status, (seen.get(res.status) ?? 0) + 1);
+    }
+    expect(Object.fromEntries(seen), "every guess spent only its own buckets: 401 each").toEqual({ 401: flood });
+    expect((await get(r.code, { tok: r.tok })).status, "the valid GET after the flood").toBe(200);
+    expect((await beat(r, A, null, { tok: r.tok })).status, "the valid beat after the flood").toBe(200);
+    expect((await start(r.code, A, { tok: r.tok })).status, "the valid start after the flood").toBe(200);
+    valid += 3;
+    // One wrong tok repeated (from rotating addresses, so the per-IP failure budget never trips): 120 × 401, then its
+    // own code bucket answers 429 with the window's Retry-After — and the valid phone is still untouched.
+    for (let i = 0; i < SPEC.code.max; i++) {
+      expect((await get(r.code, { tok: "one-wrong-guess", extra: forged(1000 + i) })).status, `guess ${i + 1}`).toBe(401);
+    }
+    await expectLimited(await get(r.code, { tok: "one-wrong-guess", extra: forged(2000) }), SPEC.code.windowSeconds);
+    expect((await get(r.code, { tok: r.tok })).status).toBe(200);
+    expect((await beat(r, A, null, { tok: r.tok })).status).toBe(200);
+    valid += 2;
+    // The positive pair: the valid tok's OWN budget is still the code's 120.
+    for (; valid < SPEC.code.max; valid++) expect((await get(r.code, { tok: r.tok })).status, `valid request ${valid + 1}`).toBe(200);
+    await expectLimited(await get(r.code, { tok: r.tok }), SPEC.code.windowSeconds);
+    redis.advance(SPEC.code.windowSeconds * 1000);
+    expect((await get(r.code, { tok: r.tok })).status, "recovered").toBe(200);
+  });
+
+  it("the budgets' credential key is a 16-hex sha256 prefix: the tok itself never appears in a counter key, and a missing Bearer has a bucket of its own", async () => {
+    const redis = windowedRedis();
+    const r = await captureRig();
+    redis.spent.length = 0;
+    expect((await get(r.code, { tok: r.tok })).status).toBe(200);
+    expect((await get(r.code, { tok: null })).status).toBe(401);
+    const codeKeys = redis.spent.filter((k) => k.startsWith("rl:capture-code:"));
+    expect(codeKeys).toHaveLength(2);
+    let checked = 0;
+    for (const k of codeKeys) {
+      expect(k, "rl:capture-code:<code>:<16 hex>").toMatch(/^rl:capture-code:[^:]+:[0-9a-f]{16}$/);
+      expect(k).not.toContain(r.tok);
+      checked++;
+    }
+    expect(codeKeys[0], "the valid tok and no Bearer are different buckets").not.toBe(codeKeys[1]);
+    expect(checked).toBe(2);
   });
 
   it("CAPTURE_FAIL_LIMIT: 30 failed 401s per IP; the 31st FAILURE is 429 with Retry-After — while a VALID tok from that same IP is admitted on all three routes with the bucket full; another IP's failure is a plain 401; it recovers", async () => {
