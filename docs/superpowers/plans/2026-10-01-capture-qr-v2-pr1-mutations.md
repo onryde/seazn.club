@@ -78,6 +78,41 @@ These were run on this tree at `ecc96f1c3`. No product file changed between T9 a
 | the countdown never computed | all 4 W24 cases |
 | the `NEVER_KEY_ROUTES` entry removed | `key-scopes.test.ts` — "consciously classified" |
 
+## Guards from later rulings (B7 review M-5)
+
+These guards come from rulings made after §11.1.3 was written, and they live on this branch, so they belong on the PR's
+killer list. Each was run once in the B7 fix round, on top of `42da4429d` plus the fix round's model. The method is the
+same as above: one replacement, a `cp` restore checked by `cmp`, and the message read.
+
+The model column is the fixed model (twelve invariants, seed 20261004, 200 runs, `CAPTURE_MODEL_SHRINK=0`). Its baseline
+across the 11 killer files was 374/374.
+
+| Ruling | Guard | Mutant as run | Killed by (file — test, message) | Red / total | Model |
+|---|---|---|---|---|---|
+| C-1 (phone-less sessions keep today's rules) | `stream-sessions.ts` `phoneLostEnd`: `if (!f.has_phone) return null` | `if (false && !f.has_phone) …` | `stream-tick.test.ts` — the four C-1 LEGACY/T35 cases (`the 5 s poll: expected 'completed' to be 'warming'`) | 4 / 45 | survived, as expected: every model session starts on a pairing, so none is phone-less |
+| m-3 (an `unknown` read never ends a session) | `phoneLostEnd`: `fresh !== "unknown"` | the conjunct dropped | `stream-tick.test.ts` — the m-3 case (`claimed unknown: expected 'completed' to be 'live'`) and the I-1 countdown case | 3 / 45 (1 is the model) | killed — `#10: … ended phone_lost live … script unknown, sample unknown` |
+| W23 (three free restarts) | `relay/domain/credits.ts` `restartIsFree`: `a.used < limit` | `<=` | `credits.test.ts` — "used 3 → not free"; `restart-allowance.test.ts` — BOUNDARY, NO VIDEO, NEVER BLOCKS, AGREEMENT, the refunded anchor, and its own SEQUENCE property | 8 / 23 (1 is the model) | killed — `the paid live wrote its consume row: expected undefined to be defined` (a free 4th) |
+| W23 (only a restart with video counts) | `stream-credits.ts` `restartAllowance`: `and s.first_ingest_at is not null` | the line dropped | `restart-allowance.test.ts` — NO VIDEO (`used: 4` against 3) and its SEQUENCE property | 3 / 14 (1 is the model) | killed — `#11: the fixture's consume rows are W23's count: expected 2 to be 1` |
+| C-2 (a reissue never ends the open session's phone) | `stream-sessions.ts` `phoneFactsOf`: the pairing join reads NO code state | the join gains `and exists (… fixture_stream_codes … ended_at is null)` | `stream-tick.test.ts` — "C1b/C3 (T30): after Revoke & reissue the old code still serves the open session's phone" (`reissued: … expected 'completed' to be 'warming'`) | 2 / 45 (1 is the model) | killed — `#10 (ask 10): … ended phone_lost after 0 ms of silence` |
+| W5 (Go live asks the ACTIVE code's phone) | `stream-sessions.ts` `currentPhoneOf`: `and c.ended_at is null` | the filter dropped | `stream-sessions.test.ts` — "W5 after Revoke & reissue (T30, C3) …" (the Go live resolved instead of refusing) | 2 / 192 (1 is the model) | killed — `W5: a present phone is admitted: expected 'phone_not_paired' to be null` (the revoked code's pairing was read first) |
+| B4 m-2 (a phone start carries the code's issuer and its pairing) | `capture-phone.ts` `postStart`'s actor | `pairingId: current.id` → `null` | `capture-start.test.ts` — 12 cases, through `startBroadcast`'s own refusal (`a phone start rides the slot's pairing, and none was given`) | 12 / 28 | — |
+| B4 m-2, its other half | the same actor | `userId: resolved.issuedBy` → `null` | `capture-start.test.ts` — the same 12 (`a phone start is attributed to its stream code's issuer, not to user null`) | 12 / 28 | — |
+| B6 R-1 (budgets keyed on the credential) | `api-v1/capture-http.ts` `capturePhoneRoute`: `capture-code:${code}:${who}` | `capture-code:${code}` | `limits-route.test.ts` — R-1's wrong-tok flood (`{ '401': 119, '429': 6 }` against `{ '401': 125 }`) and the 16-hex key shape | 2 / 9 | — |
+| B6 I-1 (a valid tok is never refused by the 401 budget) | `capturePhoneRoute`: the fail budget is spent only in the 401 `catch` | the fail budget also spent before every call | `limits-route.test.ts` — CAPTURE_FAIL_LIMIT (`failure 16: expected 429 to be 401`), the valid-tok admission under R-1 (`valid request 31: expected 429 to be 200`), CAPTURE_CODE_LIMIT, the proxy-header order, "counts 401s ONLY" and the file's anti-vacuity | 6 / 9 | — |
+| B6 I-2 (the rescan re-seat) | `capture-phone.ts` `postBeat`: `claim.result === "accept" && holder !== null && holder.code_id !== resolved.codeId` | `false && …` | `capture-beat.test.ts` — "I-2: the session's phone RESCANS the new QR …" (`ONE current pairing, A's, on the NEW code`) | 3 / 35 (2 are the model's) | killed — `the open session's phone and its code are the model's`, and the seed-55 regression |
+| B6 M-6 (the lazy `code_ended`, with its C1b exemption) | `stream-codes.ts` `resolveStreamCode`: `!(callerIsOpenSessionPhone && sessionCreatedBeforeEnd)` | the exemption dropped | `capture-beat.test.ts` — "M-6: … the open session's phone is never ended by its refused claim" (`expected … to be null`) and "C1b / C3 / T30 through the REAL reissue" | 3 / 35 (1 is the model) | killed — `the open session's phone and its code are the model's: expected [ null, null ] …` |
+
+## The B7 fix round's own guards
+
+| Finding | Guard | Mutant as run | Killed by (file — test, message) | Red / total | Model |
+|---|---|---|---|---|---|
+| I-1 (T9: the countdown only on a `disconnected` read) | `stream-sessions.ts` `currentSession`: `ingestDisconnected: ingestState?.state === "disconnected"` | `!== "connected"` (the pre-fix reading) | `stream-tick.test.ts` — "I-1 … an UNKNOWN read shows NO countdown" (`claimed unknown: expected { kind: 'live', … } to be null`) and "I-1: a FAILED read …" | 2 / 73 | — |
+| I-1, the domain gate | `relay/domain/phone-lost.ts` `lostCountdown`: `if (!i.ingestDisconnected) return null` | the line deleted | the two I-1 cases, O5's connected read, and `phone-lost.test.ts`'s empty case | 4 / 73 | — |
+| M-6 (T9: refused reads write nothing) | `stream-phone.ts` `streamPhone`: the org check BEFORE the code block | the org check moved after the C2 write | `stream-phone.test.ts` — "org scope …" (`the three refused reads wrote nothing`) | 1 / 17 | — |
+| I-3 (#8 on the answers) | `relay/domain/beat-answer.ts` `ANSWER_ROWS` row 6: `i.slot === "armed"` | `… \|\| i.slot === "live"` (a live slot answers `go-live`) | the model only — and the PRE-fix model survives it (4 / 4 green, run in this round), which is I-3's finding | 1 / 4 | killed — `#8: a beat answering go-live … ⇒ no ingest yet` |
+| M-2 (T4 owed, not only allowed) | `capture-phone.ts` `postBeat`: `const dead = takeoverFacts !== null && …` | `const dead = false && …` (never a takeover) | the model | 1 / 4 | killed — `M-2: T4 is owed — the live slot's phone is dead on a claimed read` |
+| M-4 (an owed W19 end is made) | `phoneLostEnd`'s W19 clause | `… && false && livePhoneLost(…)` | the model (`stream-tick.test.ts` kills it as well: every W19 case) | 1 / 4 | killed — `M-4: W19 was owed for … at this tick and it is still open` |
+
 ## Notes
 
 1. **Row 17b survived its first run on `phone-lost` and `stream-tick` alone, by design.** Those suites derive every
