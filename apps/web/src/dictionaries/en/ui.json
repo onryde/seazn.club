@@ -5518,7 +5518,6 @@
   "stream.phone.credits.other": "{n} credits",
   "stream.phone.buyMore": "Buy more",
   "stream.phone.goLive": "Go live",
-  "stream.phone.qr.caption": "Point the phone at this code",
   "stream.phone.qr.copy": "Copy",
   "stream.phone.qr.copied": "Copied",
   "stream.phone.cancel": "Cancel",

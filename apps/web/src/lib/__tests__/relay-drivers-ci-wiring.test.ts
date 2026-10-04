@@ -13,6 +13,11 @@
 // server (`npm run dev`, help-shots.yml) runs NODE_ENV=development, where an unset RELAY_DRIVERS is already fake, so it
 // is not a production boot. bench.yml boots one and is exempt BY NAME with its reason — and the exemption is itself
 // checked, so it cannot outlive its boot.
+//
+// Capture QR v2 (owner, 2026-10-04): the panel's phone-camera option sits behind the PostHog flag `capture-qr-v2` with
+// `fallback: false`, and a CI server has no PostHog — so without the override every spec and walkthrough would see the
+// option hidden. The same production boots therefore carry CAPTURE_QR_V2_ALWAYS: "1" (exactly "1": the panel context
+// reads no other value as on). Staging and prod never set it.
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -82,6 +87,7 @@ describe("R5: every production server a streaming suite boots runs the fake rela
         // m2: under production (server.js) an explicit fake refuses an unset ENV_NAME and any name outside the allowed
         // list (config.ts relayDriverMode) — the list is read from config, so stg/prod are refused by construction.
         expect(FAKE_DRIVER_ENV_NAMES, `${wf}:${line} ENV_NAME=${JSON.stringify(env.ENV_NAME)}`).toContain(env.ENV_NAME);
+        expect(env.CAPTURE_QR_V2_ALWAYS, `${wf}:${line} shows the phone-camera option (capture-qr-v2 override)`).toBe("1");
         checked++;
       }
     }
@@ -144,6 +150,8 @@ describe("R5: every production server a streaming suite boots runs the fake rela
       // PR #904: like CI, a per-run generated KEK (never a literal) and the walkthrough's fake connect delay.
       expect(boot).toMatch(/RELAY_KEK="\$\{RELAY_KEK:-\$\(openssl rand -hex 32\)\}"/);
       expect(boot).toMatch(/FAKE_INGEST_CONNECT_AFTER_MS="\$\{FAKE_INGEST_CONNECT_AFTER_MS:-\d+\}"/);
+      // Capture QR v2: the flag's override, as CI's boots carry it.
+      expect(boot).toMatch(/CAPTURE_QR_V2_ALWAYS="\$\{CAPTURE_QR_V2_ALWAYS:-1\}"/);
     }
   });
 });

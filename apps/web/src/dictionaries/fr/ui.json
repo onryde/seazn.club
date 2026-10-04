@@ -5518,7 +5518,6 @@
   "stream.phone.credits.other": "{n} crédits",
   "stream.phone.buyMore": "Acheter",
   "stream.phone.goLive": "Passer en direct",
-  "stream.phone.qr.caption": "Pointez le téléphone vers ce code",
   "stream.phone.qr.copy": "Copier",
   "stream.phone.qr.copied": "Copié",
   "stream.phone.cancel": "Annuler",

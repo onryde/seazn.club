@@ -345,12 +345,19 @@ export function reconnectReasonOf(phone: StreamPhone["phone"]): ReconnectReason 
   return null;
 }
 
+/** Each (kind, reason) pair the wire's union declares — distributed per member, never the cross product. */
+type CountdownCombo = StreamLostCountdown extends infer C
+  ? C extends { kind: infer K extends string; reason: infer R extends string }
+    ? `${K}.${R}`
+    : never
+  : never;
+
 /** W24: one sentence per end the countdown can name — keyed by the wire's own (kind, reason). */
 export const COUNTDOWN_KEYS = {
   "warming.no_inbound_timeout": "stream.phone.countdown.warming.no_inbound_timeout",
   "warming.phone_lost": "stream.phone.countdown.warming.phone_lost",
   "live.phone_lost": "stream.phone.countdown.live.phone_lost",
-} as const satisfies Record<`${StreamLostCountdown["kind"]}.${StreamLostCountdown["reason"]}`, MessageKey>;
+} as const satisfies Record<CountdownCombo, MessageKey>;
 
 export function countdownKey(c: StreamLostCountdown): MessageKey {
   return COUNTDOWN_KEYS[`${c.kind}.${c.reason}` as keyof typeof COUNTDOWN_KEYS];

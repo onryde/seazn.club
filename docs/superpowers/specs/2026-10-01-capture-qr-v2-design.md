@@ -1920,6 +1920,32 @@ Amends §6.12's Waiting row and W24. Recorded 2026-10-04. These are controller r
   `first_ingest_at` writes precede it. Phone-less rows keep today's rules (C-1). An inert countdown branch would be worse
   than none.
 
+### 17.13 What the panel does where §6.12 is silent (T11)
+
+Amends §6.12. Recorded 2026-10-05 by T11's implementer. These are the implementer's readings, offered for the
+controller's review. None is the controller's ruling, and none is the seazn.club owner's.
+
+- **The flag hides the option, and only the option.** With `capture-qr-v2` off (or PostHog absent, `fallback: false`),
+  the Stream panel has no Phone/OBS tablist: it opens on OBS, and the live-stream stop probe stays mounted. The flag is
+  read only for an entitled panel, keyed `userId ?? orgId` with the org group. `CAPTURE_QR_V2_ALWAYS` is on only at
+  exactly `"1"`. The routes are not gated.
+- **The code line follows the phone past Ready (ruling A).** The folded "Show the code again" line, with Revoke &
+  reissue inside it, also shows under Waiting and Live for a session with a pairing. It does not show for a legacy
+  session. The mockup draws it only at Ready.
+- **No Revoke & reissue on a finished fixture.** The reissue route answers 422 there, so the control is not drawn.
+  While the code is still `finishing`, Show the code again keeps the code.
+- **Code ended is one line.** At Ready with the match over (finished, and the code ended or absent), the tab shows "This
+  match is over" alone. It has no chain, no Go live, no code, and no forced credits chooser, at any balance.
+- **A legacy session is today's panel without the v1 QR.** It has §3.2's chain words, no strip, no code line, and no
+  far-cadence line. Its Waiting row is Cancel alone, because the v1 QR is gone (§6.13).
+- **The picker opens at the saved pre-pick.** It does so while that destination is listed, until the organiser picks.
+  A pick writes the pre-pick (`PUT stream-settings`). Opening the panel writes nothing. **Open question:** the
+  destination the picker offers by default (the oldest) is not saved, so a phone's own Start can answer
+  `no_destination` while the panel shows one selected.
+- **The strip replaces D3's phone box.** While a strip shows, D3's phone-cause box is not drawn. With no reason to
+  give, D3 draws its box as before. The Phone node's "!" stays while a countdown runs. It is dropped while the phone
+  beats with a reason (O5). With no reason, it follows D3's box as before.
+
 **No spec text changes for these:**
 
 - **R9, the owner's ruling (2026-10-01).** The staging cost of the `*/5` trigger is accepted, including keeping the

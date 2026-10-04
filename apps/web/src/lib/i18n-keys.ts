@@ -6319,7 +6319,6 @@ export type DictionaryKey =
   | "stream.phone.paused.weak"
   | "stream.phone.pollFar"
   | "stream.phone.qr.alt"
-  | "stream.phone.qr.caption"
   | "stream.phone.qr.copied"
   | "stream.phone.qr.copy"
   | "stream.phone.qr.field"

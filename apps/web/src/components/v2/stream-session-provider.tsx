@@ -60,13 +60,11 @@ export function usePhoneSession(fixtureId: string, opts: PhoneSessionOptions = {
   const [readFailed, setReadFailed] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // `reveal` marks a read as the organiser DISCLOSING the credentials rather than the 5-second poll (De). Only two
-  // things set it: the first showing of a session's QR, and a tap on Copy. Mount, poll and post-action reads are polls.
+  // One read of `current`. Capture QR v2 (W4) removed the session QR and its disclosure read: `current` carries no
+  // credential, and the route refuses any query parameter of that name (400).
   const read = useCallback(
-    async (reveal = false) => {
-      const cur = await apiV1<StreamSessionView | null>(
-        `/api/v1/fixtures/${fixtureId}/stream-sessions/current${reveal ? "?reveal=1" : ""}`,
-      );
+    async () => {
+      const cur = await apiV1<StreamSessionView | null>(`/api/v1/fixtures/${fixtureId}/stream-sessions/current`);
       setView(cur);
       setLoaded(true);
       setReadFailed(false);

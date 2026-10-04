@@ -27,6 +27,15 @@ vi.mock("@/server/usecases/stream-credits-checkout", () => ({
 // P1: the currency the relay-checkout route charges — the loader resolves the SAME function for the same org.
 const money = vi.hoisted(() => ({ preferredCurrency: vi.fn<(orgId: string | null, req?: Request) => Promise<string>>(async () => "gbp") }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: (orgId: string | null, req?: Request) => money.preferredCurrency(orgId, req) }));
+// Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option. Doubled at the
+// helper the loader calls, so a test reads WHAT it asked (flag, distinct id, org group, fallback) and decides the answer.
+const flags = vi.hoisted(() => ({
+  isServerFeatureEnabled: vi.fn<(flag: string, distinctId: string, opts?: { orgId?: string; fallback?: boolean }) => Promise<boolean>>(async () => false),
+}));
+vi.mock("@/lib/posthog-server", () => ({
+  isServerFeatureEnabled: (flag: string, distinctId: string, opts?: { orgId?: string; fallback?: boolean }) =>
+    flags.isServerFeatureEnabled(flag, distinctId, opts),
+}));
 vi.mock("@/server/usecases/stream-sessions", () => ({
   relayCredits: async (auth: unknown, orgId: string) => {
     const total = await relay.balance(auth, orgId);
@@ -61,19 +70,24 @@ beforeEach(() => {
   money.preferredCurrency.mockReset().mockResolvedValue("gbp");
   vi.mocked(hasFeature).mockReset().mockImplementation(async () => true);
   vi.mocked(getDictionary).mockClear();
+  flags.isServerFeatureEnabled.mockReset().mockResolvedValue(false);
+  vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and spectator's refresh stays free)", () => {
   it("offered:false reads NOTHING — no entitlement query, no reconcile, no credits, no currency, no dictionary (a read-only viewer or a frozen page)", async () => {
     const got = await load({ status: "success", sessionId: "cs_1" }, { offered: false });
     expect(got).toBeUndefined();
-    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary] as const;
+    const deps = [hasFeature, relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled] as const;
     let checked = 0;
     for (const dep of deps) {
       expect(dep).not.toHaveBeenCalled();
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(6);
   });
 
   it("the loader's reads: offered:true calls each dependency AT MOST once per render (hasFeature exactly twice, both competition-scoped) — the count cannot grow unnoticed", async () => {
@@ -86,13 +100,13 @@ describe("the gate: offered:false reads NOTHING (review #11 — the scorer's and
       ["streaming.overlay", "comp-1"],
       ["streaming.relay", "comp-1"],
     ]);
-    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary] as const;
+    const once = [relay.reconcile, relay.balance, money.preferredCurrency, getDictionary, flags.isServerFeatureEnabled] as const;
     let checked = 0;
     for (const dep of once) {
       expect(dep).toHaveBeenCalledTimes(1);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 });
 
@@ -287,5 +301,68 @@ describe("RT: the loader hands the panel one signed overlay key per listed fixtu
     const on = await load(undefined, { fixtureIds: IDS });
     expect(Object.keys(on?.overlayKeys ?? {})).toHaveLength(IDS.length);
     expect(on?.overlayDict).toEqual({ "overlay.vs": "vs" });
+  });
+});
+
+// Capture QR v2 (carry 2, owner 2026-10-04): `capture-qr-v2` offers the phone-camera option, UI-only. Evaluated on the
+// server with `fallback: false` (PostHog unconfigured or down → hidden), against the `organization` group keyed by the
+// org; `CAPTURE_QR_V2_ALWAYS=1` forces it on (CI, e2e). Not NODE_ENV. Routes are not gated (routes.test.ts's).
+describe("capture-qr-v2: the phone-camera option follows the flag, and CAPTURE_QR_V2_ALWAYS=1 forces it", () => {
+  it("flag OFF → hidden; flag ON → shown — and the flag is asked for THIS user, in THIS org's group, falling back to off", async () => {
+    let checked = 0;
+    for (const on of [false, true]) {
+      flags.isServerFeatureEnabled.mockReset().mockResolvedValue(on);
+      expect((await load())?.phoneCapture, `flag ${on}`).toBe(on);
+      expect(flags.isServerFeatureEnabled.mock.calls).toEqual([["capture-qr-v2", "user-1", { orgId: "org-1", fallback: false }]]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the override: CAPTURE_QR_V2_ALWAYS=1 with the flag OFF → shown (the flag is not even asked); any other value → follows the flag", async () => {
+    vi.stubEnv("CAPTURE_QR_V2_ALWAYS", "1");
+    expect((await load())?.phoneCapture).toBe(true);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+    let checked = 0;
+    for (const value of [undefined, "", "0", "true", "yes", " 1"]) {
+      vi.stubEnv("CAPTURE_QR_V2_ALWAYS", value);
+      for (const on of [false, true]) {
+        flags.isServerFeatureEnabled.mockReset().mockResolvedValue(on);
+        expect((await load())?.phoneCapture, `override ${JSON.stringify(value)}, flag ${on}`).toBe(on);
+        expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
+  });
+
+  it("not NODE_ENV: a development or test build with the flag off and no override is still hidden", async () => {
+    let checked = 0;
+    for (const env of ["development", "test", "production"]) {
+      vi.stubEnv("NODE_ENV", env);
+      expect((await load())?.phoneCapture, env).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the flag outranks nothing else: off with the relay on still reads the credits (the OBS tab and the stop probe need none, but the loader's other reads are unchanged)", async () => {
+    relay.balance.mockResolvedValue(2);
+    const got = await load();
+    expect(got).toMatchObject({ phoneCapture: false, relayEntitled: true, streamBalance: 2 });
+  });
+
+  it("no panel (overlay off) asks no flag — the switched-off org costs one entitlement query, as before", async () => {
+    vi.mocked(hasFeature).mockImplementation(async () => false);
+    vi.stubEnv("CAPTURE_QR_V2_ALWAYS", undefined);
+    expect((await load())?.phoneCapture).toBe(false);
+    expect(flags.isServerFeatureEnabled).not.toHaveBeenCalled();
+  });
+
+  it("an API-key caller (no user) is asked by its org — the flag is org-targeted", async () => {
+    flags.isServerFeatureEnabled.mockResolvedValue(true);
+    const keyAuth = { ...AUTH, userId: null, via: "api_key" } as unknown as AuthCtx;
+    expect((await load(undefined, { auth: keyAuth }))?.phoneCapture).toBe(true);
+    expect(flags.isServerFeatureEnabled.mock.calls[0]).toEqual(["capture-qr-v2", "org-1", { orgId: "org-1", fallback: false }]);
   });
 });

@@ -11,6 +11,7 @@ import type { StreamPanelContext } from "@/components/v2/fixture-stream-panel";
 import { hasFeature } from "@/lib/entitlements";
 import { getDictionary, type Locale } from "@/lib/i18n";
 import { preferredCurrency } from "@/lib/currency-server";
+import { isServerFeatureEnabled } from "@/lib/posthog-server";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import { relayUnavailable } from "@/server/relay/drivers";
@@ -38,6 +39,16 @@ export async function relayOffer(
   const relayEntitled = entitled && (await hasFeature(orgId, "streaming.relay", competitionId));
   const relayDisabled = relayEntitled && relayUnavailable();
   return { entitled, relayEntitled, relayDisabled };
+}
+
+/** Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option — UI-only (the routes
+ *  are not gated). Org-targeted (the `organization` group, keyed by the org id); `fallback: false`, so PostHog
+ *  unconfigured or down hides it. `CAPTURE_QR_V2_ALWAYS=1` forces it on — CI and e2e set it; staging and production leave
+ *  it unset. Deliberately not NODE_ENV. */
+export const CAPTURE_QR_V2_FLAG = "capture-qr-v2";
+async function phoneCaptureOffered(auth: AuthCtx): Promise<boolean> {
+  if (process.env.CAPTURE_QR_V2_ALWAYS === "1") return true;
+  return isServerFeatureEnabled(CAPTURE_QR_V2_FLAG, auth.userId ?? auth.orgId, { orgId: auth.orgId, fallback: false });
 }
 
 export async function loadStreamPanelContext(args: {
@@ -73,10 +84,13 @@ export async function loadStreamPanelContext(args: {
   // cookies/headers read — so they run together, not one after the other. Both only with the relay (D9's query budget).
   // Task 14b (R3b): `relayCredits` grants this month's free match credits BEFORE it reads (idempotent), and answers the
   // balance split by bucket beside the plan's monthly allowance — the chip stays the total.
-  const [credits, currency] =
-    relayEntitled && !relayDisabled
-      ? await Promise.all([relayCredits(auth, auth.orgId), preferredCurrency(auth.orgId)])
-      : [null, "gbp" as const];
+  // The capture-qr-v2 flag rides the same Promise.all: an independent read, only with the panel (`entitled`).
+  const relayOn = relayEntitled && !relayDisabled;
+  const [credits, currency, phoneCapture] = await Promise.all([
+    relayOn ? relayCredits(auth, auth.orgId) : null,
+    relayOn ? preferredCurrency(auth.orgId) : ("gbp" as const),
+    entitled ? phoneCaptureOffered(auth) : false,
+  ]);
   return {
     entitled,
     relayEntitled,
@@ -95,6 +109,8 @@ export async function loadStreamPanelContext(args: {
     // relay there are no tiles, and nothing reads it.
     currency,
     sportKey: args.sportKey,
+    // Capture QR v2 (carry 2): false hides the Phone tab (the phone-camera option) and nothing else.
+    phoneCapture,
     // RT (lane-close fix, ruled 2026-09-29): each listed fixture's signed overlay key, for the OBS URL its panel copies —
     // the grant a community org's overlay presents to the realtime-token route. Only with the panel (`entitled`); a
     // fixture the server cannot sign for (no AUTH_SECRET) is left out and its URL goes keyless.

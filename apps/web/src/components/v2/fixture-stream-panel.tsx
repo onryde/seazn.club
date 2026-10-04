@@ -31,18 +31,20 @@
 import {
   Component, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode,
 } from "react";
-import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RotateCcw } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, Copy, ExternalLink, RefreshCw, RotateCcw } from "lucide-react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport, type ThemeId } from "@/components/overlay/theme-registry";
 import { fetchOverlayFixture, type OverlayLiveData } from "@/components/public-site/live-score-data";
 import { useDict, useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { useConfirm } from "@/components/ui/confirm-provider";
 import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
+import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { PlatformMark, platformName } from "./stream-platform-mark";
-import { D3Warning, SignalChain } from "./stream-signal-chain";
+import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useSharedPhoneSession } from "./stream-session-provider";
 import { useTabReturn } from "./use-tab-return";
@@ -60,7 +62,9 @@ import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STATE_PILL_KEYS,
+  STREAM_POLL_MS,
   TARGET_REMOVED,
+  canGoLive,
   createErrorCode,
   createErrorHolder,
   createErrorIsNotFound,
@@ -68,8 +72,10 @@ import {
   d3Warning,
   elapsedLabel,
   healthChips,
+  phoneStrip,
   phoneTabState,
-  qrText,
+  readyStateOf,
+  restartLine,
   type CreateFailureCode,
   type CreateErrorHolder,
   type PhoneTabState,
@@ -77,7 +83,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
-import type { StreamTarget } from "@/server/api-v1/schemas";
+import type { StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
 // I2: the embedded-checkout sheet, and Stripe.js with it, is its own chunk — never fetched with the fixtures tab.
 // `@stripe/stripe-js` injects js.stripe.com as an IMPORT side effect, and this panel ships on every organiser fixtures
@@ -222,6 +228,10 @@ export interface StreamPanelContext {
    *  org's overlay real-time scores at the token route. A fixture missing here (no signing secret on the server) gets a
    *  keyless URL, and its overlay polls. */
   overlayKeys: Record<string, string>;
+  /** Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag `capture-qr-v2` for this organiser's org — or
+   *  `CAPTURE_QR_V2_ALWAYS=1` — as `server/stream-panel-context.ts` resolved it. False hides the phone-camera option
+   *  (the Phone tab) and nothing else: the routes are not gated, and a stream already up keeps its Stop. */
+  phoneCapture: boolean;
 }
 
 /** G5: what the checkout return put on the URL, and nothing else — every other param is kept. (Spec 2026-09-30 §2: the
@@ -257,6 +267,9 @@ export function FixtureStreamPanel({
   // Spec §3.1 (T9b): Phone is the FIRST tab and the default — on a return and on any ordinary open alike. The return
   // still strips its params and scrolls (below); it no longer chooses the tab.
   const [tab, setTab] = useState<"obs" | "phone">("phone");
+  // Capture QR v2 (carry 2): with the `capture-qr-v2` flag off the phone-camera option is not offered — no Phone tab and
+  // no switch; the panel IS the OBS overlay. The organiser's own choice survives the flag coming back on a refresh.
+  const shownTab = stream.phoneCapture ? tab : "obs";
 
   // G5: the return has done its job once this row is open on the Phone tab, so its params come off the URL — a reload
   // or a shared link must not re-open the panel, or re-run the page's reconcile, on a purchase that is finished. A
@@ -356,7 +369,7 @@ export function FixtureStreamPanel({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [tab]);
+  }, [shownTab]);
 
   const previewScale = previewScaleFor(stripWidth ?? PREVIEW_MAX_W_PX);
 
@@ -465,6 +478,10 @@ export function FixtureStreamPanel({
       {/* Owner 2026-09-07: streaming is bought in the fixture console itself,
           so the panel carries both tiers. Tier B's session controls are R1's;
           W1 ships the tab and §5.3's gate. */}
+      {/* Flag off: no switch, but a stream already up (started before, or by a phone — the routes are not gated) keeps its
+          way out, exactly as G2's probe does for an org without the relay. Renders nothing without one. */}
+      {!stream.phoneCapture && <PhoneStopProbe fixtureId={fixture.id} />}
+      {stream.phoneCapture && (
       <div role="tablist" aria-label={msg("stream.tabs.label")} className="inline-flex rounded-lg bg-slate-100 p-1">
         <button
           type="button"
@@ -487,14 +504,15 @@ export function FixtureStreamPanel({
           {msg("stream.tab.obs")}
         </button>
       </div>
+      )}
       {/* B1: W1's lead line promises a scorebug to paste into OBS — the OBS tab's promise. §8a's Phone frame has no lead. */}
-      {tab === "obs" && (
-        <p data-testid="stream-lead" className="mt-3 text-xs text-slate-600">
+      {shownTab === "obs" && (
+        <p data-testid="stream-lead" className={stream.phoneCapture ? "mt-3 text-xs text-slate-600" : "text-xs text-slate-600"}>
           {msg("stream.line")}
         </p>
       )}
 
-      {tab === "obs" ? (
+      {shownTab === "obs" ? (
         <>
           <div
             role="tablist"
@@ -671,18 +689,22 @@ export function FixtureStreamPanel({
 
 // ─── The Phone tab (Streaming R1, lane D) ─────────────────────────────────────────────────────────────────────────────
 // §8a option A ("Stepper") and §8b option A ("Three tiles"), values from `_THEMES.md`. Three pieces, each tested where
-// it CAN be in a node harness: `PhoneTab` (the container — fetch, poll, reveal and every action), `PhoneTabBody` (pure:
-// every state is a function of its props). Destinations are managed in Directory → Streaming (T8, D1): the tab only
-// PICKS one, and links there.
+// it CAN be in a node harness: `PhoneTab` (the container — fetch, poll and every action), `PhoneTabBody` (pure: every
+// state is a function of its props). Destinations are managed in Directory → Streaming (T8, D1): the tab only PICKS one
+// (and saves it as the fixture's pre-pick, capture QR v2 §6.7.3), and links there.
 
-/** §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling I-2): 3 × 121 CSS px — three px per module for every
- *  capture payload up to v24 (121 modules with the quiet zone), so desktop stays ≥ 320 (spec §7) at a whole scale.
- *  The painted size is the box snapped to whole device px per module: 339 for today's v22 payload. */
+/** §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling I-2): 363 CSS px. Capture QR v2 (§6.12, Option B rev
+ *  2): the v2 payload is a 57-module symbol (v8 + the quiet zone), which `SeaznQrImage` snaps to 6 px per module — 342 px
+ *  wherever the code card gives it room (768 and up), and 4 px per module (228) in a 320-px phone's card. The symbol's
+ *  EC level, quiet zone and logo are `lib/seazn-qr`'s (§8a's `QR encoding` row). */
 const STREAM_QR_MAX_PX = 363;
-/** §8a's QR box: the cap + its `p-3` twice + its 1-px border twice. The paste-code field takes the SAME class, which is
- *  what "the QR box's own width, not the card's" means — two elements that cannot drift apart. The symbol's EC level,
- *  quiet zone and logo are `lib/seazn-qr`'s (§8a's `QR encoding` row). */
-const QR_COLUMN_W = "w-full max-w-[389px]";
+
+/** The fixture's stream code as the body shows it (capture QR v2 §6.1): asked for, refused, or its paste text — the QR's
+ *  own text, `captureQrV2Text` — with the image once the browser has encoded THAT text (never the previous code's). */
+export type CodeCard =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ok"; text: string; image: SeaznQr | null };
 
 /** The org's destinations as the picker knows them (spec §3.3): a failed read is an ERROR with Retry, never "none" —
  *  "none" told an organiser with five saved destinations to go and add one. */
@@ -798,7 +820,6 @@ export function PhoneTab({
   // m2: the server refused a create for want of credits — the page's balance is stale, so this tab reads 0 until the
   // next page load (a checkout return is one).
   const [noCredits, setNoCredits] = useState(false);
-  const [qrImage, setQrImage] = useState<{ text: string; qr: SeaznQr } | null>(null);
   const [copied, setCopied] = useState(false);
   const [showBuy, setShowBuy] = useState(false);
   // N2: one Checkout Session per sheet. Held from the tap until the sheet closes or the attempt is refused — a ref, so a
@@ -887,42 +908,124 @@ export function PhoneTab({
   }, [readTargets]);
   useTabReturn(onTabReturn, state === "idle");
 
-  // The QR is rendered CLIENT-SIDE from the projection — never in page HTML. m10: keyed on the payload STRING, not the
-  // object — every poll is a fresh object off the wire, and an object key re-encoded the same symbol on each. The ref
-  // keeps the reveal to ONCE per session (De), not once per poll.
-  const qr = shown?.qr ?? null;
-  const sessionId = shown?.id ?? null;
-  const qrPayload = qr ? qrText(qr) : null;
-  const revealedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!qrPayload || !sessionId) return;
-    if (revealedFor.current !== sessionId) {
-      revealedFor.current = sessionId;
-      void read(true).catch(() => {});
+  // Capture QR v2 §6.12: the phone's read model, polled every STREAM_POLL_MS while the tab is open — beside the session's
+  // own poll, which idles at Ready. A failed read keeps the last answer (the next poll tries again); the first answer, or
+  // its failure, is what lets the body render — a Ready state drawn before it would flash "no phone" at a paired one.
+  const [phone, setPhone] = useState<StreamPhone | null>(null);
+  const [phoneLoaded, setPhoneLoaded] = useState(false);
+  const readPhone = useCallback(async () => {
+    try {
+      setPhone(await apiV1<StreamPhone>(`/api/v1/fixtures/${fixtureId}/stream-phone`));
+    } catch {
+      // transient — the poll asks again
+    } finally {
+      setPhoneLoaded(true);
     }
+  }, [fixtureId]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- every setState in readPhone runs after its await
+    void readPhone();
+    const id = setInterval(() => void readPhone(), STREAM_POLL_MS);
+    return () => clearInterval(id);
+  }, [readPhone]);
+
+  const ready = readyStateOf(phone, shown);
+  const legacy = phone?.legacy ?? false;
+
+  // The stream code (§6.1): asked for LAZILY — when Ready has no phone (the card shows it), or when the organiser opens
+  // "Show the code again". Never for a legacy session or a match that is over (ensure answers 422 there). The QR is
+  // rendered CLIENT-SIDE from the answer — never in page HTML — and the answer is never cached (`private, no-store`).
+  type Code = { status: "idle" } | { status: "loading" } | { status: "error" } | { status: "ok"; qr: CaptureQrV2; issuedAt: string };
+  const [code, setCode] = useState<Code>({ status: "idle" });
+  const [codeOpen, setCodeOpen] = useState(false);
+  const ensureCode = useCallback(async () => {
+    setCode({ status: "loading" });
+    try {
+      const got = await apiV1<{ qr: CaptureQrV2; issuedAt: string }>(`/api/v1/fixtures/${fixtureId}/stream-code`, { method: "POST" });
+      setCode({ status: "ok", qr: got.qr, issuedAt: got.issuedAt });
+    } catch {
+      setCode({ status: "error" });
+    }
+  }, [fixtureId]);
+  const wantCode = phoneLoaded && !legacy && ready !== "code_ended" && (ready === "no_phone" ? state === "idle" : codeOpen);
+  // The read model names the code the server holds NOW. One the card does not show — reissued from another tab, or the
+  // shown one ended (expired) on a match no longer finished (C5) — is asked for again, ONCE per such answer, so a stale
+  // read can never spin the ensure.
+  const codeSeen = phone?.code ? `${phone.code.issuedAt}|${phone.code.state === "ended" ? "ended" : "open"}` : null;
+  const askedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!wantCode) return;
+    if (code.status === "idle") {
+      askedFor.current = codeSeen;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the card shows the ask in flight before it answers
+      void ensureCode();
+      return;
+    }
+    if (code.status !== "ok" || codeSeen === null || askedFor.current === codeSeen || !phone?.code) return;
+    const stale = phone.code.issuedAt !== code.issuedAt || (phone.code.state === "ended" && !phone.finished);
+    if (!stale) return;
+    askedFor.current = codeSeen;
+    void ensureCode();
+  }, [wantCode, code, codeSeen, phone, ensureCode]);
+  const codeText = code.status === "ok" ? captureQrV2Text(code.qr) : null;
+  const [codeImage, setCodeImage] = useState<{ text: string; qr: SeaznQr } | null>(null);
+  useEffect(() => {
+    if (!codeText) return;
     let cancelled = false;
     // An SVG: it scales, and the box decides the painted size (snapped to whole device px per module, §8a).
-    void renderSeaznQr(qrPayload)
+    void renderSeaznQr(codeText)
       .then((qr) => {
-        if (!cancelled) setQrImage({ text: qrPayload, qr });
+        if (!cancelled) setCodeImage({ text: codeText, qr });
       })
       .catch(() => {
-        // the paste code below the box is always rendered (§8a), so a failed encode still leaves a way in
+        // the paste code under the QR is always rendered, so a failed encode still leaves a way in
       });
     return () => {
       cancelled = true;
     };
-  }, [qrPayload, sessionId, read]);
-  // Only the image of THIS payload: until the encoder answers for a new one, the box is the placeholder, never the
-  // previous session's symbol under the new session's paste code.
-  const qrSymbol = qrImage && qrImage.text === qrPayload ? qrImage.qr : null;
+  }, [codeText]);
+  const codeCard: CodeCard =
+    code.status === "ok"
+      ? { status: "ok", text: codeText!, image: codeImage && codeImage.text === codeText ? codeImage.qr : null }
+      : code.status === "error"
+        ? { status: "error" }
+        : { status: "loading" };
+
+  // Revoke & reissue (§6.12): the house confirm, danger tone. The old code stops at once (a phone already streaming keeps
+  // its session — ruling A: the remedy for a stranger who scanned it); the answer IS the new code.
+  const confirm = useConfirm();
+  const onReissue = async () => {
+    const ok = await confirm({
+      title: msg("stream.code.reissue.confirm.title"),
+      body: msg("stream.code.reissue.confirm.body"),
+      confirmLabel: msg("stream.code.reissue.confirm.button"),
+      tone: "danger",
+      size: "touch",
+    });
+    if (!ok) return;
+    setCode({ status: "loading" });
+    try {
+      const got = await apiV1<{ qr: CaptureQrV2; issuedAt: string }>(`/api/v1/fixtures/${fixtureId}/stream-code/reissue`, { method: "POST" });
+      setCode({ status: "ok", qr: got.qr, issuedAt: got.issuedAt });
+    } catch {
+      setCode({ status: "error" });
+    }
+    void readPhone();
+  };
+
+  // §6.7.3: the picker shows the fixture's saved pre-pick until the organiser picks — the destination the phone's own
+  // start would use — when it is still listed; otherwise the list's own choice (the oldest, or none under n1's hold).
+  const [picked, setPicked] = useState(false);
+  const prePick = phone?.destination?.id ?? null;
+  const shownTargetId =
+    !picked && prePick !== null && targets.status === "ok" && targets.list.some((t) => t.id === prePick) ? prePick : selectedTargetId;
 
   // C1: with a session, the projection's `balance` is the fresher number. With NO session there is no projection at
   // all, so the server-resolved one is the only source — unless the server has since refused for want of credits (m2).
   const balance = view ? view.balance : noCredits ? 0 : streamBalance;
 
   const onGoLive = async () => {
-    const chosen = selectedTargetId;
+    const chosen = shownTargetId;
     if (!chosen) return;
     setBusy(true);
     setCreateError(null);
@@ -999,21 +1102,20 @@ export function PhoneTab({
   };
 
   const onCopy = async () => {
-    if (!shown?.qr) return;
+    if (!codeText) return;
     try {
-      await navigator.clipboard.writeText(qrText(shown.qr));
+      await navigator.clipboard.writeText(codeText);
     } catch {
       return; // a browser that refuses the clipboard leaves the field selectable; nothing was taken
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
-    void read(true).catch(() => {}); // De: taking the paste code IS a reveal
   };
 
   // I1: a plan refusal REPLACES the tab only when there is nothing to protect. With a session up, Stop (and Cancel)
   // must survive it — the body renders the gate in the buy slot instead.
   if (planGate && state === "idle") return switchedOff(msg);
-  if (!session.loaded) {
+  if (!session.loaded || !phoneLoaded) {
     return (
       <p data-testid="stream-loading" role="status" aria-busy="true" className="text-xs text-slate-600">
         <span aria-hidden>…</span>
@@ -1031,8 +1133,10 @@ export function PhoneTab({
         busy={session.busy}
         createError={createError}
         checkoutError={checkoutError}
-        selectedTargetId={selectedTargetId}
-        qrImage={qrSymbol}
+        selectedTargetId={shownTargetId}
+        phone={phone}
+        code={codeCard}
+        codeOpen={codeOpen}
         now={session.now}
         copied={copied}
         showBuy={showBuy}
@@ -1043,15 +1147,19 @@ export function PhoneTab({
         split={streamSplit}
         monthlyAllowance={monthlyAllowance}
         // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
-        // is exactly what the next start is asking about. No session ever → nothing consumed → no window.
-        restartFree={view?.restartFree ?? false}
+        // is exactly what the next start is asking about. No session ever → nothing consumed → no window (W23).
+        restart={view?.restart ?? null}
         // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, or held by
         // another match) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
         // selection only empties again through another removal, which holds it again.)
         onSelectTarget={(id) => {
           selectedRef.current = id;
           setSelectedTargetId(id);
+          setPicked(true);
           setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use") ? null : e));
+          // §6.7.3: the picker writes the fixture's pre-pick on change — what the phone's own start streams to. Best
+          // effort: Go live saves it again on success, so the two cannot stay apart past the next start.
+          void apiV1(`/api/v1/fixtures/${fixtureId}/stream-settings`, { method: "PUT", json: { targetId: id } }).catch(() => {});
         }}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
         onGoLive={() => void onGoLive()}
@@ -1071,6 +1179,9 @@ export function PhoneTab({
           setCheckoutError(null);
         }}
         onCopy={() => void onCopy()}
+        onToggleCode={setCodeOpen}
+        onReissue={() => void onReissue()}
+        onRetryCode={() => void ensureCode()}
         // Buy more and the chooser's Close (B6) are one toggle; either way a refusal from the last attempt goes.
         onShowBuy={() => {
           setShowBuy((v) => !v);
@@ -1119,8 +1230,12 @@ export interface PhoneTabBodyProps {
   createError: CreateError | null;
   checkoutError: CheckoutError | null;
   selectedTargetId: string | null;
-  /** The stream QR, once the browser has encoded it for THIS payload (never the previous session's). */
-  qrImage: SeaznQr | null;
+  /** Capture QR v2 §6.12: the `stream-phone` read model — null until a read has answered (or while every read fails). */
+  phone: StreamPhone | null;
+  /** The fixture's stream code, for the code card and "Show the code again". */
+  code: CodeCard;
+  /** "Show the code again" is open — the code is asked for only then (or with no phone). */
+  codeOpen: boolean;
   now: Date;
   copied: boolean;
   showBuy: boolean;
@@ -1133,9 +1248,9 @@ export interface PhoneTabBodyProps {
   checkoutOpen: boolean;
   /** P1: the currency the checkout will charge; the tiles quote in it. */
   currency: Currency;
-  /** I-1: the projection's `restartFree` — a start on this fixture now would be admitted without a credit (the reuse
-   *  window). At balance 0 it is what keeps Go live reachable instead of the forced chooser. */
-  restartFree: boolean;
+  /** W23 (I-1): the RAW projection's restart allowance — null with no reuse window open. `free` is what admission would
+   *  waive the credit for; at balance 0 it is what keeps Go live reachable instead of the forced chooser. */
+  restart: StreamSessionCurrent["restart"];
   onSelectTarget: (id: string) => void;
   /** Re-read the destination list after a failed read. */
   onRetryTargets: () => void;
@@ -1145,6 +1260,9 @@ export interface PhoneTabBodyProps {
   onBuy: (pack: StreamPackSize) => void;
   onAgain: () => void;
   onCopy: () => void;
+  onToggleCode: (open: boolean) => void;
+  onReissue: () => void;
+  onRetryCode: () => void;
   onShowBuy: () => void;
   /** M2: a hand is on a credit tile (pointerenter, focus, touchstart) — warm the checkout sheet's chunk now. */
   onTileIntent: () => void;
@@ -1278,8 +1396,15 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // The chooser opens either because the org cannot start without credits (FORCED — there is nothing behind it to go
   // back to), or because the organiser asked for it from "Buy more" — mid-session included. A plan refusal (I1) takes
   // its slot: buying is exactly what the plan refused. I-1: NOT forced when the restart is free — admission waives the
-  // credit inside the fixture's reuse window, so balance 0 is no reason to withhold Go live.
-  const forced = state === "idle" && p.balance < 1 && !p.restartFree;
+  // credit inside the fixture's reuse window, so balance 0 is no reason to withhold Go live. A match that is over (C5) has
+  // nothing to start, so it never forces the chooser either.
+  //
+  // Capture QR v2 §6.12: the Ready row off the two projections, and a LEGACY session (C-1: open, no pairing — it opened
+  // before stream codes) is drawn as the panel was: no phone strip, no code, the §3.2 chain.
+  const ready = readyStateOf(p.phone, p.view);
+  const legacy = p.phone?.legacy ?? false;
+  const matchOver = state === "idle" && ready === "code_ended";
+  const forced = state === "idle" && p.balance < 1 && !p.restart?.free && !matchOver;
   const buyCard = !p.planGate && (forced || p.showBuy);
   // B3: an idle org with no credits sees the heading and the credits card ONLY — a "Ready" pill and a three-step
   // stepper promise a stream it cannot start.
@@ -1299,12 +1424,21 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // §3.2: the Signal path is drawn to the session's destination, or — with none — to the picked one. Neither (credits
   // only, a list loading, failed or empty) draws no chain: a path to nowhere says nothing. Ended and failed draw none.
   const chainTarget = p.view ? p.view.target : selected ?? null;
+  const capture = legacy ? undefined : { phone: p.phone?.phone ?? null, countdown: p.view?.countdown ?? null };
   const drawn =
-    !creditsOnly && chainTarget
-      ? { to: chainTarget, chain: chainFor(p.view, { destInUse: state === "idle" && p.createError?.code === "target_in_use" }) }
+    !creditsOnly && !matchOver && chainTarget
+      ? {
+          to: chainTarget,
+          chain: chainFor(p.view, { destInUse: state === "idle" && p.createError?.code === "target_in_use", capture }),
+        }
       : null;
-  // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running. I-1: phone first.
-  const warned = d3Warning(p.view);
+  // Option B rev 2: the phone's one message, in a strip under the chain (caret on the Phone node). Go live names it.
+  const strip = creditsOnly || matchOver ? null : phoneStrip(p.phone, p.view);
+  const stripId = `stream-why-${p.fixtureId}`;
+  // D3: the server-measured 30 s (M6) — a warning under the chain; the stream keeps running. I-1: phone first. §6.12:
+  // the phone's sentence gives way to the strip while it shows the countdown or the paused reason.
+  const d3 = d3Warning(p.view);
+  const warned = d3 === "phone" && strip !== null ? null : d3;
   // Ended and failed are summary cards that carry their own (visible) pill.
   const summary = state === "ended" || state === "failed";
   const pickerId = `stream-target-${p.fixtureId}`;
@@ -1317,7 +1451,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // spend one (not inside the reuse window, I-1). The balance keeps the plural key's own text (`stream.phone.credits.*`
   // — the mockup's "9 left" reads "9 credits": a plan decision, the plural key is what keeps every locale grammatical);
   // the monthly/bought split is its `title`, and a visually hidden copy keeps it for screen readers.
-  const usesShown = state === "idle" && !buyCard && !p.restartFree;
+  // §6.12 (rev 2): inside the reuse window the restart line above Go live says it — "1 credit" is said once.
+  const usesShown = state === "idle" && !buyCard && p.restart === null;
   const creditParts: ReactNode[] = [];
   if (usesShown) creditParts.push(<span key="uses">{msg("stream.credits.uses")}</span>);
   if (p.balance >= 1) {
@@ -1365,6 +1500,120 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       </p>
     ) : null;
 
+  // W23: "Free restarts used (n of 3)" above Go live (and on the ended card) — emerald below the limit, amber at it.
+  const restart = restartLine(p.restart);
+  const restartEl = restart ? (
+    <p
+      data-testid="stream-restart"
+      data-tone={restart.tone}
+      className={`flex items-start gap-1.5 text-xs ${restart.tone === "emerald" ? "text-emerald-800" : "text-amber-800"}`}
+    >
+      <RotateCcw
+        aria-hidden
+        className={`mt-px h-3.5 w-3.5 shrink-0 ${restart.tone === "emerald" ? "text-emerald-600" : "text-amber-600"}`}
+        strokeWidth={1.8}
+      />
+      <span>{msg(restart.key, restart.vars)}</span>
+    </p>
+  ) : null;
+
+  // §6.12 (Option B rev 2): the code's QR, its paste code with Copy beneath it at every width, and Revoke & reissue —
+  // the card's own content at Ready with no phone, and the body of "Show the code again" otherwise. The QR and the paste
+  // code both carry a live tok: `ph-no-capture` on each (the QR's is `sensitive`). A finished match has no reissue (the
+  // route refuses it, 422).
+  const codeInner = (
+    <>
+      <div className="mt-2">
+        {p.code.status === "ok" ? (
+          p.code.image ? (
+            <SeaznQrImage testId="stream-qr" sensitive qr={p.code.image} alt={msg("stream.phone.qr.alt")} maxSize={STREAM_QR_MAX_PX} />
+          ) : (
+            // The QR's own square and caption line, so the card keeps its size when the symbol lands (review m-7).
+            <SeaznQrPlaceholder maxSize={STREAM_QR_MAX_PX} modules={seaznQrModules(p.code.text)} />
+          )
+        ) : p.code.status === "error" ? (
+          <div data-testid="stream-code-error" role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
+            <span>{msg("stream.code.error")}</span>
+            <button type="button" data-testid="stream-code-retry" onClick={p.onRetryCode} className="btn btn-ghost min-h-11 md:min-h-10">
+              {msg("stream.dest.retry")}
+            </button>
+          </div>
+        ) : (
+          <SeaznQrPlaceholder maxSize={STREAM_QR_MAX_PX} modules={null} />
+        )}
+      </div>
+      {p.code.status === "ok" && (
+        <div data-testid="stream-qr-field" className="relative mt-2 w-full">
+          <input
+            data-testid="stream-qr-text"
+            readOnly
+            aria-label={msg("stream.phone.qr.field")}
+            value={p.code.text}
+            onFocus={(e) => e.currentTarget.select()}
+            className="ph-no-capture h-11 w-full rounded-lg border border-purple-100 bg-slate-950 px-3 font-mono text-[11px] text-slate-100 outline-none focus:ring-2 focus:ring-purple-200"
+          />
+          <button type="button" data-testid="stream-qr-copy" onClick={p.onCopy} className="btn btn-ghost mt-1.5 h-11 w-full text-xs">
+            {p.copied ? <Check aria-hidden className="h-3.5 w-3.5 text-green-600" /> : <Copy aria-hidden className="h-3.5 w-3.5" />}
+            <span aria-live="polite">{p.copied ? msg("stream.phone.qr.copied") : msg("stream.phone.qr.copy")}</span>
+          </button>
+        </div>
+      )}
+      {!p.phone?.finished && (
+        <div className="mt-1 flex justify-center">
+          <button
+            type="button"
+            data-testid="stream-code-reissue"
+            disabled={p.code.status === "loading"}
+            onClick={p.onReissue}
+            className="inline-flex min-h-11 items-center gap-1.5 text-sm font-medium text-red-700 underline decoration-red-300 underline-offset-2 hover:decoration-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw aria-hidden className="h-4 w-4 shrink-0" strokeWidth={1.8} />
+            {msg("stream.code.reissue")}
+          </button>
+        </div>
+      )}
+    </>
+  );
+  // Ready, paired (or silent): the card folds to one line. Ruling A (carry 3): Reissue is the organiser's remedy for a
+  // stranger who scanned the code, so the same line stays while the session waits and while it is live.
+  const facts = p.phone?.phone ?? null;
+  const dot = facts?.present ? "lime" : facts ? "amber" : "slate";
+  const codeDisclosure = (
+    <details
+      data-testid="stream-code-disclosure"
+      open={p.codeOpen}
+      onToggle={(e) => p.onToggleCode(e.currentTarget.open)}
+      className="group min-w-0 rounded-lg bg-white ring-1 ring-purple-100"
+    >
+      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-sm [&::-webkit-details-marker]:hidden">
+        <span
+          aria-hidden
+          data-tone={dot}
+          className={`h-2 w-2 shrink-0 rounded-full ${
+            dot === "lime" ? "bg-[var(--mk-lime)] ring-1 ring-lime-600" : dot === "amber" ? "bg-amber-400" : "bg-slate-300"
+          }`}
+        />
+        {facts && (
+          <>
+            <span className="font-medium text-slate-800">{msg("stream.code.paired")}</span>
+            <span aria-hidden className="text-slate-400">
+              ·
+            </span>
+          </>
+        )}
+        <span className="min-w-0 truncate font-medium text-purple-700 underline decoration-purple-300 underline-offset-2">
+          {msg("stream.code.showAgain")}
+        </span>
+        <ChevronRight
+          aria-hidden
+          className="ml-auto h-4 w-4 shrink-0 text-slate-500 transition-transform group-open:rotate-90 motion-reduce:transition-none"
+          strokeWidth={1.8}
+        />
+      </summary>
+      {p.codeOpen && <div className="px-3 pb-3">{codeInner}</div>}
+    </details>
+  );
+
   return (
     // P5: the root marker the chooser's Close looks Buy more up from.
     <div data-phone-body>
@@ -1375,7 +1624,13 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
 
       {/* §3.2 (T9a): the Signal path replaces §8a's stepper — one drawing at every width; only its destination label
           moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
-      {drawn?.chain && <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: drawn.to.label }} />}
+      {drawn?.chain && (
+        <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: drawn.to.label }}>
+          {strip && <PhoneStripView id={stripId} strip={strip} caret />}
+        </SignalChain>
+      )}
+      {/* No chain to point at (no destination yet): the strip still says what the phone needs, without its caret. */}
+      {!drawn?.chain && strip && <PhoneStripView id={stripId} strip={strip} caret={false} />}
       {warned && p.view && <D3Warning cause={warned} kind={p.view.target.kind} />}
 
       {p.view?.fixtureDecided && (state === "live" || state === "ending") && (
@@ -1394,10 +1649,21 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         </div>
       )}
 
-      {state === "idle" && !buyCard && (
-        // §3.3 Ready (mockup state 1): the destination, then Go live, then the credits line under it.
-        <div className="mt-4 space-y-4">
-          <div className="min-w-0">
+      {matchOver && (
+        // §6.12 "Code ended": the match is over and its code with it — no QR and no Go live.
+        <p data-testid="stream-match-over" className="mt-4 text-sm text-slate-700">
+          {msg("stream.phone.matchOver")}
+        </p>
+      )}
+
+      {state === "idle" && !buyCard && !matchOver && (
+        // Option B rev 2 (§6.12): the destination; the code card beside it from 768 (370 px, equal columns from 1024),
+        // below it on a phone; then the restart line, Go live and the credits line under the picker.
+        <div
+          data-testid="stream-ready"
+          className="mt-4 grid items-start gap-4 md:grid-cols-[minmax(0,1fr)_370px] md:grid-rows-[auto_1fr] lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+        >
+          <div className="min-w-0 md:col-start-1 md:row-start-1">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               {p.targets.status === "ok" && targetList.length > 0 ? (
                 <label htmlFor={pickerId} className="text-sm font-medium text-slate-800">
@@ -1493,90 +1759,58 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               </div>
             )}
           </div>
-          {p.restartFree && (
-            // I-1: why a zero (or unchanged) balance can start — the line Go live stands on, in the chip's emerald.
-            <p data-testid="stream-restart-free" className="flex items-start gap-1.5 text-xs text-emerald-800">
-              <RotateCcw aria-hidden className="mt-px h-3.5 w-3.5 shrink-0 text-emerald-600" strokeWidth={2} />
-              {msg("stream.phone.restartFree")}
-            </p>
-          )}
-          <div>
-            <button
-              type="button"
-              data-testid="stream-go-live"
-              // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
-              // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
-              // Mockup state 5: a destination another match holds cannot start until it is picked again or freed.
-              disabled={p.busy || !p.selectedTargetId || targetList.length === 0 || inUseBox}
-              onClick={p.onGoLive}
-              className="btn btn-primary min-h-12 w-full text-base"
-            >
-              {msg("stream.phone.goLive")}
-            </button>
-            {creditsLine}
+          <div className={ready === "no_phone" ? "min-w-0 md:col-start-2 md:row-start-1 md:row-span-2" : "min-w-0 md:col-start-2 md:row-start-1 md:row-span-2 md:mt-6"}>
+            {ready === "no_phone" ? (
+              <div data-testid="stream-code-card" className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-purple-100">
+                <p className="text-sm font-semibold text-slate-900">{msg("stream.code.scan")}</p>
+                {codeInner}
+              </div>
+            ) : (
+              codeDisclosure
+            )}
+          </div>
+          <div className="min-w-0 space-y-4 md:col-start-1 md:row-start-2">
+            {restartEl}
+            <div>
+              <button
+                type="button"
+                data-testid="stream-go-live"
+                // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
+                // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
+                // Mockup state 5: a destination another match holds cannot start until it is picked again or freed.
+                // §6.12 (W5): and only with a phone paired and answering — the strip above says why not.
+                disabled={p.busy || !p.selectedTargetId || targetList.length === 0 || inUseBox || !canGoLive(ready)}
+                aria-describedby={strip ? stripId : undefined}
+                onClick={p.onGoLive}
+                className="btn btn-primary min-h-12 w-full text-base"
+              >
+                {msg("stream.phone.goLive")}
+              </button>
+              {creditsLine}
+            </div>
           </div>
         </div>
       )}
 
       {(state === "provisioning" || state === "warming") && (
-        // §8a: ONE CENTRED COLUMN — the QR box, then the paste code at the box's own width, the caption and Cancel.
-        <div data-testid="stream-qr-column" className="mt-3 flex flex-col items-center gap-2 text-center">
-          <div data-testid="stream-qr-box" className={`${QR_COLUMN_W} rounded-lg border border-purple-100 bg-white p-3`}>
-            {p.qrImage ? (
-              // A data: URL encoded in the browser, never in page HTML — through the shared Seazn QR (D7, D10): tap to
-              // enlarge, and `sensitive` because it paints the capture credentials (D10a).
-              <SeaznQrImage
-                testId="stream-qr"
-                sensitive
-                qr={p.qrImage}
-                alt={msg("stream.phone.qr.alt")}
-                maxSize={STREAM_QR_MAX_PX}
-              />
-            ) : (
-              // The QR's own square and caption line, so the box keeps its size when the symbol lands (review m-7).
-              <SeaznQrPlaceholder maxSize={STREAM_QR_MAX_PX} modules={p.view?.qr ? seaznQrModules(qrText(p.view.qr)) : null} />
-            )}
-          </div>
-          {p.view?.qr && (
-            <div data-testid="stream-qr-field" className={`relative ${QR_COLUMN_W}`}>
-              {/* D10a: the paste code IS the capture payload, so it carries the replay block the QR does. */}
-              <input
-                data-testid="stream-qr-text"
-                readOnly
-                aria-label={msg("stream.phone.qr.field")}
-                value={qrText(p.view.qr)}
-                onFocus={(e) => e.currentTarget.select()}
-                className="ph-no-capture h-11 w-full rounded-lg border border-purple-100 bg-slate-950 px-3 font-mono text-[11px] text-slate-100 outline-none focus:ring-2 focus:ring-purple-200 md:h-10 md:pr-10"
-              />
-              {/* §8's copy-button rule: 28 px inside the field at ≥ 768 (its name is the sr-only label), full width
-                  and 44 px beneath it below. */}
-              <button
-                type="button"
-                data-testid="stream-qr-copy"
-                onClick={p.onCopy}
-                className="btn btn-ghost mt-1.5 h-11 w-full text-xs md:absolute md:right-1.5 md:top-1.5 md:mt-0 md:h-7 md:w-7 md:p-0"
-              >
-                {p.copied ? (
-                  <Check aria-hidden className="h-3.5 w-3.5 text-green-600" />
-                ) : (
-                  <Copy aria-hidden className="h-3.5 w-3.5" />
-                )}
-                <span aria-live="polite" className="md:sr-only">
-                  {p.copied ? msg("stream.phone.qr.copied") : msg("stream.phone.qr.copy")}
-                </span>
-              </button>
-            </div>
+        // §6.12 Waiting: no QR (the phone is already paired) — the strip above says what it waits for, then the far
+        // cadence's line (§6.6) while the phone is on it, and Cancel.
+        <div data-testid="stream-waiting" className="mt-4 space-y-3">
+          {!legacy && p.phone?.phone?.farPoll && (
+            <p data-testid="stream-poll-far" className="text-xs text-slate-600">
+              {msg("stream.phone.pollFar")}
+            </p>
           )}
-          <p className="text-xs text-slate-600">{msg("stream.phone.qr.caption")}</p>
           <button
             type="button"
             data-testid="stream-cancel"
             disabled={p.busy}
             onClick={p.onCancel}
-            className={`btn btn-ghost min-h-11 ${QR_COLUMN_W} md:min-h-10 md:w-auto`}
+            className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
           >
             {msg("stream.phone.cancel")}
           </button>
+          {!legacy && codeDisclosure}
         </div>
       )}
 
@@ -1622,6 +1856,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               ))}
             </div>
           </details>
+          {!legacy && state === "live" && codeDisclosure}
         </div>
       )}
 
@@ -1658,6 +1893,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               </span>
             )}
           </div>
+          {restartEl}
           <div className="flex flex-col gap-2 md:flex-row">
             {p.view.replayUrl && (
               <a

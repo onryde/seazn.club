@@ -1542,6 +1542,10 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
+          # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
+          # Exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
         run: |
           rm -rf apps/web/.next/standalone/apps/web/.next/static
           cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static

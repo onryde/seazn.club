@@ -41,24 +41,22 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { OverlayStage } from "@/components/overlay/overlay-stage";
 import { defaultThemeFor, themesForSport } from "@/components/overlay/theme-registry";
 import { ApiV1Error } from "@/lib/client-v1";
-import type { CaptureQrV1 } from "@/lib/capture-qr";
+import { CaptureQrV2, captureQrV2Text } from "@/lib/capture-qr";
 import { messages, type MessageKey } from "@/lib/messages";
 import { STREAM_CREDIT_PACKS, streamPack, streamPackPriceAmounts } from "@/lib/stream-credit-packs";
 import { SUPPORTED_CURRENCIES, formatMinor } from "@/lib/currency";
 import { LOCALES } from "@/lib/i18n-constants";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
-import { CREDIT_REUSE_HOURS } from "@/server/relay/config";
 import {
   END_REASON_KEYS,
   FAIL_REASON_KEYS,
   STREAM_POLL_MS,
   TARGET_REMOVED,
-  qrText,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
-import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
+import { StreamTargetKind, type StreamPhone, type StreamTarget } from "@/server/api-v1/schemas";
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
-import { D3Warning, SignalChain } from "@/components/v2/stream-signal-chain";
+import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
 import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
 import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES, type SeaznQr } from "@/lib/seazn-qr";
@@ -193,6 +191,7 @@ function ctx(o: Partial<StreamPanelContext> = {}): StreamPanelContext {
     monthlyAllowance: 0,
     currency: "gbp",
     overlayKeys: { [FIXTURE.id]: "KEY_for-f-1_0123456789" },
+    phoneCapture: true,
     ...o,
   };
 }
@@ -580,33 +579,37 @@ const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
 /** P3/P4 (fix round 3): what every Stop confirm must carry — its cancel from the PAGE's dictionary, and the touch size. */
 const STOP_CONFIRM_EXTRAS = { cancelLabel: m("stream.phone.stop.keep"), size: "touch" } as const;
 
-/** A v1 QR payload, the `session()` factory's default. Typed here: capture QR v2 PR-1 T1 removed the v1 contract and
- *  its fixtures (W4), while the v1 builder, the panel's v1 rendering and this type live until T11. The values are the
- *  removed `fixtures/capture-qr.v1/valid.json`'s, field for field, so no case below changes its input (A1). */
-const QR: CaptureQrV1 = {
-  v: 1,
-  sid: "2a6a0d4e-7c1b-4e9a-9f2d-3b1c5d7e9f01",
-  slot: 0,
-  cred: {
-    srt: {
-      url: "srt://live.cloudflare.com:778?passphrase=fixture-pass&streamid=2a6a0d4e-0",
-      streamId: "2a6a0d4e-0",
-      passphrase: "fixture-pass",
-      latencyMs: 2000,
-    },
-    rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: "fixture-rtmps-key" },
-  },
-  preferred: "srt",
-  exp: 4102444800,
-};
+/** The fixture's stream code as the T5 route answers it (§6.2's alphabet and tok, written out here). */
+const CODE_QR: CaptureQrV2 = CaptureQrV2.parse({ v: 2, code: "k7m2q9xr4tbw", slot: 0, tok: "f3Kq9_ZtR2mXw8LpN4vB0a" });
+const CODE_TEXT = captureQrV2Text(CODE_QR);
+/** An encoded symbol, as the browser hands the body one (57 modules: the v2 payload's v8 + the quiet zone). */
+const SYMBOL: SeaznQr = { src: "data:image/svg+xml;charset=utf-8,code", modules: 57 };
+
+type Facts = NonNullable<StreamPhone["phone"]>;
+/** The paired phone's facts as the T9 read model serves them — present, answering, nothing wrong. */
+const facts = (over: Partial<Facts> = {}): Facts => ({
+  present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2", mode: "operator",
+  state: "paired", notReady: null, startFailed: null, lastBeatAt: "2026-09-14T11:59:55.000Z", elapsedMs: 5_000,
+  beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB: null }, farPoll: false, ...over,
+});
+/** The `stream-phone` read model (§9, T9): an active code with a paired, present phone — Ready's "paired" row. */
+const readModel = (over: Partial<StreamPhone> = {}): StreamPhone => ({
+  code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "active", endCause: null }, phone: facts(), destination: null,
+  lastTakeover: null, auto: null, legacy: false, finished: false, ...over,
+});
+/** §6.9: paired, but the phone has stopped answering. */
+const SILENT = facts({ present: false, silent: true, elapsedMs: 90_000 });
+/** C5: the match is over — finished, and its code ended. */
+const MATCH_OVER = readModel({ finished: true, phone: null, code: { issuedAt: "2026-09-14T09:00:00.000Z", state: "ended", endCause: "expired" } });
+/** C-1: an open session with no pairing (it opened before stream codes) — today's panel. */
+const LEGACY = readModel({ legacy: true, phone: null, code: null });
 
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
-  qr: QR, balance: 2, startedAt: null, endedAt: null, replayUrl: null,
+  balance: 2, startedAt: null, endedAt: null, replayUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-  restartFree: false, startCause: "organiser", restart: null,   // T6/T6b: the wire's new required fields (tsc), no behaviour read here
-  countdown: null,   // T9 (W24): the wire's new required field (tsc); the panel reads it from T11
+  startCause: "organiser", restart: null, countdown: null,
   ...over,
 });
 
@@ -712,9 +715,11 @@ describe("the Phone tab reads the §5.3 gate, then hands the container the conte
     expect(src).not.toMatch(/result\.code/);
     // C1: the idle tab's balance has a source when there is no session (m2: a no_credits refusal reads it as 0).
     expect(src).toMatch(/view \? view\.balance : noCredits \? 0 : streamBalance/);
-    // De: the reveal flag exists — on the session's read, which T9b moved to the page's one poller.
+    // W4 (capture QR v2 §6.13): the session's read — on the page's one poller (T9b) — asks no reveal any more; the route
+    // answers 400 to one (routes.test.ts). The positive pair: the provider still reads `current`.
     const provider = readFileSync(join(__dirname, "..", "stream-session-provider.tsx"), "utf8");
-    expect(provider).toMatch(/\?reveal=1/);
+    expect(provider).not.toMatch(/reveal/i);
+    expect(provider).toMatch(/\/stream-sessions\/current`/);
     // The legacy transport prefixes nothing and drops the extras (404s here) — v1 only.
     expect(src).not.toMatch(/from "@\/lib\/client"/);
   });
@@ -951,10 +956,11 @@ describe("the return opens the panel on the Phone tab — on the fixture page's 
 const NOW = new Date("2026-09-14T12:00:00Z");
 const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
-  selectedTargetId: null, qrImage: null, now: NOW, copied: false, showBuy: false,
-  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restartFree: false,
+  selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
+  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null,
   onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
-  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onShowBuy: () => {}, onTileIntent: () => {},
+  onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
+  onShowBuy: () => {}, onTileIntent: () => {},
 };
 /** A loaded list — what most states render with. */
 const ok = (list: StreamTarget[]): TargetsState => ({ status: "ok", list });
@@ -1006,12 +1012,23 @@ function bodyStates(): [string, ReactElement[]][] {
     ["idle, a refused create", body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } })],
     ["idle, Buy more opened", body({ view: null, balance: 2, showBuy: true, checkoutError: "owner" })],
     ["idle, the destination in use", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "target_in_use", holder: IN_USE_HOLDER } })],
-    ["provisioning", body({ view: session({ state: "provisioning", qr: null }), balance: 2 })],
-    ["warming, the QR", body({ view: session(), balance: 2, qrImage: { src: "data:image/png;base64,AAAA", modules: 113 } })],
-    ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", qr: null, fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
-    ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z", qr: null }), balance: 1 })],
-    ["ended", body({ view: session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
-    ["failed", body({ view: session({ state: "failed", qr: null, failReason: "no_credits" }), balance: 0 })],
+    // Capture QR v2 §6.12 (Option B rev 2): the Ready rows, each with the code where it shows.
+    ["ready, no phone (the code card)", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: SYMBOL } })],
+    ["ready, no phone, the code refused", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "error" } })],
+    ["ready, paired, the code shown again", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } })],
+    ["ready, silent", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: SILENT }) })],
+    ["ready, inside the reuse window at the limit", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", restart: { windowOpen: true, used: 3, limit: 3, free: false } })],
+    ["ready, the match over", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: MATCH_OVER })],
+    ["provisioning", body({ view: session({ state: "provisioning" }), balance: 2 })],
+    ["warming", body({ view: session(), balance: 2, phone: readModel({ phone: facts({ farPoll: true }) }) })],
+    ["warming, the countdown", body({ view: session({ countdown: { kind: "warming", reason: "no_inbound_timeout", elapsedMs: 45_000, remainingMs: 555_000 } }), balance: 2 })],
+    ["live, the phone lost (the countdown)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", output: { state: "unknown", since: "2026-09-14T11:57:00Z", elapsedMs: 180_000 }, countdown: { kind: "live", reason: "phone_lost", elapsedMs: 160_000, remainingMs: 740_000 } }), balance: 1, phone: readModel({ phone: SILENT }) })],
+    ["live, paused (O5)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: readModel({ phone: facts({ notReady: "camera", state: "publishing" }) }) })],
+    ["live, a legacy session", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: LEGACY })],
+    ["live", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", fixtureDecided: true, health: { fps: 30, bitrateKbps: 2900, lastBeatAt: "2026-09-14T11:59:56Z" } }), balance: 1 })],
+    ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1 })],
+    ["ended", body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
+    ["failed", body({ view: session({ state: "failed", failReason: "no_credits" }), balance: 0 })],
   ];
 }
 
@@ -1146,7 +1163,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(bought, "no pack is chosen on the organiser's behalf").toBeNull();
     expect(attr(byTestId(tree, "stream-buy-more")!, "aria-expanded")).toBe(false);
     // …and once open, all three tiles are reachable even with a balance in hand, mid-session included.
-    for (const view of [null, session({ state: "live", startedAt: "2026-09-14T11:50:00Z", qr: null })]) {
+    for (const view of [null, session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })]) {
       const opened2 = body({ view, balance: 2, showBuy: true });
       expect(attr(byTestId(opened2, "stream-buy-more")!, "aria-expanded")).toBe(true);
       for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(opened2, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
@@ -1172,68 +1189,224 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(body({ view: null, balance: 1 }), "stream-create-error"), "the empty case").toBeUndefined();
   });
 
-  it("warming: the QR image (a real alt), the paste code equal to the payload (a real name), the caption, Cancel — one centred column at the QR box's own width", () => {
-    const v = session();
-    const symbol: SeaznQr = { src: "data:image/png;base64,AAAA", modules: 113 };
-    const tree = body({ view: v, balance: 2, qrImage: symbol });
-    // T10: the QR is a <SeaznQrImage> element (renderIsland does not expand it): find it by type and `testId` prop,
-    // never by data-testid, and pin its props. The width is the sheet's rule, read from the row.
+  it("Ready, no phone (§6.12, Option B): the code card — its title, the QR through SeaznQrImage (sensitive, the sheet's cap), the paste code (ph-no-capture, exactly the QR's four keys), Copy beneath it, Revoke & reissue", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: SYMBOL } });
+    const card = byTestId(tree, "stream-code-card");
+    expect(card, "the code card at Ready with no phone").toBeDefined();
+    expect(textOf(card!)).toContain(m("stream.code.scan"));
+    // T10: the QR is a <SeaznQrImage> element (the harness does not expand it): found by type and `testId` prop.
     const qrEl = qrImageOf(tree, "stream-qr");
-    expect(qrEl, "the Waiting state renders the stream QR through SeaznQrImage").toBeDefined();
+    expect(qrEl, "the stream QR, through the shared component").toBeDefined();
     expect(byTestId(tree, "stream-qr"), "no bare img bypasses the component").toBeUndefined();
-    expect(propsOf(qrEl!).qr, "the symbol the panel encoded, whole").toBe(symbol);
+    expect(propsOf(qrEl!).qr, "the symbol the container encoded, whole").toBe(SYMBOL);
     expect(propsOf(qrEl!).alt).toBe(m("stream.phone.qr.alt"));
-    expect(propsOf(qrEl!).sensitive, "D10a: the capture credentials never reach a replay").toBe(true);
+    expect(propsOf(qrEl!).sensitive, "the QR carries a live tok: ph-no-capture").toBe(true);
     const cap = sheetQrCap();
     expect(cap).toBeGreaterThanOrEqual(320); // spec §7's floor on desktop
     expect(propsOf(qrEl!).maxSize, "the sheet's cap; the component snaps inside it").toBe(cap);
     const field = byTestId(tree, "stream-qr-text")!;
-    // D10a: the paste code IS the payload — the text carries the replay block as well as the image.
     expect(String(attr(field, "className")).split(/\s+/), "the paste code is ph-no-capture").toContain("ph-no-capture");
-    expect(attr(field, "value")).toBe(JSON.stringify(v.qr));
+    // W3 (regression): the paste code is the QR's text — exactly the four keys, in order, never a credential.
+    expect(attr(field, "value")).toBe(CODE_TEXT);
+    expect(Object.keys(JSON.parse(String(attr(field, "value"))))).toEqual(["v", "code", "slot", "tok"]);
     expect(attr(field, "readOnly")).toBe(true);
     expect(attr(field, "aria-label")).toBe(m("stream.phone.qr.field"));
-    // §8a: the paste field takes the QR BOX's width — the same width class on both, so they cannot drift apart.
-    const box = byTestId(tree, "stream-qr-box")!;
-    const width = String(attr(box, "className")).match(/(^|\s)(max-w-\[\d+px\])(\s|$)/)?.[2];
-    expect(width, "the QR box has no max width").toBeDefined();
-    // The box holds the cap exactly: the cap + its `p-3` (12) twice + its 1-px border twice, so the box is never the
-    // thing that snaps the QR down a scale on desktop.
-    expect(Number(/\d+/.exec(width!)![0]), "the box's max width is the cap plus its chrome").toBe(cap + 2 * (12 + 1));
-    expect(String(attr(box, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["p-3", "border"]));
-    expect(String(attr(byTestId(tree, "stream-qr-field")!, "className")).split(/\s+/)).toContain(width);
-    expect(String(attr(byTestId(tree, "stream-qr-column")!, "className"))).toMatch(/(^|\s)items-center(\s|$)/);
-    expect(byTestId(tree, "stream-cancel")).toBeDefined();
-    // §3.2: waiting — the phone and Seazn amber, the destination not live yet (was §8a's "step 2 of 4").
-    expect(chainOf(tree)?.chain).toMatchObject({ phone: { word: "waiting" }, link1: "connecting", dest: { word: "notLive" } });
-    // The copy button's accessible name at ≥ 768 (icon-only there) is its sr-only text.
+    // Option B: Copy sits BENEATH the field, full width, at every width — no md: placement inside it.
+    const copy = String(attr(byTestId(tree, "stream-qr-copy")!, "className")).split(/\s+/);
+    expect(copy).toEqual(expect.arrayContaining(["w-full", "h-11", "mt-1.5"]));
+    expect(copy.filter((c) => c.startsWith("md:")), "no md: override moves Copy into the field").toEqual([]);
     expect(textAt(tree, "stream-qr-copy")).toBe(m("stream.phone.qr.copy"));
-    expect(textAt(body({ view: v, balance: 2, copied: true }), "stream-qr-copy")).toBe(m("stream.phone.qr.copied"));
+    expect(textAt(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: SYMBOL }, copied: true }), "stream-qr-copy")).toBe(m("stream.phone.qr.copied"));
+    expect(textAt(tree, "stream-code-reissue")).toBe(m("stream.code.reissue"));
+    // Order inside the card: the title, the QR, the paste code, Copy, then Revoke & reissue.
+    const cardTree = walk(propsOf(card!).children as ReactElement);
+    const at = (pred: (el: ReactElement) => boolean, what: string) => {
+      const i = cardTree.findIndex(pred);
+      expect(i, what).toBeGreaterThan(-1);
+      return i;
+    };
+    const order = [
+      at((el) => el.type === SeaznQrImage, "qr"),
+      at((el) => attr(el, "data-testid") === "stream-qr-text", "paste"),
+      at((el) => attr(el, "data-testid") === "stream-qr-copy", "copy"),
+      at((el) => attr(el, "data-testid") === "stream-code-reissue", "reissue"),
+    ];
+    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    // Go live is held: no phone yet (W5) — and it names the strip that says why.
+    const go = byTestId(tree, "stream-go-live")!;
+    expect(attr(go, "disabled")).toBe(true);
+    expect(attr(go, "aria-describedby")).toBe("stream-why-f-1");
+    const strip = tree.find((el) => el.type === PhoneStripView);
+    expect(propsOf(strip!).id).toBe("stream-why-f-1");
+    expect(propsOf(strip!).strip).toEqual({ tone: "slate", icon: "phone", lead: null, body: { key: "stream.phone.pairFirst" } });
+    expect(chainOf(tree)?.chain?.phone).toEqual({ tone: "slate", word: "notConnected", mark: null });
   });
 
-  it("warming before the encoder answers: a placeholder the QR's size, and the paste code is ALREADY there (§8a: always rendered)", () => {
-    const v = session();
-    const tree = body({ view: v, balance: 2, qrImage: null });
+  it("the code before the encoder answers: a placeholder the QR's size for THIS text, and the paste code ALREADY there; still asking: a module-less placeholder and no paste code; refused: the error with Retry", () => {
+    const base = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: null }) } as const;
+    const tree = body({ ...base, code: { status: "ok", text: CODE_TEXT, image: null } });
     expect(qrImageOf(tree, "stream-qr"), "no QR before the encoder answers").toBeUndefined();
-    expect(byTestId(tree, "stream-qr")).toBeUndefined();
-    // The placeholder holds the QR's own snapped square and caption line, so the box does not jump when the symbol
-    // lands (review m-7): the same cap, and the module count of THIS payload — QRCode's own matrix plus the quiet zone.
-    const box = byTestId(tree, "stream-qr-box")!;
-    const placeholder = walk(propsOf(box).children as ReactElement).find((el) => el.type === SeaznQrPlaceholder);
+    const placeholder = tree.find((el) => el.type === SeaznQrPlaceholder);
     expect(placeholder, "the placeholder renders").toBeDefined();
     expect(propsOf(placeholder!).maxSize).toBe(sheetQrCap());
-    const modules = QRCode.create(qrText(v.qr!), { errorCorrectionLevel: "H" }).modules.size + 2 * 4;
+    // The module count of THIS text — QRCode's own matrix at the house EC level, plus the quiet zone.
+    const modules = QRCode.create(CODE_TEXT, { errorCorrectionLevel: "H" }).modules.size + 2 * 4;
+    expect(modules, "PREMISE: the v2 payload is the v8 symbol §6.12 sized for").toBe(57);
     expect(propsOf(placeholder!).modules).toBe(modules);
-    // No payload yet (provisioning before the credentials exist): the box's own square, unsnapped.
-    const early = byTestId(body({ view: session({ qr: null }), balance: 2, qrImage: null }), "stream-qr-box");
-    expect(early, "premise: the waiting box shows before the credentials do").toBeDefined();
-    const ph = walk(propsOf(early!).children as ReactElement).find((el) => el.type === SeaznQrPlaceholder);
-    expect(propsOf(ph!).modules).toBeNull();
-    expect(byTestId(tree, "stream-qr-text")).toBeDefined();
+    expect(attr(byTestId(tree, "stream-qr-text")!, "value")).toBe(CODE_TEXT);
+    const asking = body({ ...base, code: { status: "loading" } });
+    expect(propsOf(asking.find((el) => el.type === SeaznQrPlaceholder)!).modules).toBeNull();
+    expect(byTestId(asking, "stream-qr-text")).toBeUndefined();
+    expect(attr(byTestId(asking, "stream-code-reissue")!, "disabled"), "no reissue while one is in flight").toBe(true);
+    const onRetryCode = vi.fn();
+    const refused = body({ ...base, code: { status: "error" }, onRetryCode });
+    expect(attr(byTestId(refused, "stream-code-error")!, "role")).toBe("alert");
+    expect(textAt(refused, "stream-code-error")).toContain(m("stream.code.error"));
+    click(byTestId(refused, "stream-code-retry"));
+    expect(onRetryCode).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ready, paired: the card folds to one line — a lime dot, 'Paired · Show the code again' — Go live ENABLED, no strip; opened, the same code body inside", () => {
+    const onToggleCode = vi.fn();
+    const folded = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", onToggleCode });
+    expect(byTestId(folded, "stream-code-card"), "no card: the phone is paired").toBeUndefined();
+    const d = byTestId(folded, "stream-code-disclosure")!;
+    expect(d.type).toBe("details");
+    expect(attr(d, "open")).toBe(false);
+    expect(textOf(d).replace(/\s+/g, " ")).toContain(`${m("stream.code.paired")} · ${m("stream.code.showAgain")}`);
+    expect(walk(propsOf(d).children as ReactElement).find((el) => attr(el, "data-tone") !== undefined && el.type === "span")?.props).toMatchObject({ "data-tone": "lime" });
+    expect(byTestId(folded, "stream-qr-text"), "folded: the code is not even in the DOM").toBeUndefined();
+    (attr(d, "onToggle") as (e: unknown) => void)({ currentTarget: { open: true } });
+    expect(onToggleCode).toHaveBeenCalledWith(true);
+    expect(attr(byTestId(folded, "stream-go-live")!, "disabled")).toBe(false);
+    expect(attr(byTestId(folded, "stream-go-live")!, "aria-describedby"), "nothing to say: no strip").toBeUndefined();
+    expect(folded.find((el) => el.type === PhoneStripView)).toBeUndefined();
+    expect(chainOf(folded)?.chain?.phone).toEqual({ tone: "lime", word: "paired", mark: null });
+    const opened = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL } });
+    expect(attr(byTestId(opened, "stream-code-disclosure")!, "open")).toBe(true);
+    expect(attr(byTestId(opened, "stream-qr-text")!, "value")).toBe(CODE_TEXT);
+    expect(byTestId(opened, "stream-code-reissue")).toBeDefined();
+    expect(qrImageOf(opened, "stream-qr")).toBeDefined();
+  });
+
+  it("Ready, silent (§6.9): amber — the dot, the Phone node 'Not answering', the strip 'Open Seazn Capture' — and Go live DISABLED", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: readModel({ phone: SILENT }) });
+    expect(attr(byTestId(tree, "stream-go-live")!, "disabled")).toBe(true);
+    expect(attr(byTestId(tree, "stream-go-live")!, "aria-describedby")).toBe("stream-why-f-1");
+    expect(propsOf(tree.find((el) => el.type === PhoneStripView)!).strip).toMatchObject({ tone: "amber", icon: "alert", body: { key: "stream.phone.silent" } });
+    expect(chainOf(tree)?.chain?.phone).toEqual({ tone: "amber", word: "notAnswering", mark: null });
+    const d = byTestId(tree, "stream-code-disclosure")!;
+    expect(walk(propsOf(d).children as ReactElement).find((el) => el.type === "span" && attr(el, "data-tone") !== undefined)?.props).toMatchObject({ "data-tone": "amber" });
+  });
+
+  it("Code ended (C5): 'This match is over' — no QR, no code line, no Go live, no chain, no strip; a reverted result (not finished, the code still ended) is Ready again", () => {
+    const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: MATCH_OVER });
+    expect(textAt(tree, "stream-match-over")).toBe(m("stream.phone.matchOver"));
+    for (const id of ["stream-go-live", "stream-code-card", "stream-code-disclosure", "stream-qr-text", "stream-credits-line", "stream-buy-pack-5"]) {
+      expect(byTestId(tree, id), id).toBeUndefined();
+    }
+    expect(chainOf(tree)).toBeUndefined();
+    expect(tree.find((el) => el.type === PhoneStripView)).toBeUndefined();
+    // …and at balance 0 it is still the line, never the forced chooser: there is nothing left to start.
+    expect(byTestId(body({ view: null, balance: 0, phone: MATCH_OVER }), "stream-buy-pack-5")).toBeUndefined();
+    const reverted = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", phone: { ...MATCH_OVER, finished: false } });
+    expect(byTestId(reverted, "stream-match-over")).toBeUndefined();
+    expect(byTestId(reverted, "stream-code-card"), "Ready may mint again").toBeDefined();
+    // A finished match whose code is still FINISHING (the grace): not over — but its code cannot be reissued (422).
+    const grace = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", codeOpen: true, code: { status: "ok", text: CODE_TEXT, image: SYMBOL }, phone: readModel({ finished: true, code: { issuedAt: "2026-09-14T11:00:00.000Z", state: "finishing", endCause: null } }) });
+    expect(byTestId(grace, "stream-match-over")).toBeUndefined();
+    expect(byTestId(grace, "stream-qr-text")).toBeDefined();
+    expect(byTestId(grace, "stream-code-reissue"), "no reissue on a finished match").toBeUndefined();
+  });
+
+  it("waiting (§6.12): no QR — the strip's 'Waiting for the phone's video', the far-cadence line only on the 60 s cadence, Cancel, and the folded code line (ruling A)", () => {
+    const near = body({ view: session(), balance: 2 });
+    expect(qrImageOf(near, "stream-qr")).toBeUndefined();
+    expect(byTestId(near, "stream-qr-text")).toBeUndefined();
+    expect(byTestId(near, "stream-poll-far")).toBeUndefined();
+    expect(byTestId(near, "stream-cancel")).toBeDefined();
+    expect(byTestId(near, "stream-code-disclosure"), "ruling A: Reissue stays one tap away").toBeDefined();
+    expect(propsOf(near.find((el) => el.type === PhoneStripView)!).strip).toEqual({ tone: "slate", icon: "clock", lead: "stream.phone.waitingVideo", body: null });
+    expect(chainOf(near)?.chain?.phone).toEqual({ tone: "amber", word: "starting", mark: null });
+    const far = body({ view: session(), balance: 2, phone: readModel({ phone: facts({ farPoll: true }) }) });
+    expect(textAt(far, "stream-poll-far")).toBe(m("stream.phone.pollFar"));
+    // Its order: the line, then Cancel.
+    const i = far.findIndex((el) => attr(el, "data-testid") === "stream-poll-far");
+    const j = far.findIndex((el) => attr(el, "data-testid") === "stream-cancel");
+    expect(i).toBeLessThan(j);
+  });
+
+  it("W24: the countdown renders EXACTLY as the server sends it — its (kind, reason) sentence and both durations — and none at all when `countdown` is null", () => {
+    const warming = { kind: "warming" as const, reason: "no_inbound_timeout" as const, elapsedMs: 45_000, remainingMs: 555_000 };
+    const w = body({ view: session({ countdown: warming }), balance: 2 });
+    expect(propsOf(w.find((el) => el.type === PhoneStripView)!).strip).toEqual({
+      tone: "amber", icon: "clock", lead: "stream.phone.waitingVideo",
+      body: { key: "stream.phone.countdown.warming.no_inbound_timeout", elapsedMs: 45_000, remainingMs: 555_000 },
+    });
+    const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ countdown: warming })} balance={2} />);
+    expect(html).toContain(`the stream is cancelled in <span class="whitespace-nowrap tabular-nums">9 min, 15 sec</span>`);
+    const lost = { kind: "live" as const, reason: "phone_lost" as const, elapsedMs: 160_000, remainingMs: 740_000 };
+    const liveView = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", countdown: lost });
+    const liveHtml = renderToStaticMarkup(<PhoneTabBody {...BODY} view={liveView} balance={1} phone={readModel({ phone: SILENT })} />);
+    expect(liveHtml).toContain(`No video from the phone for <span class="whitespace-nowrap tabular-nums">2 min, 40 sec</span> — the stream ends in <span class="whitespace-nowrap tabular-nums">12 min, 20 sec</span>`);
+    expect(liveHtml).toContain(`>${m("stream.chain.word.reconnecting")}<`);
+    // The empty case: a live session with the input down and NO countdown from the server shows no countdown sentence.
+    const none = renderToStaticMarkup(<PhoneTabBody {...BODY} view={session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })} balance={1} />);
+    expect(none).not.toMatch(/the stream (ends|is cancelled) in/);
+    expect(none).not.toContain("tabular-nums\">9 min");
+  });
+
+  it("O5: live, the input down, the phone still beating with notReady camera → 'Reconnecting…' and 'Phone is on a call — video paused', NO countdown, no '!' and no D3 phone box", () => {
+    const v = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", output: { state: "unknown", since: "2026-09-14T11:57:00Z", elapsedMs: 180_000 } });
+    const phone = readModel({ phone: facts({ notReady: "camera", state: "publishing" }) });
+    const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={v} balance={1} phone={phone} />);
+    expect(html).toContain(`>${m("stream.chain.word.reconnecting")}<`);
+    expect(m("stream.chain.word.reconnecting")).toBe("Reconnecting…");
+    expect(html).toContain(m("stream.phone.paused.camera"));
+    expect(m("stream.phone.paused.camera")).toBe("Phone is on a call — video paused");
+    expect(html).not.toMatch(/the stream (ends|is cancelled) in/);
+    expect(html, "the phone beats: no '!' on its node").not.toMatch(/data-node="phone"[^]*?data-mark="bang"[^]*?data-node="seazn"/);
+    const PHONE_BOX = 'data-testid="stream-output-warning" data-cause="phone"';
+    expect(html, "the strip replaced D3's phone sentence").not.toContain(PHONE_BOX);
+    // The positive pair: the same live view with NO reason (publishing, no notReady) — D3's phone box is back.
+    const plain = renderToStaticMarkup(<PhoneTabBody {...BODY} view={v} balance={1} phone={readModel({ phone: facts({ state: "publishing" }) })} />);
+    expect(plain).toContain(PHONE_BOX);
+    expect(plain).not.toContain(m("stream.phone.paused.camera"));
+    // A connected input says none of it: "Reconnecting…" only while the input is not connected.
+    const connected = renderToStaticMarkup(<PhoneTabBody {...BODY} view={{ ...v, ingest: { state: "connected", protocol: "srt" } }} balance={1} phone={phone} />);
+    expect(connected).not.toContain(m("stream.chain.word.reconnecting"));
+    expect(connected).not.toContain(m("stream.phone.paused.camera"));
+  });
+
+  it("C-1: a LEGACY session (no pairing) is today's panel — §3.2's chain words, no strip, no code line, no far-cadence line", () => {
+    let checked = 0;
+    for (const v of [session(), session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })]) {
+      const tree = body({ view: v, balance: 1, phone: LEGACY });
+      expect(chainOf(tree)?.chain, v.state).toEqual(chainFor(v));
+      expect(tree.find((el) => el.type === PhoneStripView), v.state).toBeUndefined();
+      expect(byTestId(tree, "stream-code-disclosure"), v.state).toBeUndefined();
+      expect(byTestId(tree, "stream-poll-far"), v.state).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(chainOf(body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, phone: LEGACY }))?.chain?.phone.word).toBe("noSignal");
+  });
+
+  it("no `qr` and no `reveal` is read: a projection carrying a smuggled v1 `qr` paints nothing from it", () => {
+    const smuggled = { ...session(), qr: { v: 1, sid: "x", cred: { srt: { passphrase: "LEAK" } } } } as unknown as StreamSessionView;
+    const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={smuggled} balance={2} />);
+    expect(html).not.toContain("LEAK");
+    expect(html).not.toContain("passphrase");
+    // The source half: no session read names `qr` (the code's QR comes from the stream-code route), and nothing asks
+    // `current` for a reveal (W4: the route answers 400 to one).
+    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    expect(src.match(/\b(view|shown|session|v)\??\.qr\b/g) ?? [], "a session's `qr` is read").toEqual([]);
+    expect(src.match(/reveal/gi) ?? [], "a reveal is asked for").toEqual([]);
+    expect(src, "PREMISE: the scan reads the panel (it names the code route)").toContain("/stream-code");
   });
 
   it("live (§3.3, mockup state 3): On air + the elapsed time in mono, a FULL-WIDTH solid red Stop, then a CLOSED Details led by the INGEST STATE (C6); the decided chip only when decided", () => {
-    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } });
+    const live = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } });
     const tree = body({ view: live, balance: 1 });
     expect(textAt(tree, "stream-on-air")).toBe(m("stream.onAir"));
     expect(byTestId(tree, "stream-rec"), "T9b: no REC badge in the tab — On air says it").toBeUndefined();
@@ -1270,13 +1443,13 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 
   it("ending: the flush copy names the destination and there is no Stop", () => {
-    const tree = body({ view: session({ state: "ending", qr: null, target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 });
+    const tree = body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 });
     expect(textAt(tree, "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club TV" }));
     expect(byTestId(tree, "stream-stop")).toBeUndefined();
   });
 
   it("ended: duration; '1 credit used' ONLY when the ledger says so (D3); the replay link only with a replay; the end reason", () => {
-    const base = { state: "completed" as const, qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "max_duration" as const };
+    const base = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "max_duration" as const };
     const paid = body({ view: session({ ...base, creditUsed: true, replayUrl: "https://www.youtube.com/watch?v=abc" }), balance: 1 });
     expect(textAt(paid, "stream-ended")).toContain(m("stream.phone.ended.duration", { duration: "45:00" }));
     expect(textAt(paid, "stream-credit-used")).toBe(m("stream.phone.ended.credits"));
@@ -1301,7 +1474,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(reasons.length, "no end reasons declared — the sweep would be vacuous").toBeGreaterThan(0);
     let checked = 0;
     for (const endReason of reasons) {
-      const never = body({ view: session({ state: "completed", qr: null, startedAt: null, endedAt: "2026-09-14T11:45:00Z", endReason, creditUsed: false }), balance: 1 });
+      const never = body({ view: session({ state: "completed", startedAt: null, endedAt: "2026-09-14T11:45:00Z", endReason, creditUsed: false }), balance: 1 });
       expect(endedChips(never), `${endReason}: one chip, and it is the never-live one`).toEqual(["stream-ended-never-live"]);
       expect(textAt(never, "stream-ended-never-live"), endReason).toBe(m("stream.phone.ended.neverLive"));
       expect(textAt(never, "stream-ended"), endReason).not.toContain(m("stream.phone.ended.duration", { duration: "0:00" }));
@@ -1309,7 +1482,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       expect(byTestId(never, "stream-again"), endReason).toBeDefined();
       // The positive pair, UNCHANGED: once it went live the card shows its duration and its end reason — a paid stop adds
       // "1 credit used", a free restart inside the reuse window does not.
-      const live = { state: "completed" as const, qr: null, startedAt: "2026-09-14T11:44:45Z", endedAt: "2026-09-14T11:45:00Z", endReason };
+      const live = { state: "completed" as const, startedAt: "2026-09-14T11:44:45Z", endedAt: "2026-09-14T11:45:00Z", endReason };
       const paid = body({ view: session({ ...live, creditUsed: true }), balance: 1 });
       expect(endedChips(paid), `${endReason}: paid stop`).toEqual(["stream-ended-duration", "stream-credit-used", "stream-end-reason"]);
       expect(textAt(paid, "stream-ended-duration"), endReason).toBe(m("stream.phone.ended.duration", { duration: "0:15" }));
@@ -1331,12 +1504,12 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 
   it("failed: the reason copy, Try again — and no end-reason chip (P1-F-b: a failed row carries none)", () => {
-    const failed = body({ view: session({ state: "failed", qr: null, failReason: "target_rejected" }), balance: 1 });
+    const failed = body({ view: session({ state: "failed", failReason: "target_rejected" }), balance: 1 });
     expect(textAt(failed, "stream-fail-reason")).toBe(m(FAIL_REASON_KEYS.target_rejected));
     expect(byTestId(failed, "stream-retry")).toBeDefined();
     expect(byTestId(failed, "stream-end-reason")).toBeUndefined();
     for (const reason of ["provision_timeout", "admission_timeout"] as const) {
-      expect(textAt(body({ view: session({ state: "failed", qr: null, failReason: reason }), balance: 1 }), "stream-fail-reason"), reason).toBe(m(FAIL_REASON_KEYS[reason]));
+      expect(textAt(body({ view: session({ state: "failed", failReason: reason }), balance: 1 }), "stream-fail-reason"), reason).toBe(m(FAIL_REASON_KEYS[reason]));
     }
   });
 
@@ -1350,18 +1523,21 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     // The positive pair, one credit up: the pill and the chain are back (and the tiles are not).
     const funded = body({ view: null, balance: 1, targets: TARGETS, selectedTargetId: "t1" });
     for (const id of ["stream-state-pill", "stream-go-live"]) expect(byTestId(funded, id), id).toBeDefined();
-    expect(chainOf(funded)?.chain).toEqual(chainFor(null));
+    expect(chainOf(funded)?.chain).toEqual(chainFor(null, { capture: { phone: facts(), countdown: null } }));
     expect(byTestId(funded, "stream-buy-pack-5")).toBeUndefined();
     // …and a FAILED session at balance 0 is not idle: it keeps its pill and stepper (the no_credits failure explains itself).
-    const failed = body({ view: session({ state: "failed", qr: null, failReason: "no_credits" }), balance: 0 });
+    const failed = body({ view: session({ state: "failed", failReason: "no_credits" }), balance: 0 });
     expect(byTestId(failed, "stream-state-pill")).toBeDefined();
   });
 
-  // I-1 (lane-close review): admission waives the credit for a restart inside the fixture's reuse window
-  // (stream-credits.ts `reuseWindowOpen`), so an org at balance 0 may start this match again — but the tab forced the
-  // chooser at balance 0 and no path reached Go live. The projection now says so (`restartFree`) and the tab obeys it.
-  it("I-1: idle at balance 0 with a FREE restart is Go live plus the free-restart line — not the forced chooser; without it, the tiles", () => {
-    const free = body({ view: null, balance: 0, restartFree: true, targets: TARGETS, selectedTargetId: "t1" });
+  // I-1 → W23 (capture QR v2 §6.7.4): admission waives the credit for a restart while the reuse window is open and fewer
+  // than three restarts are used. The projection's `restart` ({windowOpen, used, limit, free}) is the ONE authority —
+  // the panel counts nothing — and the tab obeys it: a free restart keeps Go live at balance 0, and the line says how
+  // many of the free restarts are used.
+  const FREE = { windowOpen: true, used: 1, limit: 3, free: true } as const;
+  const AT_LIMIT = { windowOpen: true, used: 3, limit: 3, free: false } as const;
+  it("W23 / I-1: idle at balance 0 with a FREE restart is Go live plus the emerald 'Free restarts used (1 of 3)' — not the forced chooser; at the limit or with no window, the tiles", () => {
+    const free = body({ view: null, balance: 0, restart: FREE, targets: TARGETS, selectedTargetId: "t1" });
     const go = byTestId(free, "stream-go-live");
     expect(go, "a free restart at balance 0 reaches Go live").toBeDefined();
     expect(propsOf(go!).disabled, "…and it is enabled").toBeFalsy();
@@ -1371,59 +1547,83 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
       tiles++;
     }
     expect(tiles, "no packs declared — the absence above would be vacuous").toBeGreaterThan(0);
-    expect(textAt(free, "stream-restart-free")).toBe(m("stream.phone.restartFree"));
-    // Not credits-only (B3): a startable tab keeps its pill and its chain.
+    expect(textAt(free, "stream-restart")).toBe(m("stream.restart.used", { used: 1, limit: 3 }));
+    expect(attr(byTestId(free, "stream-restart")!, "data-tone")).toBe("emerald");
     expect(byTestId(free, "stream-state-pill")).toBeDefined();
     expect(chainOf(free), "a free restart draws the chain").toBeDefined();
-    // Still no balance chip and no Buy more — the org holds nothing to count or top up from here.
     expect(byTestId(free, "stream-balance")).toBeUndefined();
 
-    // The positive pair, the SAME balance-0 idle with the window shut: the forced tiles, no Go live, no line.
-    const shut = body({ view: null, balance: 0, restartFree: false, targets: TARGETS, selectedTargetId: "t1" });
-    for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(shut, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+    // At the limit with no credits: not free, so the forced tiles — the restart line is Go live's, and Go live is gone.
+    const spent = body({ view: null, balance: 0, restart: AT_LIMIT, targets: TARGETS, selectedTargetId: "t1" });
+    for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(spent, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
+    expect(byTestId(spent, "stream-go-live")).toBeUndefined();
+    // The empty case: no window → no line, at any balance.
+    const shut = body({ view: null, balance: 0, restart: null, targets: TARGETS, selectedTargetId: "t1" });
     expect(byTestId(shut, "stream-go-live")).toBeUndefined();
-    expect(byTestId(shut, "stream-restart-free")).toBeUndefined();
-    expect(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }), "stream-restart-free"), "funded, window shut: no line").toBeUndefined();
-
-    // A funded org restarting inside the window is told the same true thing: this start will not spend a credit.
-    expect(textAt(body({ view: null, balance: 2, restartFree: true, targets: TARGETS, selectedTargetId: "t1" }), "stream-restart-free")).toBe(m("stream.phone.restartFree"));
-    // …and only at idle, where the start is: a running or finished session never shows it.
-    const up = [
-      session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", restartFree: true }),
-      session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true, restartFree: true }),
-      session({ state: "failed", qr: null, failReason: "no_inbound_timeout", balance: 0, restartFree: true }),
-    ];
-    for (const v of up) expect(byTestId(body({ view: v, balance: 0, restartFree: true }), "stream-restart-free"), v.state).toBeUndefined();
+    expect(byTestId(shut, "stream-restart")).toBeUndefined();
+    expect(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }), "stream-restart"), "funded, window shut: no line").toBeUndefined();
   });
 
-  /** The free-restart copy M-4 retired, per locale: it said the window ran "after it went live", as if each restart
-   *  opened a new one. */
-  const RETIRED_RESTART_FREE_COPY: Readonly<Record<string, string>> = {
-    en: "Restarting this match is free for 24 hours after it went live.",
-    es: "Reiniciar este partido es gratis durante 24 horas desde que empezó a emitirse.",
-    fr: "Relancer ce match est gratuit pendant 24 heures après son passage en direct.",
-    nl: "Deze wedstrijd opnieuw starten is gratis tot 24 uur nadat hij live ging.",
-  };
+  it("W23 (rev 2): at the limit the amber line carries the credit suffix and 'Uses 1 credit' leaves the credits line — '1 credit' said once; below it, emerald and no suffix", () => {
+    const SEP = " · ";
+    const limit = body({ view: null, balance: 9, restart: AT_LIMIT, targets: TARGETS, selectedTargetId: "t1" });
+    expect(textAt(limit, "stream-restart")).toBe(m("stream.restart.usedCredit", { used: 3, limit: 3 }));
+    expect(m("stream.restart.usedCredit", { used: 3, limit: 3 })).toBe("Free restarts used (3 of 3) — this one uses 1 credit");
+    expect(attr(byTestId(limit, "stream-restart")!, "data-tone")).toBe("amber");
+    expect(textAt(limit, "stream-credits-line")).toBe([m("stream.phone.credits.other", { n: 9 }), m("stream.phone.buyMore")].join(SEP));
+    const below = body({ view: null, balance: 9, restart: { windowOpen: true, used: 2, limit: 3, free: true }, targets: TARGETS, selectedTargetId: "t1" });
+    expect(textAt(below, "stream-restart")).toBe(m("stream.restart.used", { used: 2, limit: 3 }));
+    expect(textAt(below, "stream-restart")).not.toContain("credit");
+    expect(textAt(below, "stream-credits-line")).toBe([m("stream.phone.credits.other", { n: 9 }), m("stream.phone.buyMore")].join(SEP));
+    // The line sits above Go live, in the column under the picker (mockup state 4).
+    const i = limit.findIndex((el) => attr(el, "data-testid") === "stream-restart");
+    const j = limit.findIndex((el) => attr(el, "data-testid") === "stream-go-live");
+    expect(i).toBeGreaterThan(-1);
+    expect(i).toBeLessThan(j);
+  });
 
-  it("I-1: the free-restart line says the reuse window's own hours, in every locale", () => {
-    // Taken from the relay's declaration (config.ts CREDIT_REUSE_HOURS — the hours `withinReuseWindow` counts), never
-    // typed here: a window moved to 12 h leaves every locale's "24" a lie, and this is where that shows.
-    let locales = 0;
+  it("§6.12's new copy, in every locale: the same placeholders as English (a lost {remaining} renders a countdown with no time), and every sentence translated", () => {
+    const en = uiDict("en");
+    const keys = Object.keys(en).filter((k) => /^stream\.(restart\.|code\.|phone\.(countdown|paused)\.|phone\.(pairFirst|silent|waitingVideo|pollFar|matchOver)$|error\.phone_not_paired$)/.test(k));
+    const holes = (t: string) => [...t.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+    let checked = 0;
+    let sentences = 0;
     for (const l of LOCALES) {
-      const line = uiDict(l)["stream.phone.restartFree"];
-      expect(line?.length, `${l}: the key exists`).toBeGreaterThan(0);
-      expect(line, `${l} names the window's hours`).toMatch(new RegExp(`\\b${CREDIT_REUSE_HOURS}\\b`));
-      if (l !== "en") expect(line, `${l} is translated`).not.toBe(uiDict("en")["stream.phone.restartFree"]);
-      // M-4 (lane-close re-review): the window is anchored on the FIRST go-live, and a restart does not extend it. The
-      // retired copy ("free for 24 hours after it went live") read as a fresh window per restart; no locale keeps it.
-      expect(line, `${l} still carries the retired copy`).not.toBe(RETIRED_RESTART_FREE_COPY[l]);
-      locales++;
+      const d = uiDict(l);
+      for (const k of keys) {
+        expect(d[k], `${l} ${k}`).toBeTypeOf("string");
+        expect(holes(d[k]!), `${l} ${k}`).toEqual(holes(en[k]!));
+        if (l !== "en" && en[k]!.length > 20) {
+          expect(d[k], `${l} ${k} is translated`).not.toBe(en[k]);
+          sentences++;
+        }
+        checked++;
+      }
     }
-    expect(locales).toBe(4);
-    // The owner-ruled English, with the digit taken from the declaration as above.
-    expect(uiDict("en")["stream.phone.restartFree"]).toBe(
-      `Restarting this match is free within ${CREDIT_REUSE_HOURS} hours of first going live.`,
-    );
+    // 2 restart + 8 code + 3 countdown + 5 paused + 5 phone sentences + phone_not_paired.
+    expect(keys.length, "PREMISE: the sweep found §6.12's keys").toBe(24);
+    expect(checked).toBe(keys.length * LOCALES.length);
+    expect(sentences).toBeGreaterThan(0);
+    // The countdown sentences name the time left; the live one also the time gone (W24).
+    expect(holes(en["stream.phone.countdown.live.phone_lost"]!)).toEqual(["elapsed", "remaining"]);
+    expect(holes(en["stream.restart.usedCredit"]!)).toEqual(["limit", "used"]);
+  });
+
+  it("W23: the ENDED card carries the line too (Ready or Ended, inside the window); a live, waiting or failed session never does", () => {
+    const ended = session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true, restart: FREE });
+    const card = byTestId(body({ view: ended, balance: 0, restart: FREE }), "stream-ended")!;
+    expect(walk(propsOf(card).children as ReactElement).some((el) => attr(el, "data-testid") === "stream-restart"), "inside the ended card").toBe(true);
+    const up = [
+      session({ state: "live", startedAt: "2026-09-14T11:50:00Z", restart: FREE }),
+      session({ restart: FREE }),
+      session({ state: "failed", failReason: "no_inbound_timeout", balance: 0, restart: FREE }),
+    ];
+    let checked = 0;
+    for (const v of up) {
+      expect(byTestId(body({ view: v, balance: 0, restart: FREE }), "stream-restart"), v.state).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("B6: an OPENED chooser has a visible Close that hands back the idle controls; a FORCED one (balance 0) has none", () => {
@@ -1474,7 +1674,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 
   it("I1/I4: a relay refusal mid-session renders the switched-off state in the BUY slot and keeps every session control — Stop above all", () => {
-    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const live = session({ state: "live", startedAt: "2026-09-14T11:50:00Z" });
     const tree = body({ view: live, balance: 2, planGate: true, showBuy: true });
     expect(byTestId(tree, "stream-stop"), "a plan refusal took Stop away from a live stream").toBeDefined();
     expect(byTestId(tree, "stream-on-air")).toBeDefined();
@@ -1489,25 +1689,25 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 
   it("m1: a failed stop has its OWN copy while the session is still up — never the create copy, and gone once it has ended", () => {
-    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const live = session({ state: "live", startedAt: "2026-09-14T11:50:00Z" });
     const tree = body({ view: live, balance: 1, stopFailed: true });
     expect(textAt(tree, "stream-stop-error")).toBe(m("stream.error.stop"));
     expect(attr(byTestId(tree, "stream-stop-error")!, "role")).toBe("alert");
     expect(byTestId(tree, "stream-create-error")).toBeUndefined();
     expect(byTestId(body({ view: live, balance: 1 }), "stream-stop-error"), "the empty case").toBeUndefined();
     // A later read that finds it ended makes "did not stop" false — the card must not keep saying it.
-    const ended = session({ state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z" });
+    const ended = session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z" });
     expect(byTestId(body({ view: ended, balance: 1, stopFailed: true }), "stream-stop-error")).toBeUndefined();
   });
 
   it("N1/N3: the failure copy names the control ON SCREEN — Cancel before live, Stop once live — and nothing while it ends", () => {
     expect(m("stream.error.cancel"), "premise: the two sentences differ").not.toBe(m("stream.error.stop"));
     const EXPECTED: [string, StreamSessionView, string | null][] = [
-      ["provisioning", session({ state: "provisioning", qr: null }), m("stream.error.cancel")],
+      ["provisioning", session({ state: "provisioning" }), m("stream.error.cancel")],
       ["warming", session({ state: "warming" }), m("stream.error.cancel")],
-      ["live", session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), m("stream.error.stop")],
-      ["ending", session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" }), null],
-      ["failed", session({ state: "failed", qr: null, failReason: "machine_crash" }), null],
+      ["live", session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), m("stream.error.stop")],
+      ["ending", session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), null],
+      ["failed", session({ state: "failed", failReason: "machine_crash" }), null],
     ];
     let checked = 0;
     for (const [name, view, copy] of EXPECTED) {
@@ -1531,18 +1731,18 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   });
 
   it("m11: a failed row with NO reason (V410's fail_reason is nullable, unchecked) has its own copy — not a machine crash", () => {
-    const tree = body({ view: session({ state: "failed", qr: null, failReason: null }), balance: 1 });
+    const tree = body({ view: session({ state: "failed", failReason: null }), balance: 1 });
     expect(textAt(tree, "stream-fail-reason")).toBe(m("stream.fail.unknown"));
     expect(m("stream.fail.unknown"), "the premise: the two sentences differ").not.toBe(m(FAIL_REASON_KEYS.machine_crash));
   });
 
   it("m12: ending disables EVERY control — Buy more and an open chooser's tiles and Close included", () => {
-    const ending = session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const ending = session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" });
     const tree = body({ view: ending, balance: 2, showBuy: true });
     const ids = ["stream-buy-more", "stream-credits-close", ...STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`)];
     for (const id of ids) expect(attr(byTestId(tree, id)!, "disabled"), id).toBe(true);
     // The positive pair: live, the same controls are live.
-    const live = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true });
+    const live = body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true });
     for (const id of ids) expect(attr(byTestId(live, id)!, "disabled"), id).toBeFalsy();
   });
 
@@ -1551,7 +1751,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     let checked = 0;
     for (const [name, props] of [
       ["forced, balance 0", { view: null, balance: 0 }],
-      ["Buy more opened, live", { view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true }],
+      ["Buy more opened, live", { view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true }],
     ] as const) {
       const open = body({ ...props, checkoutOpen: true });
       const shut = body({ ...props, checkoutOpen: false });
@@ -1568,7 +1768,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     let checked = 0;
     for (const [name, props] of [
       ["forced, balance 0", { view: null, balance: 0 }],
-      ["Buy more opened, live", { view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true }],
+      ["Buy more opened, live", { view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true }],
     ] as const) {
       const intent = vi.fn();
       const bought: number[] = [];
@@ -1587,7 +1787,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     }
     expect(checked).toBe(2 * STREAM_CREDIT_PACKS.length * 3);
     // Nothing but a tile warms the sheet: the chooser's other controls carry no intent handler.
-    const tree = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true, onTileIntent: () => {} });
+    const tree = body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2, showBuy: true, onTileIntent: () => {} });
     const warmers = tree.filter((el) => typeof attr(el, "onPointerEnter") === "function");
     expect(warmers.map((el) => attr(el, "data-testid")).sort()).toEqual(STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`).sort());
   });
@@ -1758,7 +1958,7 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
   const W = 30_000; // spec §0 D3 — stream-session-view.test.ts pins the lib's OUTPUT_WARNING_AFTER_MS to it
   const live = (output: "ok" | "connecting" | "unknown" | "rejected" | null, elapsedMs = 0, over: Partial<StreamSessionView> = {}) =>
     session({
-      state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" },
+      state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" },
       output: output ? { state: output, since: "2026-09-14T11:59:00Z", elapsedMs } : null,
       ...over,
     });
@@ -1766,7 +1966,7 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
 
   it("idle: drawn to the PICKED destination — and not drawn at all with nothing to draw it to (empty, loading, failed list)", () => {
     const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
-    expect(chainOf(picked)?.chain).toEqual(chainFor(null));
+    expect(chainOf(picked)?.chain).toEqual(chainFor(null, { capture: { phone: facts(), countdown: null } }));
     expect(chainOf(picked)?.destination).toEqual({ kind: "twitch", label: "Alt" });
     let none = 0;
     for (const targets of [[] as StreamTarget[], { status: "loading" } as TargetsState, { status: "error" } as TargetsState]) {
@@ -1781,16 +1981,18 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
   it("with a session: drawn to the SESSION's destination, whatever the picker holds", () => {
     const tree = body({ view: session({ target: { id: "t9", kind: "facebook", label: "Page" } }), balance: 2, targets: TARGETS, selectedTargetId: "t1" });
     expect(chainOf(tree)?.destination).toEqual({ kind: "facebook", label: "Page" });
-    expect(chainOf(tree)?.chain?.phone.word).toBe("waiting");
+    expect(chainOf(tree)?.chain?.phone.word, "§6.12: a v2 session's phone is Starting").toBe("starting");
   });
 
   it("every state's chain is chainFor of the body's own projection; ended and failed draw none", () => {
     let checked = 0;
-    for (const v of [session({ state: "provisioning", qr: null }), session(), live("ok"), live("connecting", W - 1), live("connecting", W), session({ state: "ending", qr: null })]) {
-      expect(chainOf(body({ view: v, balance: 2 }))?.chain, v.state).toEqual(chainFor(v));
+    for (const v of [session({ state: "provisioning" }), session(), live("ok"), live("connecting", W - 1), live("connecting", W), session({ state: "ending" })]) {
+      // The body hands chainFor its read model's phone and the server's countdown (§6.12); a legacy session hands none.
+      expect(chainOf(body({ view: v, balance: 2 }))?.chain, v.state).toEqual(chainFor(v, { capture: { phone: facts(), countdown: v.countdown } }));
+      expect(chainOf(body({ view: v, balance: 2, phone: LEGACY }))?.chain, `${v.state} (legacy)`).toEqual(chainFor(v));
       checked++;
     }
-    for (const v of [session({ state: "completed", qr: null }), session({ state: "failed", qr: null, failReason: "no_credits" })]) {
+    for (const v of [session({ state: "completed" }), session({ state: "failed", failReason: "no_credits" })]) {
       expect(chainOf(body({ view: v, balance: 2 })), v.state).toBeUndefined();
       checked++;
     }
@@ -1819,9 +2021,10 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
     expect(propsOf(warnings(body({ view: live("connecting", W, { target: { id: "t2", kind: "twitch", label: "Alt" } }), balance: 1 }))[0]!).kind).toBe("twitch");
   });
 
-  it("a stale phone while live: the chain says No signal; the destination half still follows the output", () => {
+  it("a stale phone while live: the chain says Reconnecting… (§6.12; a legacy session keeps No signal); the destination half still follows the output", () => {
     const v = live("ok", 0, { ingest: { state: "disconnected", protocol: null } });
-    expect(chainOf(body({ view: v, balance: 1 }))?.chain).toMatchObject({ phone: { word: "noSignal" }, dest: { word: "live" } });
+    expect(chainOf(body({ view: v, balance: 1 }))?.chain).toMatchObject({ phone: { word: "reconnecting" }, dest: { word: "live" } });
+    expect(chainOf(body({ view: v, balance: 1, phone: LEGACY }))?.chain).toMatchObject({ phone: { word: "noSignal" }, dest: { word: "live" } });
   });
 
   // I-1 (owner 2026-10-01, option a): past the hold, the box POINTS AT THE PHONE while the phone has no signal, and at
@@ -1843,7 +2046,7 @@ describe("PhoneTabBody — the Signal path and the D3 warning (T9a)", () => {
     const warned = body({ view: live("connecting", W, silent), balance: 1 });
     expect(propsOf(byTestId(warned, "stream-stop")!).disabled, "the stream keeps running: Stop is there").toBeFalsy();
     // The chain's "!" follows the box (ruling 2026-10-01): on the phone node, not the destination, through the body.
-    expect(chainOf(warned)?.chain).toMatchObject({ phone: { word: "noSignal", mark: "bang" }, dest: { word: "notReceiving", mark: null } });
+    expect(chainOf(warned)?.chain).toMatchObject({ phone: { word: "reconnecting", mark: "bang" }, dest: { word: "notReceiving", mark: null } });
     expect(chainOf(body({ view: live("connecting", W), balance: 1 }))?.chain, "the phone sending: the '!' is the destination's")
       .toMatchObject({ phone: { mark: null }, dest: { word: "notReceiving", mark: "bang" } });
   });
@@ -1927,11 +2130,11 @@ describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the i
   });
 
   it("'Uses 1 credit' only where Go live would spend one: not inside the reuse window, not mid-session; ending disables Buy more", () => {
-    const free = body({ view: null, balance: 2, restartFree: true, targets: TARGETS, selectedTargetId: "t1" });
+    const free = body({ view: null, balance: 2, restart: { windowOpen: true, used: 0, limit: 3, free: true }, targets: TARGETS, selectedTargetId: "t1" });
     expect(textAt(free, "stream-credits-line")).toBe([m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP));
-    const live = body({ view: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
+    const live = body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
     expect(textAt(live, "stream-credits-line"), "a mid-match top-up stays").toBe([m("stream.phone.credits.other", { n: 2 }), m("stream.phone.buyMore")].join(SEP));
-    const ending = body({ view: session({ state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
+    const ending = body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 2 });
     expect(propsOf(byTestId(ending, "stream-buy-more")!).disabled).toBe(true);
     // The empty case: credits only (balance 0, no free restart) has no line at all — the tiles are the whole tab.
     expect(byTestId(body({ view: null, balance: 0 }), "stream-credits-line")).toBeUndefined();
@@ -2018,9 +2221,20 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     failTargets?: boolean;
     create?: () => unknown;
     stop?: () => unknown;
+    /** The `stream-phone` read model (T9). Unset: a paired, present phone (Ready's "paired" row). */
+    phone?: StreamPhone;
+    /** The read model's read fails while set. */
+    failPhone?: boolean;
+    /** The stream-code ensure (T5). Unset: the active code, as the route re-shows it. */
+    code?: () => unknown;
+    reissue?: () => unknown;
   };
   const TAB = { fixtureId: "f-1", orgId: "o-1", streamBalance: 3, streamSplit: null, monthlyAllowance: 0, currency: "eur" as const };
   const CURRENT = "GET /api/v1/fixtures/f-1/stream-sessions/current";
+  const PHONE = "GET /api/v1/fixtures/f-1/stream-phone";
+  const ENSURE = "POST /api/v1/fixtures/f-1/stream-code";
+  const REISSUE = "POST /api/v1/fixtures/f-1/stream-code/reissue";
+  const SETTINGS = "PUT /api/v1/fixtures/f-1/stream-settings";
 
   function serve(s: Server): Server {
     apiV1.mockImplementation(async (url, options) => {
@@ -2030,11 +2244,18 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       await new Promise((resolve) => setTimeout(resolve, 1));
       const method = options?.method ?? "GET";
       const key = `${method} ${url}`;
-      if (key === CURRENT || key === `${CURRENT}?reveal=1`) {
+      if (key === CURRENT) {
         if (s.failCurrent) throw new TypeError("Failed to fetch");
         // A fresh object per response, as JSON off the wire is — an identity-keyed effect must not be flattered.
         return s.current === null ? null : structuredClone(s.current);
       }
+      if (key === PHONE) {
+        if (s.failPhone) throw new TypeError("Failed to fetch");
+        return structuredClone(s.phone ?? readModel());
+      }
+      if (key === ENSURE) return s.code ? s.code() : { qr: { ...CODE_QR, exp: 1_900_000_000 }, issuedAt: (s.phone ?? readModel()).code?.issuedAt ?? "2026-09-14T11:00:00.000Z" };
+      if (key === REISSUE) return s.reissue!();
+      if (key === SETTINGS) return { targetId: (options?.json as { targetId: string | null }).targetId };
       if (key === "GET /api/v1/orgs/o-1/stream-targets") {
         if (s.failTargets) throw new TypeError("Failed to fetch");
         return structuredClone(s.targets);
@@ -2047,7 +2268,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   }
   const calls = (): string[] => apiV1.mock.calls.map(([url, o]) => `${o?.method ?? "GET"} ${url}`);
   const plainPolls = () => calls().filter((c) => c === CURRENT).length;
-  const reveals = () => calls().filter((c) => c === `${CURRENT}?reveal=1`).length;
+  const phoneReads = () => calls().filter((c) => c === PHONE).length;
+  const ensures = () => calls().filter((c) => c === ENSURE).length;
   /** Eight network hops' worth of time — enough for mount → current → reveal → encode, and every action → refresh. */
   const settle = async () => {
     for (let i = 0; i < 8; i++) await vi.advanceTimersByTimeAsync(1);
@@ -2090,7 +2312,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(attr(byTestId(island.tree(), "stream-loading")!, "role")).toBe("status");
     expect(textOf(byTestId(island.tree(), "stream-loading")!)).toContain(m("stream.phone.loading"));
     expect(island.tree().find((el) => el.type === PhoneTabBody)).toBeUndefined();
-    expect([...calls()].sort()).toEqual([CURRENT, "GET /api/v1/orgs/o-1/stream-targets"]);
+    expect([...calls()].sort()).toEqual([CURRENT, PHONE, "GET /api/v1/orgs/o-1/stream-targets"].sort());
     await settle();
     expect(byTestId(island.tree(), "stream-loading")).toBeUndefined();
     expect(bodyOf(island).view, "no session: idle").toBeNull();
@@ -2110,7 +2332,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const idle = track(await mount({ current: null, targets: TARGETS }));
     expect(bodyOf(idle).balance).toBe(TAB.streamBalance);
     // 1, not the page's 3: the right answer differs from the wrong one's constant.
-    const done = track(await mount({ current: session({ id: "s0", state: "completed", qr: null, balance: 1 }), targets: TARGETS }));
+    const done = track(await mount({ current: session({ id: "s0", state: "completed", balance: 1 }), targets: TARGETS }));
     expect(bodyOf(done).balance).toBe(1);
     bodyOf(done).onAgain();
     expect(bodyOf(done).view, "Start another returns the tab to idle").toBeNull();
@@ -2120,23 +2342,24 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   // I-1: the review's own case. A restart whose phone never connected failed (no_inbound_timeout) at balance 0, inside
   // the reuse window of the match's paid go-live — admission would waive the credit, so Try again must reach Go live.
   it("I-1: a failed no_inbound_timeout session at balance 0 INSIDE the window → Try again shows Go live and no forced tiles; OUTSIDE → the tiles", async () => {
-    const failed = { id: "s2", state: "failed" as const, qr: null, failReason: "no_inbound_timeout" as const, balance: 0 };
+    const failed = { id: "s2", state: "failed" as const, failReason: "no_inbound_timeout" as const, balance: 0 };
     let checked = 0;
-    for (const restartFree of [true, false]) {
-      const island = track(await mount({ current: session({ ...failed, restartFree }), targets: TARGETS }));
-      expect(bodyOf(island).restartFree, `${restartFree}: the container hands the projection's answer down`).toBe(restartFree);
+    for (const restart of [{ windowOpen: true, used: 1, limit: 3, free: true }, null]) {
+      const restartFree = restart !== null;
+      const island = track(await mount({ current: session({ ...failed, restart }), targets: TARGETS }));
+      expect(bodyOf(island).restart, `${restartFree}: the container hands the projection's answer down`).toEqual(restart);
       expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-retry"), "Try again is on the failed card").toBeDefined();
       bodyOf(island).onAgain();
       const b = bodyOf(island);
       expect(b.view, "Try again returns the tab to idle").toBeNull();
       expect(b.balance, "the projection's balance, kept").toBe(0);
       // …and the answer survives the dismiss: it is the FIXTURE's window, not the dismissed card's.
-      expect(b.restartFree, `${restartFree}: kept across Try again`).toBe(restartFree);
+      expect(b.restart, `${restartFree}: kept across Try again`).toEqual(restart);
       const tree = walk(expandWithHooks(PhoneTabBody, b));
       if (restartFree) {
         expect(byTestId(tree, "stream-go-live"), "inside the window: Go live").toBeDefined();
         expect(byTestId(tree, "stream-buy-pack-5"), "inside the window: no forced tiles").toBeUndefined();
-        expect(byTestId(tree, "stream-restart-free")).toBeDefined();
+        expect(textAt(tree, "stream-restart")).toBe(m("stream.restart.used", { used: 1, limit: 3 }));
       } else {
         expect(byTestId(tree, "stream-go-live"), "outside the window: no Go live").toBeUndefined();
         for (const pack of STREAM_CREDIT_PACKS) expect(byTestId(tree, `stream-buy-pack-${pack.size}`), `tile ${pack.size}`).toBeDefined();
@@ -2147,7 +2370,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("I-1: the balance-0 ENDED card still offers Start another, and it leads to Go live inside the window", async () => {
-    const ended = session({ id: "s1", state: "completed", qr: null, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true, balance: 0, restartFree: true });
+    const ended = session({ id: "s1", state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", creditUsed: true, balance: 0, restart: { windowOpen: true, used: 0, limit: 3, free: true } });
     const island = track(await mount({ current: ended, targets: TARGETS }));
     expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-again"), "Start another at balance 0").toBeDefined();
     bodyOf(island).onAgain();
@@ -2179,55 +2402,163 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).createError).toBeNull();
   });
 
-  it("a poll is not a reveal (De): the QR's first showing reveals ONCE, polls never do, Copy does, and the next session reveals once more", async () => {
-    const s = { current: session(), targets: TARGETS };
-    const island = track(await mount(s));
-    expect(reveals(), "the QR's first showing").toBe(1);
-    const before = plainPolls();
+  it("§6.12 polling: the read model is read at mount and every STREAM_POLL_MS while the tab is open — at idle too, where `current` rests — and never after it closes", async () => {
+    const island = track(await mount({ current: null, targets: TARGETS }));
+    expect(phoneReads(), "the mount's read").toBe(1);
+    const currentBefore = plainPolls();
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 3);
     await settle();
-    expect(plainPolls() - before, "three polls ran").toBe(3);
-    expect(reveals(), "polls are not reveals").toBe(1);
-    // The QR is encoded CLIENT-side from the payload itself, through the Seazn QR helper (T10, D7) — ONCE per payload
-    // (m10): every poll is a fresh object off the wire, and an effect keyed on the object re-encoded the same symbol on
-    // each. It is an SVG: the shared component, not this call, decides the painted size.
-    expect(seaznQr.renderSeaznQr.mock.calls[0]).toEqual([qrText(QR)]);
-    expect(seaznQr.renderSeaznQr, "the same payload was re-encoded per poll").toHaveBeenCalledTimes(1);
-    expect(bodyOf(island).qrImage).toEqual({ src: `data:image/svg+xml;charset=utf-8,len${qrText(QR).length}`, modules: 113 });
+    expect(phoneReads(), "three polls at idle").toBe(4);
+    expect(plainPolls() - currentBefore, "PREMISE: `current` does not poll at idle — the read model's poll is its own").toBe(0);
+    island.unmount();
+    islands = islands.filter((i) => i !== island);
+    const after = phoneReads();
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    expect(phoneReads(), "nothing polls behind a closed tab").toBe(after);
+  });
+
+  it("the body waits for the read model's first answer (a Ready drawn before it would flash 'no phone' at a paired one); a FAILED first read still lets it render", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    serve({ current: null, targets: TARGETS });
+    const inner = apiV1.getMockImplementation()!;
+    apiV1.mockImplementation(async (url, o) => {
+      if (url === "/api/v1/fixtures/f-1/stream-phone") await gate;
+      return inner(url, o);
+    });
+    const island = track(renderIsland(PhoneTab, TAB));
+    await settle();
+    expect(byTestId(island.tree(), "stream-loading"), "current answered; the read model has not").toBeDefined();
+    release();
+    await settle();
+    expect(bodyOf(island).phone?.phone?.present).toBe(true);
+    const failed = track(await mount({ current: null, targets: TARGETS, failPhone: true }));
+    expect(byTestId(failed.tree(), "stream-loading")).toBeUndefined();
+    expect(bodyOf(failed).phone, "no answer yet: the body reads no phone").toBeNull();
+  });
+
+  it("the code is asked for LAZILY: paired → never; opening 'Show the code again' → once; no phone → once at mount; legacy and match-over → never", async () => {
+    const paired = track(await mount({ current: null, targets: TARGETS }));
+    expect(ensures(), "paired and folded: no code asked").toBe(0);
+    expect(bodyOf(paired).code).toEqual({ status: "loading" });
+    bodyOf(paired).onToggleCode(true);
+    await settle();
+    expect(ensures(), "opened: one ensure").toBe(1);
+    expect(bodyOf(paired).code).toMatchObject({ status: "ok", text: CODE_TEXT });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    await settle();
+    expect(ensures(), "polls never re-ask an answered code").toBe(1);
+    apiV1.mockClear();
+    track(await mount({ current: null, targets: TARGETS, phone: readModel({ phone: null }) }));
+    expect(ensures(), "no phone: the card asks at once").toBe(1);
+    let checked = 0;
+    for (const [name, phone, current] of [
+      ["legacy", LEGACY, session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })],
+      ["match over", MATCH_OVER, null],
+    ] as const) {
+      apiV1.mockClear();
+      const island = track(await mount({ current, targets: TARGETS, phone }));
+      bodyOf(island).onToggleCode(true);
+      await settle();
+      expect(ensures(), name).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("W3: the code is encoded CLIENT-side from its own text — exactly the four keys, never the route's `exp` — once per text; Copy writes that text", async () => {
+    const island = track(await mount({ current: null, targets: TARGETS, phone: readModel({ phone: null }) }));
+    expect(seaznQr.renderSeaznQr.mock.calls).toEqual([[CODE_TEXT]]);
+    expect(Object.keys(JSON.parse(seaznQr.renderSeaznQr.mock.calls[0]![0]))).toEqual(["v", "code", "slot", "tok"]);
+    expect(bodyOf(island).code).toEqual({ status: "ok", text: CODE_TEXT, image: { src: `data:image/svg+xml;charset=utf-8,len${CODE_TEXT.length}`, modules: 113 } });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    await settle();
+    expect(seaznQr.renderSeaznQr, "the same text was re-encoded per poll").toHaveBeenCalledTimes(1);
     const writeText = vi.fn<(text: string) => Promise<void>>(async () => {});
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     bodyOf(island).onCopy();
     await settle();
-    expect(writeText).toHaveBeenCalledWith(qrText(QR));
+    expect(writeText).toHaveBeenCalledWith(CODE_TEXT);
     expect(bodyOf(island).copied).toBe(true);
-    expect(reveals(), "taking the paste code IS a reveal").toBe(2);
-    // m4: the next session carries a DIFFERENT payload. Until the encoder answers for it, there is no image — never the
-    // previous session's symbol under the new session's paste code.
-    const QR2: CaptureQrV1 = { ...QR, sid: "7d1e2f3a-4b5c-4d6e-8f70-819203a4b5c6" };
-    expect(qrText(QR2), "premise: the two payloads differ").not.toBe(qrText(QR));
-    let answer: (qr: SeaznQr) => void = () => {};
-    seaznQr.renderSeaznQr.mockImplementationOnce(() => new Promise<SeaznQr>((resolve) => { answer = resolve; }));
-    s.current = session({ id: "s2", qr: QR2 });
-    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
-    await settle();
-    expect(reveals(), "a new session's QR is a new disclosure").toBe(3);
-    expect(seaznQr.renderSeaznQr).toHaveBeenLastCalledWith(qrText(QR2));
-    expect(bodyOf(island).qrImage, "s1's symbol was painted over s2's payload").toBeNull();
-    answer({ src: "data:image/png;base64,S2", modules: 113 });
-    await settle();
-    expect(bodyOf(island).qrImage).toEqual({ src: "data:image/png;base64,S2", modules: 113 });
+    expect(calls().some((c) => /reveal/.test(c)), "no reveal is ever asked").toBe(false);
   });
 
-  it("m5: a clipboard that REFUSES is neither a reveal nor 'Copied'", async () => {
-    const island = track(await mount({ current: session(), targets: TARGETS }));
-    expect(reveals()).toBe(1);
+  it("m5: a clipboard that REFUSES is not 'Copied'", async () => {
+    const island = track(await mount({ current: null, targets: TARGETS, phone: readModel({ phone: null }) }));
     const writeText = vi.fn<(text: string) => Promise<void>>(async () => { throw new Error("NotAllowedError"); });
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     bodyOf(island).onCopy();
     await settle();
     expect(writeText, "the copy was attempted").toHaveBeenCalledTimes(1);
-    expect(reveals(), "nothing was taken, so nothing was disclosed").toBe(1);
     expect(bodyOf(island).copied).toBe(false);
+  });
+
+  it("a code reissued elsewhere (the read model names a newer one) is asked for ONCE — and the same stale answer never asks again; an expired code on a reverted match is re-minted once", async () => {
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    const island = track(await mount(s));
+    expect(ensures()).toBe(1);
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    s.phone = readModel({ phone: null, code: { issuedAt: "2026-09-14T11:30:00.000Z", state: "active", endCause: null } });
+    s.code = () => ({ qr: NEW, issuedAt: "2026-09-14T11:30:00.000Z" });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(ensures(), "the newer code, asked once").toBe(2);
+    expect(bodyOf(island).code).toMatchObject({ status: "ok", text: captureQrV2Text(NEW) });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS * 2);
+    await settle();
+    expect(ensures(), "now in step: no more asks").toBe(2);
+    // C5: the shown code expired and the result was reverted (finished false) — Ready mints again, once.
+    s.phone = readModel({ phone: null, code: { issuedAt: "2026-09-14T11:30:00.000Z", state: "ended", endCause: "expired" } });
+    s.code = () => ({ qr: CODE_QR, issuedAt: "2026-09-14T12:00:00.000Z" });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(ensures()).toBe(3);
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(ensures(), "the same ended answer does not spin the ensure").toBe(3);
+  });
+
+  it("Revoke & reissue asks the house confirm (danger, §6.12's copy) and POSTs reissue, showing the NEW code; declined, nothing is sent", async () => {
+    const NEW = CaptureQrV2.parse({ v: 2, code: "m3n4p5q6r7s8", slot: 0, tok: "Zz9_Yy8-Xx7Ww6Vv5Uu4Tt" });
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ phone: null }) });
+    s.reissue = () => ({ qr: NEW, issuedAt: "2026-09-14T11:40:00.000Z" });
+    const island = track(await mount(s));
+    confirmMock.mockResolvedValueOnce(false);
+    bodyOf(island).onReissue();
+    await settle();
+    expect(calls()).not.toContain(REISSUE);
+    expect(confirmMock).toHaveBeenCalledWith({
+      title: m("stream.code.reissue.confirm.title"), body: m("stream.code.reissue.confirm.body"),
+      confirmLabel: m("stream.code.reissue.confirm.button"), tone: "danger", size: "touch",
+    });
+    expect(m("stream.code.reissue.confirm.title")).toBe("Make a new code?");
+    bodyOf(island).onReissue();
+    await settle();
+    expect(calls().filter((c) => c === REISSUE)).toHaveLength(1);
+    expect(bodyOf(island).code).toMatchObject({ status: "ok", text: captureQrV2Text(NEW) });
+    // A refused reissue says so, with Retry (which re-shows whatever code is current).
+    s.reissue = () => { throw new ApiV1Error("the match is over", 422, "fixture_finished"); };
+    bodyOf(island).onReissue();
+    await settle();
+    expect(bodyOf(island).code).toEqual({ status: "error" });
+    bodyOf(island).onRetryCode();
+    await settle();
+    expect(bodyOf(island).code).toMatchObject({ status: "ok" });
+  });
+
+  it("§6.7.3: a pick writes the fixture's pre-pick (PUT stream-settings); the saved pre-pick is what the picker opens at until the organiser picks", async () => {
+    const s = serve({ current: null, targets: TARGETS, phone: readModel({ destination: { id: "t2", label: "Alt" } }) });
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId, "the saved pre-pick, not the oldest").toBe("t2");
+    expect(calls(), "opening writes nothing").not.toContain(SETTINGS);
+    bodyOf(island).onSelectTarget("t1");
+    await settle();
+    const put = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-settings" && o?.method === "PUT");
+    expect(put?.[1]?.json).toEqual({ targetId: "t1" });
+    expect(bodyOf(island).selectedTargetId, "the organiser's pick outranks the saved one").toBe("t1");
+    // A pre-pick that is not listed (archived) is not offered: the list's own choice stands.
+    const gone = track(await mount({ current: null, targets: TARGETS, phone: readModel({ destination: { id: "t9", label: "Old" } }) }));
+    expect(bodyOf(gone).selectedTargetId).toBe("t1");
   });
 
   it("§8a's encoding settings are the helper's: EC-H, a 4-module quiet zone, and the Seazn logo (amended 2026-09-30, D7)", () => {
@@ -2241,9 +2572,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("polls while a session is in flight and STOPS once it is terminal — nothing polls behind an ended card", async () => {
-    const s = { current: session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS };
+    const s = { current: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS };
     const island = track(await mount(s));
-    s.current = session({ state: "completed", qr: null });
+    s.current = session({ state: "completed" });
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
     await settle();
     expect(bodyOf(island).view?.state).toBe("completed");
@@ -2278,7 +2609,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("after Start another, a refused create SHOWS its refusal — the refresh must not resurrect the dismissed card over it", async () => {
-    const s = serve({ current: session({ id: "s0", state: "completed", qr: null, balance: 0 }), targets: TARGETS });
+    const s = serve({ current: session({ id: "s0", state: "completed", balance: 0 }), targets: TARGETS });
     s.create = () => { throw new ApiV1Error("no credits", 402, "no_credits", { featureKey: "streaming.relay" }); };
     const island = track(await mount(s));
     bodyOf(island).onAgain();
@@ -2287,7 +2618,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).view, "the old session came back over the refusal").toBeNull();
     expect(bodyOf(island).createError).toEqual({ code: "no_credits", holder: null });
     // An active_session refusal is the other way round: the running session IS the answer, so it is shown.
-    const running = session({ id: "s9", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+    const running = session({ id: "s9", state: "live", startedAt: "2026-09-14T11:50:00Z" });
     const busy = serve({ current: null, targets: TARGETS });
     busy.create = () => { busy.current = running; throw new ApiV1Error("busy", 409, "active_session", { sessionId: "s9" }); };
     const other = track(await mount(busy));
@@ -2318,7 +2649,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
   it("I1: a 402 at checkout while a session is UP never replaces the tab — the body keeps Stop and shows the gate; at idle it still does", async () => {
     checkout.fetch.mockResolvedValueOnce({ ok: false, error: "plan_lacks_relay", status: 402 });
-    const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
+    const s = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
     const island = track(await mount(s));
     bodyOf(island).onShowBuy();
     bodyOf(island).onBuy(5);
@@ -2334,7 +2665,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     // …and once the session ends and the organiser starts another, idle has nothing to protect: the gate IS the tab.
     // N5: the session ends the way it really does — the SERVER serves it completed and the next poll reads it; Start
     // another is only offered on an ended card, so it is pressed from there, never from a live one.
-    s.current = session({ id: "s1", state: "completed", qr: null, startedAt: "2026-09-14T11:50:00Z", endedAt: "2026-09-14T11:58:00Z", endReason: "stopped", creditUsed: true });
+    s.current = session({ id: "s1", state: "completed", startedAt: "2026-09-14T11:50:00Z", endedAt: "2026-09-14T11:58:00Z", endReason: "stopped", creditUsed: true });
     await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
     await settle();
     expect(bodyOf(island).view?.state, "the poll read the ended session").toBe("completed");
@@ -2358,8 +2689,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("Stop asks the repo's confirm dialog (danger) and POSTs THIS session's stop; a declined confirm sends nothing", async () => {
-    const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
-    s.stop = () => session({ id: "s1", state: "ending", qr: null });
+    const s = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
+    s.stop = () => session({ id: "s1", state: "ending" });
     const island = track(await mount(s));
     confirmMock.mockResolvedValueOnce(false);
     bodyOf(island).onStop();
@@ -2381,7 +2712,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const stops = () => calls().filter((c) => c === STOP).length;
     // Still warming: nothing is on air, so no confirm — but the read came before the stop.
     const s = serve({ current: session({ id: "s1" }), targets: TARGETS });
-    s.stop = () => session({ id: "s1", state: "completed", qr: null });
+    s.stop = () => session({ id: "s1", state: "completed" });
     const warm = track(await mount(s));
     const before = calls().length;
     bodyOf(warm).onCancel();
@@ -2394,9 +2725,9 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
     // The phone connected while the QR was on screen: the SAME tap is now a live stop, and asks.
     const went = serve({ current: session({ id: "s1" }), targets: TARGETS });
-    went.stop = () => session({ id: "s1", state: "ending", qr: null });
+    went.stop = () => session({ id: "s1", state: "ending" });
     const live = track(await mount(went));
-    went.current = session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:59:00Z" });
+    went.current = session({ id: "s1", state: "live", startedAt: "2026-09-14T11:59:00Z" });
     confirmMock.mockResolvedValueOnce(false);
     let base = stops();
     bodyOf(live).onCancel();
@@ -2407,7 +2738,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
     // The read fails: nobody knows whether it is on air, so it is the confirming stop.
     const blind = serve({ current: session({ id: "s1" }), targets: TARGETS });
-    blind.stop = () => session({ id: "s1", state: "ending", qr: null });
+    blind.stop = () => session({ id: "s1", state: "ending" });
     const unknown = track(await mount(blind));
     blind.failCurrent = true;
     confirmMock.mockClear();
@@ -2420,7 +2751,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     // It already ended (it timed out): nothing to stop, nothing asked.
     const gone = serve({ current: session({ id: "s1" }), targets: TARGETS });
     const done = track(await mount(gone));
-    gone.current = session({ id: "s1", state: "failed", qr: null, failReason: "admission_timeout" });
+    gone.current = session({ id: "s1", state: "failed", failReason: "admission_timeout" });
     confirmMock.mockClear();
     base = stops();
     bodyOf(done).onCancel();
@@ -2431,15 +2762,15 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("D14: a refused stop reads the server again (it may already have ended); only a failed read says so", async () => {
-    const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
-    s.stop = () => { s.current = session({ id: "s1", state: "completed", qr: null }); throw new ApiV1Error("not running", 409, "not_active"); };
+    const s = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
+    s.stop = () => { s.current = session({ id: "s1", state: "completed" }); throw new ApiV1Error("not running", 409, "not_active"); };
     const ended = track(await mount(s));
     bodyOf(ended).onStop();
     await settle();
     expect(bodyOf(ended).view?.state, "server state is the truth").toBe("completed");
     expect(bodyOf(ended).createError).toBeNull();
 
-    const down = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
+    const down = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS });
     down.stop = () => { down.failCurrent = true; throw new TypeError("Failed to fetch"); };
     const offline = track(await mount(down));
     bodyOf(offline).onStop();
@@ -2554,7 +2885,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   // instance built from the element the container rendered — the order React runs them in (render phase, then commit).
   it("M1: a sheet that THROWS while rendering takes down only the sheet — Stop stays, the lock and the tiles are freed, and it says so", async () => {
     checkout.fetch.mockResolvedValue({ ok: true, clientSecret: "cs_test_secret_1" });
-    const live = session({ state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z", balance: 2 });
+    const live = session({ state: "live", startedAt: "2026-09-14T11:50:00Z", balance: 2 });
     const island = track(await mount({ current: live, targets: TARGETS }));
     bodyOf(island).onShowBuy();
     bodyOf(island).onBuy(5);
@@ -2725,7 +3056,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
     it("no session, or a finished one: renders NOTHING, and reads only `current` — never the org's destinations", async () => {
       let checked = 0;
-      for (const current of [null, session({ state: "completed", qr: null }), session({ state: "failed", qr: null })]) {
+      for (const current of [null, session({ state: "completed" }), session({ state: "failed" })]) {
         apiV1.mockClear();
         const island = await probe({ current, targets: TARGETS });
         expect(island.tree(), String(current?.state)).toEqual([]);
@@ -2736,8 +3067,8 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     });
 
     it("live: the pill (announced), REC + elapsed and a confirming Stop that POSTs THIS session's stop", async () => {
-      const s = { current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS } as Server;
-      s.stop = () => { s.current = session({ id: "s1", state: "ending", qr: null }); return s.current; };
+      const s = { current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS } as Server;
+      s.stop = () => { s.current = session({ id: "s1", state: "ending" }); return s.current; };
       const island = await probe(s);
       const tree = island.tree();
       expect(byTestId(tree, "stream-stop-probe")).toBeDefined();
@@ -2751,14 +3082,14 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(textAt(island.tree(), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club" }));
       expect(byTestId(island.tree(), "stream-stop"), "no Stop while it ends").toBeUndefined();
       // It keeps polling while not terminal, and gets out of the way once the stream is done.
-      s.current = session({ id: "s1", state: "completed", qr: null });
+      s.current = session({ id: "s1", state: "completed" });
       await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
       await settle();
       expect(island.tree()).toEqual([]);
     });
 
     it("F1: a probe the frozen division page mounts NAMES its fixture; a row's own probe (no label) adds no line", async () => {
-      const live = () => ({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS }) as Server;
+      const live = () => ({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS }) as Server;
       serve(live());
       const labelled = track(renderIsland(PhoneStopProbe, { fixtureId: "f-1", label: "Green Giants vs Gold Geese" }));
       await settle();
@@ -2788,7 +3119,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     });
 
     it("N3: a stop that LANDED behind a lost response says nothing once a read finds it ending", async () => {
-      const s = { current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS } as Server;
+      const s = { current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS } as Server;
       s.stop = () => { s.failCurrent = true; throw new TypeError("Failed to fetch"); };
       const island = await probe(s);
       click(byTestId(island.tree(), "stream-stop"));
@@ -2796,7 +3127,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(textAt(island.tree(), "stream-stop-error"), "premise: the stop could not be confirmed").toBe(m("stream.error.stop"));
       // The network comes back and the stop had in fact landed.
       s.failCurrent = false;
-      s.current = session({ id: "s1", state: "ending", qr: null, startedAt: "2026-09-14T11:50:00Z" });
+      s.current = session({ id: "s1", state: "ending", startedAt: "2026-09-14T11:50:00Z" });
       await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
       await settle();
       expect(byTestId(island.tree(), "stream-ending")).toBeDefined();
@@ -2807,7 +3138,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     // as idle, idle as terminal, and never polled — so a stream on air behind one dropped request left the organiser
     // with no Stop until a reload. It now keeps reading at STREAM_POLL_MS until a read lands, and stops once one does.
     it("m3: a FAILED first read keeps polling at STREAM_POLL_MS until a read lands — then shows the live stream's Stop", async () => {
-      const s = { current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true } as Server;
+      const s = { current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true } as Server;
       apiV1.mockClear();
       const island = await probe(s);
       expect(island.tree(), "nothing known yet: nothing drawn").toEqual([]);
@@ -2831,7 +3162,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
 
     it("m3: the retry ENDS once a read lands on nothing — a probe with no stream stops asking; after a failed read at mount, a finished one does too", async () => {
       let checked = 0;
-      for (const answer of [null, session({ id: "s1", state: "completed", qr: null })]) {
+      for (const answer of [null, session({ id: "s1", state: "completed" })]) {
         const s = { current: answer, targets: TARGETS, failCurrent: true } as Server;
         apiV1.mockClear();
         const island = await probe(s);
@@ -2851,7 +3182,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("m3: the Phone tab shares the retry — a failed first read keeps polling until the live session it missed is shown", async () => {
-    const s = serve({ current: session({ id: "s1", state: "live", qr: null, startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true });
+    const s = serve({ current: session({ id: "s1", state: "live", startedAt: "2026-09-14T11:50:00Z" }), targets: TARGETS, failCurrent: true });
     apiV1.mockClear();
     const island = track(await mount(s));
     expect(bodyOf(island).view, "premise: the failed read leaves the tab usable, at idle").toBeNull();
@@ -2903,7 +3234,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   });
 
   it("Try again on a failed session is the same return to idle as Start another — the refusal cleared, the destination kept", async () => {
-    const s = serve({ current: session({ id: "s5", state: "failed", qr: null, failReason: "target_rejected" }), targets: TARGETS });
+    const s = serve({ current: session({ id: "s5", state: "failed", failReason: "target_rejected" }), targets: TARGETS });
     const island = track(await mount(s));
     bodyOf(island).onAgain();
     expect(bodyOf(island).view).toBeNull();
