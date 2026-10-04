@@ -13,6 +13,7 @@ primary_region = "lhr"
     NEXT_PUBLIC_BASE_URL               = "https://stg.seazn.club"
     NEXT_PUBLIC_POSTHOG_KEY            = "phc_xHZUn8jQRf66tgEhE5f3U5Z9XuLqGtAXAyDVLz6rcyMG"
     NEXT_PUBLIC_POSTHOG_HOST           = "https://eu.posthog.com"
+    NEXT_PUBLIC_POSTHOG_API_HOST       = "https://n.seazn.club"
     NEXT_PUBLIC_SENTRY_DSN             = "https://77cd7f66bdb8a600423328d6e561b6e9@o4512107033198592.ingest.de.sentry.io/4512119703208016"
 
 [http_service]
