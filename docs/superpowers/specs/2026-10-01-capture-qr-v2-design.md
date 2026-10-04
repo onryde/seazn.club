@@ -678,7 +678,7 @@ plan task (house rule "new write path").
   real actor (`source 'phone'`, with the pairing id).
 - **The phone gate (W5, T10)** is a new `admit` input, `phonePresent: boolean`, with the refusal `phone_not_paired`.
   Order (F-A5 kept): plan gates → `active_session` → **`phone_not_paired`** → `no_credits` → `target_not_found` →
-  `storage_exhausted`.
+  `storage_exhausted`. W5 is answered before the storage read, and after the destination doors (amended, §17.10).
   - The organiser route asks it of slot 0's current pairing.
   - The phone route and auto start pass `true`, because the caller **is** the current phone (T12 checked it first).
 
@@ -1861,6 +1861,21 @@ Amends §5.4's table with two rows.
     authority: the use-case sends `wireBeatAnswer`'s `pollSeconds` and stores that value as the answered cadence,
     and §6.9 judges silence against what was stored. Either value gives the same 60 s silent threshold
     (max(60, 5 + 30) = max(60, 10 + 30) = 60).
+
+### 17.10 W5 against the destination doors and the storage read
+
+Amends §6.7.1's order line. Recorded in the B4 fix round (2026-10-04). Both points are the controller's, not the
+seazn.club owner's: the first keeps the order as built, where §6.7.1 was silent (B4 review m-6), and the second is a
+controller ruling.
+
+- **The destination doors still answer first.** §6.7.1 orders only `admit`'s refusals. Before admission,
+  `startBroadcast` runs the destination doors: the holder guard and the two prior-teardown refusals, each
+  `target_in_use`. So with no phone **and** a destination another match is streaming to, the organiser hears
+  `target_in_use`. Its remedy (pick another destination, or stop the other match) is owed whether or not a phone is
+  paired. On a free destination the same Go live answers `phone_not_paired`.
+- **W5 is answered before the storage-usage read.** A Go live with no phone asks Cloudflare nothing. The check is
+  `admit` itself, asked without storage, so the plan gates and `active_session` (F-A5) still outrank it. Nothing was
+  measured, so this refusal records no storage snapshot. Every other admission refusal keeps its snapshot (ruling 13).
 
 **No spec text changes for these:**
 

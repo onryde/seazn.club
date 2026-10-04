@@ -4597,8 +4597,9 @@ describe.skipIf(!HAS_DB)("the DESTINATION lifecycle as a SEQUENCE — two orgs, 
           const stray = rec.calls.slice(callsBefore).filter((call) => !(call.sessionId != null && expired.has(call.sessionId)) && !(call.subjectId != null && inputs.includes(call.subjectId)));
           // DEST_REGRESSION_ADMISSION_READ below: a refusal FROM `admit` still takes the admission's storage measurement —
           // one read-only storageUsage, no session — and records it (a snapshot per admission check: ruling 13, streaming-r1
-          // plan "Data captured"); the SAMPLES and SNAPSHOTS test above and routes.test.ts A21 pin that snapshot. Every other refusal — the holder guard, an unreadable key, and
-          // every Directory refusal — asks the provider nothing.
+          // plan "Data captured"); the SAMPLES and SNAPSHOTS test above and routes.test.ts A21 pin that snapshot. Every other refusal — the holder guard, an unreadable key, W5's
+          // phone_not_paired (answered before the storage read, spec §17.10; every fixture here is paired) and every
+          // Directory refusal — asks the provider nothing.
           const fromAdmit = c.kind === "goLive" && (expected.code === "active_session" || expected.status === 404);
           expect(stray.map((call) => `${call.operation}:${call.sessionId ?? "-"}`), `${label}: a refusal called a provider`).toEqual(fromAdmit ? ["storageUsage:-"] : []);
           tally.refusalCallChecks++;
@@ -5472,6 +5473,37 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
       .rejects.toMatchObject({ status: 409, code: "active_session", extra: { sessionId: running.sessionId } });
   });
 
+  it("W5 is answered BEFORE the storage read (ruled in the B4 fix round): a Go live with no phone asks Cloudflare nothing — no storageUsage, no admission snapshot; the same Go live with the phone present reads storage exactly once (the positive pair)", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, phone: false, recorder: rec });
+    // A used-minutes figure no other suite's snapshot carries, so this start's admission snapshot is found by value.
+    const marker = randomInt(10_000, 1_000_000);
+    r.ingest.storage = { ...r.ingest.storage, totalStorageMinutes: marker };
+    const snapshots = async () => (await sql<{ n: number }[]>`
+      select count(*)::int as n from stream_storage_snapshots where source = 'admission' and used_minutes = ${marker}`)[0]!.n;
+    const storageReads = () => rec.calls.filter((c) => c.operation === "storageUsage").length;
+    await expect(organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    await new Promise((res) => setImmediate(res));
+    expect(storageReads(), "a refused W5 read storage").toBe(0);
+    expect(await snapshots(), "nothing was measured, so nothing is recorded").toBe(0);
+    await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    await organiserStart(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await new Promise((res) => setImmediate(res));
+    expect(storageReads(), "the recorder sees the admitted start's one storage read").toBe(1);
+    expect(await snapshots()).toBe(1);
+  });
+
+  it("§17.10 ORDER over the destination doors: no phone AND a destination another match is streaming to → target_in_use (the doors run before admission; §6.7.1 orders only admission's refusals); the same Go live on a FREE destination → phone_not_paired", async () => {
+    const r = await rig({ credits: 2, fixtures: 2, phone: false });
+    const [a, b] = r.fixtureIds as [string, string];
+    await pairPresentPhone(a, { at: r.deps.now() });
+    await organiserStart(r.auth, a, body(r.target.id), r.deps);   // a holds the destination
+    await expect(organiserStart(r.auth, b, body(r.target.id), r.deps)).rejects.toMatchObject({ status: 409, code: "target_in_use" });
+    const free = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Court two", streamKey: `k-${randomUUID()}` });
+    await expect(organiserStart(r.auth, b, body(free.id), r.deps)).rejects.toMatchObject({ status: 409, code: "phone_not_paired" });
+    expect(await sessionsOf(r.auth.orgId)).toBe(1);
+  });
+
   it("W5 after Revoke & reissue (T30, C3): the REVOKED code's pairing is left current and beating by design, yet it is not this fixture's phone — Go live answers phone_not_paired; a phone paired on the NEW code is admitted and the session rides that code", async () => {
     const r = await rig({ credits: 1, phone: false });
     const old = await pairPresentPhone(r.fixtureId, { at: r.deps.now(), phone: "phone-before-revoke" });
@@ -5546,9 +5578,10 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     const operator = await observe(() => startBroadcast(
       { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phoneB.pairingId }, b,
       { targetId: second.id, startCause: "operator", phonePresent: true }, deps));
-    // The M1 probe and the admission: two asks each, or one path skipped a gate the other kept.
-    expect(organiser.inputs).toHaveLength(2);
-    expect(operator.inputs).toHaveLength(2);
+    // The W5 probe (before the storage read), the M1 probe and the admission: three asks each, or one path skipped a gate
+    // the other kept.
+    expect(organiser.inputs).toHaveLength(3);
+    expect(operator.inputs).toHaveLength(3);
     // headroomMinutes is the ACCOUNT-WIDE pool (the C3 tests' reason): A's own reservation, and any other suite's
     // session, moves it between the two starts. Every other field is compared.
     const strip = (i: AdmitInput): Partial<AdmitInput> => {
@@ -5560,8 +5593,8 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(operator.inputs.map(strip)).toEqual(organiser.inputs.map(strip));
     // The documented difference is WHERE phonePresent comes from: read from the pairing for the organiser, the caller's
     // own word for the operator. Both true here — a present phone is paired on each fixture.
-    expect(organiser.inputs.map((i) => i.phonePresent)).toEqual([true, true]);
-    expect(operator.inputs.map((i) => i.phonePresent)).toEqual([true, true]);
+    expect(organiser.inputs.map((i) => i.phonePresent)).toEqual([true, true, true]);
+    expect(operator.inputs.map((i) => i.phonePresent)).toEqual([true, true, true]);
     expect(organiser.calls.length, "the organiser's start made provider calls").toBeGreaterThan(0);
     expect(operator.calls).toEqual(organiser.calls);
     r.tick(3000);

@@ -1316,6 +1316,17 @@ export async function startBroadcast(
     // drives it through createSession on an org with no override row.
     overrideRow(orgId, "streaming.relay"),
   ]);
+  // W5 BEFORE the storage read (controller ruling, B4 fix round): a Go live with no phone to stream from asks Cloudflare
+  // nothing. The probe is `admit` itself on everything it can weigh without storage, so the plan gates and
+  // `active_session` (F-A5) still outrank W5 in admit's own order; only a `phone_not_paired` answer is taken here, and
+  // every other refusal is left to the admission below, measurement included (ruling 13). Nothing was measured, so this
+  // refusal records no storage snapshot. The destination doors above still answer first (§17.10).
+  const early = admit({
+    overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phonePresent: opts.phonePresent,
+    headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES,
+    activeSessionId: (await activeSessionIdFor(fixtureId)) ?? priorMachineSessionId,
+  });
+  if (!early.ok && early.refusal === "phone_not_paired") refuse(early, 0);
   // M1 (B2 review): a saved key that will not open is refused BEFORE the storage read below — the first provider call a
   // create makes for itself — so an unreadable Go live asks Cloudflare nothing at all. A PROBE only: it answers solely for
   // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
