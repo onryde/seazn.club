@@ -59,7 +59,7 @@ Where the spec and the tree disagree, see **False premises found in planning**. 
 | `runItems` / `itemId`; `execute` plans after sign-in (`variantFor` needs the DB's variant order) | `HM/run.ts:768-787`, `:839-845` |
 | `runSlice`'s `refused` list lacks `NoLayerForWidth` | `HM/run.ts:1059-1062` |
 | `RunIdReused` checks only `<report-dir>/<run-id>/results.json` | `HM/run.ts:300-309`, `:1044-1045` |
-| `planL1` = the slice × LIFECYCLE at 1280; `planL2(pairs, cells)` sets `run` on every L2 case; `l2Planner` = the slice's cells | `HM/lib/layers.ts:103-106`, `:139-160`, `:183-195` |
+| `LayerCase` = `DrivenLayerCase {spec, noPath:null, notRun:null}` \| `PlannedLayerCase {spec:null, identity, noPath\|notRun}`; `planL1` = the slice × LIFECYCLE at 1280; `planL2(pairs, cells)` sets `run` on every L2 case; `l1Planner`/`l2Planner` = the slice's cells; `LAYER_PLANNERS` exists, chosen at `run.ts:1020` | `HM/lib/layers.ts:80-91`, `:103-106`, `:142-161`, `:174-197`; `HM/run.ts:1020` |
 | `CaseSchemaV3` and `RunResultsSchemaV3` are `z.strictObject` | `HM/lib/results.ts:177-221` |
 | `decideState`: error reds read `error: <name>: <msg>`; vacuous reds read `no checks ran (vacuous)` / `every check abstained (vacuous)` / `checked zero items (vacuous)` | `HM/lib/results.ts:248-263` |
 | `RefusedCall` message: `<METHOD> <path> → HTTP <status> <code>: <message>` | `HM/lib/driver/types.ts:236-252` |
@@ -218,7 +218,7 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" under
     - `gen-catalogue.ts` uses 1 for "drift".
 
     Unreadable input is 3 in `parity.ts` (`:58`, `:70`) and 2 in `render.ts` (`:55`). → D8, Task 6.
-12. **RULING CONFLICT, ruling 64 × ruling 61: "L2 = all 1,731 pair-runs" and "no ░".** Only 62 of the 1,731 runs have a harness script (M1 21, R4a 21, F1 20). `l2-pairs.json` holds no LIFECYCLE atom. 164 runs plan 🚫 (a named wave owes the path) and **1,505 plan ░ "no scenario script yet"** by construction (`layers.ts:139-160`). Read literally, ruling 61's "no ░" can never hold on the full L2 scope. → D7 puts the reading to the owner. Nothing in PR-A depends on the answer, but PR-B's verdict does.
+12. **RULING CONFLICT, ruling 64 × ruling 61: "L2 = all 1,731 pair-runs" and "no ░".** Only 62 of the 1,731 runs have a harness script (M1 21, R4a 21, F1 20). `l2-pairs.json` holds no LIFECYCLE atom. 164 runs plan 🚫 (a named wave owes the path) and **1,505 plan ░ "no scenario script yet"** by construction (`layers.ts:139-160`). Read literally, ruling 61's "no ░" can never hold on the full L2 scope. **Resolved by owner ruling 65 (2026-10-04, `_INDEX.md:919`):** "no ░" applies to driven cases only; the 1,505 planned ░ runs do not make a run harness-red. → D7.
 13. **"The full L1 grid is 231 driven runs."** 53 of the 231 cells are API-only with no builder control, so they plan 🚫 naming W4 or W5 (`api-only-ui.ts`). The 2 template-reachable cells drive through their gallery cards. So L1 = **178 driven + 53 🚫**, and that is still 231 cases (ruling 64's count holds).
 14. **"Item 15: forfeit and withdraw on league and knockout in the browser are unbuilt."** Half false. The full-grid L2 already drives M1 and R4a on `league|football` (M1@430, R4a@390) and `knockout|icehockey` (M1@834, R4a@768): runs 408, 64, 417 and 73 of `l2-pairs.json`. The 1280 half is still owed. → Task 3 pins the four runs; Task 14 Step 7 adds the 1280 proof.
 15. **"Void is a product path the harness never reached."** No `OrganiserDriver` method voids anything. The product's void is `core.void {event_id}` from the fixture console (per-row Void, and "Void last", `fixture-console.tsx:1253,1278-1286`). It is reachable in the browser; the harness simply never had the method. → D15, Task 14.
@@ -227,6 +227,8 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" under
 18. **"The Cloudflare cron worker can fire the weekly run."** It can only `POST ${BASE_URL}${path}` with `x-cron-secret` (`apps/cron-worker/src/call.ts:92-94`). It has no GitHub API target. This was moot after ruling 60; it is recorded so the option is not re-offered.
 19. **Design §7.5's "scheduling, competition and tiebreaker modules" are three directories.** They are two: `tiebreakers.ts` lives in `packages/engine/src/competition/`.
 20. **W2 prompt trap 2** ("declared 3/0 loses to the FIH 2/1 the rulebook adopts", SC-P4) contradicts the SC-P4 false premise (`_INDEX.md:1362-1366`) and design §8 ("FIH 2/1 is Pro League only"). It is not W1d's to fix. Task 22 records it beside the W2 backlog for W2's planner.
+21. **(Found in review fix round 1.) "The 11 `RefusedCall` reds in `w1drv-l3` are a harness-seeding shape"** (plan review 1, m7). They are not. All 11 are `POST /api/v1/entrants/<id>/withdraw → 422`, the R4 scenario's withdraw action (P5 → W4), counted at HEAD with Task 6 Step 0's one-liner. They are the product answering a scenario action, so they stay data. The setup-call guard the review proposed is adopted anyway (`SETUP_CALLS`, D6), because a refused SETUP call would be a harness fault, and none exists today to witness it.
+22. **(Found in review fix round 1.) "bench.yml builds the placement image with a `type=gha` cache"** (bench.yml:141's comment; ci.yml:594, 1080 and e2e.yml:612 say the same; plan review 1, I13). No workflow at HEAD sets `cache-from:` or `cache-to:`. `rtk proxy grep -an "cache-from:\|cache-to:" .github/workflows/*.yml` matches comments only. What IS load-bearing is `docker/setup-buildx-action@v3` before `build-push-action` (bench.yml:143, e2e.yml:614). Task 9 copies bench's step unchanged and adds buildx, and does not invent a cache the source never had.
 
 ---
 
@@ -239,7 +241,7 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" under
 - every case reports a state, with no ░ and no harness error;
 - case states are identical across the three runs.
 
-Product reds are data. → Tasks 6, 17. See D7 for the L2 ░ conflict.
+Product reds are data. → Tasks 6, 17. Narrowed by ruling 65 (D7).
 
 **Ruled: 62.** One plan, two PRs. PR-A is Tasks 1–16 and PR-B is Tasks 17–22. PR-A merges by the owner's hand, and PR-B is cut after.
 
@@ -285,8 +287,9 @@ Each job is one shard on a fresh Postgres with `sync:sports`, about 12 shards, w
 - `tools/matrix/ci/shards.json` holds `{L1: 8, L2: 2, L3: 2}` = **12 shard jobs** for the full scope, plus per-layer timing ceilings read from committed evidence.
 - Sizing, derived in Task 8 and re-derived in PR-B from measured times:
   - **L3:** 937 cases. On 4 workers, Σ 3,943 s ran in 988 s locally (`w1drv-l3`), so 2 shards are ~8–10 min of cases each.
-  - **L1:** 178 driven at 1 browser worker. The committed max per case is 123 s and the median 15–21 s, so 8 shards hold ~23 driven each.
-  - **L2:** 62 driven, so 2 shards hold 31 each.
+  - **L1:** 178 driven at 1 browser worker. The committed max per case is 132.7 s, across the six `TR/w1drv-l1/w1drv-l1-*` sub-runs (the directory has no top-level `results.json`), and the median is 15–21 s. So 8 shards hold ~23 driven each.
+  - **L2:** 62 driven of 1,731 planned, so 2 shards drive ~31 each. Planned cases cost 0 s (`recordPlanned`).
+- **A budget counts DRIVEN items, per stripe** (review C2). Each job's timeout comes from the driven count of ITS stripe, so the stripe with the most driven items sets the largest timeout. Counting planned items would budget L2 at 18 + ⌈866 × 30 / 60⌉ + 10 = 461 min, which is over the cap and refused.
 - Each shard keeps `--workers 4` on L3 and 1 on L1/L2 (D11).
 - Owner value: wall clock stays under ~1 h at $0. A stripe balances slow rows across shards, and the same case always lands in the same shard, which ruling 61's per-case comparison needs.
 - Rejected:
@@ -302,21 +305,22 @@ Each job is one shard on a fresh Postgres with `sync:sports`, about 12 shards, w
 **D6 — What counts as a harness error** (ruling 61's "no harness error"; `judge.ts` `harnessFaults`). A harness fault is any of:
 - **crash:** a red whose reason starts `error: crashed —` (`run.ts` `crashResult`);
 - **harness error:** a red whose reason starts `error: ` but not `error: RefusedCall:`. A `RefusedCall` is the product answering, so it is data (for example P5's `422 WRONG_PHASE`). Anything else (`DriverMisuse`, a timeout, a TypeError) is the harness or the environment;
-- **vacuous:** a red whose reason is one of `decideState`'s three vacuity reasons;
+- **vacuous:** a red whose reason is one of `decideState`'s three vacuity reasons (`results.ts:256,260,262`). They are matched as `decideState` writes them: two exact strings, and `checked zero items (vacuous): <ids>` by PREFIX, because it carries a suffix (review I3). The strings are exported from `results.ts` as `VACUOUS_REASONS` and imported by the judge, never retyped;
+- **setup refused:** a red reading `error: RefusedCall: <METHOD> <path> …` whose path is a SETUP call the harness makes before the scenario acts. That means signing in, creating the org/competition/division/stage/entrants, provisions and fillers (`SETUP_CALLS` in `lib/judge.ts`, read from `seed-org.ts` and the drivers' setup methods at Task 6 Step 0). A refused setup call means the harness asked wrongly (review m7). A RefusedCall on a scenario ACTION stays data. All 11 RefusedCall reds in `TR/w1drv-l3` are `POST /api/v1/entrants/<id>/withdraw` (the R4 action; P5 → W4), so they stay data;
 - **unplanned ░:** `not_run` without the `planned: true` marker (Task 2);
 - **run-level:** a missing, partial or aborted shard (`merge-shards.ts` refuses).
 
-⏳ `later` and 🚫 `no_path` are data (they name a wave). Each class is a named test.
+⏳ `later` and 🚫 `no_path` are data (they name a wave). ⬜ `needs_ruling` is data too: it names a missing decision (R12), and triage routes it to the owner, not to a wave (review m4). Each class is a named test.
 - Owner value: "harness-green" is mechanical, so nobody judges it by eye.
 - Rejected: reading exit codes alone (a shard that exits 0 with 40 crash reds is not green).
 
-**D7 — RULING CONFLICT (false premise 12), recommendation for the owner.** Read ruling 61's "no ░" as **"no ░ on a case the plan DRIVES"**.
+**D7 — RULED 65 (2026-10-04, `_INDEX.md:919`; owner "ok" to recommendation (a)). Ruling 61's "no ░" applies to driven cases only.**
 - The 1,505 L2 runs whose atom has no harness script are planned ░ (marker `planned: true`). They are recorded as the plan says, counted in `SUMMARY.md` per atom, and do not make a run harness-red.
-- A ░ WITHOUT the marker is a fault (D6).
-- Alternatives the owner may choose instead:
-  - **(b)** shrink ruling 64's L2 to the 62 + 164 runs that are not ░;
-  - **(c)** keep the literal reading. Then no full run can ever be harness-green until W2–W7 write the remaining atoms' scripts, and the weekly schedule can never be enabled.
-- Owner value of the recommendation: the weekly run starts now, and ░ shrinks wave by wave as scripts land (design §2: ░ = "not yet run"). PR-A is unaffected by the choice. Task 17 Step 0 asks the owner before the first dispatch, and the judge's `--planned-not-run` flag encodes the answer (`allow` default, or `refuse`).
+- A ░ on a case the plan DRIVES, meaning a ░ without the marker, is still harness-red (D6, "unplanned ░"). Task 6 pins it with a test.
+- The judge applies it as `--planned-not-run allow`, which is the default and is written explicitly in `matrix-truth.yml` with a comment citing ruling 65. `refuse` stays only as the mutation lever that Task 6's tests use. No workflow passes it.
+- Rejected by the ruling:
+  - (b) shrinking L2 to the drivable runs (it hides the backlog);
+  - (c) the literal reading (the schedule could never be enabled).
 
 **D8 — One exit convention (item 6): run.ts's.** Every matrix CLI uses:
 - **0:** done, a verdict or data;
@@ -343,11 +347,11 @@ Three CLIs change:
   - including bench (it doubles the task, and it is another programme's code);
   - nodenext for tests (18 false errors in app code).
 
-**D10 — The lock is append-only, in CI (item 1).** `HM/lock-append-only.ts --against HEAD^1` runs in `ci.yml`'s `gates` job, after the single-sport ratchet. Every entry present in the base's `plans.lock.json` must be byte-identical in the head, and any number of entries may be added. A removed or edited entry exits 1 and names the run.
+**D10 — The lock is append-only, in CI (item 1).** `HM/lock-append-only.ts --against HEAD^1` runs in `ci.yml`'s `gates` job, directly after `npm run reference:boundary`. That is not directly after the single-sport ratchet, because `ci-wiring.test.ts:351` pins `reference:boundary` as the line immediately after the ratchet (review I5). Every entry present in the base's `plans.lock.json` must be byte-identical in the head, and any number of entries may be added. A removed or edited entry exits 1 and names the run.
 - Owner value: the re-review's tamper (an existing entry and its results edited together) turns from "review must notice" into a red CI step.
 - Rejected: review-only (it already missed one).
 
-**D11 — Browser workers and `MAX_WORKERS` (items 17, 18): declined in favour of shards.**
+**D11 — Browser workers and `MAX_WORKERS` (items 17, 18): recommend declining in favour of shards. This is a recommendation, put to the owner in PR-A's body (Task 16 Step 3), because the owner listed items 17 and 18 (review m8). If the owner wants browser workers, they become a W1d follow-up task; nothing else in the plan depends on the answer.**
 - L1/L2 shards run one browser case at a time, and parallelism comes from the job matrix.
 - `BROWSER_WORKERS = routeTo("W1d", …)` is removed (W1d closes; the Q-A guard would red a route to a closed wave). The D10 refusal's text becomes "one browser case at a time per shard; parallelism is the shard matrix (W1d D11)".
 - `MAX_WORKERS` stays 8.
@@ -368,10 +372,11 @@ Three CLIs change:
   - no declaration on such a PR → exit 1, which fails the job;
   - `Matrix rows: none — <reason>` is allowed;
   - `all` means every row.
-- **The sample** is `--set pr-sample --rows <rows>`: the w1-driving cases on the declared rows, plus a fixed sample of 33. The fixed sample is the 24 slice cases plus `league|<sport>|LIFECYCLE` on the 9 sports the slice lacks.
+- **The sample** is `--set pr-sample --rows <rows>`: the w1-driving cases on the declared rows, plus a fixed sample of 33. The fixed sample is the 24 slice cases plus `league|<sport>|<variantFor(sport)>|LIFECYCLE` on the 9 sports the slice lacks. `variantFor` is the run's own builder-default reader, the one authority for the variant (review m10).
 - The job runs only when a paths filter matches: `packages/engine/**`, `apps/web/src/server/**`, `apps/web/src/lib/format-templates.ts`, `tools/matrix/**` or `pnpm-lock.yaml`.
-- **Judged** against the committed baseline's L3 (`HM/catalogue/baseline.json` names it: `TR/w1drv-l3/results.json` until PR-B replaces it with `TR/w1d-baseline/L3/results.json`). A ✅/⛔ case now in any other state is re-run once (`--set w1-driving --only <cell> --scenario <S>`), and only a reproduced move fails.
-- Owner value: an engine PR learns in ~10 minutes, on its own PR, whether it broke a case that worked.
+- **Judged** against the committed baseline's L3 (`HM/catalogue/baseline.json` names it: `TR/w1drv-l3/results.json` until PR-B replaces it with `TR/w1d-baseline/L3/results.json`). The baseline is restricted to the EXACT case ids the sample plans. `run-sample.ts` writes them from `planPrSample(rows, offlineBuilderDefault)` before it runs, and `judge.ts regression --expect <ids.json>` uses them. A cell filter would also pull in the baseline's three `league|cricket|test|LIFECYCLE|cricket#…` cases, which the fixed sample does not plan, so every PR would report them absent (review C3c).
+- **Re-run:** when the judge finds a ✅/⛔ case in any other state, the WHOLE sample is re-run once under a fresh run id, and only a move that reproduces fails. `run.ts --only` takes one cell, so re-running only the regressed cases would mean one process per cell. The pr-sample job's derived timeout therefore budgets two passes (`shards.json` `"passes": 2`; Task 8; review I10).
+- Owner value: an engine PR learns on its own PR whether it broke a case that worked. Task 7 Step 4 measures how long one pass takes on the local env, and that measured time, not a guess, is what PR-A's body quotes.
 - Rejected:
   - every PR (most touch only UI copy);
   - failing on the first red (flaky-shaped gates are run again, class 8).
@@ -493,8 +498,8 @@ Batching (ruling 41): every one of the 28 "W1d first tasks" items is owned by ex
 | Task | Items |
 |---|---|
 | T1 | 1 |
-| T2 | 2, 3, 4, 14, 21 |
-| T3 | 47's grid (ruling 64) |
+| T2 | 3, 4, 14, 21 (and the `scope` schema field item 2 needs; review m1) |
+| T3 | 2 (the full-grid planners, and the run's recorded scope; ruling 64's grid) |
 | T4 | — (sharding) |
 | T5 | 5, 12, 25 |
 | T6 | 6 |
@@ -694,16 +699,16 @@ export function main(argv: readonly string[]): number {
 if (isMainModule(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 ```
 
-Add the `gates` step to `ci.yml`, directly after the single-sport line. The comment says why `HEAD^1` (the same reasoning as R26's step):
+Add the `gates` step to `ci.yml`, directly after the `- run: npm run reference:boundary` line, NOT directly after the single-sport line: `ci-wiring.test.ts:351` asserts that `reference:boundary` is the line immediately after the ratchet, and that assertion stays as it is. The comment says why `HEAD^1` (the same reasoning as R26's step):
 
 ```yaml
       # Item 1 (W1d D10): plans.lock.json is append-only — an edited or removed
       # entry is a rewritten plan for evidence already committed. HEAD^1 as
-      # for the single-sport ratchet above.
+      # for the single-sport ratchet two steps above.
       - run: pnpm matrix:lock-check --against HEAD^1
 ```
 
-In `ci-wiring.test.ts`, add one test, "the lock gate runs in gates, unconditionally, after the single-sport ratchet". It uses the file's existing `stepOf`/`gatesSteps` helpers, the same way the R26 test does: the step exists, it has no `if:` and no `continue-on-error`, and its index is the single-sport step's index + 1.
+In `ci-wiring.test.ts`, add one test, "the lock gate runs in gates, unconditionally, right after reference:boundary". Write it in the line-based style of the existing R26 test (`:333-358`, which finds the ratchet line `ss` in the file's lines and asserts `lines[ss + 1]`): find the `reference:boundary` run line, then assert that the next non-comment line is `- run: pnpm matrix:lock-check --against HEAD^1`, that exactly one non-comment line names `matrix:lock-check`, and that no `if:` or `continue-on-error` sits between it and the next `- ` step. The R26 test at `:351` still passes unchanged; re-run it to prove that.
 
 - [ ] **Step 4: Run it and see it pass**
 
@@ -731,7 +736,7 @@ Run scoped tsc on `tools/matrix/lib/lock-diff.ts tools/matrix/lock-append-only.t
 
 ---
 
-### Task 2: What a result records — scope, planned marker, L2 run, fillers, shard (items 2, 3, 4, 14, 21)
+### Task 2: What a result records — scope, planned marker, L2 run, fillers, shard (items 3, 4, 14, 21; item 2's schema field)
 
 **Why:**
 - A committed run cannot say whether ░ was planned or a harness failure: the I-2 heuristic is `durationMs === 0` (item 3).
@@ -756,7 +761,7 @@ All additions are OPTIONAL fields on the strict v3 schemas, so every committed r
 - Produces, all optional, on `CaseSchemaV3`:
   - `planned: z.literal(true)`
   - `l2: z.strictObject({ n: z.number().int().min(1), covers: z.array(z.string().min(1)).min(1), l3Gap: z.string().min(1).nullable() })`
-  - `fillers: z.record(z.enum(FILLER), z.number().int().min(1))`
+  - `fillers: z.partialRecord(z.enum(FILLER), z.number().int().min(1))`. It must be `partialRecord`: in zod 4, `z.record(z.enum(…), …)` is EXHAUSTIVE and would refuse a run that ran one filler (review I2).
 - Produces on `RunResultsSchemaV3`:
   - `shard: z.strictObject({ index: z.number().int().min(1), of: z.number().int().min(2).max(MAX_SHARDS), planSize: z.number().int().min(1) }).refine(s => s.index <= s.of)`
   - `shards: z.number().int().min(2).max(MAX_SHARDS)`
@@ -804,7 +809,7 @@ describe("W1d optional fields (items 3, 4, 21; shard)", () => {
 
 If `results.test.ts` has no `validV3Run()` builder, Step 0 names the existing fixture and the test uses it. Do not create a second fixture.
 
-Create `run-planned-marker.test.ts`. It drives `execute` with the existing fake-driver deps, the way `run-layers.test.ts` already does, through `RunDeps.planCases`, with a planner that returns one driven case, one 🚫 case and one ░ case:
+Create `run-planned-marker.test.ts`. It drives `execute` with the existing fake-driver deps, the way `run-cli.test.ts` already does (the only test file that passes `planCases:` at HEAD), through `RunDeps.planCases`, with a planner that returns one driven case, one 🚫 case and one ░ case:
 
 ```ts
 it("recordPlanned marks every case it writes; a driven case never carries the marker", async () => {
@@ -834,7 +839,7 @@ it("a browser case records the setup fillers it ran; an HTTP case records none",
 });
 ```
 
-`runWithFakePlan`, `runLayered` and `runWithFakeBrowser` are thin wrappers over `execute` + `fake-driver.ts`, defined at the top of this file. Model them on `run-layers.test.ts`'s existing helper (Step 0 names it). A fake browser driver exposes `fillers` exactly like `BrowserDriver.fillers` (`browser-driver.ts:585`).
+`runWithFakePlan`, `runLayered` and `runWithFakeBrowser` are thin wrappers over `execute` + `fake-driver.ts`, defined at the top of this file. Model them on `run-cli.test.ts`'s existing `planCases` helper (Step 0 names it). A fake browser driver exposes `fillers` exactly like `BrowserDriver.fillers` (`browser-driver.ts:585`).
 
 Extend `parity.test.ts` with:
 - "a browser case carrying `planned: true` is notDriven even when its key maps";
@@ -851,7 +856,21 @@ Run the vitest template on the three test files. Expected: the new `results.test
 3. In `run.ts` `runCase`, when the LayerCase carries `run !== null` and `layer === "L2"`, write `l2: { n: run.n, covers: run.covers, l3Gap: run.l3Gap }`. Do the same in `recordPlanned` for an L2 planned case: a ░ L2 run still names its pair-run.
 4. In `run.ts` `runCase`, when `cli.driver === "browser"` and the driver exposes `fillers` with at least one non-zero entry, write `fillers` (only the non-zero names).
 5. In `parity.ts` notDriven, accept `b.planned === true && b.checks.length === 0` as well as the existing unmapped-key shape.
-6. In `committed-plans.ts:143`, `judgeRun` uses `c.planned === true` when ANY case in the run carries the field. It falls back to the `durationMs === 0` heuristic only for runs that predate W1d. Write this as a named branch, `const marked = run.cases.some(c => c.planned !== undefined)`, with a comment: "W1d item 3; runs before it keep I-2".
+6. In `committed-plans.ts` `judgeRun` (`:125-160`), **keep the I-2 heuristic exactly as it is**. ADD a marker cross-check that applies only to runs that carry the marker. Two conditions, two refusals (review I4):
+
+   ```ts
+   // W1d item 3: the marker is a SECOND witness beside I-2's shape, never a replacement.
+   const marked = cases.some((c) => c.planned !== undefined);
+   // …inside the per-case loop, after `p`/driven are known:
+   if (marked && p !== undefined && !(c.planned === true && c.durationMs === 0 && c.checks.length === 0)) {
+     wrong.push(`${c.caseId}: the plan records it planned, stored without the planned shape (planned=${c.planned}, ${c.durationMs} ms, ${c.checks.length} check(s))`);
+   }
+   if (c.planned === true && plan.driven.has(key)) {
+     wrong.push(`${c.caseId}: the plan DRIVES this case, stored with planned: true — a driven result recorded as planned (class 6)`);
+   }
+   ```
+
+   The second check does not depend on `marked`, because a single stray marker is exactly the case it catches.
 
 - [ ] **Step 4: Run and see them pass**
 
@@ -863,10 +882,10 @@ tools/matrix/__tests__/run-planned-marker.test.ts
 tools/matrix/__tests__/parity.test.ts
 tools/matrix/__tests__/committed-matrix.test.ts
 tools/matrix/__tests__/committed-plans-frozen.test.ts
-tools/matrix/__tests__/run-layers.test.ts
+tools/matrix/__tests__/run-cli.test.ts
 ```
 
-All green; `files 6`. The committed-matrix pass proves every committed run still parses (its `RESULTS_FLOOR` count is in its own output).
+All green; `files 6` (`run-planned-marker.test.ts` is new; the other five exist at HEAD). The committed-matrix pass proves every committed run still parses (its `RESULTS_FLOOR` count is in its own output).
 
 - [ ] **Step 5: Mutate**
 
@@ -874,7 +893,9 @@ All green; `files 6`. The committed-matrix pass proves every committed run still
 |---|---|
 | Drop `planned: true` from `recordPlanned` | "recordPlanned marks every case it writes" |
 | In `runCase`, write `l2` only when `state === "works"` | "an L2 case records its run … driven or planned" |
-| In `judgeRun`, `marked` → `false` | Add to `committed-plans-frozen.test.ts`: "a W1d-shaped run (marked) whose ░ case has `durationMs: 5` but `planned: true` judges as planned". It fails under the mutant. |
+| In `judgeRun`, delete the first new check (planned-shape) | Add to `committed-plans-frozen.test.ts`: "a marked run where one lock-planned case LACKS `planned: true` (the shape `recordPlanned` would write if it forgot one case) is wrong, naming the case". |
+| In `judgeRun`, delete the second new check (marker on a driven key) | Add: "a run where one lock-DRIVEN case carries `planned: true` with `durationMs` > 0 and checks (a driven result relabelled) is wrong". Under the old I-2 heuristic alone this case passes, so the test witnesses the new guard and not the old one. |
+| Both mutated at once | Not done: class 3 (they are mutated one at a time). |
 
 - [ ] **Step 6: Scoped tsc, eslint, commit**
 
@@ -886,147 +907,215 @@ Run scoped tsc on `results.ts run.ts parity.ts`, and eslint on all changed files
 
 **Why:**
 - Ruling 64 sets the full scope: L1 is 231 cells at 1280, and L2 is the 1,731 runs.
-- `l1Planner`/`l2Planner` plan only the 6-cell slice (`layers.ts:183-195`).
+- `LAYER_PLANNERS` (`layers.ts:197`, chosen at `run.ts:1020`) maps `L1`/`L2` to `l1Planner`/`l2Planner`. Both are `PlanLayers` functions over the 6-cell slice (`layers.ts:174-195`).
 - `planOf` cannot say which of the two a run planned (item 2).
 - `counts.json` says L1 is 462 (false premise 3).
 
+Re-pinned against `layers.ts` at HEAD (review I1). A `LayerCase` is either a `DrivenLayerCase` `{ layer, width, run, spec: CaseSpec, noPath: null, notRun: null }` or a `PlannedLayerCase` `{ layer, width, run, spec: null, identity: CaseIdentity, noPath | notRun }` (`layers.ts:80-91`). A case's id is `layerCaseId(c)` (`:98`). Tests tell the two shapes apart by `c.spec !== null`.
+
 **Files:**
 - Modify:
-  - `tools/matrix/lib/layers.ts`: `planL1Grid`, `l1GridPlanner`, `l2GridPlanner`, `LAYER_PLANNERS` keyed by scope;
-  - `tools/matrix/run.ts`: `parseCli` `--scope`, `planOf`, USAGE;
+  - `tools/matrix/lib/layers.ts`: `planL1Grid`, `l1GridPlanner`, `l2GridPlanner`, `ALL_CELLS`, and a NEW `LAYER_GRID_PLANNERS` beside the existing `LAYER_PLANNERS`, which stays unchanged;
+  - `tools/matrix/run.ts`: `parseCli` `--scope`, planner selection `:1020`, `planOf`, USAGE;
   - `tools/matrix/lib/counts.ts:99`;
   - `tools/matrix/catalogue/counts.json` (regenerated through `pnpm matrix:catalogue`, never hand-edited);
   - `tools/matrix/__tests__/committed-plans.ts` (`expectedPlanFor` reads `--scope grid`);
   - `tools/matrix/__tests__/committed-catalogue.test.ts:271`.
 - Test:
   - `tools/matrix/__tests__/layers-grid.test.ts` (create);
-  - `tools/matrix/__tests__/run-cli.test.ts` (extend).
+  - `tools/matrix/__tests__/layers.test.ts` and `tools/matrix/__tests__/run-cli.test.ts` (both exist; extend).
 
 **Interfaces:**
 - Produces:
   - `type LayerScope = "slice" | "grid"`;
-  - `LAYER_PLANNERS: Record<"L1" | "L2", Record<LayerScope, LayeredPlanner>>`;
-  - `planL1Grid(variantFor): LayerCase[]` (231 cases);
+  - `LAYER_GRID_PLANNERS: Readonly<Record<"L1" | "L2", PlanLayers>>`;
+  - `planL1Grid(variantFor: (sport: string) => string): LayerCase[]` (231 cases, `ROW_KEYS` × `SPORT_KEYS` order);
+  - `ALL_CELLS: ReadonlySet<string>` (every `cellId(row, sport)`);
   - `Cli.scope?: LayerScope`;
   - `planOf` returns `--layer L1 --scope grid` for a grid run. A slice run keeps today's `--layer L1` string, so every committed lock entry still matches.
+- Grid planners take no `--only`/`--scenario`. The grid is the whole grid, and a filter is a usage refusal (`refuseFilters`, `layers.ts`, as the named sets do).
 
 - [ ] **Step 0: Pin the grid's facts from the committed files**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec && node -e 'const p=require("./tools/matrix/catalogue/l2-pairs.json");const r=p.runs??p;console.log(r.length);for(const [row,sport,sc] of [["league","football","M1"],["league","football","R4a"],["knockout","icehockey","M1"],["knockout","icehockey","R4a"]])console.log(row,sport,sc,JSON.stringify(r.filter(x=>x.row===row&&x.sport===sport&&x.scenario===sc).map(x=>[x.n,x.width])))'
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec && sed -n '78,100p;170,200p' tools/matrix/lib/layers.ts
 ```
 
-Expected: `1731`, then one line per pair naming its `n` and width. False premise 14 says M1@430, R4a@390, M1@834 and R4a@768. Record the four `n` values in the task report; the test below reads them from the file, not from this plan.
+Expected: `1731`, then one line per pair naming its `n` and width. False premise 14 says M1@430, R4a@390, M1@834 and R4a@768. Record the four `n` values; the test reads them from the file, not from this plan. Re-read the `LayerCase` types; if they moved, adapt the code below to them and record it.
 
 - [ ] **Step 1: Write the failing tests**
 
-`layers-grid.test.ts`. Every expected count is derived from the committed catalogue files and rulings, never from `planL1Grid`/`planL2`:
+`layers-grid.test.ts`. Every expected count is derived from the catalogue constants, the committed `counts.json` and the rulings, never from `planL1Grid`/`planL2`:
 
 ```ts
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS } from "../lib/catalogue.ts";
 import { TEMPLATE_ROW } from "../lib/templates.ts";
 import { HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
-import { L1_WIDTH, LAYER_PLANNERS, planL1Grid } from "../lib/layers.ts";
+import { L1_WIDTH, LAYER_GRID_PLANNERS, layerCaseId, planL1Grid, type LayerCase } from "../lib/layers.ts";
 import { loadL2Pairs } from "../lib/pairs.ts";          // pairs.ts:216
 // variantFor is (sport) => string (run.ts:225); offlineBuilderDefault (variants.ts:34) is that signature, read from the
 // committed builder defaults with no DB — the committed-plans judge's stand-in.
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
+const COUNTS = JSON.parse(readFileSync(new URL("../catalogue/counts.json", import.meta.url), "utf8"));
 const CELLS = (TEMPLATE_ROW_KEYS.length + API_ONLY_ROWS.length) * SPORT_KEYS.length;
-const TEMPLATE_REACHED = Object.values(TEMPLATE_ROW).length;   // box-league → group_only, t20-super8 → group_group_ko
+const TEMPLATE_REACHED = Object.keys(TEMPLATE_ROW).length;   // box-league → group_only, t20-super8 → group_group_ko
+const driven = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec !== null);
+const planned = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec === null);
 
 describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39)", () => {
   const cases = planL1Grid(offlineBuilderDefault);
-  it("plans one case per cell of the catalogue, all at 1280", () => {
+  it("plans one case per cell — the count the corrected counts.json states — all at 1280", () => {
     expect(CELLS).toBe(231);
+    expect(COUNTS.l1.value).toBe(CELLS);           // red until Step 3 regenerates counts.json (462 today)
     expect(cases).toHaveLength(CELLS);
-    expect(new Set(cases.map((c) => c.caseId)).size).toBe(CELLS);
-    expect(cases.every((c) => c.width === L1_WIDTH && c.layer === "L1")).toBe(true);
+    expect(new Set(cases.map(layerCaseId)).size).toBe(CELLS);
+    expect(cases.every((c) => c.width === L1_WIDTH && c.layer === "L1" && c.run === null)).toBe(true);
   });
   it("drives every builder row and every template-reached API-only cell; plans 🚫 for the rest", () => {
-    const driven = cases.filter((c) => "driven" in c);
-    expect(driven).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length + TEMPLATE_REACHED);   // 178
-    const planned = cases.filter((c) => !("driven" in c));
-    expect(planned).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - TEMPLATE_REACHED);      // 53
-    expect(planned.every((c) => c.state === "no_path" && /\bW[45]\b/.test(c.reason))).toBe(true);
+    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length + TEMPLATE_REACHED);   // 178
+    const p = planned(cases);
+    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - TEMPLATE_REACHED);                   // 53
+    expect(p.every((c) => c.noPath !== null && /^W\d+$/.test(c.noPath.wave))).toBe(true);
   });
-  it("another sport: cricket's first builder row drives under its first declared variant only once per cell", () => {
-    expect(cases.filter((c) => c.caseId.startsWith("league|cricket|"))).toHaveLength(1);
+  it("a template-reached cell carries its template and the template's own variant (ruling 47, D11 of W1-driving)", () => {
+    const t = driven(cases).filter((c) => c.spec!.template !== undefined);
+    expect(t.map((c) => c.spec!.template).sort()).toEqual(Object.keys(TEMPLATE_ROW).sort());
+  });
+  it("another sport: cricket's league cell is planned once, under variantFor's variant", () => {
+    const cricket = cases.filter((c) => layerCaseId(c).startsWith("league|cricket|"));
+    expect(cricket).toHaveLength(1);
+    expect(cricket[0].spec!.variant).toBe(offlineBuilderDefault("cricket"));
+  });
+  it("the grid takes no filter", () => {
+    expect(() => LAYER_GRID_PLANNERS.L1({ only: "league|generic" })).toThrow();
   });
 });
 
 describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
   const pairs = loadL2Pairs();
-  const cases = LAYER_PLANNERS.L2.grid.layered(offlineBuilderDefault);
+  const cases = LAYER_GRID_PLANNERS.L2({}).layered(offlineBuilderDefault);
   it("plans exactly one case per committed pair-run, none twice", () => {
     expect(cases).toHaveLength(pairs.runs.length);
-    expect(new Set(cases.map((c) => c.caseId)).size).toBe(pairs.runs.length);
+    expect(new Set(cases.map(layerCaseId)).size).toBe(pairs.runs.length);
   });
-  it("drives exactly the runs whose atom has a harness script and no owed path; every other run is planned with a reason", () => {
+  it("drives exactly the runs whose atom has a harness script; every other run is planned 🚫 or ░ with its reason", () => {
     const scripted = new Set(Object.keys(HARNESS_SCENARIO));
-    const driven = cases.filter((c) => "driven" in c);
-    expect(driven.every((c) => scripted.has(c.run!.scenario))).toBe(true);
-    expect(driven.length).toBeGreaterThan(0);
-    const notRun = cases.filter((c) => !("driven" in c) && c.state === "not_run");
+    const d = driven(cases);
+    expect(d.length).toBeGreaterThan(0);
+    expect(d.every((c) => scripted.has(c.run!.scenario))).toBe(true);
+    const notRun = cases.filter((c) => c.spec === null && c.notRun !== null);
     expect(notRun.every((c) => !scripted.has(c.run!.scenario))).toBe(true);
-    console.log(`L2 grid: ${driven.length} driven, ${cases.length - driven.length - notRun.length} no_path, ${notRun.length} not_run of ${cases.length}`);
+    console.log(`L2 grid: ${d.length} driven, ${cases.length - d.length - notRun.length} no_path, ${notRun.length} not_run of ${cases.length}`);
   });
   it("the four league/knockout M1/R4a phone runs (false premise 14) are driven", () => {
     for (const [row, sport] of [["league", "football"], ["knockout", "icehockey"]]) for (const sc of ["M1", "R4a"]) {
       const want = pairs.runs.filter((r) => r.row === row && r.sport === sport && r.scenario === sc);
       expect(want.length).toBeGreaterThan(0);
-      for (const w of want) expect(cases.find((c) => c.run?.n === w.n && "driven" in c)).toBeDefined();
+      for (const w of want) expect(cases.find((c) => c.run?.n === w.n && c.spec !== null)).toBeDefined();
     }
   });
 });
 ```
 
+`layers.test.ts`: add "LAYER_PLANNERS is unchanged: L1 still plans the slice's 6 cells at 1280" as the second-call guard that the slice default did not move.
+
 `run-cli.test.ts` additions:
 - `--scope grid` without `--layer` is a usage refusal (exit 2);
 - `--scope` with `--set` is a usage refusal;
 - `--scope banana` is a usage refusal;
+- `--layer L1 --scope grid --only league|generic` is a usage refusal;
 - `planOf` of `--layer L1 --scope grid` is `"--layer L1 --scope grid"`, and of `--layer L1` (no scope) is `"--layer L1"`, which is the second call: the default is unchanged.
 
-`committed-catalogue.test.ts:271` becomes `expect(c.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS })`, with `CELLS` derived as above, never `c.cells` read back.
+`committed-catalogue.test.ts:271` becomes `expect(c.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS })`, with `CELLS` derived from the catalogue constants as above, never `c.cells` read back.
 
 - [ ] **Step 2: Run and see them fail**
 
-Run the vitest template on `layers-grid.test.ts run-cli.test.ts committed-catalogue.test.ts`. Expected: collection fails on `planL1Grid` (not exported), and the catalogue test fails on 462 ≠ 231.
+Run the vitest template on `layers-grid.test.ts layers.test.ts run-cli.test.ts committed-catalogue.test.ts`. Expected: `layers-grid.test.ts` fails to collect (`planL1Grid` is not exported), and the catalogue test fails on 462 ≠ 231. The JSON line must show `files: 4`; any other count means a path did not match (vitest drops a positional that matches nothing).
 
 - [ ] **Step 3: Implement**
 
-1. In `layers.ts`, `planL1Grid(variantFor)` iterates `CATALOGUE` cells (rows × sports, in catalogue order):
-   - a builder row → `{ layer: "L1", width: L1_WIDTH, run: null, driven: { cell, scenario: "LIFECYCLE", variant: variantFor(sport) } }`, the same item shape `planL1` produces for one slice cell (Step 0 reads `planL1` `:103-106` and copies its exact shape);
-   - an API-only row with `templateFor(row, sport) !== null` → the driven item `apiOnlyBrowserPlanner` builds for it (reuse its item builder, do not copy it);
-   - any other API-only row → `apiOnlyNoPath(row, sport)` (`layers.ts`, existing).
-2. `l1GridPlanner = { ...l1Planner, label: "L1 full grid (ruling 64)", layered: planL1Grid }`. `l2GridPlanner = { ...l2Planner, label: "L2 full grid (ruling 64)", layered: () => planL2(loadL2Pairs(), ALL_CELLS) }`. `planL2(pairs, cells: ReadonlySet<string>)` is `layers.ts:142`; `ALL_CELLS` is a new `ReadonlySet` of every `row|sport` in `CATALOGUE` order, exported from `layers.ts`. Do not confuse it with `pairs.ts:115`'s `planL2`, which BUILDS `l2-pairs.json` and is not a planner. `LAYER_PLANNERS = { L1: { slice: l1Planner, grid: l1GridPlanner }, L2: { slice: l2Planner, grid: l2GridPlanner } }`.
-3. In `run.ts`:
-   - `parseCli` gains `scope: { type: "string" }`. It is accepted only with `--layer`, its value is `slice | grid`, and anything else is a usage refusal (the existing `Usage` error);
-   - layer selection becomes `LAYER_PLANNERS[layer][cli.scope ?? "slice"]`;
-   - `planOf` appends ` --scope grid` only when `cli.scope === "grid"`;
-   - USAGE gains the flag line.
-4. `counts.ts:99` → `l1: { formula: "cells × 1 width (1280; ruling 39)", value: cells }`. Then regenerate: `cd <exec> && pnpm matrix:catalogue; echo EXIT=$?`. The `counts.json` diff must be exactly the `l1` object; anything else is a STOP.
-5. In `committed-plans.ts` `expectedPlanFor`, `--layer L1 --scope grid` → `l1GridPlanner` (same for L2). A bare `--layer L1` stays the slice planner, so every committed entry is judged exactly as before.
+In `layers.ts`:
+
+```ts
+/** Every catalogue cell (ruling 64's full grid), in ROW_KEYS × SPORT_KEYS order. */
+export const ALL_CELLS: ReadonlySet<string> = new Set(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s))));
+const isApiOnly = (row: RowKey): row is ApiOnlyRowKey => (API_ONLY_ROWS as readonly string[]).includes(row);
+
+/** Ruling 64: the full L1 grid — one LIFECYCLE case per cell at 1280. A
+ *  builder row drives with variantFor's variant; an API-only cell a catalog
+ *  template reaches drives through that template (its own sport and variant,
+ *  as planW1DrivingL1 does); every other API-only cell is 🚫 naming its wave. */
+export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
+  const at = (spec: CaseSpec): DrivenLayerCase => ({ spec, layer: "L1", width: L1_WIDTH, noPath: null, notRun: null, run: null });
+  return ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport): LayerCase => {
+    if (!isApiOnly(row)) {
+      const variant = variantFor(sport);
+      return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false });
+    }
+    const p = apiOnlyUiPath(row, sport);
+    if (p.reachable) {
+      const { variant } = templateField(p.template);
+      return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false, template: p.template });
+    }
+    const variant = variantFor(sport);
+    return { spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
+      layer: "L1", width: L1_WIDTH, noPath: { wave: p.wave, reason: p.reason }, notRun: null, run: null };
+  }));
+}
+
+export const l1GridPlanner: PlanLayers = (cli: PlannerCli) => {
+  refuseFilters("--layer L1 --scope grid", cli);
+  return { sports: SPORT_KEYS, deniesFeatures: false, layer: "L1", label: "--layer L1 --scope grid", acceptsWidth: L1_WIDTH, layered: planL1Grid };
+};
+
+export const l2GridPlanner: PlanLayers = (cli: PlannerCli) => {
+  refuseFilters("--layer L2 --scope grid", cli);
+  const cases = planL2(loadL2Pairs(), ALL_CELLS);
+  const sports = [...new Set(cases.flatMap((c) => (c.spec === null ? [] : [c.spec.sport])))];
+  return { sports, deniesFeatures: false, layer: "L2", label: "--layer L2 --scope grid", acceptsWidth: null, layered: () => cases };
+};
+
+export const LAYER_GRID_PLANNERS: Readonly<Record<"L1" | "L2", PlanLayers>> = Object.freeze({ L1: l1GridPlanner, L2: l2GridPlanner });
+```
+
+Notes for the implementer:
+- `refuseFilters` already exists for the named sets. Step 0 confirms its signature (`(label, cli)`) and adapts the call if it differs.
+- `CaseSpec.template` is the field `planW1DrivingL1` sets (`layers.ts:~268`).
+- `planL2(pairs, cells)` is `layers.ts:142`. Do not confuse it with `pairs.ts:115`'s `planL2`, which BUILDS `l2-pairs.json` and is not a planner.
+- `sports: SPORT_KEYS` covers all 11 sports, so the runner reads every sport's variant order once, exactly as the planner contract (`run.ts:~250`, `UndeclaredSport`) requires.
+
+In `run.ts`:
+- `parseCli` gains `scope: { type: "string" }`. It is accepted only with `--layer`, its value is `slice | grid`, and anything else is a usage refusal (the existing usage path);
+- planner selection at `:1020` becomes `cli.layer !== undefined ? (cli.scope === "grid" ? LAYER_GRID_PLANNERS : LAYER_PLANNERS)[cli.layer] : …`;
+- `planOf` appends ` --scope grid` only when `cli.scope === "grid"`;
+- USAGE gains the flag line.
+
+`counts.ts:99` → `l1: { formula: "cells × 1 width (1280; ruling 39)", value: cells }`. Then regenerate: `cd <exec> && pnpm matrix:catalogue; echo EXIT=$?`. The `counts.json` diff must be exactly the `l1` object; anything else is a STOP.
+
+In `committed-plans.ts` `expectedPlanFor`, `--layer L1 --scope grid` → `LAYER_GRID_PLANNERS.L1` (the same for L2). A bare `--layer L1` stays `LAYER_PLANNERS.L1`, so every committed entry is judged exactly as before.
 
 - [ ] **Step 4: Run and see them pass**
 
 Run the vitest template on:
 
 ```
-layers-grid.test.ts run-cli.test.ts committed-catalogue.test.ts
-committed-matrix.test.ts committed-plans-frozen.test.ts run-layers.test.ts
+tools/matrix/__tests__/layers-grid.test.ts tools/matrix/__tests__/layers.test.ts tools/matrix/__tests__/run-cli.test.ts
+tools/matrix/__tests__/committed-catalogue.test.ts tools/matrix/__tests__/committed-matrix.test.ts tools/matrix/__tests__/committed-plans-frozen.test.ts
 ```
 
-All green. Paste the `L2 grid: …` console line. Expected `62 driven, 164 no_path, 1505 not_run of 1731`; if the tree moved, record what you see and why.
+All green, with `files: 6`. Paste the `L2 grid: …` console line. Expected `62 driven, 164 no_path, 1505 not_run of 1731`; if the tree moved, record what you see and why.
 
 - [ ] **Step 5: Mutate**
 
 | Mutant | Killing test |
 |---|---|
-| In `planL1Grid`, skip the `templateFor` branch (plan 🚫 for every API-only cell) | "drives every builder row and every template-reached API-only cell" |
+| In `planL1Grid`, skip the `p.reachable` branch (plan 🚫 for every API-only cell; `apiOnlyNoPath` would also throw `TemplateReachable`) | "drives every builder row and every template-reached API-only cell" |
 | `planOf` drops ` --scope grid` | `run-cli.test.ts` planOf case |
-| `counts.ts` back to `cells * 2` | `committed-catalogue.test.ts` |
+| `counts.ts` back to `cells * 2` | `committed-catalogue.test.ts` and "the count the corrected counts.json states" |
 
 - [ ] **Step 6: Scoped tsc, eslint, commit**
 
@@ -1039,9 +1128,9 @@ Run scoped tsc on `layers.ts run.ts counts.ts`. Commit `feat(matrix): --scope gr
 **Why:** Ruling 64 splits each layer into about 12 jobs. The partition must be stable (ruling 61 compares per case across runs), and the merge must refuse every way a shard can silently be short (R25, class 1).
 
 **Files:**
-- Create: `tools/matrix/lib/shard.ts`, `tools/matrix/lib/merge.ts`, `tools/matrix/merge-shards.ts`
+- Create: `tools/matrix/lib/shard.ts`, `tools/matrix/lib/merge.ts`, `tools/matrix/merge-shards.ts`, `tools/matrix/lib/run-id.ts`
 - Modify:
-  - `tools/matrix/run.ts`: `--shard`; the stripe applied after `runItems`; `ShardEmpty` in `refused`; the `shard` header;
+  - `tools/matrix/run.ts`: `--shard`; the stripe applied after `runItems`; `ShardEmpty` in `refused`; the `shard` header; the run-id slug (`:567-569`) moves into `lib/run-id.ts` and is imported back, with its behaviour unchanged;
   - `package.json`: `"matrix:merge": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/merge-shards.ts"`.
 - Test: `tools/matrix/__tests__/shard.test.ts`, `tools/matrix/__tests__/merge.test.ts`, `tools/matrix/__tests__/run-shard.test.ts` (all create).
 
@@ -1053,7 +1142,8 @@ Run scoped tsc on `layers.ts run.ts counts.ts`. Commit `feat(matrix): --scope gr
   - `stripeSize(planSize: number, s: Shard): number`;
   - `mergeShards(inputs: readonly ShardInput[], runId: string): { merged: RunResults; checked: number }`, with `type ShardInput = { name: string; exit: string | null; results: unknown }`;
   - the refusals `ShardMissing`, `ShardDuplicate`, `ShardFailed`, `ShardEmpty`, `ShardAborted`, `ShardMismatch`, `ShardSize`, `CaseCollision`, `ShardSecret`, each `name`d;
-  - CLI `merge-shards.ts --run-id <id> --out <dir> <shardDir>...`. Each shard dir holds `results.json` and `exit.txt`. Exit 0 merged (`results.json` + `MATRIX.md` written); 2 refused, nothing written.
+  - CLI `merge-shards.ts --run-id <id> --out <dir> <shardDir>...`. Each shard dir holds `results.json` and `exit.txt`. Exit 0 merged (`results.json` + `MATRIX.md` written); 2 refused, nothing written. It refuses a `--run-id` that is not already its own slug (`slugRunId(id) !== id`), so the CLI never writes to a directory other than the one it was named.
+  - `slugRunId(raw: string): string | null` (`lib/run-id.ts`): run.ts's slug, moved verbatim. It returns the lowercase `[a-z0-9-]` id, or null when the result is empty or longer than `RUN_ID_MAX`. **run.ts writes `<report-dir>/<slugRunId(--run-id)>/`, so every caller that later reads that directory must pass an id that is already its own slug** (review C1: `…-L3-s1` would land in `…-l3-s1/`). Task 8 emits lowercase ids, and Task 9's tests hold the workflow's templates to `slugRunId(x) === x`.
 - Consumes: `RunResultsSchemaV3.shard`/`shards`, `MAX_SHARDS` (Task 2); `parseResults`, `writeResults`, `renderMatrix`, `findSecrets`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1259,6 +1349,8 @@ export function mergeShards(inputs: readonly ShardInput[], runId: string): { mer
 }
 ```
 
+`lib/run-id.ts` is a straight move of run.ts's slug, plus a `run-cli.test.ts` case: "an upper-case run id is written to its lower-case directory, and the results.json names the slug". That pins the behaviour C1 tripped on, so no caller can assume otherwise again.
+
 `merge-shards.ts` follows `render.ts`'s CLI shape, with a header of exit codes (0 merged; 2 refused, nothing written; 3 load crash through the package script).
 - Positionals are shard directories. For each it reads `exit.txt`, or null when absent, and `results.json`, or null when absent; `JSON.parse` errors become exit 2 naming the dir.
 - It calls `mergeShards`, then `writeResults(out, merged, …)` and `renderMatrix` → `MATRIX.md` (through `redact`), and prints `merged <checked> cases from <N> shards → <out>`.
@@ -1382,6 +1474,7 @@ Then run scoped tsc and eslint, and commit `feat(matrix): NoLayerForWidth and a 
 **Files:**
 - Create: `tools/matrix/lib/judge.ts`, `tools/matrix/judge.ts`, `tools/matrix/lib/exit-codes.ts`
 - Modify:
+  - `tools/matrix/lib/results.ts`: export `VACUOUS_REASONS` (the two exact strings and the one prefix `decideState` writes at `:256,260,262`), and use them in `decideState`, so the judge and the writer share one authority;
   - `tools/matrix/parity.ts:58,70` (3 → 2);
   - `tools/matrix/findings-table.ts` (refused 1 → 2, unreadable 3 → 2, and its header);
   - `tools/matrix/draw-counts.ts` (the same);
@@ -1392,14 +1485,25 @@ Then run scoped tsc and eslint, and commit `feat(matrix): NoLayerForWidth and a 
 
 **Interfaces:**
 - Produces:
-  - `harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }): { caseId: string; kind: "crash" | "harness-error" | "vacuous" | "unplanned-not-run" | "planned-not-run"; reason: string }[]`
+  - `harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }): { caseId: string; kind: "crash" | "harness-error" | "setup-refused" | "vacuous" | "unplanned-not-run" | "planned-not-run"; reason: string }[]`. Ruling 65 fixes `plannedNotRun` at `allow` (the default) for every caller. `refuse` exists only so a test can show what the option changes.
+  - `SETUP_CALLS: readonly RegExp[]`: the method+path shapes of the harness's setup calls, read at Step 0 from `seed-org.ts` and the drivers' setup methods. Examples are sign-in (`/api/auth/magic-link`), `POST /api/v1/orgs…`, `/competitions`, `/divisions`, `/stages` creation, entrant creation and the FILLER calls. They never include a scenario action (withdraw, forfeit, score, generate, start, complete). Each entry is written as a comment with its source line.
   - `statesAcross(runs: readonly RunResults[]): { compared: number; differing: { caseId: string; states: string[] }[]; missing: { caseId: string; inRuns: number[] }[] }`
   - `regressions(baseline: RunResults, now: RunResults): { compared: number; regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[]; absent: string[] }`
   - `EXIT_CODES: Record<0 | 1 | 2 | 3, string>`
   - CLI `judge.ts`, two modes:
     - `across <runA.json> <runB.json> <runC.json> [--planned-not-run allow|refuse]`: exit 0 harness-green; 1 not green (faults or differences listed); 2 refused (fewer than 2 runs, unreadable, different layer, plan or `harnessCommit` — three runs of two products are not a flakiness measure (D21) — or zero cases compared);
-    - `regression --baseline <file> --now <file> [--rerun <file>]`: exit 0 none; 1 reproduced regressions; 2 refused (a baseline case absent from `now`, unreadable, zero compared).
+    - `regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>]`: exit 0 none; 1 reproduced regressions; 2 refused (an expected case absent from `now`, a `now` case not in `--expect`, unreadable, zero compared). `--expect` is the exact case-id list the sample PLANNED (written by `run-sample.ts` from `planPrSample`), and the baseline is restricted to exactly those ids (review C3c). Never use a cell filter.
     - `faults <run.json> [--planned-not-run allow|refuse]`: one merged run's harness faults (D6), used by the workflow's merge job on every run. Exit 0 none; 1 faults listed; 2 refused (unreadable, zero cases).
+
+- [ ] **Step 0: Read the setup routes**
+
+`rtk proxy grep -an "post(\|put(\|\"/api/" tools/matrix/lib/seed-org.ts tools/matrix/lib/driver/http-driver.ts`, plus `FILLER` (`lib/driver/mixed.ts:29`). List every route the harness calls BEFORE a scenario's first action, each with its line, and write them as `SETUP_CALLS`. Then check the committed L3 evidence:
+
+```bash
+cd <exec> && node -e 'const r=require("./docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-l3/results.json");const m={};for(const c of r.cases){const x=/^error: RefusedCall: ([A-Z]+ \S+) →/.exec(c.reason||"");if(x){const k=x[1].replace(/[0-9a-f-]{36}/g,"<id>");m[k]=(m[k]||0)+1}}console.log(m)'
+```
+
+Expected at HEAD: `{ "POST /api/v1/entrants/<id>/withdraw": 11 }`. That is the R4 action (P5 → W4), so it must NOT match `SETUP_CALLS`. A test pins it: "the 11 committed RefusedCall reds are data".
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1417,15 +1521,26 @@ describe("harnessFaults (D6)", () => {
       ok("a", "red", "error: crashed — TypeError: x is undefined"),
       ok("b", "red", "error: DriverMisuse: no such control"),
       ok("c", "red", "error: RefusedCall: POST /api/v1/stages/1/start → HTTP 422 WRONG_PHASE: not now"),
-      ok("d", "red", "no checks ran (vacuous)"),
+      ok("d", "red", VACUOUS_REASONS.none),
       { ...ok("e", "not_run", "no scenario script yet (atom M7)") },
       { ...ok("f", "not_run", "no scenario script yet (atom M7)"), planned: true },
       ok("g", "later", "W4 owes the path"),
       ok("h", "red", "standings: expected 3, saw 2"),
+      ok("i", "needs_ruling", "the rulebook is silent on …"),
+      ok("j", "red", "error: RefusedCall: POST /api/v1/orgs → HTTP 409 SLUG_TAKEN: taken"),
+      ok("k", "red", "error: RefusedCall: POST /api/v1/entrants/0b2c/withdraw → HTTP 422 WRONG_PHASE: fixture has an unassigned entrant"),
     ]), { plannedNotRun: "allow" });
-    expect(f.map((x) => [x.caseId, x.kind])).toEqual([["a", "crash"], ["b", "harness-error"], ["d", "vacuous"], ["e", "unplanned-not-run"]]);
+    expect(f.map((x) => [x.caseId, x.kind])).toEqual([["a", "crash"], ["b", "harness-error"], ["d", "vacuous"], ["e", "unplanned-not-run"], ["j", "setup-refused"]]);
   });
-  it("D7 alternative (c): with plannedNotRun refuse, a planned ░ is a fault too", () => {
+  it.each([["none"], ["abstained"], ["zeroItems"]] as const)("every vacuity reason decideState writes is a fault: %s (strings from results.ts, review I3)", (k) => {
+    const reason = k === "zeroItems" ? `${VACUOUS_REASONS.zeroItemsPrefix} i1-standings, i4-complete` : VACUOUS_REASONS[k];
+    expect(harnessFaults(run([ok("v", "red", reason)]), { plannedNotRun: "allow" }).map((x) => x.kind)).toEqual(["vacuous"]);
+  });
+  it("ruling 65: a planned ░ (L2's 1,505) is not a fault, and a ░ on a driven case still is", () => {
+    const f = harnessFaults(run([{ ...ok("p", "not_run", "no scenario script yet (atom M7)"), planned: true }, ok("q", "not_run", "lost result")]), { plannedNotRun: "allow" });
+    expect(f).toEqual([{ caseId: "q", kind: "unplanned-not-run", reason: "lost result" }]);
+  });
+  it("the refuse lever (rejected alternative (c)) is what makes a planned ░ a fault — so allow is doing the work", () => {
     const f = harnessFaults(run([{ ...ok("f", "not_run", "x"), planned: true }]), { plannedNotRun: "refuse" });
     expect(f.map((x) => x.kind)).toEqual(["planned-not-run"]);
   });
@@ -1447,16 +1562,16 @@ describe("statesAcross (ruling 61; Review Focus 3)", () => {
 });
 
 describe("regressions (D13; Review Focus 4)", () => {
-  it("known red stays red passes; ✅→❌ fails; ⛔→✅ is not a regression; a missing case is refused", () => {
-    const base = run([ok("a", "red", "x"), ok("b"), ok("c", "refused", "422"), ok("d")]);
+  it("known red stays red passes; ✅→❌ fails; ⛔→✅ is not a regression; an EXPECTED case missing from now is absent", () => {
+    const base = run([ok("a", "red", "x"), ok("b"), ok("c", "refused", "422"), ok("d"), ok("e")]);
     const now = run([ok("a", "red", "x"), ok("b", "red", "y"), ok("c")]);
-    const r = regressions(base, now);
+    const r = regressions(base, now, ["a", "b", "c", "d"]);   // e: in the baseline, not planned by the sample → ignored
     expect(r.regressed.map((x) => x.caseId)).toEqual(["b"]);
     expect(r.absent).toEqual(["d"]);
     expect(r.compared).toBe(3);
   });
   it("a ✅ case that comes back ✅ on the single re-run is not reported (CLI --rerun)", () => {
-    const code = judgeCli(["regression", "--baseline", f(run([ok("b")])), "--now", f(run([ok("b", "red", "y")])), "--rerun", f(run([ok("b")]))]);
+    const code = judgeCli(["regression", "--baseline", f(run([ok("b")])), "--now", f(run([ok("b", "red", "y")])), "--expect", ids(["b"]), "--rerun", f(run([ok("b")]))]);
     expect(code).toBe(0);
   });
   it("faults mode: exit 1 on one crash red, 0 on a run of product reds only, 2 on zero cases", () => {
@@ -1465,13 +1580,13 @@ describe("regressions (D13; Review Focus 4)", () => {
     expect(judgeCli(["faults", f(run([]))])).toBe(2);
   });
   it("…and one that is red again on the re-run is exit 1, named", () => {
-    const code = judgeCli(["regression", "--baseline", f(run([ok("b")])), "--now", f(run([ok("b", "red", "y")])), "--rerun", f(run([ok("b", "red", "y")]))]);
+    const code = judgeCli(["regression", "--baseline", f(run([ok("b")])), "--now", f(run([ok("b", "red", "y")])), "--expect", ids(["b"]), "--rerun", f(run([ok("b", "red", "y")]))]);
     expect(code).toBe(1);
   });
 });
 ```
 
-`f(run)` writes the run to a temp file; `judgeCli` calls `main(argv)` with stdout/stderr captured.
+`f(run)` writes the run to a temp file, `ids(list)` writes a JSON id list, and `judgeCli` calls `main(argv)` with stdout/stderr captured.
 
 `exit-codes.test.ts` reads each CLI's header comment as text: `run.ts`, `render.ts`, `parity.ts`, `findings-table.ts`, `draw-counts.ts`, `gen-catalogue.ts`, `single-sport.ts`, `model.ts`, `merge-shards.ts`, `judge.ts` and `lock-append-only.ts`. For each, it asserts:
 - every code the header declares is in `EXIT_CODES`;
@@ -1491,10 +1606,15 @@ Expected: the modules are missing, and exit-codes fails on `parity.ts` (3 for un
 // fault is a crash, a non-product error, a vacuous red, or a ░ the plan did
 // not mark planned; product reds (incl. RefusedCall — the product answering)
 // are data. States must be identical across runs, per case.
-import type { CaseState, RunResults } from "./results.ts";
+import { VACUOUS_REASONS, type CaseState, type RunResults } from "./results.ts";
 
-export type FaultKind = "crash" | "harness-error" | "vacuous" | "unplanned-not-run" | "planned-not-run";
-const VACUOUS = new Set(["no checks ran (vacuous)", "every check abstained (vacuous)", "checked zero items (vacuous)"]);
+export type FaultKind = "crash" | "harness-error" | "setup-refused" | "vacuous" | "unplanned-not-run" | "planned-not-run";
+// results.ts: { none: "no checks ran (vacuous)", abstained: "every check abstained (vacuous)",
+//               zeroItemsPrefix: "checked zero items (vacuous):" } — the third carries a suffix of check ids.
+const isVacuous = (r: string): boolean => r === VACUOUS_REASONS.none || r === VACUOUS_REASONS.abstained || r.startsWith(VACUOUS_REASONS.zeroItemsPrefix);
+// D6: a RefusedCall on a SETUP call is the harness asking wrongly; on a scenario action it is the product answering.
+export const SETUP_CALLS: readonly RegExp[] = [/* Step 0: one entry per setup route, each with its source line */];
+const refusedPath = (r: string): string | null => /^error: RefusedCall: ([A-Z]+ \S+) →/.exec(r)?.[1] ?? null;
 
 export function harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }) {
   const out: { caseId: string; kind: FaultKind; reason: string }[] = [];
@@ -1503,7 +1623,8 @@ export function harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | 
     let kind: FaultKind | null = null;
     if (c.state === "red" && reason.startsWith("error: crashed —")) kind = "crash";
     else if (c.state === "red" && reason.startsWith("error: ") && !reason.startsWith("error: RefusedCall:")) kind = "harness-error";
-    else if (c.state === "red" && VACUOUS.has(reason)) kind = "vacuous";
+    else if (c.state === "red" && SETUP_CALLS.some((re) => re.test(refusedPath(reason) ?? ""))) kind = "setup-refused";
+    else if (c.state === "red" && isVacuous(reason)) kind = "vacuous";
     else if (c.state === "not_run" && c.planned !== true) kind = "unplanned-not-run";
     else if (c.state === "not_run" && opts.plannedNotRun === "refuse") kind = "planned-not-run";
     if (kind !== null) out.push({ caseId: c.caseId, kind, reason });
@@ -1529,12 +1650,14 @@ export function statesAcross(runs: readonly RunResults[]) {
 
 const HELD: ReadonlySet<string> = new Set(["works", "refused"]);
 
-export function regressions(baseline: RunResults, now: RunResults) {
+export function regressions(baseline: RunResults, now: RunResults, expected: readonly string[]) {
+  const want = new Set(expected);
   const nowBy = new Map(now.cases.map((c) => [c.caseId, c]));
   const regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[] = [];
   const absent: string[] = [];
   let compared = 0;
   for (const b of baseline.cases) {
+    if (!want.has(b.caseId)) continue;   // not planned by this sample (review C3c)
     const n = nowBy.get(b.caseId);
     if (n === undefined) { if (HELD.has(b.state)) absent.push(b.caseId); continue; }
     compared++;
@@ -1545,7 +1668,7 @@ export function regressions(baseline: RunResults, now: RunResults) {
 ```
 
 Two notes for the implementer:
-- `regressions`' `compared` counts cases present in both runs. Only baseline ✅/⛔ cases count as `absent`, because the sample is a SUBSET of the baseline: the CLI first filters the baseline to `now`'s plan cell set (the cases whose `row|sport` is in `now`'s grid AND whose scenario `now` planned). Write that filter in `judge.ts` as `baselineFor(now)`, with its own test: "the sample's baseline holds exactly the cases the sample planned".
+- `regressions`' `compared` counts expected cases present in both runs. Only baseline ✅/⛔ cases count as `absent`. The restriction is by EXACT case id from `--expect`, never by cell or scenario: the baseline's `league|cricket|test|LIFECYCLE|cricket#…` cases share a cell and a scenario with the fixed sample's `league|cricket|<variant>|LIFECYCLE`, and a cell filter would report them absent on every PR (review C3c). The CLI also refuses (exit 2) a `now` case that is not in `--expect`, so a sample that planned something else cannot pass by omission.
 - The check `regressed` × `rerun`: the CLI keeps only cases red in BOTH `--now` and `--rerun` (a `--rerun` without the case = exit 2).
 
 `judge.ts` (CLI):
@@ -1590,6 +1713,9 @@ Step 0 confirms the exact test filenames for the three CLIs with `ls tools/matri
 | Mutant | Killing test |
 |---|---|
 | In `harnessFaults`, drop `&& !reason.startsWith("error: RefusedCall:")` | "names each class once" (c would be a fault) |
+| `SETUP_CALLS` emptied | "names each class once" (j) |
+| `isVacuous` back to exact match only | the `zeroItems` row of "every vacuity reason decideState writes" |
+| `regressions` ignoring `expected` | "an EXPECTED case missing from now is absent" (e would be absent) |
 | `c.planned !== true` → `true` | the same test (f would be a fault) |
 | In `statesAcross`, `new Set(states).size > 1` → `> 2` | "differs in one run of three" |
 | In `regressions`, `HELD` without `"refused"` | "⛔→✅ is not a regression" plus a new line asserting ⛔→❌ IS one |
@@ -1616,9 +1742,10 @@ Commit `feat(matrix): judge — harness-green across runs and regression vs base
 **Interfaces:**
 - Produces:
   - `PR_SAMPLE_SET = "pr-sample"`;
-  - `FIXED_SAMPLE: readonly string[]` (case-id prefixes);
+  - `fixedSample(variantFor: (sport: string) => string): CaseSpec[]`. It returns `planSliceCases(variantFor)` (24) plus `league|<sport>|<variantFor(sport)>|LIFECYCLE` for each `SPORT_KEYS` sport not in `SLICE_SPORTS` (9). `variantFor` is the only variant authority (review m10);
   - `parseRows(text: string): readonly string[] | "all"`, which throws `UnknownRow` naming the row and the 21 catalogue rows;
-  - `planPrSample(rows, variantFor): PlannedCase[]`;
+  - `planPrSample(rows: readonly string[] | "all", variantFor): CaseSpec[]`. It calls `planW1Driving(variantFor, {})`: the full w1-driving set, with the filter argument explicit (`w1-driving-set.ts:183`; review m2), filtered to `rows`;
+  - `baselineL3Path(): string` reads `catalogue/baseline.json`'s `L3` and resolves it against the repo root. It throws when the file is missing.
   - CLI `ci/pr-rows.ts --body-file <path> --changed-file <path>`. It prints `rows=<csv|all|none>` to stdout (for `$GITHUB_OUTPUT`). Exit 0 decided; 1 the PR touches a declaring path and declares no rows (R27), naming the paths; 2 usage or unreadable.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1642,8 +1769,24 @@ describe("pr-rows decision", () => {
   it("the empty change list is refused (vacuous)", () => expect(decide({ body: "Matrix rows: all", changed: [] }).exit).toBe(2));
 });
 
+describe("the sample against the real baseline (review C3c)", () => {
+  it("the real committed baseline against the real fixed sample: zero absent when now holds every planned case", () => {
+    const baseline = parseResults(JSON.parse(readFileSync(baselineL3Path(), "utf8")));   // catalogue/baseline.json's L3
+    const expected = planPrSample([], offlineBuilderDefault).map((c) => c.caseId);
+    const now = { ...baseline, cases: baseline.cases.filter((c) => expected.includes(c.caseId)) };
+    const r = regressions(baseline, now, expected);
+    expect(r.absent).toEqual([]);
+    expect(r.compared).toBeGreaterThan(0);
+    expect(r.compared).toBe(now.cases.length);
+  });
+  it("…and the cell filter it replaced WOULD have reported the cricket test cases absent (the regression this guards)", () => {
+    const baseline = parseResults(JSON.parse(readFileSync(baselineL3Path(), "utf8")));
+    expect(baseline.cases.filter((c) => c.caseId.startsWith("league|cricket|test|LIFECYCLE|")).length).toBeGreaterThan(0);
+  });
+});
+
 describe("planPrSample", () => {
-  const W1 = planW1Driving(offlineBuilderDefault);    // the committed w1-driving set is the authority for row cases
+  const W1 = planW1Driving(offlineBuilderDefault, {});    // the committed w1-driving set, unfiltered, is the authority for row cases
   it("the fixed sample is the 24 slice cases plus league LIFECYCLE on the 9 sports the slice lacks", () => {
     const cases = planPrSample([], offlineBuilderDefault);
     expect(cases).toHaveLength(SLICE_ROWS.length * SLICE_SPORTS.length * SCENARIO_KEYS.length + (SPORT_KEYS.length - SLICE_SPORTS.length));
@@ -1667,8 +1810,8 @@ describe("planPrSample", () => {
 - [ ] **Step 3: Implement**
 
 1. `pr-sample.ts`:
-   - `FIXED_SAMPLE` = `planSliceCases` (all 24) ∪ `league|<sport>|<first variant>|LIFECYCLE` for each `SPORT_KEYS` sport not in `SLICE_SPORTS`;
-   - `planPrSample(rows, v)` = that ∪ `planW1Driving(v)` filtered to `rows`, deduplicated by `caseId`, in w1-driving order and then the fixed sample;
+   - `fixedSample(v)` = `planSliceCases(v)` (all 24) ∪ `league|<sport>|<v(sport)>|LIFECYCLE` for each `SPORT_KEYS` sport not in `SLICE_SPORTS`;
+   - `planPrSample(rows, v)` = that ∪ `planW1Driving(v, {})` filtered to `rows`, deduplicated by `caseId`, in w1-driving order and then the fixed sample;
    - an empty plan is impossible (the fixed sample is non-empty), and that is asserted.
 2. `pr-rows.ts`:
    - `DECLARING = [/^packages\/engine\//, /^apps\/web\/src\/server\/usecases\/stages\.ts$/]` (R27's two paths, verbatim from `_RULES.md` R27);
@@ -1683,12 +1826,14 @@ describe("planPrSample", () => {
 
 - [ ] **Step 4: Run, mutate, commit**
 
-Run the vitest template on `pr-sample.test.ts pr-rows.test.ts run-cli.test.ts committed-matrix.test.ts`. Mutate:
+Run the vitest template on `pr-sample.test.ts pr-rows.test.ts run-cli.test.ts committed-matrix.test.ts` (`files: 4`; the first two are new). Mutate:
 
 | Mutant | Killing test |
 |---|---|
 | `DECLARING` without the stages.ts entry | "stages.ts is a declaring path too" |
 | Drop the dedupe in `planPrSample` | "never twice" |
+
+**Measure one pass (review I10).** On the local env, with a fresh DB and run id, `pnpm matrix:l3 --set pr-sample --rows none --workers 4 --run-id w1d-t7-sample --report-dir "$TMPDIR/w1d-runs"; echo EXIT=$?`. Record the wall clock and the max per-case `durationMs` from its `results.json`. Those two numbers are what D13's owner-value line quotes in PR-A's body, and what `shards.json`'s L3 `pr-sample` budget is checked against in Task 8.
 
 Commit `feat(matrix): pr-sample set and the R27 row declaration reader (W1d D13)`.
 
@@ -1710,6 +1855,7 @@ The YAML only calls them.
   - `tools/matrix/ci/summary.ts`;
   - `tools/matrix/ci/staleness.ts`;
   - `tools/matrix/ci/gh.ts` (a thin `gh api` wrapper with an injectable runner).
+- Modify: `package.json`: `matrix:shards`, `matrix:summary` and `matrix:staleness`, each `node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/<file>`, for `shard-matrix.ts`, `summary.ts` and `staleness.ts` respectively (review m9). The workflows call them through `pnpm --silent`, so pnpm's banner never reaches `$GITHUB_OUTPUT`.
 - Test: `tools/matrix/__tests__/shard-matrix.test.ts`, `summary.test.ts`, `staleness.test.ts` (create).
 
 **Interfaces:**
@@ -1717,73 +1863,114 @@ The YAML only calls them.
 
 ```json
 {
-  "note": "W1d D4. Shard counts per layer per scope, and the per-case ceiling each layer's timeout derives from. Ceilings are the max measured durationMs in the named committed run, rounded up to 10 s, ×1.5 for a CI runner. Re-derive from PR-B's baseline (Task 21).",
+  "note": "W1d D4. Shard counts per layer per scope, and the committed runs each layer's per-case ceiling derives from. A ceiling is the max measured durationMs across the named runs, rounded up to 10 s, then ×1.5 for a CI runner. Budgets count DRIVEN cases per stripe (planned cases cost 0 s). Re-derive from PR-B's baseline (Task 21).",
   "setupMinutes": 18,
   "slackMinutes": 10,
   "maxTimeoutMinutes": 300,
   "layers": {
-    "L1": { "full": { "args": "--driver browser --layer L1 --scope grid", "shards": 8, "workers": 1 }, "smoke": { "args": "--driver browser --layer L1 --scope slice", "shards": 2, "workers": 1 }, "ceilingFrom": "w1drv-l1" },
-    "L2": { "full": { "args": "--driver browser --layer L2 --scope grid", "shards": 2, "workers": 1 }, "smoke": { "args": "--driver browser --layer L2 --scope slice", "shards": 2, "workers": 1 }, "ceilingFrom": "w1c-l2" },
-    "L3": { "full": { "args": "--set w1-driving", "shards": 2, "workers": 4 }, "smoke": { "args": "--set pr-sample --rows none", "shards": 2, "workers": 4 }, "ceilingFrom": "w1drv-l3" }
-  }
+    "L1": { "full": { "args": "--driver browser --layer L1 --scope grid", "shards": 8, "workers": 1 }, "smoke": { "args": "--driver browser --layer L1 --scope slice", "shards": 2, "workers": 1 },
+            "ceilingFrom": ["w1drv-l1/w1drv-l1-r1", "w1drv-l1/w1drv-l1-r2", "w1drv-l1/w1drv-l1-r3", "w1drv-l1/w1drv-l1-t15-r1", "w1drv-l1/w1drv-l1-t15-r2", "w1drv-l1/w1drv-l1-t15-r3"] },
+    "L2": { "full": { "args": "--driver browser --layer L2 --scope grid", "shards": 2, "workers": 1 }, "smoke": { "args": "--driver browser --layer L2 --scope slice", "shards": 2, "workers": 1 }, "ceilingFrom": ["w1c-l2"] },
+    "L3": { "full": { "args": "--set w1-driving", "shards": 2, "workers": 4 }, "smoke": { "args": "--set pr-sample --rows none", "shards": 2, "workers": 4 }, "ceilingFrom": ["w1drv-l3"] }
+  },
+  "prSample": { "args": "--set pr-sample", "workers": 4, "passes": 2 }
 }
 ```
 
-- `shardMatrix(cfg, scope: "full" | "smoke" | "pr-sample", plannedPerLayer: Record<Layer, number>, ceilingS: Record<Layer, number>, rows?: string): { include: { layer: Layer; k: number; of: number; args: string; timeout: number }[] }`.
+`ceilingFrom` is a LIST of committed run directories, each holding a `results.json`. `TR/w1drv-l1/` has no top-level `results.json`; its six runs are sub-directories (review I6). The CLI refuses (exit 2) a listed directory with no `results.json`, so a moved directory reds the plan step, never the shard. Measured at HEAD (2026-10-04), the maxima are:
+- L1 132,684 ms (`w1drv-l1-r2`) → 140 s × 1.5 = **210 s**;
+- L2 17,002 ms → **30 s**;
+- L3 13,530 ms → **30 s**.
+
+- `shardMatrix(cfg, scope: "full" | "smoke" | "pr-sample", plans: Partial<Record<Layer, readonly boolean[]>>, ceilingS: Record<Layer, number>, rows?: string): { include: { layer: Layer; id: string; k: number; of: number; args: string; timeout: number }[] }`.
+  - `plans[layer][i]` is `true` when plan item `i` (in plan order, the order `stripe` partitions) is DRIVEN, and `false` when it is planned 🚫/░ (review C2).
+  - Each job's timeout is `setupMinutes + ceil(drivenInStripe × ceilingS × passes / workers / 60) + slackMinutes`, where `drivenInStripe` counts the driven items `i` with `i mod of = k − 1`. The job holding the most driven items therefore gets the largest budget. `passes` is 1, except 2 for `pr-sample` (its single re-run, D13).
+  - `id` is the job's lowercase run-id suffix: `<layer lowercased>-s<k>` (for example `l3-s1`), or `l3-sample` for `pr-sample`. The workflow builds `RUN_ID = ci-<run_id>-<attempt>-<id>` from it, and Task 9's test holds every id to `slugRunId(x) === x` (review C1).
   - `args` is the full run.ts argument string: the layer's `args`, then `--workers <w>` when w > 1, then `--shard <k>/<of>` when `of > 1`. The workflow passes it through an env var and adds only `--run-id` and `--report-dir`.
   - `k`/`of` name the artifact (`shard-<layer>-<k>`), since an artifact name cannot hold `/`.
-  - `pr-sample` = L3 only, 1 job, no `--shard`, `--set pr-sample --rows <rows>`, where `rows` comes from the caller (already validated by `pr-rows.ts`; `run.ts` validates it again through `parseRows`). The layers it does not run may count 0.
-  - The timeout formula is `setupMinutes + ceil(ceil(planned/shards) × ceilingS / workers / 60) + slackMinutes`.
-  - It throws `ShardTimeoutTooLong` when the result exceeds `maxTimeoutMinutes`, which is a red at plan time, never at minute 360.
+  - `pr-sample` = L3 only, 1 job, no `--shard`, `cfg.prSample.args` + ` --rows <rows>`. `rows` comes from the caller, already validated by `pr-rows.ts`; `run.ts` validates it again through `parseRows`.
+  - Refusals:
+    - `ShardTimeoutTooLong` when a job's timeout exceeds `maxTimeoutMinutes`, which reds at plan time, never at minute 360;
+    - a layer of the scope with zero planned items, or zero driven items in the whole layer (vacuous);
+    - a stripe with zero ITEMS (it would be `ShardEmpty` at run time).
+
+    A stripe with items but no driven case is allowed, because the smoke L2 slice drives 3 of 68. It costs its setup, and it still exercises the merge of planned cases.
 - CLI `shard-matrix.ts --scope <s> [--rows <csv>]`:
-  - plans each layer OFFLINE (`offlineBuilderDefault`, the same as the committed-plans judge) to count driven cases;
-  - reads each `ceilingFrom` run's max `durationMs` from `TR/<dir>/results.json`;
+  - plans each layer OFFLINE (`offlineBuilderDefault`, the same as the committed-plans judge), producing the driven flags in plan order;
+  - reads the ceilings from `ceilingFrom`;
   - prints `matrix=<json>` for `$GITHUB_OUTPUT`;
   - exit 0, or 2 when refused.
+
+  Package script: `"matrix:shards": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/shard-matrix.ts"` (review m9), and the workflow calls `pnpm --silent matrix:shards`.
 - `summary(merged: Record<Layer, RunResults | null>, judge: JudgeOut | null, previous: { runId: number; date: string; layers: Record<Layer, RunResults> } | null, now: Date): string` → `SUMMARY.md`.
 - `staleness(runs: { conclusion: string; event: string; created_at: string }[], now: Date, maxDays: number): { stale: boolean; message: string; newest: string | null }`.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-describe("shardMatrix (D4; class 20 — derived budgets)", () => {
+const flags = (n: number, driven = n) => Array.from({ length: n }, (_, i) => i < driven);
+describe("shardMatrix (D4; class 20 — derived budgets; review C2)", () => {
   const cfg = loadShardsConfig();
-  it("the full scope is 12 jobs (L1 8 + L2 2 + L3 2), and each job's timeout derives from its ceiling", () => {
-    const m = shardMatrix(cfg, "full", { L1: 178, L2: 62, L3: 937 }, { L1: 190, L2: 190, L3: 30 });
+  const C = { L1: 210, L2: 30, L3: 30 };
+  it("the full scope is 12 jobs (L1 8 + L2 2 + L3 2), each timed by the driven items of its own stripe", () => {
+    const m = shardMatrix(cfg, "full", { L1: flags(231, 178), L2: flags(1731, 62), L3: flags(937) }, C);
     expect(m.include).toHaveLength(12);
-    const l1 = m.include.find((j) => j.layer === "L1")!;
-    expect(l1.timeout).toBe(cfg.setupMinutes + Math.ceil((Math.ceil(178 / 8) * 190) / 1 / 60) + cfg.slackMinutes);
     expect(m.include.every((j) => j.timeout <= cfg.maxTimeoutMinutes && j.timeout < 360)).toBe(true);
   });
-  it("shard labels are k/N with every k once per layer", () => {
-    const m = shardMatrix(cfg, "full", { L1: 178, L2: 62, L3: 937 }, { L1: 190, L2: 190, L3: 30 });
+  it("the stripe with the most driven items sets the larger budget", () => {
+    // items 0..5, driven at 0,2,4,5 → stripe 1 (0,2,4) drives 3, stripe 2 (1,3,5) drives 1
+    const plan = [true, false, true, false, true, true];
+    const m = shardMatrix({ ...cfg, layers: { ...cfg.layers, L2: { ...cfg.layers.L2, smoke: { ...cfg.layers.L2.smoke, shards: 2 } } } }, "smoke", { L1: flags(6), L2: plan, L3: flags(33) }, { L1: 210, L2: 600, L3: 30 });
+    const [s1, s2] = m.include.filter((j) => j.layer === "L2");
+    expect(s1.timeout).toBe(cfg.setupMinutes + Math.ceil((3 * 600) / 60) + cfg.slackMinutes);
+    expect(s2.timeout).toBe(cfg.setupMinutes + Math.ceil((1 * 600) / 60) + cfg.slackMinutes);
+  });
+  it("planned cases cost nothing: L2's 1,731-item grid with 62 driven fits, where counting planned items would not", () => {
+    const m = shardMatrix(cfg, "full", { L1: flags(231, 178), L2: flags(1731, 62), L3: flags(937) }, C);
+    for (const j of m.include.filter((x) => x.layer === "L2")) expect(j.timeout).toBeLessThan(60);
+    expect(cfg.setupMinutes + Math.ceil((Math.ceil(1731 / 2) * 30) / 60) + cfg.slackMinutes).toBeGreaterThan(cfg.maxTimeoutMinutes);   // the wrong count would refuse
+  });
+  it("job ids are lowercase, unique, and already their own run-id slug (review C1)", () => {
+    const m = shardMatrix(cfg, "full", { L1: flags(231, 178), L2: flags(1731, 62), L3: flags(937) }, C);
+    const ids = m.include.map((j) => j.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(slugRunId(`ci-12345678901-2-${id}`)).toBe(`ci-12345678901-2-${id}`);
+  });
+  it("shard labels are k/N with every k once per layer, and args end with that shard", () => {
+    const m = shardMatrix(cfg, "full", { L1: flags(231, 178), L2: flags(1731, 62), L3: flags(937) }, C);
     const l1 = m.include.filter((j) => j.layer === "L1");
     expect(l1.map((j) => `${j.k}/${j.of}`)).toEqual(["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]);
     expect(l1.every((j) => j.args.endsWith(`--shard ${j.k}/8`))).toBe(true);
   });
-  it("pr-sample is ONE L3 job with no --shard, and its rows travel in args", () => {
-    const m = shardMatrix(cfg, "pr-sample", { L1: 0, L2: 0, L3: 40 }, { L1: 190, L2: 190, L3: 30 }, "league,swiss");
-    expect(m.include).toEqual([expect.objectContaining({ layer: "L3", k: 1, of: 1, args: "--set pr-sample --rows league,swiss --workers 4" })]);
+  it("pr-sample is ONE L3 job with no --shard, budgeted for two passes, and its rows travel in args", () => {
+    const m = shardMatrix(cfg, "pr-sample", { L3: flags(40) }, C, "league,swiss");
+    expect(m.include).toEqual([expect.objectContaining({ layer: "L3", id: "l3-sample", k: 1, of: 1, args: "--set pr-sample --rows league,swiss --workers 4",
+      timeout: cfg.setupMinutes + Math.ceil((40 * 30 * 2) / 4 / 60) + cfg.slackMinutes })]);
   });
   it("a timeout over the cap is refused at plan time (moving the ceiling moves the budget)", () => {
-    expect(() => shardMatrix(cfg, "full", { L1: 178, L2: 62, L3: 937 }, { L1: 2000, L2: 190, L3: 30 })).toThrow(/ShardTimeoutTooLong|exceeds/);
+    expect(() => shardMatrix(cfg, "full", { L1: flags(231, 178), L2: flags(1731, 62), L3: flags(937) }, { ...C, L1: 5000 })).toThrow(/ShardTimeoutTooLong|exceeds/);
   });
-  it("the empty case: zero planned cases in a layer is refused (vacuous)", () => {
-    expect(() => shardMatrix(cfg, "full", { L1: 0, L2: 62, L3: 937 }, { L1: 190, L2: 190, L3: 30 })).toThrow(/zero/);
+  it("the empty case: zero planned, or zero driven, in a layer is refused (vacuous)", () => {
+    expect(() => shardMatrix(cfg, "full", { L1: [], L2: flags(1731, 62), L3: flags(937) }, C)).toThrow(/zero/);
+    expect(() => shardMatrix(cfg, "full", { L1: flags(231, 0), L2: flags(1731, 62), L3: flags(937) }, C)).toThrow(/zero driven/);
   });
-  it("more shards than driven cases is refused (an empty shard would be ShardEmpty at run time)", () => {
-    expect(() => shardMatrix(cfg, "smoke", { L1: 6, L2: 1, L3: 33 }, { L1: 190, L2: 190, L3: 30 })).toThrow(/fewer cases than shards/);
+  it("a stripe with zero items is refused; a stripe with items but nothing driven is allowed", () => {
+    expect(() => shardMatrix(cfg, "smoke", { L1: flags(1), L2: flags(68, 3), L3: flags(33) }, C)).toThrow(/fewer items than shards/);
+    expect(() => shardMatrix(cfg, "smoke", { L1: flags(6), L2: [false, false, false, true], L3: flags(33) }, C)).not.toThrow();
   });
-  it("the CLI reads the real committed ceilings and the real offline plans (another layer each)", () => {
+  it("the CLI reads the real committed ceilings and the real offline plans, and the full scope plans", () => {
     const out = runCli(["--scope", "full"]);
     expect(out.status).toBe(0);
     const m = JSON.parse(out.stdout.replace(/^matrix=/, ""));
     expect(m.include.map((j: { layer: string }) => j.layer).sort()).toEqual([...Array(8).fill("L1"), ...Array(2).fill("L2"), ...Array(2).fill("L3")].sort());
   });
+  it("a ceilingFrom directory without results.json is refused by name (review I6)", () => {
+    expect(runCli(["--scope", "full", "--shards-file", withCeiling("L1", ["w1drv-l1"])]).status).toBe(2);
+  });
 });
 ```
 
-The smoke-scope test exists because the smoke L2 slice has only 3 driven cases. `shardMatrix` counts PLANNED items, so `plannedPerLayer` is the full plan length (driven + planned), which is what `stripe` partitions. The test above uses 1 to reach the guard. Make sure the CLI passes `items.length` (all planned items), not the driven count, and add that as a comment and a test: "the smoke L2 slice plans 68 items, so 2 shards is allowed".
+`runCli` spawns the real script, and `withCeiling` writes a temp copy of `shards.json` with one layer's `ceilingFrom` replaced. The CLI therefore takes an optional `--shards-file` (default `tools/matrix/ci/shards.json`), for tests only.
 
 `summary.test.ts`:
 - "harness verdict and per-layer histogram rows, with planned ░ counted per atom";
@@ -1823,7 +2010,10 @@ Run the vitest template on the three files. Mutate:
 
 | Mutant | Killing test |
 |---|---|
-| The timeout formula without `setupMinutes` | the "full scope" assertion |
+| The timeout formula without `setupMinutes` | "the stripe with the most driven items" |
+| Count all planned items instead of driven ones | "planned cases cost nothing" (L2 refused) |
+| `passes` ignored for pr-sample | "pr-sample is ONE L3 job … two passes" |
+| `id` keeps the upper-case layer | "job ids are … already their own run-id slug" |
 | `staleness` counting `pull_request` runs | its test |
 | `summary` including planned cases in timings | its test |
 
@@ -1888,11 +2078,16 @@ it("the matrix runs only in matrix-truth.yml, and ci.yml reaches it only by call
 });
 ```
 
-`matrix-workflow.test.ts` hand-parses the YAML with the `stepOf`/job-splitting helpers that `ci-wiring.test.ts` already has. Import them; if they are not exported, export them from `ci-wiring.test.ts` into a new `__tests__/workflow-text.ts`, and move them rather than copy them.
+`matrix-workflow.test.ts` stays a TEXT parser: there is no YAML dependency at HEAD, and none is added (review I8). The helpers live in a new `tools/matrix/__tests__/workflow-text.ts`.
+- MOVE (do not copy) `indentOf`, `stepOf` and `jobBlock` from `ci-wiring.test.ts:~15-55`, and import them back there.
+- `stepOf(text, name): { keys: string[]; body: string; script: string | null }` keeps its HEAD contract: it throws unless exactly ONE `      - name: <name>` line exists in `text`. Because every truth job has a guard step of the same name, it is always called on ONE job's text, never on the whole file.
+- `jobsOf(text: string): Record<string, string>` is new. It takes the lines under `jobs:`, splits them at each `^  ([a-z][\w-]*):$` key, and maps each job name to its text (the key line through the line before the next job). It throws on zero jobs or a repeated name.
+- `stepHeads(jobText: string): string[]` is new. It lists every `      - ` step line of the job, in order, named or not (`- uses: actions/checkout@v5` included), and throws on zero.
+- Every step the tests read by name has a `name:` in the workflow, the upload steps included (`Upload shard results`, `Upload merged results`).
 
 ```ts
 const WF = readFileSync(".github/workflows/matrix-truth.yml", "utf8");
-const JOBS = jobsOf(WF);                               // name → text
+const JOBS = jobsOf(WF);                               // job name → that job's text
 const GUARD = "Visibility guard (design §6.4; R14a)";
 
 describe("matrix-truth.yml — triggers and the disabled schedule (rulings 60, 62; D2, D3)", () => {
@@ -1903,40 +2098,75 @@ describe("matrix-truth.yml — triggers and the disabled schedule (rulings 60, 6
     expect(WF).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/matrix-truth\.yml"\s*\n\s*- "tools\/matrix\/ci\/\*\*"/);
   });
   it("the plan job is skipped on a schedule unless vars.MATRIX_WEEKLY_ENABLED is 'true', and every other job needs it", () => {
+    expect(Object.keys(JOBS)).toEqual(["plan", "build", "shard", "merge"]);
     expect(JOBS.plan).toContain("if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'");
     for (const [name, text] of Object.entries(JOBS)) if (name !== "plan") expect(text).toMatch(/needs:\s*\[?[^\n]*\bplan\b/);
-    expect(Object.keys(JOBS).length).toBe(4);   // plan, build, shard, merge
   });
 });
 
 describe("the visibility guard (Review Focus 2)", () => {
   it("is the first step of every job, with one identical script", () => {
-    const scripts = Object.values(JOBS).map((t) => { const s = stepsOf(t); expect(s[0].name).toBe(GUARD); return s[0].run; });
+    const scripts = Object.values(JOBS).map((t) => {
+      expect(stepHeads(t)[0]).toBe(`      - name: ${GUARD}`);
+      return stepOf(t, GUARD).script;
+    });
+    expect(scripts).toHaveLength(4);
+    expect(scripts.every((x) => x !== null)).toBe(true);
     expect(new Set(scripts).size).toBe(1);
-    expect(scripts.length).toBe(4);
   });
   const run = (env: Record<string, string>, gh: "public" | "private" | "fail") => {
     const dir = mkdtempSync(join(tmpdir(), "gh-"));
     writeFileSync(join(dir, "gh"), gh === "fail" ? "#!/bin/sh\necho 'HTTP 403' >&2\nexit 1\n" : `#!/bin/sh\necho ${gh}\n`, { mode: 0o755 });
-    return spawnSync("bash", ["-c", stepsOf(JOBS.plan)[0].run], { env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "onryde/seazn.club", ...env }, encoding: "utf8" });
+    return spawnSync("bash", ["-c", stepOf(JOBS.plan, GUARD).script!], { env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "onryde/seazn.club", ...env }, encoding: "utf8" });
   };
-  const cases: [string, Record<string, string>, "public" | "private" | "fail", number][] = [
-    ["public, hosted", { RUNNER_ENV: "github-hosted", INJECT: "none" }, "public", 0],
-    ["private, hosted", { RUNNER_ENV: "github-hosted", INJECT: "none" }, "private", 1],
-    ["unreadable (403), hosted", { RUNNER_ENV: "github-hosted", INJECT: "none" }, "fail", 1],
-    ["public but injected private (the live mutation)", { RUNNER_ENV: "github-hosted", INJECT: "private" }, "public", 1],
-    ["public but injected internal", { RUNNER_ENV: "github-hosted", INJECT: "internal" }, "public", 1],
-    ["private but injected public (cannot loosen)", { RUNNER_ENV: "github-hosted", INJECT: "public" }, "private", 1],
-    ["runner.environment unset", { RUNNER_ENV: "", INJECT: "none" }, "public", 1],
-    ["self-hosted, private (no hosted minutes)", { RUNNER_ENV: "self-hosted", INJECT: "none" }, "private", 0],
+  const cases: { name: string; env: Record<string, string>; gh: "public" | "private" | "fail"; want: number }[] = [
+    { name: "public, hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "public", want: 0 },
+    { name: "private, hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "private", want: 1 },
+    { name: "unreadable (403), hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "fail", want: 1 },
+    { name: "public but injected private (the live mutation)", env: { RUNNER_ENV: "github-hosted", INJECT: "private" }, gh: "public", want: 1 },
+    { name: "public but injected internal", env: { RUNNER_ENV: "github-hosted", INJECT: "internal" }, gh: "public", want: 1 },
+    { name: "private but injected public (cannot loosen)", env: { RUNNER_ENV: "github-hosted", INJECT: "public" }, gh: "private", want: 1 },
+    { name: "runner.environment unset", env: { RUNNER_ENV: "", INJECT: "none" }, gh: "public", want: 1 },
+    { name: "self-hosted, private (no hosted minutes)", env: { RUNNER_ENV: "self-hosted", INJECT: "none" }, gh: "private", want: 0 },
   ];
-  it.each(cases)("%s → exit %#", (_n, env, gh, want) => expect(run(env, gh).status).toBe(want));
+  // review m3: the title names the expected exit from the row itself ($want), never the row index.
+  it.each(cases)("$name → exit $want", ({ env, gh, want }) => expect(run(env, gh).status).toBe(want));
   it("the guard fails closed: unreadable, 403, private, internal, injected public, unset runner — counted", () => {
-    expect(cases.filter((c) => c[3] === 1)).toHaveLength(6);
+    expect(cases.filter((c) => c.want === 1)).toHaveLength(6);
   });
   it("never prints the token", () => {
     const r = run({ RUNNER_ENV: "github-hosted", INJECT: "none", GH_TOKEN: "ghs_SECRETSECRETSECRET" }, "private");
     expect(r.stdout + r.stderr).not.toContain("ghs_");
+  });
+});
+
+describe("the build and shard jobs carry what bench.yml needed to build and serve (review I13)", () => {
+  const bench = readFileSync(".github/workflows/bench.yml", "utf8");
+  const envKeys = (block: string) => [...block.matchAll(/^ {6,10}([A-Z][A-Z0-9_]+):/gm)].map((m) => m[1]);
+  const benchJob = Object.values(jobsOf(bench))[0];
+  const benchJobEnv = envKeys(jobBlock(benchJob.split("\n"), "env"));
+  const benchServerEnv = envKeys(stepOf(benchJob, "Start server").body);
+  it("every env key bench.yml sets at job level is set on the shard job AND the build job (NEXT_PUBLIC_* is baked at build)", () => {
+    expect(benchJobEnv.length).toBeGreaterThan(8);
+    expect(benchJobEnv).toEqual(expect.arrayContaining(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "DATABASE_SSL"]));
+    const shardEnv = envKeys(jobBlock(JOBS.shard.split("\n"), "env"));
+    const buildEnv = envKeys(jobBlock(JOBS.build.split("\n"), "env"));
+    for (const k of benchJobEnv) expect(shardEnv, k).toContain(k);
+    for (const k of benchJobEnv) expect(buildEnv, k).toContain(k);
+  });
+  it("every env key bench.yml's server step sets is set on the shard job's server step, and none twice (review m11)", () => {
+    expect(benchServerEnv.length).toBeGreaterThan(3);
+    const server = envKeys(stepOf(JOBS.shard, "Start the server").body);
+    const shardEnv = envKeys(jobBlock(JOBS.shard.split("\n"), "env"));
+    for (const k of benchServerEnv) expect(server, k).toContain(k);
+    for (const k of server) expect(shardEnv, `${k} set at job AND step level`).not.toContain(k);
+  });
+  it("buildx is set up before the placement image is built, and the build step is bench.yml's, unchanged", () => {
+    const heads = stepHeads(JOBS.build);
+    const buildx = heads.findIndex((h) => h.includes("docker/setup-buildx-action@v3"));
+    expect(buildx).toBeGreaterThan(-1);
+    expect(buildx).toBeLessThan(heads.indexOf("      - name: Build the placement service image"));
+    expect(stepOf(JOBS.build, "Build the placement service image").body).toBe(stepOf(benchJob, "Build the placement service image").body);
   });
 });
 
@@ -1949,23 +2179,33 @@ describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
   });
   it("a fresh Postgres per job, db:apply then sync:sports before the run, its own data dir proven", () => {
     expect(shard).toMatch(/services:\s*\n\s*postgres:\s*\n\s*image: postgres:16/);
-    const names = stepsOf(shard).map((s) => s.name);
-    expect(names.indexOf("Apply migrations")).toBeLessThan(names.indexOf("Sync sports (sync:sports)"));
-    expect(names.indexOf("Sync sports (sync:sports)")).toBeLessThan(names.indexOf("Run the shard"));
+    const heads = stepHeads(shard);
+    const at = (n: string) => heads.indexOf(`      - name: ${n}`);
+    expect(at("Apply migrations")).toBeGreaterThan(0);
+    expect(at("Apply migrations")).toBeLessThan(at("Sync sports (sync:sports)"));
+    expect(at("Sync sports (sync:sports)")).toBeLessThan(at("Run the shard"));
     expect(shard).toContain("BENCH_EXPECTED_DATA_DIR");
+  });
+  it("the run id is built from the matrix's lowercase id, and is already its own slug (review C1)", () => {
+    const tpl = /RUN_ID: (ci-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}-\$\{\{ matrix\.id \}\})/.exec(stepOf(shard, "Run the shard").body)?.[1];
+    expect(tpl).toBeDefined();
+    const m = JSON.parse(spawnSync(process.execPath, ["--experimental-strip-types", "tools/matrix/ci/shard-matrix.ts", "--scope", "full"], { encoding: "utf8" }).stdout.replace(/^matrix=/, ""));
+    for (const j of [...m.include]) {
+      const id = tpl!.replace("${{ github.run_id }}", "12345678901").replace("${{ github.run_attempt }}", "2").replace("${{ matrix.id }}", j.id);
+      expect(slugRunId(id)).toBe(id);
+    }
+    expect(m.include.length).toBe(12);
   });
   it("no Redis anywhere (D12, item 19)", () => {
     expect(WF).not.toMatch(/redis/i);
   });
   it("the run writes EXIT=$? itself, and a killed step cannot read as 0", () => {
-    const step = stepsOf(shard).find((s) => s.name === "Run the shard")!;
-    expect(step.run).toMatch(/set \+e[\s\S]*pnpm matrix:l3 \$MATRIX_ARGS[\s\S]*echo "\$code" > "\$dir\/exit\.txt"/);
+    expect(stepOf(shard, "Run the shard").script).toMatch(/set \+e[\s\S]*pnpm matrix:l3 \$MATRIX_ARGS[\s\S]*echo "\$code" > "\$dir\/exit\.txt"/);
   });
   it("upload paths are an allow-list; no trace; no step echoes a DB URL or token (Review Focus 5)", () => {
-    const up = stepsOf(shard).find((s) => s.uses?.startsWith("actions/upload-artifact"))!;
-    expect(up.with.path.split("\n").map((l: string) => l.trim()).filter(Boolean)).toEqual([
-      "out/*/results.json", "out/*/MATRIX.md", "out/*/exit.txt", "out/*/**/*.png",
-    ]);
+    const up = stepOf(shard, "Upload shard results").body;
+    const paths = /path: \|\n((?: {12}.+\n)+)/.exec(up + "\n")![1].split("\n").map((l) => l.trim()).filter(Boolean);
+    expect(paths).toEqual(["out/*/results.json", "out/*/MATRIX.md", "out/*/exit.txt", "out/*/**/*.png"]);
     expect(WF).not.toMatch(/trace\.zip|MATRIX_TRACE_ON_TIMEOUT/);
     expect(WF).not.toMatch(/echo[^\n]*\$\{?(DATABASE_URL|AUTH_SECRET|GH_TOKEN|SUPABASE_JWT)/);
   });
@@ -1976,29 +2216,35 @@ describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
 });
 
 describe("the merge job", () => {
-  it("runs even when a shard failed, refuses on any short shard, and judges faults per layer", () => {
+  it("runs even when a shard failed, refuses on any short shard, and judges faults per layer under ruling 65", () => {
     expect(JOBS.merge).toContain("if: ${{ always() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' }}");
-    expect(JOBS.merge).toMatch(/pnpm matrix:merge[\s\S]*pnpm matrix:judge faults/);
-    expect(JOBS.merge).toContain("$GITHUB_STEP_SUMMARY");
+    const script = stepOf(JOBS.merge, "Merge each layer and judge its faults").script!;
+    expect(script).toMatch(/pnpm matrix:merge --run-id "ci-[^"]*\$\{layer,,\}"[\s\S]*pnpm matrix:judge faults [^\n]*--planned-not-run allow/);
+    expect(stepOf(JOBS.merge, "Merge each layer and judge its faults").body).toMatch(/# ruling 65/);
+    expect(script).toContain("$GITHUB_STEP_SUMMARY");
   });
 });
 
 describe("ci.yml's per-PR sample (R27, D13)", () => {
   const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const ciJobs = jobsOf(ci);
   it("matrix-rows declares the rows, matrix-sample calls the truth workflow with scope pr-sample when the filter matches", () => {
-    expect(ci).toMatch(/matrix-sample:[\s\S]*needs: matrix-rows[\s\S]*if: needs\.matrix-rows\.outputs\.run == 'true'[\s\S]*uses: \.\/\.github\/workflows\/matrix-truth\.yml[\s\S]*scope: pr-sample/);
+    expect(ciJobs["matrix-sample"]).toMatch(/needs: matrix-rows[\s\S]*if: needs\.matrix-rows\.outputs\.run == 'true'[\s\S]*uses: \.\/\.github\/workflows\/matrix-truth\.yml[\s\S]*scope: pr-sample/);
   });
   it("the PR body reaches pr-rows through env, never inline", () => {
-    expect(ci).toMatch(/PR_BODY: \$\{\{ github\.event\.pull_request\.body \}\}/);
+    expect(stepOf(ciJobs["matrix-rows"], "Rows the PR declares (R27)").body).toMatch(/PR_BODY: \$\{\{ github\.event\.pull_request\.body \}\}/);
     expect(ci).not.toMatch(/run:[^\n]*github\.event\.pull_request\.body/);
   });
-  it("the staleness step never fails a PR (D1b)", () => {
-    const step = stepOf(ci, "Truth-run staleness (D1b, non-blocking)");
-    expect(step).toContain("continue-on-error: true");
-    expect(step).toContain("if: vars.MATRIX_WEEKLY_ENABLED == 'true'");
+  it("the staleness step never fails a PR, and runs even when the rows step failed (D1b; review m6)", () => {
+    const s = stepOf(ciJobs["matrix-rows"], "Truth-run staleness (D1b, non-blocking)");
+    expect(s.keys).toContain("continue-on-error");
+    expect(s.body).toContain("continue-on-error: true");
+    expect(s.body).toContain("if: ${{ always() && vars.MATRIX_WEEKLY_ENABLED == 'true' }}");
   });
 });
 ```
+
+`slugRunId` is imported from `../lib/run-id.ts` (Task 4).
 
 `run-sample.test.ts`. The sample re-runs a regressed case once before failing:
 
@@ -2013,7 +2259,7 @@ it("a regression that does not reproduce: two runs, the second judged with --rer
   expect(await runSample(deps)).toBe(0);
   expect(deps.runs).toBe(2);
   expect(deps.judgeArgs[1]).toContain("--rerun");
-  expect(deps.runArgs[1].find((a) => a.startsWith("--run-id"))).not.toBe(deps.runArgs[0].find((a) => a.startsWith("--run-id")));
+  // the re-run id itself is pinned by the real-CLI tests below, against the workflow's template (review I9)
 });
 it("a reproduced regression is exit 1; the sample never re-runs twice", async () => {
   const deps = fakeSampleDeps({ judgeExits: [1, 1] });
@@ -2132,7 +2378,7 @@ jobs:
           ROWS: ${{ inputs.rows || 'none' }}
         run: |
           set -euo pipefail
-          node --experimental-strip-types tools/matrix/ci/shard-matrix.ts --scope "$SCOPE" --rows "$ROWS" >> "$GITHUB_OUTPUT"
+          pnpm --silent matrix:shards --scope "$SCOPE" --rows "$ROWS" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build once
@@ -2140,8 +2386,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # bench.yml's CI-only dummies (bench.yml:85-106) — never real secrets.
-      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # bench.yml's job-level env (bench.yml:80-106), every key, copied with its
+      # comments. CI-only dummies, never real secrets. NEXT_PUBLIC_* is baked into
+      # the client bundle HERE, so the stubs must be present at build (review I13).
+      # … DATABASE_URL, DATABASE_SSL, AUTH_SECRET, DEVICE_LINK_KEK, SUPABASE_JWT_SIGNING_KEY_B64,
+      #   SUPABASE_JWT_SECRET, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      #   NEXT_TELEMETRY_DISABLED, STRIPE_SECRET_KEY, NEXT_PUBLIC_SCOREPAD_HOLD_MS …
       SKIP_TYPECHECK: "1"
     steps:
       - name: Visibility guard (design §6.4; R14a)
@@ -2150,6 +2400,7 @@ jobs:
       # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile, as in plan …
       - name: Build the web app (standalone)
         run: npm run build --workspace apps/web
+      - uses: docker/setup-buildx-action@v3
       - name: Build the placement service image
         uses: docker/build-push-action@v6
         with:
@@ -2185,16 +2436,20 @@ jobs:
       postgres:
         image: postgres:16
         env:
+          POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: seazn
+          POSTGRES_DB: postgres
         ports: ["5433:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5433/seazn   # CI-only dummy (bench.yml precedent)
+      # bench.yml's job-level env (bench.yml:80-106), every key once, at JOB level only.
+      # DATABASE_URL points at this job's service DB; the server step below does NOT
+      # repeat it (review m11: one level per key, so there is no precedence to reason about).
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+      DATABASE_SSL: disable
+      # … AUTH_SECRET … NEXT_PUBLIC_SCOREPAD_HOLD_MS, copied verbatim with their comments …
       SMOKE_BASE: http://localhost:3200
-      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
-      # … the remaining bench.yml:85-106 CI dummies, copied verbatim …
     steps:
       - name: Visibility guard (design §6.4; R14a)
         # (identical script)
@@ -2223,20 +2478,30 @@ jobs:
           gunzip -c placement.tgz | docker load
           # … e2e.yml:670-690 verbatim (container placement-e2e on 50051, its 15 s TCP wait) …
       - name: Start the server
+        env:
+          # bench.yml's "Start server" env (bench.yml:176-195), every key, and no job-level key repeated.
+          PORT: "3200"
+          AUTH_DEV_LINKS: "1"
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-matrix-secret
+          LOG_LEVEL: warn
         run: |
           set -euo pipefail
           tar -xzf web.tgz
-          # … bench.yml's server start (PORT 3200, AUTH_DEV_LINKS "1", PLACEMENT_SERVICE_HOST/SECRET, LOG_LEVEL warn,
-          #   the health loop) — reading from ./standalone/apps/web/server.js …
+          # … bench.yml's health loop on :3200 — reading from ./standalone/apps/web/server.js …
       - name: Run the shard
         env:
           MATRIX_ARGS: ${{ matrix.args }}
-          RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.layer }}-s${{ matrix.k }}
+          # matrix.id is lowercase (shard-matrix.ts); run.ts slugs --run-id, so the
+          # id must already be its own slug or "out/$RUN_ID" below names nothing (review C1).
+          RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
         run: |
           set +e
           mkdir -p out
           if [ "$SCOPE" = "pr-sample" ]; then
-            pnpm matrix:sample --args "$MATRIX_ARGS" --run-id "$RUN_ID" --report-dir out
+            # run-sample reads MATRIX_ARGS from the env: a dash-leading --args value is
+            # refused by util.parseArgs (review C3a).
+            pnpm matrix:sample --run-id "$RUN_ID" --report-dir out
           else
             pnpm matrix:l3 $MATRIX_ARGS --run-id "$RUN_ID" --report-dir out
           fi
@@ -2245,7 +2510,8 @@ jobs:
           echo "$code" > "$dir/exit.txt"
           echo "EXIT=$code"
           exit "$code"
-      - uses: actions/upload-artifact@v4
+      - name: Upload shard results
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: shard-${{ matrix.layer }}-${{ matrix.k }}
@@ -2275,21 +2541,25 @@ jobs:
       - name: Merge each layer and judge its faults
         env:
           GH_TOKEN: ${{ github.token }}
+        # ruling 65 (2026-10-04): "no ░" applies to driven cases only. A planned ░
+        # (L2's 1,505 unscripted pair-runs) is not a fault, so `allow` is the ruled
+        # behaviour; a ░ on a DRIVEN case is still a fault under it (judge.test.ts).
         run: |
           set +e
           status=0
           for layer in L1 L2 L3; do
             dirs=$(ls -d shards/shard-$layer-*/* 2>/dev/null)
             [ -z "$dirs" ] && { echo "$layer: no shards ran (scope $SCOPE)" | tee -a merged-notes.txt; continue; }
-            pnpm matrix:merge --run-id "ci-${{ github.run_id }}-${{ github.run_attempt }}-$layer" --out "merged/$layer" $dirs
+            pnpm matrix:merge --run-id "ci-${{ github.run_id }}-${{ github.run_attempt }}-${layer,,}" --out "merged/$layer" $dirs
             code=$?; echo "$layer merge EXIT=$code"; [ "$code" -ne 0 ] && status=1 && continue
             pnpm matrix:judge faults "merged/$layer/results.json" --planned-not-run allow > "merged/$layer/faults.txt"
             code=$?; echo "$layer faults EXIT=$code"; [ "$code" -ne 0 ] && status=1
           done
-          node --experimental-strip-types tools/matrix/ci/summary.ts --merged merged --previous-run auto --out merged/SUMMARY.md
+          pnpm matrix:summary --merged merged --previous-run auto --out merged/SUMMARY.md
           cat merged/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
-      - uses: actions/upload-artifact@v4
+      - name: Upload merged results
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: merged
@@ -2297,29 +2567,44 @@ jobs:
           retention-days: 90
 ```
 
-In the committed file, the `# … as in plan …` / `# (identical script)` lines are REPLACED by the literal steps. The test above holds them identical. They are elided here only to keep the plan readable; the guard's text is given once in full in the `plan` job.
+In the committed file, the `# … as in plan …` / `# (identical script)` / `# … copied verbatim …` lines are REPLACED by the literal steps and keys. The test above holds them identical. They are elided here only to keep the plan readable; the guard's text is given once in full in the `plan` job.
 
 `merge-shards.ts` reads each shard dir's `<run-id>/` subdirectory: the artifact holds `out/<run-id>/…`. The `ls -d shards/shard-$layer-*/*` glob gives the per-run-id dirs.
 
 - [ ] **Step 4: Write `run-sample.ts`**
 
-The CLI is `run-sample.ts --args "<run.ts args>" --run-id <id> --report-dir <dir>`. Its exit header (D8): 0 no reproduced regression; 1 a reproduced regression; 2 the sample run itself refused or aborted, or the baseline is unreadable.
+The CLI is `run-sample.ts --run-id <id> --report-dir <dir>`, and it reads the run.ts arguments from the `MATRIX_ARGS` env var, split on whitespace (review C3a: `util.parseArgs` refuses a separate value that starts with `--`, such as `--args "--set pr-sample …"`). It refuses (exit 2):
+- an empty or missing `MATRIX_ARGS`;
+- a `--run-id` that is not its own slug (`slugRunId(id) !== id`, Task 4);
+- a `-r` re-run id that would exceed `RUN_ID_MAX`.
+
+Its exit header (D8): 0 no reproduced regression; 1 a reproduced regression; 2 the sample run itself refused or aborted, the baseline is unreadable, or a refusal above.
+
+Before the run it writes `<report-dir>/<run-id>.expect.json`: the exact case ids `planPrSample(rows, offlineBuilderDefault)` plans, with `rows` read from `MATRIX_ARGS`'s `--rows`. The judge restricts the baseline to those ids (Task 6, review C3c).
 
 ```ts
 export async function runSample(d: SampleDeps): Promise<number> {
   const first = await d.run([...d.args, "--run-id", d.runId, "--report-dir", d.reportDir]);
   if (first !== 0) { d.say(`sample run exited ${first} — a broken sample is not a pass`); return 2; }
   const nowFile = join(d.reportDir, d.runId, "results.json");
-  const j1 = d.judge(["regression", "--baseline", d.baseline, "--now", nowFile]);
+  const j1 = d.judge(["regression", "--baseline", d.baseline, "--now", nowFile, "--expect", d.expectFile]);
   if (j1 !== 1) return j1;
+  // D13: the WHOLE sample runs once more (shards.json prSample.passes = 2 budgets it); only cases red in both count.
   const rerunId = `${d.runId}-r`;
   const second = await d.run([...d.args, "--run-id", rerunId, "--report-dir", d.reportDir]);
   if (second !== 0) { d.say(`re-run exited ${second}`); return 2; }
-  return d.judge(["regression", "--baseline", d.baseline, "--now", nowFile, "--rerun", join(d.reportDir, rerunId, "results.json")]);
+  return d.judge(["regression", "--baseline", d.baseline, "--now", nowFile, "--expect", d.expectFile, "--rerun", join(d.reportDir, rerunId, "results.json")]);
 }
 ```
 
-`d.baseline` is read from `tools/matrix/catalogue/baseline.json`'s `L3`. The real `run`/`judge` deps spawn `node --experimental-strip-types tools/matrix/run.ts …` and `tools/matrix/judge.ts …`, the way `ci-wiring.test.ts` spawns its stand-ins. `RUN_ID_MAX` is 40 and `ci-<11 digits>-<attempt>-L3-s1-r` is about 26 characters; the test asserts that a `-r` id still parses through `parseCli`.
+`d.baseline` is `baselineL3Path()` (Task 7). The real `run`/`judge` deps spawn `node --experimental-strip-types tools/matrix/run.ts …` and `tools/matrix/judge.ts …`, the way `ci-wiring.test.ts` spawns its stand-ins.
+
+Add these CLI tests to `run-sample.test.ts`. They spawn the REAL `run-sample.ts` with the real deps replaced only at the process boundary: `MATRIX_RUN_BIN` / `MATRIX_JUDGE_BIN` point at stand-in scripts that record their argv to a file. That replaces the fake-deps test whose `--run-id` lookup compared a value with itself (review I9).
+- "a dash-leading MATRIX_ARGS reaches run.ts intact": `MATRIX_ARGS="--set pr-sample --rows none --workers 4"`. The recorded run argv starts with exactly those five tokens.
+- "the run id the workflow builds is the id run.ts is given and the dir the judge reads". Take the YAML's `RUN_ID` template (read from `matrix-truth.yml` as in Task 9's C1 test), with `matrix.id = l3-sample` substituted. The recorded run argv's `--run-id` equals it, and the recorded judge argv's `--now` equals `<report-dir>/<it>/results.json`. Both expected values come from the workflow text, never from `run-sample.ts`.
+- "the re-run id is the first id plus `-r`, it is its own slug, and it fits RUN_ID_MAX".
+- "an upper-case --run-id is refused with exit 2 before anything runs".
+- "the expect file holds planPrSample's ids for the rows in MATRIX_ARGS".
 
 - [ ] **Step 5: Write `ci.yml`'s two jobs**
 
@@ -2372,11 +2657,12 @@ export async function runSample(d: SampleDeps): Promise<number> {
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
           node --experimental-strip-types tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
       - name: Truth-run staleness (D1b, non-blocking)
-        if: vars.MATRIX_WEEKLY_ENABLED == 'true'
+        # always(): a failed rows step (R27 undeclared) must not hide the staleness signal (review m6).
+        if: ${{ always() && vars.MATRIX_WEEKLY_ENABLED == 'true' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node --experimental-strip-types tools/matrix/ci/staleness.ts --max-days 8
+        run: pnpm --silent matrix:staleness --max-days 8
 
   matrix-sample:
     name: Matrix per-PR sample (R27)
@@ -2401,7 +2687,7 @@ Run the vitest template on:
 ci-wiring.test.ts matrix-workflow.test.ts run-sample.test.ts shard-matrix.test.ts strip-types-loadable.test.ts
 ```
 
-All green. The guard's `it.each` must report 8 cases.
+All green, with `.testResults[].name` listing exactly these 5 files (review I15: a misspelt positional is silently dropped). The guard's `it.each` must report 8 cases.
 
 - [ ] **Step 7: Mutate**
 
@@ -2413,6 +2699,11 @@ All green. The guard's `it.each` must report 8 cases.
 | Remove `if:` from `plan` | the D2 test |
 | Add `out/*/trace.zip` to the upload | Review Focus 5 test |
 | In `runSample`, `if (j1 !== 1) return j1` → `return j1` | "a regression that does not reproduce" |
+| `RUN_ID` template back to `${{ matrix.layer }}-s${{ matrix.k }}` | "the run id is built from the matrix's lowercase id" (C1) |
+| `run-sample.ts` reads `--args` again instead of `MATRIX_ARGS` | "a dash-leading MATRIX_ARGS reaches run.ts intact" (C3a) |
+| Drop `--expect` from the judge call | "the run id the workflow builds…" (judge argv) and Task 6's expect refusal |
+| Remove the buildx step | "buildx is set up before the placement image is built" (I13) |
+| Remove `NEXT_PUBLIC_SUPABASE_URL` from the build job | "every env key bench.yml sets at job level…" (I13) |
 
 Mutate the guard's three branches one at a time; they partly cover for each other. Each mutant is applied to EVERY job's copy, or the identity test reds first and proves nothing about the guard.
 
@@ -2468,18 +2759,25 @@ Expected: about 8 errors (5 in `scenarios.test.ts`, 3 in `scripts/__tests__`) an
 `tools-tests-typecheck.test.ts`:
 
 ```ts
-it("tsconfig.tools-tests.json covers the matrix's and scripts' tests and none of bench's", () => {
+const tracked = (glob: string) => spawnSync("git", ["ls-files", glob], { encoding: "utf8" }).stdout.split("\n").filter(Boolean);
+it("tsconfig.tools-tests.json covers every tracked matrix test and every tracked scripts test, counted separately (review m13)", () => {
   const r = spawnSync(process.execPath, ["node_modules/typescript-native/bin/tsc", "-p", "tsconfig.tools-tests.json", "--listFilesOnly"], { encoding: "utf8" });
-  const files = r.stdout.split("\n").filter((f) => /\/(tools\/matrix|scripts)\/.*\.test\.ts$/.test(f));
-  expect(files.length).toBeGreaterThan(80);     // tools/matrix/__tests__ alone holds > 80 test files at HEAD (Step 0 pins)
-  expect(r.stdout).not.toMatch(/tools\/bench\//);
-});
-it("and it type-checks clean", () => {
-  const r = spawnSync(process.execPath, ["node_modules/typescript-native/bin/tsc", "-p", "tsconfig.tools-tests.json"], { encoding: "utf8" });
-  expect(r.stdout.match(/error TS\d+/g) ?? []).toEqual([]);
   expect(r.status).toBe(0);
+  const listed = new Set(r.stdout.split("\n").map((f) => relative(process.cwd(), f.trim())).filter(Boolean));
+  const matrix = tracked("tools/matrix/__tests__/*.test.ts");
+  const scripts = tracked("scripts/*.test.ts");     // a git pathspec's * crosses "/", so this is recursive
+  expect(matrix.length).toBeGreaterThan(0);        // 67 at HEAD 2026-10-04; derived, never typed in
+  expect(scripts.length).toBeGreaterThan(0);       // 15 at HEAD
+  for (const f of [...matrix, ...scripts]) expect(listed.has(f), f).toBe(true);
+});
+it("…and none of bench's TESTS (bench's lib is allowed: HM/run.ts imports it, R3; review I7)", () => {
+  const r = spawnSync(process.execPath, ["node_modules/typescript-native/bin/tsc", "-p", "tsconfig.tools-tests.json", "--listFilesOnly"], { encoding: "utf8" });
+  const bench = r.stdout.split("\n").filter((f) => /tools\/bench\//.test(f));
+  expect(bench.filter((f) => /\.test\.ts$|\/__tests__\//.test(f))).toEqual([]);
 });
 ```
+
+The type-check ITSELF is not a vitest test (review m12): a full `tsc -p` inside the unit step would duplicate the gates step's minutes against `ci.yml`'s unit-step timeout. The gates step below is the check, and Step 4 runs it locally.
 
 - [ ] **Step 2: See it fail on the 8 errors. Step 3: Fix them.**
 
@@ -2493,7 +2791,11 @@ Run the vitest template on `tools-tests-typecheck.test.ts scenarios.test.ts`. Pl
 
 The guard test is Task 11's. It does not collect from a nested worktree (vite import analysis on `typescript.js`), which is environmental and noted in facts. Run it from the exec worktree; if it fails to collect there too, that is the same environment fault, and CI is the arbiter.
 
-Mutate: re-introduce one `scenarios.test.ts` error (an extra argument). The "type-checks clean" test reds.
+Run the gates step's command locally: `cd <exec> && node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json; echo EXIT=$?`, expecting `EXIT=0`.
+
+Mutate:
+- re-introduce one `scenarios.test.ts` error (an extra argument): that command exits non-zero, naming the file;
+- drop `scripts/**` from the tsconfig's `include`: "covers every tracked … scripts test" reds.
 
 Commit `chore(matrix): type-check tools/matrix and scripts tests in CI; vitest is a root devDependency (W1d item 7, D9)`.
 
@@ -2579,7 +2881,7 @@ Commit `test(guard): the tools/ import guard judges spawn-call arguments (W1d it
   - `tools/matrix/lib/pad-proof-set.ts:14-15`;
   - `tools/matrix/run.ts:561`.
 - Test:
-  - `pad-replay.test.ts`, `pad-adapters.test.ts`, `browser-driver.test.ts`, `pad-proof-set.test.ts` (extend);
+  - `pad-replay.test.ts`, `pad-adapters.test.ts`, `browser-driver.test.ts`, `pad-proof.test.ts` (extend; there is no `pad-proof-set.test.ts` at HEAD, review I15);
   - `pad-cricket-innings.test.ts` (create).
 
 **Interfaces:**
@@ -2611,7 +2913,7 @@ Item 9:
 
 15a: `browser-driver.test.ts`, "a tap-wait timeout's message carries the last 5 tap timings, each with clickedAtMs and waitedMs, redacted". It uses the fake page whose ledger never advances.
 
-15b: `pad-proof-set.test.ts`, covering `--only league|badminton` → only badminton's cases; `--only league|chess` (not in `PAD_SPORTS`) → refused; `--scenario M1` → still refused; and the empty case, `--only` with an empty value → usage.
+15b: `pad-proof.test.ts`, covering `--only league|badminton` → only badminton's cases; `--only league|chess` (not in `PAD_SPORTS`) → refused; `--scenario M1` → still refused; and the empty case, `--only` with an empty value → usage.
 
 16, `pad-cricket-innings.test.ts`:
 - "inningsPerSide 2 is accepted";
@@ -2682,10 +2984,10 @@ Each item extends its tests in the existing test file for that module.
 Run the vitest template on the files touched:
 
 ```
-parity.test.ts boundary.test.ts browser-budget.test.ts run-cli.test.ts workers.test.ts browser-driver.test.ts stage-rail.test.ts scenarios.test.ts model-run-cell.test.ts
+parity.test.ts boundary.test.ts browser-budget.test.ts run-cli.test.ts workers.test.ts browser-driver.test.ts page-objects.test.ts scenarios.test.ts model-run-cell.test.ts
 ```
 
-Step 0 confirms the exact test file names with `ls tools/matrix/__tests__`.
+All nine exist at HEAD (re-pinned 2026-10-04 with `ls tools/matrix/__tests__`; the rail's tests live in `page-objects.test.ts:108-170`, there is no `stage-rail.test.ts`, review I15). The JSON reporter's `.testResults[].name` must list exactly 9 files: a misspelt positional is dropped silently and the run reports green on fewer.
 
 - [ ] **Step 5: Mutate (one per item that has a guard)**
 
@@ -2720,7 +3022,7 @@ Commit `fix(matrix): harness minors — parity quiet, scan spellings, browser wo
   - `tools/matrix/lib/carry-1280-set.ts`.
 - Test:
   - `__tests__/run-sheet-today.test.ts`, `__tests__/void-proof.test.ts`, `__tests__/carry-sets.test.ts` (create);
-  - `__tests__/stage-rail.test.ts` (extend).
+  - `__tests__/page-objects.test.ts` (extend: its `describe("the stage rail's fold")` block, `:112`).
 - Evidence: `TR/w1d-carry/{match-day-1280,match-day-320,void-1280,void-320,carry8-1280}/`, `TR/plans.lock.json` (5 added entries), `committed-matrix.test.ts` `EVIDENCE_DIRS` + `RESULTS_FLOOR`.
 
 **Interfaces:**
@@ -2758,7 +3060,7 @@ it("judges runsheet-today-default: today on match day, all otherwise; abstains, 
   expect(judgeTodayDefault({ phase: "scheduled", seen: { filter: "all", rows: [1, 2, 3] }, datedToday: [] })).toEqual({ verdict: "abstain", checked: 0, note: expect.stringContaining("no fixture dated today") });
 });
 
-// stage-rail.test.ts
+// page-objects.test.ts, inside describe("the stage rail's fold")
 it("records the fold branch: opened below 768, unfolded at 768 and above", async () => {
   for (const [w, want] of [[320, "opened"], [767, "opened"], [768, "unfolded"], [1280, "unfolded"]] as const) {
     expect((await railBranchAt(w)).branch).toBe(want);
@@ -2834,7 +3136,7 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
 **Files:**
 - Create:
   - `packages/engine/stryker.config.mjs`;
-  - `packages/engine/stryker.groups.mjs`;
+  - `packages/engine/stryker.groups.mjs`, and `packages/engine/stryker.groups.d.mts` declaring exactly its two exports (review I11d: the engine tsconfig includes `test/**`, and a `.ts` test importing an untyped `.mjs` is TS7016);
   - `packages/engine/stryker-floor.json` (`{"note": "...", "groups": {}}`: empty until PR-B, Task 20);
   - `packages/engine/stryker-equivalent.json` (`{"note": "...", "equivalent": []}`);
   - `packages/engine/scripts/stryker-floor.ts`;
@@ -2849,14 +3151,14 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
 
 **Interfaces:**
 - `STRYKER_GROUPS: Record<"competition" | "draws" | "build" | "calendar" | "repair" | "probe", string[]>`, as globs relative to `packages/engine`:
-  - **competition:** `src/competition/**/*.ts`;
+  - **competition:** `src/competition/**/*.ts`, `!src/competition/**/*.test.ts`, `!src/competition/**/__tests__/**` (review I11a: `src/` co-locates its tests, and a glob without the negations would have Stryker mutate test files);
   - **draws:** `bracket`, `bracket-layout`, `roundrobin`, `swiss`, `americano`, `participants`, `feedgraph`;
   - **build:** `build`, `build-grid`, `build-objectives`, `constraints`, `candidate-courts`;
   - **calendar:** `calendar`, `tz`, `court-windows`, `grid-step`, `rest-floor`, `capacity`, `health`;
   - **repair:** `repair-decompose`, `repair-decompose-cpsat`, `repair-domain`, `repair-minimality`, `repair-synthetic-board`, `conflict-detail`, `report`;
   - **probe:** `src/scheduling/rest-floor.ts` only (the PR self-proof, D3).
 
-  Each scheduling entry above is `src/scheduling/<name>.ts`.
+  Each scheduling entry above is `src/scheduling/<name>.ts`: an exact file, never a glob, so no test file can match it.
 - `STRYKER_EXCLUDED: Record<string, string>` maps file → reason:
   - `placement-client.ts`: a gRPC client, covered by integration tests that need the service;
   - `generated/**`: generated;
@@ -2890,11 +3192,28 @@ it("every non-test .ts under src/scheduling and src/competition is in exactly on
   const owners = new Map<string, string[]>();
   for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of globSync(globs, { cwd: ENGINE })) owners.set(f, [...(owners.get(f) ?? []), g]);
   for (const f of files) {
-    const excluded = Object.keys(STRYKER_EXCLUDED).some((e) => minimatch(f, `src/scheduling/${e}`) || minimatch(f, e));
+    // path.matchesGlob (node:path, Node 22+): minimatch is not a dependency of the engine or the root (review I11c)
+    const excluded = Object.keys(STRYKER_EXCLUDED).some((e) => matchesGlob(f, `src/scheduling/${e}`) || matchesGlob(f, e));
     expect({ f, n: excluded ? 0 : owners.get(f)?.length ?? 0, excluded }).toEqual({ f, n: excluded ? 0 : 1, excluded });
   }
 });
 it("every exclusion names a reason and a file that exists", () => { /* each key globs ≥ 1 file; each reason ≥ 10 chars */ });
+it("no group's mutate list reaches a test file (review I11a)", () => {
+  let checked = 0;
+  for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
+    const pos = globs.filter((x) => !x.startsWith("!"));
+    const neg = globs.filter((x) => x.startsWith("!")).map((x) => x.slice(1));
+    const files = globSync(pos, { cwd: ENGINE, exclude: (f) => neg.some((n) => matchesGlob(f, n)) });
+    checked += files.length;
+    expect(files.filter((f) => /\.test\.ts$|__tests__/.test(f)), g).toEqual([]);
+  }
+  expect(checked).toBeGreaterThan(35);
+});
+it("concurrency derives from memory the way vitest.config.ts bounds workers, never above it (review I11b)", () => {
+  expect(strykerConcurrency({ cores: 4, memBytes: 16 * GB })).toBe(2);   // ubuntu-latest: 4 vCPU, 16 GB
+  expect(strykerConcurrency({ cores: 16, memBytes: 8 * GB })).toBe(2);   // memory-bound floor
+  expect(strykerConcurrency({ cores: 16, memBytes: 64 * GB })).toBe(15);
+});
 
 // stryker-floor.test.ts
 it("zero mutants is a refusal (vacuous), never a pass", () => expect(check("draws", report({ killed: 0, survived: 0 }), floors({ draws: 50 }))).toEqual({ exit: 2, why: expect.stringContaining("zero mutants") }));
@@ -2921,7 +3240,8 @@ The `mutation.json` fixture uses Stryker's mutation-testing-elements schema (`fi
 // Design §7.5 item 2 (W1d D14): weekly mutation testing of the engine's
 // scheduling and competition code. One group per CI job (STRYKER_GROUP);
 // incremental across weeks via the cached incremental file.
-import { STRYKER_GROUPS } from "./stryker.groups.mjs";
+import { availableParallelism, totalmem } from "node:os";
+import { STRYKER_GROUPS, strykerConcurrency } from "./stryker.groups.mjs";
 const group = process.env.STRYKER_GROUP;
 if (!group || !(group in STRYKER_GROUPS)) throw new Error(`STRYKER_GROUP must be one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
 export default {
@@ -2935,10 +3255,14 @@ export default {
   jsonReporter: { fileName: `reports/mutation/${group}.json` },
   thresholds: { high: 80, low: 60, break: null },   // the floor file, not Stryker's break, gates (D14)
   timeoutMS: 60000,
-  concurrency: 4,
+  // Each Stryker sandbox runs the engine's vitest, z3-WASM files included. Same bound as
+  // vitest.config.ts:43-45, max(2, min(cores − 1, mem / 3 GB)); a fixed 4 would OOM a 16 GB runner (review I11b).
+  concurrency: strykerConcurrency({ cores: availableParallelism(), memBytes: totalmem() }),
   tempDirName: ".stryker-tmp",
 };
 ```
+
+`stryker.groups.mjs` also exports `strykerConcurrency({ cores, memBytes }) = Math.max(2, Math.min(cores - 1, Math.floor(memBytes / (3 * GB))))`, a copy of `vitest.config.ts:43-45`'s formula. The test pins it against three machines, and a comment in each file names the other.
 
 `stryker-floor.ts` follows the interfaces above, with a D8 exit header.
 
@@ -2973,6 +3297,8 @@ Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest r
 | `check` treating zero mutants as 100% | its test |
 | `floorDiff` ignoring removed groups | its test |
 | Put `rest-floor.ts` in two groups | the groups test |
+| Drop `!src/competition/**/*.test.ts` | "no group's mutate list reaches a test file" |
+| `strykerConcurrency` returning `cores - 1` | "concurrency derives from memory" |
 
 - [ ] **Step 6: Commit**
 
@@ -3000,8 +3326,8 @@ Expected: `compared` equals the slice size (24), and `differ: []`. A difference 
 - [ ] **Step 3: `_INDEX.md`**
 
 - **W1d status row:** "PR-A open: infra (Tasks 1–16); PR-B after the owner merges".
-- **False premises:** add "### Found during W1d planning" with the 20 entries above, plus any found while executing.
-- **Recommendations:** the bench carry (D9); D7's question for the owner, verbatim; D2's enable step, as the owner's action.
+- **False premises:** add "### Found during W1d planning" with the 22 entries above, plus any found while executing.
+- **Recommendations:** the bench carry (D9); D11's recommendation (decline browser workers in favour of shards, items 17 and 18), for the owner; D2's enable step, as the owner's action. D7 needs nothing here: ruling 65 is already recorded (`_INDEX.md:919`).
 - **Close "W1d first tasks":** each item gets `— done in W1d T<N> (<sha>)`, or `— accepted (item 13)`.
 
 - [ ] **Step 4: Scoped gate, reviewer, push, PR**
@@ -3009,7 +3335,7 @@ Expected: `compared` equals the slice size (24), and `differ: []`. A difference 
 1. Run the vitest template over EVERY test file this PR touched (the union from Tasks 1–15), plus the engine's two files. Paste the counts.
 2. Run eslint on every changed `.ts`/`.mjs` through `rtk proxy`, and tsc on `tsconfig.tools-tests.json`.
 3. Dispatch the `reviewer` agent on `git diff origin/main...HEAD`, at most 25 findings. Fix every Critical and Important finding inline (the no-new-issues rule), then re-review the fixes.
-4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D7's question, and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after."
+4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D11's recommendation, the line "the merge job judges with `--planned-not-run allow` per owner ruling 65", and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after."
 
 - [ ] **Step 5: Watch the self-proof (D3)**
 
@@ -3038,7 +3364,7 @@ Every PR-B step that touches GitHub reads its result before believing it. The tr
 - `_INDEX.md` (the W1d status row; a "W1d dispatches" block under the programme log)
 - `$TMPDIR/w1d-dispatch/<n>/` (downloaded artifacts; not committed until Task 21)
 
-- [ ] **Step 0: Worktree, the owner's D7 answer, the tag**
+- [ ] **Step 0: Worktree and the tag**
 
 ```bash
 cd /Users/ashokhein/github/seazn.club && git fetch origin && git worktree add -b feat/format-matrix-w1d-evidence .claude/worktrees/format-matrix-w1d-evidence origin/main; echo EXIT=$?
@@ -3046,9 +3372,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-eviden
 cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-evidence && git log -1 --format='%H %s' && test -f .github/workflows/matrix-truth.yml && echo PR-A-merged
 ```
 
-Then ask the owner D7's question in chat (feedback: questions in chat), and record the answer VERBATIM in `_INDEX.md` "Owner rulings" as the next number, with the date.
-- `--planned-not-run allow` (the recommendation) or `refuse` (alternative c) becomes the judge flag for every step below.
-- If the owner picks (b), shrink ruling 64's L2: change `shards.json` L2 full args to a new `--scope grid-driven`, which needs a small PR before any dispatch. **STOP and report.**
+Every judge call below uses `--planned-not-run allow`: owner ruling 65 (2026-10-04, `_INDEX.md:919`) says "no ░" applies to driven cases only. Nothing is asked of the owner here.
 
 D21: tag the tip and push the tag:
 
@@ -3091,7 +3415,7 @@ Then check the run:
 
 ```bash
 cd <evidence> && rm -rf "$TMPDIR/w1d-dispatch/1" && gh run download <id> -n merged -D "$TMPDIR/w1d-dispatch/1"; echo EXIT=$?
-cd <evidence> && for l in L1 L2 L3; do pnpm matrix:judge faults "$TMPDIR/w1d-dispatch/1/$l/results.json" --planned-not-run <D7>; echo "$l EXIT=$?"; done
+cd <evidence> && for l in L1 L2 L3; do pnpm matrix:judge faults "$TMPDIR/w1d-dispatch/1/$l/results.json" --planned-not-run allow; echo "$l EXIT=$?"; done
 ```
 
 Expected per layer: `EXIT=0`. Then confirm the case counts against ruling 64:
@@ -3109,7 +3433,7 @@ The workflow's concurrency group for a dispatch is `matrix-truth-workflow_dispat
 - [ ] **Step 4: The verdict (ruling 61)**
 
 ```bash
-cd <evidence> && for l in L1 L2 L3; do pnpm matrix:judge across "$TMPDIR/w1d-dispatch/1/$l/results.json" "$TMPDIR/w1d-dispatch/2/$l/results.json" "$TMPDIR/w1d-dispatch/3/$l/results.json" --planned-not-run <D7> | tee "$TMPDIR/w1d-dispatch/across-$l.txt"; echo "$l EXIT=$?"; done
+cd <evidence> && for l in L1 L2 L3; do pnpm matrix:judge across "$TMPDIR/w1d-dispatch/1/$l/results.json" "$TMPDIR/w1d-dispatch/2/$l/results.json" "$TMPDIR/w1d-dispatch/3/$l/results.json" --planned-not-run allow | tee "$TMPDIR/w1d-dispatch/across-$l.txt"; echo "$l EXIT=$?"; done
 ```
 
 **Harness-green = all three `EXIT=0`.** The output's `compared` must equal each layer's case count.
@@ -3224,6 +3548,7 @@ Commit `feat(matrix): triage and audit-ledger tools — every red keyed to a gap
 **Files:**
 - `tools/matrix/catalogue/{gap-routing,triage-rules,audit-verdicts,new-gaps}.json` (filled)
 - `$TMPDIR/w1d-triage/` (outputs; committed in Task 21)
+- `packages/engine/test/audit-witnesses.test.ts` and `tools/matrix/__tests__/audit-witnesses.test.ts` (create, only if a verdict is `verified-by-failing-test`; Step 4)
 
 - [ ] **Step 1: Transcribe §8**
 
@@ -3260,7 +3585,11 @@ For each audit id the triage does not reproduce, write one verdict with evidence
 - **exercised-not-reproduced:** the driven case ids that cover it and passed. These become "False premises found — W1d triage" entries in `_INDEX.md`, one line each with evidence (R5);
 - **not-exercised:** the atom or script that would reach it, and its wave;
 - **verified-by-read:** `file:line` and what it shows;
-- **verified-by-failing-test:** the test path, which is committed in this PR and fails on `main`. Each such test goes in the owning module's test file with a `.fails` marker naming the gap, so it is a real, running witness that flips when the gap is fixed.
+- **verified-by-failing-test:** the test path, which is committed in this PR and fails on `main`. Each such test is marked `it.fails` and names the gap, so it is a real, running witness that flips when the gap is fixed. It goes OUTSIDE `packages/engine/src/**`, which this wave does not touch (review I12):
+  - an engine gap → `packages/engine/test/audit-witnesses.test.ts` (new; `packages/engine/test/**` is in the engine's vitest `include` and its tsconfig, and already holds `boundary-gate.test.ts`, `runtime-deps.test.ts`, `source-bytes.test.ts`). It imports the engine's public entry the way those files do;
+  - a gap reached only through the product's HTTP surface → `tools/matrix/__tests__/audit-witnesses.test.ts` (new), as a text or plan-level assertion.
+
+  Each `.fails` test carries the audit id in its title. `audit-verdicts.json` names the file and the title, and the ledger CLI refuses a `verified-by-failing-test` verdict whose title does not appear in the named file. Run both files with the vitest template and confirm `.testResults[].name` lists them, because a missing path is dropped silently.
 
 Then run:
 
@@ -3400,10 +3729,44 @@ If it has not fired within 8 days, D1's PR annotation shows it; that is the sign
 
 1. Update the W1d status row: "Done: PR-A `<sha>`, PR-B `<sha>`; baseline `TR/w1d-baseline` (tag `matrix-truth/w1d-baseline`); weekly schedule enabled `<date>`".
 2. Dispatch the reviewer on the whole PR-B diff, then fix and re-review.
-3. Push and open the PR. Its body carries `Matrix rows: none — evidence, triage catalogue and Stryker floors; no runtime change` (it touches `packages/engine/stryker-floor.json`, a declaring path). It also carries the per-wave counts, D7's answer, the three run ids and the mutation run id.
+3. Push and open the PR. Its body carries `Matrix rows: none — evidence, triage catalogue and Stryker floors; no runtime change` (it touches `packages/engine/stryker-floor.json`, a declaring path). It also carries the per-wave counts, ruling 65's reading of ░ (driven cases only), the three run ids and the mutation run id.
 4. Watch CI: `gates` (the lock check prints `3 added`, the floor check passes) and the per-PR sample (now judged against the new baseline).
 
 **The owner merges PR-B.**
+
+---
+
+## Review response (fix round 1)
+
+Plan review 1 (3 Critical, 15 Important, 13 Minor; findings in the session's scratchpad `plan-review-1.md`) was taken against `ed9801b60`. Owner ruling 65 (`6399878c9`) landed after the plan.
+
+**Every C and I is fixed.** Where:
+- **C1** `lib/run-id.ts` `slugRunId` (Task 4); `shardMatrix` emits a lowercase `id` (Task 8); the YAML builds `RUN_ID` from `matrix.id`, and the merge uses `${layer,,}` (Task 9). Tests hold the templates to `slugRunId(x) === x` against the real CLI output.
+- **C2** budgets count DRIVEN items per stripe, with a test showing the planned count would refuse L2 (D4, Task 8).
+- **C3** (a) `run-sample.ts` reads `MATRIX_ARGS` from the env; (b) is C1; (c) `regressions` takes the exact expected ids (`--expect`), with a test on the real committed baseline (Tasks 6, 7, 9).
+- **I1** Task 3 is rewritten on `DrivenLayerCase`/`PlannedLayerCase`.
+- **I2** `z.partialRecord`.
+- **I3** `VACUOUS_REASONS` comes from results.ts, with the prefix match and a test per reason.
+- **I4** the marker is a second witness beside I-2, and the mutant has a new killing test.
+- **I5** the gate sits after `reference:boundary`.
+- **I6** `ceilingFrom` is a list holding the six L1 sub-runs.
+- **I7** asserts no bench TEST file.
+- **I8** `workflow-text.ts` with stated contracts; it stays a text parser.
+- **I9** real-CLI spawn tests against the workflow's template.
+- **I10** whole-sample re-run, `passes: 2`, measured in Task 7.
+- **I11** negated test globs, memory-derived concurrency, `path.matchesGlob`, `.d.mts`.
+- **I12** witnesses in `packages/engine/test/` or `HM/__tests__/`.
+- **I13** bench's env on the build and shard jobs, buildx, and a key-parity test.
+- **I14** per ruling 65, `allow` is the ruled behaviour. It is cited in the YAML, and the D7 question is removed from Tasks 16/17 and the handoff. A ░ on a driven case is still a fault (Task 6 test).
+- **I15** re-pinned to `pad-proof.test.ts`, `page-objects.test.ts` and `layers.test.ts`/`run-cli.test.ts`, with file counts stated.
+
+**Minors fixed:** m1, m2, m3, m4 (⬜ `needs_ruling` is data, D6), m6, m8, m9, m10, m11, m12, m13.
+
+**Disagreed, with reasons:**
+- **m5 (evidence directories in PR-A): kept in PR-A.** Ruling 62 gives PR-B "three harness-green dispatches, the triaged baseline committed, the Stryker floor". Those are the dispatched evidence, and they all land in PR-B (Tasks 17–21). The only evidence PR-A commits is Task 14's `TR/w1d-carry/`. Those are LOCAL runs that close "W1d first tasks" items 15c–15f, and ruling 62 puts those items in PR-A. Moving them would split one item's proof from its code across two PRs, and would leave Task 1's append-only gate without a real addition to witness before merge.
+- **m7 (RefusedCall as a seeding shape): premise false, guard adopted.** See false premise 21. The 11 reds are scenario withdraw actions, so they stay data. `SETUP_CALLS` is added so that a refused setup call would be a fault.
+
+**New false premises:** 21 and 22 above.
 
 ---
 
@@ -3435,7 +3798,7 @@ If it has not fired within 8 days, D1's PR annotation shows it; that is the sign
 | Item 15 browser items and item 16 cricket routes, sized honestly | Tasks 12, 14 (Step 0 of each re-sizes against the skin) |
 | PR-B: 3 dispatches with the traps; the triage tool and process; a baseline layout without the `w1drv-` prefix; the Stryker floor; enabling the schedule; _INDEX tables; W2 "backlog ready" | Tasks 17–22; D19, D21 |
 | The four test types per task | the table in Global Constraints; each task's steps |
-| A "False premises found" section | 20 entries |
+| A "False premises found" section | 22 entries (20 at planning, 2 in review fix round 1) |
 | D-numbered recommendations with owner value | D1–D22 |
 
 **2. Placeholder scan.** Three places say "Step 0 pins" for a number the tree must give:
@@ -3451,7 +3814,10 @@ Three YAML steps are elided with `# … verbatim from e2e.yml/bench.yml …`. Th
 - `Shard {index, of}`, `stripe`, `stripeSize` and `MAX_SHARDS` (Tasks 2, 4, 8);
 - `mergeShards → {merged, checked}`;
 - `harnessFaults`, `statesAcross` and `regressions` (Task 6), as used in Tasks 9 and 17;
-- `shardMatrix` `include {layer, k, of, args, timeout}` (Task 8), as used in Task 9's YAML (`matrix.k`, `matrix.of`, `matrix.args`, `matrix.timeout`);
+- `shardMatrix(cfg, scope, plans: driven flags per layer, ceilingS, rows?)` → `include {layer, id, k, of, args, timeout}` (Task 8), as used in Task 9's YAML (`matrix.id`, `matrix.k`, `matrix.of`, `matrix.args`, `matrix.timeout`);
+- `slugRunId` (Task 4), used by run.ts, `merge-shards.ts`, `run-sample.ts` and Tasks 8–9's tests;
+- `regressions(baseline, now, expected)` and `judge.ts regression --expect` (Task 6), fed by `run-sample.ts`'s expect file from `planPrSample` (Tasks 7, 9);
+- `VACUOUS_REASONS` (results.ts) and `SETUP_CALLS` (judge.ts), Task 6;
 - `planned` / `l2` / `fillers` / `shard` / `shards` (Task 2), as read in Tasks 4, 6 and 21;
 - `LAYER_PLANNERS[layer][scope]` (Task 3);
 - `voidLast` (Task 14).
@@ -3470,4 +3836,4 @@ Plan complete, saved to `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md`
 
 Batch Tasks 12 and 13 into one dispatch with one review: they are same-shaped carries in disjoint files. Tasks 1–11 are sequential. Tasks 12–15 may run in parallel worktrees only if their file sets stay disjoint (Task 14 and Task 12 both touch `browser-driver.ts`, so they run sequentially).
 
-D7 (the L2 ░ reading) needs the owner's answer before Task 17, not before PR-A.
+D7 (the L2 ░ reading) is RULED: owner ruling 65 (2026-10-04). The merge job and every Task 17 judge call use `--planned-not-run allow`, and Task 6 keeps a test that a ░ on a DRIVEN case is still harness-red. No owner question blocks any task.
