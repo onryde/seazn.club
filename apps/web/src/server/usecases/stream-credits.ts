@@ -103,9 +103,10 @@ export async function lockOrg(tx: Tx, orgId: string): Promise<void> {
 }
 
 /** §5.2 — "a restart after a failure is the same match": does this FIXTURE have a consume inside the
- *  reuse window? ONE authority for the rule's ledger read (Task 10 I2, orchestrator ruling 2026-09-28):
- *  `consumeForSession` asks it before debiting, and admission (stream-sessions.ts `createSession`) asks
- *  it so a restart at balance 0 is admitted — the two cannot drift.
+ *  reuse window? Its ledger read is `standingConsume`, the ONE authority for the window (Task 10 I2,
+ *  orchestrator ruling 2026-09-28). Since W23 (T6b) no money path asks this function: admission, `consumeForSession`
+ *  and the projection all ask `restartAllowance`, which reads the same `standingConsume` and adds the three-restart
+ *  bound — so the window can never drift between them.
  *
  *  The rule is per FIXTURE. A session whose fixture is gone (fixture_id is `on delete set null`) has
  *  none to match, so it has no window; comparing `= null` would say the same thing by accident, and

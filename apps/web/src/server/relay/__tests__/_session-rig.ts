@@ -147,7 +147,9 @@ export async function streamRig(opts: { fixtures?: 1 | 2; createdBy?: string } =
  *      `answered_poll_seconds = POLL_FAR_SECONDS`. **This insert is the one NON-REAL step**: the real claim is T8b's
  *      `postBeat`, which does not exist yet. T8b re-points this step to a real claim in its own commit.
  *  A second call for the same fixture REFRESHES `last_beat_at` (the current pairing is kept, never a second one) — so a
- *  test that advances its clock re-calls it, on that clock, before its next start. */
+ *  test that advances its clock re-calls it, on that clock, before its next start. A refresh touches `last_beat_at`
+ *  ONLY: a different `opts.phone` is ignored while a current pairing exists, and the OLD phone is returned. To pair a
+ *  different phone, end the current pairing first (B4 review m-7). */
 export async function pairPresentPhone(
   fixtureId: string, opts: { phone?: string; at?: Date } = {},
 ): Promise<{ codeId: string; pairingId: string; phone: string }> {

@@ -1423,9 +1423,10 @@ export const StreamSessionCurrent = z
      *  both read false, so the "1 credit used" chip is never a false money claim (lane D D3). */
     creditUsed: z.boolean(),
     /** I-1 (lane-close review): true iff a new start on THIS fixture would cost nothing right now — a consume of this
-     *  fixture still stands inside the reuse window (§5.2 "a restart after a failure is the same match"). Computed through
-     *  the one authority admission asks (`reuseWindowOpen`), so the Phone tab never sells a pack for a restart the server
-     *  would admit at balance 0. A fixture fact, not this session's: a restart that consumed nothing still reads true. */
+     *  fixture still stands inside the reuse window (§5.2 "a restart after a failure is the same match") AND fewer than
+     *  three restarts have been counted since it (W23). Computed through the one authority admission asks
+     *  (`restartAllowance`), so the Phone tab never sells a pack for a restart the server would admit at balance 0. A
+     *  fixture fact, not this session's: it reads false once the window's free restarts are used, even inside it. */
     restartFree: z.boolean(),
     /** W23 (capture QR v2 T6b, A9(a)): the fixture's free-restart allowance in its reuse window — null while no window is
      *  open (never a default object). `restartFree` above is derived from the SAME read (`restart !== null &&

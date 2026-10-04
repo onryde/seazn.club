@@ -75,10 +75,12 @@ export type AdmitRefusal = "plan_lacks_overlay" | "overlay_required" | "plan_lac
 export interface AdmitInput {
   overlay: boolean; relay: boolean; balance: number; targetBelongsToOrg: boolean;
   headroomMinutes: number; maxDurationMinutes: number; activeSessionId: string | null;
-  /** §5.2 "a restart after a failure is the same match": this FIXTURE already consumed inside the reuse window, so the
-   *  start will cost nothing and the balance gate does not apply to it (orchestrator ruling 2026-09-28, Task 10 I2). The
-   *  usecase computes it from the ledger through stream-credits.ts's `reuseWindowOpen` — the same authority
-   *  consumeForSession asks — and the domain stays pure. Required, so no caller can forget it and silently refuse. */
+  /** §5.2 "a restart after a failure is the same match", bounded by W23 (capture QR v2 T6b): this start is a FREE
+   *  restart — inside the reuse window of a consume that stands, with fewer than FREE_RESTARTS_PER_WINDOW restarts
+   *  counted since that anchor — so it will cost nothing and the balance gate does not apply to it (orchestrator ruling
+   *  2026-09-28, Task 10 I2). A 4th restart is an ordinary paid start: false here, and the balance gate answers it. The
+   *  usecase computes it through stream-credits.ts's `restartAllowance(...).free` — the same authority consumeForSession
+   *  asks at go-live — and the domain stays pure. Required, so no caller can forget it and silently refuse. */
   restartWithinReuseWindow: boolean;
   /** Capture QR v2 W5 / T10 (§6.7.1): slot 0's current pairing is present (§6.9). The organiser's Go live asks it of the
    *  fixture's code; the phone's start and the auto start pass true — the caller IS the current phone. Required, so no

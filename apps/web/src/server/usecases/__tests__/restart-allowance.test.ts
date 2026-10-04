@@ -19,7 +19,7 @@ import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW } from "@/server/relay/con
 import { admit } from "@/server/relay/domain/session";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { grantCredits } from "../stream-credits";
+import { grantCredits, refundCredits, restartAllowance } from "../stream-credits";
 import { type SessionDeps, createSession, currentSession, stopSession } from "../stream-sessions";
 import { createStreamTarget } from "../stream-targets";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
@@ -196,6 +196,44 @@ describe.skipIf(!HAS_DB)("W23: three free restarts per reuse window — on the l
     await r.start();
     await r.video();
     expect(await r.consumes()).toBe(2);
+  });
+
+  it("a REFUNDED anchor does not stand (D2): refund the paid 4th and the window falls back to the first live's consume — all four restarts count against it, so the 5th pays, where unrefunded it was free (BOUNDARY)", async () => {
+    const r = await rig({ credits: 3 });
+    const s0 = await r.start();
+    await r.video();
+    await r.stop(s0);
+    let fourth: string | null = null;
+    for (let restart = 1; restart <= FREE_RESTARTS_PER_WINDOW + 1; restart++) {
+      const sid = await r.start();
+      await r.video();
+      await r.stop(sid);
+      fourth = sid;
+    }
+    expect(await r.consumes(), "the first live and the paid 4th").toBe(2);
+    await refundCredits({ orgId: r.auth.orgId, delta: 1, sessionId: fourth!, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
+    // The 4th's consume no longer stands, so it anchors nothing: the anchor is the first live again, and every restart
+    // since it — the refunded 4th included, which did reach video — is counted.
+    expect((await r.current()).restart).toMatchObject({ windowOpen: true, used: FREE_RESTARTS_PER_WINDOW + 1, free: false });
+    await r.start();
+    await r.video();
+    expect(await r.consumes(), "the 5th pays").toBe(3);
+  });
+
+  it("no FIXTURE, no window: a session whose fixture is gone (fixture_id set null) holds no window, and restartAllowance for a null fixture is closed — even with that fixture-less consume in the org; the fixture's own window was open before (the positive pair)", async () => {
+    const r = await rig({ credits: 1 });
+    const sid = await r.start();
+    await r.video();
+    await r.stop(sid);
+    const now = r.deps.now();
+    const ask = (fixtureId: string | null) => restartAllowance(sql, { orgId: r.auth.orgId, fixtureId, excludeSessionId: null }, now);
+    const CLOSED = { windowOpen: false, used: 0, limit: FREE_RESTARTS_PER_WINDOW, free: false };
+    expect(await ask(r.fixtureId)).toEqual({ windowOpen: true, used: 0, limit: FREE_RESTARTS_PER_WINDOW, free: true });
+    expect(await ask(null)).toEqual(CLOSED);
+    // The fixture is deleted (`on delete set null`): its consume now belongs to no fixture — not to "the null fixture".
+    await sql`update fixture_stream_sessions set fixture_id = null where id = ${sid}`;
+    expect(await ask(null)).toEqual(CLOSED);
+    expect(await ask(r.fixtureId), "the consume left with its session").toEqual(CLOSED);
   });
 
   it("the EMPTY case: before any consume there is no window — restart null, restartFree false — and the first live pays", async () => {
