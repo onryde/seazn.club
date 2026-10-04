@@ -7,6 +7,10 @@
 // 3. The empty case first: a module that loads and sets nothing exits 0, and
 // a verdict (exitCode 1) stays 1 — the preload never turns a verdict into 3.
 // Every command is the package script as written, run for real.
+// The preload left the harness for scripts/lib (CL-R4), and its own test —
+// driven through reference:boundary, the repo gate it also serves — sits
+// beside it in scripts/__tests__/crash-exit.test.ts. The matrix CLIs stay
+// here: spawning a harness CLI is the harness's business, never scripts/'s.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +34,6 @@ const CLIS: readonly (readonly [string, string, readonly string[], number, reado
   ["matrix:single-sport", "tools/matrix/single-sport.ts", ["--bogus"], 2, []],
   ["matrix:model", "tools/matrix/model.ts", ["--bogus"], 2, []],
   ["matrix:parity", "tools/matrix/parity.ts", [], 2, []],
-  ["reference:boundary", "scripts/reference-boundary.ts", ["a", "b"], 2, []],
 ];
 
 /** The package script's own argv (after `node`), with its CLI swapped for
@@ -73,7 +76,7 @@ describe("an import-time crash exits 3 in every W1b and W1c CLI (final batch F-6
       expect(scripts[key], key).toBe([`node --experimental-strip-types --import ${PRELOAD} ${cli}`, ...tail].join(" "));
       checked++;
     }
-    expect(checked).toBe(8);
+    expect(checked).toBe(7);
   });
 
   it.each(CLIS)("%s's flags: each load failure exits 3, naming the crash; a clean load exits 0; a verdict stays 1", (key, cli, _usage, _code, tail) => {

@@ -44,9 +44,14 @@ describe("spawn budget (final batch FB-6)", () => {
     // spawned eslint (its own package, so its own constant pair). Then W1b
     // carry (d): the CI-step and single-sport spawns in ci-wiring, and
     // workspace-wiring's turbo dry run. Each with the fewest named timeouts
-    // it holds — its spawn sites.
+    // it holds — its spawn sites. CL-R4 (review m-3) split main-module's test:
+    // the harness keeps its CLI spawns (cli-main-module), and the module's own
+    // test moved beside it to scripts/__tests__ with crash-exit's — scripts/
+    // may not import spawn-budget.ts, so each holds its own constant pair.
     const covered: readonly [string, string, number][] = [
-      ["tools/matrix/__tests__/main-module.test.ts", "./spawn-budget.ts", 2],
+      ["tools/matrix/__tests__/cli-main-module.test.ts", "./spawn-budget.ts", 2],
+      ["scripts/__tests__/main-module.test.ts", "SPAWN_MS", 1],
+      ["scripts/__tests__/crash-exit.test.ts", "SPAWN_MS", 1],
       ["tools/matrix/__tests__/committed-catalogue.test.ts", "./spawn-budget.ts", 2],
       ["tools/matrix/__tests__/single-sport.test.ts", "./spawn-budget.ts", 2],
       ["packages/reference/test/eslint-inline-type.test.ts", "LINT_MS", 2],
