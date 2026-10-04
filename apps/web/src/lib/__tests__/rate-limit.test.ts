@@ -12,17 +12,15 @@
 // limiter-placement test depends on.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const cacheMock = vi.hoisted(() => ({ incrWindow: vi.fn(), peekWindow: vi.fn(), cacheEnabled: vi.fn(() => true) }));
+const cacheMock = vi.hoisted(() => ({ incrWindow: vi.fn(), cacheEnabled: vi.fn(() => true) }));
 vi.mock("@/lib/cache", () => ({
   incrWindow: cacheMock.incrWindow,
-  peekWindow: cacheMock.peekWindow,
   cacheEnabled: cacheMock.cacheEnabled,
 }));
 
 import { HttpError } from "@/lib/errors";
 import {
   rateLimit,
-  rateLimitPeek,
   AUTH_LIMIT,
   EMAIL_LIMIT,
   WEBHOOK_LIMIT,
@@ -37,7 +35,6 @@ const CFG = { max: 3, windowSeconds: 60 };
 
 afterEach(() => {
   cacheMock.incrWindow.mockReset();
-  cacheMock.peekWindow.mockReset();
   cacheMock.cacheEnabled.mockReset();
   cacheMock.cacheEnabled.mockReturnValue(true); // Redis configured by default
   // Must clear, or the injector leaks into the incrWindow-backed group above
@@ -228,35 +225,6 @@ describe("Retry-After (R4)", () => {
     await expect(rateLimit("t:r6", { max: 3, windowSeconds: 300 })).resolves.toBeUndefined();
     __setRateLimitCounterForTests(async () => ({ count: 3, ttlMs: 400 }));
     await expect(rateLimit("t:r6", CFG)).resolves.toBeUndefined();
-  });
-});
-
-describe("rateLimitPeek (capture QR v2 §10.4: an IP over its failed-401 budget is refused before anything is read)", () => {
-  it("asks the counter to PEEK — never to spend — and refuses once the window holds `max`, with the window's Retry-After", async () => {
-    const ops: string[] = [];
-    let count = 0;
-    __setRateLimitCounterForTests(async (_key, _w, op) => { ops.push(op ?? "incr"); return { count, ttlMs: 12_300 }; });
-    for (count = 0; count < 3; count++) await expect(rateLimitPeek("t:p1", CFG)).resolves.toBeUndefined();
-    count = 3;
-    expect(await retryAfterOf(rateLimitPeek("t:p1", CFG))).toBe(ceilSeconds(12_300));
-    expect(ops).toEqual(["peek", "peek", "peek", "peek"]);
-  });
-
-  it("the production backend: peekWindow, never incrWindow; Redis not configured is inert", async () => {
-    cacheMock.peekWindow.mockResolvedValue({ count: 3, ttlMs: 5_000 });
-    expect(await retryAfterOf(rateLimitPeek("t:p2", CFG))).toBe("5");
-    expect(cacheMock.peekWindow).toHaveBeenCalledWith("rl:t:p2");
-    expect(cacheMock.incrWindow).not.toHaveBeenCalled();
-    cacheMock.peekWindow.mockResolvedValue(null);
-    cacheMock.cacheEnabled.mockReturnValue(false);
-    await expect(rateLimitPeek("t:p2", { ...CFG, failClosed: true })).resolves.toBeUndefined();
-  });
-
-  it("Redis configured but unreachable: fail-open by default; a failClosed peek refuses with the FULL window (R4) — the same policy as rateLimit", async () => {
-    cacheMock.peekWindow.mockResolvedValue(null);
-    cacheMock.cacheEnabled.mockReturnValue(true);
-    await expect(rateLimitPeek("t:p3", CFG)).resolves.toBeUndefined();
-    expect(await retryAfterOf(rateLimitPeek("t:p3", { max: 3, windowSeconds: 240, failClosed: true }))).toBe("240");
   });
 });
 

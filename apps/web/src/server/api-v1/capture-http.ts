@@ -7,7 +7,7 @@
 // The `code` is the contract's closed `CaptureRefusalCode` list, so a refusal the phone cannot key its copy on does not
 // compile.
 import { HttpError, handler } from "@/lib/http";
-import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit, rateLimitPeek } from "@/lib/rate-limit";
+import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRefusalCode } from "./capture-schemas";
 
@@ -79,27 +79,33 @@ export function captureBearer(req: Request): string {
   return m[1]!;
 }
 
-/** The client IP the failed-401 budget is keyed on: the first X-Forwarded-For hop (Fly / Cloudflare set it), else
- *  X-Real-IP — the idiom every per-IP limiter in this app uses. */
-function clientIpOf(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "unknown";
+/**
+ * The client IP the failed-401 budget is keyed on. The repo has no shared client-IP helper (each per-IP limiter inlines
+ * the first X-Forwarded-For hop, which a client can forge: review 2026-09-22 F-CF5), so this prefers the headers a
+ * PROXY sets over the one a client can write: `CF-Connecting-IP` (Cloudflare, in front), then `Fly-Client-IP` (Fly's
+ * proxy, when the origin is reached directly), then the first X-Forwarded-For hop, then X-Real-IP. A forged value only
+ * moves the forger's OWN failures to another bucket: the budget never refuses a valid tok (B6 review I-1).
+ */
+export function clientIpOf(req: Request): string {
+  const h = req.headers;
+  return h.get("cf-connecting-ip")?.trim() || h.get("fly-client-ip")?.trim()
+    || h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip")?.trim() || "unknown";
 }
 
 /**
  * A phone route with its rate limits (§10.4, amended §17.4), inside `captureRoute`, in this order:
- *  1. an IP already past its failed-401 budget is refused BEFORE anything is read (`rateLimitPeek`): every request,
- *     the right tok included, so a guess cannot be told from a hit;
- *  2. the code's own budget is spent — ONE budget across the three routes — and a start spends its own on top. Only a
+ *  1. the code's own budget is spent — ONE budget across the three routes — and a start spends its own on top. Only a
  *     well-formed code has a budget (a malformed one is the use-case's 404, read from nothing);
- *  3. the route runs; a 401 it answers spends the IP's failure budget, and the one that crosses it answers 429.
+ *  2. the route runs. A 401 it answers spends the client IP's FAILED-attempt budget, and a failure past it answers 429
+ *     instead of 401. The budget is consulted ONLY for a failure: a valid tok is always admitted, whatever the bucket
+ *     holds (B6 review I-1 — the tok is 128 bits, so throttling hits buys nothing, and refusing them let anyone sharing
+ *     or forging a phone's IP lock it out, ending a warming broadcast `phone_lost`).
  * Every 429 is the bare `{code: rate_limited, message}` with `Retry-After` = the window's true remaining seconds.
  */
 export async function capturePhoneRoute(
   req: Request, rawCode: string, route: "get" | "beats" | "start", fn: () => Promise<Response>,
 ): Promise<Response> {
   return captureRoute(async () => {
-    const failKey = `capture-fail:${clientIpOf(req)}`;
-    await rateLimitPeek(failKey, CAPTURE_FAIL_LIMIT);
     const code = normaliseCode(rawCode);
     if (code !== null) {
       await rateLimit(`capture-code:${code}`, CAPTURE_CODE_LIMIT);
@@ -108,7 +114,7 @@ export async function capturePhoneRoute(
     try {
       return await fn();
     } catch (e) {
-      if (e instanceof CaptureRefusalError && e.status === 401) await rateLimit(failKey, CAPTURE_FAIL_LIMIT);
+      if (e instanceof CaptureRefusalError && e.status === 401) await rateLimit(`capture-fail:${clientIpOf(req)}`, CAPTURE_FAIL_LIMIT);
       throw e;
     }
   });

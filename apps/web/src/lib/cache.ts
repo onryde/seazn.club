@@ -318,14 +318,6 @@ local n = redis.call('INCR', KEYS[1])
 if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
 return {n, redis.call('PTTL', KEYS[1])}`;
 
-// The count and TTL WITHOUT spending (capture QR v2 §10.4: an IP already past
-// its failed-401 budget is refused before anything is read). A key never hit
-// reads count 0 (PTTL -2).
-const PEEK_WINDOW_LUA = `
-local n = redis.call('GET', KEYS[1])
-if not n then return {0, -2} end
-return {tonumber(n), redis.call('PTTL', KEYS[1])}`;
-
 /** A fixed window's count and the milliseconds left in it (PTTL: -1 no TTL, -2 no key). */
 export interface WindowCount {
   count: number;
@@ -352,17 +344,6 @@ export async function incrWindow(key: string, windowSeconds: number): Promise<Wi
   if (!c) return null;
   try {
     return windowCountOf(await c.eval(INCR_WINDOW_LUA, 1, key, String(windowSeconds)));
-  } catch {
-    return null;
-  }
-}
-
-/** The window's count and TTL, spending nothing; null if Redis is unavailable. */
-export async function peekWindow(key: string): Promise<WindowCount | null> {
-  const c = client();
-  if (!c) return null;
-  try {
-    return windowCountOf(await c.eval(PEEK_WINDOW_LUA, 1, key));
   } catch {
     return null;
   }

@@ -1,6 +1,6 @@
 import "server-only";
 import { HttpError } from "@/lib/errors";
-import { incrWindow, peekWindow, cacheEnabled, type WindowCount } from "@/lib/cache";
+import { incrWindow, cacheEnabled, type WindowCount } from "@/lib/cache";
 
 export interface RateLimitConfig {
   /** Max requests allowed within `windowSeconds`. */
@@ -33,7 +33,7 @@ const TOO_MANY = "Too many requests — slow down and try again.";
  * self-expiring keys). When Redis is momentarily unreachable `incrWindow`
  * returns null and we apply the `failClosed` policy.
  */
-type CounterFn = (key: string, windowSeconds: number, op?: "incr" | "peek") => Promise<WindowCount | null>;
+type CounterFn = (key: string, windowSeconds: number) => Promise<WindowCount | null>;
 
 /** Test-only seam. Production always uses `incrWindow`; the suite injects a
  *  deterministic counter so limiter BEHAVIOUR is executed rather than skipped.
@@ -62,7 +62,7 @@ export async function rateLimit(
   { max, windowSeconds, failClosed = false }: RateLimitConfig,
 ): Promise<void> {
   const window = counterOverride
-    ? await counterOverride(`rl:${key}`, windowSeconds, "incr")
+    ? await counterOverride(`rl:${key}`, windowSeconds)
     : await incrWindow(`rl:${key}`, windowSeconds);
 
   if (window === null) {
@@ -76,30 +76,6 @@ export async function rateLimit(
   }
 
   if (window.count > max) {
-    throw tooMany(retryAfterSeconds(window.ttlMs, windowSeconds));
-  }
-}
-
-/**
- * The same budget, READ without spending: refuses once the window already holds `max`. Capture QR v2 §10.4 counts a
- * phone route's FAILED 401s per IP with `rateLimit` on each failure, and asks this BEFORE anything is read — so an IP
- * past its budget is refused on every request, the right tok included, and a guess cannot be told from a hit. One
- * Redis command per request (the Lua's GET + PTTL).
- */
-export async function rateLimitPeek(
-  key: string,
-  { max, windowSeconds, failClosed = false }: RateLimitConfig,
-): Promise<void> {
-  const window = counterOverride
-    ? await counterOverride(`rl:${key}`, windowSeconds, "peek")
-    : await peekWindow(`rl:${key}`);
-
-  if (window === null) {
-    if (failClosed && cacheEnabled()) throw tooMany(windowSeconds);
-    return;
-  }
-
-  if (window.count >= max) {
     throw tooMany(retryAfterSeconds(window.ttlMs, windowSeconds));
   }
 }
@@ -146,7 +122,7 @@ export const CHECKOUT_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 60 };
  * Capture QR v2 §10.4 — the phone routes (`/api/v1/capture/codes/{code}…`). All three fail OPEN: a Redis blip must not
  * stop a broadcast's beats or the phone's start, and the tok (128 bits) is the real defence against guessing.
  *  - CAPTURE_CODE_LIMIT: per code, ONE budget across the three routes — a phone beats every 5–60 s;
- *  - CAPTURE_FAIL_LIMIT: failed 401s per client IP; past it the IP is refused before anything is read (`rateLimitPeek`);
+ *  - CAPTURE_FAIL_LIMIT: FAILED 401s per client IP; a failure past it answers 429 — a valid tok is never refused;
  *  - CAPTURE_START_LIMIT: the phone's start, per code, on top of the code's budget.
  */
 export const CAPTURE_CODE_LIMIT: RateLimitConfig = { max: 120, windowSeconds: 60 };

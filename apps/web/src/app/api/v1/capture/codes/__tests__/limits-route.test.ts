@@ -3,8 +3,9 @@
 // clock (the shape the Lua answers: {count, ttlMs}), so the 429s are executed, not assumed:
 //   - CAPTURE_CODE_LIMIT: 120 per 60 s per code, ONE budget across the three routes; the 121st is 429;
 //   - CAPTURE_START_LIMIT: 6 starts per 60 s per code, on top;
-//   - CAPTURE_FAIL_LIMIT: 30 failed 401s per 60 s per IP; past it EVERY request from that IP is 429 before anything is
-//     read — the right tok included, so a guess cannot be told from a hit;
+//   - CAPTURE_FAIL_LIMIT: 30 FAILED 401s per 60 s per client IP; a failure past it is 429 instead of 401 — and a VALID
+//     tok from that IP is still admitted, whatever the bucket holds (B6 review I-1: the tok is 128 bits; refusing hits
+//     let anyone sharing or forging a phone's IP lock it out);
 //   - every 429 is the bare {code: rate_limited, message}, no-store, with Retry-After = the window's true remaining
 //     seconds; and each limit RECOVERS once that many seconds have passed.
 // The budgets are the spec's numbers (§10.4), never read back from rate-limit.ts.
@@ -53,26 +54,27 @@ afterAll(async () => {
 });
 afterEach(() => __setRateLimitCounterForTests(null));
 
-/** A fixed-window counter with the Lua's semantics: INCR, EXPIRE on the first hit, PTTL in the same answer; a peek is a
- *  GET + PTTL that spends nothing (a key never hit reads 0). */
+/** A fixed-window counter with the Lua's semantics: INCR, EXPIRE on the first hit, PTTL in the same answer. It records
+ *  every key it was asked to spend, so a test can say which bucket a request touched. */
 function windowedRedis() {
   let now = 0;
   const keys = new Map<string, { count: number; expiresAt: number }>();
-  __setRateLimitCounterForTests(async (key, windowSeconds, op = "incr") => {
+  const spent: string[] = [];
+  __setRateLimitCounterForTests(async (key, windowSeconds) => {
+    spent.push(key);
     let k = keys.get(key);
     if (k && k.expiresAt <= now) { keys.delete(key); k = undefined; }
-    if (op === "peek") return k ? { count: k.count, ttlMs: k.expiresAt - now } : { count: 0, ttlMs: -2 };
     if (!k) { k = { count: 0, expiresAt: now + windowSeconds * 1000 }; keys.set(key, k); }
     k.count++;
     return { count: k.count, ttlMs: k.expiresAt - now };
   });
-  return { advance: (ms: number) => { now += ms; } };
+  return { advance: (ms: number) => { now += ms; }, spent };
 }
 
 const BASE = "https://test.local/api/v1/capture/codes";
-type Opts = { tok?: string | null; ip?: string };
+type Opts = { tok?: string | null; ip?: string; extra?: Record<string, string> };
 const headersOf = (o: Opts) => {
-  const h: Record<string, string> = { "content-type": "application/json", "x-forwarded-for": `${o.ip ?? "203.0.113.7"}, 10.0.0.1` };
+  const h: Record<string, string> = { "content-type": "application/json", "x-forwarded-for": `${o.ip ?? "203.0.113.7"}, 10.0.0.1`, ...o.extra };
   if (o.tok !== null && o.tok !== undefined) h.authorization = `Bearer ${o.tok}`;
   return h;
 };
@@ -142,22 +144,50 @@ describe.skipIf(!HAS_DB)("the phone routes' rate limits (§10.4, R4)", () => {
     expect((await start(r.code, A, { tok: r.tok })).status, "recovered: already_live again").toBe(409);
   });
 
-  it("CAPTURE_FAIL_LIMIT: 30 failed 401s per IP; then EVERY request from that IP is 429 — the right tok too; another IP is untouched; it recovers after Retry-After", async () => {
+  it("CAPTURE_FAIL_LIMIT: 30 failed 401s per IP; the 31st FAILURE is 429 with Retry-After — while a VALID tok from that same IP is admitted on all three routes with the bucket full; another IP's failure is a plain 401; it recovers", async () => {
     const redis = windowedRedis();
     const r = await captureRig();
-    const attacker = "198.51.100.9";
+    const A = phoneId("a");
+    const shared = "198.51.100.9";   // the venue Wi-Fi / CGNAT address the phone and the guesser share
     let fails = 0;
     for (; fails < SPEC.fail.max; fails++) {
-      const res = fails % 3 === 0 ? await get(r.code, { tok: null, ip: attacker }) : await get(r.code, { tok: `guess-${fails}`, ip: attacker });
+      const res = fails % 3 === 0 ? await get(r.code, { tok: null, ip: shared }) : await get(r.code, { tok: `guess-${fails}`, ip: shared });
       expect(res.status, `failure ${fails + 1}`).toBe(401);
     }
     redis.advance(5_000);
-    await expectLimited(await get(r.code, { tok: `guess-x`, ip: attacker }), SPEC.fail.windowSeconds - 5);
-    await expectLimited(await get(r.code, { tok: r.tok, ip: attacker }), SPEC.fail.windowSeconds - 5);
-    await expectLimited(await start(r.code, phoneId("a"), { tok: r.tok, ip: attacker }), SPEC.fail.windowSeconds - 5);
-    expect((await get(r.code, { tok: r.tok, ip: "192.0.2.44" })).status, "per IP").toBe(200);
+    // The bucket is full. A valid tok is never refused by it (I-1).
+    expect((await get(r.code, { tok: r.tok, ip: shared })).status, "a valid GET from the locked IP").toBe(200);
+    expect((await beat(r, A, "new", { tok: r.tok, ip: shared })).status, "a valid beat from the locked IP").toBe(200);
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
+    expect((await start(r.code, A, { tok: r.tok, ip: shared })).status, "a valid start from the locked IP").toBe(200);
+    // Failures past the budget are throttled: 429, Retry-After = the window's remaining seconds.
+    await expectLimited(await get(r.code, { tok: "guess-x", ip: shared }), SPEC.fail.windowSeconds - 5);
+    await expectLimited(await get(r.code, { tok: null, ip: shared }), SPEC.fail.windowSeconds - 5);
+    expect((await get(r.code, { tok: "guess-y", ip: "192.0.2.44" })).status, "per IP: another IP's failure is a 401").toBe(401);
     redis.advance((SPEC.fail.windowSeconds - 5) * 1000);
-    expect((await get(r.code, { tok: r.tok, ip: attacker })).status, "recovered").toBe(200);
+    expect((await get(r.code, { tok: "guess-z", ip: shared })).status, "recovered: a failure is a 401 again").toBe(401);
+  });
+
+  it("the failure budget's IP prefers the PROXY's header: CF-Connecting-IP, then Fly-Client-IP, then the first X-Forwarded-For hop", async () => {
+    const redis = windowedRedis();
+    const r = await captureRig();
+    const cases: [Opts["extra"], string][] = [
+      [{ "cf-connecting-ip": "203.0.113.50", "fly-client-ip": "198.51.100.60" }, "capture-fail:203.0.113.50"],
+      [{ "fly-client-ip": "198.51.100.60" }, "capture-fail:198.51.100.60"],
+      [{}, "capture-fail:203.0.113.7"],   // headersOf's default first XFF hop
+    ];
+    let checked = 0;
+    for (const [extra, key] of cases) {
+      redis.spent.length = 0;
+      expect((await get(r.code, { tok: "guess", extra })).status).toBe(401);
+      expect(redis.spent.filter((k) => k.startsWith("rl:capture-fail:")), JSON.stringify(extra)).toEqual([`rl:${key}`]);
+      checked++;
+    }
+    // A valid tok never touches the failure bucket at all.
+    redis.spent.length = 0;
+    expect((await get(r.code, { tok: r.tok })).status).toBe(200);
+    expect(redis.spent.filter((k) => k.startsWith("rl:capture-fail:"))).toEqual([]);
+    expect(checked).toBe(cases.length);
   });
 
   it("CAPTURE_FAIL_LIMIT counts 401s ONLY: past 30 refusals that are not a failed auth (422 a bad slot, 404 not a code), the IP is not limited", async () => {

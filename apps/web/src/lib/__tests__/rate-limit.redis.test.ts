@@ -5,7 +5,7 @@
 // provides a redis:7 service container.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { incrWindow, peekWindow } from "@/lib/cache";
+import { incrWindow } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { HttpError } from "@/lib/errors";
 
@@ -61,18 +61,6 @@ describe.skipIf(!HAS_REDIS)("rate limiter (real Redis)", () => {
     expect(second?.count).toBe(2);
     expect(second!.ttlMs).toBeLessThan(first!.ttlMs - 1000);
     expect(second!.ttlMs).toBeGreaterThan(0);
-  });
-
-  it("peekWindow reads the count and TTL WITHOUT spending; a key never hit reads count 0", async () => {
-    const key = uniq();
-    expect((await peekWindow(key))?.count).toBe(0);
-    await incrWindow(key, 60);
-    await incrWindow(key, 60);
-    const peeked = await peekWindow(key);
-    expect(peeked?.count).toBe(2);
-    expect(peeked!.ttlMs).toBeGreaterThan(0);
-    expect((await peekWindow(key))?.count, "a peek spends nothing").toBe(2);
-    expect((await incrWindow(key, 60))?.count).toBe(3);
   });
 
   it("rateLimit's 429 over real Redis carries Retry-After = ceil(remaining TTL) — within the window, never 0", async () => {
