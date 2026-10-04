@@ -1,0 +1,3473 @@
+# Format × Sport Matrix — W1d (CI truth runs + the first full truth run) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** The matrix runs itself. A GitHub workflow runs it weekly and on dispatch, sharded across about 12 jobs, each on a fresh Postgres with `sync:sports`. A visibility guard stops it before it can bill a private repo. Stryker runs weekly on the engine's scheduling and competition code against a floor that may only rise. The first full truth run is then triaged: every ❌ carries an audit gap ID (or `NEW-W1d-<n>`) and its owning wave, so W2–W7 each start from a measured backlog.
+
+What an organiser gets: the ~150 audit hypotheses become a list of reproduced problems, each owned by one wave, plus a weekly signal when a change breaks a case that used to work.
+
+**Architecture** (owner rulings 60–64, 2026-10-04):
+- **One plan, two PRs** (ruling 62). `workflow_dispatch` fires only a workflow file already on `main`.
+  - **PR-A (infra), Tasks 1–16:** the 28 "W1d first tasks" items, sharding, the workflow and its visibility guard, the per-PR sample, the Stryker workflow, and the weekly schedule shipped DISABLED.
+  - **PR-B (evidence), Tasks 17–22:** three harness-green dispatches, the triage tooling and the triaged baseline, the Stryker floor, the schedule enabled, the per-wave ❌ tables, and W2 → "backlog ready".
+  - **Merge gate between them: the owner merges PR-A.** PR-B's branch is cut from `main` after that merge.
+- **A shard is a stripe of the plan.** `--shard k/N` keeps the plan items whose index `i` satisfies `i mod N = k−1`. It is a pure function of plan order, so the same case lands in the same shard on every run. The union of the shards is the plan, and no two shards overlap.
+- **One merged result per layer.** `merge-shards.ts` puts each layer's N shard files back into plan order (one `results.json`, one `MATRIX.md`). It refuses a missing, partial, aborted or mismatched shard. `judge.ts` then decides harness-green (ruling 61) from the merged files.
+- **The workflow is reusable.** `.github/workflows/matrix-truth.yml` has four triggers:
+  - `schedule` (gated by `vars.MATRIX_WEEKLY_ENABLED`);
+  - `workflow_dispatch`;
+  - `workflow_call`, which is how `ci.yml`'s per-PR sample calls it;
+  - `pull_request` on its own paths, which runs a smoke scope (the `bench.yml` self-proof precedent).
+
+  There is one recipe and one guard.
+- **No product changes.** Product reds are data (ruling 19). W1d touches `apps/web` and `packages/engine` only for Stryker's config, devDependencies and floor checker, which change no runtime path.
+
+**Tech Stack:**
+- Node 26 `--experimental-strip-types`: no enums, namespaces or parameter properties; `.ts` import suffixes.
+- TypeScript 7 (`typescript-native` 7.0.2).
+- vitest 4 via `packages/engine`'s binary.
+- zod 4.
+- Playwright 1.61.1 (chromium).
+- pnpm 10.34.5.
+- GitHub Actions: `background:`/`wait:` steps as in `e2e.yml`; `runner.environment`.
+- `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` 10.0.0. Both need Node ≥ 22; the runner's peer is `vitest >=2.0.0` (read from the npm registry 2026-10-04).
+
+**Spec:** `docs/superpowers/specs/2026-09-27-format-matrix-design.md` §2, §6.4, §6.5, §7.3, §7.5 item 2, §8, §9, §10 and §12. The binding scope is owner rulings 16, 19, 20, 21, 39, 46, 47, 48, 55, 56, 58 and **60–64** in `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md` ("Owner rulings"), plus "W1d first tasks" items 1–28.
+- Prompt: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/W1d-ci-truth-run.md`. Where the prompt and rulings 60–64 disagree, the rulings win (False premises 6–8).
+- `_RULES.md`: R5, R10–R14a, R18, R19, R22, R25, R27, R29.
+- `docs/superpowers/TEST-STRATEGY.md`: rules 1–5 and 10, plus the reviewer's four questions.
+- `docs/superpowers/RULES.md`: TS7, Node 26, the four test types, never a full local suite.
+- `AGENTS.md`: failure classes 1, 3, 4, 5, 8, 9, 10, 14, 15, 16 and 20.
+- House style follows `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md`.
+
+Where the spec and the tree disagree, see **False premises found in planning**. The tree wins.
+
+---
+
+## Step 0 — anchors (pinned 2026-10-04 against `57f78d888` = `origin/main` `dfe8132da` + rulings 60–64)
+
+`HM` = `tools/matrix`. `TR` = `docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs`.
+
+| Fact | Where |
+|---|---|
+| Exit table `EXIT = {OK 0, NO_SIGNAL 1, REFUSED 2, ABORTED 3}`; the per-code meanings | `HM/run.ts:135`, header `:40-95` |
+| `SETS` (w1b-probe, pad-proof, width-sweep, api-only-browser, w1-driving, w1-driving-l1) | `HM/run.ts:275-285` |
+| `BROWSER_WORKERS = routeTo("W1d", "browser workers inside a shard (D10)")`; the D10 usage refusal | `HM/run.ts:454`, `:545-548` |
+| `planOf` writes `--layer L1` with no scope | `HM/run.ts:484-490` |
+| `parseCli`: the flags; no `--shard`, `--scope` or `--rows` | `HM/run.ts:530-569` |
+| `recordPlanned`: `durationMs: 0`, zero counts, no marker | `HM/run.ts:727-735` |
+| `runItems` / `itemId`; `execute` plans after sign-in (`variantFor` needs the DB's variant order) | `HM/run.ts:768-787`, `:839-845` |
+| `runSlice`'s `refused` list lacks `NoLayerForWidth` | `HM/run.ts:1059-1062` |
+| `RunIdReused` checks only `<report-dir>/<run-id>/results.json` | `HM/run.ts:300-309`, `:1044-1045` |
+| `planL1` = the slice × LIFECYCLE at 1280; `planL2(pairs, cells)` sets `run` on every L2 case; `l2Planner` = the slice's cells | `HM/lib/layers.ts:103-106`, `:139-160`, `:183-195` |
+| `CaseSchemaV3` and `RunResultsSchemaV3` are `z.strictObject` | `HM/lib/results.ts:177-221` |
+| `decideState`: error reds read `error: <name>: <msg>`; vacuous reds read `no checks ran (vacuous)` / `every check abstained (vacuous)` / `checked zero items (vacuous)` | `HM/lib/results.ts:248-263` |
+| `RefusedCall` message: `<METHOD> <path> → HTTP <status> <code>: <message>` | `HM/lib/driver/types.ts:236-252` |
+| Lock schema `{note, runs:{<dir>:{plan, layered, driven[], planned{}}}}`; `judgeRun`; the I-2 heuristic | `HM/__tests__/committed-plans.ts:183-200`, `:125-176`, `:143` |
+| `expectedPlanFor` parses `--layer L1` as `l1Planner` (today: the slice) | `HM/__tests__/committed-plans.ts:~100-112` |
+| `RESULTS_FLOOR = 33`; `EVIDENCE_DIRS`; `W1C_RUNS` | `HM/__tests__/committed-matrix.test.ts:234`, `:71-74`, `:190-197` |
+| `rebase-map.test.ts` reads every `TR/w1drv-*` dir's harness commits | `HM/__tests__/rebase-map.test.ts:81` |
+| `ci-wiring.test.ts` "no scheduled matrix workflow exists in W1a" reds on ANY workflow matching `/matrix:l3\|tools\/matrix\/run\b/` | `HM/__tests__/ci-wiring.test.ts:244-252` |
+| `counts.json` `l1 {formula "cells × 2 widths (1280, 320)", value 462}`; the writer; the test that freezes it | `HM/catalogue/counts.json`; `HM/lib/counts.ts:99`; `HM/__tests__/committed-catalogue.test.ts:271` |
+| `l2-pairs.json`: 1,731 runs. Full-grid plan: **62 driven** (M1 21, R4a 21, F1 20), **164 🚫** (W9 63, W4 67, W2 21, W5 13), **1,505 ░** | `HM/catalogue/l2-pairs.json`; measured by `planL2(loadL2Pairs(), all 231 cells)` in the scratchpad |
+| Full-grid L1: 16 template rows × 11 = 176 driven; 5 API-only rows × 11 = 55, of which 2 template-reachable (driven through their cards) and 53 🚫 | `HM/lib/catalogue.ts:21-35`; `HM/lib/api-only-ui.ts`; `HM/lib/templates.ts:112,125-131` |
+| `HARNESS_SCENARIO = {LIFECYCLE, M1, R4a→R4, F1}` | `HM/lib/scenario-catalogue.ts:199` |
+| `MAX_WORKERS = 8`; the results schema reads it | `HM/lib/workers.ts:28`; `HM/lib/results.ts:211,216` |
+| `requireOwnDataDir` (BENCH_EXPECTED_DATA_DIR mandatory) | `HM/lib/seed-org.ts:67-70` |
+| The bench preflight refuses base ports 3000 and 3100, and DB port 5432 | `tools/bench/lib/env.ts:32,36` |
+| `get fillers()` and the `FILLER` names | `HM/lib/driver/browser-driver.ts:585`; `HM/lib/driver/mixed.ts:29` |
+| Parity `quiet`; `notDriven` uses the recordPlanned shape | `HM/lib/parity.ts:145`, `:167-189` |
+| `openFoldIfFolded` returns `"opened" \| "unfolded"`; `railFor` drops it | `HM/lib/browser/pages/stage-rail.ts:39-52`, `:64` |
+| `showAllFixtures` always presses "all"; the product opens on "today" when `phase === "match_day"` | `HM/lib/browser/pages/run-sheet.ts:51-68`; `apps/web/src/components/v2/stages-panel.tsx:556` |
+| The console's void: per-row Void and "Void last" both send `core.void {event_id}` | `apps/web/src/components/v2/fixture-console.tsx:1253`, `:1278-1286` |
+| `cricketPad` refuses `inningsPerSide !== 1` | `HM/lib/pads/cricket.ts:66` |
+| `padProofPlanner` refuses any filter | `HM/lib/pad-proof-set.ts:14-15` |
+| `regressionFor` returns the FIRST open matching case | `HM/lib/model/run-cell.ts:157-165` |
+| Entrants are `Matrix Player ${i+1}`; the americano note joins the whole roster | `HM/lib/scenarios/common.ts:226`; `HM/lib/scenarios/r4-withdrawal.ts:366` |
+| Import guard `scan()`; ROOTS; literals; positive control `perRoot {apps:5, packages:2, scripts:4}` | `scripts/__tests__/tools-import-guard.test.ts:94-177`, `:27`, `:64-73`, `:268-288` |
+| `tsconfig.scripts.json` excludes `*.test.ts`; nodenext | `tsconfig.scripts.json` |
+| ci.yml `gates`: `fetch-depth: 0`; single-sport at `:113`; matrix unit step `:239-257` | `.github/workflows/ci.yml` |
+| e2e.yml recipe: Postgres, db:apply, sync:sports, background build, placement image, chromium, standalone server | `.github/workflows/e2e.yml:353-800` |
+| bench.yml: port 5433, server on 3200, `AUTH_DEV_LINKS: "1"`, no Redis, `NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"` at job level | `.github/workflows/bench.yml:59-213` |
+| Engine vitest: threads, `isolate: false`, memory-bound workers | `packages/engine/vitest.config.ts:40-66` |
+| Engine `tsconfig.json` includes `scripts/**/*.ts` and `test/**/*.ts` | `packages/engine/tsconfig.json` |
+| `runtime-deps.test.ts` constrains `dependencies` only | `packages/engine/test/runtime-deps.test.ts:1-20` |
+
+Before building on any line above, the executor pins it again (AGENTS class 5). A line that has moved is a note in the task report, not a blocker. A line whose MEANING is false is a false premise: record it, then continue.
+
+---
+
+## Global Constraints
+
+- **Worktrees and branches.**
+  - **PR-A** executes in `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec` on branch `feat/format-matrix-w1d-infra`, created from the tip of the planning branch `docs/format-matrix-w1d-plan` (Task 1 Step 0).
+  - **PR-B** executes in `/Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-evidence` on branch `feat/format-matrix-w1d-evidence`, created from `origin/main` AFTER PR-A merges (Task 17 Step 0).
+  - Every shell command starts `cd <worktree> && …`, because cwd resets between calls.
+  - Never edit the main checkout. **Never `git stash`**: the stash stack is shared.
+  - No heredocs. Write commit messages with the Write tool into `$TMPDIR/w1d-msg.txt`, then `git commit -F "$TMPDIR/w1d-msg.txt" -- <paths>`.
+  - Every message ends with a blank line, then `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **pnpm, never npm install.** A fresh worktree has no `node_modules`, so run `pnpm install --frozen-lockfile` first. Two tasks change the lockfile:
+  - Task 10 adds `vitest` as a root devDependency, the same range as the engine's, so it is the same package;
+  - Task 15 adds the two Stryker packages to `packages/engine`.
+
+  Each lockfile diff is reviewed. No other task touches it.
+- **Local verification = ONLY the tests that cover the files you changed** (owner, 2026-09-28). Never the full gate, the full vitest suite, the full e2e suite or `seazn-env gate`.
+  - The vitest template, with `<N>` = the task number and `<files>` = the exact test paths:
+    ```bash
+    cd <worktree> && rm -f "$TMPDIR/w1d-t<N>.json" && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t<N>.json" --testTimeout=30000 <files>; echo EXIT=$?
+    cd <worktree> && node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));const files=r.testResults.map(t=>t.name);const bad=files.filter(f=>!f.startsWith(process.argv[2]));console.log(JSON.stringify({total:r.numTotalTests,passed:r.numPassedTests,failed:r.numFailedTests,failedSuites:r.numFailedTestSuites,files:files.length,stray:bad}))' "$TMPDIR/w1d-t<N>.json" "$PWD/"
+    ```
+  - Green means all of: `failed == 0`; `failedSuites == 0`; `passed == total > 0`; `files` equals the number of paths passed; `stray` is empty. Paste the JSON line into the task report, and pin `total`.
+  - Never trust `rtk` summaries. `PASS(0) FAIL(0)` is a suite that failed to collect, and vitest positionals are literal filename filters.
+  - Engine tests (Task 15) run with `cd packages/engine && ./node_modules/.bin/vitest run --reporter=json --outputFile=… <files>` from the worktree, judged the same way.
+- **tsc and eslint on changed files only.**
+  - Scoped tsc uses `$TMPDIR/w1d-tsc-<N>.json`: `{"extends":"<worktree>/tsconfig.scripts.json","include":[],"files":[<absolute changed non-test .ts paths>],"compilerOptions":{"incremental":false}}`. Run it with `rtk proxy node node_modules/typescript-native/bin/tsc -p "$TMPDIR/w1d-tsc-<N>.json"; echo EXIT=$?`.
+  - After Task 10 lands, test files are also checked with `rtk proxy node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json; echo EXIT=$?`.
+  - eslint: `rtk proxy ./node_modules/.bin/eslint <changed files>; echo EXIT=$?`. Empty output is clean only with `EXIT=0`. `rtk` hides lint output, so always use `rtk proxy`.
+- **`grep -a` always**, through `rtk proxy grep -a …` when the output matters.
+- **Strip-types rules.** No `enum`, `namespace` or constructor parameter properties. Error subclasses assign their fields in the constructor body. Every relative import carries `.ts`. Extend `HM/__tests__/strip-types-loadable.test.ts` with each new module, as a `W1D_T<N>` array beside the existing ones.
+- **Boundary.** No new import from `tools/bench/**` beyond the existing `http`, `plan` and `env` helpers (R3; `HM/__tests__/boundary.test.ts`). No new relative import of `apps/web` runtime code; product facts are read as text. Nothing under `apps/`, `packages/` or `scripts/` imports or spawns `tools/` (ruling 56; Task 11 closes the spawn gap).
+- **Do not touch:**
+  - `tools/bench/lib/suites/run-suite.ts` and `PackSchema` (R3);
+  - `.github/workflows/e2e.yml` and `bench.yml`;
+  - any `apps/web/**` source;
+  - any `packages/engine/src/**` file. Task 15 adds config, devDependencies, a script and a test beside `src/`, never inside it.
+  - **Committed truth-runs evidence is never edited.** A new run only ADDS a directory and a lock entry (item 1). Task 1 makes that a CI gate.
+- **Test authority** (TEST-STRATEGY rules 1–5 and 10; R9, R13, R25):
+  - List each task's state transitions and its **empty case first**, then test both. The four questions are a second call, an empty input, after a withdrawal or void, and another sport. For the CI tools, the shapes are: a second run, an empty shard, a shard that died, and another layer.
+  - Every judge, sweep, merge and planner reports how many items it checked. **Zero checked is a failure.**
+  - Expected values come from the committed catalogue files (`l2-pairs.json`, `drop-list.json`, `variants.json`), the product's own text, the rulings, or the design. **Never from the code under test.** Where one can, pick a case where the right answer differs from the wrong one's constant.
+  - "Cannot happen" becomes a named refusal, plus a test that reaches it.
+  - **Rule 10.** This wave's ordered-action surface is the shard partition and its merge, so Task 4 gets a fast-check property: for any plan length and any N, the merged shards equal the plan, in order. A shrunk failure is committed as a named case with its seed BEFORE the fix.
+- **Mutation** (R17). Each task's last test step lists `mutant → killing test`.
+  - Back up with `cp <file> "$TMPDIR/w1d-bak-<name>"`, mutate, run the named test file, and see it red (pin `total` and `failed`). Then restore with `cp "$TMPDIR/w1d-bak-<name>" <file>`.
+  - **Never** `git checkout <file>`.
+  - Mutate each new guard once. Mutate two guards that cover for each other one at a time.
+- **Budgets are derived, never flat** (class 20). A shard job's `timeout-minutes` comes from `shard-matrix.ts`: `setup + ceil(driven × perCaseCeilingS ÷ workers ÷ 60) + slack`. Each layer's per-case ceiling is read from committed evidence (Task 8), never typed into the workflow.
+- **The repo is public** (R14a; design §6.4). Every CI log and artifact is public.
+  - Synthetic identities only: `delivered+matrix-<runId>@resend.dev`, "Matrix Player N" / "Matrix Team N".
+  - Never echo `DATABASE_URL`, a cookie, a magic link or a token.
+  - Every text writer goes through `redact()`, and results still refuse on `findSecrets()`.
+  - No Playwright trace is ever uploaded (D16).
+  - The CI DB URL is a CI-only dummy (`postgres:postgres@localhost`), as in `bench.yml`.
+- **Live runs** (Tasks 12, 14, 16 locally; Tasks 17, 20 in CI) follow `~/.claude/skills/seazn-local-env/SKILL.md`:
+  - a fresh DB via `db:apply` + `sync:sports`, with `BENCH_EXPECTED_DATA_DIR` = `show data_directory` (confirm it is yours);
+  - no `REDIS_URL`; PostHog and Sentry blanked; `AUTH_DEV_LINKS=1`;
+  - a prod build with `NEXT_PUBLIC_SCOREPAD_HOLD_MS=3000`;
+  - `SMOKE_BASE=http://localhost:<port>`, never 127.0.0.1, never port 3000 or 3100;
+  - a fresh run id and a clean tree before evidence runs;
+  - every command writes `EXIT=$?` itself.
+- **Owner rulings are binding:**
+  - 19 (wave done; product reds are recorded, never fixed);
+  - 20 (weekly L1+L2+L3 while public);
+  - 39 (L1 at 1280);
+  - 46 (workers in-process; W1d owns shards);
+  - 47 (the full L1 grid is W1d's);
+  - 56 (`tools/` boundary; evidence stays in `docs/`);
+  - 58 as clarified;
+  - **60–64**.
+
+### The four test types, as they apply here
+
+| Type | Meaning in W1d |
+|---|---|
+| Unit | DB-free tests under `HM/__tests__/` for the planners, shard, merge, judge, exit table, pr-sample and pr-rows, shard-matrix, summary, staleness and the visibility guard. The workflow steps run against stand-in `gh`/`vitest` binaries, as `ci-wiring.test.ts` does today. Also `scripts/__tests__/tools-import-guard.test.ts` and `packages/engine/test/stryker-*.test.ts`. |
+| E2E / live | `matrix-truth.yml` proves itself on PR-A through its own `pull_request` trigger (smoke scope: all three layers, two shards each, merge, judge). Task 14's browser carries run live at 1280 and 320. PR-B's three full dispatches are the wave's E2E. |
+| Smoke | The HTTP slice re-run on PR-A's head equals `w1drv-http-slice` in every state (Task 16 Step 2). The per-PR sample itself is a smoke on every engine-touching PR. |
+| Regression | Committed runs stay judged against `plans.lock.json`, which Task 1 makes append-only in CI. The model's `--regressions` replays MB-001..MB-010 as known (Task 13). The per-PR sample judges every ✅/⛔ case of the committed baseline (Task 7). |
+
+---
+
+## Review Focus
+
+These are the five failure modes most likely to bite a person using this system (the owner reading the weekly summary, a W2 implementer reading their backlog) that no functional test exercises. Each one's pinning test sits in its owning task.
+
+1. **A shard that ran nothing reads as green.** Three ways it happens: a killed step exits 0; a shard dies before writing `results.json`; or a shard that planned 23 cases writes 14 (an abort). Expected: the merge refuses a missing `exit.txt`, an `exit.txt` other than `0`, a missing or empty `results.json`, an `aborted` header, and a shard whose case count is not its stripe's derived size. A run with any refused shard is harness-red. Pinned by `merge.test.ts`, "a shard that died, a partial shard, a stray shard: each refused by name" (Task 4).
+2. **The visibility guard fails open.** Ways it could: a `schedule` payload with no `repository` object; a `gh api` that 403s or prints nothing; `runner.environment` unset; a dispatch input that tries to inject `public`. Expected: the guard reads visibility through `gh api`, treats unreadable as not public, exempts only an exact `self-hosted` runner (no hosted minutes billed), and refuses an injected `public`. The per-PR sample is NOT exempt: on a private repo it fails loudly too. Pinned by `matrix-workflow.test.ts`, "the guard fails closed: unreadable, 403, private, internal, injected public, unset runner" (Task 9), and live by Task 17's injected-`private` dispatch.
+3. **A state that differs across the three runs for a PRODUCT reason.** The W7 note says mexicano pairing ties break on random person UUIDs. Expected: `judge.ts across` names each differing case with its state per run, and harness-green stays RED per ruling 61. The executor never averages, never re-runs until it agrees, and never classifies a difference away. The difference goes to the owner (Task 17 Step 6). Pinned by `judge.test.ts`, "a case whose state differs in one run of three is named with all three states, and the verdict is not green" (Task 6).
+4. **The per-PR sample blocks an unrelated PR, or passes a real regression.** Ways it could: a stale baseline; a flaky ✅ case; a known red that stays red; a case missing from the sample. Expected: only a ✅/⛔ → anything-else move is a regression. It is re-run once, and only a reproduced regression fails. A baseline case absent from the current run is a refusal, not a pass. Pinned by `judge.test.ts` "regression: known red stays red passes; ✅→❌ fails; ✅→❌→✅ on re-run passes; missing case refused" (Task 6), and `matrix-workflow.test.ts` "the sample re-runs a regressed case once before failing" (Task 9).
+5. **A public log or artifact leaks something.** The candidates: `DATABASE_URL`, a magic link, a cookie, a Playwright trace (it holds cookies and request bodies), or a server log. Expected: no step echoes a secret-shaped env value; uploaded paths are an explicit allow-list (`results.json`, `MATRIX.md`, `exit.txt`, `shots/**/*.png`, `SUMMARY.md`) and never `trace.zip`; `MATRIX_TRACE_ON_TIMEOUT` is never set in a workflow; every new writer goes through `redact()` + `findSecrets()`. Pinned by `matrix-workflow.test.ts` "upload paths are an allow-list; no trace; no step echoes a DB URL or token" (Task 9) and `merge.test.ts` "a secret-shaped string in a shard is refused" (Task 4).
+
+---
+
+## False premises found in planning
+
+Each has file:line evidence. They go to `_INDEX.md` "False premises found" under a new "### Found during W1d planning" (Task 16 Step 3).
+
+1. **Item 4: "every case the layers build carries `run: null`."** Partly false. The four cited lines (`layers.ts:105`, `:220`, `:255`, `:278`) are the non-L2 planners. `planL2` has set `run` on every L2 case since W1c `64ae38f4d` (`layers.ts:149`). The inert half holds: `run.ts` never reads `c.run`, and `CaseSchemaV3` (strict) would refuse `n`/`covers`. Task 2 records them.
+2. **Item 7: "5 pre-existing errors in `scenarios.test.ts`" is the whole of it.** The scope moved and widened. The tests now live in `tools/`, and `tsconfig.scripts.json` includes `tools/**` (excluding only `*.test.ts`). A test-inclusive TS7 program reports 124 errors:
+   - 5 in `HM/__tests__/scenarios.test.ts`;
+   - about 90 in `tools/bench/**/__tests__`;
+   - 3 in `scripts/__tests__`;
+   - 18 in `apps/web` (`queue.ts` 7, `use-pad-pipeline.ts` 11), pulled in by three matrix tests that import the pad queue, under nodenext rules the app does not use;
+   - 4 environment artifacts in `tools/bench/lib`.
+
+   `vitest` is not a root devDependency either; a stale root `node_modules/vitest` in the main checkout made the local probe resolve it. → D9, Task 10.
+3. **`counts.json` L1 = 462, "cells × 2 widths (1280, 320)".** This contradicts ruling 39 and `widths.ts` (L1 at 1280 only). `committed-catalogue.test.ts:271` pins `CELLS * 2`: a test that froze the stale value (class 4). → Task 3.
+4. **"The wave that adds the weekly schedule must invert `ci-wiring.test.ts`"** (decision log). The test reds on ANY workflow mentioning `matrix:l3` or `tools/matrix/run`, so a dispatch-only workflow reds it too (`ci-wiring.test.ts:244-252`). → Task 9.
+5. **"Following `bench.yml`'s precedent (R84): three consecutive green manual dispatches."** `bench.yml` has never been dispatched: 0 `workflow_dispatch` runs; all 15 runs are `pull_request` self-path runs, 9 green and 6 red (`gh run list`, 2026-10-04). The R84 bar was never met, and no cron was ever added, so there is no worked example of the three-dispatch gate. W1d's Task 17 is the first.
+6. **W1d prompt: "The design does not say what 'green' means."** False. Design §6.5 (D:326-331) defines harness-green, including "case states are identical across the three runs". Ruling 61 adopts it. The prompt's shorter suggestion dropped the identical-states clause.
+7. **W1d prompt and item 27: "The trigger must NOT be GitHub `schedule:`."** Superseded by ruling 60 (GitHub `schedule:` + `workflow_dispatch`, and a staleness signal, D1).
+8. **W1d prompt: every ❌ "carries its gap ID", as if the reds already did.** W1-driving's 164 product reds are keyed by triage rule P1–P7 and coverage-table signatures, not audit IDs (`TR/w1drv-l3/TRIAGE.md`; `_INDEX.md` "Every product red"). Audit IDs appear only inside rule prose (P1 "SC-O1/SC-O2", P6 "SW-H1"). → ruling 63, Task 19.
+9. **`plan-facts-repo.md` §5's paths** (`scripts/bench/…`, `scripts/matrix`) predate the `tools/` move (#913, #914). The facts still hold at the new paths.
+10. **"Evidence moves out of `docs/` with the harness."** It stays: ruling 56 was amended on 2026-10-04 (12 MB, read by 12 CI test files). New W1d evidence goes under `TR/`, and new directories must not use the `w1drv-` prefix, because `rebase-map.test.ts:81` requires every `w1drv-*` harness commit in the W1-driving rebase map.
+11. **"Exit 1 means the same thing in every CLI."** It does not:
+    - `findings-table.ts` and `draw-counts.ts` use 1 for "refused";
+    - `run.ts` uses 1 for "zero cases";
+    - `model.ts` uses 1 for "a NEW failure";
+    - `gen-catalogue.ts` uses 1 for "drift".
+
+    Unreadable input is 3 in `parity.ts` (`:58`, `:70`) and 2 in `render.ts` (`:55`). → D8, Task 6.
+12. **RULING CONFLICT, ruling 64 × ruling 61: "L2 = all 1,731 pair-runs" and "no ░".** Only 62 of the 1,731 runs have a harness script (M1 21, R4a 21, F1 20). `l2-pairs.json` holds no LIFECYCLE atom. 164 runs plan 🚫 (a named wave owes the path) and **1,505 plan ░ "no scenario script yet"** by construction (`layers.ts:139-160`). Read literally, ruling 61's "no ░" can never hold on the full L2 scope. → D7 puts the reading to the owner. Nothing in PR-A depends on the answer, but PR-B's verdict does.
+13. **"The full L1 grid is 231 driven runs."** 53 of the 231 cells are API-only with no builder control, so they plan 🚫 naming W4 or W5 (`api-only-ui.ts`). The 2 template-reachable cells drive through their gallery cards. So L1 = **178 driven + 53 🚫**, and that is still 231 cases (ruling 64's count holds).
+14. **"Item 15: forfeit and withdraw on league and knockout in the browser are unbuilt."** Half false. The full-grid L2 already drives M1 and R4a on `league|football` (M1@430, R4a@390) and `knockout|icehockey` (M1@834, R4a@768): runs 408, 64, 417 and 73 of `l2-pairs.json`. The 1280 half is still owed. → Task 3 pins the four runs; Task 14 Step 7 adds the 1280 proof.
+15. **"Void is a product path the harness never reached."** No `OrganiserDriver` method voids anything. The product's void is `core.void {event_id}` from the fixture console (per-row Void, and "Void last", `fixture-console.tsx:1253,1278-1286`). It is reachable in the browser; the harness simply never had the method. → D15, Task 14.
+16. **The cited lines for item 15 drifted.** `run.ts:468-469` is now `run.ts:561`, and `lib/pad-proof-set.ts:16` is now `:15`. The meaning holds.
+17. **"A scheduled run's payload carries the repository."** Unverified, and design §6.5 assumed it. The guard does not depend on it: it reads `gh api repos/$GITHUB_REPOSITORY --jq .visibility`. Task 17 Step 5 records what the first scheduled run's `github.event` actually held.
+18. **"The Cloudflare cron worker can fire the weekly run."** It can only `POST ${BASE_URL}${path}` with `x-cron-secret` (`apps/cron-worker/src/call.ts:92-94`). It has no GitHub API target. This was moot after ruling 60; it is recorded so the option is not re-offered.
+19. **Design §7.5's "scheduling, competition and tiebreaker modules" are three directories.** They are two: `tiebreakers.ts` lives in `packages/engine/src/competition/`.
+20. **W2 prompt trap 2** ("declared 3/0 loses to the FIH 2/1 the rulebook adopts", SC-P4) contradicts the SC-P4 false premise (`_INDEX.md:1362-1366`) and design §8 ("FIH 2/1 is Pro League only"). It is not W1d's to fix. Task 22 records it beside the W2 backlog for W2's planner.
+
+---
+
+## Decisions
+
+**Ruled: 60 (2026-10-04).** The weekly trigger is the truth workflow's own GitHub `schedule:` plus `workflow_dispatch`. There is no Cloudflare worker and no app route. A missed week must still be visible (D1). → Task 9.
+
+**Ruled: 61.** Harness-green is design §6.5's definition:
+- every shard completes;
+- every case reports a state, with no ░ and no harness error;
+- case states are identical across the three runs.
+
+Product reds are data. → Tasks 6, 17. See D7 for the L2 ░ conflict.
+
+**Ruled: 62.** One plan, two PRs. PR-A is Tasks 1–16 and PR-B is Tasks 17–22. PR-A merges by the owner's hand, and PR-B is cut after.
+
+**Ruled: 63.** Every ❌ carries an audit gap ID (`SW-`/`FX-`/`ST-`/`SC-`/`SH-`) or `NEW-W1d-<n>`, with its owning wave from §8. Triage never re-routes a gap §8 already assigns. W1-driving's 164 reds are re-keyed in the same pass. → Tasks 18, 19.
+
+**Ruled: 64.** Full scope:
+- L1 is 231 cells at 1280, and `counts.json` moves from 462 to 231;
+- L2 is the 1,731 runs of `l2-pairs.json`;
+- L3 is the 937 W1-driving cases.
+
+Each job is one shard on a fresh Postgres with `sync:sports`, about 12 shards, with explicit `timeout-minutes` well under 360. → Tasks 3, 4, 8, 9.
+
+**D1 — The staleness signal (ruling 60's "a missed week must still be visible").** Two halves:
+- **(a)** Every run's `SUMMARY.md` (also the job summary) opens with "Previous harness-green weekly/dispatch run: `<date>` (`<n>` days ago) — run `<id>`". `summary.ts` reads it from `gh api …/actions/workflows/matrix-truth.yml/runs?status=success`.
+- **(b)** `ci.yml`'s `matrix-rows` job carries a NON-BLOCKING step. When `vars.MATRIX_WEEKLY_ENABLED == 'true'` and the newest successful `schedule`/`workflow_dispatch` run of `matrix-truth.yml` is older than 8 days (or none exists), it emits `::warning title=Matrix truth run is stale::…` on every PR. It never fails the PR, and an API failure warns rather than fails.
+- Owner value: a skipped or broken week shows on the next PR, at the cost of one API call, with no new service.
+- Rejected:
+  - a scheduled "watchdog" workflow (it can be missed the same way);
+  - failing the PR (it would block unrelated work on CI's weather).
+
+**D2 — Shipped disabled: the gate is `vars.MATRIX_WEEKLY_ENABLED`.**
+- `matrix-truth.yml` declares `schedule: - cron: "17 2 * * 6"` (Saturday 02:17 UTC: "overnight at the weekend", design §6.5).
+- Its first job, `plan`, carries `if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'`. Every other job `needs: plan`, so a schedule that fires while disabled is a visible run of skipped jobs.
+- `mutation.yml` uses the same variable (`cron: "23 3 * * 0"`, Sunday).
+- PR-B's "schedule enabled" is the owner running `gh variable set MATRIX_WEEKLY_ENABLED --body true`. The controller records the time and the first scheduled run id in `_INDEX.md` (R22).
+- Owner value: the schedule can be switched off in seconds without a PR if it ever turns noisy, and switching it on is one reviewed, recorded act.
+- Rejected:
+  - a commented-out `schedule:` (invisible: nothing fires, nothing shows);
+  - a committed flag file (a PR to switch off).
+
+**D3 — The workflow proves itself on its own PR.**
+- `matrix-truth.yml` and `mutation.yml` also trigger on `pull_request` with `paths:` limited to their own files and `tools/matrix/ci/**` (`bench.yml`'s precedent, `bench.yml:17-22`).
+- On that event `matrix-truth.yml` runs the **smoke** scope:
+  - L1 `--layer L1 --scope slice` (6);
+  - L2 `--layer L2 --scope slice` (68, 3 driven);
+  - L3 `--set pr-sample` (the fixed sample, 33).
+
+  Each layer is split into **2 shards**, so the partition, merge and judge are exercised with N > 1. `mutation.yml` runs its `probe` group.
+- Owner value: PR-A cannot merge an untested workflow, because `workflow_dispatch` fires only from `main` (ruling 62). The self-proof costs one ~20-minute run per edit of those files.
+- Rejected: proving it only after merge (the bench's "proved after merging untested" trap).
+
+**D4 — Shards: a stripe of the plan, sized per layer, committed.**
+- `tools/matrix/ci/shards.json` holds `{L1: 8, L2: 2, L3: 2}` = **12 shard jobs** for the full scope, plus per-layer timing ceilings read from committed evidence.
+- Sizing, derived in Task 8 and re-derived in PR-B from measured times:
+  - **L3:** 937 cases. On 4 workers, Σ 3,943 s ran in 988 s locally (`w1drv-l3`), so 2 shards are ~8–10 min of cases each.
+  - **L1:** 178 driven at 1 browser worker. The committed max per case is 123 s and the median 15–21 s, so 8 shards hold ~23 driven each.
+  - **L2:** 62 driven, so 2 shards hold 31 each.
+- Each shard keeps `--workers 4` on L3 and 1 on L1/L2 (D11).
+- Owner value: wall clock stays under ~1 h at $0. A stripe balances slow rows across shards, and the same case always lands in the same shard, which ruling 61's per-case comparison needs.
+- Rejected:
+  - contiguous blocks (all cricket `test` cases land in one shard);
+  - hash partition (stable, but harder to verify and unbalanced on small plans).
+
+**D5 — One merged result per layer, one summary per run.** `results.json` has a run-level `layer`, so L1, L2 and L3 merge separately into `merged/<layer>/{results.json, MATRIX.md}`.
+- The merged header records `shards: N` and the plan WITHOUT `--shard`. Each shard's header records `shard {index, of, planSize}`.
+- `SUMMARY.md` spans all three layers: histograms, harness verdict, timings, staleness and the diff against the previous green run.
+- Owner value: each layer's `MATRIX.md` is exactly what a one-machine run would have written (R10: generated, never hand-edited), and the committed baseline's lock entries are per layer.
+- Rejected: a cross-layer results.json (a schema change for no reader).
+
+**D6 — What counts as a harness error** (ruling 61's "no harness error"; `judge.ts` `harnessFaults`). A harness fault is any of:
+- **crash:** a red whose reason starts `error: crashed —` (`run.ts` `crashResult`);
+- **harness error:** a red whose reason starts `error: ` but not `error: RefusedCall:`. A `RefusedCall` is the product answering, so it is data (for example P5's `422 WRONG_PHASE`). Anything else (`DriverMisuse`, a timeout, a TypeError) is the harness or the environment;
+- **vacuous:** a red whose reason is one of `decideState`'s three vacuity reasons;
+- **unplanned ░:** `not_run` without the `planned: true` marker (Task 2);
+- **run-level:** a missing, partial or aborted shard (`merge-shards.ts` refuses).
+
+⏳ `later` and 🚫 `no_path` are data (they name a wave). Each class is a named test.
+- Owner value: "harness-green" is mechanical, so nobody judges it by eye.
+- Rejected: reading exit codes alone (a shard that exits 0 with 40 crash reds is not green).
+
+**D7 — RULING CONFLICT (false premise 12), recommendation for the owner.** Read ruling 61's "no ░" as **"no ░ on a case the plan DRIVES"**.
+- The 1,505 L2 runs whose atom has no harness script are planned ░ (marker `planned: true`). They are recorded as the plan says, counted in `SUMMARY.md` per atom, and do not make a run harness-red.
+- A ░ WITHOUT the marker is a fault (D6).
+- Alternatives the owner may choose instead:
+  - **(b)** shrink ruling 64's L2 to the 62 + 164 runs that are not ░;
+  - **(c)** keep the literal reading. Then no full run can ever be harness-green until W2–W7 write the remaining atoms' scripts, and the weekly schedule can never be enabled.
+- Owner value of the recommendation: the weekly run starts now, and ░ shrinks wave by wave as scripts land (design §2: ░ = "not yet run"). PR-A is unaffected by the choice. Task 17 Step 0 asks the owner before the first dispatch, and the judge's `--planned-not-run` flag encodes the answer (`allow` default, or `refuse`).
+
+**D8 — One exit convention (item 6): run.ts's.** Every matrix CLI uses:
+- **0:** done, a verdict or data;
+- **1:** a negative signal (difference, drift, zero cases, a regression, a harness fault);
+- **2:** refused, nothing written (usage, **unreadable input**, a refused precondition);
+- **3:** aborted after start, or a load crash.
+
+Three CLIs change:
+- `parity.ts`: unreadable input 3 → 2;
+- `findings-table.ts`: refused 1 → 2, unreadable 3 → 2;
+- `draw-counts.ts`: refused 1 → 2, unreadable 3 → 2.
+
+`gen-catalogue.ts`, `single-sport.ts`, `render.ts`, `run.ts` and `model.ts` already fit. One declared table, `HM/lib/exit-codes.ts`, is pinned against each CLI's header, so the CI wrapper reads one meaning per code (W1b's "key on which CLI" becomes a table lookup, not a switch).
+- Owner value: a red CI step means the same thing whichever tool printed it.
+- Rejected: a per-CLI switch in the wrapper (the drift the table removes).
+
+**D9 — Item 7's scope.**
+- A new `tsconfig.tools-tests.json` type-checks `tools/matrix/**` and `scripts/**` INCLUDING tests, under `moduleResolution: "bundler"` + `module: "preserve"`. That resolves the 18 apps/web errors, which are nodenext-only artifacts of reading app code; the app itself is bundler.
+- `vitest` becomes a root devDependency, the same range as the engine's, so `scripts/__tests__` resolve it in CI.
+- The 5 `scenarios.test.ts` errors and the 3 `scripts/__tests__` errors are fixed.
+- `tools/bench/**` tests are excluded and recorded in `_INDEX.md` as a carry for the bench programme (~90 errors; no issue filed).
+- Owner value: the matrix's own test code is checked at last, without W1d absorbing the bench's debt.
+- Rejected:
+  - including bench (it doubles the task, and it is another programme's code);
+  - nodenext for tests (18 false errors in app code).
+
+**D10 — The lock is append-only, in CI (item 1).** `HM/lock-append-only.ts --against HEAD^1` runs in `ci.yml`'s `gates` job, after the single-sport ratchet. Every entry present in the base's `plans.lock.json` must be byte-identical in the head, and any number of entries may be added. A removed or edited entry exits 1 and names the run.
+- Owner value: the re-review's tamper (an existing entry and its results edited together) turns from "review must notice" into a red CI step.
+- Rejected: review-only (it already missed one).
+
+**D11 — Browser workers and `MAX_WORKERS` (items 17, 18): declined in favour of shards.**
+- L1/L2 shards run one browser case at a time, and parallelism comes from the job matrix.
+- `BROWSER_WORKERS = routeTo("W1d", …)` is removed (W1d closes; the Q-A guard would red a route to a closed wave). The D10 refusal's text becomes "one browser case at a time per shard; parallelism is the shard matrix (W1d D11)".
+- `MAX_WORKERS` stays 8.
+- Owner value: no unmeasured contention on pad holds, and wall clock is bought with free jobs instead.
+- Rejected: building browser workers now (an inert seam until measured, class 1).
+
+**D12 — Redis (item 19): no Redis in any matrix job, pinned.**
+- `matrix-truth.yml` declares no `redis` service and sets no `REDIS_URL`; a test pins both.
+- Each shard is its own runner, with its own source IP, so the 5-per-300 s magic-link budget applies per shard (5 sign-ins on L3's 4 workers + 1).
+- The `--workers` refusal stays unbuilt, as the W1-driving recommendation said.
+- Owner value: the threshold can never be met by accident in CI.
+
+**D13 — The per-PR sample (R27).**
+- `ci.yml` gains two jobs:
+  - `matrix-rows`: reads the PR body's `Matrix rows:` line and the changed files;
+  - `matrix-sample`: calls `matrix-truth.yml` with `scope: pr-sample`.
+- **Rows:** R27 says a PR touching `packages/engine/**` or `apps/web/src/server/usecases/stages.ts` declares its rows. `pr-rows.ts` enforces it:
+  - no declaration on such a PR → exit 1, which fails the job;
+  - `Matrix rows: none — <reason>` is allowed;
+  - `all` means every row.
+- **The sample** is `--set pr-sample --rows <rows>`: the w1-driving cases on the declared rows, plus a fixed sample of 33. The fixed sample is the 24 slice cases plus `league|<sport>|LIFECYCLE` on the 9 sports the slice lacks.
+- The job runs only when a paths filter matches: `packages/engine/**`, `apps/web/src/server/**`, `apps/web/src/lib/format-templates.ts`, `tools/matrix/**` or `pnpm-lock.yaml`.
+- **Judged** against the committed baseline's L3 (`HM/catalogue/baseline.json` names it: `TR/w1drv-l3/results.json` until PR-B replaces it with `TR/w1d-baseline/L3/results.json`). A ✅/⛔ case now in any other state is re-run once (`--set w1-driving --only <cell> --scenario <S>`), and only a reproduced move fails.
+- Owner value: an engine PR learns in ~10 minutes, on its own PR, whether it broke a case that worked.
+- Rejected:
+  - every PR (most touch only UI copy);
+  - failing on the first red (flaky-shaped gates are run again, class 8).
+
+**D14 — Stryker lives with the engine, five groups, incremental.**
+- `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` (exact `10.0.0`) become devDependencies of `packages/engine`.
+- `packages/engine/stryker.config.mjs` reads `STRYKER_GROUP`. `packages/engine/stryker.groups.mjs` declares the five groups (`competition`, `draws`, `build`, `calendar`, `repair`) plus a `probe` group. A test holds every non-test source file of `src/scheduling` and `src/competition` in exactly one group, or in a named exclusion with its reason.
+- `mutation.yml` runs one job per group, each with `--incremental` and its incremental file cached across weeks, with a derived `timeout-minutes` ≤ 300.
+- Floors are per group in `packages/engine/stryker-floor.json`, checked by `packages/engine/scripts/stryker-floor.ts`. A floor is never lowered: the `--check-file-against HEAD^1` mode runs in `ci.yml` `gates`.
+- Survivors are listed in `SURVIVORS.md` per group. Equivalent mutants are recorded in `packages/engine/stryker-equivalent.json` by `file:line:col mutator → replacement`, never by Stryker's unstable ids.
+- Estimate before measuring: ~15k source lines → on the order of 10k mutants. The engine suite runs 46–57 s locally and 5 m 44 s on CI with coverage. With per-test coverage each mutant runs only its covering tests, so the first run is expected at 1–4 h in total across the groups. Task 20 measures it, and a group over 200 min is split (Task 20 Step 4).
+- Owner value: mutation sits beside the code it measures, and weekly reruns stay cheap.
+- Rejected:
+  - a `tools/mutation` workspace (Stryker's sandbox cannot mutate files outside its cwd);
+  - root-level Stryker (the sandbox would copy the whole monorepo).
+
+**D15 — Void in the browser (item 15e): the console's "Void last", as a capability proof.**
+- A new driver method `voidLast(fixtureId)`:
+  - HTTP: `core.void {event_id}` on the newest voidable event;
+  - browser: the console's "Void last" control.
+- A new proof scenario `VOIDPROOF` and a set `void-proof` (league|badminton at 1280 and 320, 2 cases) score one event, void it, check the ledger and the fold, then finish as LIFECYCLE.
+- The M7 atoms ("void a decided result") keep their ░ until the wave that owns their rulebook writes their scripts.
+- Owner value: the organiser's undo is proven end to end in the browser, without W1d inventing M7's rulebook.
+- Rejected: scripting M7 here (rule semantics owned by later waves).
+
+**D16 — F-PP-1 diagnostics (item 15a): timestamps always, trace local-only.**
+- Every pad tap records `{tap, clickedAtMs, ledgerSeenAtMs | null, waitedMs, budgetMs}`, relative to the case start.
+- A tap-wait timeout throws with the last 5 taps' timings in its message (redacted).
+- A Playwright trace is saved ONLY when `MATRIX_TRACE_ON_TIMEOUT=1` and only to the local report dir. Workflows never set it, and uploads never include `trace.zip` (Review Focus 5).
+- Owner value: the next F-PP-1 red explains itself in a public log, without publishing cookies.
+
+**D17 — Item 15c, the match-day run sheet: a `match-day` set.**
+- One layered set, `match-day` (league|badminton LIFECYCLE at 1280 and 320). It creates the competition dated today, schedules its first fixture for today through HTTP filler (the product's own schedule endpoint, pinned at Task 14 Step 0), and reads the run sheet BEFORE widening the filter.
+- The check `runsheet-today-default`:
+  - the product opened on "today" exactly when its derived phase reads `match_day`;
+  - the "today" rows are exactly the fixtures the HTTP fixture list dates today.
+
+  It abstains, counted, when no fixture is dated today.
+- Owner value: the organiser's match-day default is finally driven, on the two widths that matter.
+
+**D18 — The triage tooling ships in PR-B (Task 18).** `triage.ts` and `audit-ledger.ts` are shaped by the run's data, so they land with the data they judge. They are DB-free like every tool, with their own tests.
+- Owner value: PR-A stays the infra the owner reviews before any evidence exists.
+
+**D19 — The baseline layout (item 27; PR-B).**
+- `TR/w1d-baseline/{L1,L2,L3}/{results.json, MATRIX.md}` come from the LAST of the three harness-green dispatches.
+- Beside them sit `HARNESS-GREEN.md` (the three run ids and `judge.ts across` output), `TRIAGE.md`, `AUDIT-LEDGER.md`, `TIMINGS.md` and `README.md`.
+- Screenshots are not committed. They live in the runs' artifacts (90-day retention), and their run ids are in `README.md`.
+- Lock entries: `w1d-baseline/L1`, `w1d-baseline/L2`, `w1d-baseline/L3`.
+- Weekly runs keep artifacts only (item 27).
+- Owner value: one reviewable baseline instead of three 10 MB copies, with every claim traceable to a run id.
+
+**D20 — The weekly diff (informational).** `summary.ts` downloads the previous harness-green run's merged artifact and lists every case whose state changed, as "✅→❌", "❌→✅" and so on. It never fails the run.
+- Owner value: the weekly summary says what changed this week, not only what is red.
+
+**D21 — The three dispatches run one product: a pinned, non-release tag (PR-B).**
+- Before the first of the three, the executor tags `origin/main`'s tip as `matrix-truth/w1d-baseline` (a lightweight tag, pushed) and dispatches all three with `--ref matrix-truth/w1d-baseline`. Read 2026-10-04: no workflow triggers on a tag outside `v*.*.*` (`prod.yml`, `placement-prod.yml`), so the tag deploys nothing.
+- `judge.ts across` refuses runs whose `harnessCommit` differs (Task 6).
+- Owner value: a state that differs across the three runs is flakiness or nondeterminism, never "main moved between dispatches".
+- Rejected: dispatching on moving `main`. Three runs of two products would make ruling 61's comparison meaningless, and a fix landing mid-sequence would restart it.
+
+**D22 — An audit gap the run never exercised is not a false premise.** Ruling 63 and R5 send a non-reproduced gap to "False premises found". W1d's run exercises only LIFECYCLE, M1, R4 and F1 (plus the 62 L2 atoms), so most of the ~150 gaps have no driven case at all. The audit ledger (Task 18) gives every gap exactly one of five outcomes:
+- **reproduced** (case ids);
+- **exercised, not reproduced:** a driven case covers the gap's cell and action and passed. This is a false premise (R5), with the case ids as evidence;
+- **not exercised:** no driven case reaches it. It stays a hypothesis with its §8 wave and the atom or script that would reach it;
+- **verified-by-read** / **verified-by-failing-test** for a non-behavioural gap (design §10 step 3).
+
+- Owner value: "false premise" keeps meaning "we looked and it is not there", and no wave loses a real gap because W1d's scenarios never reached it.
+- Rejected: marking every non-reproduced gap a false premise (it would delete most of W2–W7's backlog on no evidence).
+
+---
+
+## File Structure
+
+```
+tools/matrix/
+  lock-append-only.ts            (T1)  CLI: plans.lock.json entries never change (D10, item 1)
+  lib/lock-diff.ts               (T1)  lockChanges(base, head)
+  lib/results.ts                 (T2,T4) v3 optional: case planned/l2/filler; run shard/shards
+  run.ts                         (T2,T3,T4,T5,T7,T13) planOf scope; --scope; --shard; refused list; RunIdUsedInDb; pr-sample; D11 text
+  lib/layers.ts                  (T3)  planL1Grid; l1/l2 planners take scope grid
+  lib/counts.ts, catalogue/counts.json (T3) l1 = cells × 1 width (231)
+  lib/shard.ts                   (T4)  parseShard, stripe, stripeSize
+  lib/merge.ts, merge-shards.ts  (T4)  mergeShards + CLI
+  lib/seed-org.ts, model.ts      (T5)  RunIdUsedInDb (items 12, 25)
+  lib/judge.ts, judge.ts         (T6)  harnessFaults, statesAcross, regressions + CLI
+  lib/exit-codes.ts              (T6)  the one table (D8)
+  parity.ts, findings-table.ts, draw-counts.ts (T6) exit codes normalised
+  lib/pr-sample.ts               (T7)  PR_SAMPLE_SET, planPrSample, parseRows
+  ci/pr-rows.ts                  (T7)  R27 rows from the PR body + changed files
+  catalogue/baseline.json        (T7,T21) the baseline the sample is judged against
+  ci/shards.json                 (T8)  per-layer shard counts + per-case ceilings
+  ci/shard-matrix.ts             (T8)  the GitHub job matrix, derived timeouts
+  ci/summary.ts                  (T8)  SUMMARY.md: histograms, timings, staleness, diff
+  ci/staleness.ts                (T8)  the PR annotation (D1b)
+  lib/pads/*.ts, lib/pad-proof-set.ts, lib/browser/budget/execute (T12) items 8, 9, 15a, 15b, 16
+  lib/parity.ts, lib/scenarios/{common,r4-withdrawal}.ts, lib/browser/pages/stage-rail.ts, lib/model/run-cell.ts (T13) items 10, 11, 22, 23, 24, 26
+  lib/browser/pages/{run-sheet,stage-rail,fixture-console}.ts, lib/driver/*, lib/scenarios/void-proof.ts, lib/match-day-set.ts (T14) items 15c–f
+  triage.ts, lib/triage.ts, audit-ledger.ts, lib/audit-ledger.ts (T18) PR-B
+  __tests__/…                    one test file per module (named in each task)
+.github/workflows/matrix-truth.yml (T9)
+.github/workflows/mutation.yml     (T15)
+.github/workflows/ci.yml           (T1,T9,T10,T15) lock gate; matrix-rows + matrix-sample; tests typecheck; floor gate
+tsconfig.tools-tests.json          (T10)
+package.json                       (T10) vitest devDependency
+scripts/__tests__/tools-import-guard.test.ts (T11)
+packages/engine/{stryker.config.mjs, stryker.groups.mjs, stryker-floor.json, stryker-equivalent.json, scripts/stryker-floor.ts, test/stryker-*.test.ts, package.json} (T15)
+docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md (T1,T16,T17,T19,T21,T22)
+docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1d-carry/ (T14) 1280 browser proofs
+docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1d-baseline/ (T21) PR-B
+```
+
+Every new `HM/**` test file is picked up by the existing strict CI matrix step (`ci.yml:239-257`), which fails on zero tests, failed suites, passed ≠ total and stray files.
+
+---
+## PR-A — infra (Tasks 1–16)
+
+Batching (ruling 41): every one of the 28 "W1d first tasks" items is owned by exactly one task here.
+
+| Task | Items |
+|---|---|
+| T1 | 1 |
+| T2 | 2, 3, 4, 14, 21 |
+| T3 | 47's grid (ruling 64) |
+| T4 | — (sharding) |
+| T5 | 5, 12, 25 |
+| T6 | 6 |
+| T7 | — (R27) |
+| T8 | — |
+| T9 | 19, 27 |
+| T10 | 7 |
+| T11 | 28 |
+| T12 | 8, 9, 15a, 15b, 16 |
+| T13 | 10, 11, 13, 17, 18, 20, 22, 23, 24, 26 |
+| T14 | 15c, 15d, 15e, 15f |
+
+Reviewers check the table against `_INDEX.md` "W1d first tasks" at the end of PR-A (Task 16 Step 1).
+
+### Task 1: The lock is append-only (item 1, D10)
+
+**Why:** Item 1's guard (`committed-matrix.test.ts:264-275`) proves a committed run has a lock entry. Nothing proves an existing entry was not edited alongside its results. The re-review found exactly that tamper path, and review was the only guard.
+
+**Files:**
+- Create: `tools/matrix/lib/lock-diff.ts`, `tools/matrix/lock-append-only.ts`, `tools/matrix/__tests__/lock-append-only.test.ts`
+- Modify:
+  - `package.json`: add the root script `"matrix:lock-check": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/lock-append-only.ts"`;
+  - `.github/workflows/ci.yml`: a `gates` step after `pnpm matrix:single-sport --check --against HEAD^1`;
+  - `tools/matrix/__tests__/ci-wiring.test.ts`: pin the step;
+  - `tools/matrix/__tests__/strip-types-loadable.test.ts`: add `W1D_T1`.
+
+**Interfaces:**
+- Produces:
+  - `lockChanges(base: LockFile, head: LockFile): { compared: number; added: string[]; changed: { run: string; kind: "removed" | "edited" }[] }`
+  - `type LockFile = { runs: Record<string, unknown> }`
+  - CLI `lock-append-only.ts --against <git-ref> [--lock <path>]`. Exit 0 append-only; 1 an entry removed or edited (each named); 2 refused (usage, unreadable, zero entries compared).
+
+- [ ] **Step 0: Create the execution worktree and pin anchors**
+
+```bash
+cd /Users/ashokhein/github/seazn.club && git worktree add -b feat/format-matrix-w1d-infra .claude/worktrees/format-matrix-w1d-exec docs/format-matrix-w1d-plan; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec && pnpm install --frozen-lockfile; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec && node -e 'const l=require("./docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/plans.lock.json");console.log(Object.keys(l.runs).length)'
+```
+
+Expected: `135` (record the number you see; a later merge to main may have added entries). Re-pin the Step 0 anchors table and note any moved line in the task report.
+
+- [ ] **Step 1: Write the failing test**
+
+Write `tools/matrix/__tests__/lock-append-only.test.ts`:
+
+```ts
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { lockChanges } from "../lib/lock-diff.ts";
+
+const REAL = JSON.parse(readFileSync(new URL("../../../docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/plans.lock.json", import.meta.url), "utf8"));
+const entry = (plan: string) => ({ plan, layered: false, driven: ["a|b|c|LIFECYCLE"], planned: {} });
+
+describe("lockChanges (item 1, D10)", () => {
+  it("the empty case: two empty locks compare zero entries, and the CLI refuses that as vacuous", () => {
+    expect(lockChanges({ runs: {} }, { runs: {} })).toEqual({ compared: 0, added: [], changed: [] });
+  });
+  it("adding entries is allowed, and every base entry is compared", () => {
+    const base = { runs: { a: entry("slice") } };
+    const head = { runs: { a: entry("slice"), b: entry("--set w1-driving") } };
+    expect(lockChanges(base, head)).toEqual({ compared: 1, added: ["b"], changed: [] });
+  });
+  it("an edited entry is named — one changed character in a driven id", () => {
+    const head = { runs: { a: { ...entry("slice"), driven: ["a|b|c|M1"] } } };
+    expect(lockChanges({ runs: { a: entry("slice") } }, head).changed).toEqual([{ run: "a", kind: "edited" }]);
+  });
+  it("a removed entry is named", () => {
+    expect(lockChanges({ runs: { a: entry("slice") } }, { runs: {} }).changed).toEqual([{ run: "a", kind: "removed" }]);
+  });
+  it("a reordered key inside an entry is NOT an edit — the comparison is by value, keys sorted", () => {
+    const e = entry("slice");
+    const reordered = { planned: e.planned, driven: e.driven, layered: e.layered, plan: e.plan };
+    expect(lockChanges({ runs: { a: e } }, { runs: { a: reordered } }).changed).toEqual([]);
+  });
+  it("the real committed lock against itself: every entry compared, none changed", () => {
+    const r = lockChanges(REAL, REAL);
+    expect(r.compared).toBe(Object.keys(REAL.runs).length);
+    expect(r.compared).toBeGreaterThanOrEqual(135);
+    expect(r.changed).toEqual([]);
+  });
+});
+
+describe("lock-append-only CLI", () => {
+  const cli = (args: string[], cwd: string) => spawnSync(process.execPath, ["--experimental-strip-types", join(process.cwd(), "tools/matrix/lock-append-only.ts"), ...args], { cwd, encoding: "utf8" });
+  const repo = (base: object, head: object) => {
+    const d = mkdtempSync(join(tmpdir(), "lock-"));
+    const git = (...a: string[]) => execFileSync("git", a, { cwd: d });
+    git("init", "-q"); git("config", "user.email", "t@example.invalid"); git("config", "user.name", "t");
+    writeFileSync(join(d, "lock.json"), JSON.stringify(base)); git("add", "."); git("commit", "-qm", "base");
+    writeFileSync(join(d, "lock.json"), JSON.stringify(head)); git("commit", "-qam", "head");
+    return d;
+  };
+  it("exit 1 and names the run when the head edits a base entry", () => {
+    const d = repo({ runs: { w1c: entry("slice") } }, { runs: { w1c: entry("--layer L1") } });
+    const r = cli(["--against", "HEAD^1", "--lock", "lock.json"], d);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("w1c: edited");
+  });
+  it("exit 0 with the count when the head only adds", () => {
+    const d = repo({ runs: { w1c: entry("slice") } }, { runs: { w1c: entry("slice"), w1d: entry("slice") } });
+    const r = cli(["--against", "HEAD^1", "--lock", "lock.json"], d);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("1 entries compared, 1 added");
+  });
+  it("exit 2 when the base holds zero entries (vacuous), and on an unknown ref", () => {
+    expect(cli(["--against", "HEAD^1", "--lock", "lock.json"], repo({ runs: {} }, { runs: {} })).status).toBe(2);
+    expect(cli(["--against", "no-such-ref", "--lock", "lock.json"], repo({ runs: { a: entry("s") } }, { runs: { a: entry("s") } })).status).toBe(2);
+  });
+});
+```
+
+- [ ] **Step 2: Run it and see it fail**
+
+Use the vitest template with `<N>`=1 and `<files>` = `tools/matrix/__tests__/lock-append-only.test.ts`. Expected: the suite fails to collect (`failedSuites: 1`), with `Cannot find module '../lib/lock-diff.ts'`.
+
+- [ ] **Step 3: Implement**
+
+`tools/matrix/lib/lock-diff.ts`:
+
+```ts
+// Item 1 (W1d D10): plans.lock.json is append-only. An entry present in the
+// base must be value-identical in the head; entries may be added. Keys are
+// sorted before comparing, so a formatter reordering an object is not an edit.
+export type LockFile = { runs: Record<string, unknown> };
+export type LockChange = { run: string; kind: "removed" | "edited" };
+
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+export function lockChanges(base: LockFile, head: LockFile): { compared: number; added: string[]; changed: LockChange[] } {
+  const changed: LockChange[] = [];
+  let compared = 0;
+  for (const [run, entry] of Object.entries(base.runs)) {
+    compared++;
+    if (!Object.hasOwn(head.runs, run)) changed.push({ run, kind: "removed" });
+    else if (canonical(entry) !== canonical(head.runs[run])) changed.push({ run, kind: "edited" });
+  }
+  const added = Object.keys(head.runs).filter((r) => !Object.hasOwn(base.runs, r));
+  return { compared, added, changed };
+}
+```
+
+`tools/matrix/lock-append-only.ts`:
+
+```ts
+// CLI: pnpm matrix:lock-check --against <git-ref> [--lock <path>]
+// Exit codes (the one convention, D8):
+//   0  append-only: every base entry unchanged (count printed);
+//   1  an entry was removed or edited — each named on stderr;
+//   2  refused, nothing judged: usage, a ref or file git cannot read, JSON
+//      that is not a lock, or ZERO base entries compared (vacuous, R25).
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { parseArgs } from "node:util";
+import { isMainModule } from "../../scripts/lib/main-module.ts";
+import { lockChanges, type LockFile } from "./lib/lock-diff.ts";
+
+export const DEFAULT_LOCK = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/plans.lock.json";
+
+function asLock(text: string, what: string): LockFile {
+  const v: unknown = JSON.parse(text);
+  if (v === null || typeof v !== "object" || typeof (v as { runs?: unknown }).runs !== "object" || (v as { runs: unknown }).runs === null) {
+    throw new Error(`${what} is not a plans lock (no "runs" object)`);
+  }
+  return v as LockFile;
+}
+
+export function main(argv: readonly string[]): number {
+  let against: string; let lock: string;
+  try {
+    const { values } = parseArgs({ args: [...argv], options: { against: { type: "string" }, lock: { type: "string" } }, strict: true, allowPositionals: false });
+    if (values.against === undefined) throw new Error("--against <git-ref> is required");
+    against = values.against; lock = values.lock ?? DEFAULT_LOCK;
+  } catch (e) { console.error(`lock-append-only: ${(e as Error).message}`); return 2; }
+  let base: LockFile; let head: LockFile;
+  try {
+    base = asLock(execFileSync("git", ["show", `${against}:${lock}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), `${against}:${lock}`);
+    head = asLock(readFileSync(lock, "utf8"), lock);
+  } catch (e) { console.error(`lock-append-only: cannot read the locks — ${(e as Error).message.split("\n")[0]}`); return 2; }
+  const r = lockChanges(base, head);
+  if (r.compared === 0) { console.error(`lock-append-only: ${against}:${lock} holds zero entries — nothing was compared (vacuous)`); return 2; }
+  for (const c of r.changed) console.error(`${c.run}: ${c.kind} — plans.lock.json is append-only (item 1); a committed run's plan never changes`);
+  if (r.changed.length > 0) return 1;
+  console.log(`lock-append-only: ${r.compared} entries compared, ${r.added.length} added`);
+  return 0;
+}
+
+if (isMainModule(import.meta.url)) process.exitCode = main(process.argv.slice(2));
+```
+
+Add the `gates` step to `ci.yml`, directly after the single-sport line. The comment says why `HEAD^1` (the same reasoning as R26's step):
+
+```yaml
+      # Item 1 (W1d D10): plans.lock.json is append-only — an edited or removed
+      # entry is a rewritten plan for evidence already committed. HEAD^1 as
+      # for the single-sport ratchet above.
+      - run: pnpm matrix:lock-check --against HEAD^1
+```
+
+In `ci-wiring.test.ts`, add one test, "the lock gate runs in gates, unconditionally, after the single-sport ratchet". It uses the file's existing `stepOf`/`gatesSteps` helpers, the same way the R26 test does: the step exists, it has no `if:` and no `continue-on-error`, and its index is the single-sport step's index + 1.
+
+- [ ] **Step 4: Run it and see it pass**
+
+Run the vitest template with `<files>` = `tools/matrix/__tests__/lock-append-only.test.ts tools/matrix/__tests__/ci-wiring.test.ts tools/matrix/__tests__/strip-types-loadable.test.ts`. Expected: `failed 0`, `failedSuites 0`, `files 3`. Then run the CLI against the real tree:
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec && pnpm matrix:lock-check --against origin/main; echo EXIT=$?
+```
+
+Expected: `lock-append-only: 135 entries compared, 0 added` and `EXIT=0`.
+
+- [ ] **Step 5: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| In `lockChanges`, `canonical(entry) !== canonical(head.runs[run])` → `false` | "an edited entry is named" + the CLI exit 1 test |
+| In `main`, delete the `r.compared === 0` line | "exit 2 when the base holds zero entries" |
+| `canonical` → `JSON.stringify` | "a reordered key … is NOT an edit" |
+
+Use cp backups (Global Constraints), and record `total`/`failed` for each mutant.
+
+- [ ] **Step 6: Scoped tsc, eslint, commit**
+
+Run scoped tsc on `tools/matrix/lib/lock-diff.ts tools/matrix/lock-append-only.ts`, then eslint on all five changed files. Commit the 5 files plus `package.json` with the message `feat(matrix): plans.lock.json is append-only in CI (W1d item 1, D10)`.
+
+---
+
+### Task 2: What a result records — scope, planned marker, L2 run, fillers, shard (items 2, 3, 4, 14, 21)
+
+**Why:**
+- A committed run cannot say whether ░ was planned or a harness failure: the I-2 heuristic is `durationMs === 0` (item 3).
+- L2's `n`/`covers`/`l3Gap` are computed and thrown away (item 4).
+- A browser run cannot say which setup ran through HTTP (item 21).
+- The shard fields arrive here so Task 4 only writes them.
+
+All additions are OPTIONAL fields on the strict v3 schemas, so every committed run still parses. The committed-matrix suite is the regression test.
+
+**Files:**
+- Modify:
+  - `tools/matrix/lib/results.ts:177-221` (CaseSchemaV3, RunResultsSchemaV3);
+  - `tools/matrix/run.ts`: `recordPlanned` `:727-735`, `runCase` `:~700-720`;
+  - `tools/matrix/lib/parity.ts:183-189` (notDriven);
+  - `tools/matrix/__tests__/committed-plans.ts:143` (judgeRun prefers the marker).
+- Test:
+  - `tools/matrix/__tests__/results.test.ts` (extend);
+  - `tools/matrix/__tests__/run-planned-marker.test.ts` (create);
+  - `tools/matrix/__tests__/parity.test.ts` (extend).
+
+**Interfaces:**
+- Produces, all optional, on `CaseSchemaV3`:
+  - `planned: z.literal(true)`
+  - `l2: z.strictObject({ n: z.number().int().min(1), covers: z.array(z.string().min(1)).min(1), l3Gap: z.string().min(1).nullable() })`
+  - `fillers: z.record(z.enum(FILLER), z.number().int().min(1))`
+- Produces on `RunResultsSchemaV3`:
+  - `shard: z.strictObject({ index: z.number().int().min(1), of: z.number().int().min(2).max(MAX_SHARDS), planSize: z.number().int().min(1) }).refine(s => s.index <= s.of)`
+  - `shards: z.number().int().min(2).max(MAX_SHARDS)`
+  - `export const MAX_SHARDS = 64` in `results.ts`.
+  - A refine: `shard` and `shards` are never both present.
+- Item 14, per-case `layer` read by no production code: no code change. Task 4's merge READS it (each case's `layer` must equal the run's), which makes the field load-bearing. Add a JSDoc line on `CaseSchemaV3.layer` naming that reader.
+
+- [ ] **Step 0: Read the shapes**
+
+Read `results.ts:150-221` in full, and check whether `lib/driver/mixed.ts` (which owns `FILLER`) imports `results.ts` directly or through another module (`rtk proxy grep -an "import" tools/matrix/lib/driver/mixed.ts`). If it does, that is a cycle: move `FILLER` and `FillerName` into a new `tools/matrix/lib/fillers.ts`, re-exported from `mixed.ts` so no other importer changes.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `results.test.ts`:
+
+```ts
+describe("W1d optional fields (items 3, 4, 21; shard)", () => {
+  const base = () => structuredClone(validV3Run());   // the file's existing v3 fixture builder
+  it("a v3 run with none of the new fields still parses (every committed run)", () => {
+    expect(() => parseResults(base())).not.toThrow();
+  });
+  it("planned is only ever the literal true", () => {
+    const r = base(); (r.cases[0] as Record<string, unknown>).planned = false;
+    expect(() => parseResults(r)).toThrow();
+  });
+  it("l2 carries n ≥ 1 and at least one covered atom", () => {
+    const r = base(); (r.cases[0] as Record<string, unknown>).l2 = { n: 0, covers: [], l3Gap: null };
+    expect(() => parseResults(r)).toThrow();
+  });
+  it("fillers names only FILLER methods, each counted at least once", () => {
+    const r = base(); (r.cases[0] as Record<string, unknown>).fillers = { start: 1 };
+    expect(() => parseResults(r)).toThrow();
+    (r.cases[0] as Record<string, unknown>).fillers = { setMembers: 2 };
+    expect(() => parseResults(r)).not.toThrow();
+  });
+  it("a shard header and a merged header are exclusive, and index ≤ of", () => {
+    const r = base() as Record<string, unknown>;
+    r.shard = { index: 3, of: 2, planSize: 10 };
+    expect(() => parseResults(r)).toThrow();
+    r.shard = { index: 2, of: 2, planSize: 10 }; r.shards = 2;
+    expect(() => parseResults(r)).toThrow();
+  });
+});
+```
+
+If `results.test.ts` has no `validV3Run()` builder, Step 0 names the existing fixture and the test uses it. Do not create a second fixture.
+
+Create `run-planned-marker.test.ts`. It drives `execute` with the existing fake-driver deps, the way `run-layers.test.ts` already does, through `RunDeps.planCases`, with a planner that returns one driven case, one 🚫 case and one ░ case:
+
+```ts
+it("recordPlanned marks every case it writes; a driven case never carries the marker", async () => {
+  const results = await runWithFakePlan([
+    { caseId: "league|generic|default|LIFECYCLE", layer: "L3", driven: true },
+    { caseId: "page_playoff_only|generic|default|LIFECYCLE", layer: "L3", state: "no_path", reason: "API-only (W4)" },
+    { caseId: "league|generic|default|M7", layer: "L3", state: "not_run", reason: "no scenario script yet (atom M7)" },
+  ]);
+  const by = new Map(results.cases.map((c) => [c.caseId, c]));
+  expect(by.get("league|generic|default|LIFECYCLE")!.planned).toBeUndefined();
+  expect(by.get("page_playoff_only|generic|default|LIFECYCLE")!.planned).toBe(true);
+  expect(by.get("league|generic|default|M7")!.planned).toBe(true);
+  expect(results.cases.filter((c) => c.planned === true)).toHaveLength(2);
+});
+it("an L2 case records its run (n, covers, l3Gap) from l2-pairs.json, driven or planned", async () => {
+  const pairs = loadL2Pairs();            // the committed file is the authority, not planL2
+  const want = pairs.runs.find((r) => r.row === "league" && r.sport === "football" && r.scenario === "M1")!;
+  const results = await runLayered("L2", { only: "league|football", scenario: "M1" });
+  const c = results.cases.find((x) => x.width === want.width)!;
+  expect(c.l2).toEqual({ n: want.n, covers: want.covers, l3Gap: want.l3Gap });
+});
+it("a browser case records the setup fillers it ran; an HTTP case records none", async () => {
+  const b = await runWithFakeBrowser({ fillers: { setMembers: 3, putLineup: 1 } });
+  expect(b.cases[0].fillers).toEqual({ setMembers: 3, putLineup: 1 });
+  const h = await runWithFakePlan([{ caseId: "league|generic|default|LIFECYCLE", layer: "L3", driven: true }]);
+  expect(h.cases[0].fillers).toBeUndefined();
+});
+```
+
+`runWithFakePlan`, `runLayered` and `runWithFakeBrowser` are thin wrappers over `execute` + `fake-driver.ts`, defined at the top of this file. Model them on `run-layers.test.ts`'s existing helper (Step 0 names it). A fake browser driver exposes `fillers` exactly like `BrowserDriver.fillers` (`browser-driver.ts:585`).
+
+Extend `parity.test.ts` with:
+- "a browser case carrying `planned: true` is notDriven even when its key maps";
+- "a case with no checks, ░, and NO marker on an unmapped key is still notDriven (old evidence)" — the existing behaviour, kept for committed runs.
+
+- [ ] **Step 2: Run and see them fail**
+
+Run the vitest template on the three test files. Expected: the new `results.test.ts` cases fail (the strict schema refuses `planned`), and `run-planned-marker.test.ts` fails on `planned` undefined.
+
+- [ ] **Step 3: Implement**
+
+1. In `results.ts`, add the three case fields and two run fields above (`import { FILLER } from "./driver/mixed.ts"`, or `./fillers.ts` per Step 0). Add `.refine((r) => !(r.shard !== undefined && r.shards !== undefined), "a run is a shard or a merge, never both")` on `RunResultsSchemaV3`.
+2. In `run.ts` `recordPlanned`, add `planned: true` to the written case.
+3. In `run.ts` `runCase`, when the LayerCase carries `run !== null` and `layer === "L2"`, write `l2: { n: run.n, covers: run.covers, l3Gap: run.l3Gap }`. Do the same in `recordPlanned` for an L2 planned case: a ░ L2 run still names its pair-run.
+4. In `run.ts` `runCase`, when `cli.driver === "browser"` and the driver exposes `fillers` with at least one non-zero entry, write `fillers` (only the non-zero names).
+5. In `parity.ts` notDriven, accept `b.planned === true && b.checks.length === 0` as well as the existing unmapped-key shape.
+6. In `committed-plans.ts:143`, `judgeRun` uses `c.planned === true` when ANY case in the run carries the field. It falls back to the `durationMs === 0` heuristic only for runs that predate W1d. Write this as a named branch, `const marked = run.cases.some(c => c.planned !== undefined)`, with a comment: "W1d item 3; runs before it keep I-2".
+
+- [ ] **Step 4: Run and see them pass**
+
+Run the vitest template on:
+
+```
+tools/matrix/__tests__/results.test.ts
+tools/matrix/__tests__/run-planned-marker.test.ts
+tools/matrix/__tests__/parity.test.ts
+tools/matrix/__tests__/committed-matrix.test.ts
+tools/matrix/__tests__/committed-plans-frozen.test.ts
+tools/matrix/__tests__/run-layers.test.ts
+```
+
+All green; `files 6`. The committed-matrix pass proves every committed run still parses (its `RESULTS_FLOOR` count is in its own output).
+
+- [ ] **Step 5: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| Drop `planned: true` from `recordPlanned` | "recordPlanned marks every case it writes" |
+| In `runCase`, write `l2` only when `state === "works"` | "an L2 case records its run … driven or planned" |
+| In `judgeRun`, `marked` → `false` | Add to `committed-plans-frozen.test.ts`: "a W1d-shaped run (marked) whose ░ case has `durationMs: 5` but `planned: true` judges as planned". It fails under the mutant. |
+
+- [ ] **Step 6: Scoped tsc, eslint, commit**
+
+Run scoped tsc on `results.ts run.ts parity.ts`, and eslint on all changed files. Commit `feat(matrix): results record the planned marker, the L2 run, fillers and shard fields (W1d items 3, 4, 14, 21)`.
+
+---
+
+### Task 3: The full grid — `--scope grid` for L1 and L2, and counts.json's L1 (ruling 64, item 2)
+
+**Why:**
+- Ruling 64 sets the full scope: L1 is 231 cells at 1280, and L2 is the 1,731 runs.
+- `l1Planner`/`l2Planner` plan only the 6-cell slice (`layers.ts:183-195`).
+- `planOf` cannot say which of the two a run planned (item 2).
+- `counts.json` says L1 is 462 (false premise 3).
+
+**Files:**
+- Modify:
+  - `tools/matrix/lib/layers.ts`: `planL1Grid`, `l1GridPlanner`, `l2GridPlanner`, `LAYER_PLANNERS` keyed by scope;
+  - `tools/matrix/run.ts`: `parseCli` `--scope`, `planOf`, USAGE;
+  - `tools/matrix/lib/counts.ts:99`;
+  - `tools/matrix/catalogue/counts.json` (regenerated through `pnpm matrix:catalogue`, never hand-edited);
+  - `tools/matrix/__tests__/committed-plans.ts` (`expectedPlanFor` reads `--scope grid`);
+  - `tools/matrix/__tests__/committed-catalogue.test.ts:271`.
+- Test:
+  - `tools/matrix/__tests__/layers-grid.test.ts` (create);
+  - `tools/matrix/__tests__/run-cli.test.ts` (extend).
+
+**Interfaces:**
+- Produces:
+  - `type LayerScope = "slice" | "grid"`;
+  - `LAYER_PLANNERS: Record<"L1" | "L2", Record<LayerScope, LayeredPlanner>>`;
+  - `planL1Grid(variantFor): LayerCase[]` (231 cases);
+  - `Cli.scope?: LayerScope`;
+  - `planOf` returns `--layer L1 --scope grid` for a grid run. A slice run keeps today's `--layer L1` string, so every committed lock entry still matches.
+
+- [ ] **Step 0: Pin the grid's facts from the committed files**
+
+```bash
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-exec && node -e 'const p=require("./tools/matrix/catalogue/l2-pairs.json");const r=p.runs??p;console.log(r.length);for(const [row,sport,sc] of [["league","football","M1"],["league","football","R4a"],["knockout","icehockey","M1"],["knockout","icehockey","R4a"]])console.log(row,sport,sc,JSON.stringify(r.filter(x=>x.row===row&&x.sport===sport&&x.scenario===sc).map(x=>[x.n,x.width])))'
+```
+
+Expected: `1731`, then one line per pair naming its `n` and width. False premise 14 says M1@430, R4a@390, M1@834 and R4a@768. Record the four `n` values in the task report; the test below reads them from the file, not from this plan.
+
+- [ ] **Step 1: Write the failing tests**
+
+`layers-grid.test.ts`. Every expected count is derived from the committed catalogue files and rulings, never from `planL1Grid`/`planL2`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS } from "../lib/catalogue.ts";
+import { TEMPLATE_ROW } from "../lib/templates.ts";
+import { HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
+import { L1_WIDTH, LAYER_PLANNERS, planL1Grid } from "../lib/layers.ts";
+import { loadL2Pairs } from "../lib/pairs.ts";          // pairs.ts:216
+// variantFor is (sport) => string (run.ts:225); offlineBuilderDefault (variants.ts:34) is that signature, read from the
+// committed builder defaults with no DB — the committed-plans judge's stand-in.
+import { offlineBuilderDefault } from "../lib/variants.ts";
+
+const CELLS = (TEMPLATE_ROW_KEYS.length + API_ONLY_ROWS.length) * SPORT_KEYS.length;
+const TEMPLATE_REACHED = Object.values(TEMPLATE_ROW).length;   // box-league → group_only, t20-super8 → group_group_ko
+
+describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39)", () => {
+  const cases = planL1Grid(offlineBuilderDefault);
+  it("plans one case per cell of the catalogue, all at 1280", () => {
+    expect(CELLS).toBe(231);
+    expect(cases).toHaveLength(CELLS);
+    expect(new Set(cases.map((c) => c.caseId)).size).toBe(CELLS);
+    expect(cases.every((c) => c.width === L1_WIDTH && c.layer === "L1")).toBe(true);
+  });
+  it("drives every builder row and every template-reached API-only cell; plans 🚫 for the rest", () => {
+    const driven = cases.filter((c) => "driven" in c);
+    expect(driven).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length + TEMPLATE_REACHED);   // 178
+    const planned = cases.filter((c) => !("driven" in c));
+    expect(planned).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - TEMPLATE_REACHED);      // 53
+    expect(planned.every((c) => c.state === "no_path" && /\bW[45]\b/.test(c.reason))).toBe(true);
+  });
+  it("another sport: cricket's first builder row drives under its first declared variant only once per cell", () => {
+    expect(cases.filter((c) => c.caseId.startsWith("league|cricket|"))).toHaveLength(1);
+  });
+});
+
+describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
+  const pairs = loadL2Pairs();
+  const cases = LAYER_PLANNERS.L2.grid.layered(offlineBuilderDefault);
+  it("plans exactly one case per committed pair-run, none twice", () => {
+    expect(cases).toHaveLength(pairs.runs.length);
+    expect(new Set(cases.map((c) => c.caseId)).size).toBe(pairs.runs.length);
+  });
+  it("drives exactly the runs whose atom has a harness script and no owed path; every other run is planned with a reason", () => {
+    const scripted = new Set(Object.keys(HARNESS_SCENARIO));
+    const driven = cases.filter((c) => "driven" in c);
+    expect(driven.every((c) => scripted.has(c.run!.scenario))).toBe(true);
+    expect(driven.length).toBeGreaterThan(0);
+    const notRun = cases.filter((c) => !("driven" in c) && c.state === "not_run");
+    expect(notRun.every((c) => !scripted.has(c.run!.scenario))).toBe(true);
+    console.log(`L2 grid: ${driven.length} driven, ${cases.length - driven.length - notRun.length} no_path, ${notRun.length} not_run of ${cases.length}`);
+  });
+  it("the four league/knockout M1/R4a phone runs (false premise 14) are driven", () => {
+    for (const [row, sport] of [["league", "football"], ["knockout", "icehockey"]]) for (const sc of ["M1", "R4a"]) {
+      const want = pairs.runs.filter((r) => r.row === row && r.sport === sport && r.scenario === sc);
+      expect(want.length).toBeGreaterThan(0);
+      for (const w of want) expect(cases.find((c) => c.run?.n === w.n && "driven" in c)).toBeDefined();
+    }
+  });
+});
+```
+
+`run-cli.test.ts` additions:
+- `--scope grid` without `--layer` is a usage refusal (exit 2);
+- `--scope` with `--set` is a usage refusal;
+- `--scope banana` is a usage refusal;
+- `planOf` of `--layer L1 --scope grid` is `"--layer L1 --scope grid"`, and of `--layer L1` (no scope) is `"--layer L1"`, which is the second call: the default is unchanged.
+
+`committed-catalogue.test.ts:271` becomes `expect(c.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS })`, with `CELLS` derived as above, never `c.cells` read back.
+
+- [ ] **Step 2: Run and see them fail**
+
+Run the vitest template on `layers-grid.test.ts run-cli.test.ts committed-catalogue.test.ts`. Expected: collection fails on `planL1Grid` (not exported), and the catalogue test fails on 462 ≠ 231.
+
+- [ ] **Step 3: Implement**
+
+1. In `layers.ts`, `planL1Grid(variantFor)` iterates `CATALOGUE` cells (rows × sports, in catalogue order):
+   - a builder row → `{ layer: "L1", width: L1_WIDTH, run: null, driven: { cell, scenario: "LIFECYCLE", variant: variantFor(sport) } }`, the same item shape `planL1` produces for one slice cell (Step 0 reads `planL1` `:103-106` and copies its exact shape);
+   - an API-only row with `templateFor(row, sport) !== null` → the driven item `apiOnlyBrowserPlanner` builds for it (reuse its item builder, do not copy it);
+   - any other API-only row → `apiOnlyNoPath(row, sport)` (`layers.ts`, existing).
+2. `l1GridPlanner = { ...l1Planner, label: "L1 full grid (ruling 64)", layered: planL1Grid }`. `l2GridPlanner = { ...l2Planner, label: "L2 full grid (ruling 64)", layered: () => planL2(loadL2Pairs(), ALL_CELLS) }`. `planL2(pairs, cells: ReadonlySet<string>)` is `layers.ts:142`; `ALL_CELLS` is a new `ReadonlySet` of every `row|sport` in `CATALOGUE` order, exported from `layers.ts`. Do not confuse it with `pairs.ts:115`'s `planL2`, which BUILDS `l2-pairs.json` and is not a planner. `LAYER_PLANNERS = { L1: { slice: l1Planner, grid: l1GridPlanner }, L2: { slice: l2Planner, grid: l2GridPlanner } }`.
+3. In `run.ts`:
+   - `parseCli` gains `scope: { type: "string" }`. It is accepted only with `--layer`, its value is `slice | grid`, and anything else is a usage refusal (the existing `Usage` error);
+   - layer selection becomes `LAYER_PLANNERS[layer][cli.scope ?? "slice"]`;
+   - `planOf` appends ` --scope grid` only when `cli.scope === "grid"`;
+   - USAGE gains the flag line.
+4. `counts.ts:99` → `l1: { formula: "cells × 1 width (1280; ruling 39)", value: cells }`. Then regenerate: `cd <exec> && pnpm matrix:catalogue; echo EXIT=$?`. The `counts.json` diff must be exactly the `l1` object; anything else is a STOP.
+5. In `committed-plans.ts` `expectedPlanFor`, `--layer L1 --scope grid` → `l1GridPlanner` (same for L2). A bare `--layer L1` stays the slice planner, so every committed entry is judged exactly as before.
+
+- [ ] **Step 4: Run and see them pass**
+
+Run the vitest template on:
+
+```
+layers-grid.test.ts run-cli.test.ts committed-catalogue.test.ts
+committed-matrix.test.ts committed-plans-frozen.test.ts run-layers.test.ts
+```
+
+All green. Paste the `L2 grid: …` console line. Expected `62 driven, 164 no_path, 1505 not_run of 1731`; if the tree moved, record what you see and why.
+
+- [ ] **Step 5: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| In `planL1Grid`, skip the `templateFor` branch (plan 🚫 for every API-only cell) | "drives every builder row and every template-reached API-only cell" |
+| `planOf` drops ` --scope grid` | `run-cli.test.ts` planOf case |
+| `counts.ts` back to `cells * 2` | `committed-catalogue.test.ts` |
+
+- [ ] **Step 6: Scoped tsc, eslint, commit**
+
+Run scoped tsc on `layers.ts run.ts counts.ts`. Commit `feat(matrix): --scope grid plans the full L1 (231) and L2 (1,731) grids; counts.json L1 is 231 (W1d, ruling 64, item 2)`.
+
+---
+
+### Task 4: Shards and their merge (D4, D5; Review Focus 1)
+
+**Why:** Ruling 64 splits each layer into about 12 jobs. The partition must be stable (ruling 61 compares per case across runs), and the merge must refuse every way a shard can silently be short (R25, class 1).
+
+**Files:**
+- Create: `tools/matrix/lib/shard.ts`, `tools/matrix/lib/merge.ts`, `tools/matrix/merge-shards.ts`
+- Modify:
+  - `tools/matrix/run.ts`: `--shard`; the stripe applied after `runItems`; `ShardEmpty` in `refused`; the `shard` header;
+  - `package.json`: `"matrix:merge": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/merge-shards.ts"`.
+- Test: `tools/matrix/__tests__/shard.test.ts`, `tools/matrix/__tests__/merge.test.ts`, `tools/matrix/__tests__/run-shard.test.ts` (all create).
+
+**Interfaces:**
+- Produces:
+  - `type Shard = { index: number; of: number }`;
+  - `parseShard(text: string): Shard`, which throws `BadShard` for anything other than `k/N` with integers 1 ≤ k ≤ N, 2 ≤ N ≤ MAX_SHARDS;
+  - `stripe<T>(items: readonly T[], s: Shard): T[]`;
+  - `stripeSize(planSize: number, s: Shard): number`;
+  - `mergeShards(inputs: readonly ShardInput[], runId: string): { merged: RunResults; checked: number }`, with `type ShardInput = { name: string; exit: string | null; results: unknown }`;
+  - the refusals `ShardMissing`, `ShardDuplicate`, `ShardFailed`, `ShardEmpty`, `ShardAborted`, `ShardMismatch`, `ShardSize`, `CaseCollision`, `ShardSecret`, each `name`d;
+  - CLI `merge-shards.ts --run-id <id> --out <dir> <shardDir>...`. Each shard dir holds `results.json` and `exit.txt`. Exit 0 merged (`results.json` + `MATRIX.md` written); 2 refused, nothing written.
+- Consumes: `RunResultsSchemaV3.shard`/`shards`, `MAX_SHARDS` (Task 2); `parseResults`, `writeResults`, `renderMatrix`, `findSecrets`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`shard.test.ts`, including the rule-10 property:
+
+```ts
+import fc from "fast-check";
+import { describe, expect, it } from "vitest";
+import { BadShard, parseShard, stripe, stripeSize } from "../lib/shard.ts";
+
+describe("parseShard", () => {
+  it.each(["0/2", "3/2", "1/1", "1/65", "a/2", "1/2/3", "", "1/ 2", "01/2"])("refuses %j", (s) => expect(() => parseShard(s)).toThrow(BadShard));
+  it("reads k/N", () => expect(parseShard("3/12")).toEqual({ index: 3, of: 12 }));
+});
+
+describe("stripe (rule 10: the union is the plan, in order, with no overlap, on every run)", () => {
+  it("the empty plan: every shard is empty and stripeSize says 0", () => {
+    expect(stripe([], { index: 1, of: 2 })).toEqual([]);
+    expect(stripeSize(0, { index: 1, of: 2 })).toBe(0);
+  });
+  it("a plan shorter than N leaves the high shards empty", () => {
+    expect(stripe(["a"], { index: 2, of: 3 })).toEqual([]);
+    expect(stripeSize(1, { index: 2, of: 3 })).toBe(0);
+  });
+  it("property: interleaving the N stripes round-robin rebuilds the plan exactly", () => {
+    let checked = 0;
+    fc.assert(fc.property(fc.array(fc.integer(), { maxLength: 300 }), fc.integer({ min: 2, max: 64 }), (plan, of) => {
+      const parts = Array.from({ length: of }, (_, k) => stripe(plan, { index: k + 1, of }));
+      parts.forEach((p, k) => expect(p).toHaveLength(stripeSize(plan.length, { index: k + 1, of })));
+      const rebuilt: number[] = [];
+      for (let i = 0; i < plan.length; i++) rebuilt.push(parts[i % of][Math.floor(i / of)]);
+      expect(rebuilt).toEqual(plan);
+      expect(parts.reduce((n, p) => n + p.length, 0)).toBe(plan.length);
+      checked++;
+    }), { numRuns: 300 });
+    expect(checked).toBe(300);
+  });
+  it("a second call is identical (the partition is a pure function of plan order)", () => {
+    const plan = Array.from({ length: 937 }, (_, i) => `c${i}`);
+    expect(stripe(plan, { index: 2, of: 2 })).toEqual(stripe(plan, { index: 2, of: 2 }));
+  });
+});
+```
+
+`merge.test.ts`. Its fixture builder `shardOf(plan, k, of, overrides)` writes a valid v3 shard of the stripe, with `harnessCommit "abc"`, a fixed grid, `layer "L3"`, `driver "http"`, `plan "--set w1-driving"`, `shard {index: k, of, planSize: plan.length}`, and every case `works` with one check:
+
+```ts
+describe("mergeShards (Review Focus 1)", () => {
+  const plan = Array.from({ length: 7 }, (_, i) => `league|generic|default|S${i}`);
+  const all = (of: number) => Array.from({ length: of }, (_, k) => ({ name: `s${k + 1}`, exit: "0", results: shardOf(plan, k + 1, of) }));
+  it("merges N shards back into plan order, records shards: N, and counts every case", () => {
+    const { merged, checked } = mergeShards(all(3), "ci-1-1-L3");
+    expect(merged.cases.map((c) => c.caseId)).toEqual(plan);
+    expect(merged.shards).toBe(3);
+    expect(merged.shard).toBeUndefined();
+    expect(merged.runId).toBe("ci-1-1-L3");
+    expect(checked).toBe(7);
+  });
+  it("zero shards is refused (vacuous)", () => expect(() => mergeShards([], "x")).toThrow(/ShardMissing|zero shards/));
+  it("a shard that died, a partial shard, a stray shard: each refused by name", () => {
+    const s = all(3);
+    expect(() => mergeShards([s[0], s[2]], "x")).toThrow(expect.objectContaining({ name: "ShardMissing" }));
+    expect(() => mergeShards([s[0], { ...s[1], exit: null }, s[2]], "x")).toThrow(expect.objectContaining({ name: "ShardFailed" }));
+    expect(() => mergeShards([s[0], { ...s[1], exit: "3" }, s[2]], "x")).toThrow(expect.objectContaining({ name: "ShardFailed" }));
+    const short = structuredClone(s[1]); (short.results as { cases: unknown[] }).cases.pop();
+    expect(() => mergeShards([s[0], short, s[2]], "x")).toThrow(expect.objectContaining({ name: "ShardSize" }));
+    const aborted = structuredClone(s[1]); (aborted.results as Record<string, unknown>).aborted = { turn: "t", deadlineMs: 1, caseId: plan[1], worker: null, inFlight: [] };
+    expect(() => mergeShards([s[0], aborted, s[2]], "x")).toThrow(expect.objectContaining({ name: "ShardAborted" }));
+    expect(() => mergeShards([...s, s[0]], "x")).toThrow(expect.objectContaining({ name: "ShardDuplicate" }));
+  });
+  it("shards of different commits, plans, layers or plan sizes are refused", () => {
+    for (const o of [{ harnessCommit: "def" }, { plan: "--set pad-proof" }, { layer: "L1" }, { shard: { index: 2, of: 3, planSize: 8 } }]) {
+      const s = all(3); s[1] = { ...s[1], results: { ...(s[1].results as object), ...o } };
+      expect(() => mergeShards(s, "x")).toThrow(expect.objectContaining({ name: "ShardMismatch" }));
+    }
+  });
+  it("a case whose own layer differs from its run's is refused (item 14's reader)", () => {
+    const s = all(3); (s[0].results as { cases: { layer: string }[] }).cases[0].layer = "L1";
+    expect(() => mergeShards(s, "x")).toThrow(expect.objectContaining({ name: "ShardMismatch" }));
+  });
+  it("a secret-shaped string in a shard is refused (Review Focus 5)", () => {
+    const s = all(3); (s[0].results as { cases: { reason: string }[] }).cases[0].reason = "postgres://u:p@h/db";
+    expect(() => mergeShards(s, "x")).toThrow(expect.objectContaining({ name: "ShardSecret" }));
+  });
+  it("another layer: an L2 grid shard set merges with planned ░ cases kept planned", () => {
+    const l2 = Array.from({ length: 5 }, (_, i) => ({ id: `league|generic|default|M7|n${i}`, planned: i % 2 === 0 }));
+    const { merged } = mergeShards(l2ShardsOf(l2, 2), "ci-1-1-L2");
+    expect(merged.cases.filter((c) => c.planned === true)).toHaveLength(3);
+  });
+});
+```
+
+`run-shard.test.ts` drives `execute` through `RunDeps.planCases` with a fake 5-item plan:
+- `--shard 2/2` runs cases 1 and 3 (0-based) and writes `shard {index: 2, of: 2, planSize: 5}`;
+- `--shard 3/4` on a 2-item plan is refused `ShardEmpty`, with exit 2 and nothing written;
+- `--shard` with `--canary` is a usage refusal;
+- the second call: running `--shard 1/2` twice under two run ids plans the same case ids.
+
+- [ ] **Step 2: Run and see them fail**
+
+Run the vitest template on the three files. Expected: collection fails on the missing modules.
+
+- [ ] **Step 3: Implement `shard.ts`**
+
+```ts
+// W1d D4: a shard is a stripe of the plan — item i (0-based) belongs to shard
+// (i mod N) + 1. A pure function of plan order: the same case lands in the
+// same shard on every run (ruling 61 compares per case across runs).
+import { MAX_SHARDS } from "./results.ts";
+
+export type Shard = { index: number; of: number };
+
+export class BadShard extends Error {
+  constructor(text: string) {
+    super(`--shard ${JSON.stringify(text)} is not k/N with 1 ≤ k ≤ N and 2 ≤ N ≤ ${MAX_SHARDS}`);
+    this.name = "BadShard";
+  }
+}
+
+export function parseShard(text: string): Shard {
+  const m = /^([1-9]\d*)\/([1-9]\d*)$/.exec(text);
+  if (m === null) throw new BadShard(text);
+  const index = Number(m[1]); const of = Number(m[2]);
+  if (of < 2 || of > MAX_SHARDS || index > of) throw new BadShard(text);
+  return { index, of };
+}
+
+export function stripe<T>(items: readonly T[], s: Shard): T[] {
+  return items.filter((_, i) => i % s.of === s.index - 1);
+}
+
+export function stripeSize(planSize: number, s: Shard): number {
+  return planSize < s.index ? 0 : Math.floor((planSize - s.index) / s.of) + 1;
+}
+```
+
+- [ ] **Step 4: Implement `merge.ts` and the CLI**
+
+```ts
+// W1d D5: N shard results of ONE layer back into one run, in plan order. Every
+// way a shard can be short is refused by name (Review Focus 1, R25): a shard
+// that is absent, failed (exit.txt missing or ≠ 0), aborted, short of its
+// stripe, duplicated, from another commit/plan/layer/plan size, or carrying a
+// secret. Nothing is merged around a hole.
+import { findSecrets } from "./redact.ts";
+import { parseResults, type RunResults } from "./results.ts";
+import { stripeSize } from "./shard.ts";
+
+export type ShardInput = { name: string; exit: string | null; results: unknown };
+
+function refusal(name: string, message: string): Error { const e = new Error(message); e.name = name; return e; }
+
+const SAME = ["harnessCommit", "layer", "driver", "plan"] as const;
+
+export function mergeShards(inputs: readonly ShardInput[], runId: string): { merged: RunResults; checked: number } {
+  if (inputs.length === 0) throw refusal("ShardMissing", "zero shards given — nothing to merge (vacuous)");
+  for (const i of inputs) {
+    if (i.exit === null) throw refusal("ShardFailed", `${i.name}: no exit.txt — the shard died before writing its exit code`);
+    if (i.exit.trim() !== "0") throw refusal("ShardFailed", `${i.name}: exit ${i.exit.trim()} (run.ts: 1 zero cases, 2 refused, 3 aborted)`);
+    if (i.results === null || i.results === undefined) throw refusal("ShardEmpty", `${i.name}: no results.json`);
+    const leaks = findSecrets(JSON.stringify(i.results));
+    if (leaks.length > 0) throw refusal("ShardSecret", `${i.name}: ${leaks.length} secret-shaped string(s) — refused before anything is written`);
+  }
+  const shards = inputs.map((i) => ({ name: i.name, r: parseResults(i.results) as RunResults }));
+  const first = shards[0].r;
+  if (first.shard === undefined) throw refusal("ShardMismatch", `${shards[0].name}: not a shard (no shard header)`);
+  const { of, planSize } = first.shard;
+  const byIndex = new Map<number, RunResults>();
+  for (const { name, r } of shards) {
+    if (r.shard === undefined) throw refusal("ShardMismatch", `${name}: not a shard (no shard header)`);
+    if (r.aborted !== undefined) throw refusal("ShardAborted", `${name}: aborted at ${r.aborted.turn}`);
+    for (const k of SAME) if (JSON.stringify(r[k]) !== JSON.stringify(first[k])) throw refusal("ShardMismatch", `${name}: ${k} ${JSON.stringify(r[k])} ≠ ${JSON.stringify(first[k])}`);
+    if (JSON.stringify(r.grid) !== JSON.stringify(first.grid) || r.shard.of !== of || r.shard.planSize !== planSize) {
+      throw refusal("ShardMismatch", `${name}: grid, shard count or plan size differs from ${shards[0].name}`);
+    }
+    if (byIndex.has(r.shard.index)) throw refusal("ShardDuplicate", `${name}: shard ${r.shard.index}/${of} given twice`);
+    if (r.cases.length === 0) throw refusal("ShardEmpty", `${name}: zero cases`);
+    const want = stripeSize(planSize, r.shard);
+    if (r.cases.length !== want) throw refusal("ShardSize", `${name}: ${r.cases.length} cases, its stripe of ${planSize} holds ${want}`);
+    for (const c of r.cases) if (c.layer !== r.layer) throw refusal("ShardMismatch", `${name}: case ${c.caseId} is ${c.layer} in an ${r.layer} run`);
+    byIndex.set(r.shard.index, r);
+  }
+  for (let k = 1; k <= of; k++) if (!byIndex.has(k) && stripeSize(planSize, { index: k, of }) > 0) throw refusal("ShardMissing", `shard ${k}/${of} is absent`);
+  const cases: RunResults["cases"] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < planSize; i++) {
+    const c = byIndex.get((i % of) + 1)!.cases[Math.floor(i / of)];
+    if (seen.has(c.caseId)) throw refusal("CaseCollision", `case ${c.caseId} appears in two shards`);
+    seen.add(c.caseId); cases.push(c);
+  }
+  const all = [...byIndex.values()];
+  const { shard: _drop, workers: _w, ...header } = first;
+  const maxWorkers = Math.max(...all.map((r) => r.workers ?? 1));
+  const merged: RunResults = {
+    ...header, runId, shards: of,
+    startedAt: all.map((r) => r.startedAt).sort()[0],
+    finishedAt: all.map((r) => r.finishedAt).sort().at(-1)!,
+    ...(maxWorkers > 1 ? { workers: maxWorkers } : {}),
+    cases,
+  };
+  return { merged: parseResults(merged) as RunResults, checked: cases.length };
+}
+```
+
+`merge-shards.ts` follows `render.ts`'s CLI shape, with a header of exit codes (0 merged; 2 refused, nothing written; 3 load crash through the package script).
+- Positionals are shard directories. For each it reads `exit.txt`, or null when absent, and `results.json`, or null when absent; `JSON.parse` errors become exit 2 naming the dir.
+- It calls `mergeShards`, then `writeResults(out, merged, …)` and `renderMatrix` → `MATRIX.md` (through `redact`), and prints `merged <checked> cases from <N> shards → <out>`.
+- Any refusal prints `merge-shards: <name>: <message>` and returns 2.
+
+Add a CLI test to `merge.test.ts`: spawn it on three temp shard dirs with exit 0 and assert the files are written; spawn it on dirs missing `exit.txt` and assert exit 2 and no `results.json` in `--out`.
+
+- [ ] **Step 5: Wire `--shard` into run.ts**
+
+1. `parseCli` gains `shard: { type: "string" }`, read through `parseShard`; `BadShard` maps to the usage refusal. `--shard` with `--canary` is a usage refusal.
+2. In `execute`, immediately after `runItems` returns the full plan's items (`run.ts:~839-845`):
+
+```ts
+const planSize = items.length;
+const mine = cli.shard === undefined ? items : stripe(items, cli.shard);
+if (cli.shard !== undefined && mine.length === 0) throw new ShardEmptyPlan(cli.shard, planSize);
+```
+
+   `ShardEmptyPlan` is named `"ShardEmpty"`, with the message `shard k/N of a plan of P items holds none — fewer items than shards`. Add it to `runSlice`'s `refused` list → exit 2.
+3. The header gains `...(cli.shard !== undefined ? { shard: { ...cli.shard, planSize } } : {})`. `plan` stays `planOf(cli)`, without the shard, so every shard of a run carries the same plan string.
+4. USAGE gains `--shard k/N  run only plan items i with i mod N = k−1 (W1d D4)`.
+
+- [ ] **Step 6: Run and see them pass**
+
+Run the vitest template on `shard.test.ts merge.test.ts run-shard.test.ts run-cli.test.ts strip-types-loadable.test.ts`. All green; paste the counts. The property test's `checked` must be 300.
+
+- [ ] **Step 7: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| In `stripe`, `i % s.of === s.index - 1` → `i % s.of === s.index` | the property test |
+| In `mergeShards`, delete the `ShardSize` check | "a partial shard" |
+| Delete the `exit.trim() !== "0"` line | "a shard that died" (exit "3") |
+| Delete the `ShardMissing` loop | "a shard that died" (missing middle shard) |
+| Delete the `CaseCollision` check | Add a test with two shards whose fixtures carry the same case id at the same stripe position. Reaching it needs a hand-built collision fixture; the test is "two shards naming one case is refused". |
+
+The `ShardMissing` and `ShardSize` checks cover for each other (a missing shard also shortens the total), so mutate them one at a time.
+
+- [ ] **Step 8: Scoped tsc, eslint, commit**
+
+Run scoped tsc on `shard.ts merge.ts merge-shards.ts run.ts`. Commit `feat(matrix): --shard k/N stripes a plan; merge-shards rebuilds it and refuses any short shard (W1d D4, D5)`.
+
+---
+
+### Task 5: Refusals before a run — NoLayerForWidth, a run id the DB already holds (items 5, 12, 25)
+
+**Why:**
+- Item 5: `NoLayerForWidth` exits 3 (aborted) when it is a precondition refusal (2).
+- Items 12 and 25: a run id reused with another `--report-dir` (or by `model.ts`) against the same DB collides on the case org slug `m-<runId>-<n>` with a raw 23505 mid-run.
+
+Under sharding this matters: a re-dispatched CI attempt reuses nothing (each attempt's run id carries `github.run_attempt`), but a local re-run of a shard does.
+
+**Files:**
+- Modify:
+  - `tools/matrix/run.ts` (`refused` list `:1059-1062`; a DB probe before the first case);
+  - `tools/matrix/lib/seed-org.ts` (`runIdTaken(sql, runId)`);
+  - `tools/matrix/model.ts:~200-416` (the same probe).
+- Test: `tools/matrix/__tests__/run-refusals.test.ts` (create), `tools/matrix/__tests__/model-cli.test.ts` (extend).
+
+**Interfaces:**
+- Produces:
+  - `runIdTaken(sql: Sql, runId: string): Promise<number>`: the count of `organizations` rows whose slug starts with `m-<runId>-`. Use parameterised `LIKE $1 || '%'` with the id escaped for `%`/`_`;
+  - `class RunIdUsedInDb extends Error`, `name "RunIdUsedInDb"`, with the message `run id <id> already seeded <n> org(s) in this database — pick a fresh --run-id (item 12)`. It is refused (exit 2) in both CLIs.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it("NoLayerForWidth is a refusal (exit 2), not an abort (item 5)", async () => {
+  const code = await runSliceWith({ planCases: () => { throw new NoLayerForWidth(999); } });
+  expect(code).toBe(2);
+});
+it("a run id this DB already seeded is refused before any case runs (items 12, 25)", async () => {
+  const deps = fakeDeps({ runIdTaken: async () => 3 });
+  const code = await runSliceWith(deps, ["--run-id", "w1d-dup"]);
+  expect(code).toBe(2);
+  expect(deps.casesStarted).toBe(0);
+  expect(deps.stderr).toContain("already seeded 3 org(s)");
+});
+it("the empty case: a fresh run id (zero orgs) proceeds", async () => {
+  const deps = fakeDeps({ runIdTaken: async () => 0 });
+  expect(await runSliceWith(deps, ["--run-id", "w1d-fresh"])).toBe(0);
+});
+it("a run id containing % or _ cannot match other ids (the LIKE escape)", () => {
+  expect(likePrefixOf("w1d_a")).toBe("m-w1d\\_a-");
+});
+```
+
+`runSliceWith` and `fakeDeps` extend the existing `RunDeps` fakes; `RunDeps` gains `runIdTaken?`. The `model-cli.test.ts` case is the same refusal through `model.ts`'s deps.
+
+- [ ] **Step 2: Run and see it fail**
+
+Run the vitest template on the two files. Expected: NoLayerForWidth returns 3, and `runIdTaken` is unknown.
+
+- [ ] **Step 3: Implement**
+
+1. Add `NoLayerForWidth` to `refused`.
+2. In `execute`, after the DB connection opens and BEFORE sign-in, run `const taken = await (deps.runIdTaken ?? runIdTaken)(sql, cli.runId); if (taken > 0) throw new RunIdUsedInDb(cli.runId, taken);`, and add `RunIdUsedInDb` to `refused`.
+3. Do the same in `model.ts` before its first `caseOrgSlug`.
+4. Export `likePrefixOf(runId)` from `seed-org.ts`, and use it in the SQL.
+
+- [ ] **Step 4: Run, mutate, commit**
+
+Run the vitest template on both files, green. Mutate:
+
+| Mutant | Killing test |
+|---|---|
+| `taken > 0` → `taken > 5` | "already seeded 3" |
+| Remove `NoLayerForWidth` from `refused` | the item 5 test |
+
+Then run scoped tsc and eslint, and commit `feat(matrix): NoLayerForWidth and a run id the DB already holds are refusals (W1d items 5, 12, 25)`.
+
+---
+
+### Task 6: The judge, and one exit convention (ruling 61, D6, D8, item 6; Review Focus 3, 4)
+
+**Why:**
+- Ruling 61's verdict must be mechanical: three merged runs per layer, identical case-id sets, identical states, no harness fault.
+- The per-PR sample needs a regression judge against the baseline.
+- Item 6: the CLIs disagree on what each exit code means.
+
+**Files:**
+- Create: `tools/matrix/lib/judge.ts`, `tools/matrix/judge.ts`, `tools/matrix/lib/exit-codes.ts`
+- Modify:
+  - `tools/matrix/parity.ts:58,70` (3 → 2);
+  - `tools/matrix/findings-table.ts` (refused 1 → 2, unreadable 3 → 2, and its header);
+  - `tools/matrix/draw-counts.ts` (the same);
+  - `package.json` (`"matrix:judge": …`).
+- Test:
+  - `tools/matrix/__tests__/judge.test.ts`, `tools/matrix/__tests__/exit-codes.test.ts` (create);
+  - extend the three CLIs' existing tests where they pin an exit code.
+
+**Interfaces:**
+- Produces:
+  - `harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }): { caseId: string; kind: "crash" | "harness-error" | "vacuous" | "unplanned-not-run" | "planned-not-run"; reason: string }[]`
+  - `statesAcross(runs: readonly RunResults[]): { compared: number; differing: { caseId: string; states: string[] }[]; missing: { caseId: string; inRuns: number[] }[] }`
+  - `regressions(baseline: RunResults, now: RunResults): { compared: number; regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[]; absent: string[] }`
+  - `EXIT_CODES: Record<0 | 1 | 2 | 3, string>`
+  - CLI `judge.ts`, two modes:
+    - `across <runA.json> <runB.json> <runC.json> [--planned-not-run allow|refuse]`: exit 0 harness-green; 1 not green (faults or differences listed); 2 refused (fewer than 2 runs, unreadable, different layer, plan or `harnessCommit` — three runs of two products are not a flakiness measure (D21) — or zero cases compared);
+    - `regression --baseline <file> --now <file> [--rerun <file>]`: exit 0 none; 1 reproduced regressions; 2 refused (a baseline case absent from `now`, unreadable, zero compared).
+    - `faults <run.json> [--planned-not-run allow|refuse]`: one merged run's harness faults (D6), used by the workflow's merge job on every run. Exit 0 none; 1 faults listed; 2 refused (unreadable, zero cases).
+
+- [ ] **Step 1: Write the failing tests**
+
+`judge.test.ts` (fixtures via a `run(cases)` builder producing valid merged v3 runs):
+
+```ts
+const ok = (id: string, state = "works", reason = "") => ({ caseId: id, state, reason, checks: state === "works" ? [chk()] : [] });
+
+describe("harnessFaults (D6)", () => {
+  it("the empty case: a run with zero cases is refused by the CLI, and has no faults by itself", () => {
+    expect(harnessFaults(run([]), { plannedNotRun: "allow" })).toEqual([]);
+  });
+  it("names each class once, and a product refusal is data, not a fault", () => {
+    const f = harnessFaults(run([
+      ok("a", "red", "error: crashed — TypeError: x is undefined"),
+      ok("b", "red", "error: DriverMisuse: no such control"),
+      ok("c", "red", "error: RefusedCall: POST /api/v1/stages/1/start → HTTP 422 WRONG_PHASE: not now"),
+      ok("d", "red", "no checks ran (vacuous)"),
+      { ...ok("e", "not_run", "no scenario script yet (atom M7)") },
+      { ...ok("f", "not_run", "no scenario script yet (atom M7)"), planned: true },
+      ok("g", "later", "W4 owes the path"),
+      ok("h", "red", "standings: expected 3, saw 2"),
+    ]), { plannedNotRun: "allow" });
+    expect(f.map((x) => [x.caseId, x.kind])).toEqual([["a", "crash"], ["b", "harness-error"], ["d", "vacuous"], ["e", "unplanned-not-run"]]);
+  });
+  it("D7 alternative (c): with plannedNotRun refuse, a planned ░ is a fault too", () => {
+    const f = harnessFaults(run([{ ...ok("f", "not_run", "x"), planned: true }]), { plannedNotRun: "refuse" });
+    expect(f.map((x) => x.kind)).toEqual(["planned-not-run"]);
+  });
+});
+
+describe("statesAcross (ruling 61; Review Focus 3)", () => {
+  it("a case whose state differs in one run of three is named with all three states, and the verdict is not green", () => {
+    const r = statesAcross([run([ok("a"), ok("b")]), run([ok("a"), ok("b", "red", "x")]), run([ok("a"), ok("b")])]);
+    expect(r.compared).toBe(2);
+    expect(r.differing).toEqual([{ caseId: "b", states: ["works", "red", "works"] }]);
+  });
+  it("a red that is the same red in all three runs is NOT a difference (product reds are data)", () => {
+    const r = statesAcross([run([ok("a", "red", "x")]), run([ok("a", "red", "y")]), run([ok("a", "red", "x")])]);
+    expect(r.differing).toEqual([]);
+  });
+  it("a case missing from one run is named with the runs that hold it", () => {
+    expect(statesAcross([run([ok("a"), ok("b")]), run([ok("a")]), run([ok("a"), ok("b")])]).missing).toEqual([{ caseId: "b", inRuns: [0, 2] }]);
+  });
+});
+
+describe("regressions (D13; Review Focus 4)", () => {
+  it("known red stays red passes; ✅→❌ fails; ⛔→✅ is not a regression; a missing case is refused", () => {
+    const base = run([ok("a", "red", "x"), ok("b"), ok("c", "refused", "422"), ok("d")]);
+    const now = run([ok("a", "red", "x"), ok("b", "red", "y"), ok("c")]);
+    const r = regressions(base, now);
+    expect(r.regressed.map((x) => x.caseId)).toEqual(["b"]);
+    expect(r.absent).toEqual(["d"]);
+    expect(r.compared).toBe(3);
+  });
+  it("a ✅ case that comes back ✅ on the single re-run is not reported (CLI --rerun)", () => {
+    const code = judgeCli(["regression", "--baseline", f(run([ok("b")])), "--now", f(run([ok("b", "red", "y")])), "--rerun", f(run([ok("b")]))]);
+    expect(code).toBe(0);
+  });
+  it("faults mode: exit 1 on one crash red, 0 on a run of product reds only, 2 on zero cases", () => {
+    expect(judgeCli(["faults", f(run([ok("a", "red", "error: crashed — x")]))])).toBe(1);
+    expect(judgeCli(["faults", f(run([ok("a", "red", "standings: expected 3, saw 2")]))])).toBe(0);
+    expect(judgeCli(["faults", f(run([]))])).toBe(2);
+  });
+  it("…and one that is red again on the re-run is exit 1, named", () => {
+    const code = judgeCli(["regression", "--baseline", f(run([ok("b")])), "--now", f(run([ok("b", "red", "y")])), "--rerun", f(run([ok("b", "red", "y")]))]);
+    expect(code).toBe(1);
+  });
+});
+```
+
+`f(run)` writes the run to a temp file; `judgeCli` calls `main(argv)` with stdout/stderr captured.
+
+`exit-codes.test.ts` reads each CLI's header comment as text: `run.ts`, `render.ts`, `parity.ts`, `findings-table.ts`, `draw-counts.ts`, `gen-catalogue.ts`, `single-sport.ts`, `model.ts`, `merge-shards.ts`, `judge.ts` and `lock-append-only.ts`. For each, it asserts:
+- every code the header declares is in `EXIT_CODES`;
+- an input-unreadable line is declared under 2;
+- no header declares "refused" under 1.
+
+It counts the CLIs read and expects 11, so the zero-checked case fails.
+
+- [ ] **Step 2: Run and see them fail**
+
+Expected: the modules are missing, and exit-codes fails on `parity.ts` (3 for unreadable) and `findings-table.ts` (1 for refused).
+
+- [ ] **Step 3: Implement `lib/judge.ts`**
+
+```ts
+// Ruling 61 (design §6.5) and D6: harness-green is mechanical. A harness
+// fault is a crash, a non-product error, a vacuous red, or a ░ the plan did
+// not mark planned; product reds (incl. RefusedCall — the product answering)
+// are data. States must be identical across runs, per case.
+import type { CaseState, RunResults } from "./results.ts";
+
+export type FaultKind = "crash" | "harness-error" | "vacuous" | "unplanned-not-run" | "planned-not-run";
+const VACUOUS = new Set(["no checks ran (vacuous)", "every check abstained (vacuous)", "checked zero items (vacuous)"]);
+
+export function harnessFaults(run: RunResults, opts: { plannedNotRun: "allow" | "refuse" }) {
+  const out: { caseId: string; kind: FaultKind; reason: string }[] = [];
+  for (const c of run.cases) {
+    const reason = c.reason ?? "";
+    let kind: FaultKind | null = null;
+    if (c.state === "red" && reason.startsWith("error: crashed —")) kind = "crash";
+    else if (c.state === "red" && reason.startsWith("error: ") && !reason.startsWith("error: RefusedCall:")) kind = "harness-error";
+    else if (c.state === "red" && VACUOUS.has(reason)) kind = "vacuous";
+    else if (c.state === "not_run" && c.planned !== true) kind = "unplanned-not-run";
+    else if (c.state === "not_run" && opts.plannedNotRun === "refuse") kind = "planned-not-run";
+    if (kind !== null) out.push({ caseId: c.caseId, kind, reason });
+  }
+  return out;
+}
+
+export function statesAcross(runs: readonly RunResults[]) {
+  const ids = new Set(runs.flatMap((r) => r.cases.map((c) => c.caseId)));
+  const maps = runs.map((r) => new Map(r.cases.map((c) => [c.caseId, c.state as string])));
+  const differing: { caseId: string; states: string[] }[] = [];
+  const missing: { caseId: string; inRuns: number[] }[] = [];
+  let compared = 0;
+  for (const id of ids) {
+    const inRuns = maps.flatMap((m, i) => (m.has(id) ? [i] : []));
+    if (inRuns.length !== runs.length) { missing.push({ caseId: id, inRuns }); continue; }
+    compared++;
+    const states = maps.map((m) => m.get(id)!);
+    if (new Set(states).size > 1) differing.push({ caseId: id, states });
+  }
+  return { compared, differing, missing };
+}
+
+const HELD: ReadonlySet<string> = new Set(["works", "refused"]);
+
+export function regressions(baseline: RunResults, now: RunResults) {
+  const nowBy = new Map(now.cases.map((c) => [c.caseId, c]));
+  const regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[] = [];
+  const absent: string[] = [];
+  let compared = 0;
+  for (const b of baseline.cases) {
+    const n = nowBy.get(b.caseId);
+    if (n === undefined) { if (HELD.has(b.state)) absent.push(b.caseId); continue; }
+    compared++;
+    if (HELD.has(b.state) && !HELD.has(n.state)) regressed.push({ caseId: b.caseId, was: b.state, now: n.state, reason: n.reason ?? "" });
+  }
+  return { compared, regressed, absent };
+}
+```
+
+Two notes for the implementer:
+- `regressions`' `compared` counts cases present in both runs. Only baseline ✅/⛔ cases count as `absent`, because the sample is a SUBSET of the baseline: the CLI first filters the baseline to `now`'s plan cell set (the cases whose `row|sport` is in `now`'s grid AND whose scenario `now` planned). Write that filter in `judge.ts` as `baselineFor(now)`, with its own test: "the sample's baseline holds exactly the cases the sample planned".
+- The check `regressed` × `rerun`: the CLI keeps only cases red in BOTH `--now` and `--rerun` (a `--rerun` without the case = exit 2).
+
+`judge.ts` (CLI):
+- the `across` output prints, per layer, `compared N cases across K runs; D differing; F faults`, listing each differing case with its states and each fault with its kind;
+- `regression` prints each reproduced regression with was → now and its reason (redacted);
+- both print the D8 exit header.
+
+`lib/exit-codes.ts`:
+
+```ts
+// D8 (item 6): one meaning per code across every tools/matrix CLI. Each CLI's
+// header comment states its own codes in these words; exit-codes.test.ts holds
+// every header to this table.
+export const EXIT_CODES = Object.freeze({
+  0: "done — a verdict or data was written",
+  1: "a negative signal: a difference, drift, zero cases, a regression, a harness fault",
+  2: "refused, nothing written: usage, unreadable input, a refused precondition",
+  3: "aborted after start, or a crash while loading (through the package script's preload)",
+} as const);
+```
+
+- [ ] **Step 4: Normalise the three CLIs**
+
+- `parity.ts:58,70` → `return 2`, and update its header line.
+- `findings-table.ts`: "refused" → 2, "unreadable" → 2. Its 1 is now unused: the header says so ("1 is not used").
+- `draw-counts.ts`: the same.
+
+Find each one's tests that pin the old code (`rtk proxy grep -an "status).toBe(3)\|toBe(1)" tools/matrix/__tests__/{parity,findings-table,draw-counts}*.test.ts`) and change them to 2, under a comment `// D8: unreadable input is a refusal`. A grep is not a read, so open each test and confirm it pins the INPUT failure before changing it.
+
+- [ ] **Step 5: Run and see them pass**
+
+Run the vitest template on:
+
+```
+judge.test.ts exit-codes.test.ts parity.test.ts findings-table.test.ts draw-counts.test.ts strip-types-loadable.test.ts
+```
+
+Step 0 confirms the exact test filenames for the three CLIs with `ls tools/matrix/__tests__ | grep -a "parity\|findings\|draw"`. Pass every file the ls names.
+
+- [ ] **Step 6: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| In `harnessFaults`, drop `&& !reason.startsWith("error: RefusedCall:")` | "names each class once" (c would be a fault) |
+| `c.planned !== true` → `true` | the same test (f would be a fault) |
+| In `statesAcross`, `new Set(states).size > 1` → `> 2` | "differs in one run of three" |
+| In `regressions`, `HELD` without `"refused"` | "⛔→✅ is not a regression" plus a new line asserting ⛔→❌ IS one |
+| `parity.ts` back to 3 | `exit-codes.test.ts` |
+
+- [ ] **Step 7: Scoped tsc, eslint, commit**
+
+Commit `feat(matrix): judge — harness-green across runs and regression vs baseline; one exit convention (W1d ruling 61, D6, D8, item 6)`.
+
+---
+
+### Task 7: The per-PR sample — `--set pr-sample` and the rows a PR declares (R27, D13)
+
+**Why:** R27 says a PR touching the engine or `stages.ts` declares its rows, and the matrix samples them. Today nothing reads the declaration and there is no set to run.
+
+**Files:**
+- Create:
+  - `tools/matrix/lib/pr-sample.ts`;
+  - `tools/matrix/ci/pr-rows.ts`;
+  - `tools/matrix/catalogue/baseline.json` (`{ "L3": "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-l3/results.json" }`).
+- Modify: `tools/matrix/run.ts` (`SETS` adds `pr-sample`; `--rows` accepted only with `--set pr-sample`; `planOf` records `--set pr-sample --rows <sorted>`).
+- Test: `tools/matrix/__tests__/pr-sample.test.ts`, `tools/matrix/__tests__/pr-rows.test.ts` (create).
+
+**Interfaces:**
+- Produces:
+  - `PR_SAMPLE_SET = "pr-sample"`;
+  - `FIXED_SAMPLE: readonly string[]` (case-id prefixes);
+  - `parseRows(text: string): readonly string[] | "all"`, which throws `UnknownRow` naming the row and the 21 catalogue rows;
+  - `planPrSample(rows, variantFor): PlannedCase[]`;
+  - CLI `ci/pr-rows.ts --body-file <path> --changed-file <path>`. It prints `rows=<csv|all|none>` to stdout (for `$GITHUB_OUTPUT`). Exit 0 decided; 1 the PR touches a declaring path and declares no rows (R27), naming the paths; 2 usage or unreadable.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+describe("parseRows (R27)", () => {
+  it.each([["Matrix rows: league, swiss", ["league", "swiss"]], ["matrix rows:all", "all"], ["Matrix rows: none — copy only", []]])("%j", (t, want) => expect(rowsFromBody(t)).toEqual(want));
+  it("an unknown row is refused by name, listing the catalogue", () => expect(() => rowsFromBody("Matrix rows: leage")).toThrow(/leage.*league/s));
+  it("the empty body declares nothing (null), which is not 'none'", () => expect(rowsFromBody("")).toBeNull());
+  it("only the first Matrix rows: line counts; a quoted one inside a code fence is ignored", () => {
+    expect(rowsFromBody("```\nMatrix rows: all\n```\nMatrix rows: swiss")).toEqual(["swiss"]);
+  });
+});
+
+describe("pr-rows decision", () => {
+  it("an engine change with no declaration is exit 1, naming the path", () => {
+    expect(decide({ body: "fixes a bug", changed: ["packages/engine/src/competition/standings.ts"] })).toEqual({ exit: 1, why: expect.stringContaining("packages/engine/src/competition/standings.ts") });
+  });
+  it("stages.ts is a declaring path too", () => expect(decide({ body: "", changed: ["apps/web/src/server/usecases/stages.ts"] }).exit).toBe(1));
+  it("a UI-only change needs no declaration and samples only the fixed sample", () => expect(decide({ body: "", changed: ["apps/web/src/components/x.tsx"] })).toEqual({ exit: 0, rows: [] }));
+  it("the empty change list is refused (vacuous)", () => expect(decide({ body: "Matrix rows: all", changed: [] }).exit).toBe(2));
+});
+
+describe("planPrSample", () => {
+  const W1 = planW1Driving(offlineBuilderDefault);    // the committed w1-driving set is the authority for row cases
+  it("the fixed sample is the 24 slice cases plus league LIFECYCLE on the 9 sports the slice lacks", () => {
+    const cases = planPrSample([], offlineBuilderDefault);
+    expect(cases).toHaveLength(SLICE_ROWS.length * SLICE_SPORTS.length * SCENARIO_KEYS.length + (SPORT_KEYS.length - SLICE_SPORTS.length));
+  });
+  it("a declared row adds exactly the w1-driving cases on that row, never twice", () => {
+    const cases = planPrSample(["swiss"], offlineBuilderDefault);
+    const want = new Set([...planPrSample([], offlineBuilderDefault).map((c) => c.caseId), ...W1.filter((c) => c.caseId.startsWith("swiss|")).map((c) => c.caseId)]);
+    expect(new Set(cases.map((c) => c.caseId))).toEqual(want);
+    expect(cases).toHaveLength(want.size);
+  });
+  it("'all' is the whole w1-driving set plus the fixed sample", () => {
+    expect(planPrSample("all", offlineBuilderDefault).length).toBeGreaterThanOrEqual(W1.length);
+  });
+});
+```
+
+`rowsFromBody` and `decide` are exported from `ci/pr-rows.ts`. The expected-count line derives from the slice constants and `SPORT_KEYS` (rule 2), not from `FIXED_SAMPLE.length`.
+
+- [ ] **Step 2: Run and see them fail**
+
+- [ ] **Step 3: Implement**
+
+1. `pr-sample.ts`:
+   - `FIXED_SAMPLE` = `planSliceCases` (all 24) ∪ `league|<sport>|<first variant>|LIFECYCLE` for each `SPORT_KEYS` sport not in `SLICE_SPORTS`;
+   - `planPrSample(rows, v)` = that ∪ `planW1Driving(v)` filtered to `rows`, deduplicated by `caseId`, in w1-driving order and then the fixed sample;
+   - an empty plan is impossible (the fixed sample is non-empty), and that is asserted.
+2. `pr-rows.ts`:
+   - `DECLARING = [/^packages\/engine\//, /^apps\/web\/src\/server\/usecases\/stages\.ts$/]` (R27's two paths, verbatim from `_RULES.md` R27);
+   - the body regex is `/^Matrix rows:\s*(.+)$/im`, taken from the body with fenced blocks stripped first;
+   - `none — <reason>` → `[]`.
+3. `run.ts`:
+   - `SETS[PR_SAMPLE_SET] = makePrSamplePlanner(cli.rows)`;
+   - `--rows` is parsed by `parseRows` (usage refusal on `UnknownRow`) and refused without `--set pr-sample`;
+   - `planOf` → `--set pr-sample --rows <sorted csv|all|none>`.
+
+   The `committed-matrix.test.ts` test "livePlan reads every --set the runner registers" will now red on the new set until `expectedPlanFor` knows it. Teach it `--set pr-sample --rows …`, with no committed run of it expected yet.
+
+- [ ] **Step 4: Run, mutate, commit**
+
+Run the vitest template on `pr-sample.test.ts pr-rows.test.ts run-cli.test.ts committed-matrix.test.ts`. Mutate:
+
+| Mutant | Killing test |
+|---|---|
+| `DECLARING` without the stages.ts entry | "stages.ts is a declaring path too" |
+| Drop the dedupe in `planPrSample` | "never twice" |
+
+Commit `feat(matrix): pr-sample set and the R27 row declaration reader (W1d D13)`.
+
+---
+
+### Task 8: The CI helpers — shard matrix, summary, staleness (D1, D4, D20)
+
+**Why:** The workflow must not carry logic it cannot test. Three things live in node scripts with unit tests:
+- the job matrix and its derived timeouts;
+- the run summary (histograms, harness verdict, timings, staleness, the weekly diff);
+- the PR staleness annotation.
+
+The YAML only calls them.
+
+**Files:**
+- Create:
+  - `tools/matrix/ci/shards.json`;
+  - `tools/matrix/ci/shard-matrix.ts`;
+  - `tools/matrix/ci/summary.ts`;
+  - `tools/matrix/ci/staleness.ts`;
+  - `tools/matrix/ci/gh.ts` (a thin `gh api` wrapper with an injectable runner).
+- Test: `tools/matrix/__tests__/shard-matrix.test.ts`, `summary.test.ts`, `staleness.test.ts` (create).
+
+**Interfaces:**
+- `shards.json`:
+
+```json
+{
+  "note": "W1d D4. Shard counts per layer per scope, and the per-case ceiling each layer's timeout derives from. Ceilings are the max measured durationMs in the named committed run, rounded up to 10 s, ×1.5 for a CI runner. Re-derive from PR-B's baseline (Task 21).",
+  "setupMinutes": 18,
+  "slackMinutes": 10,
+  "maxTimeoutMinutes": 300,
+  "layers": {
+    "L1": { "full": { "args": "--driver browser --layer L1 --scope grid", "shards": 8, "workers": 1 }, "smoke": { "args": "--driver browser --layer L1 --scope slice", "shards": 2, "workers": 1 }, "ceilingFrom": "w1drv-l1" },
+    "L2": { "full": { "args": "--driver browser --layer L2 --scope grid", "shards": 2, "workers": 1 }, "smoke": { "args": "--driver browser --layer L2 --scope slice", "shards": 2, "workers": 1 }, "ceilingFrom": "w1c-l2" },
+    "L3": { "full": { "args": "--set w1-driving", "shards": 2, "workers": 4 }, "smoke": { "args": "--set pr-sample --rows none", "shards": 2, "workers": 4 }, "ceilingFrom": "w1drv-l3" }
+  }
+}
+```
+
+- `shardMatrix(cfg, scope: "full" | "smoke" | "pr-sample", plannedPerLayer: Record<Layer, number>, ceilingS: Record<Layer, number>, rows?: string): { include: { layer: Layer; k: number; of: number; args: string; timeout: number }[] }`.
+  - `args` is the full run.ts argument string: the layer's `args`, then `--workers <w>` when w > 1, then `--shard <k>/<of>` when `of > 1`. The workflow passes it through an env var and adds only `--run-id` and `--report-dir`.
+  - `k`/`of` name the artifact (`shard-<layer>-<k>`), since an artifact name cannot hold `/`.
+  - `pr-sample` = L3 only, 1 job, no `--shard`, `--set pr-sample --rows <rows>`, where `rows` comes from the caller (already validated by `pr-rows.ts`; `run.ts` validates it again through `parseRows`). The layers it does not run may count 0.
+  - The timeout formula is `setupMinutes + ceil(ceil(planned/shards) × ceilingS / workers / 60) + slackMinutes`.
+  - It throws `ShardTimeoutTooLong` when the result exceeds `maxTimeoutMinutes`, which is a red at plan time, never at minute 360.
+- CLI `shard-matrix.ts --scope <s> [--rows <csv>]`:
+  - plans each layer OFFLINE (`offlineBuilderDefault`, the same as the committed-plans judge) to count driven cases;
+  - reads each `ceilingFrom` run's max `durationMs` from `TR/<dir>/results.json`;
+  - prints `matrix=<json>` for `$GITHUB_OUTPUT`;
+  - exit 0, or 2 when refused.
+- `summary(merged: Record<Layer, RunResults | null>, judge: JudgeOut | null, previous: { runId: number; date: string; layers: Record<Layer, RunResults> } | null, now: Date): string` → `SUMMARY.md`.
+- `staleness(runs: { conclusion: string; event: string; created_at: string }[], now: Date, maxDays: number): { stale: boolean; message: string; newest: string | null }`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+describe("shardMatrix (D4; class 20 — derived budgets)", () => {
+  const cfg = loadShardsConfig();
+  it("the full scope is 12 jobs (L1 8 + L2 2 + L3 2), and each job's timeout derives from its ceiling", () => {
+    const m = shardMatrix(cfg, "full", { L1: 178, L2: 62, L3: 937 }, { L1: 190, L2: 190, L3: 30 });
+    expect(m.include).toHaveLength(12);
+    const l1 = m.include.find((j) => j.layer === "L1")!;
+    expect(l1.timeout).toBe(cfg.setupMinutes + Math.ceil((Math.ceil(178 / 8) * 190) / 1 / 60) + cfg.slackMinutes);
+    expect(m.include.every((j) => j.timeout <= cfg.maxTimeoutMinutes && j.timeout < 360)).toBe(true);
+  });
+  it("shard labels are k/N with every k once per layer", () => {
+    const m = shardMatrix(cfg, "full", { L1: 178, L2: 62, L3: 937 }, { L1: 190, L2: 190, L3: 30 });
+    const l1 = m.include.filter((j) => j.layer === "L1");
+    expect(l1.map((j) => `${j.k}/${j.of}`)).toEqual(["1/8", "2/8", "3/8", "4/8", "5/8", "6/8", "7/8", "8/8"]);
+    expect(l1.every((j) => j.args.endsWith(`--shard ${j.k}/8`))).toBe(true);
+  });
+  it("pr-sample is ONE L3 job with no --shard, and its rows travel in args", () => {
+    const m = shardMatrix(cfg, "pr-sample", { L1: 0, L2: 0, L3: 40 }, { L1: 190, L2: 190, L3: 30 }, "league,swiss");
+    expect(m.include).toEqual([expect.objectContaining({ layer: "L3", k: 1, of: 1, args: "--set pr-sample --rows league,swiss --workers 4" })]);
+  });
+  it("a timeout over the cap is refused at plan time (moving the ceiling moves the budget)", () => {
+    expect(() => shardMatrix(cfg, "full", { L1: 178, L2: 62, L3: 937 }, { L1: 2000, L2: 190, L3: 30 })).toThrow(/ShardTimeoutTooLong|exceeds/);
+  });
+  it("the empty case: zero planned cases in a layer is refused (vacuous)", () => {
+    expect(() => shardMatrix(cfg, "full", { L1: 0, L2: 62, L3: 937 }, { L1: 190, L2: 190, L3: 30 })).toThrow(/zero/);
+  });
+  it("more shards than driven cases is refused (an empty shard would be ShardEmpty at run time)", () => {
+    expect(() => shardMatrix(cfg, "smoke", { L1: 6, L2: 1, L3: 33 }, { L1: 190, L2: 190, L3: 30 })).toThrow(/fewer cases than shards/);
+  });
+  it("the CLI reads the real committed ceilings and the real offline plans (another layer each)", () => {
+    const out = runCli(["--scope", "full"]);
+    expect(out.status).toBe(0);
+    const m = JSON.parse(out.stdout.replace(/^matrix=/, ""));
+    expect(m.include.map((j: { layer: string }) => j.layer).sort()).toEqual([...Array(8).fill("L1"), ...Array(2).fill("L2"), ...Array(2).fill("L3")].sort());
+  });
+});
+```
+
+The smoke-scope test exists because the smoke L2 slice has only 3 driven cases. `shardMatrix` counts PLANNED items, so `plannedPerLayer` is the full plan length (driven + planned), which is what `stripe` partitions. The test above uses 1 to reach the guard. Make sure the CLI passes `items.length` (all planned items), not the driven count, and add that as a comment and a test: "the smoke L2 slice plans 68 items, so 2 shards is allowed".
+
+`summary.test.ts`:
+- "harness verdict and per-layer histogram rows, with planned ░ counted per atom";
+- "no previous run → 'Previous harness-green run: none yet' (the empty case)";
+- "the weekly diff lists ✅→❌ and ❌→✅ moves, and says 'no state changed' when none did";
+- "per-layer timings p50/p90/max computed from durationMs of driven cases only (planned cases have durationMs 0 and are excluded)";
+- "a missing layer (merge refused) is a line saying so, never a silent omission";
+- "the text passes findSecrets() with zero hits on a fixture containing a reason with an email" (redact applied).
+
+`staleness.test.ts`:
+- "no successful schedule/dispatch run ever → stale with 'never'";
+- "the newest success 9 days ago → stale";
+- "7 days → not stale";
+- "a successful pull_request run does not count (smoke scope is not the weekly run)";
+- "a failed run newer than the last success does not reset the clock".
+
+- [ ] **Step 2: Run, see them fail. Step 3: Implement.**
+
+Write each module to the interfaces above. `summary.ts` CLI: `summary.ts --merged <dir> [--judge <json>] [--previous-run auto|none] --out <file>`.
+- `auto` calls `gh.ts` → `gh api repos/$GITHUB_REPOSITORY/actions/workflows/matrix-truth.yml/runs?status=success&per_page=20`, keeps runs whose `event` is `schedule` or `workflow_dispatch` and whose `id` ≠ `GITHUB_RUN_ID`, and downloads the newest one's `merged` artifact via `gh run download <id> -n merged -D <tmp>`.
+- Any `gh` failure becomes the line "previous run unavailable: <redacted reason>". It never fails the summary, since D20 is informational.
+
+`staleness.ts` CLI: `staleness.ts --max-days 8`.
+- It reads the runs list through `gh.ts` and prints `::warning title=Matrix truth run is stale::<message>` when stale, otherwise `matrix truth run: last success <date>`.
+- **It always exits 0** (D1: non-blocking). An API failure prints `::warning::` naming it and exits 0.
+
+`gh.ts`:
+
+```ts
+export type GhRunner = (args: readonly string[]) => { status: number; stdout: string; stderr: string };
+export const realGh: GhRunner = (args) => { const r = spawnSync("gh", [...args], { encoding: "utf8" }); return { status: r.status ?? 1, stdout: r.stdout, stderr: redact(r.stderr) }; };
+```
+
+- [ ] **Step 4: Run, mutate, commit**
+
+Run the vitest template on the three files. Mutate:
+
+| Mutant | Killing test |
+|---|---|
+| The timeout formula without `setupMinutes` | the "full scope" assertion |
+| `staleness` counting `pull_request` runs | its test |
+| `summary` including planned cases in timings | its test |
+
+Commit `feat(matrix): CI helpers — derived shard matrix, run summary, staleness signal (W1d D1, D4, D20)`.
+
+---
+### Task 9: `matrix-truth.yml`, its visibility guard, and the per-PR sample's wiring (rulings 60, 64; D1–D4, D12, D13; items 19, 27; Review Focus 2, 4, 5)
+
+**Why:** This is the wave's deliverable. Every rule the earlier tasks built is used here.
+
+The workflow is written failing-first against `ci-wiring.test.ts`'s deliberate change:
+- the old "no workflow may run the matrix" test becomes "exactly `matrix-truth.yml` may, and `ci.yml` only by calling it";
+- the new test is red before the file exists.
+
+**Files:**
+- Create:
+  - `.github/workflows/matrix-truth.yml`;
+  - `tools/matrix/ci/run-sample.ts` (the sample's run → judge → one re-run → judge, as a tested script rather than YAML logic);
+  - `tools/matrix/__tests__/matrix-workflow.test.ts`;
+  - `tools/matrix/__tests__/run-sample.test.ts`.
+- Modify:
+  - `.github/workflows/ci.yml`: the jobs `matrix-rows` and `matrix-sample`;
+  - `tools/matrix/__tests__/ci-wiring.test.ts:244-252`: the deliberate change;
+  - `package.json`: `"matrix:sample": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/run-sample.ts"`.
+
+**Interfaces:**
+- Consumes:
+  - `shard-matrix.ts`, `summary.ts`, `staleness.ts` (Task 8);
+  - `merge-shards.ts` (Task 4);
+  - `judge.ts` `faults`/`regression` (Task 6);
+  - `pr-rows.ts` and `--set pr-sample` (Task 7);
+  - `--layer … --scope grid` (Task 3);
+  - `--shard` (Task 4).
+- Produces:
+  - the workflow's dispatch inputs `scope: full|smoke` (default `full`) and `inject_visibility: none|private|internal` (default `none`);
+  - `workflow_call` inputs `scope` (string, required) and `rows` (string, default `none`);
+  - the artifacts `shard-<layer>-<k>` (per shard) and `merged` (`merged/<layer>/{results.json, MATRIX.md, faults.txt}`, `SUMMARY.md`);
+  - `runSample(deps): Promise<number>`, with `deps = { run(args): Promise<number>; judge(args): number; now(): Date }`. It returns the judge's exit (0 / 1 / 2).
+
+- [ ] **Step 0: Read the recipes this copies**
+
+Read these, and copy literally where this task says "as e2e/bench":
+- `e2e.yml:353-700`: env, checkout, pnpm, node, Flyway cache, db:apply, sync:sports, build, placement image, chromium, the placement container (`:670-690`), the server start;
+- `bench.yml:59-213`.
+
+Check whether a reusable workflow may declare top-level `concurrency:`. Read GitHub's "Reusing workflows" limitations page via WebFetch, or the `docs.github.com` copy in `node_modules` if one exists. If it may not, move the `concurrency` block onto the `plan` job and record the change.
+
+Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report.
+
+- [ ] **Step 1: Write the failing tests**
+
+The deliberate change to `ci-wiring.test.ts:244-252`. It replaces the test "no scheduled matrix workflow exists in W1a" with:
+
+```ts
+it("the matrix runs only in matrix-truth.yml, and ci.yml reaches it only by calling that workflow (W1d; was W1a's 'no workflow')", () => {
+  const files = readdirSync(WORKFLOWS).filter((f) => f.endsWith(".yml"));
+  const runners = files.filter((f) => /matrix:l3|matrix:browser|tools\/matrix\/run\b/.test(readFileSync(join(WORKFLOWS, f), "utf8")));
+  expect(runners).toEqual(["matrix-truth.yml"]);
+  const ci = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
+  expect(ci).toMatch(/uses:\s*\.\/\.github\/workflows\/matrix-truth\.yml/);
+  expect(files.length).toBeGreaterThan(5);   // anti-vacuity: the directory was read
+});
+```
+
+`matrix-workflow.test.ts` hand-parses the YAML with the `stepOf`/job-splitting helpers that `ci-wiring.test.ts` already has. Import them; if they are not exported, export them from `ci-wiring.test.ts` into a new `__tests__/workflow-text.ts`, and move them rather than copy them.
+
+```ts
+const WF = readFileSync(".github/workflows/matrix-truth.yml", "utf8");
+const JOBS = jobsOf(WF);                               // name → text
+const GUARD = "Visibility guard (design §6.4; R14a)";
+
+describe("matrix-truth.yml — triggers and the disabled schedule (rulings 60, 62; D2, D3)", () => {
+  it("schedule + workflow_dispatch + workflow_call + its own pull_request paths, and no push", () => {
+    expect(WF).toMatch(/schedule:\s*\n\s*- cron: "17 2 \* \* 6"/);
+    for (const t of ["workflow_dispatch:", "workflow_call:", "pull_request:"]) expect(WF).toContain(t);
+    expect(WF).not.toMatch(/^\s{2}push:/m);
+    expect(WF).toMatch(/paths:\s*\n\s*- "\.github\/workflows\/matrix-truth\.yml"\s*\n\s*- "tools\/matrix\/ci\/\*\*"/);
+  });
+  it("the plan job is skipped on a schedule unless vars.MATRIX_WEEKLY_ENABLED is 'true', and every other job needs it", () => {
+    expect(JOBS.plan).toContain("if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'");
+    for (const [name, text] of Object.entries(JOBS)) if (name !== "plan") expect(text).toMatch(/needs:\s*\[?[^\n]*\bplan\b/);
+    expect(Object.keys(JOBS).length).toBe(4);   // plan, build, shard, merge
+  });
+});
+
+describe("the visibility guard (Review Focus 2)", () => {
+  it("is the first step of every job, with one identical script", () => {
+    const scripts = Object.values(JOBS).map((t) => { const s = stepsOf(t); expect(s[0].name).toBe(GUARD); return s[0].run; });
+    expect(new Set(scripts).size).toBe(1);
+    expect(scripts.length).toBe(4);
+  });
+  const run = (env: Record<string, string>, gh: "public" | "private" | "fail") => {
+    const dir = mkdtempSync(join(tmpdir(), "gh-"));
+    writeFileSync(join(dir, "gh"), gh === "fail" ? "#!/bin/sh\necho 'HTTP 403' >&2\nexit 1\n" : `#!/bin/sh\necho ${gh}\n`, { mode: 0o755 });
+    return spawnSync("bash", ["-c", stepsOf(JOBS.plan)[0].run], { env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_REPOSITORY: "onryde/seazn.club", ...env }, encoding: "utf8" });
+  };
+  const cases: [string, Record<string, string>, "public" | "private" | "fail", number][] = [
+    ["public, hosted", { RUNNER_ENV: "github-hosted", INJECT: "none" }, "public", 0],
+    ["private, hosted", { RUNNER_ENV: "github-hosted", INJECT: "none" }, "private", 1],
+    ["unreadable (403), hosted", { RUNNER_ENV: "github-hosted", INJECT: "none" }, "fail", 1],
+    ["public but injected private (the live mutation)", { RUNNER_ENV: "github-hosted", INJECT: "private" }, "public", 1],
+    ["public but injected internal", { RUNNER_ENV: "github-hosted", INJECT: "internal" }, "public", 1],
+    ["private but injected public (cannot loosen)", { RUNNER_ENV: "github-hosted", INJECT: "public" }, "private", 1],
+    ["runner.environment unset", { RUNNER_ENV: "", INJECT: "none" }, "public", 1],
+    ["self-hosted, private (no hosted minutes)", { RUNNER_ENV: "self-hosted", INJECT: "none" }, "private", 0],
+  ];
+  it.each(cases)("%s → exit %#", (_n, env, gh, want) => expect(run(env, gh).status).toBe(want));
+  it("the guard fails closed: unreadable, 403, private, internal, injected public, unset runner — counted", () => {
+    expect(cases.filter((c) => c[3] === 1)).toHaveLength(6);
+  });
+  it("never prints the token", () => {
+    const r = run({ RUNNER_ENV: "github-hosted", INJECT: "none", GH_TOKEN: "ghs_SECRETSECRETSECRET" }, "private");
+    expect(r.stdout + r.stderr).not.toContain("ghs_");
+  });
+});
+
+describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
+  const shard = JOBS.shard;
+  it("runs the derived matrix, fail-fast off, with the derived timeout", () => {
+    expect(shard).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
+    expect(shard).toContain("fail-fast: false");
+    expect(shard).toContain("timeout-minutes: ${{ matrix.timeout }}");
+  });
+  it("a fresh Postgres per job, db:apply then sync:sports before the run, its own data dir proven", () => {
+    expect(shard).toMatch(/services:\s*\n\s*postgres:\s*\n\s*image: postgres:16/);
+    const names = stepsOf(shard).map((s) => s.name);
+    expect(names.indexOf("Apply migrations")).toBeLessThan(names.indexOf("Sync sports (sync:sports)"));
+    expect(names.indexOf("Sync sports (sync:sports)")).toBeLessThan(names.indexOf("Run the shard"));
+    expect(shard).toContain("BENCH_EXPECTED_DATA_DIR");
+  });
+  it("no Redis anywhere (D12, item 19)", () => {
+    expect(WF).not.toMatch(/redis/i);
+  });
+  it("the run writes EXIT=$? itself, and a killed step cannot read as 0", () => {
+    const step = stepsOf(shard).find((s) => s.name === "Run the shard")!;
+    expect(step.run).toMatch(/set \+e[\s\S]*pnpm matrix:l3 \$MATRIX_ARGS[\s\S]*echo "\$code" > "\$dir\/exit\.txt"/);
+  });
+  it("upload paths are an allow-list; no trace; no step echoes a DB URL or token (Review Focus 5)", () => {
+    const up = stepsOf(shard).find((s) => s.uses?.startsWith("actions/upload-artifact"))!;
+    expect(up.with.path.split("\n").map((l: string) => l.trim()).filter(Boolean)).toEqual([
+      "out/*/results.json", "out/*/MATRIX.md", "out/*/exit.txt", "out/*/**/*.png",
+    ]);
+    expect(WF).not.toMatch(/trace\.zip|MATRIX_TRACE_ON_TIMEOUT/);
+    expect(WF).not.toMatch(/echo[^\n]*\$\{?(DATABASE_URL|AUTH_SECRET|GH_TOKEN|SUPABASE_JWT)/);
+  });
+  it("rows from a PR body never reach a run: line as an expression (script injection)", () => {
+    expect(WF).not.toMatch(/run:[^\n]*\$\{\{\s*inputs\.rows/);
+    expect(WF).not.toMatch(/\$\{\{\s*github\.event\.pull_request\.body/);
+  });
+});
+
+describe("the merge job", () => {
+  it("runs even when a shard failed, refuses on any short shard, and judges faults per layer", () => {
+    expect(JOBS.merge).toContain("if: ${{ always() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' }}");
+    expect(JOBS.merge).toMatch(/pnpm matrix:merge[\s\S]*pnpm matrix:judge faults/);
+    expect(JOBS.merge).toContain("$GITHUB_STEP_SUMMARY");
+  });
+});
+
+describe("ci.yml's per-PR sample (R27, D13)", () => {
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  it("matrix-rows declares the rows, matrix-sample calls the truth workflow with scope pr-sample when the filter matches", () => {
+    expect(ci).toMatch(/matrix-sample:[\s\S]*needs: matrix-rows[\s\S]*if: needs\.matrix-rows\.outputs\.run == 'true'[\s\S]*uses: \.\/\.github\/workflows\/matrix-truth\.yml[\s\S]*scope: pr-sample/);
+  });
+  it("the PR body reaches pr-rows through env, never inline", () => {
+    expect(ci).toMatch(/PR_BODY: \$\{\{ github\.event\.pull_request\.body \}\}/);
+    expect(ci).not.toMatch(/run:[^\n]*github\.event\.pull_request\.body/);
+  });
+  it("the staleness step never fails a PR (D1b)", () => {
+    const step = stepOf(ci, "Truth-run staleness (D1b, non-blocking)");
+    expect(step).toContain("continue-on-error: true");
+    expect(step).toContain("if: vars.MATRIX_WEEKLY_ENABLED == 'true'");
+  });
+});
+```
+
+`run-sample.test.ts`. The sample re-runs a regressed case once before failing:
+
+```ts
+it("no regression: one run, judge 0, no re-run", async () => {
+  const deps = fakeSampleDeps({ judgeExits: [0] });
+  expect(await runSample(deps)).toBe(0);
+  expect(deps.runs).toBe(1);
+});
+it("a regression that does not reproduce: two runs, the second judged with --rerun, exit 0", async () => {
+  const deps = fakeSampleDeps({ judgeExits: [1, 0] });
+  expect(await runSample(deps)).toBe(0);
+  expect(deps.runs).toBe(2);
+  expect(deps.judgeArgs[1]).toContain("--rerun");
+  expect(deps.runArgs[1].find((a) => a.startsWith("--run-id"))).not.toBe(deps.runArgs[0].find((a) => a.startsWith("--run-id")));
+});
+it("a reproduced regression is exit 1; the sample never re-runs twice", async () => {
+  const deps = fakeSampleDeps({ judgeExits: [1, 1] });
+  expect(await runSample(deps)).toBe(1);
+  expect(deps.runs).toBe(2);
+});
+it("a run that exits non-zero (refused/aborted) is exit 2 with no judge call — a broken sample is not a pass", async () => {
+  const deps = fakeSampleDeps({ runExits: [3], judgeExits: [] });
+  expect(await runSample(deps)).toBe(2);
+});
+```
+
+- [ ] **Step 2: Run them and see them fail**
+
+Run the vitest template on `ci-wiring.test.ts matrix-workflow.test.ts run-sample.test.ts`. Expected:
+- `ci-wiring`'s new test fails (`runners` is `[]`);
+- `matrix-workflow.test.ts` fails on ENOENT for the workflow file;
+- `run-sample` fails to collect.
+
+- [ ] **Step 3: Write `matrix-truth.yml`**
+
+```yaml
+name: Matrix truth run
+
+# W1d (owner rulings 60–64, 2026-10-04). The format × sport matrix, sharded:
+# L1 (231 cells @1280), L2 (1,731 pair-runs), L3 (937 cases), each shard on its
+# own fresh Postgres with sync:sports. Triggers:
+#  - schedule: weekly, Sat 02:17 UTC — GATED by vars.MATRIX_WEEKLY_ENABLED (D2):
+#    while the variable is not 'true' a firing is a visible run of skipped jobs.
+#  - workflow_dispatch: scope full|smoke; inject_visibility proves the guard live.
+#  - workflow_call: ci.yml's per-PR sample (R27, D13), scope pr-sample.
+#  - pull_request on this file and tools/matrix/ci/**: the smoke scope proves
+#    the workflow on its own PR (D3) — dispatch only fires main's copy.
+# PUBLIC REPO (R14a): synthetic orgs only; nothing here echoes a secret; no
+# Playwright trace is ever uploaded (D16).
+on:
+  schedule:
+    - cron: "17 2 * * 6"
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "full (ruling 64) or smoke (slice, 2 shards per layer)"
+        type: choice
+        options: [full, smoke]
+        default: full
+      inject_visibility:
+        description: "mutation proof of the visibility guard: none, or a visibility to pretend (the run must then fail)"
+        type: choice
+        options: [none, private, internal]
+        default: none
+  workflow_call:
+    inputs:
+      scope:
+        type: string
+        required: true
+      rows:
+        type: string
+        default: none
+  pull_request:
+    paths:
+      - ".github/workflows/matrix-truth.yml"
+      - "tools/matrix/ci/**"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: matrix-truth-${{ github.event_name }}-${{ inputs.scope || 'self' }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  SCOPE: ${{ inputs.scope || (github.event_name == 'pull_request' && 'smoke') || 'full' }}
+
+jobs:
+  plan:
+    name: Plan the shards
+    if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_ENV" = "self-hosted" ]; then echo "self-hosted runner: no hosted minutes billed; guard passes"; exit 0; fi
+          if [ "$RUNNER_ENV" != "github-hosted" ]; then echo "::error::runner.environment is '${RUNNER_ENV:-unset}', neither github-hosted nor self-hosted; refusing"; exit 1; fi
+          vis="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility 2>/dev/null || true)"
+          case "$INJECT" in
+            none) ;;
+            private|internal) echo "inject_visibility=$INJECT: pretending the repository is $INJECT (mutation proof; this run must fail here)"; vis="$INJECT" ;;
+            *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
+          esac
+          if [ "$vis" != "public" ]; then
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent."
+            exit 1
+          fi
+          echo "repository is public; guard passes"
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Derive the shard matrix (D4)
+        id: matrix
+        env:
+          ROWS: ${{ inputs.rows || 'none' }}
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types tools/matrix/ci/shard-matrix.ts --scope "$SCOPE" --rows "$ROWS" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build once
+    needs: [plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # bench.yml's CI-only dummies (bench.yml:85-106) — never real secrets.
+      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      SKIP_TYPECHECK: "1"
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        # (identical script — matrix-workflow.test.ts holds every job's copy equal)
+      - uses: actions/checkout@v5
+      # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile, as in plan …
+      - name: Build the web app (standalone)
+        run: npm run build --workspace apps/web
+      - name: Build the placement service image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/placement
+          file: services/placement/Dockerfile
+          push: false
+          load: true
+          tags: placement-service:ci
+      - name: Pack the build
+        run: |
+          set -euo pipefail
+          cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          cp -r apps/web/public apps/web/.next/standalone/apps/web/public
+          tar -czf web.tgz -C apps/web/.next standalone
+          docker save placement-service:ci | gzip > placement.tgz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build
+          path: |
+            web.tgz
+            placement.tgz
+          retention-days: 1
+
+  shard:
+    name: ${{ matrix.layer }} shard ${{ matrix.k }}/${{ matrix.of }}
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: seazn
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5433/seazn   # CI-only dummy (bench.yml precedent)
+      SMOKE_BASE: http://localhost:3200
+      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # … the remaining bench.yml:85-106 CI dummies, copied verbatim …
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        # (identical script)
+      - uses: actions/checkout@v5
+      # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile …
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+      - name: Apply migrations
+        run: npm run db:apply
+      - name: Sync sports (sync:sports)
+        run: npm run sync:sports
+      - name: Prove the DB is this job's own (BENCH_EXPECTED_DATA_DIR)
+        run: |
+          set -euo pipefail
+          dir="$(psql "$DATABASE_URL" -tAc 'show data_directory')"
+          test -n "$dir"
+          echo "BENCH_EXPECTED_DATA_DIR=$dir" >> "$GITHUB_ENV"
+      - name: Install chromium
+        if: matrix.layer != 'L3'
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          gunzip -c placement.tgz | docker load
+          # … e2e.yml:670-690 verbatim (container placement-e2e on 50051, its 15 s TCP wait) …
+      - name: Start the server
+        run: |
+          set -euo pipefail
+          tar -xzf web.tgz
+          # … bench.yml's server start (PORT 3200, AUTH_DEV_LINKS "1", PLACEMENT_SERVICE_HOST/SECRET, LOG_LEVEL warn,
+          #   the health loop) — reading from ./standalone/apps/web/server.js …
+      - name: Run the shard
+        env:
+          MATRIX_ARGS: ${{ matrix.args }}
+          RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.layer }}-s${{ matrix.k }}
+        run: |
+          set +e
+          mkdir -p out
+          if [ "$SCOPE" = "pr-sample" ]; then
+            pnpm matrix:sample --args "$MATRIX_ARGS" --run-id "$RUN_ID" --report-dir out
+          else
+            pnpm matrix:l3 $MATRIX_ARGS --run-id "$RUN_ID" --report-dir out
+          fi
+          code=$?
+          dir="out/$RUN_ID"; mkdir -p "$dir"
+          echo "$code" > "$dir/exit.txt"
+          echo "EXIT=$code"
+          exit "$code"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shard-${{ matrix.layer }}-${{ matrix.k }}
+          path: |
+            out/*/results.json
+            out/*/MATRIX.md
+            out/*/exit.txt
+            out/*/**/*.png
+          retention-days: 90
+          if-no-files-found: warn
+
+  merge:
+    name: Merge, judge, summarise
+    needs: [plan, shard]
+    if: ${{ always() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        # (identical script)
+      - uses: actions/checkout@v5
+      # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile …
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          path: shards
+      - name: Merge each layer and judge its faults
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          status=0
+          for layer in L1 L2 L3; do
+            dirs=$(ls -d shards/shard-$layer-*/* 2>/dev/null)
+            [ -z "$dirs" ] && { echo "$layer: no shards ran (scope $SCOPE)" | tee -a merged-notes.txt; continue; }
+            pnpm matrix:merge --run-id "ci-${{ github.run_id }}-${{ github.run_attempt }}-$layer" --out "merged/$layer" $dirs
+            code=$?; echo "$layer merge EXIT=$code"; [ "$code" -ne 0 ] && status=1 && continue
+            pnpm matrix:judge faults "merged/$layer/results.json" --planned-not-run allow > "merged/$layer/faults.txt"
+            code=$?; echo "$layer faults EXIT=$code"; [ "$code" -ne 0 ] && status=1
+          done
+          node --experimental-strip-types tools/matrix/ci/summary.ts --merged merged --previous-run auto --out merged/SUMMARY.md
+          cat merged/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: merged
+          path: merged/
+          retention-days: 90
+```
+
+In the committed file, the `# … as in plan …` / `# (identical script)` lines are REPLACED by the literal steps. The test above holds them identical. They are elided here only to keep the plan readable; the guard's text is given once in full in the `plan` job.
+
+`merge-shards.ts` reads each shard dir's `<run-id>/` subdirectory: the artifact holds `out/<run-id>/…`. The `ls -d shards/shard-$layer-*/*` glob gives the per-run-id dirs.
+
+- [ ] **Step 4: Write `run-sample.ts`**
+
+The CLI is `run-sample.ts --args "<run.ts args>" --run-id <id> --report-dir <dir>`. Its exit header (D8): 0 no reproduced regression; 1 a reproduced regression; 2 the sample run itself refused or aborted, or the baseline is unreadable.
+
+```ts
+export async function runSample(d: SampleDeps): Promise<number> {
+  const first = await d.run([...d.args, "--run-id", d.runId, "--report-dir", d.reportDir]);
+  if (first !== 0) { d.say(`sample run exited ${first} — a broken sample is not a pass`); return 2; }
+  const nowFile = join(d.reportDir, d.runId, "results.json");
+  const j1 = d.judge(["regression", "--baseline", d.baseline, "--now", nowFile]);
+  if (j1 !== 1) return j1;
+  const rerunId = `${d.runId}-r`;
+  const second = await d.run([...d.args, "--run-id", rerunId, "--report-dir", d.reportDir]);
+  if (second !== 0) { d.say(`re-run exited ${second}`); return 2; }
+  return d.judge(["regression", "--baseline", d.baseline, "--now", nowFile, "--rerun", join(d.reportDir, rerunId, "results.json")]);
+}
+```
+
+`d.baseline` is read from `tools/matrix/catalogue/baseline.json`'s `L3`. The real `run`/`judge` deps spawn `node --experimental-strip-types tools/matrix/run.ts …` and `tools/matrix/judge.ts …`, the way `ci-wiring.test.ts` spawns its stand-ins. `RUN_ID_MAX` is 40 and `ci-<11 digits>-<attempt>-L3-s1-r` is about 26 characters; the test asserts that a `-r` id still parses through `parseCli`.
+
+- [ ] **Step 5: Write `ci.yml`'s two jobs**
+
+```yaml
+  # -------------------------------------------------------------------------
+  # R27 (W1d D13): a PR touching the engine or stages.ts declares its matrix
+  # rows; the sample runs them + a fixed 33 against the committed baseline.
+  # -------------------------------------------------------------------------
+  matrix-rows:
+    name: Matrix rows (R27) + truth-run staleness
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      run: ${{ steps.filter.outputs.matrix }}
+      rows: ${{ steps.rows.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            matrix:
+              - 'packages/engine/**'
+              - 'apps/web/src/server/**'
+              - 'apps/web/src/lib/format-templates.ts'
+              - 'tools/matrix/**'
+              - 'pnpm-lock.yaml'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Rows the PR declares (R27)
+        id: rows
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/body.txt"
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
+          node --experimental-strip-types tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+      - name: Truth-run staleness (D1b, non-blocking)
+        if: vars.MATRIX_WEEKLY_ENABLED == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types tools/matrix/ci/staleness.ts --max-days 8
+
+  matrix-sample:
+    name: Matrix per-PR sample (R27)
+    needs: matrix-rows
+    if: needs.matrix-rows.outputs.run == 'true'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/matrix-truth.yml
+    with:
+      scope: pr-sample
+      rows: ${{ needs.matrix-rows.outputs.rows }}
+```
+
+`rows` passes as a `with:` input (data), and the truth workflow reads it only through `env: ROWS`. Its values are validated twice: `pr-rows.ts` emits only catalogue row keys, `all` or `none`, and `run.ts` `parseRows` refuses anything else.
+
+- [ ] **Step 6: Run and see them pass**
+
+Run the vitest template on:
+
+```
+ci-wiring.test.ts matrix-workflow.test.ts run-sample.test.ts shard-matrix.test.ts strip-types-loadable.test.ts
+```
+
+All green. The guard's `it.each` must report 8 cases.
+
+- [ ] **Step 7: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| In the guard, `[ "$vis" != "public" ]` → `[ "$vis" = "private" ]` | "unreadable (403)" (and "internal") |
+| Delete the `case "$INJECT"` block | "public but injected private" |
+| Change `private\|internal)` to accept `public` | "private but injected public" |
+| Remove `if:` from `plan` | the D2 test |
+| Add `out/*/trace.zip` to the upload | Review Focus 5 test |
+| In `runSample`, `if (j1 !== 1) return j1` → `return j1` | "a regression that does not reproduce" |
+
+Mutate the guard's three branches one at a time; they partly cover for each other. Each mutant is applied to EVERY job's copy, or the identity test reds first and proves nothing about the guard.
+
+- [ ] **Step 8: Prove it on the PR (E2E, D3)**
+
+This happens at PR-A's opening, in Task 16. Pushing the branch fires the workflow's own `pull_request` trigger in smoke scope. Nothing is dispatched from a feature branch.
+
+- [ ] **Step 9: Commit**
+
+Commit `feat(ci): matrix-truth.yml — sharded weekly/dispatch truth run with visibility guard; ci.yml per-PR sample (W1d rulings 60, 64; D1–D4, D12, D13)`.
+
+---
+
+### Task 10: Type-check the matrix's tests in CI (item 7, D9)
+
+**Why:** `tsconfig.scripts.json` excludes every `*.test.ts`, so type errors in test code reach `main` (five already have). `vitest` is not resolvable from the repo root in a fresh clone.
+
+**Files:**
+- Create: `tsconfig.tools-tests.json`, `tools/matrix/__tests__/tools-tests-typecheck.test.ts`
+- Modify:
+  - `package.json` (devDependency `vitest`, the engine's range `^4.1.11`; `pnpm-lock.yaml` via `pnpm install`);
+  - `tools/matrix/__tests__/scenarios.test.ts:734,745,1567,1776,1785`;
+  - `scripts/__tests__/seed-demo-templates.test.ts:38`;
+  - `scripts/__tests__/stripe-connect-fixture.test.ts:137`;
+  - `scripts/__tests__/tools-import-guard.test.ts:23` (TS7016: add `scripts/lib/tools-import-guard.d.mts`);
+  - `.github/workflows/ci.yml` (`gates` step);
+  - `_INDEX.md` (the bench carry, Task 16).
+
+**Interfaces:**
+- Produces:
+  - `tsconfig.tools-tests.json`:
+
+    ```json
+    {
+      "extends": "./tsconfig.scripts.json",
+      "compilerOptions": { "module": "preserve", "moduleResolution": "bundler", "noEmit": true },
+      "include": ["scripts/**/*.ts", "tools/matrix/**/*.ts"],
+      "exclude": []
+    }
+    ```
+
+    Step 0 confirms `extends` keeps `paths: {"@/*"}` and `allowImportingTsExtensions`.
+  - The gates step `- run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json`.
+
+- [ ] **Step 1: Measure first, then write the failing test**
+
+```bash
+cd <exec> && rtk proxy node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json > "$TMPDIR/w1d-t10-before.txt"; echo EXIT=$?; grep -ac "error TS" "$TMPDIR/w1d-t10-before.txt"; grep -ao "^[^(]*" "$TMPDIR/w1d-t10-before.txt" | sort | uniq -c
+```
+
+Expected: about 8 errors (5 in `scenarios.test.ts`, 3 in `scripts/__tests__`) and **zero under `apps/web`**. Bundler resolution is the claim D9 rests on. If ANY `apps/web` file errors, STOP and report the list: D9's premise is false, and the owner chooses between excluding those three tests and fixing app types.
+
+`tools-tests-typecheck.test.ts`:
+
+```ts
+it("tsconfig.tools-tests.json covers the matrix's and scripts' tests and none of bench's", () => {
+  const r = spawnSync(process.execPath, ["node_modules/typescript-native/bin/tsc", "-p", "tsconfig.tools-tests.json", "--listFilesOnly"], { encoding: "utf8" });
+  const files = r.stdout.split("\n").filter((f) => /\/(tools\/matrix|scripts)\/.*\.test\.ts$/.test(f));
+  expect(files.length).toBeGreaterThan(80);     // tools/matrix/__tests__ alone holds > 80 test files at HEAD (Step 0 pins)
+  expect(r.stdout).not.toMatch(/tools\/bench\//);
+});
+it("and it type-checks clean", () => {
+  const r = spawnSync(process.execPath, ["node_modules/typescript-native/bin/tsc", "-p", "tsconfig.tools-tests.json"], { encoding: "utf8" });
+  expect(r.stdout.match(/error TS\d+/g) ?? []).toEqual([]);
+  expect(r.status).toBe(0);
+});
+```
+
+- [ ] **Step 2: See it fail on the 8 errors. Step 3: Fix them.**
+
+Open each error line and fix the test's types. Do not change what a test asserts (class 4): a `TS2554` (wrong arg count) means the test calls a helper whose signature moved; follow the helper. Add the `.d.mts` for `scripts/lib/tools-import-guard.mjs`, declaring exactly what the `.mjs` exports (read it: 47 lines).
+
+Then run `pnpm add -D -w vitest@^4.1.11`. The lockfile diff must ADD only a root importer entry pointing at the same resolved `vitest` version the engine uses; a second vitest version is a STOP. Then add the gates step.
+
+- [ ] **Step 4: Pass, mutate, commit**
+
+Run the vitest template on `tools-tests-typecheck.test.ts scenarios.test.ts`. Plus run `cd <exec> && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t10s.json" scripts/__tests__/seed-demo-templates.test.ts scripts/__tests__/stripe-connect-fixture.test.ts; echo EXIT=$?`, judged the same way.
+
+The guard test is Task 11's. It does not collect from a nested worktree (vite import analysis on `typescript.js`), which is environmental and noted in facts. Run it from the exec worktree; if it fails to collect there too, that is the same environment fault, and CI is the arbiter.
+
+Mutate: re-introduce one `scenarios.test.ts` error (an extra argument). The "type-checks clean" test reds.
+
+Commit `chore(matrix): type-check tools/matrix and scripts tests in CI; vitest is a root devDependency (W1d item 7, D9)`.
+
+---
+
+### Task 11: The `tools/` import guard sees spawn-by-path (item 28)
+
+**Why:** `scan()` judges imports, manifests, tsconfigs and script NAMES. A string literal holding a `tools/…` path passed to `exec`/`execFile`/`spawn`/`fork` (or their `Sync` forms) is never judged, so `apps/`, `packages/` or `scripts/` could run tools code at runtime while the guard stays green.
+
+**Files:**
+- Modify: `scripts/__tests__/tools-import-guard.test.ts` (`scan()` `:94-177`, its fixture, the positive control `:268-288`, the real-tree floors `:290-316`)
+
+**Interfaces:**
+- Produces: `scan()` returns, in addition to today's fields, `spawnCalls: number` (calls inspected) and `spawnHits: { file: string; line: number; arg: string }[]`. `SPAWN_EXEMPT = ["packages/reference/test/boundary-gate.test.ts", "scripts/__tests__/tools-import-guard.test.ts"]` holds exact paths, each with its reason in a comment.
+
+- [ ] **Step 1: Write the failing tests**
+
+Extend the `fixture()` helper with three files:
+- `scripts/spawns.ts`: `execFileSync("node", ["--experimental-strip-types", "tools/matrix/run.ts"])` (a hit);
+- `apps/web/x/spawn-decoy.ts`: `const p = "tools/matrix/run.ts"; spawnSync("git", ["ls-files"])`. This is the dockerignore/z3 decoy shape: a tools literal in a file that spawns something else. It is not a hit;
+- `packages/reference/test/boundary-gate.test.ts`: `spawnSync("node", ["tools/bench/x.ts"])` (exempt).
+
+```ts
+it("a tools/ path passed to a spawn call is a hit; a tools/ literal elsewhere in a spawning file is not; the exempt file is exempt", () => {
+  const r = scan(fixture());
+  expect(r.spawnHits).toEqual([{ file: "scripts/spawns.ts", line: 1, arg: "tools/matrix/run.ts" }]);
+  expect(r.spawnCalls).toBe(2);   // spawns.ts and spawn-decoy.ts; the exempt file is not inspected
+});
+it("every spelling: exec, execSync, execFile, execFileSync, spawn, spawnSync, fork, and child_process.<x>, and ./tools and an absolute-ish join", () => {
+  for (const call of ["exec(\"node tools/matrix/a.ts\")", "cp.execSync(\"pnpm --dir tools/matrix x\")", "fork(\"./tools/bench/b.ts\")", "spawn(\"node\", [join(root, \"tools\", \"matrix\", \"run.ts\")])"]) {
+    expect(scan(fixtureWith(`scripts/one.ts`, call)).spawnHits).toHaveLength(1);
+  }
+});
+it("the real tree: spawn calls were inspected (non-zero) and none reaches tools/", () => {
+  const r = scan(process.cwd());
+  expect(r.spawnCalls).toBeGreaterThan(10);
+  expect(r.spawnHits).toEqual([]);
+});
+```
+
+The `join(root, "tools", "matrix", …)` case: a call argument whose string-literal pieces include `"tools"` immediately followed by `"matrix"` or `"bench"` counts.
+
+- [ ] **Step 2: See them fail. Step 3: Implement**
+
+In `scan()`, for each source file already read (the existing loop at `:150-160`):
+- `ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)`;
+- walk it with `ts.forEachChild`;
+- for each `CallExpression` whose callee's final identifier is in `SPAWNERS = /^(exec|execSync|execFile|execFileSync|spawn|spawnSync|fork)$/`, collect every `StringLiteral`/`NoSubstitutionTemplateLiteral`/template head and span inside the call's ARGUMENTS (descending into arrays and nested calls like `join(...)`), and count one `spawnCalls`;
+- a hit is any collected literal matching `/(^|[\s"'./])tools\/(matrix|bench)\b/`, or an adjacent pair of literals `"tools"`, `"matrix"|"bench"`.
+
+Skip files in `SPAWN_EXEMPT` before parsing. The guard test file names `tools/` paths in its own fixtures, which is why it is exempt by exact path.
+
+- [ ] **Step 4: Pass, mutate, commit**
+
+Run `cd <exec> && ./packages/engine/node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t11.json" scripts/__tests__/tools-import-guard.test.ts; echo EXIT=$?` and judge it with the template's node line. If it fails to COLLECT with "Failed to parse source for import analysis" (the nested-worktree vite fault recorded in facts), run it from a fresh non-nested detached worktree:
+
+```bash
+cd /Users/ashokhein/github/seazn.club && git worktree add --detach /private/tmp/w1d-guard-check feat/format-matrix-w1d-infra && cd /private/tmp/w1d-guard-check && pnpm install --frozen-lockfile && ./packages/engine/node_modules/.bin/vitest run … ; echo EXIT=$?
+```
+
+Remove that worktree after.
+
+Mutate:
+
+| Mutant | Killing test |
+|---|---|
+| Drop `fork` from `SPAWNERS` | "every spelling" |
+| Collect ALL literals in the file, not only call arguments | the decoy test (spawn-decoy becomes a hit) |
+| Remove the exemption | the first test |
+
+Commit `test(guard): the tools/ import guard judges spawn-call arguments (W1d item 28)`.
+
+---
+
+### Task 12: Pad adapter and pad-proof carries (items 8, 9, 15a, 15b, 16; D16)
+
+**Why:** The replay's guards are unwitnessed (item 8), and the adapter minors are open (item 9). F-PP-1's timeout cannot explain itself (15a). Pad proof cannot be scoped to one sport (15b). Cricket two-innings events have no pad route, so 24 `test` cases are HTTP-only (16).
+
+**Files:**
+- Modify:
+  - `tools/matrix/lib/pads/{cricket,carrom,period,replay,types}.ts`;
+  - `tools/matrix/lib/driver/browser-driver.ts` (`padCheck` `:243-246`; the tap timings);
+  - `tools/matrix/lib/pad-proof-set.ts:14-15`;
+  - `tools/matrix/run.ts:561`.
+- Test:
+  - `pad-replay.test.ts`, `pad-adapters.test.ts`, `browser-driver.test.ts`, `pad-proof-set.test.ts` (extend);
+  - `pad-cricket-innings.test.ts` (create).
+
+**Interfaces:**
+- `--set pad-proof --only league|<sport>` is accepted. One sport, where `<sport>` ∈ `PAD_SPORTS`; any other filter stays refused. `planOf` → `--set pad-proof --only league|<sport>`, which `committed-plans.ts` parses.
+- `TapTiming = { tap: number; clickedAtMs: number; ledgerSeenAtMs: number | null; waitedMs: number; budgetMs: number }`. A `TapWaitTimeout` message ends with `last taps: <JSON of the last 5 TapTimings>`, redacted.
+- `cricketPad` accepts `inningsPerSide: 2` and routes:
+  - `cricket.followon` (the pad's follow-on control);
+  - `cricket.match.close`;
+  - a declared innings (`cricket.declare`, or the event name the engine declares; Step 0 reads it from `packages/engine/src/sport/cricket*`).
+
+- [ ] **Step 0: Read the referents**
+
+- Item 8 cites `pad-replay.test.ts:49-61,154-173` and `browser-driver.ts:243-246,645`.
+- Item 9's M-4 is `cricket.ts:86,146-148`; M-8 is `carrom.ts:27` vs `apps/web/src/components/v2/scorepad/v3/skins/carrom.tsx:452,479`; Mn-1 is `period.ts:37,49`; Mn-2 is `replay.ts:103`.
+- For item 16: grep the cricket v3 skin for the follow-on, declare and close controls (`rtk proxy grep -an "followon\|declare\|match.close" apps/web/src/components/v2/scorepad/v3/skins/cricket*.tsx`) and the engine's event names. **If the skin has no control for one of them, that event is a 🚫 naming the owning wave, not a route.** Record which; ruling 52 says routes for what the pad offers. Re-pin the sizing below against what you find.
+
+- [ ] **Step 1: Write the failing tests**
+
+Item 8:
+- "a ledger row at seq ≤ the server tip is never replayed": the fake ledger gains rows at `tip-1` and `tip`, and the replay sends only the later ones;
+- "the unseated-fixture guard refuses by name": drive `browser-driver` with a fixture whose entrants are unseated, and expect the message `does not seat two entrants` (the text at `:645`);
+- "padCheck lists 12 notes and then '+N more' when there are more": 14 notes → 12 lines + `+2 more`.
+
+Item 9:
+- M-4: two consecutive `stepsFor` calls on two different events give independent `tapped` state. Today the module-level variable leaks between them; the test calls `stepsFor(eventA)`, then `stepsFor(eventB)` without consuming A, and asserts B's steps equal a fresh adapter's. Fix: move `tapped` into the closure `stepsFor` returns, and document "stepsFor is one-shot per event" on `MatrixPadAdapter.stepsFor` (`types.ts:33-45`).
+- M-8: "carrom's coin bound is the skin's": read `carrom.tsx` as TEXT, extract the `max:` beside the coins field (`/coins[\s\S]{0,200}?max:\s*(\d+)/`), and assert the adapter refuses `max+1` and accepts `max`. Change `carrom.ts:27` to a named constant `CARROM_COIN_MAX = 9`, with a comment pointing at the skin line. The test is the binding.
+- Mn-1: "period.ts refuses 1.5 periods". Mutate `Number.isInteger` → `Number.isFinite` and see it red.
+- Mn-2: "replay.ts:103 FallbackMismatch is returned, not thrown, and names both sides". Read the line first; the test pins its exact message shape.
+
+15a: `browser-driver.test.ts`, "a tap-wait timeout's message carries the last 5 tap timings, each with clickedAtMs and waitedMs, redacted". It uses the fake page whose ledger never advances.
+
+15b: `pad-proof-set.test.ts`, covering `--only league|badminton` → only badminton's cases; `--only league|chess` (not in `PAD_SPORTS`) → refused; `--scenario M1` → still refused; and the empty case, `--only` with an empty value → usage.
+
+16, `pad-cricket-innings.test.ts`:
+- "inningsPerSide 2 is accepted";
+- "a follow-on request yields the follow-on control's steps";
+- "a declared innings yields the declare control";
+- "match.close yields the close control";
+- "the 24 committed cricket test cases (w1drv-l3) each map to a route or a named 🚫". It reads `TR/w1drv-l3/results.json`, filters `|cricket|test|`, expects 24, and asserts every event type their ledgers hold is routable.
+
+- [ ] **Step 2: See them fail. Step 3: Implement each to its test.** Keep each item's change inside its file. The tap timing is a small ring buffer in the driver's tap loop.
+
+- [ ] **Step 4: A live proof of 15b and 16**
+
+Use the local env recipe and a fresh run id:
+
+```bash
+cd <exec> && pnpm matrix:browser --set pad-proof --only "league|cricket" --run-id w1d-t12-pp-cricket --report-dir "$TMPDIR/w1d-runs"; echo EXIT=$?
+```
+
+Expected: EXIT 0, and only cricket cases in `results.json`. The two-innings routes are exercised only if the pad-proof set plans a `test` variant. If it does not, ALSO run `--driver browser --set w1-driving --only "league|cricket" --scenario LIFECYCLE` at 1280 on the `test` variant (D13 of W1-driving: the variant's own case) and record what the pad did. Report the browser-driven count of cricket `test` cases. **Not committed** (this is a task proof, not evidence); paste the `jq` histogram into the task report.
+
+- [ ] **Step 5: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| `padCheck` without `+N more` | its test |
+| `tapped` back to module scope | M-4 |
+| `CARROM_COIN_MAX = 10` | M-8 |
+| `pad-proof-set` accepting any `--only` | the chess refusal |
+
+- [ ] **Step 6: Scoped tsc, eslint, commit**
+
+Commit `feat(matrix): pad carries — replay guards witnessed, adapter minors, tap timings, single-sport pad proof, cricket two-innings routes (W1d items 8, 9, 15a, 15b, 16)`.
+
+---
+
+### Task 13: Harness minors (items 10, 11, 13, 17, 18, 20, 22, 23, 24, 26; D11)
+
+**Why:** Each is small and owned here by name. Batched (ruling 41) because none changes a case's state.
+
+**Files:**
+- `lib/parity.ts:145` (10);
+- `__tests__/boundary.test.ts:215-226` and `__tests__/browser-budget.test.ts:42` (11);
+- `run.ts:454,545-548` (17);
+- `lib/workers.ts:25-28` comment (18);
+- the plain-browser planner in `run.ts` and `browser-driver.ts:367-383` (20);
+- `lib/browser/pages/stage-rail.ts:115-123` (22);
+- `lib/scenarios/common.ts:226` (23);
+- `lib/scenarios/r4-withdrawal.ts:366` (24);
+- `lib/model/run-cell.ts:155-165` and `model.ts` (26).
+
+Each item extends its tests in the existing test file for that module.
+
+- [ ] **Step 1: Write the failing tests, one per item**
+
+- **10:** "a browser error red that kept its checks, against an HTTP works case, lists each check row" (today `quiet` hides them). And kill the unkilled conjunct: "equal states with one side check-less is NOT quiet".
+- **11:** `boundary.test.ts` matches `spec === "playwright" || spec.startsWith("playwright/") || spec === "@playwright/test"`. `FLAT` adds `setDefaultTimeout\(\s*\d`, `setDefaultNavigationTimeout\(\s*\d` and `new Promise\(\s*\(?r\w*\)?\s*=>\s*setTimeout\(\s*\w+,\s*\d`. Each new spelling gets a positive fixture string that must be caught and a negative that must not. The real-tree scan still reports zero hits with a non-zero count of files scanned.
+- **13:** No code; accepted (T8 m-2). Task 19's triage rule T-H names any L1 red whose reason mentions hydration or first control and sends it to the owner as item 13's revisit trigger.
+- **17 (D11):** "`--driver browser --workers 2` is refused with a message naming the shard matrix, and no route names W1d". Assert the message contains `parallelism is the shard matrix (W1d D11)`, and that `rtk proxy grep -a 'routeTo("W1d"' tools/matrix -r` finds nothing (a test reading `run.ts` text). The scenario-catalogue Q-A guard stays green after `_INDEX.md` marks W1d done.
+- **18:** "MAX_WORKERS stays 8; the comment names D11". A text test on `workers.ts`, so a silent raise is a diff the test sees.
+- **20:** "`--driver browser --only group_only|badminton` plans the template case, like the grid does". Today it throws DriverMisuse naming the template. The plain browser planner routes template-reachable API-only cells through `templateFor`, as `planL1Grid` does in Task 3, and reuses that item builder. Second assertion: "a template competition is created public; the run's org is the case's own, so its public quota is that org's", which reads the gallery's request shape from `template-gallery.tsx:316-324` as text and asserts no `visibility` key. Record that each case gets its own org, so quota never accumulates across cases.
+- **22:** "a multi-stage knockout L1 case shoots `08-completed` after the LAST stage completes; the group stage's completion shot is `07-stage-1-completed`". The fake page holds two stages; assert the shot order.
+- **23:** "team-entrant rows are named Matrix Team N; individual rows stay Matrix Player N". It reads the row's entrant kind from the catalogue's `entrantKind`, or wherever `model/state.ts:345` derives it (Step 0).
+- **24:** "the americano policy note names the withdrawn entrant's persons count, not every id". For example, `2 pending game(s) of the withdrawn entrant (2 persons)`. The note keeps the policy and pending count, and drops the `join("+")`.
+- **26:** "MB-007 and MB-010 (same cell, check, match) are told apart by their shown trigger". `regressionFor` gains a `trigger` argument: the scenario step that tripped it, which `run-cell.ts` already logs per step (Step 0 names the field). Among open cases matching cell, check and match, it prefers the one whose `regressions.json` row's `trigger` equals it. If two or more match and none names the trigger, it returns `ambiguous: [ids]`, which the model reports as NEW-or-ambiguous and NEVER as known. A `trigger` field is added to MB-007 and MB-010 in `catalogue/regressions.json`, read from their commands. That is catalogue data, not evidence, so it may change. The test replays the `w1drv-t16fr1-model-de` withdrawn-trigger failure shape and expects `ambiguous` or MB-010, never MB-007.
+
+- [ ] **Step 2: See each fail. Step 3: Implement each. Step 4: Run.**
+
+Run the vitest template on the files touched:
+
+```
+parity.test.ts boundary.test.ts browser-budget.test.ts run-cli.test.ts workers.test.ts browser-driver.test.ts stage-rail.test.ts scenarios.test.ts model-run-cell.test.ts
+```
+
+Step 0 confirms the exact test file names with `ls tools/matrix/__tests__`.
+
+- [ ] **Step 5: Mutate (one per item that has a guard)**
+
+| Mutant | Killing test |
+|---|---|
+| 10: restore `&& h.state !== b.state` deletion | the conjunct test |
+| 11: drop the `setDefaultTimeout` alternation | its positive fixture |
+| 17: re-add `routeTo("W1d"` | the text test |
+| 26: make the matcher return the first match | the ambiguity test |
+
+- [ ] **Step 6: Commit**
+
+Commit `fix(matrix): harness minors — parity quiet, scan spellings, browser workers declined, template cells, completion shot, team names, fence ambiguity (W1d items 10, 11, 13, 17, 18, 20, 22–24, 26; D11)`.
+
+---
+
+### Task 14: Browser carries — match-day run sheet, fold branch, void, forfeit and withdraw at 1280 (items 15c–15f; D15, D17)
+
+**Why:** Four organiser paths the browser has never proven, or never proven at 1280. Each becomes a small committed carry run under `TR/w1d-carry/` with a lock entry: the first committed runs of W1d, and the first exercise of Task 1's append-only gate on a real addition.
+
+**Files:**
+- Modify:
+  - `tools/matrix/lib/browser/pages/run-sheet.ts` (`readDefaultFilter`, before `showAllFixtures`);
+  - `tools/matrix/lib/browser/pages/stage-rail.ts:64` (record the fold result);
+  - `tools/matrix/lib/browser/pages/fixture-console.ts` (`voidLastUi`);
+  - `tools/matrix/lib/driver/{types,http-driver,browser-driver,mixed}.ts` (`voidLast`);
+  - `tools/matrix/lib/selectors.ts` (the void-last selector, read from the console's markup);
+  - `tools/matrix/run.ts` (`SETS`).
+- Create:
+  - `tools/matrix/lib/scenarios/void-proof.ts`;
+  - `tools/matrix/lib/match-day-set.ts`;
+  - `tools/matrix/lib/carry-1280-set.ts`.
+- Test:
+  - `__tests__/run-sheet-today.test.ts`, `__tests__/void-proof.test.ts`, `__tests__/carry-sets.test.ts` (create);
+  - `__tests__/stage-rail.test.ts` (extend).
+- Evidence: `TR/w1d-carry/{match-day-1280,match-day-320,void-1280,void-320,carry8-1280}/`, `TR/plans.lock.json` (5 added entries), `committed-matrix.test.ts` `EVIDENCE_DIRS` + `RESULTS_FLOOR`.
+
+**Interfaces:**
+- `OrganiserDriver.voidLast(fixtureId: string): Promise<{ voidedEventId: string; voidedType: string }>`. HTTP finds the newest event of the fixture that is not `core.void` and not already voided (the console's own rule, `fixture-console.tsx:882`), then appends `core.void {event_id}`. Browser clicks the console's "Void last" control.
+- `ACTION_TYPES` gains `"voidLast"`. The mixed driver records it like every action.
+- Check id `runsheet-today-default` (D17). Check id `fold-branch` (15d): `{ width, branch: "opened" | "unfolded" }`, where `opened` is expected below 768 and `unfolded` at or above it (the design: `max-md` is <768).
+- Sets:
+  - `match-day` (league|badminton LIFECYCLE @1280 and @320: 2 cases);
+  - `void-proof` (league|badminton VOIDPROOF @1280 and @320: 2 cases);
+  - `carry8-1280` (league|generic and knockout|badminton × M1, R4: 4 cases @1280).
+
+  Every one is layered, so `planOf` → `--set <name>`.
+
+- [ ] **Step 0: Read the product**
+
+- The console's "Void last" markup: `fixture-console.tsx:1270-1290` (its `data-testid`, or its accessible name via the `score.voidLast` dictionary key). Read the English value from `apps/web/src/i18n/dictionaries/en*.json`, and prefer a testid if one exists.
+- The run sheet's "today" filter value and how `phase === "match_day"` is derived (`stages-panel.tsx:550-556`, plus the phase derivation it reads).
+- The HTTP endpoint the harness can use to schedule a fixture for today: `rtk proxy grep -an "scheduled_at\|schedule" tools/matrix/lib/driver/http-driver.ts`. If the driver has no schedule method, use the product route the scheduler UI calls, and record it.
+- **If making a competition "match day" needs a product path the harness cannot reach, the match-day set records 🚫 naming the path, and that is a finding for the owner**, not a reason to fake the date.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// run-sheet-today.test.ts — fake page with a run sheet whose default filter is "today"
+it("reads the default filter BEFORE widening it, and the today rows are exactly the fixtures dated today", async () => {
+  const page = fakeRunSheet({ pressed: "today", rows: [1, 3], allRows: [1, 2, 3] });
+  const seen = await readDefaultFilter(ctxOf(page));
+  expect(seen).toEqual({ filter: "today", rows: [1, 3] });
+  expect(page.clicks).toEqual([]);           // nothing pressed yet
+});
+it("judges runsheet-today-default: today on match day, all otherwise; abstains, counted, with no fixture dated today", () => {
+  expect(judgeTodayDefault({ phase: "match_day", seen: { filter: "today", rows: [1, 3] }, datedToday: [1, 3] }).verdict).toBe("pass");
+  expect(judgeTodayDefault({ phase: "match_day", seen: { filter: "all", rows: [1, 2, 3] }, datedToday: [1, 3] }).verdict).toBe("fail");
+  expect(judgeTodayDefault({ phase: "match_day", seen: { filter: "today", rows: [1] }, datedToday: [1, 3] }).verdict).toBe("fail");
+  expect(judgeTodayDefault({ phase: "scheduled", seen: { filter: "all", rows: [1, 2, 3] }, datedToday: [] })).toEqual({ verdict: "abstain", checked: 0, note: expect.stringContaining("no fixture dated today") });
+});
+
+// stage-rail.test.ts
+it("records the fold branch: opened below 768, unfolded at 768 and above", async () => {
+  for (const [w, want] of [[320, "opened"], [767, "opened"], [768, "unfolded"], [1280, "unfolded"]] as const) {
+    expect((await railBranchAt(w)).branch).toBe(want);
+  }
+});
+
+// void-proof.test.ts — through the fake driver and the REAL engine fold (class 1)
+it("VOIDPROOF scores one event, voids it, and the ledger and the fold both show it voided", async () => {
+  const r = await runScenario("VOIDPROOF", "league|badminton", fakeDriverWithEngine());
+  expect(r.checks.find((c) => c.id === "void-ledger")!.verdict).toBe("pass");
+  expect(r.checks.find((c) => c.id === "void-fold")!.verdict).toBe("pass");
+  expect(r.checks.find((c) => c.id === "void-fold")!.checked).toBeGreaterThan(0);
+});
+it("a second void voids the NEXT newest event, never the void itself (sequence)", async () => {
+  const r = await runScenario("VOIDPROOF", "league|badminton", fakeDriverWithEngine(), { voids: 2 });
+  expect(r.voided.map((v) => v.type)).not.toContain("core.void");
+  expect(new Set(r.voided.map((v) => v.id)).size).toBe(2);
+});
+it("void with nothing to void is refused by the product shape, never sent", async () => {
+  await expect(fakeDriverWithEngine().voidLast("fixture-with-no-events")).rejects.toThrow(/nothing to void/);
+});
+
+// carry-sets.test.ts
+it("each carry set plans exactly its cases, at its widths, and planOf names it", () => {
+  expect(planOf(cliFor("--set match-day"))).toBe("--set match-day");
+  expect(caseIdsOf("carry8-1280")).toEqual([
+    "league|generic|default|M1", "league|generic|default|R4", "knockout|badminton|default|M1", "knockout|badminton|default|R4",
+  ].map((id) => expect.stringContaining(id.split("|default|")[0])));
+});
+```
+
+`fakeDriverWithEngine` folds through `@seazn/engine`'s real reducer, as the W1-driving scenario tests already do. Step 0 names their helper; reuse it.
+
+- [ ] **Step 2: See them fail. Step 3: Implement.**
+
+1. `readDefaultFilter(c)` reads `aria-pressed="true"` among `RUN_SHEET_FILTER_OPTIONS` and the visible `li[data-fixture-no]` numbers, BEFORE `showAllFixtures`. `railFor` calls it when the case's spec asks (the match-day set), and passes `seen` to the scenario's check.
+2. `railFor` returns `{ sheet, branch }`, and the driver records `fold-branch` once per case.
+3. `voidLast` goes into all four drivers. In the browser it opens the console (`fixture-console.ts`), clicks the void-last control (`actBudget`), and waits for the ledger tip to advance by one `core.void`, the same wait the pad uses.
+4. `VOIDPROOF` = LIFECYCLE up to the first scored fixture, plus one score event, `voidLast`, the checks `void-ledger` (the ledger's newest row is `core.void` naming that event) and `void-fold` (the fold's score equals the score before the event), then the remaining LIFECYCLE.
+5. Register the three sets in `SETS`, and teach `expectedPlanFor` the three plan strings.
+
+- [ ] **Step 4: Run them, then the live carries**
+
+Run the vitest template on the four test files plus `committed-plans-frozen.test.ts run-cli.test.ts`. Then, on the local env (fresh DB; each set under a fresh run id):
+
+```bash
+cd <exec> && for s in match-day void-proof carry8-1280; do pnpm matrix:browser --set $s --run-id w1d-carry-$s --report-dir "$TMPDIR/w1d-runs"; echo "$s EXIT=$?"; done
+```
+
+Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read its reason. A crash or harness-error red (D6) is a harness bug, fixed in this task. Then copy each run's `results.json` + `MATRIX.md` + shots into `TR/w1d-carry/<name>/`, using the width-split directory names in the Files list where a set ran both widths. Add their lock entries exactly as `committed-matrix.test.ts`'s missing-entry failure prints them, extend `EVIDENCE_DIRS`, and raise `RESULTS_FLOOR` by the number of `results.json` added.
+
+**The visual check is owed** (AGENTS class 15; feedback "verify visually"). Open the match-day shots at 320 and 1280 and the void shots before and after. Write one line per screen in `TR/w1d-carry/README.md`: what the screen shows, not what must be true.
+
+- [ ] **Step 5: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| `readDefaultFilter` called AFTER `showAllFixtures` | the first run-sheet test (clicks non-empty) |
+| `voidLast` picking the newest event including `core.void` | "a second void" |
+| `fold-branch` threshold 767 | its test |
+
+- [ ] **Step 6: Commit (two commits)**
+
+- Code: `feat(matrix): match-day run sheet, fold branch, void in the browser, forfeit/withdraw at 1280 (W1d items 15c–f; D15, D17)`.
+- Evidence: `docs(matrix): W1d carry runs — match-day, void-proof, carry8-1280 (+5 lock entries)`. Run `pnpm matrix:lock-check --against HEAD^1` before this commit; it must print `… 5 added`.
+
+---
+
+### Task 15: Stryker on the engine's scheduling and competition code (design §7.5 item 2; D14)
+
+**Why:** Mutation testing is the design's answer to "a green suite whose guards are never killed" (class 3), applied weekly to the engine's two most rule-dense directories.
+
+**Files:**
+- Create:
+  - `packages/engine/stryker.config.mjs`;
+  - `packages/engine/stryker.groups.mjs`;
+  - `packages/engine/stryker-floor.json` (`{"note": "...", "groups": {}}`: empty until PR-B, Task 20);
+  - `packages/engine/stryker-equivalent.json` (`{"note": "...", "equivalent": []}`);
+  - `packages/engine/scripts/stryker-floor.ts`;
+  - `packages/engine/test/stryker-groups.test.ts`;
+  - `packages/engine/test/stryker-floor.test.ts`;
+  - `.github/workflows/mutation.yml`.
+- Modify:
+  - `packages/engine/package.json` (devDependencies `@stryker-mutator/core` `10.0.0` and `@stryker-mutator/vitest-runner` `10.0.0`; scripts `"mutation": "stryker run stryker.config.mjs"` and `"mutation:floor": "node --experimental-strip-types scripts/stryker-floor.ts"`);
+  - `pnpm-lock.yaml`;
+  - `.github/workflows/ci.yml` (a gates step, `pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1`);
+  - `.gitignore` (`packages/engine/reports/mutation/`, `packages/engine/.stryker-tmp/`).
+
+**Interfaces:**
+- `STRYKER_GROUPS: Record<"competition" | "draws" | "build" | "calendar" | "repair" | "probe", string[]>`, as globs relative to `packages/engine`:
+  - **competition:** `src/competition/**/*.ts`;
+  - **draws:** `bracket`, `bracket-layout`, `roundrobin`, `swiss`, `americano`, `participants`, `feedgraph`;
+  - **build:** `build`, `build-grid`, `build-objectives`, `constraints`, `candidate-courts`;
+  - **calendar:** `calendar`, `tz`, `court-windows`, `grid-step`, `rest-floor`, `capacity`, `health`;
+  - **repair:** `repair-decompose`, `repair-decompose-cpsat`, `repair-domain`, `repair-minimality`, `repair-synthetic-board`, `conflict-detail`, `report`;
+  - **probe:** `src/scheduling/rest-floor.ts` only (the PR self-proof, D3).
+
+  Each scheduling entry above is `src/scheduling/<name>.ts`.
+- `STRYKER_EXCLUDED: Record<string, string>` maps file → reason:
+  - `placement-client.ts`: a gRPC client, covered by integration tests that need the service;
+  - `generated/**`: generated;
+  - `index.ts`: re-exports;
+  - `logger.ts`: logging;
+  - `solver-test-bounds.ts`: test support;
+  - `payload-fixtures.ts`: test fixtures.
+- `stryker-floor.ts` modes:
+  - `--check <group> <mutation.json>`: exit 0 when the score ≥ floor; 1 when below (survivors listed); 2 refused (zero mutants, no floor for the group, unreadable);
+  - `--set-floor <group> <mutation.json>`: PR-B only; writes `floor = floor(score, 1 dp)`, and refuses lowering;
+  - `--check-file-against <ref>`: exit 1 when any group's floor in the working file is LOWER than at `<ref>`, or a group was removed.
+- `--survivors <group> <mutation.json> --out SURVIVORS.md` lists file:line:col mutator → replacement for each Survived/NoCoverage mutant not in `stryker-equivalent.json`.
+
+- [ ] **Step 0: Versions and runtime**
+
+```bash
+cd <exec> && npm view @stryker-mutator/core@10.0.0 engines peerDependencies --json; npm view @stryker-mutator/vitest-runner@10.0.0 peerDependencies engines --json; ./packages/engine/node_modules/.bin/vitest --version
+```
+
+Record each. The vitest-runner peer must admit the engine's vitest 4. Stryker must load on Node 26 (it runs plain JS, so TS7 does not matter, and vitest transpiles TS itself). If `npm view` shows a newer 10.x patch, use the newest 10.x and record it.
+
+Read Stryker's vitest-runner docs for its constraints on `pool`, `isolate` and `coverageAnalysis: "perTest"` (WebFetch `https://stryker-mutator.io/docs/stryker-js/vitest-runner/`). The engine runs `pool: threads`, `isolate: false` (`vitest.config.ts:40-66`). If the runner requires different settings, put them in `stryker.config.mjs`'s `vitest.configFile` override, a `vitest.stryker.config.ts` beside the main one. Never change the main config.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// stryker-groups.test.ts — every source file in exactly one group or excluded with a reason
+it("every non-test .ts under src/scheduling and src/competition is in exactly one group, or excluded by name", () => {
+  const files = globSync(["src/scheduling/**/*.ts", "src/competition/**/*.ts"], { cwd: ENGINE }).filter((f) => !/__tests__|\.test\.ts$/.test(f));
+  expect(files.length).toBeGreaterThan(35);
+  const owners = new Map<string, string[]>();
+  for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of globSync(globs, { cwd: ENGINE })) owners.set(f, [...(owners.get(f) ?? []), g]);
+  for (const f of files) {
+    const excluded = Object.keys(STRYKER_EXCLUDED).some((e) => minimatch(f, `src/scheduling/${e}`) || minimatch(f, e));
+    expect({ f, n: excluded ? 0 : owners.get(f)?.length ?? 0, excluded }).toEqual({ f, n: excluded ? 0 : 1, excluded });
+  }
+});
+it("every exclusion names a reason and a file that exists", () => { /* each key globs ≥ 1 file; each reason ≥ 10 chars */ });
+
+// stryker-floor.test.ts
+it("zero mutants is a refusal (vacuous), never a pass", () => expect(check("draws", report({ killed: 0, survived: 0 }), floors({ draws: 50 }))).toEqual({ exit: 2, why: expect.stringContaining("zero mutants") }));
+it("a score below the floor fails and lists survivors; at the floor passes", () => {
+  expect(check("draws", report({ killed: 49, survived: 51 }), floors({ draws: 50 })).exit).toBe(1);
+  expect(check("draws", report({ killed: 50, survived: 50 }), floors({ draws: 50 })).exit).toBe(0);
+});
+it("an equivalent mutant listed by file:line:col and mutator is excluded from the denominator", () => { /* 49 killed, 50 survived, 1 equivalent → 49/99 → still < 50 → exit 1; with 2 equivalents listed → 49/98 = 50.0 → 0 */ });
+it("the floor never falls: --check-file-against flags a lowered or removed group", () => {
+  expect(floorDiff({ draws: 50, build: 40 }, { draws: 49.9, build: 40 })).toEqual([{ group: "draws", was: 50, now: 49.9 }]);
+  expect(floorDiff({ draws: 50 }, {})).toEqual([{ group: "draws", was: 50, now: null }]);
+  expect(floorDiff({}, { draws: 50 })).toEqual([]);   // a new group may be added
+});
+it("no floor for a group is a refusal until PR-B sets one", () => expect(check("repair", report({ killed: 1, survived: 0 }), floors({})).exit).toBe(2));
+```
+
+The `mutation.json` fixture uses Stryker's mutation-testing-elements schema (`files[path].mutants[].status`). Step 0 records the schema version Stryker 10 writes; the fixture matches it. Score = killed + timeout ÷ (all − ignored − equivalents − NoCoverage?) — **Step 0 decides**, from Stryker's own "mutation score" definition (covered vs total). Use Stryker's TOTAL score (NoCoverage counts as surviving) and say so in the floor file's note: an uncovered line is a survivor.
+
+- [ ] **Step 2: See them fail. Step 3: Implement.**
+
+`stryker.config.mjs`:
+
+```js
+// Design §7.5 item 2 (W1d D14): weekly mutation testing of the engine's
+// scheduling and competition code. One group per CI job (STRYKER_GROUP);
+// incremental across weeks via the cached incremental file.
+import { STRYKER_GROUPS } from "./stryker.groups.mjs";
+const group = process.env.STRYKER_GROUP;
+if (!group || !(group in STRYKER_GROUPS)) throw new Error(`STRYKER_GROUP must be one of ${Object.keys(STRYKER_GROUPS).join(", ")}`);
+export default {
+  testRunner: "vitest",
+  plugins: ["@stryker-mutator/vitest-runner"],
+  mutate: STRYKER_GROUPS[group],
+  coverageAnalysis: "perTest",
+  incremental: true,
+  incrementalFile: `reports/mutation/${group}.incremental.json`,
+  reporters: ["json", "clear-text", "progress"],
+  jsonReporter: { fileName: `reports/mutation/${group}.json` },
+  thresholds: { high: 80, low: 60, break: null },   // the floor file, not Stryker's break, gates (D14)
+  timeoutMS: 60000,
+  concurrency: 4,
+  tempDirName: ".stryker-tmp",
+};
+```
+
+`stryker-floor.ts` follows the interfaces above, with a D8 exit header.
+
+`mutation.yml`:
+- triggers: `schedule: - cron: "23 3 * * 0"`, `workflow_dispatch` (input `group`: all|competition|draws|build|calendar|repair; `inject_visibility` as in matrix-truth), and `pull_request` paths `.github/workflows/mutation.yml`, `packages/engine/stryker*`, `packages/engine/scripts/stryker-floor.ts`. A PR runs the `probe` group only.
+- jobs `plan` (guard + `if:` gate on `vars.MATRIX_WEEKLY_ENABLED` + a matrix of groups) and `mutate`. `mutate` runs per group:
+  - the guard, checkout, pnpm, node and install;
+  - `actions/cache` for `packages/engine/reports/mutation/<group>.incremental.json`, keyed `stryker-<group>-${{ github.sha }}` with restore-keys `stryker-<group>-`;
+  - `cd packages/engine && STRYKER_GROUP=<g> pnpm mutation`, writing `EXIT=$?` itself;
+  - `pnpm mutation:floor --check <g> reports/mutation/<g>.json` (skipped when the floor file has no entry for the group yet, which is PR-A's state: it prints "no floor yet: PR-B sets it");
+  - `--survivors` → `SURVIVORS.md`;
+  - upload the `mutation-<group>` artifact (json, SURVIVORS.md).
+- `timeout-minutes: 240` per group for the first run. Task 20 replaces it with the measured time × 1.5. Under 360 always.
+
+The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's.
+
+- [ ] **Step 4: Run the probe group locally (it is small) and the tests**
+
+```bash
+cd <exec>/packages/engine && STRYKER_GROUP=probe pnpm mutation > "$TMPDIR/w1d-t15-probe.log" 2>&1; echo EXIT=$?; tail -30 "$TMPDIR/w1d-t15-probe.log"
+cd <exec>/packages/engine && node --experimental-strip-types scripts/stryker-floor.ts --survivors probe reports/mutation/probe.json --out "$TMPDIR/w1d-probe-SURVIVORS.md"; echo EXIT=$?
+```
+
+Expected: Stryker completes, with a non-zero mutant count and a score. Record the mutants, the score and the wall time; that wall time and the file's line count give the first per-line rate for Task 20's estimate.
+
+Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t15.json" test/stryker-groups.test.ts test/stryker-floor.test.ts test/runtime-deps.test.ts; echo EXIT=$?` (judged by the template). `runtime-deps` must stay green: devDependencies only.
+
+- [ ] **Step 5: Mutate**
+
+| Mutant | Killing test |
+|---|---|
+| `check` treating zero mutants as 100% | its test |
+| `floorDiff` ignoring removed groups | its test |
+| Put `rest-floor.ts` in two groups | the groups test |
+
+- [ ] **Step 6: Commit**
+
+Commit `feat(engine): Stryker weekly on scheduling + competition, floor that only rises (W1d D14; design §7.5)`. The lockfile diff is reviewed in the task report: only the two packages and their transitive dependencies.
+
+---
+
+### Task 16: PR-A close — smoke, review, `_INDEX`, open the PR (merge gate)
+
+- [ ] **Step 1: Coverage check of the 28 items**
+
+Read `_INDEX.md` "W1d first tasks" 1–28 against the batching table at the top of PR-A. Every item maps to a commit, or to a recorded "no code; accepted" (13). Write the map into the PR body.
+
+- [ ] **Step 2: Smoke: the HTTP slice is unchanged**
+
+On the local env, with a fresh DB and run id:
+
+```bash
+cd <exec> && pnpm matrix:l3 --run-id w1d-smoke-slice --report-dir "$TMPDIR/w1d-runs"; echo EXIT=$?
+node -e 'const a=require(process.argv[1]),b=require(process.argv[2]);const m=new Map(b.cases.map(c=>[c.caseId,c.state]));const d=a.cases.filter(c=>m.get(c.caseId)!==c.state).map(c=>[c.caseId,m.get(c.caseId),c.state]);console.log(JSON.stringify({compared:a.cases.length,differ:d}))' "$TMPDIR/w1d-runs/w1d-smoke-slice/results.json" docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-http-slice/results.json
+```
+
+Expected: `compared` equals the slice size (24), and `differ: []`. A difference is either a real behaviour change from this branch (a STOP) or a product change on `main` since that run (record it and its cause). Then run the sharded form of the same: `--shard 1/2` and `--shard 2/2` under two run ids, `pnpm matrix:merge` them, and diff the merged file against the unsharded run. The states must be identical. That is Task 4's property, on a live run.
+
+- [ ] **Step 3: `_INDEX.md`**
+
+- **W1d status row:** "PR-A open: infra (Tasks 1–16); PR-B after the owner merges".
+- **False premises:** add "### Found during W1d planning" with the 20 entries above, plus any found while executing.
+- **Recommendations:** the bench carry (D9); D7's question for the owner, verbatim; D2's enable step, as the owner's action.
+- **Close "W1d first tasks":** each item gets `— done in W1d T<N> (<sha>)`, or `— accepted (item 13)`.
+
+- [ ] **Step 4: Scoped gate, reviewer, push, PR**
+
+1. Run the vitest template over EVERY test file this PR touched (the union from Tasks 1–15), plus the engine's two files. Paste the counts.
+2. Run eslint on every changed `.ts`/`.mjs` through `rtk proxy`, and tsc on `tsconfig.tools-tests.json`.
+3. Dispatch the `reviewer` agent on `git diff origin/main...HEAD`, at most 25 findings. Fix every Critical and Important finding inline (the no-new-issues rule), then re-review the fixes.
+4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D7's question, and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after."
+
+- [ ] **Step 5: Watch the self-proof (D3)**
+
+The PR fires `matrix-truth.yml` (smoke) and `mutation.yml` (probe) through their own `pull_request` paths. Before believing either:
+- read each job's steps: steps > 0, not cancelled, not billing-shaped;
+- read the merged `SUMMARY.md` artifact: three layers, 2 shards each, a harness verdict;
+- confirm `merged/L3/results.json` holds 33 cases.
+
+Then the per-PR sample: this PR touches `tools/matrix/**`, so `ci.yml`'s `matrix-sample` runs. It also touches `packages/engine/**` (Task 15's config, devDependencies and script), a declaring path, so PR-A's body must carry `Matrix rows: none — harness infrastructure; engine change is Stryker config only`, or the R27 gate reds by design. That red is the gate's first live witness: open the PR WITHOUT the line, see `matrix-rows` red naming `packages/engine/package.json`, then add the line and see it green. Record both run ids.
+
+**Merge gate: STOP here. The owner reviews and merges PR-A.**
+
+---
+## PR-B — evidence (Tasks 17–22). Starts only after the owner merges PR-A.
+
+Every PR-B step that touches GitHub reads its result before believing it. The traps, from memory and the W1d prompt:
+- **A dispatched run executes the workflow file at the dispatched REF.** `--ref main` runs main's copy, so PR-B can only dispatch what PR-A merged.
+- **A run whose jobs are all red with 0 steps in ~3 s is billing**, not the harness.
+- **A job with zero steps never got a runner.**
+- **`cancelled` is not a pass.**
+- **A run's `headSha` is the dispatch ref's SHA**, so check it equals the tag's SHA.
+
+### Task 17: Three harness-green dispatches, and the guard proven live (ruling 61, 62; D7, D21; Review Focus 2, 3)
+
+**Files:**
+- `_INDEX.md` (the W1d status row; a "W1d dispatches" block under the programme log)
+- `$TMPDIR/w1d-dispatch/<n>/` (downloaded artifacts; not committed until Task 21)
+
+- [ ] **Step 0: Worktree, the owner's D7 answer, the tag**
+
+```bash
+cd /Users/ashokhein/github/seazn.club && git fetch origin && git worktree add -b feat/format-matrix-w1d-evidence .claude/worktrees/format-matrix-w1d-evidence origin/main; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-evidence && pnpm install --frozen-lockfile; echo EXIT=$?
+cd /Users/ashokhein/github/seazn.club/.claude/worktrees/format-matrix-w1d-evidence && git log -1 --format='%H %s' && test -f .github/workflows/matrix-truth.yml && echo PR-A-merged
+```
+
+Then ask the owner D7's question in chat (feedback: questions in chat), and record the answer VERBATIM in `_INDEX.md` "Owner rulings" as the next number, with the date.
+- `--planned-not-run allow` (the recommendation) or `refuse` (alternative c) becomes the judge flag for every step below.
+- If the owner picks (b), shrink ruling 64's L2: change `shards.json` L2 full args to a new `--scope grid-driven`, which needs a small PR before any dispatch. **STOP and report.**
+
+D21: tag the tip and push the tag:
+
+```bash
+cd <evidence> && git tag matrix-truth/w1d-baseline origin/main && git push origin matrix-truth/w1d-baseline; echo EXIT=$?
+cd <evidence> && git rev-parse matrix-truth/w1d-baseline
+```
+
+Record the SHA. A tag push runs no workflow (D21), and the executor confirms that in the Actions tab via `gh run list -L 5 --json event,headBranch,createdAt`: there must be no run whose `headBranch` is the tag.
+
+- [ ] **Step 1: The guard, live (the mutation PR-A could only unit-test)**
+
+```bash
+cd <evidence> && gh workflow run matrix-truth.yml --ref matrix-truth/w1d-baseline -f scope=smoke -f inject_visibility=private; echo EXIT=$?
+cd <evidence> && gh run list --workflow matrix-truth.yml --event workflow_dispatch -L 1 --json databaseId,headSha,status,conclusion
+cd <evidence> && gh run view <id> --json jobs --jq '.jobs[] | {name, conclusion, steps: [.steps[] | {name, conclusion}]}'
+```
+
+Expected:
+- `plan` is `failure` at the step "Visibility guard (design §6.4; R14a)";
+- `build`, `shard` and `merge` are `skipped`;
+- the log shows `pretending the repository is private` and the `::error title=Matrix truth run refused::` line;
+- `headSha` equals the tag's SHA.
+
+Record the run id. If `plan` SUCCEEDED, the guard is open: STOP, with a PR-A defect.
+
+- [ ] **Step 2: Dispatch 1 of 3 (full)**
+
+```bash
+cd <evidence> && gh workflow run matrix-truth.yml --ref matrix-truth/w1d-baseline -f scope=full; echo EXIT=$?
+cd <evidence> && gh run list --workflow matrix-truth.yml --event workflow_dispatch -L 1 --json databaseId,headSha,status
+```
+
+Wait for it with the Monitor tool, using an until-loop on `gh run view <id> --json status --jq .status` = `completed`. Never use a foreground sleep.
+
+Then check the run:
+- `gh run view <id> --json conclusion,jobs`: 15 jobs (plan, build, 12 shards, merge), each with > 0 steps;
+- none `cancelled`;
+- no shard at its `timeout-minutes` (a timeout shows as `cancelled` with "exceeded the maximum execution time"; class 20: a timeout is the clock, not data).
+
+```bash
+cd <evidence> && rm -rf "$TMPDIR/w1d-dispatch/1" && gh run download <id> -n merged -D "$TMPDIR/w1d-dispatch/1"; echo EXIT=$?
+cd <evidence> && for l in L1 L2 L3; do pnpm matrix:judge faults "$TMPDIR/w1d-dispatch/1/$l/results.json" --planned-not-run <D7>; echo "$l EXIT=$?"; done
+```
+
+Expected per layer: `EXIT=0`. Then confirm the case counts against ruling 64:
+
+```bash
+cd <evidence> && node -e 'for (const l of ["L1","L2","L3"]) { const r=require(process.argv[1]+"/"+l+"/results.json"); const h={}; for (const c of r.cases) h[c.state]=(h[c.state]??0)+1; console.log(l, r.cases.length, r.shards, JSON.stringify(h)); }' "$TMPDIR/w1d-dispatch/1"
+```
+
+Expected: L1 231, L2 1731, L3 937 (the current plans' sizes; Task 3 Step 4 and the `w1-driving` set pin them).
+
+- [ ] **Step 3: Dispatches 2 and 3, sequentially**
+
+The workflow's concurrency group for a dispatch is `matrix-truth-workflow_dispatch-full-refs/tags/…` and does not cancel, but GitHub keeps only ONE pending run per group. A third dispatch queued behind a running and a pending one replaces the pending one. So dispatch 2 only after 1 completes, and 3 after 2. Each gets the Step 2 checks, downloaded to `$TMPDIR/w1d-dispatch/<n>`.
+
+- [ ] **Step 4: The verdict (ruling 61)**
+
+```bash
+cd <evidence> && for l in L1 L2 L3; do pnpm matrix:judge across "$TMPDIR/w1d-dispatch/1/$l/results.json" "$TMPDIR/w1d-dispatch/2/$l/results.json" "$TMPDIR/w1d-dispatch/3/$l/results.json" --planned-not-run <D7> | tee "$TMPDIR/w1d-dispatch/across-$l.txt"; echo "$l EXIT=$?"; done
+```
+
+**Harness-green = all three `EXIT=0`.** The output's `compared` must equal each layer's case count.
+
+- [ ] **Step 5: If not green**
+
+- **A harness fault** (D6) means a harness defect. Fix it on a branch, through the reviewer, and get it merged by the owner (ruling 62's merge gate applies to every `main` change). Then move the tag, record the old and new SHA, and **restart from dispatch 1**. "Three consecutive" means three on one SHA (D21).
+- **A missing shard or a merge refusal:** read the shard job's log. An environment fault (a runner died, a docker pull rate-limit) is re-dispatched, and the count restarts.
+- **A state differing for a PRODUCT reason** (Review Focus 3, e.g. the W7 mexicano UUID tie-break) **stays red per ruling 61.** Write the differing cases, their three states and their reasons into `_INDEX.md`, and ask the owner in chat. Never classify it away, average it, or re-run until it agrees. Rule each owner reply into `_INDEX.md`.
+
+Record every dispatch in `_INDEX.md` as it happens (R22): run id, SHA, conclusion, per-layer histogram, wall clock, and verdict.
+
+- [ ] **Step 6: Record the scheduled-run payload question (false premise 17)**
+
+Nothing fires on a schedule yet (the variable is unset). Record in `_INDEX.md` that Task 22 Step 3 reads the first scheduled run's event payload.
+
+---
+
+### Task 18: The triage tooling (ruling 63; D18, D22)
+
+**Why:** Ruling 63 asks for every ❌ to carry an audit gap ID (or `NEW-W1d-<n>`) and its §8 wave, and for W1-driving's 164 to be re-keyed. By hand that is ~200 rows that drift. Two DB-free tools make it a committed, re-checkable mapping.
+
+**Files:**
+- Create:
+  - `tools/matrix/lib/audit-ledger.ts`, `tools/matrix/audit-ledger.ts`;
+  - `tools/matrix/lib/triage.ts`, `tools/matrix/triage.ts`;
+  - `tools/matrix/catalogue/gap-routing.json`;
+  - `tools/matrix/catalogue/triage-rules.json`;
+  - `tools/matrix/catalogue/audit-verdicts.json`;
+  - `tools/matrix/catalogue/new-gaps.json`.
+- Test: `tools/matrix/__tests__/audit-ledger.test.ts`, `tools/matrix/__tests__/triage.test.ts`
+- Modify: `package.json` (`matrix:triage`, `matrix:ledger`)
+
+**Interfaces:**
+- `readAuditGaps(dir: string): { id: string; file: string; title: string; severity: string }[]`. It parses each `<PREFIX>-*.md` file's `## Gaps` table(s); the ID column holds the bare id (`H1`), and the prefix comes from the file name (`SW-swiss.md` → `SW-H1`). It throws `AuditParse` on a row without an id, or on a duplicate id.
+- `gap-routing.json`: `{ "note": "design §8 (D:446-460), transcribed; a reviewed change", "routes": { "SC-O1": "W2", … , "SW-*": "W3", "SH-*": "W8" } }`. Exact ids win over a `<PREFIX>-*` wildcard.
+- `triage-rules.json`: `{ "rules": [{ "id": "T-1", "match": { "cell"?: "<glob over row|sport>", "scenario"?: "M1", "layer"?: "L3", "check"?: "<check id>", "reason"?: "<substring>" }, "gap": "SC-O1" | "NEW-W1d-<n>", "wave": "W2", "was"?: "P1", "note": "…" }] }`.
+- `new-gaps.json`: `{ "gaps": [{ "id": "NEW-W1d-1", "wave": "W4", "title": "…", "evidence": "<case ids>" }] }`.
+- `audit-verdicts.json`: `{ "verdicts": [{ "id": "SW-H2", "outcome": "not-exercised" | "exercised-not-reproduced" | "verified-by-read" | "verified-by-failing-test", "evidence": "…", "wave": "W3" }] }`.
+- `triage(runs: RunResults[], rules, routing, ledger, newGaps): { rows: { caseId; layer; gap; wave; rule; was? }[]; untriaged: string[]; ambiguous: { caseId; rules: string[] }[]; misrouted: { rule; gap; wave; routed }[]; unknownGap: { rule; gap }[]; checked: number }`.
+- CLI `triage.ts --runs <L1> <L2> <L3> [--rekey <w1drv-l3 results> --rekey-map <w1drv-l3 TRIAGE p-map json>] --out <dir>`. It writes `triage.json`, `TRIAGE.md` (per wave, per gap, the case list) and `REKEY.md`. Exit 0 every red triaged; 1 untriaged, ambiguous, misrouted or unknown (each listed); 2 refused.
+- CLI `audit-ledger.ts --audit <dir> --triage <triage.json> --verdicts <json> --out <AUDIT-LEDGER.md>`. Every ledger id gets exactly one outcome from the five (D22): `reproduced` comes from triage, the others from verdicts. Exit 1 when an id has none or two.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+describe("readAuditGaps", () => {
+  const gaps = readAuditGaps(AUDIT_DIR);
+  it("reads every Gaps row of the five audit files, prefixed by file, none twice", () => {
+    const by = Object.groupBy(gaps, (g) => g.id.split("-")[0]);
+    expect(Object.fromEntries(Object.entries(by).map(([k, v]) => [k, v!.length]))).toEqual(STEP0_COUNTS);   // pinned at Step 0
+    expect(new Set(gaps.map((g) => g.id)).size).toBe(gaps.length);
+    expect(gaps.length).toBeGreaterThanOrEqual(150);
+  });
+  it("the empty dir is refused (vacuous)", () => expect(() => readAuditGaps(emptyDir())).toThrow(/zero gaps/));
+});
+
+describe("triage (ruling 63)", () => {
+  it("every red maps to exactly one rule; a red with none is untriaged, with two is ambiguous", () => {
+    const r = triage([run([red("league|generic|default|M1", "standings: x"), red("swiss|chess|default|R4", "round 5 paired nobody (SW-H1)"), red("knockout|generic|default|F1", "nothing matches")])], rules([
+      { id: "T-1", match: { cell: "league|*", check: "standings" }, gap: "ST-G3", wave: "W5" },
+      { id: "T-2", match: { reason: "SW-H1" }, gap: "SW-H1", wave: "W3" },
+      { id: "T-3", match: { cell: "swiss|*" }, gap: "SW-H1", wave: "W3" },
+    ]), ROUTING, LEDGER, NONE);
+    expect(r.rows.map((x) => [x.caseId, x.gap])).toEqual([["league|generic|default|M1", "ST-G3"]]);
+    expect(r.ambiguous).toEqual([{ caseId: "swiss|chess|default|R4", rules: ["T-2", "T-3"] }]);
+    expect(r.untriaged).toEqual(["knockout|generic|default|F1"]);
+    expect(r.checked).toBe(3);
+  });
+  it("a rule that routes a gap away from §8 is misrouted (never re-route a gap §8 assigns)", () => {
+    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "SC-O1", wave: "W4" }]), ROUTING, LEDGER, NONE);
+    expect(r.misrouted).toEqual([{ rule: "T-1", gap: "SC-O1", wave: "W4", routed: "W2" }]);
+  });
+  it("a gap id that is neither in the audit ledger nor in new-gaps.json is unknown", () => {
+    const r = triage([run([red("a|b|c|M1", "x")])], rules([{ id: "T-1", match: {}, gap: "SC-Z9", wave: "W2" }]), ROUTING, LEDGER, NONE);
+    expect(r.unknownGap).toEqual([{ rule: "T-1", gap: "SC-Z9" }]);
+  });
+  it("works, refused, later, no_path and planned not_run cases are never triaged; a zero-red run checks zero and is fine", () => {
+    expect(triage([run([ok("a|b|c|M1")])], rules([]), ROUTING, LEDGER, NONE)).toMatchObject({ rows: [], untriaged: [], checked: 0 });
+  });
+  it("rekey: each of W1-driving's red cases is listed with its P-rule and its new gap, or 'not red in the baseline'", () => {
+    const r = rekey(W1DRV_FIXTURE, { "league|boardgame|default|F1": "P1" }, triaged([["league|boardgame|default|F1", "SC-O1"]]));
+    expect(r).toEqual([{ caseId: "league|boardgame|default|F1", was: "P1", now: "SC-O1" }]);
+  });
+});
+
+describe("audit ledger outcomes (D22)", () => {
+  it("each id gets exactly one of the five outcomes; none or two is exit 1, naming the id", () => { /* … */ });
+  it("'exercised-not-reproduced' must cite at least one case id present in the runs as works", () => { /* … */ });
+});
+```
+
+`STEP0_COUNTS` is pinned at Step 0 by running `readAuditGaps` once and reading the rows by hand against each file. The facts recorded SW 29, FX 24, ST 33, SC 44 ids in 46 rows, SH 20. The two extra SC rows are a finding for the test to explain, not to ignore: read them.
+
+- [ ] **Step 2: Fail. Step 3: Implement. Step 4: Pass.**
+
+Run the vitest template on both test files plus `strip-types-loadable.test.ts`.
+
+- [ ] **Step 5: Mutate, then commit**
+
+| Mutant | Killing test |
+|---|---|
+| `triage` taking the first matching rule (no ambiguity) | "two is ambiguous" |
+| Skipping the routing check | "misrouted" |
+
+Commit `feat(matrix): triage and audit-ledger tools — every red keyed to a gap and its §8 wave (W1d ruling 63, D18, D22)`.
+
+---
+
+### Task 19: Triage the baseline, and re-key W1-driving's 164 (ruling 63; R5, R12)
+
+**Files:**
+- `tools/matrix/catalogue/{gap-routing,triage-rules,audit-verdicts,new-gaps}.json` (filled)
+- `$TMPDIR/w1d-triage/` (outputs; committed in Task 21)
+
+- [ ] **Step 1: Transcribe §8**
+
+Transcribe design §8 (D:446-460) into `gap-routing.json`, id by id, each with its line. A reviewer checks every line against the design. "Gaps not listed go to the wave owning their format/sport" becomes rows that cite their format or sport.
+
+- [ ] **Step 2: Seed the rules from W1-driving's triage**
+
+Translate P1–P7 and the coverage-table signatures in `TR/w1drv-l3/TRIAGE.md` into rules with `was: "P<n>"`. The gap ids come from the rule prose and the audit files:
+- P1 → SC-O1/SC-O2 (W2);
+- P6 → SW-H1 (W3);
+- P2, P4, P5: read their cited mechanisms against `FX-fixtures.md`/`ST-standings.md` and pick the audit id whose mechanism matches, or `NEW-W1d-<n>`.
+
+**A grep is not a read** (class 5). Open the audit row and confirm that the mechanism matches the red's reason before assigning.
+
+- [ ] **Step 3: Run triage on the third dispatch's merged layers, iterating rules until exit 0**
+
+```bash
+cd <evidence> && pnpm matrix:triage --runs "$TMPDIR/w1d-dispatch/3/L1/results.json" "$TMPDIR/w1d-dispatch/3/L2/results.json" "$TMPDIR/w1d-dispatch/3/L3/results.json" --rekey docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w1drv-l3/results.json --rekey-map "$TMPDIR/w1d-triage/p-map.json" --out "$TMPDIR/w1d-triage"; echo EXIT=$?
+```
+
+`p-map.json` (case id → P-rule) is derived by script from `TRIAGE.md`'s per-case table. Its count must be 164, and the script asserts that.
+
+For each red the rules do not cover:
+1. Read the case's evidence: the reason, the failing checks and the screenshots for L1/L2.
+2. Find the audit row whose mechanism it is.
+3. If none fits, add `NEW-W1d-<n>` to `new-gaps.json`, with the wave that owns its format or sport (§8's fallback rule) and the case ids.
+4. A red whose cause is a HARNESS defect (D6 should have caught it; if it did not, D6 has a gap) is a STOP: fix it, and Task 17's three dispatches restart.
+
+An L1 red whose reason names hydration or the first control is item 13's revisit trigger (rule T-H): it goes to the owner, not to a wave.
+
+- [ ] **Step 4: Audit verdicts (D22)**
+
+For each audit id the triage does not reproduce, write one verdict with evidence:
+- **exercised-not-reproduced:** the driven case ids that cover it and passed. These become "False premises found — W1d triage" entries in `_INDEX.md`, one line each with evidence (R5);
+- **not-exercised:** the atom or script that would reach it, and its wave;
+- **verified-by-read:** `file:line` and what it shows;
+- **verified-by-failing-test:** the test path, which is committed in this PR and fails on `main`. Each such test goes in the owning module's test file with a `.fails` marker naming the gap, so it is a real, running witness that flips when the gap is fixed.
+
+Then run:
+
+```bash
+cd <evidence> && pnpm matrix:ledger --audit docs/superpowers/specs/2026-09-27-format-matrix-prompts/audit-2026-09-27 --triage "$TMPDIR/w1d-triage/triage.json" --verdicts tools/matrix/catalogue/audit-verdicts.json --out "$TMPDIR/w1d-triage/AUDIT-LEDGER.md"; echo EXIT=$?
+```
+
+Expected: `EXIT=0`, with every id given one outcome and the counts per outcome printed.
+
+- [ ] **Step 5: Review the triage**
+
+Dispatch the `reviewer` on the four catalogue files plus `TRIAGE.md`/`AUDIT-LEDGER.md`/`REKEY.md`. Brief: sample 20 reds across the waves, and for each re-derive its gap from the case evidence and the audit row without reading the rule. Every disagreement is a finding. Fix and re-run until it agrees.
+
+- [ ] **Step 6: Commit the catalogue files**
+
+Commit `docs(matrix): W1d triage rules, §8 routing, audit verdicts, new gaps (ruling 63)`.
+
+---
+
+### Task 20: Stryker's first measured run sets the floor (design §7.5 item 2; D14)
+
+- [ ] **Step 1: Dispatch every group**
+
+```bash
+cd <evidence> && gh workflow run mutation.yml --ref matrix-truth/w1d-baseline -f group=all; echo EXIT=$?
+```
+
+Monitor it until completed, with the same Step 2 checks as Task 17. Download each `mutation-<group>` artifact into `$TMPDIR/w1d-mutation/<group>/`.
+
+- [ ] **Step 2: Read each group**
+
+For each group, record:
+- mutants;
+- killed, survived, NoCoverage, timeout;
+- the total score;
+- the wall time;
+- the 10 files with the most survivors.
+
+A group with zero mutants is a configuration fault (the floor checker refuses it): fix the globs. A group that hit its 240-minute timeout is split in two by file (line counts in Step 0's anchors), and that group is re-dispatched.
+
+- [ ] **Step 3: Set the floors**
+
+```bash
+cd <evidence>/packages/engine && for g in competition draws build calendar repair; do node --experimental-strip-types scripts/stryker-floor.ts --set-floor $g "$TMPDIR/w1d-mutation/$g/$g.json"; echo "$g EXIT=$?"; done
+```
+
+Then `--check-file-against origin/main`, which must pass: floors rise from "none".
+
+- [ ] **Step 4: Derive the timeouts, and commit the survivors**
+
+Set `mutation.yml`'s per-group `timeout-minutes` = ceil(measured × 1.5), staying ≤ 300, as a `timeout` field of the job matrix, derived exactly like Task 8's. Write `TR/w1d-baseline/MUTATION.md` with:
+- the per-group table;
+- the run id;
+- the artifact names;
+- the instruction "survivors are killed by a test or recorded as equivalent in `stryker-equivalent.json` (by file:line:col mutator), by the wave that owns the file".
+
+Commit `feat(engine): Stryker floors from the first measured run (W1d D14)`.
+
+---
+
+### Task 21: Commit the baseline (D19; item 27)
+
+**Files:**
+- `TR/w1d-baseline/{L1,L2,L3}/{results.json, MATRIX.md}`;
+- `TR/w1d-baseline/{README.md, HARNESS-GREEN.md, TRIAGE.md, REKEY.md, AUDIT-LEDGER.md, TIMINGS.md, MUTATION.md}`;
+- `TR/plans.lock.json` (+3);
+- `HM/__tests__/committed-matrix.test.ts` (`EVIDENCE_DIRS`, `RESULTS_FLOOR`);
+- `HM/catalogue/baseline.json`;
+- `HM/ci/shards.json` (`ceilingFrom` → the baseline).
+
+- [ ] **Step 1: Copy the third dispatch's merged layers**
+
+Copy `results.json` and `MATRIX.md` per layer. `MATRIX.md` is already generated by `merge-shards.ts` (R10), so never hand-edit it. Then size-check the result: `du -sh TR/w1d-baseline`. Ruling 56 keeps evidence in `docs/` at ~12 MB today. If L2's `results.json` exceeds 5 MB, report it to the controller before committing; do not trim cases.
+
+- [ ] **Step 2: Lock entries, exactly as the missing-entry failure prints them**
+
+Run the committed-matrix test once, copy the three printed entries (`w1d-baseline/L1` plan `--layer L1 --scope grid`, `w1d-baseline/L2` plan `--layer L2 --scope grid`, `w1d-baseline/L3` plan `--set w1-driving`) into the lock, and re-run it. Raise `RESULTS_FLOOR` by 3, and add `w1d-baseline/L1`, `w1d-baseline/L2` and `w1d-baseline/L3` to `EVIDENCE_DIRS`.
+
+The `merged` runs carry `shards: N` and no `shard`, so `judgeRun` must accept them. If it does not, that is a Task 4/Task 2 gap: fix it in this PR, with a test.
+
+- [ ] **Step 3: The prose files**
+
+- `README.md`: the env (CI, `postgres:16`, no Redis, HOLD 3000, the tag and its SHA, the three run ids, artifact retention 90 days, where the screenshots are);
+- `HARNESS-GREEN.md`: the three `judge across` outputs verbatim;
+- `TIMINGS.md`: per layer and per shard, wall and per-case p50/p90/max, from `summary.ts`. Design §12: "W1d publishes the real times". `counts.json` gains nothing; times are not counts;
+- the triage outputs from Task 19 and `MUTATION.md` from Task 20.
+
+- [ ] **Step 4: Point the sample and the shard budget at the baseline**
+
+Set `baseline.json` `L3` to `…/w1d-baseline/L3/results.json`, and each layer's `shards.json` `ceilingFrom` to `w1d-baseline/<layer>`. Re-run `shard-matrix.test.ts`: the CLI test reads the new ceilings. If a derived timeout moved past the cap, re-shard (raise that layer's count) and record why.
+
+- [ ] **Step 5: Verify, then commit**
+
+Run the vitest template on:
+
+```
+committed-matrix.test.ts committed-plans-frozen.test.ts shard-matrix.test.ts pr-sample.test.ts rebase-map.test.ts
+```
+
+`rebase-map` must stay green, which is why the directory is not `w1drv-*` (false premise 10). Then run `pnpm matrix:lock-check --against origin/main`; it must print `… 3 added`.
+
+Commit `docs(matrix): W1d baseline — full L1/L2/L3 truth run, triaged (ruling 63, D19)`.
+
+---
+
+### Task 22: Enable the schedule, write the backlogs, close W1d (ruling 62; D2)
+
+- [ ] **Step 1: Per-wave ❌ tables in `_INDEX.md`**
+
+Under a new "## W1d truth-run backlog (baseline `<sha>`)", write one table per wave (W2…W10), generated from `triage.json`. For each gap, give:
+- the gap id;
+- its title;
+- the case count;
+- up to 5 example case ids;
+- the layer(s).
+
+Then the not-exercised gaps per wave, from the ledger. Generate the section with a one-off `node -e` over `triage.json` and paste it in. **The tables are data, so they are never typed.**
+
+- [ ] **Step 2: The W2 backlog**
+
+When W2's table is written, flip W2's status row to "backlog ready (W1d baseline `<sha>`)". No other wave's row changes (the prompt's rule).
+
+Next to the W2 backlog, record W2 prompt trap 2's contradiction (false premise 20) for W2's planner.
+
+- [ ] **Step 3: Enable the schedule (the owner's act; D2)**
+
+Ask the owner in chat to run `gh variable set MATRIX_WEEKLY_ENABLED --body true`, or run it on their explicit instruction in this session, never on an inherited one (AGENTS 17). Record the time in `_INDEX.md`. Then read `gh variable list` to confirm.
+
+The first scheduled firing is the following Saturday 02:17 UTC, and GitHub's cron can be hours late (help-shots fires 5–6.5 h late). Record its run id when it appears, and from it:
+- its `event` (`schedule`);
+- that the `plan` job ran (not skipped);
+- what the run's payload held (false premise 17). Read it from `gh api repos/{owner}/{repo}/actions/runs/<id>` (`event`, `triggering_actor`, `head_sha`), never from a debug step that prints `github.event` (it is public, and nothing in the guard depends on it).
+
+If it has not fired within 8 days, D1's PR annotation shows it; that is the signal working. This observation is a carry recorded in `_INDEX.md`, not a PR-B blocker.
+
+- [ ] **Step 4: PR-B**
+
+1. Update the W1d status row: "Done: PR-A `<sha>`, PR-B `<sha>`; baseline `TR/w1d-baseline` (tag `matrix-truth/w1d-baseline`); weekly schedule enabled `<date>`".
+2. Dispatch the reviewer on the whole PR-B diff, then fix and re-review.
+3. Push and open the PR. Its body carries `Matrix rows: none — evidence, triage catalogue and Stryker floors; no runtime change` (it touches `packages/engine/stryker-floor.json`, a declaring path). It also carries the per-wave counts, D7's answer, the three run ids and the mutation run id.
+4. Watch CI: `gates` (the lock check prints `3 added`, the floor check passes) and the per-PR sample (now judged against the new baseline).
+
+**The owner merges PR-B.**
+
+---
+
+## Self-Review
+
+**1. Spec coverage** (the brief, rulings 60–64, item list):
+
+| Requirement | Where |
+|---|---|
+| Weekly via the workflow's own `schedule:` + dispatch; no worker or route (60) | Task 9; D2; false premise 18 |
+| A missed week is visible (60) | D1; Task 8 `staleness.ts` + `summary.ts`; Task 9 ci.yml step |
+| Harness-green per §6.5, a 3-run comparison tool, non-zero exit, anti-vacuity (61) | Task 6 `judge.ts across`; Task 17 Step 4; D6 |
+| One plan, two PRs; tasks marked; merge gate (62) | the PR-A/PR-B headings; Task 16 STOP; Task 17 Step 0 |
+| Schedule shipped disabled; a firing while disabled is a visible skipped run (62) | D2; Task 9 `plan` `if:`; test "skipped on a schedule unless…" |
+| Every ❌ keyed to an audit id or NEW-W1d with its §8 wave; 164 re-keyed; non-reproduced → false premises; non-behavioural verified (63) | Tasks 18, 19; D22 |
+| L1 231 @1280 + counts.json fix; L2 1,731; L3 937; one shard per job, fresh Postgres + sync:sports, ~12 shards, explicit timeouts < 360 (64) | Tasks 3, 4, 8, 9; D4 |
+| Full-grid planners + scope recorded (item 2); frozen plans (item 1) + lock review | Tasks 3, 1; D10 |
+| `--shard i/N` deterministic; union = plan; no overlap; stable | Task 4 (property test) |
+| A merge CLI refusing missing/empty shards (R25); `EXIT=$?` written by each shard; MATRIX.md from merged | Task 4; Task 9 "Run the shard" |
+| One exit-code convention + normalising the CLIs (item 6) | Task 6; D8 |
+| Workflow: build once, a shard matrix with own Postgres + db:apply + sync:sports + BENCH_EXPECTED_DATA_DIR + Playwright; artifacts per shard; merge, judge and summary | Task 9 |
+| Visibility guard first in every job, `gh api`, fails loudly; unit test with injected visibility; dispatch input injects `private`; PR-B proves it live | Task 9; Task 17 Step 1 |
+| R14a: synthetic only, never echo secrets | Global Constraints; Review Focus 5; Task 4 `ShardSecret`; Task 9 tests |
+| `ci-wiring.test.ts:244` changed deliberately, failing-first | Task 9 Step 1 |
+| Per-PR sample (R27) in ci.yml | Tasks 7, 9; D13 |
+| Stryker weekly: versions, config, own workflow + timeout, floor + checker (only rises), floor from the first run, survivors, runtime estimate, grouping and incremental | Tasks 15, 20; D14 |
+| All 28 items batched (ruling 41); items 4 and 7 CHANGED | the PR-A table; Tasks 2, 10; false premises 1, 2 |
+| Item 28 inspects spawn ARGUMENTS, decoys, exempt by name, positive control, non-zero count | Task 11 |
+| Item 15 browser items and item 16 cricket routes, sized honestly | Tasks 12, 14 (Step 0 of each re-sizes against the skin) |
+| PR-B: 3 dispatches with the traps; the triage tool and process; a baseline layout without the `w1drv-` prefix; the Stryker floor; enabling the schedule; _INDEX tables; W2 "backlog ready" | Tasks 17–22; D19, D21 |
+| The four test types per task | the table in Global Constraints; each task's steps |
+| A "False premises found" section | 20 entries |
+| D-numbered recommendations with owner value | D1–D22 |
+
+**2. Placeholder scan.** Three places say "Step 0 pins" for a number the tree must give:
+- `STEP0_COUNTS` (Task 18);
+- the four L2 run `n` values (Task 3);
+- Stryker's score definition (Task 15).
+
+Each names the command or source that yields it. They are deliberate re-pins (class 5), not TBDs.
+
+Three YAML steps are elided with `# … verbatim from e2e.yml/bench.yml …`. They name the exact source lines, and Task 9's identity test forbids divergence. They are kept out of the plan only because the source is the authority.
+
+**3. Type consistency:**
+- `Shard {index, of}`, `stripe`, `stripeSize` and `MAX_SHARDS` (Tasks 2, 4, 8);
+- `mergeShards → {merged, checked}`;
+- `harnessFaults`, `statesAcross` and `regressions` (Task 6), as used in Tasks 9 and 17;
+- `shardMatrix` `include {layer, k, of, args, timeout}` (Task 8), as used in Task 9's YAML (`matrix.k`, `matrix.of`, `matrix.args`, `matrix.timeout`);
+- `planned` / `l2` / `fillers` / `shard` / `shards` (Task 2), as read in Tasks 4, 6 and 21;
+- `LAYER_PLANNERS[layer][scope]` (Task 3);
+- `voidLast` (Task 14).
+
+All consistent.
+
+**4. Review Focus.** Five entries, each pinned by a named test in Tasks 4, 6, 9 (×2), plus Task 17's live proof.
+
+---
+
+## Execution handoff
+
+Plan complete, saved to `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md`. Please review it.
+
+**Recommended: Subagent-driven.** 22 tasks share interfaces tightly: the Task 2 schema fields feed Tasks 4, 6 and 21, and the Task 4/6/8 CLIs are called by Task 9's YAML. A shipped mistake here is a weekly job that reads green on a run that did not happen. Use a fresh implementer per task, and a reviewer per task before the next.
+
+Batch Tasks 12 and 13 into one dispatch with one review: they are same-shaped carries in disjoint files. Tasks 1–11 are sequential. Tasks 12–15 may run in parallel worktrees only if their file sets stay disjoint (Task 14 and Task 12 both touch `browser-driver.ts`, so they run sequentially).
+
+D7 (the L2 ░ reading) needs the owner's answer before Task 17, not before PR-A.
