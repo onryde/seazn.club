@@ -338,6 +338,10 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /fixtures/:id/stream-sessions",
   "GET /fixtures/:id/stream-sessions/current",
   "POST /fixtures/:id/stream-sessions/:sid/stop",
+  // Capture QR v2 (T5): the stream code's tok unlocks stream credentials, and the pre-pick names a destination.
+  "POST /fixtures/:id/stream-code",
+  "POST /fixtures/:id/stream-code/reissue",
+  "PUT /fixtures/:id/stream-settings",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",

@@ -41,7 +41,7 @@ import { streamUrlSchema } from "../../lib/stream-url.ts";
 // Streaming R1 (Task 9) — the capture QR's ONE schema (design §7.6), re-exported
 // in the relay block below, never re-typed. Relative + explicit `.ts`, same
 // reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
-import { CaptureQrV1 } from "../../lib/capture-qr.ts";
+import { CaptureQrV1, CaptureQrV2 } from "../../lib/capture-qr.ts";
 // Capture QR v2 (PR-1 T1) — the phone↔web contract's zod twins (docs/contracts/capture-*.json), re-exported, never
 // re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and nothing else.
 export {
@@ -1421,6 +1421,17 @@ export const StreamSessionCurrent = z
   })
   .strict();
 export type StreamSessionCurrent = z.infer<typeof StreamSessionCurrent>;
+
+/** Capture QR v2 §6.1 / §9 (T5): the stable stream code as the organiser's panel shows it — `POST …/stream-code` (ensure)
+ *  and `POST …/stream-code/reissue`. `qr` is the v2 payload (lib/capture-qr.ts, re-used, never re-typed); `issuedAt`
+ *  is when this code was minted, so a re-show answers the same instant. Served `private, no-store`: the tok is live. */
+export const StreamCodeShown = z.object({ qr: CaptureQrV2, issuedAt: z.string() }).strict();
+export type StreamCodeShown = z.infer<typeof StreamCodeShown>;
+/** §6.7.3: the destination pre-pick. PR-1 carries `targetId` only (PR-2 adds `autoStream`); `null` clears it. */
+export const PutStreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
+export type PutStreamSettings = z.infer<typeof PutStreamSettings>;
+export const StreamSettings = z.object({ targetId: z.string().uuid().nullable() }).strict();
+export type StreamSettings = z.infer<typeof StreamSettings>;
 
 /** D6: the platforms a NEW destination may name — a subset of `StreamTargetKind`, which stays whole for stored rows. */
 export const StreamPlatform = z.enum(STREAM_PLATFORMS);
