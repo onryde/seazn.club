@@ -112,6 +112,10 @@ jobs:
       # ci-wiring.test.ts pins that this step always runs and always gates.
       - run: pnpm matrix:single-sport --check --against HEAD^1
       - run: npm run reference:boundary
+      # Item 1 (W1d D10): plans.lock.json is append-only — an edited or removed
+      # entry is a rewritten plan for evidence already committed. HEAD^1 as
+      # for the single-sport ratchet two steps above.
+      - run: pnpm matrix:lock-check --against HEAD^1
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh

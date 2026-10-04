@@ -22,6 +22,7 @@
     "matrix:single-sport": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/single-sport.ts",
     "matrix:model": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/model.ts",
     "matrix:parity": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/parity.ts",
+    "matrix:lock-check": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/lock-append-only.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",

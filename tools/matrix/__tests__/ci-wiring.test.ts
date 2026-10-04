@@ -416,3 +416,58 @@ describe("reference CI wiring (Task 12)", () => {
     expect(stale.stderr).toMatch(/vitest-results-reference\.json/);
   }, spawnBudget(3));
 });
+
+// W1d Task 1 (item 1, D10): plans.lock.json is append-only. The gate's step is
+// pinned the way R26's is: a line-based read of ci.yml, so a reshaped step reds
+// here rather than parsing into something vacuous.
+describe("lock-append-only CI wiring (W1d Task 1, item 1 D10)", () => {
+  const LOCK_STEP = "- run: pnpm matrix:lock-check --against HEAD^1";
+  const lines = ci.split("\n");
+  const isComment = (l: string) => /^\s*#/.test(l);
+  const jobAt = (i: number) => lines.slice(0, i + 1).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
+
+  it("the lock gate runs in gates, unconditionally, right after reference:boundary", () => {
+    const rb = lines.findIndex((l) => l.trim() === "- run: npm run reference:boundary");
+    expect(rb).toBeGreaterThan(0);
+    // the next non-comment line is the lock gate
+    let next = rb + 1;
+    while (next < lines.length && isComment(lines[next]!)) next++;
+    expect(lines[next]!.trim()).toBe(LOCK_STEP);
+    expect(lines[next]).toBe(`      ${LOCK_STEP}`);
+    // exactly one non-comment line names it, and it sits in the gates job
+    expect(lines.filter((l) => l.includes("matrix:lock-check") && !isComment(l))).toEqual([`      ${LOCK_STEP}`]);
+    expect(jobAt(next)).toBe("  gates:");
+    // nothing turns it off or makes it advisory: between it and the next step, only
+    // comments (a key under the step — `if:`, `continue-on-error:`, `env:` — sits at indent 8)
+    let end = next + 1;
+    while (end < lines.length && !lines[end]!.startsWith("      - ")) end++;
+    expect(end).toBeGreaterThan(next);
+    const between = lines.slice(next + 1, end);
+    expect(between.filter((l) => !isComment(l) && l.trim() !== "")).toEqual([]);
+    // the same job carries no job-level `if:` / `continue-on-error:` that could skip the step
+    const gatesAt = lines.indexOf("  gates:");
+    const header = lines.slice(gatesAt + 1, lines.indexOf("    steps:", gatesAt));
+    expect(header.length).toBeGreaterThan(0);
+    for (const l of header.filter((x) => !isComment(x))) expect(l).not.toMatch(/^ {4}(if|continue-on-error):/);
+    // and R26's own assertion still holds: reference:boundary is the line right after the ratchet
+    const ss = lines.findIndex((l) => l.trim() === "- run: pnpm matrix:single-sport --check --against HEAD^1");
+    expect(lines[ss + 1]!.trim()).toBe("- run: npm run reference:boundary");
+  });
+
+  it("its package script preloads crash-exit.ts, runs the CLI, and the CLI exists", () => {
+    expect(pkg.scripts["matrix:lock-check"]).toBe("node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/lock-append-only.ts");
+    expect(existsSync(resolve(REPO, "tools/matrix/lock-append-only.ts"))).toBe(true);
+  });
+
+  it("the step's command as ci.yml spells it, run the way CI runs it, reaches the CLI and passes on this tree", () => {
+    const step = lines.find((l) => l.includes("matrix:lock-check") && !isComment(l));
+    expect(step).toBeDefined();
+    const cmd = (step ?? "").trim().replace(/^- run: /, "");
+    expect(cmd).toContain(" --against HEAD^1");
+    // HEAD^1 needs history and a merge commit; HEAD is always there and the lock is committed unchanged
+    const r = spawnSync("bash", ["-c", cmd.replace(" --against HEAD^1", " --against HEAD")], { cwd: REPO, encoding: "utf8", timeout: SPAWN_MS });
+    expect(r.status, r.stderr).toBe(0);
+    // only a CLI that read both flags prints this: --against reached it through pnpm
+    expect(r.stdout).toMatch(/^lock-append-only: \d+ entries compared, \d+ added$/m);
+  }, spawnBudget(1));
+});

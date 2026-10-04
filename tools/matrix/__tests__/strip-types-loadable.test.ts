@@ -245,6 +245,15 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 1 (item 1, D10): the lock append-only gate, which CI runs as a
+  // bare `node --experimental-strip-types` through its package script.
+  const W1D_T1 = ["lib/lock-diff.ts", "lock-append-only.ts"];
+  it("W1d Task 1's modules are all in the walk", () => {
+    const missing = W1D_T1.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T1.length).toBe(2);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().
