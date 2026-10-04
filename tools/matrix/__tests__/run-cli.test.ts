@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import { PAD_ADAPTERS } from "../lib/pads/index.ts";
 import { HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
 import { LOCAL_BASE } from "../lib/redact.ts";
+import { slugRunId } from "../lib/run-id.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
@@ -279,6 +280,25 @@ describe("runSlice — a run", () => {
     expect(io.out()).toMatch(/^\[1\/1\] league\|generic\|score\|LIFECYCLE → works \d+ checks, \d+ items$/m);
     expect(io.out()).toContain("vacuous: none");
     expect(io.out()).toContain("error reds: none");
+  });
+  // W1d Task 4 (review C1): run.ts writes <report-dir>/<slugRunId(--run-id)>/, so a caller that later reads
+  // that directory must pass an id that is already its own slug. This pins the behaviour C1 tripped on:
+  // an upper-case id lands in its LOWER-case directory, and the results.json names the slug — so no
+  // caller can assume otherwise again (merge-shards refuses an id that is not its own slug).
+  it("C1: an upper-case run id is written to its lower-case directory, and the results.json names the slug", async () => {
+    capture();
+    const dir = dirFor();
+    const raw = "CI-123-1-L3-S1";
+    const d = deps();
+    expect(await runSlice(d, ["--only", "league|generic", "--scenario", "LIFECYCLE", "--run-id", raw, "--report-dir", dir])).toBe(0);
+    // A listing, not existsSync: a case-insensitive filesystem answers existsSync for either spelling.
+    expect(readdirSync(dir)).toEqual(["ci-123-1-l3-s1"]);
+    expect(slugRunId(raw)).toBe("ci-123-1-l3-s1");
+    expect(slugRunId(slugRunId(raw) as string)).toBe("ci-123-1-l3-s1");
+    expect(runIn(dir, "ci-123-1-l3-s1").runId).toBe("ci-123-1-l3-s1");
+    // The case org and the owner derive from the slug too, never from what was typed.
+    expect(d.orgs[0]?.name).toBe("Matrix ci-123-1-l3-s1 1");
+    expect(d.emails.join(" ")).not.toContain("CI-123");
   });
   // W1c Task 8 review E-2 (fix round 1): writeResults and MATRIX.md overwrite
   // <report-dir>/<run-id>/ unconditionally, and every case org's slug derives

@@ -262,6 +262,14 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 4: the stripe, the shard merge and its CLI, and the run-id slug they share.
+  const W1D_T4 = ["lib/shard.ts", "lib/merge.ts", "lib/run-id.ts", "merge-shards.ts"];
+  it("W1d Task 4's modules are all in the walk", () => {
+    const missing = W1D_T4.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T4.length).toBe(4);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

@@ -36,7 +36,7 @@
 // Finalize left one core.finalize row. No HTTP case has one to compare, so it
 // is browser-only.
 import { HARNESS_SCENARIO } from "./scenario-catalogue.ts";
-import type { AnyRunResults, CaseResult, CaseResultV2, CheckResult, DriverKind } from "./results.ts";
+import { isPlannedShape, type AnyRunResults, type CaseResult, type CaseResultV2, type CheckResult, type DriverKind } from "./results.ts";
 
 /** Check ids only the browser driver emits (lib/driver/browser-driver.ts,
  *  mixed.ts, lib/browser/evidence.ts, the PADPROOF scenario). A prefix, or a
@@ -163,9 +163,6 @@ function compareChecks(caseId: string, h: AnyCase, b: AnyCase, diffs: ParityRow[
   return common;
 }
 
-/** A 🚫/░ case as run.ts recordPlanned writes it: planned, never driven. */
-const PLANNED_STATES: ReadonlySet<string> = new Set(["no_path", "not_run"]);
-
 /** W1d item 3: recordPlanned's own marker. A v2 case predates it, so it never has one. */
 const markedPlanned = (c: AnyCase): boolean => "planned" in c && c.planned === true;
 
@@ -190,7 +187,7 @@ export function compareRuns(http: AnyRunResults, browser: AnyRunResults): Parity
     // a scripted scenario), or, in old evidence with no marker, a key that maps
     // to no script. Anything else (a PADPROOF run, a mapping hole, a marked case
     // in a state recordPlanned never writes) stays compared or a missing row.
-    if (PLANNED_STATES.has(b.state) && b.checks.length === 0 && (markedPlanned(b) || "unmapped" in key)) {
+    if (isPlannedShape(b) && (markedPlanned(b) || "unmapped" in key)) {
       notDriven.push({ caseId: b.caseId, state: b.state });
       continue;
     }

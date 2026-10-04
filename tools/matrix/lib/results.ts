@@ -48,6 +48,23 @@ export const GLYPH: Readonly<Record<CaseState, string>> = Object.freeze({
   works: "✅", refused: "⛔", red: "❌", later: "⏳", needs_ruling: "⬜", no_path: "🚫", not_run: "░",
 });
 
+/** The states run.ts recordPlanned writes (🚫 and ░): a case planned, never driven. */
+const PLANNED_STATES: ReadonlySet<CaseState> = new Set<CaseState>(["no_path", "not_run"]);
+
+/** W1d ruling T2-PRED: the ONE predicate for "this case has the shape recordPlanned
+ *  writes" — state 🚫 or ░, and no check. Every reader that must tell a planned case
+ *  from a driven one asks this (parity.ts, committed-plans.ts, merge.ts, and the
+ *  readers after them), never a copy of it: two predicates drifted once already.
+ *
+ *  It is a SHAPE, not the marker. A case with the shape need not carry
+ *  `planned: true` — committed evidence predates the marker, and a driven case that
+ *  reached NoOrganiserPath at runtime is 🚫 with no check too. A case WITH the
+ *  marker must have the shape (a ✅ with checks, marked planned, is a driven result
+ *  relabelled — class 6); merge.ts and committed-plans.ts hold it to that. */
+export function isPlannedShape(c: Pick<CaseResultV2, "state" | "checks">): boolean {
+  return PLANNED_STATES.has(c.state) && c.checks.length === 0;
+}
+
 export type Verdict = "pass" | "fail" | "abstain";
 
 export interface CheckResult {

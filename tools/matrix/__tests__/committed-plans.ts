@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { decideState, parseResults, type CaseResultV2 } from "../lib/results.ts";
+import { decideState, isPlannedShape, parseResults, type CaseResultV2 } from "../lib/results.ts";
 import { API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
@@ -147,7 +147,7 @@ export function judgeRun(cases: readonly JudgedCase[], plan: ExpectedPlan): { dr
       if (c.state !== p.state || c.reason !== p.reason) wrong.push(`${c.caseId}: the plan records ${p.state} "${p.reason}", stored ${c.state} "${c.reason}"`);
       // W1d item 3, first refusal: in a marked run, a planned case without the
       // planned shape recordPlanned writes (the marker, no time, no check).
-      if (marked && !(c.planned === true && c.durationMs === 0 && c.checks.length === 0)) {
+      if (marked && !(c.planned === true && c.durationMs === 0 && isPlannedShape(c))) {
         wrong.push(`${c.caseId}: the plan records it planned, stored without the planned shape (planned=${c.planned}, ${c.durationMs} ms, ${c.checks.length} check(s))`);
       }
     } else if (plan.driven.has(key)) {
