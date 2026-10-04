@@ -5,7 +5,8 @@
 // is a consumer of the product, never a dependency of it.
 //
 // This file is the exact layer: every import in those trees is resolved to a
-// path and judged, every package.json and tsconfig is read, and the two
+// path and judged, every package.json and tsconfig is read (the root
+// package.json's dependencies too — review m-2), and the two
 // guards' shared source (scripts/lib/tools-import-guard.mjs) is held to the
 // tools/* workspaces that actually exist. The eslint rule built from that
 // source is the coarse layer; the last block below runs each of the four real
@@ -48,28 +49,45 @@ interface Scan {
   /** Import specifiers judged, across every file. */
   specifiers: number;
   manifests: number;
+  /** Every package.json judged, repo-relative — the root one included (m-2). */
+  manifestFiles: string[];
   tsconfigs: number;
   /** `<file>: <what>` for every edge into tools/. */
   offenders: string[];
 }
 
 /** Every import, dependency and tsconfig reference under `root`'s ROOTS that
- *  reaches `root`/tools — by path (resolved), or by a tools/* package name. */
+ *  reaches `root`/tools — by path (resolved), or by a tools/* package name —
+ *  plus the root package.json's dependencies: the image installs from it
+ *  (Dockerfile COPY), so a root dependency on a harness is the same edge. */
 function scan(root: string): Scan {
   const tools = join(root, "tools");
-  const names = new Set(toolsPackagesIn(root));
+  const pkgNames = new Set(toolsPackagesIn(root));
   const intoTools = (abs: string) => abs === tools || abs.startsWith(tools + sep);
   const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...ROOTS], { cwd: root, encoding: "utf8" })
     .split("\0")
     .filter((f) => f !== "" && existsSync(join(root, f)));
-  const out: Scan = { perRoot: Object.fromEntries(ROOTS.map((r) => [r, 0])), specifiers: 0, manifests: 0, tsconfigs: 0, offenders: [] };
+  const out: Scan = { perRoot: Object.fromEntries(ROOTS.map((r) => [r, 0])), specifiers: 0, manifests: 0, manifestFiles: [], tsconfigs: 0, offenders: [] };
   const judge = (f: string, spec: string) => {
     out.specifiers++;
     const pkg = packageOf(spec);
-    if (pkg !== null ? names.has(pkg) : (spec.startsWith(".") || spec.startsWith("/")) && intoTools(spec.startsWith("/") ? spec : resolve(root, dirname(f), spec))) {
+    if (pkg !== null ? pkgNames.has(pkg) : (spec.startsWith(".") || spec.startsWith("/")) && intoTools(spec.startsWith("/") ? spec : resolve(root, dirname(f), spec))) {
       out.offenders.push(`${f}: ${spec}`);
     }
   };
+  /** A manifest's dependencies on a tools/* package, by name or by a local path into tools/. */
+  const manifest = (f: string): void => {
+    out.manifests++;
+    out.manifestFiles.push(f);
+    const m = JSON.parse(readFileSync(join(root, f), "utf8")) as Record<string, unknown>;
+    for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+      for (const [name, range] of Object.entries((m[field] ?? {}) as Record<string, string>)) {
+        const local = /^(?:link|file|portal):(.*)$/.exec(range)?.[1];
+        if (pkgNames.has(name) || (local !== undefined && intoTools(resolve(root, dirname(f), local)))) out.offenders.push(`${f}: ${field}.${name}`);
+      }
+    }
+  };
+  if (existsSync(join(root, "package.json"))) manifest("package.json");
   for (const f of new Set(files)) {
     const top = f.split("/")[0]!;
     if (SOURCE.test(f)) {
@@ -78,14 +96,7 @@ function scan(root: string): Scan {
       for (const i of info.importedFiles) judge(f, i.fileName);
       for (const r of info.referencedFiles) judge(f, r.fileName.startsWith(".") ? r.fileName : `./${r.fileName}`);
     } else if (basename(f) === "package.json") {
-      out.manifests++;
-      const m = JSON.parse(readFileSync(join(root, f), "utf8")) as Record<string, unknown>;
-      for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
-        for (const [name, range] of Object.entries((m[field] ?? {}) as Record<string, string>)) {
-          const local = /^(?:link|file|portal):(.*)$/.exec(range)?.[1];
-          if (names.has(name) || (local !== undefined && intoTools(resolve(root, dirname(f), local)))) out.offenders.push(`${f}: ${field}.${name}`);
-        }
-      }
+      manifest(f);
     } else if (/^tsconfig(?:\.[\w-]+)?\.json$/.test(basename(f))) {
       out.tsconfigs++;
       const read = ts.readConfigFile(join(root, f), (p) => readFileSync(p, "utf8"));
@@ -140,7 +151,19 @@ describe("tools import guard (ruling 56)", () => {
   it("empty case first: a repo with nothing in apps/, packages/ or scripts/ scans zero files — which the real-tree test below refuses", () => {
     const s = scan(fixture({ "tools/matrix/package.json": JSON.stringify({ name: "@seazn/matrix" }), "README": "x\n" }));
     expect(Object.values(s.perRoot).reduce((a, b) => a + b, 0)).toBe(0);
+    // No root package.json: no manifest.
+    expect(s.manifests).toBe(0);
     expect(s.offenders).toEqual([]);
+  });
+
+  it("review m-2: the root package.json is judged — a root dependency on a harness is found, as a nested one is", () => {
+    const s = scan(fixture({
+      "tools/matrix/package.json": JSON.stringify({ name: "@seazn/matrix" }),
+      "package.json": JSON.stringify({ name: "root", devDependencies: { "@seazn/matrix": "workspace:*", "fast-check": "^3" } }),
+      "packages/y/package.json": JSON.stringify({ name: "y", dependencies: { z: "file:../../tools/matrix" } }),
+    }));
+    expect(s.manifestFiles.sort()).toEqual(["package.json", "packages/y/package.json"]);
+    expect(s.offenders.sort()).toEqual(["package.json: devDependencies.@seazn/matrix", "packages/y/package.json: dependencies.z"]);
   });
 
   it("positive control: every edge shape into tools/ is found — import, re-export, require, dynamic import, a dependency, a tsconfig path — and no decoy is", () => {
@@ -169,7 +192,13 @@ describe("tools import guard (ruling 56)", () => {
     console.info(`tools-import-guard: ${JSON.stringify(s.perRoot)} source files, ${s.specifiers} specifiers, ${s.manifests} manifests, ${s.tsconfigs} tsconfigs judged`);
     for (const r of ROOTS) expect(s.perRoot[r], `${r}: zero files read`).toBeGreaterThan(10);
     expect(s.specifiers).toBeGreaterThan(1000);
-    expect(s.manifests).toBeGreaterThanOrEqual(3);
+    // m-2: the root manifest is judged too — the image installs from it (Dockerfile COPY).
+    // The expected list comes from git, never from the scan.
+    const tracked = execFileSync("git", ["ls-files", "-z", "--", "package.json", ...ROOTS.map((r) => `${r}/**/package.json`)], { cwd: REPO, encoding: "utf8" }).split("\0").filter((f) => f !== "").sort();
+    expect(tracked).toContain("package.json");
+    expect(tracked.length).toBeGreaterThanOrEqual(5);
+    expect([...s.manifestFiles].sort()).toEqual(tracked);
+    expect(s.manifests).toBe(tracked.length);
     expect(s.tsconfigs).toBeGreaterThanOrEqual(3);
     expect(s.offenders).toEqual([]);
   });
