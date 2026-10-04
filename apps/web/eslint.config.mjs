@@ -4,6 +4,7 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import { toolsImportRules } from "../../scripts/lib/tools-import-guard.mjs";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -138,6 +139,13 @@ const eslintConfig = defineConfig([
     rules: {
       "no-console": "error",
     },
+  },
+  {
+    // Ruling 56: nothing here may import a dev-only harness under tools/ (not
+    // in the image). One source for the rule: scripts/lib/tools-import-guard.mjs;
+    // scripts/__tests__/tools-import-guard.test.ts resolves every import exactly.
+    files: ["**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+    rules: toolsImportRules,
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([".next/**", "out/**", "build/**", "next-env.d.ts"]),

@@ -33,7 +33,9 @@ venv/
 apps/cron-worker
 # tools/ holds the dev-only harnesses (ruling 56): tools/matrix (@seazn/matrix)
 # today, the scheduler bench later. Nothing the image builds or type-checks may
-# import them (the import guard is the next commit). Ignoring the directory also keeps its workspace manifest out of the
+# import them: scripts/__tests__/tools-import-guard.test.ts and the eslint rule
+# from scripts/lib/tools-import-guard.mjs hold apps/, packages/ and scripts/ to
+# that. Ignoring the directory also keeps its workspace manifest out of the
 # build context, so the Dockerfile never COPYs it, exactly like
 # apps/cron-worker above.
 tools/
