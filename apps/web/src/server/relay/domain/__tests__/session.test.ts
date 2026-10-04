@@ -11,7 +11,9 @@ import {
   type Command, type Effect, type Session, type SessionState, type StopReason,
 } from "../session";
 import { DB_END_REASONS } from "../end-reason";
-import { InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TRIGGER_TYPES, type Runner, type RunnerTrigger } from "../runner";
+import {
+  InvalidRunnerTransition, OBSERVED_STATES, RUNNER_NONE, RUNNER_STATES, RUNNER_TABLE, RUNNER_TRIGGER_TYPES, type Runner, type RunnerState, type RunnerTrigger,
+} from "../runner";
 
 const T0 = new Date("2026-09-14T10:00:00Z");
 const S = (over: Partial<Session> = {}): Session => ({
@@ -181,6 +183,39 @@ describe("decide — legal edges", () => {
       }
     }
     expect(checked).toBe(12);
+  });
+  // B4 review I-3: the sweep above reaches the runner through ONE cell (playing). Every runner cell that answers a
+  // session_stop with a signal must carry the stop's reason — T8's operator_stopped and PR-2's auto_stopped land on a
+  // composed session mid-create or with its Machine lost too. The cells are DERIVED from RUNNER_TABLE (a cell that
+  // signals ending or completed), so a new signalling cell joins the sweep; the pinned list makes that change visible.
+  it("§5.3 through the RUNNER: every runner state whose session_stop cell signals the session carries EACH stop reason into endReason — the states derived from RUNNER_TABLE", () => {
+    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
+    const runnerAt = (state: RunnerState): Runner =>
+      ({ state, attempt: 1, name: "relay-s1-r1", machineId: state === "creating" ? null : "m1", stopRequestedAt: null, lastExit: null });
+    const signalling = RUNNER_STATES.filter((rs) => {
+      const cell = RUNNER_TABLE[rs].session_stop;
+      if (cell === null) return false;
+      const signal = cell(runnerAt(rs), { type: "session_stop", reason: "operator_stopped" }, T0).signal;
+      return signal?.type === "ending" || signal?.type === "completed";
+    });
+    // The table today: creating marks the stop, booting and playing SIGINT the Machine, lost tears it down.
+    expect(signalling).toEqual(["creating", "booting", "playing", "lost"]);
+    // The session state each runner state is met in (a create in flight, a Machine booting, a live one, a lost one).
+    const SESSION_STATE_OF: Partial<Record<RunnerState, SessionState>> = { creating: "provisioning", booting: "warming", playing: "live", lost: "live" };
+    let checked = 0;
+    for (const rs of signalling) {
+      const state = SESSION_STATE_OF[rs];
+      if (state === undefined) throw new Error(`runner state ${rs} signals on session_stop but has no session state here: add one`);
+      for (const reason of reasons) {
+        const s = S({ mode: "composed", state, startedAt: state === "live" ? T0 : null, runner: runnerAt(rs) });
+        const d = decide(s, { type: "stop", reason }, T0);
+        expect(d.next.endReason, `${rs} × ${reason}`).toBe(reason);
+        expect(["ending", "completed"], `${rs} × ${reason}`).toContain(d.next.state);
+        if (d.next.state === "ending") expect(d.events, `${rs} × ${reason}`).toContainEqual({ type: "SessionEnding", endReason: reason });
+        checked++;
+      }
+    }
+    expect(checked).toBe(16);
   });
   it("§5.3: a SECOND stop while ending keeps the FIRST reason (identity), passthrough and composed alike — and the runner's completion keeps it too", () => {
     const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null };
