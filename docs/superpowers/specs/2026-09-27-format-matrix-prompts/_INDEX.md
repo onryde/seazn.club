@@ -862,7 +862,11 @@ Elsewhere the text is the controller's record.
       the eslint rule from `scripts/lib/tools-import-guard.mjs` is the coarse layer, and
       `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. Nor may they reach it at
       runtime: the same test refuses a root `package.json` dependency on a harness, and any string in those trees
-      that names a root script whose command points into `tools/`. Code the gates share with the harness lives in
+      that names a root script whose command points into `tools/`. **Limit:** the guard reads imports, manifests,
+      tsconfigs and root-script names. It does NOT see a `tools/` path passed as a string to `child_process`.
+      Today only a grep holds that line: `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` finds
+      comments, the reference trap fixture and tests. The design fix is an owner decision (bench `_INDEX.md`,
+      2026-10-04). Code the gates share with the harness lives in
       `scripts/lib`: `main-module.ts`, and `crash-exit.ts`, which `reference:boundary` preloads and
       `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
       `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).

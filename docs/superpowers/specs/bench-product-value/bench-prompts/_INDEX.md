@@ -114,6 +114,15 @@ proves thin — record the pairing here.)
     relative path only: its boundary test refuses a bare `@seazn/bench`
     import, so every import stays on ruling 38's allowlist (controller
     ruling BT-R3).
+  - **The guard's limit.** The guard reads imports, manifests, tsconfigs
+    and root-script names. It does NOT see a `tools/` path passed as a
+    string to `child_process`. Today only a grep holds that line:
+    `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` finds
+    comments, the reference trap fixture, and tests (the guard's, the
+    dockerignore test's and the scans'). Without `-E` the alternation is
+    literal and the grep finds nothing. This gap dates from #913 and
+    covers the matrix too. The design fix is an owner decision; it is not
+    made here.
   - **The scans read all of `tools/` (2026-10-04). This is CONTROLLER
     ruling BT-R2, not an owner ruling.** When #913 moved the matrix,
     `tools/matrix` silently dropped out of `test-email-domain`,
