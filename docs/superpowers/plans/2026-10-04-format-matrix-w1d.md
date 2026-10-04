@@ -459,13 +459,6 @@ Three CLIs change:
 - Owner value: "false premise" keeps meaning "we looked and it is not there", and no wave loses a real gap because W1d's scenarios never reached it.
 - Rejected: marking every non-reproduced gap a false premise (it would delete most of W2–W7's backlog on no evidence).
 
-**D24 — The repo goes private after W1d, so the runner is switchable now (ruling 68).**
-- **In PR-A:** every matrix and Stryker job (all four `matrix-truth.yml` jobs and every `mutation.yml` job) takes `runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}`. The visibility guard fails loudly only when the repository is private AND `runner.environment` is `github-hosted`; on a `self-hosted` runner it passes. `runner.environment` reaches the guard script as an input (`RUNNER_ENV`), so a unit test drives it. The test covers all four combinations: public/hosted (pass), public/self-hosted (pass), private/hosted (fail), private/self-hosted (pass). The dispatch input `inject_visibility=private` still fails a hosted job, which is PR-B's live proof (Task 17 Step 1).
-- **Outside W1d, not planned here:** the ephemeral self-hosted runner on Fly Machines is a follow-up between PR-B and the private switch. Then only `vars.MATRIX_RUNNER` changes. This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner. It is recorded in the execution handoff.
-- **The order:** PR-B's dispatches run on GitHub-hosted runners while the repo is public; then the Fly runner follow-up; then the switch to private. `ci.yml` PR jobs go back on the meter at the switch, which is outside the matrix. The per-PR sample calls `matrix-truth.yml`, so it inherits the switchable runner.
-- Owner value: going private cannot silently bill hosted minutes, and the move to a free runner is one variable.
-- Rejected: building the Fly runner in W1d (ruling 68 puts it outside).
-
 **D23 — The matrix drives no placement solver, so the shard jobs carry no placement container and no greedy-fallback guard (ruling 66).**
 - **Evidence at HEAD (read 2026-10-04, review 3).** `buildSchedule(` has two production call sites, both inside `autoSchedule` (`apps/web/src/server/usecases/schedule.ts:1924` directly, and `:2486` through `reflowExisting`, whose only caller is `:1916`). `autoSchedule`'s only caller is `app/api/v1/stages/[id]/schedule/auto/route.ts:19`. The AI solver paths are reached only through the `…/schedule/ai-plan` routes. The matrix's routes are divisions, stages, fixtures and entrants (`stages`, `entrants`, `fixtures`, `start`, `generate`, `rebuild`, `complete`, `americano`, `challenges`, `seed-proposal`, `standings`, `events`, `state`, `finalize`, `lineups`, `withdraw`). None is `schedule/auto` or `ai-plan`, and the browser driver's selectors hold no auto-schedule control. `startDivision` (`:3839`) generates fixtures through `generateStageFixturesUnpublished` and never calls the solver.
 - **The server boots without the placement env.** `PLACEMENT_SERVICE_HOST` and `PLACEMENT_SERVICE_SECRET` are read lazily, at `placement-client.ts:748` and `build.ts:2125`.
@@ -473,6 +466,14 @@ Three CLIs change:
 - **The premise becomes a guard (assumptions are guards).** `tools/matrix/__tests__/no-solver-route.test.ts` scans the matrix harness for a solver route and fails, citing ruling 66, if one appears. It reports the number of files scanned, and zero scanned is a failure. If a matrix path ever needs the solver, the container comes back as plumbing, and no check may then claim to prove scheduling.
 - Owner value: the weekly run is faster and cheaper, and nothing in W1d's evidence claims to prove placement.
 - Rejected: keeping the container "because it is cheap" (it adds an image build to the build job and a start-up wait to every shard, for a path the run never takes).
+
+**D24 — The repo goes private after W1d, so the runner is switchable now (ruling 68).**
+- **In PR-A:** every matrix and Stryker job (all four `matrix-truth.yml` jobs and every `mutation.yml` job) takes `runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}`. The visibility guard fails loudly only when the repository is private AND `runner.environment` is `github-hosted`; on a `self-hosted` runner it passes. `runner.environment` reaches the guard script as an input (`RUNNER_ENV`), so a unit test drives it. The test covers all four combinations: public/hosted (pass), public/self-hosted (pass), private/hosted (fail), private/self-hosted (pass). The dispatch input `inject_visibility=private` still fails a HOSTED job, which is PR-B's live proof (Task 17 Step 1). It proves the hosted path only: on a `self-hosted` runner the guard returns before it reads the input, so Step 1 checks its precondition (`vars.MATRIX_RUNNER` unset).
+- **Outside W1d, not planned here:** the ephemeral self-hosted runner on Fly Machines is a follow-up between PR-B and the private switch. Then `vars.MATRIX_RUNNER` changes, to a runner that meets the contract in the execution handoff (it is NOT only the variable: see there). This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner.
+- **`MATRIX_RUNNER` stays UNSET while the repo is public (review 5, R5-m8).** A self-hosted runner on a public repository runs fork `pull_request` jobs. The variable is set in the same step as the private flip, never before, unless the owner accepts in writing the mitigation of an ephemeral, secretless runner.
+- **The order:** PR-B's dispatches run on GitHub-hosted runners while the repo is public; then the Fly runner follow-up; then the switch to private. `ci.yml` PR jobs go back on the meter at the switch, which is outside the matrix. The per-PR sample calls `matrix-truth.yml`, so it inherits the switchable runner.
+- Owner value: going private cannot silently bill hosted minutes, and the move to a free runner is one variable.
+- Rejected: building the Fly runner in W1d (ruling 68 puts it outside).
 
 ---
 
@@ -2126,7 +2127,7 @@ Read these, and copy literally where this task says "as e2e/bench":
 
 Check whether a reusable workflow may declare top-level `concurrency:`. Read GitHub's "Reusing workflows" limitations page via WebFetch, or the `docs.github.com` copy in `node_modules` if one exists. If it may not, move the `concurrency` block onto the `plan` job and record the change.
 
-Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report. Ruling 68 (D24) rests on it: the guard passes only on `self-hosted`.
+Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report. Ruling 68 (D24) rests on it: a `self-hosted` runner always passes, and a `github-hosted` one passes only while the repo is public.
 
 Record ruling 66 and its evidence rather than a placement recipe. Re-run the solver-route read at HEAD and write the result in the task report:
 - `rtk proxy grep -an "buildSchedule(" apps/web/src/server/usecases/*.ts` lists the call sites, all reached only from the `schedule/auto` and `ai-plan` routes;
@@ -2223,6 +2224,27 @@ describe("the visibility guard (Review Focus 2)", () => {
   it("never prints the token", () => {
     const r = run({ RUNNER_ENV: "github-hosted", INJECT: "none", GH_TOKEN: "ghs_SECRETSECRETSECRET" }, "private");
     expect(r.stdout + r.stderr).not.toContain("ghs_");
+  });
+});
+
+describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3)", () => {
+  const MUT = readFileSync(".github/workflows/mutation.yml", "utf8");
+  const MJOBS = jobsOf(MUT);
+  it("every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)", () => {
+    const all = [...Object.values(JOBS), ...Object.values(MJOBS)];
+    expect(all.length).toBeGreaterThan(4);   // anti-vacuity: matrix-truth's four plus mutation's
+    for (const t of all) expect(stepOf(t, GUARD).body).toContain("RUNNER_ENV: ${{ runner.environment }}");
+  });
+  it("the mutate job does not cancel its siblings, takes its timeout from the matrix, and saves its evidence even when Stryker exits non-zero (R5-I1)", () => {
+    expect(MJOBS.mutate).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
+    expect(MJOBS.mutate).toContain("fail-fast: false");
+    expect(MJOBS.mutate).toContain("timeout-minutes: ${{ matrix.timeout }}");
+    for (const n of ["Survivors", "Upload mutation results"]) expect(stepOf(MJOBS.mutate, n).body).toContain("if: always()");
+  });
+  it("the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys (m2; mutation.yml was not read by any test before)", () => {
+    const opts = /group:[\s\S]*?options:\n((?:\s+- .+\n)+)/.exec(MUT)![1].split("\n").map((l) => l.replace(/^\s+- /, "").trim()).filter(Boolean);
+    expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
+    expect(opts.length).toBeGreaterThan(2);
   });
 });
 
@@ -2482,7 +2504,7 @@ jobs:
             *) echo "::error::inject_visibility '$INJECT' is not none|private|internal"; exit 1 ;;
           esac
           if [ "$vis" != "public" ]; then
-            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent."
+            echo "::error title=Matrix truth run refused::repository visibility is '${vis:-unreadable}'. Sharded matrix runs are free only while the repo is public (design §6.4); refusing before any minute is spent. Set vars.MATRIX_RUNNER to a self-hosted runner label to run them privately (ruling 68)."
             exit 1
           fi
           echo "repository is public; guard passes"
@@ -2797,7 +2819,7 @@ Run the vitest template on:
 ci-wiring.test.ts matrix-workflow.test.ts no-solver-route.test.ts run-sample.test.ts shard-matrix.test.ts strip-types-loadable.test.ts
 ```
 
-All green, with `.testResults[].name` listing exactly these 6 files (review I15: a misspelt positional is silently dropped). The guard's `it.each` must report 8 cases.
+All green, with `.testResults[].name` listing exactly these 6 files (review I15: a misspelt positional is silently dropped). The guard's `it.each` must report 9 cases.
 
 - [ ] **Step 7: Mutate**
 
@@ -2807,6 +2829,10 @@ All green, with `.testResults[].name` listing exactly these 6 files (review I15:
 | Make the guard fail on a `self-hosted` runner (delete the early `exit 0`) | "public, self-hosted" and "private, self-hosted" (ruling 68) |
 | Make the guard pass on a `github-hosted` private repo (accept hosted like self-hosted) | "private, hosted" and the four-combination test |
 | One job back to `runs-on: ubuntu-latest` | "every job … runs on the switchable runner" |
+| `RUNNER_ENV: self-hosted` literal in one job's guard env | "every guard step of BOTH workflows takes RUNNER_ENV from runner.environment" |
+| Delete `fail-fast: false` from mutation.yml's `mutate` | "the mutate job does not cancel its siblings" (R5-I1) |
+| Delete `if: always()` from the `Survivors` or upload step | the same test |
+| Add a group to `stryker.groups.mjs` only | "the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys" |
 | Delete the `case "$INJECT"` block | "public but injected private" |
 | Change `private\|internal)` to accept `public` | "private but injected public" |
 | Remove `if:` from `plan` | the D2 test |
@@ -3497,9 +3523,96 @@ The tests pin the function against machines whose expected values are worked fro
   - `pnpm mutation:floor --check <g> reports/mutation/<g>.json`. It is skipped for `probe`, and for the other groups only while `stryker-floor.json`'s `groups` is empty (PR-A's state: it prints "no floor yet: PR-B sets it"). Once PR-B commits a floor, a group with no entry is exit 2, a failure (review 4, R4-m3);
   - `--survivors` → `SURVIVORS.md`;
   - upload the `mutation-<group>` artifact (json, SURVIVORS.md).
+- `mutate` has `strategy: fail-fast: false` with `matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}`, so one group's timeout or red dry run never cancels the others (Task 20 expects a timeout and still needs the other groups' wall times). The `Survivors` and `Upload mutation results` steps carry `if: always()`, so a non-zero Stryker exit still saves what the group produced (review 5, R5-I1).
 - Timeout cap: ONE value, 300 minutes, everywhere (D14, Step 4, Task 20). A group whose estimate or measurement exceeds 200 is split before its timeout (× 1.5) would pass 300.
 
-The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; dispatch `league` style unknown key is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list.
+The skeleton (the guard's body is `matrix-truth.yml`'s, copied; `…` marks what the prose above already fixes):
+
+```yaml
+name: Stryker mutation
+# W1d (rulings 66, 67, 68). One job per STRYKER_GROUPS key; a PR runs the probe only (D3).
+on:
+  schedule:
+    - cron: "23 3 * * 0"        # GATED by vars.MATRIX_WEEKLY_ENABLED (plan's if:)
+  workflow_dispatch:
+    inputs:
+      group:
+        type: choice
+        default: all
+        options:
+          - all
+          - competition          # … one line per STRYKER_GROUPS key, probe included
+      inject_visibility:
+        type: choice
+        default: none
+        options: [none, private, internal]
+  pull_request:
+    paths:
+      - ".github/workflows/mutation.yml"
+      - "packages/engine/stryker*"
+      - "packages/engine/scripts/stryker-*"
+permissions:
+  contents: read
+jobs:
+  plan:
+    name: Plan the groups
+    if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INJECT: ${{ inputs.inject_visibility || 'none' }}
+          RUNNER_ENV: ${{ runner.environment }}
+        run: |
+          # … identical to matrix-truth.yml's …
+      - uses: actions/checkout@v5
+      - name: Derive the matrix
+        id: matrix
+        env:
+          EVENT: ${{ github.event_name }}
+          GROUP: ${{ inputs.group }}
+        run: node packages/engine/scripts/stryker-matrix.mjs --event "$EVENT" --group "$GROUP" >> "$GITHUB_OUTPUT"
+
+  mutate:
+    name: mutate ${{ matrix.group }}
+    needs: [plan]
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Visibility guard (design §6.4; R14a)
+        # … the same env block and script …
+      - uses: actions/checkout@v5
+      # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile, actions/cache (see above) …
+      - name: Run Stryker
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          set +e
+          cd packages/engine && STRYKER_GROUP="$GROUP" pnpm mutation
+          code=$?; echo "EXIT=$code"; echo "$code" > reports/mutation/exit.txt; exit "$code"
+      - name: Floor check
+        # … skipped for probe, and while stryker-floor.json's groups is empty …
+      - name: Survivors
+        if: always()
+        # … --survivors → SURVIVORS.md …
+      - name: Upload mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-${{ matrix.group }}
+          path: |
+            packages/engine/reports/mutation/${{ matrix.group }}.json
+            packages/engine/SURVIVORS.md
+```
+
+The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; an unknown key such as `nosuch` is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list. The new `describe("mutation.yml and the runner wiring")` in `matrix-workflow.test.ts` imports `STRYKER_GROUPS` from `packages/engine/stryker.groups.mjs` (through its `.d.mts`) and pins the `RUNNER_ENV` line, `fail-fast: false`, `if: always()` and the dispatch choices.
 
 - [ ] **Step 4: Dry-run every group, run the probe, and the tests**
 
@@ -3511,7 +3624,7 @@ cd <exec>/packages/engine && for g in $(node -e 'import("./stryker.groups.mjs").
 
 Record, per group, the mutant count Stryker reports and the dry-run wall time. Check the groups:
 - a group whose count is zero is a configuration fault (fix the globs);
-- compute `est = ceil((dryRunSeconds + mutants × 10 ÷ concurrency) / 60)` minutes per group (D14's formula, at the pessimistic 10 s per mutant). ANY group with `est > 200` is split by file in this step, before PR-A merges, and the report says which and why (the count, never a line count). Then write `stryker-timeouts.json` with `min(300, ceil(est × 1.5))` per group, the probe's from its real run;
+- compute `est = ceil((max(dryRunSeconds, 344) + mutants × 10 ÷ 3) / 60)` minutes per group (D14's formula: the pessimistic 10 s per mutant, concurrency 3 and the 344 s CI dry run as a floor, so a faster local machine cannot under-estimate; the dry-run time may instead be read from a CI run). The timeouts are calibrated on the 4-vCPU hosted runner and must be re-derived when `MATRIX_RUNNER` changes (handoff). ANY group with `est > 200` is split by file in this step, before PR-A merges, and the report says which and why (the count, never a line count). Then write `stryker-timeouts.json` with `min(300, ceil(est × 1.5))` per group, the probe's from its real run;
 - the table (group, mutants, dry-run time) goes in the task report and the PR body. It is the evidence Task 20's first full run is compared against.
 
 Then the probe, which is small, runs for real:
@@ -3624,6 +3737,14 @@ cd <evidence> && git rev-parse matrix-truth/w1d-baseline
 Record the SHA. A tag push runs no workflow (D21), and the executor confirms that in the Actions tab via `gh run list -L 5 --json event,headBranch,createdAt`: there must be no run whose `headBranch` is the tag.
 
 - [ ] **Step 1: The guard, live (the mutation PR-A could only unit-test)**
+
+**Precondition (review 5, R5-m4; D24).** The injected-`private` proof only means something on a GitHub-hosted runner, because a self-hosted runner returns from the guard before it reads the input. Check first:
+
+```bash
+cd <evidence> && gh variable list --json name,value --jq '.[] | select(.name == "MATRIX_RUNNER")'
+```
+
+It must print nothing. If it prints a value, STOP with the reason "`MATRIX_RUNNER` is set, so this dispatch would run self-hosted and the injection proof is void" (not a red): unset it, or record that the proof was run with it unset. After the dispatch, the plan job's log must also not contain `self-hosted runner:`.
 
 ```bash
 cd <evidence> && gh workflow run matrix-truth.yml --ref matrix-truth/w1d-baseline -f scope=smoke -f inject_visibility=private; echo EXIT=$?
@@ -4087,6 +4208,16 @@ Re-review 4 (0 Critical, 3 Important, 9 Minor) was taken against `cff1e7176` and
 
 ---
 
+## Review response (fix round 5)
+
+Re-review 5 (0 Critical, 1 Important, 10 Minor) was taken against `d8b2b7b35`.
+
+- **R5-I1 fixed.** `mutate` has `strategy: fail-fast: false` and `if: always()` on its survivors and upload steps. A test in `matrix-workflow.test.ts`, beside matrix-truth's, pins both and the matrix-derived timeout, with mutation rows.
+- **m1** 9 cases. **m2** the dispatch choices test now exists. **m3** every guard step of both workflows must carry `RUNNER_ENV: ${{ runner.environment }}`, with a mutation row. **m4** Task 17 Step 1 checks `vars.MATRIX_RUNNER` is unset and STOPs with that reason; D24 says the injection proves the hosted path only. **m5** wording and the guard's hint. **m6** the estimate floors the dry run at 344 s and uses concurrency 3; timeouts are re-derived when the runner changes. **m7** the handoff states the runner contract (Docker for `services: postgres`, tools, one label). No Fly runner is planned. **m8** `MATRIX_RUNNER` stays unset while the repo is public, in D24 and the handoff. **m9** the garbled example and the D23/D24 order. **m10** a `mutation.yml` skeleton in Task 15 Step 3.
+- **Disagreements:** none. **New false premises:** none.
+
+---
+
 ## Self-Review
 
 **1. Spec coverage** (the brief, rulings 60–68, item list):
@@ -4157,4 +4288,10 @@ Batch Tasks 12 and 13 into one dispatch with one review: they are same-shaped ca
 
 D7 (the L2 ░ reading) is RULED: owner ruling 65 (2026-10-04). The merge job and every Task 17 judge call use `--planned-not-run allow`, and Task 6 keeps a test that a ░ on a DRIVEN case is still harness-red. No owner question blocks any task.
 
-**Between PR-B and the private switch (ruling 68, not planned here):** a short follow-up builds the ephemeral self-hosted GitHub Actions runner on Fly Machines (its own Fly app and image with Node, Playwright browsers and Postgres, no production secrets). Then only `vars.MATRIX_RUNNER` changes. This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner. PR-B's dispatches run on GitHub-hosted runners while the repo is still public.
+**Between PR-B and the private switch (ruling 68, not planned here):** a short follow-up builds the ephemeral self-hosted GitHub Actions runner on Fly Machines (its own Fly app and image with Node, Playwright browsers and Postgres, no production secrets). Then `vars.MATRIX_RUNNER` changes. This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner. PR-B's dispatches run on GitHub-hosted runners while the repo is still public.
+
+**The runner contract the follow-up must meet (review 5, R5-m6, m7, m8):**
+- **Docker.** The shard job declares `services: postgres:16` on port 5433, which needs Docker on the runner. A Fly image with Postgres baked in and no Docker does not satisfy it, so the follow-up either supplies Docker or changes the shard job. It is not "only the variable".
+- **Tools.** `gh`, `psql`, Node 26 and pnpm are assumed, plus sudo for `playwright install --with-deps`. `MATRIX_RUNNER` is a single label, never an array.
+- **Timeouts are calibrated on the 4-vCPU hosted runner** (Task 15 Step 4, Task 20). Re-derive them when `MATRIX_RUNNER` changes.
+- **`MATRIX_RUNNER` stays unset while the repo is public** (D24): a self-hosted runner on a public repo runs fork PRs. Set it in the same step as the private flip, or accept in writing the mitigation of an ephemeral, secretless runner.
