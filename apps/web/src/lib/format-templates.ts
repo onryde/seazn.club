@@ -21,9 +21,9 @@
 //
 // `take`'s element type reuses the engine's own TakeRule (rather than a
 // hand-rolled `unknown[]`/`{kind:string}[]` restated here) so this file and
-// detectTemplate's own parameter type below can't drift apart the way
-// api-v1/schemas.ts's zod TakeRuleSchema and this plain-TS shape already
-// have to be kept in lockstep by hand (see that file's own comment).
+// detectTemplate's own parameter type below can't drift apart. api-v1/
+// schemas.ts's zod TakeRuleSchema is tied to the same TakeRule at compile
+// time (ruling 55); take-rule-schema.test.ts parses these templates' rules.
 //
 // F3 Task 6 (i18n): this array used to carry its own English `label`/`help`
 // strings. Both render to organisers (division-builder.tsx's picker cards,
