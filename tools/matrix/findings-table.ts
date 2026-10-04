@@ -3,7 +3,7 @@
 // generated from a TRIAGE.md "Every ❌" table and the committed results.json
 // each row is judged on, so a reader can re-run what the doc cites.
 //
-//   node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts \
+//   node --experimental-strip-types --import ./scripts/lib/crash-exit.ts \
 //     tools/matrix/findings-table.ts <TRIAGE.md> <truth-runs dir> [--out <file.md>]
 //
 // A row is taken when its final class is "product". Its failing checks are
@@ -21,7 +21,7 @@
 //   2  usage: not exactly two positionals, or an unknown flag;
 //   3  unreadable input: a missing TRIAGE.md or results.json, bad JSON, or
 //      results the schema refuses. A crash while the CLI loads is 3 too,
-//      through the preload (lib/crash-exit.ts).
+//      through the preload (scripts/lib/crash-exit.ts).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";

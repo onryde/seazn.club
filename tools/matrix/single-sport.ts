@@ -77,7 +77,7 @@
 //   3  the scanner crashed — never 1, which would read as a ratchet verdict.
 //   (3 also: a crash while the CLI LOADS, before any of its code runs — a
 //   strip-types parse error, a missing export, a module that throws — through
-//   `pnpm matrix:single-sport`, whose preload lib/crash-exit.ts maps it; a bare `node …`
+//   `pnpm matrix:single-sport`, whose preload scripts/lib/crash-exit.ts maps it; a bare `node …`
 //   run exits 1 on one. Final batch F-6.)
 // Deterministic: files in codepoint order, pins in source order, keys sorted.
 import { spawnSync } from "node:child_process";

@@ -12,7 +12,7 @@
 //      schema refuses, a case or check id that repeats, or a case id that
 //      does not end in its own width. Nothing is written. A crash while the CLI
 //      loads is 3 too, through the package script's preload
-//      (lib/crash-exit.ts). Run it only through that script: without the
+//      (scripts/lib/crash-exit.ts). Run it only through that script: without the
 //      preload, a load crash exits 1, which reads as a verdict (W1b carry e).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";

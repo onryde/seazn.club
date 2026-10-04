@@ -6,7 +6,8 @@
 //
 // This file is the exact layer: every import in those trees is resolved to a
 // path and judged, every package.json and tsconfig is read (the root
-// package.json's dependencies too — review m-2), and the two
+// package.json too — its dependencies, and its scripts that reach tools/,
+// which no string in those trees may name: CL-R4, review I-1 and m-2), and the two
 // guards' shared source (scripts/lib/tools-import-guard.mjs) is held to the
 // tools/* workspaces that actually exist. The eslint rule built from that
 // source is the coarse layer; the last block below runs each of the four real
@@ -52,22 +53,55 @@ interface Scan {
   /** Every package.json judged, repo-relative — the root one included (m-2). */
   manifestFiles: string[];
   tsconfigs: number;
+  /** Root package.json scripts read, and those that reach tools/ (directly or by running one that does). */
+  rootScripts: number;
+  toolsScripts: string[];
   /** `<file>: <what>` for every edge into tools/. */
   offenders: string[];
 }
 
+/** Every string literal's text in a source file — template pieces included, comments never. */
+function stringLiterals(f: string, text: string): string[] {
+  const kind = /\.[cm]?jsx?$/.test(f) ? (f.endsWith("x") ? ts.ScriptKind.JSX : ts.ScriptKind.JS) : f.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const out: string[] = [];
+  const walk = (n: ts.Node): void => {
+    if (ts.isStringLiteralLike(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) out.push(n.text);
+    n.forEachChild(walk);
+  };
+  walk(ts.createSourceFile(f, text, ts.ScriptTarget.Latest, false, kind));
+  return out;
+}
+
+/** Does `text` name the script `name` as a whole word — so `x:run` is not `x:runner`? */
+const names = (text: string, name: string): boolean => {
+  if (!/^[\w:.-]+$/.test(name)) throw new Error(`test: script name ${JSON.stringify(name)} is outside [\\w:.-] — escape it before matching`);
+  return new RegExp(`(?<![\\w:.-])${name.replaceAll(".", "\\.")}(?![\\w:-])`).test(text);
+};
+
 /** Every import, dependency and tsconfig reference under `root`'s ROOTS that
  *  reaches `root`/tools — by path (resolved), or by a tools/* package name —
- *  plus the root package.json's dependencies: the image installs from it
- *  (Dockerfile COPY), so a root dependency on a harness is the same edge. */
+ *  plus the root package.json: its dependencies (the image installs from it),
+ *  and its scripts. A root script whose command points into tools/ (or runs
+ *  one that does) may be run by CI and by hand, but nothing under ROOTS may
+ *  name it: a packages/ test that reads a script line and spawns it reaches
+ *  tools/ at runtime with no import for the rest of this scan to see (CL-R4,
+ *  review I-1: reference:boundary preloaded the harness's crash-exit.ts).
+ *  "Named" means spelled, as a whole word, inside a string literal (a
+ *  template's text included): the one thing such an edge cannot avoid — a
+ *  constant holding the name still spells it — while a comment that mentions
+ *  a script is prose, not an edge (scripts/lib/crash-exit.ts's header lists
+ *  the scripts that preload it). */
 function scan(root: string): Scan {
   const tools = join(root, "tools");
   const pkgNames = new Set(toolsPackagesIn(root));
   const intoTools = (abs: string) => abs === tools || abs.startsWith(tools + sep);
+  /** A command's path-shaped words, resolved from `dir`, any of them inside tools/? */
+  const pointsIntoTools = (cmd: string, dir: string) =>
+    cmd.split(/[\s=]+/).map((w) => w.replace(/^["']|["']$/g, "")).some((w) => !w.startsWith("-") && w.includes("/") && intoTools(resolve(root, dir, w)));
   const files = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...ROOTS], { cwd: root, encoding: "utf8" })
     .split("\0")
     .filter((f) => f !== "" && existsSync(join(root, f)));
-  const out: Scan = { perRoot: Object.fromEntries(ROOTS.map((r) => [r, 0])), specifiers: 0, manifests: 0, manifestFiles: [], tsconfigs: 0, offenders: [] };
+  const out: Scan = { perRoot: Object.fromEntries(ROOTS.map((r) => [r, 0])), specifiers: 0, manifests: 0, manifestFiles: [], tsconfigs: 0, rootScripts: 0, toolsScripts: [], offenders: [] };
   const judge = (f: string, spec: string) => {
     out.specifiers++;
     const pkg = packageOf(spec);
@@ -76,7 +110,7 @@ function scan(root: string): Scan {
     }
   };
   /** A manifest's dependencies on a tools/* package, by name or by a local path into tools/. */
-  const manifest = (f: string): void => {
+  const manifest = (f: string): Record<string, unknown> => {
     out.manifests++;
     out.manifestFiles.push(f);
     const m = JSON.parse(readFileSync(join(root, f), "utf8")) as Record<string, unknown>;
@@ -86,17 +120,47 @@ function scan(root: string): Scan {
         if (pkgNames.has(name) || (local !== undefined && intoTools(resolve(root, dirname(f), local)))) out.offenders.push(`${f}: ${field}.${name}`);
       }
     }
+    return m;
   };
-  if (existsSync(join(root, "package.json"))) manifest("package.json");
+  // The root manifest first: its scripts decide which names the trees below may not mention.
+  const toolsScripts = new Set<string>();
+  if (existsSync(join(root, "package.json"))) {
+    const scripts = (manifest("package.json").scripts ?? {}) as Record<string, string>;
+    out.rootScripts = Object.keys(scripts).length;
+    for (const [n, cmd] of Object.entries(scripts)) if (pointsIntoTools(cmd, ".")) toolsScripts.add(n);
+    // A script that runs one of those (`pnpm <it>`, `npm run <it>`) reaches tools/ too.
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [n, cmd] of Object.entries(scripts)) {
+        if (!toolsScripts.has(n) && [...toolsScripts].some((t) => names(cmd, t))) { toolsScripts.add(n); grew = true; }
+      }
+    }
+  }
+  out.toolsScripts = [...toolsScripts].sort();
+  const named = (f: string, t: string) => out.offenders.push(`package.json: scripts.${t} reaches tools/ and is named by ${f}`);
+  /** A source file names a reaching script in a string literal. The plain-text
+   *  check first, so only a file that mentions one at all is parsed. */
+  const sourceNames = (f: string, text: string) => {
+    const mentioned = out.toolsScripts.filter((t) => names(text, t));
+    if (mentioned.length === 0) return;
+    const literals = stringLiterals(f, text);
+    for (const t of mentioned) if (literals.some((l) => names(l, t))) named(f, t);
+  };
   for (const f of new Set(files)) {
     const top = f.split("/")[0]!;
     if (SOURCE.test(f)) {
       out.perRoot[top] = (out.perRoot[top] ?? 0) + 1;
-      const info = ts.preProcessFile(readFileSync(join(root, f), "utf8"), true, true);
+      const text = readFileSync(join(root, f), "utf8");
+      const info = ts.preProcessFile(text, true, true);
       for (const i of info.importedFiles) judge(f, i.fileName);
       for (const r of info.referencedFiles) judge(f, r.fileName.startsWith(".") ? r.fileName : `./${r.fileName}`);
+      sourceNames(f, text);
     } else if (basename(f) === "package.json") {
-      manifest(f);
+      const m = manifest(f);
+      for (const [n, cmd] of Object.entries((m.scripts ?? {}) as Record<string, string>)) {
+        if (pointsIntoTools(cmd, dirname(f))) out.offenders.push(`${f}: scripts.${n}`);
+        else for (const t of out.toolsScripts) if (names(cmd, t)) named(`${f} (scripts.${n})`, t);
+      }
     } else if (/^tsconfig(?:\.[\w-]+)?\.json$/.test(basename(f))) {
       out.tsconfigs++;
       const read = ts.readConfigFile(join(root, f), (p) => readFileSync(p, "utf8"));
@@ -151,19 +215,50 @@ describe("tools import guard (ruling 56)", () => {
   it("empty case first: a repo with nothing in apps/, packages/ or scripts/ scans zero files — which the real-tree test below refuses", () => {
     const s = scan(fixture({ "tools/matrix/package.json": JSON.stringify({ name: "@seazn/matrix" }), "README": "x\n" }));
     expect(Object.values(s.perRoot).reduce((a, b) => a + b, 0)).toBe(0);
-    // No root package.json: no manifest.
-    expect(s.manifests).toBe(0);
+    // No root package.json: no manifest, no script read, none reaching tools/.
+    expect({ manifests: s.manifests, rootScripts: s.rootScripts, toolsScripts: s.toolsScripts }).toEqual({ manifests: 0, rootScripts: 0, toolsScripts: [] });
     expect(s.offenders).toEqual([]);
   });
 
-  it("review m-2: the root package.json is judged — a root dependency on a harness is found, as a nested one is", () => {
+  it("CL-R4 (review I-1, m-2): the root package.json is judged — a dependency on a harness, and a root script that reaches tools/ (directly, or by running one that does) named from a guarded tree", () => {
     const s = scan(fixture({
       "tools/matrix/package.json": JSON.stringify({ name: "@seazn/matrix" }),
-      "package.json": JSON.stringify({ name: "root", devDependencies: { "@seazn/matrix": "workspace:*", "fast-check": "^3" } }),
-      "packages/y/package.json": JSON.stringify({ name: "y", dependencies: { z: "file:../../tools/matrix" } }),
+      "tools/matrix/lib/crash-exit.ts": "\n",
+      "package.json": JSON.stringify({
+        name: "root",
+        devDependencies: { "@seazn/matrix": "workspace:*" },
+        scripts: {
+          "m:preload": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts scripts/gate.ts",
+          "m:eq": "node --import=./tools/matrix/lib/crash-exit.ts scripts/gate.ts",
+          "m:via": "pnpm m:preload && echo done",
+          "m:clean": "node --import ./scripts/lib/crash-exit.ts scripts/gate.ts",
+          "m:prefix": "node scripts/gate.ts",
+          "lint:all": "eslint scripts tools",
+        },
+      }),
+      // Spawns a reaching script by name: the edge the import scan cannot see.
+      "packages/y/test/gate.test.ts": "const line = pkg.scripts[\"m:preload\"];\nconst eq = pkg.scripts[\"m:eq\"];\n",
+      "apps/x/run.mjs": "spawn(\"pnpm\", [\"m:via\"]);\n",
+      // A template literal spells it too.
+      "scripts/tmpl.ts": "const cmd = `pnpm m:eq -- ${x}`;\n",
+      // Decoys: a clean script, a name that only starts with a reaching one, a word with no path,
+      // and a reaching script named in comments only (prose, not an edge).
+      "scripts/ok.ts": "run(\"m:clean\"); run(\"m:preloader\"); run(\"lint:all\");\n// preloaded by m:preload and m:via\n/* m:eq */\n",
+      // A nested manifest whose own script points into tools/, and one that runs a reaching root script.
+      "packages/y/package.json": JSON.stringify({ name: "y", scripts: { gate: "node ../../tools/matrix/run.ts", relay: "pnpm -w m:eq" } }),
     }));
     expect(s.manifestFiles.sort()).toEqual(["package.json", "packages/y/package.json"]);
-    expect(s.offenders.sort()).toEqual(["package.json: devDependencies.@seazn/matrix", "packages/y/package.json: dependencies.z"]);
+    expect(s.rootScripts).toBe(6);
+    expect(s.toolsScripts).toEqual(["m:eq", "m:preload", "m:via"]);
+    expect(s.offenders.sort()).toEqual([
+      "package.json: devDependencies.@seazn/matrix",
+      "package.json: scripts.m:eq reaches tools/ and is named by packages/y/package.json (scripts.relay)",
+      "package.json: scripts.m:eq reaches tools/ and is named by packages/y/test/gate.test.ts",
+      "package.json: scripts.m:eq reaches tools/ and is named by scripts/tmpl.ts",
+      "package.json: scripts.m:preload reaches tools/ and is named by packages/y/test/gate.test.ts",
+      "package.json: scripts.m:via reaches tools/ and is named by apps/x/run.mjs",
+      "packages/y/package.json: scripts.gate",
+    ].sort());
   });
 
   it("positive control: every edge shape into tools/ is found — import, re-export, require, dynamic import, a dependency, a tsconfig path — and no decoy is", () => {
@@ -189,7 +284,7 @@ describe("tools import guard (ruling 56)", () => {
 
   it("the real tree: apps/, packages/ and scripts/ reach nothing under tools/ — every root read, every import judged", () => {
     const s = scan(REPO);
-    console.info(`tools-import-guard: ${JSON.stringify(s.perRoot)} source files, ${s.specifiers} specifiers, ${s.manifests} manifests, ${s.tsconfigs} tsconfigs judged`);
+    console.info(`tools-import-guard: ${JSON.stringify(s.perRoot)} source files, ${s.specifiers} specifiers, ${s.manifests} manifests, ${s.tsconfigs} tsconfigs, ${s.rootScripts} root scripts (${s.toolsScripts.length} reach tools/) judged`);
     for (const r of ROOTS) expect(s.perRoot[r], `${r}: zero files read`).toBeGreaterThan(10);
     expect(s.specifiers).toBeGreaterThan(1000);
     // m-2: the root manifest is judged too — the image installs from it (Dockerfile COPY).
@@ -200,7 +295,19 @@ describe("tools import guard (ruling 56)", () => {
     expect([...s.manifestFiles].sort()).toEqual(tracked);
     expect(s.manifests).toBe(tracked.length);
     expect(s.tsconfigs).toBeGreaterThanOrEqual(3);
+    // Root scripts were read, and the harness CLIs are seen reaching tools/ — the
+    // positive side, checked against a plain substring oracle (and never by
+    // spelling a harness script's name here: this file is itself scanned, and
+    // naming one is the very edge it refuses). I-1's reference:boundary is no
+    // longer among them.
+    const rootScripts = (JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
+    const oracle = Object.keys(rootScripts).filter((k) => rootScripts[k]!.includes("./tools/") || rootScripts[k]!.includes(" tools/")).sort();
+    expect(s.rootScripts).toBe(Object.keys(rootScripts).length);
+    expect(s.rootScripts).toBeGreaterThan(20);
+    expect(oracle.length).toBeGreaterThanOrEqual(7);
+    expect(s.toolsScripts).toEqual(oracle);
     expect(s.offenders).toEqual([]);
+    expect(s.toolsScripts).not.toContain("reference:boundary");
   });
 
   it("the guard's package list is exactly the tools/* workspaces that exist, and its regex matches each — so a new harness joins the guard or reds here", () => {

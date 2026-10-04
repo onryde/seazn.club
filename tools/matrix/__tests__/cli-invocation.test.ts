@@ -10,7 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { HARNESS_DIR, HISTORICAL_HARNESS_DIRS, spellingsOf } from "../lib/harness-path.ts";
+import { HARNESS_DIR, HISTORICAL_HARNESS_DIRS, RELOCATED_FILES, spellingsOf } from "../lib/harness-path.ts";
 
 const REPO = new URL("../../..", import.meta.url).pathname;
 /** Every matrix CLI (W1c Task 13 added `parity`). */
@@ -22,10 +22,12 @@ const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity
 const DIRS = [HARNESS_DIR, ...HISTORICAL_HARNESS_DIRS];
 if (!DIRS.every((d) => /^[\w-]+(?:\/[\w-]+)*$/.test(d))) throw new Error(`a harness directory is not a plain path: ${DIRS.join(", ")}`);
 const BARE = new RegExp(`node\\s+(?:--[a-z-]+\\s+)*(?:\\./)?(?:${DIRS.join("|")})/(?:${CLIS.join("|")})\\.ts`);
-const PRELOAD = "--import ./tools/matrix/lib/crash-exit.ts";
-/** The preload at every path it has had: a recorded line that names the
- *  historical one carried the preload when it ran. */
-const PRELOADS = spellingsOf("tools/matrix/lib/crash-exit.ts").map((p) => `--import ./${p}`);
+/** The preload's path today: scripts/lib, outside the harness (CL-R4). */
+const CRASH_EXIT = "scripts/lib/crash-exit.ts";
+const PRELOAD = `--import ./${CRASH_EXIT}`;
+/** The preload at every path it has had (lib/harness-path.ts's RELOCATED_FILES):
+ *  a recorded line that names the historical one carried the preload when it ran. */
+const PRELOADS = spellingsOf(CRASH_EXIT).map((p) => `--import ./${p}`);
 /** A line that runs a matrix CLI without the preload. The preload may ride
  *  outside the flag run the pattern spans (NODE_OPTIONS), so a line naming it
  *  anywhere is exempt. */
@@ -63,7 +65,8 @@ describe("CLI invocation (carry e)", () => {
     const files = tracked();
     expect(files.length).toBeGreaterThan(0);
     // A pathspec that silently matched nothing would read as "no bare line".
-    for (const f of ["package.json", ".github/workflows/ci.yml", "AGENTS.md", "tools/matrix/lib/crash-exit.ts"]) expect(files, f).toContain(f);
+    // A nested harness module too: the matrix pathspec reaches lib/.
+    for (const f of ["package.json", ".github/workflows/ci.yml", "AGENTS.md", "tools/matrix/lib/harness-path.ts"]) expect(files, f).toContain(f);
     let clis = 0;
     for (const cli of CLIS) {
       expect(files, cli).toContain(`tools/matrix/${cli}.ts`);
@@ -89,7 +92,13 @@ describe("CLI invocation (carry e)", () => {
     expect(historical).not.toContain("tools/matrix");
     expect(bareRun(historical)).toBe(true);
     expect(bareRun(historical.replace("--experimental-strip-types", `--experimental-strip-types --import ./${HISTORICAL_HARNESS_DIRS[0]}/lib/crash-exit.ts`))).toBe(false);
+    // The preload's two spellings: today's, and the one its file-level entry records (CL-R4).
+    expect(RELOCATED_FILES[`${HISTORICAL_HARNESS_DIRS[0]}/lib/crash-exit.ts`]).toBe(CRASH_EXIT);
     expect(PRELOADS).toEqual([PRELOAD, `--import ./${HISTORICAL_HARNESS_DIRS[0]}/lib/crash-exit.ts`]);
+    // The spelling that existed only between the move and CL-R4 points at no file, so it exempts nothing
+    // (through NODE_OPTIONS, the one form whose preload rides outside the pattern).
+    expect(bareRun(`NODE_OPTIONS="--import ./tools/matrix/lib/crash-exit.ts" ${bare("--experimental-strip-types")}`)).toBe(true);
+    expect(bareRun(`NODE_OPTIONS="--import ./${HISTORICAL_HARNESS_DIRS[0]}/lib/crash-exit.ts" ${bare("--experimental-strip-types")}`)).toBe(false);
     // A directory that only ends in matrix is no harness.
     expect(BARE.test(bare("--experimental-strip-types").replace(" tools/matrix/", " tools/xmatrix/"))).toBe(false);
     let clis = 0;

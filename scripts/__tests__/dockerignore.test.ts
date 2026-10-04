@@ -114,7 +114,7 @@ describe(".dockerignore (ruling 56): the image's build context", () => {
       "packages/engine/src/competition/index.ts", "packages/reference/src/index.ts",
       "apps/web/src/lib/format-templates.ts", "apps/web/src/server/api-v1/schemas.ts",
       // apps/web's `typecheck` runs tsconfig.scripts.json over scripts/ inside the image.
-      "tsconfig.scripts.json", "scripts/lib/main-module.ts", "scripts/lib/tools-import-guard.mjs", "scripts/reference-boundary.ts",
+      "tsconfig.scripts.json", "scripts/lib/main-module.ts", "scripts/lib/crash-exit.ts", "scripts/lib/tools-import-guard.mjs", "scripts/reference-boundary.ts",
       "docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md",
     ];
     let judged = 0;

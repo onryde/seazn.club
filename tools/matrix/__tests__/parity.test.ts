@@ -460,7 +460,7 @@ describe("renderParity", () => {
 // The CLI, spawned as its package script (the preload included), under a
 // derived budget (spawn-budget.ts, T2(d)).
 const SCRIPT = "matrix:parity";
-const PACKAGE_LINE = "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/parity.ts";
+const PACKAGE_LINE = "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/parity.ts";
 const scripts = (JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
 describe("parity CLI, run as its package script", () => {

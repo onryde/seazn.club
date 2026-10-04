@@ -3,7 +3,7 @@
 // held; a failure to LOAD the CLI — a parse error under strip-types, a
 // missing export, a module that throws while it evaluates — exited 1, because
 // node fails before any CLI code runs. Each CLI's package script now preloads
-// tools/matrix/lib/crash-exit.ts (node --import), which maps such a crash to
+// scripts/lib/crash-exit.ts (node --import), which maps such a crash to
 // 3. The empty case first: a module that loads and sets nothing exits 0, and
 // a verdict (exitCode 1) stays 1 — the preload never turns a verdict into 3.
 // Every command is the package script as written, run for real.
@@ -16,7 +16,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const PRELOAD = "./tools/matrix/lib/crash-exit.ts";
+const PRELOAD = "./scripts/lib/crash-exit.ts";
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
 /** [package script, its CLI, an argv its main refuses as usage, that exit,

@@ -4,10 +4,10 @@
 // never against the module's own constants alone.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { HARNESS_DIR, HISTORICAL_HARNESS_DIRS, livePath, spellingsOf } from "../lib/harness-path.ts";
+import { HARNESS_DIR, HISTORICAL_HARNESS_DIRS, RELOCATED_FILES, livePath, spellingsOf } from "../lib/harness-path.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MATRIX = resolve(HERE, "..");
@@ -45,9 +45,14 @@ describe("harness-path: where the harness lives, and where it used to (ruling 56
       ["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/format-templates.ts"],
       ["tools/matrix/run.ts", "tools/matrix/run.ts"],
       [`x/${OLD}/run.ts`, `x/${OLD}/run.ts`],
+      // The two files that left the harness for scripts/lib (CL-R4) — and a sibling in their directory that did not.
+      [`${OLD}/lib/crash-exit.ts`, "scripts/lib/crash-exit.ts"],
+      [`${OLD}/lib/main-module.ts`, "scripts/lib/main-module.ts"],
+      [`${OLD}/lib/scenario-catalogue.ts`, "tools/matrix/lib/scenario-catalogue.ts"],
+      [`${OLD}/lib/crash-exit.tsx`, "tools/matrix/lib/crash-exit.tsx"],
     ];
     for (const [recorded, live] of cases) expect(livePath(recorded), recorded).toBe(live);
-    expect(cases.length).toBe(9);
+    expect(cases.length).toBe(13);
   });
 
   it("spellingsOf lists today's path first, then each historical one; a path outside the harness has only itself", () => {
@@ -58,8 +63,51 @@ describe("harness-path: where the harness lives, and where it used to (ruling 56
     expect(spellingsOf("tools/matrix")).toEqual(["tools/matrix", OLD]);
     expect(spellingsOf("tools/matrixx/a.ts")).toEqual(["tools/matrixx/a.ts"]);
     expect(spellingsOf("package.json")).toEqual(["package.json"]);
+    // A relocated file's spellings are its recorded path — and the harness
+    // spelling of its name no longer claims that recorded path.
+    expect(spellingsOf("scripts/lib/crash-exit.ts")).toEqual(["scripts/lib/crash-exit.ts", `${OLD}/lib/crash-exit.ts`]);
+    expect(spellingsOf("scripts/lib/main-module.ts")).toEqual(["scripts/lib/main-module.ts", `${OLD}/lib/main-module.ts`]);
+    expect(spellingsOf("tools/matrix/lib/crash-exit.ts")).toEqual(["tools/matrix/lib/crash-exit.ts"]);
+    expect(spellingsOf("scripts/lib/tools-import-guard.mjs")).toEqual(["scripts/lib/tools-import-guard.mjs"]);
     // The two directions agree: every spelling maps back to the live path.
-    for (const p of spellingsOf("tools/matrix/lib/crash-exit.ts")) expect(livePath(p)).toBe("tools/matrix/lib/crash-exit.ts");
+    const lives = ["scripts/lib/crash-exit.ts", "scripts/lib/main-module.ts", "tools/matrix/lib/scenario-catalogue.ts", "tools/matrix", "package.json"];
+    let checked = 0;
+    for (const live of lives) for (const p of spellingsOf(live)) { expect(livePath(p), p).toBe(live); checked++; }
+    expect(checked).toBe(9);
+  });
+
+  it("CL-R4: each relocated file is real today, outside the harness, recorded under a historical directory — and needed: the directory map alone sends it where no file is", () => {
+    const entries = Object.entries(RELOCATED_FILES);
+    // The files C3a and CL-R4 lifted; an entry is history, so the list is pinned.
+    expect(entries.map(([from]) => from).sort()).toEqual([`${OLD}/lib/crash-exit.ts`, `${OLD}/lib/main-module.ts`]);
+    let checked = 0;
+    for (const [from, to] of entries) {
+      expect(existsSync(join(REPO, to)), `${to} is gone`).toBe(true);
+      expect(to.startsWith(`${HARNESS_DIR}/`), `${to} is back in the harness`).toBe(false);
+      const dir = HISTORICAL_HARNESS_DIRS.find((d) => from.startsWith(`${d}/`));
+      expect(dir, `${from} was never a harness path`).toBeDefined();
+      const byDirectory = `${HARNESS_DIR}${from.slice(dir!.length)}`;
+      expect(byDirectory).toBe(`${HARNESS_DIR}/lib/${basename(from)}`);
+      expect(existsSync(join(REPO, byDirectory)), `${byDirectory} exists, so ${from} needs no entry`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("CL-R4: every preload an executed plan records names a real file once mapped — the historical crash-exit spelling included", () => {
+    // The plans are records, never rewritten (D4): cli-invocation.test.ts reads
+    // their `--import` lines as the preload, so each must still resolve.
+    const plans = trackedUnder("docs/superpowers/plans").filter((f) => f.endsWith(".md"));
+    expect(plans.length).toBeGreaterThan(10);
+    const recorded = new Set<string>();
+    const pattern = new RegExp(`--import[ =]\\./(${OLD.replace("/", "\\/")}\\/[\\w./-]+\\.ts)\\b`, "g");
+    for (const f of plans) for (const m of readFileSync(join(REPO, f), "utf8").matchAll(pattern)) recorded.add(m[1]!);
+    console.info(`harness-path: ${plans.length} plans read, recorded preloads ${JSON.stringify([...recorded])}`);
+    expect(recorded).toContain(`${OLD}/lib/crash-exit.ts`);
+    for (const p of recorded) {
+      expect(existsSync(join(REPO, livePath(p))), `${p} -> ${livePath(p)}`).toBe(true);
+      expect(existsSync(join(REPO, p)), `${p} still resolves unmapped`).toBe(false);
+    }
   });
 
   it("every harness path committed evidence records still names a real file once mapped — and none does unmapped", () => {

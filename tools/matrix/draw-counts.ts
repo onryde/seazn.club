@@ -3,7 +3,7 @@
 // precondition ("the run's DB shows ≥1 drawn fixture") is committed evidence
 // instead of an uncommitted probe.
 //
-//   node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts \
+//   node --experimental-strip-types --import ./scripts/lib/crash-exit.ts \
 //     tools/matrix/draw-counts.ts <run dir>... --out <file.json>
 //
 // Each run dir holds a results.json; its case ids are the cases counted. A

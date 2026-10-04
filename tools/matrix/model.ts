@@ -49,7 +49,7 @@
 //      It outranks 1: the run is incomplete, whatever else it found (RR-2).
 //   (3 also: a crash while the CLI LOADS, before any of its code runs — a
 //   strip-types parse error, a missing export, a module that throws — through
-//   `pnpm run matrix:model`, whose preload lib/crash-exit.ts maps it. Run it
+//   `pnpm run matrix:model`, whose preload scripts/lib/crash-exit.ts maps it. Run it
 //   only through that script: without the preload a load crash exits 1
 //   (cli-invocation.test.ts refuses a documented run that skips it). Final
 //   batch F-6, W1b carry e.)

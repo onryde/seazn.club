@@ -7,7 +7,7 @@
 //      file, a second file, an unknown flag, a missing or unreadable file, bad
 //      JSON, results the schema refuses, or a case off the run's own grid;
 //   3  a crash while it loads, through `pnpm run matrix:render` (its preload,
-//      lib/crash-exit.ts, final batch F-6). Run it only through that script:
+//      scripts/lib/crash-exit.ts, final batch F-6). Run it only through that script:
 //      without the preload a load crash exits 1 (W1b carry e).
 // An uncaught throw would exit 1 without the preload (3 through the package
 // script), so every input failure is caught here rather than left to read as

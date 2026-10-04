@@ -849,7 +849,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   it("final batch FB-8: the bootstrap keys on REF's package.json, not on the PR's own constants — a base that RUNS the ratchet (its package.json names the script) with the scanner renamed and the baseline moved is refused (task 11 review RR-3b, G1/G2)", () => {
     // The key is the product's: the real package.json runs the scanner under it.
     const realPkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(realPkg.scripts[RATCHET_SCRIPT]).toBe(`node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts ${SCANNER_PATH}`);
+    expect(realPkg.scripts[RATCHET_SCRIPT]).toBe(`node --experimental-strip-types --import ./scripts/lib/crash-exit.ts ${SCANNER_PATH}`);
     const pkg = (scripts: Record<string, string>) => `${JSON.stringify({ name: "scratch", scripts }, null, 2)}\n`;
     let checked = 0;
     // G1: the scanner file renamed; G2: left in place under a typo'd constant — at REF neither sits at SCANNER_PATH.

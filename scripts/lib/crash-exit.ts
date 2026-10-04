@@ -1,7 +1,12 @@
 // Preloaded (node --import) by every matrix CLI's package script — matrix:l3,
 // matrix:browser, matrix:render, matrix:catalogue, matrix:single-sport,
-// matrix:model, matrix:parity and reference:boundary (W1b final batch F-6;
-// W1c added browser and parity, pinned by crash-exit.test.ts). Each CLI promises "3 = crash, never
+// matrix:model, matrix:parity — and by reference:boundary (W1b final batch
+// F-6; W1c added browser and parity; pinned by tools/matrix/__tests__/
+// crash-exit.test.ts). It lives here, not in the harness, for the reason
+// main-module.ts does: reference:boundary is a repo gate, not harness code,
+// and packages/reference's test spawns it as its package script — so its
+// preload must not reach the dev-only tools/ (ruling 56; CL-R4, which lifted
+// it out of the harness). Each CLI promises "3 = crash, never
 // 1", because 1 reads as a verdict (drift, a ratchet violation, a NEW
 // failure). Its main keeps that promise; but a failure to LOAD the CLI — a
 // parse error under strip-types, a missing export, a module that throws while

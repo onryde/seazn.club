@@ -857,8 +857,12 @@ Elsewhere the text is the controller's record.
       harnesses (bench to follow). `tools/*` is a pnpm workspace glob; the harness's manifest declares what it
       really imports. Nothing in `apps/`, `packages/` or `scripts/` may import `tools/**` or `@seazn/matrix`:
       the eslint rule from `scripts/lib/tools-import-guard.mjs` is the coarse layer, and
-      `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. `.dockerignore` lists `tools/`
-      and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
+      `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. Nor may they reach it at
+      runtime: the same test refuses a root `package.json` dependency on a harness, and any string in those trees
+      that names a root script whose command points into `tools/`. Code the gates share with the harness lives in
+      `scripts/lib`: `main-module.ts`, and `crash-exit.ts`, which `reference:boundary` preloads and
+      `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
+      `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
     - **Old paths.** The committed evidence still spells `scripts/matrix` and is never rewritten.
       `tools/matrix/lib/harness-path.ts` is the one map from the old directory to the new one; the single-sport
       ratchet's `--against` reads a pre-move base through it. The paths elsewhere in this index were updated to
@@ -2061,7 +2065,7 @@ row whose final class is product. Each row's failing checks are read from the co
 TRIAGE judges it on. The script refuses any row that is not red on its judged run, or whose run's `harnessCommit`
 differs from TRIAGE's. It read 61 results files and 164 rows, and refused none. `findings-table.test.ts` pins this
 table as its output, byte for byte. To re-run it:
-`node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/findings-table.ts
+`node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/findings-table.ts
 <TRIAGE.md> <truth-runs dir> --out <file.md>`.
 
 **Per wave** (re-derived by script; ruling T15-R4 moved P1 from W4 to W2, and Task 16 applied it to TRIAGE):

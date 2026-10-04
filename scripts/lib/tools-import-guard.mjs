@@ -12,9 +12,15 @@
 //     tools/* package, or any relative specifier that climbs (`../`) into a
 //     directory named `tools`.
 //   * scripts/__tests__/tools-import-guard.test.ts — resolves every import in
-//     those trees to a real path, checks package.json dependencies, and pins
-//     that TOOLS_PACKAGES below names every tools/* workspace, so a new
-//     harness cannot join tools/ without joining this guard.
+//     those trees to a real path, checks package.json dependencies (the root
+//     manifest's too: the image installs from it), and pins that
+//     TOOLS_PACKAGES below names every tools/* workspace, so a new harness
+//     cannot join tools/ without joining this guard. It also holds the edge
+//     no import shows (CL-R4, review I-1): a root package.json script whose
+//     command points into tools/ may be run by CI or by hand, but no string
+//     in those trees may name it — a test that reads a script line and spawns
+//     it reaches tools/ at runtime. reference:boundary did, through its
+//     crash-exit.ts preload, until CL-R4 lifted that file into scripts/lib.
 
 /** The package names of the tools/* workspaces. The guard test reds when a
  *  tools/* package.json names a package this list does not. */

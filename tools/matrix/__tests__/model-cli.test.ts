@@ -850,7 +850,7 @@ describe("model.ts", () => {
 
   it("package.json runs the CLI under strip-types", () => {
     const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> };
-    expect(pkg.scripts["matrix:model"]).toBe("node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/model.ts");
+    expect(pkg.scripts["matrix:model"]).toBe("node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/model.ts");
   });
 });
 
