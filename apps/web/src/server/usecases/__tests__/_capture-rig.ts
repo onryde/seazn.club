@@ -12,6 +12,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { ensureStreamCode } from "../stream-codes";
+import { grantCredits } from "../stream-credits";
 import { createSession, type SessionDeps } from "../stream-sessions";
 import { createStreamTarget } from "../stream-targets";
 import { seedOrg, startedCricketDivisionWithFixture, startedDivisionWithFixture } from "./_rig";
@@ -30,7 +31,8 @@ export const phoneId = (tag: string): string => `phone-${tag}-${randomUUID()}`;
  *  controls. */
 const ROOMY_STORAGE_MINUTES = 100_000_000;
 
-export async function captureRig(opts: { sport?: "generic" | "cricket"; overlay?: boolean; relay?: boolean; targetLabel?: string; connectAfterMs?: number } = {}) {
+/** `credits`: bought credits granted up front — a session needs one to go live (the consume at warming → live). */
+export async function captureRig(opts: { sport?: "generic" | "cricket"; overlay?: boolean; relay?: boolean; targetLabel?: string; connectAfterMs?: number; credits?: number } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const fixtureId = opts.sport === "cricket"
@@ -38,6 +40,7 @@ export async function captureRig(opts: { sport?: "generic" | "cricket"; overlay?
     : (await startedDivisionWithFixture(auth)).fixtureId;
   await override(auth.orgId, "streaming.overlay", opts.overlay ?? true);
   await override(auth.orgId, "streaming.relay", opts.relay ?? true);
+  if (opts.credits) await grantCredits({ orgId: auth.orgId, delta: opts.credits, createdBy: await rigUser(), note: "capture rig", idempotencyKey: randomUUID() });
   const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: opts.targetLabel ?? "Club", streamKey: `yt-${randomUUID()}` });
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: opts.connectAfterMs ?? 3000 });

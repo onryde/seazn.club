@@ -1,34 +1,43 @@
 import "server-only";
 // server/usecases/capture-phone.ts — the phone-facing use-cases of capture QR v2 (§6.3): the descriptor (`getCode`,
-// T8a), and the waiting-fields builder the beat answer reuses (T8b), so the two never disagree (R7: ONE owner of the
-// length fit).
+// T8a), the beat (`postBeat`, T8b), and the waiting-fields builder both answers share, so the two never disagree (R7:
+// ONE owner of the length fit).
 //
 // R1 (§17.1): the V430 tables are FORCE RLS with no policy, so every read here goes through the non-tenant `sql` —
 // never `withTenant` — and the org is the code row's (`resolveStreamCode`). Each answer is built field by field, never
 // by spreading a row. The sealed ingest secrets are opened (`readFirstInput`) only when `cred` is about to be served,
 // inside this request, and never logged.
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { hasFeature } from "@/lib/entitlements";
+import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
 import { defaultThemeFor } from "@/components/overlay/theme-registry";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
-import { CaptureDescriptor, CaptureWaiting, type CaptureCred } from "@/server/api-v1/capture-schemas";
+import {
+  CaptureDescriptor, CaptureWaiting, type CaptureBeat, type CaptureBeatAnswer, type CaptureCred, type CaptureStartedBy,
+} from "@/server/api-v1/capture-schemas";
 import type { z } from "zod";
 import { log } from "@/server/logger";
 import { overlayKeyFor } from "@/server/overlay/overlay-key";
 import {
-  HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
-  srtEnabled, streamIngestHost, streamPlaybackHost,
+  DEAD_PHONE_TAKEOVER_SECONDS, HOLD_SLACK_SECONDS, HOT_THERMAL_STATUS, INGEST_TIMEOUT_SECONDS, LOW_BATTERY_PERCENT,
+  PHONE_BEAT_RETENTION_HOURS, POLL_FAR_SECONDS, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES,
+  srtEnabled, streamIngestHost, streamPlaybackHost, tunable,
 } from "@/server/relay/config";
+import { beatAnswer, wireBeatAnswer } from "@/server/relay/domain/beat-answer";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
+import { type ClaimOutcome, deadForTakeover, decideClaim, isNotResponding } from "@/server/relay/domain/pairing";
 import { pollSecondsFor } from "@/server/relay/domain/poll-seconds";
-import { isActive, type FailReason, type SessionState } from "@/server/relay/domain/session";
+import { ACTIVE_STATES, isActive, type FailReason, type SessionState } from "@/server/relay/domain/session";
+import { slotState } from "@/server/relay/domain/slot";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import { ingestCred } from "@/server/relay/ingest-cred";
+import type { IngestState } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
+import { recordEvent } from "@/server/relay/telemetry";
 import { resolveStreamCode, type ResolvedCode } from "./stream-codes";
-import type { SessionDeps } from "./stream-sessions";
+import { apply, lastConnectedSampleAt, tickSession, type SessionDeps } from "./stream-sessions";
 
 type Descriptor = z.infer<typeof CaptureDescriptor>;
 
@@ -279,4 +288,296 @@ async function serveCred(
        where id = ${sessionId}`;
     return { uid: input.ingestInputId, cred: r.cred, preferred: r.preferred };
   }) as Promise<{ uid: string | null; cred: CaptureCred; preferred: "srt" | "rtmps" }>;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// T8b — the beat: `POST /api/v1/capture/codes/{code}/beats` (§6.3.2, §6.3.3, §6.5, §6.8.2, §6.10)
+// ---------------------------------------------------------------------------------------------------------------------
+
+type Beat = z.infer<typeof CaptureBeat>;
+type BeatAnswer = z.infer<typeof CaptureBeatAnswer>;
+type Exec = Tx | typeof sql;
+
+/** The fixture's open session (one per fixture, V421) as the beat reads it. */
+type OpenRow = { id: string; state: SessionState; first_ingest_at: Date | null; start_cause: CaptureStartedBy; pairing_id: string | null };
+type PairingRow = { id: string; code_id: string; phone: string; last_beat_at: Date; answered_poll_seconds: number };
+
+async function openSessionOf(exec: Exec, fixtureId: string): Promise<OpenRow | null> {
+  const [row] = await exec<OpenRow[]>`
+    select id, state, first_ingest_at, start_cause, pairing_id from fixture_stream_sessions
+     where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])}
+     order by created_at desc, id desc limit 1`;
+  return row ?? null;
+}
+
+/** "C", the slot's current pairing (§5.5). While a session is open, the phone that HOLDS it is C — its pairing, ended
+ *  or not by nothing but a takeover, the operator's Stop or the code's cascade, wherever its code (C-2: a reissue never
+ *  makes the open session's phone non-current, so the code's state is not read). Otherwise the current pairing on the
+ *  caller's own code, the one current pairing per (code, slot) of V430's partial unique index. */
+async function holderOf(exec: Exec, codeId: string, open: OpenRow | null): Promise<PairingRow | null> {
+  if (open?.pairing_id) {
+    const [held] = await exec<PairingRow[]>`
+      select id, code_id, phone, last_beat_at, answered_poll_seconds from fixture_stream_pairings
+       where id = ${open.pairing_id} and ended_at is null`;
+    if (held) return held;
+  }
+  const [cur] = await exec<PairingRow[]>`
+    select id, code_id, phone, last_beat_at, answered_poll_seconds from fixture_stream_pairings
+     where code_id = ${codeId} and slot = ${SLOT} and ended_at is null`;
+  return cur ?? null;
+}
+
+const slotOf = (holder: PairingRow | null, open: OpenRow | null, dead: boolean) =>
+  slotState({ hasCurrent: holder !== null, open: open === null ? null : { state: open.state, firstIngestAt: open.first_ingest_at }, dead });
+
+/** §6.10's sanitising: `raw` is the beat through an ALLOWLIST of the contract's fields, picked by name, so a widened
+ *  caller object never reaches storage. `at` is normalised to UTC (R5). `device` rides only on a claim beat (G0-e). */
+function rawOf(b: Beat, atUtc: string): Record<string, unknown> {
+  return {
+    code: b.code, slot: b.slot, phone: b.phone, claim: b.claim, sid: b.sid, at: atUtc, state: b.state, cause: b.cause,
+    notReady: b.notReady, startFailed: b.startFailed, stopped: b.stopped, mode: b.mode, transport: b.transport,
+    bitrateKbps: b.bitrateKbps, delivery: b.delivery, deliveredLagS: b.deliveredLagS, audioOk: b.audioOk,
+    battery: b.battery === null ? null : { percent: b.battery.percent, charging: b.battery.charging, drainPctPerHour: b.battery.drainPctPerHour },
+    thermal: b.thermal, dataUsedMB: b.dataUsedMB, appVersion: b.appVersion,
+    ...(b.claim !== null && b.device !== null ? { device: { model: b.device.model } } : {}),
+    ...(b.endReason !== undefined ? { endReason: b.endReason } : {}),
+  };
+}
+
+/** §6.10's derived flags, each from its config.ts threshold. `notResponding` is §6.9's W8 condition, judged on the
+ *  pairing's PREVIOUS beat: this beat ends a stretch the panel must still see. */
+function flagsOf(b: Beat, notResponding: boolean): string[] {
+  const f: string[] = [];
+  if (b.battery !== null && b.battery.percent < LOW_BATTERY_PERCENT && !b.battery.charging) f.push("battery_low");
+  if (b.thermal !== null && b.thermal >= HOT_THERMAL_STATUS) f.push("hot");
+  if (b.delivery === "stalled") f.push("stalled");
+  if (b.notReady !== null) f.push("not_ready");
+  if (notResponding) f.push("not_responding");
+  return f;
+}
+const sameSet = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x) => b.includes(x));
+
+/** §6.10: a history `minute` row when the pairing has none inside this window. */
+const HISTORY_MINUTE_MS = 60_000;
+
+/** §6.10's history, inside a SAVEPOINT: a failure is logged and the beat still answers (the sampleBeat isolation rule).
+ *  A `change` row on a state or flag change; otherwise a `minute` row when the pairing has written no row this minute
+ *  (a change row stands in for that minute's sample: one row, of kind `change`). Every row written when the minute was
+ *  due purges the pairing's history past PHONE_BEAT_RETENTION_HOURS. All on the SERVER clock — `at` is never a clock. */
+async function storeHistory(
+  tx: Tx, h: { orgId: string; pairingId: string; sessionId: string | null; beat: Beat; raw: Record<string, unknown>; flags: string[] }, now: Date,
+): Promise<void> {
+  try {
+    await tx.savepoint(async (sp) => {
+      const [prev] = await sp<{ phone_state: string | null; flags: string[] }[]>`
+        select phone_state, flags from fixture_stream_phone_beats where pairing_id = ${h.pairingId} order by id desc limit 1`;
+      const [recent] = await sp<{ n: number }[]>`
+        select count(*)::int as n from fixture_stream_phone_beats
+         where pairing_id = ${h.pairingId} and recorded_at > ${new Date(now.getTime() - HISTORY_MINUTE_MS)}`;
+      const minuteDue = recent!.n === 0;
+      const changed = !prev || prev.phone_state !== h.beat.state || !sameSet(prev.flags, h.flags);
+      if (!changed && !minuteDue) return;
+      const b = h.beat;
+      await sp`
+        insert into fixture_stream_phone_beats
+          (org_id, pairing_id, session_id, recorded_at, kind, phone_state, flags, battery_pct, charging, thermal,
+           bitrate_kbps, delivery, delivered_lag_s, raw)
+        values (${h.orgId}, ${h.pairingId}, ${h.sessionId}, ${now}, ${changed ? "change" : "minute"}, ${b.state}, ${h.flags},
+                ${b.battery?.percent ?? null}, ${b.battery?.charging ?? null}, ${b.thermal}, ${b.bitrateKbps}, ${b.delivery},
+                ${b.deliveredLagS}, ${sp.json(h.raw as never)})`;
+      if (minuteDue) {
+        await sp`delete from fixture_stream_phone_beats
+                  where pairing_id = ${h.pairingId} and recorded_at < ${new Date(now.getTime() - PHONE_BEAT_RETENTION_HOURS * 3_600_000)}`;
+      }
+    });
+  } catch (err) {
+    log.warn({ err: String(err), pairingId: h.pairingId, orgId: h.orgId }, "capture beat: the history row was not written — the beat is stored and answered");
+    captureError(err, { orgId: h.orgId, route: "capture.beat.history" });
+  }
+}
+
+/** What the beat's transaction decided, for the steps that run after it commits. */
+type Decided = {
+  claim: ClaimOutcome;
+  callerCurrent: boolean;            // after the claim, BEFORE this beat's own `ended` (§6.3.3 row 2)
+  mine: PairingRow | null;           // the caller's pairing, when it is current
+  stop: string | null;               // the sid this beat stops (T21, T23), applied after the commit
+  tickSid: string | null;            // the open session this beat ticks (§6.11): its phone's beat naming it
+};
+
+/**
+ * `POST /api/v1/capture/codes/{code}/beats` (§6.3.2). `body` has passed the strict contract (`CaptureBeat`, its refines
+ * included); the route answers 422 otherwise. In order:
+ *  1. resolve the code (C1, C1b) — a `new` claim is a `claim` call, which an ended code never serves;
+ *  2. the claim (T1–T7) under the code row's lock, so two claims are decided one after the other (§6.5);
+ *  3. the beat stored (§6.10) on the SERVER clock, history in a savepoint;
+ *  4. `ended` (T21/T22) or `stopped: X` (T23/T24/T24a), decided under the same lock and applied after the commit;
+ *  5. the open session ticked (§6.11) when its phone's beat names it;
+ *  6. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
+ */
+export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
+  const resolved = await resolveStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
+  const code = normaliseCode(rawCode)!;
+  if (body.slot !== SLOT) throw new CaptureRefusalError(422, "invalid", `slot ${body.slot} is not served (PR-1 carries slot ${SLOT})`);
+  if (body.code !== code) throw new CaptureRefusalError(422, "invalid", "the body names another code than the path");
+  const atUtc = new Date(body.at).toISOString();
+  const raw = rawOf(body, atUtc);
+
+  // T4 (§6.5): a `new` claim on a LIVE slot held by another phone may be a dead-phone takeover. Its second conjunct is a
+  // FRESH read taken through the tick (claimIngestPoll coalesces it with any poll in the interval), and its third the
+  // last connected sample BEFORE that read — each conjunct its own evidence. Both run on the pool, before the lock.
+  let takeoverFacts: { fresh: IngestState | undefined; lastConnectedAt: Date | null } | null = null;
+  if (body.claim === "new") {
+    const open = await openSessionOf(sql, resolved.fixtureId);
+    const holder = await holderOf(sql, resolved.codeId, open);
+    if (open !== null && holder !== null && holder.phone !== body.phone && slotOf(holder, open, false) === "live") {
+      try {
+        const lastConnectedAt = await lastConnectedSampleAt(sql, open.id);
+        const obs = await tickSession(open.id, deps, "beat");
+        takeoverFacts = { fresh: obs.freshIngest, lastConnectedAt };
+      } catch (err) {
+        // No fresh read: nothing proves the holder gone, so the claim is judged as on a live slot (T3).
+        log.error({ err: String(err), sid: open.id, orgId: resolved.orgId }, "capture beat: the takeover read failed — the claim is judged without it");
+        captureError(err, { orgId: resolved.orgId, route: "capture.beat.takeover_read", extra: { sid: open.id } });
+      }
+    }
+  }
+
+  const decided = (await sql.begin(async (tx) => {
+    if (body.claim !== null || body.stopped !== null) {
+      await tx`select id from fixture_stream_codes where id = ${resolved.codeId} for update`;
+    }
+    const open = await openSessionOf(tx, resolved.fixtureId);
+    const holder = await holderOf(tx, resolved.codeId, open);
+    // A14 (T4): judged under the lock on the holder's LOCKED last beat. No fresh read, or an `unknown` one, proves
+    // nothing (m-3's rule): the slot stays live and the claim is refused.
+    const dead = takeoverFacts !== null && open !== null && holder !== null && open.first_ingest_at !== null
+      && takeoverFacts.fresh !== undefined && takeoverFacts.fresh !== "unknown"
+      && deadForTakeover({
+        lastBeatAt: new Date(holder.last_beat_at), freshReadConnected: takeoverFacts.fresh === "connected",
+        lastConnectedAt: takeoverFacts.lastConnectedAt, liveSince: new Date(open.first_ingest_at),
+      }, now, tunable("DEAD_PHONE_TAKEOVER_SECONDS", DEAD_PHONE_TAKEOVER_SECONDS));
+    const claim = decideClaim({ kind: body.claim, caller: body.phone, current: holder, slot: slotOf(holder, open, dead) });
+    const callerCurrent = claim.result === "accept" || claim.result === "takeover" || claim.result === "none";
+    const lockOpen = async () => { if (open) await tx`select id from fixture_stream_sessions where id = ${open.id} for update`; };
+    const event = async (sessionId: string, type: string, payload: Record<string, unknown>) =>
+      recordEvent(tx, { sessionId, orgId: resolved.orgId, source: "phone", kind: "event", type, actorUserId: null, occurredAt: now, payload });
+    const insertMine = async (): Promise<PairingRow> => {
+      const [p] = await tx<PairingRow[]>`
+        insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at, answered_poll_seconds)
+        values (${resolved.orgId}, ${resolved.codeId}, ${SLOT}, ${body.phone}, ${body.claim}, ${body.device?.model ?? null}, ${now}, ${now}, ${POLL_FAR_SECONDS})
+        returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
+      return p!;
+    };
+
+    // 2. The claim decides who holds the slot, and nothing else.
+    let mine: PairingRow | null = callerCurrent ? holder : null;
+    if (claim.result === "accept" && holder === null) mine = await insertMine();
+    if (claim.result === "takeover") {
+      await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced' where id = ${holder!.id}`;
+      mine = await insertMine();
+      await tx`update fixture_stream_pairings set replaced_by = ${mine.id} where id = ${holder!.id}`;
+      if (open && open.pairing_id === holder!.id) {
+        await lockOpen();
+        await tx`update fixture_stream_sessions set pairing_id = ${mine.id} where id = ${open.id}`;
+        open.pairing_id = mine.id;
+        await event(open.id, "phone_takeover", { dead: claim.row === "T4", pairingId: mine.id, replacedPairingId: holder!.id });
+      }
+    }
+    if (claim.result === "taken" && open) {
+      await lockOpen();
+      await event(open.id, "claim_refused", { claimRow: claim.row });
+    }
+
+    // 3. The beat stored — only a current caller's; any other beat changes nothing (T6, T7, T22).
+    const held = mine !== null && open !== null && open.pairing_id === mine.id;
+    if (mine !== null) {
+      const notResponding = held && isNotResponding({ held, lastBeatAt: new Date(mine.last_beat_at), answeredPoll: mine.answered_poll_seconds }, now);
+      await tx`
+        update fixture_stream_pairings
+           set last_beat = ${tx.json(raw as never)}, last_beat_at = ${now}, phone_state = ${body.state}, not_ready = ${body.notReady},
+               start_failed = ${body.startFailed}, mode = ${body.mode}, app_version = ${body.appVersion},
+               device_model = coalesce(${body.claim !== null && body.device !== null ? body.device.model : null}, device_model)
+         where id = ${mine.id}`;
+      if (held && body.sid === open!.id) {
+        await lockOpen();
+        await tx`update fixture_stream_sessions set phone_beat = ${tx.json(raw as never)}, phone_beat_at = ${now} where id = ${open!.id}`;
+      }
+      await storeHistory(tx, { orgId: resolved.orgId, pairingId: mine.id, sessionId: held ? open!.id : null, beat: body, raw, flags: flagsOf(body, notResponding) }, now);
+    }
+
+    // 4. The stops, judged AFTER the claim (ask 7); applied once this transaction commits (apply takes its own locks).
+    let stop: string | null = null;
+    if (body.state === "ended" && held && body.sid === open!.id) {
+      // T21: the operator's Stop from the session's phone ends the broadcast AND the pairing (a rescan is owed).
+      await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'operator_stopped' where id = ${mine!.id}`;
+      await lockOpen();
+      await event(open!.id, "phone_stop", { pairingId: mine!.id });
+      stop = open!.id;
+    } else if (body.stopped !== null) {
+      const [x] = await tx<{ id: string; state: SessionState; pairing_id: string | null }[]>`
+        select id, state, pairing_id from fixture_stream_sessions where id = ${body.stopped} and fixture_id = ${resolved.fixtureId}`;
+      if (x && isActive(x.state)) {
+        // T23 / T24a (§6.8.2): X is held by the current phone iff X's pairing is the slot's current pairing.
+        const currentNow = callerCurrent ? mine : holder;
+        const heldByCurrent = currentNow !== null && x.pairing_id === currentNow.id;
+        const stopApplies = callerCurrent || !heldByCurrent;
+        if (stopApplies) stop = x.id;
+        else {
+          await tx`select id from fixture_stream_sessions where id = ${x.id} for update`;
+          await event(x.id, "stop_ignored", { held: true });
+        }
+      }
+    }
+    // 5's subject: §6.11 "every beat from the session's phone" — the phone HOLDING the broadcast, naming its sid.
+    const tickSid = held && body.sid === open!.id ? open!.id : null;
+    return { claim, callerCurrent, mine, stop, tickSid } satisfies Decided;
+  })) as Decided;
+
+  if (decided.stop !== null) {
+    await apply(decided.stop, (s) => (isActive(s.state) ? { type: "stop", reason: "operator_stopped" } : null), deps,
+      { userId: resolved.issuedBy, source: "phone" });
+  }
+  if (decided.tickSid !== null) {
+    try {
+      await tickSession(decided.tickSid, deps, "beat");
+    } catch (err) {
+      // The beat is stored and the answer below reads the rows: a failed tick is reported, never a failed beat.
+      log.error({ err: String(err), sid: decided.tickSid, orgId: resolved.orgId }, "capture beat: the session tick failed — the beat is answered");
+      captureError(err, { orgId: resolved.orgId, route: "capture.beat.tick", extra: { sid: decided.tickSid } });
+    }
+  }
+
+  // 6. The answer, from the rows as they now stand.
+  const latest = await latestSession(resolved.fixtureId);
+  const open = await openSessionOf(sql, resolved.fixtureId);
+  const holder = await holderOf(sql, resolved.codeId, open);
+  const named = body.sid ?? body.stopped;
+  let namedEnded: { sid: string; endReason: ReturnType<typeof wireEndReason> } | null = null;
+  if (named !== null) {
+    const [x] = await sql<{ id: string; state: SessionState; end_reason: DbEndReason | null; fail_reason: FailReason | null }[]>`
+      select id, state, end_reason, fail_reason from fixture_stream_sessions where id = ${named} and fixture_id = ${resolved.fixtureId}`;
+    if (x && (x.state === "ending" || x.state === "completed" || x.state === "failed")) {
+      namedEnded = { sid: x.id, endReason: wireEndReason({ endReason: x.end_reason, failReason: x.fail_reason }) };
+    }
+  }
+  const core = beatAnswer({
+    claim: body.claim === null ? null : decided.claim,
+    callerCurrent: decided.callerCurrent,
+    namedEnded,
+    slot: slotOf(holder, open, false),
+    open: open === null ? null : { sid: open.id, startedBy: open.start_cause },
+  });
+  const common = await captureCommon(
+    { orgId: resolved.orgId, fixtureId: resolved.fixtureId, code },
+    { open: open?.state ?? null, themeId: latest?.theme_id ?? null }, deps, now,
+  );
+  const answer = wireBeatAnswer(core, {
+    label: common.label, scheduledStart: common.scheduledStart, autoAllowed: common.autoAllowed,
+    destinationName: common.destinationName, overlayUrl: common.overlayUrl, pollSeconds: common.pollSeconds,
+  });
+  if (decided.mine !== null && answer.pollSeconds !== undefined) {
+    await sql`update fixture_stream_pairings set answered_poll_seconds = ${answer.pollSeconds} where id = ${decided.mine.id}`;
+  }
+  return answer;
 }

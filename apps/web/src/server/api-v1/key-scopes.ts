@@ -344,6 +344,7 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "PUT /fixtures/:id/stream-settings",
   // Capture QR v2 (T8a–T8c, §6.3): the phone's routes. Their Bearer is the stream code's tok — no cookie, never a key.
   "GET /capture/codes/:code",
+  "POST /capture/codes/:code/beats",
   "GET /orgs/:id/stream-targets",
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",

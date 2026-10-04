@@ -142,7 +142,8 @@ describe.skipIf(!HAS_DB)("getCode — the §6.3.1 decision", () => {
     const other = await get(r, phoneId("other"));
     expect(other.state).toBe("warming");
     expect(Object.hasOwn(other, "cred"), "absent — not null — for a phone that is not the session's").toBe(false);
-    const { cred: _cred, ...rest } = withCred as typeof withCred & { cred?: unknown };
+    const rest: Record<string, unknown> = { ...withCred };
+    delete rest.cred;
     expect(other).toEqual(rest);
     expect((await get(r, null)).state).toBe("waiting");
   });

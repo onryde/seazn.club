@@ -293,8 +293,9 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
   }
 }
 
-/** Who asked (ruling 13; PII decision: a user id already in the system, never an IP). */
-export interface Actor { userId: string | null; source: "client" | "admin" }
+/** Who asked (ruling 13; PII decision: a user id already in the system, never an IP). `phone` (capture QR v2 §6.7.1):
+ *  the phone's own call, attributed to its stream code's `issued_by`. */
+export interface Actor { userId: string | null; source: "client" | "admin" | "phone" }
 
 // ---------------------------------------------------------------------------
 // apply — THE seam. Effects that need the transaction run inside it
@@ -1564,6 +1565,9 @@ export type TickObservation = {
   ingestState: StreamSessionCurrent["ingest"];
   outputObserved: OutputState | null;            // D3: what THIS poll read of the destination; null = read nothing
   coalescedSince: Date | null | undefined;       // I-1 (B0): a served sample's own since; undefined = not served
+  /** T8b (§6.5, A14 conjunct 2): THIS tick's fresh read of the phone — the word W19 judges on (a claimed read's own
+   *  word, or a coalesced sample younger than COALESCED_SAMPLE_MAX_AGE_MS); undefined = no fresh read. */
+  freshIngest: IngestState | undefined;
 };
 
 /** T7 (§6.11): who advances a session. The organiser poll's reconcile-and-ingest block, extracted so a phone beat and the
@@ -1572,7 +1576,7 @@ export type TickObservation = {
  *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5). `cause` names the caller in the log line of an end it makes. */
 export async function tickSession(sessionId: string, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<TickObservation> {
   let row = await readRow(sessionId);
-  if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined };
+  if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined, freshIngest: undefined };
 
   if (!isTerminal(row.state)) await reconcileSession(row.id, deps);      // expiry + one Machine observation
   row = (await readRow(sessionId))!;
@@ -1670,7 +1674,7 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
 
   // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
   if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
-  return { session: toSession(row), ingestState, outputObserved, coalescedSince };
+  return { session: toSession(row), ingestState, outputObserved, coalescedSince, freshIngest };
 }
 
 /** The facts ask 10, W19 and m-5 judge, in ONE statement (one snapshot). The session's phone is its `pairing_id`
@@ -1699,6 +1703,16 @@ async function phoneFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<P
       left join fixture_stream_pairings p on p.id = s.pairing_id and p.ended_at is null
      where s.id = ${sessionId}`;
   return f ?? null;
+}
+
+/** T8b (§6.5, A14 conjunct 3): when a poll sample last read the input connected — null when none ever has. The beat's
+ *  dead-phone takeover reads it on its own transaction (`exec`), through this module because only the samples' writers
+ *  may name that table (enc-boundary claim 4). The same measure W19 judges on (`phoneFactsOf`). */
+export async function lastConnectedSampleAt(exec: Tx | typeof sql, sessionId: string): Promise<Date | null> {
+  const [r] = await exec<{ at: Date | null }[]>`
+    select max(sampled_at) as at from fixture_stream_samples
+     where session_id = ${sessionId} and source = 'poll' and ingest_state = 'connected'`;
+  return r?.at ?? null;
 }
 
 /** Which phone-lost end, if any, a session owes now. `fresh` = this tick's fresh read (undefined: W19 cannot judge).

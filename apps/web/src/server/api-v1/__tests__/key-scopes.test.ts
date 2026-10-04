@@ -53,6 +53,11 @@ describe("matchKeyRoute", () => {
     expect(matchKeyRoute("GET", "/api/v1/capture/codes/0123456789ab")).toBeNull();
   });
 
+  it("capture QR v2 (T8b, A16): the phone's beats are never key-reachable — an explicit ban, matched on a concrete path", () => {
+    expect(NEVER_KEY_ROUTES).toContain("POST /capture/codes/:code/beats");
+    expect(matchKeyRoute("POST", "/api/v1/capture/codes/0123456789ab/beats")).toBeNull();
+  });
+
   it("maps the scoring doors to the score scope with a pin", () => {
     const events = matchKeyRoute("POST", "/api/v1/fixtures/11111111-1111-1111-1111-111111111111/events");
     expect(events).toMatchObject({ scope: "score", pin: "fixture" });
