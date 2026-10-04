@@ -44557,6 +44557,9 @@
                                     "dataUsedMB"
                                   ],
                                   "additionalProperties": false
+                                },
+                                "farPoll": {
+                                  "type": "boolean"
                                 }
                               },
                               "required": [
@@ -44571,7 +44574,8 @@
                                 "startFailed",
                                 "lastBeatAt",
                                 "elapsedMs",
-                                "beat"
+                                "beat",
+                                "farPoll"
                               ],
                               "additionalProperties": false
                             },
@@ -44635,6 +44639,12 @@
                         },
                         "auto": {
                           "type": "null"
+                        },
+                        "legacy": {
+                          "type": "boolean"
+                        },
+                        "finished": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -44642,7 +44652,9 @@
                         "phone",
                         "destination",
                         "lastTakeover",
-                        "auto"
+                        "auto",
+                        "legacy",
+                        "finished"
                       ],
                       "additionalProperties": false
                     },
@@ -44682,7 +44694,8 @@
                         "delivery": "ok",
                         "thermal": 0,
                         "dataUsedMB": 0
-                      }
+                      },
+                      "farPoll": true
                     },
                     "destination": {
                       "id": "example",
@@ -44692,7 +44705,9 @@
                       "at": "example",
                       "model": "example"
                     },
-                    "auto": null
+                    "auto": null,
+                    "legacy": true,
+                    "finished": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

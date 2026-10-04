@@ -21,7 +21,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureBeat } from "@/server/api-v1/capture-schemas";
 import { StreamPhone } from "@/server/api-v1/schemas";
 import {
-  CODE_GRACE_AFTER_FINISH_MINUTES, NOT_RESPONDING_BEATS, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS,
+  CODE_GRACE_AFTER_FINISH_MINUTES, NOT_RESPONDING_BEATS, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS,
 } from "@/server/relay/config";
 import { readFirstInput } from "@/server/relay/secret-columns";
 import { rigUser } from "@/server/relay/__tests__/_session-rig";
@@ -110,7 +110,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const auth: AuthCtx = { ...seeded, userId: await rigUser() };
     const { fixtureId } = await startedDivisionWithFixture(auth);
     const now = () => new Date();
-    const empty = { code: null, phone: null, destination: null, lastTakeover: null, auto: null };
+    const empty = { code: null, phone: null, destination: null, lastTakeover: null, auto: null, legacy: false, finished: false };
     expect(await read(auth, fixtureId, now)).toEqual(empty);
     expect(await read(auth, fixtureId, now)).toEqual(empty);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${fixtureId}`;
@@ -169,6 +169,7 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
       present: true, silent: false, notResponding: false, model: "Pixel 8", appVersion: "capture/2.1", mode: "automatic",
       state: "armed", notReady: "camera", startFailed: "config", lastBeatAt: beatAt.toISOString(), elapsedMs: 7_000,
       beat: { battery: { percent: 15, charging: false, drainPctPerHour: 4.5 }, bitrateKbps: 2400, delivery: "stalled", thermal: 3, dataUsedMB: 12.5 },
+      farPoll: (await pairingOf(r, a)).answered_poll_seconds === POLL_FAR_SECONDS,
     });
     expect(v.lastTakeover, "one phone, no takeover").toBeNull();
   });
@@ -269,7 +270,10 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const sid = await r.start(a);
     await sql`update fixture_stream_pairings set ended_at = ${r.now()}, end_cause = 'code_ended'
                where id = (select pairing_id from fixture_stream_sessions where id = ${sid})`;
-    expect((await readRig(r)).phone).toBeNull();
+    const v = await readRig(r);
+    expect(v.phone).toBeNull();
+    // T11: no phone is NOT the same as legacy — this session HAS a pairing (ended), so the panel keeps the v2 rules.
+    expect(v.legacy, "a session with an ended pairing is not a legacy session").toBe(false);
   });
 
   it("C-1: an open LEGACY session (pairing_id null) shows NO phone facts and no takeover — the code and the pick still read; the same session WITH its phone shows them (the positive pair)", async () => {
@@ -282,8 +286,10 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     const sid = await r.start(b);
     const withPhone = await readRig(r);
     expect([withPhone.phone?.present, withPhone.lastTakeover === null]).toEqual([true, false]);
+    expect(withPhone.legacy, "T11: a session WITH its phone is not legacy").toBe(false);
     await sql`update fixture_stream_sessions set pairing_id = null where id = ${sid}`;
     const legacy = await readRig(r);
+    expect(legacy.legacy, "T11: the panel is told the open session has no phone (C-1), so it renders today's panel").toBe(true);
     expect(legacy.phone, "no phone facts").toBeNull();
     expect(legacy.lastTakeover, "no takeover").toBeNull();
     expect(legacy.code?.state).toBe("active");
@@ -357,6 +363,36 @@ describe.skipIf(!HAS_DB)("streamPhone — the panel's read model (§9)", () => {
     expect(await rows(), "the three refused reads wrote nothing").toEqual(before);
     expect((await readRig(a)).code, "the positive pair: A's own read reaches the code and writes C2's expiry").toEqual({ issuedAt: expect.any(String), state: "ended", endCause: "expired" });
     expect((await rows()).codes[0]!.ended_at, "written").not.toBeNull();
+  });
+
+  it("T11 (§6.6's waiting line): farPoll is true exactly while the phone was last ANSWERED the far cadence — a claim with no session far from the start, then false once a beat under an open session is answered faster; a second read agrees", async () => {
+    const r = await captureRig();
+    const a = phoneId("a");
+    await beat(r, a, { claim: "new" });
+    const claimed = (await pairingOf(r, a)).answered_poll_seconds;
+    expect(claimed, "PREMISE (§6.6): no session and no scheduled start near → the far cadence").toBe(POLL_FAR_SECONDS);
+    expect((await readRig(r)).phone?.farPoll).toBe(true);
+    expect((await readRig(r)).phone?.farPoll, "a second read").toBe(true);
+    const sid = await r.start(a);
+    // Go live does not beat for the phone: the stored cadence is still the far one until the phone's next beat.
+    expect((await readRig(r)).phone?.farPoll, "the phone has not checked in since Go live").toBe(true);
+    await beat(r, a, { sid, state: "connecting" });
+    const answered = (await pairingOf(r, a)).answered_poll_seconds;
+    expect(answered, "PREMISE: an open session answers a faster cadence than the far one").toBeLessThan(POLL_FAR_SECONDS);
+    expect((await readRig(r)).phone?.farPoll, "it has heard the Go live").toBe(false);
+  });
+
+  it("T11 (C5): `finished` follows the FIXTURE — false while in play, true once finished, and false again after a reverted result while the expired code STAYS ended (the match-over row must not key on the code alone)", async () => {
+    const r = await captureRig();
+    expect((await readRig(r)).finished, "in play").toBe(false);
+    await sql`update fixtures set status = 'cancelled' where id = ${r.fixtureId}`;
+    expect((await readRig(r)).finished, "finished").toBe(true);
+    await sql`update fixtures set finished_at = ${new Date(r.now().getTime() - CODE_GRACE_AFTER_FINISH_MINUTES * MIN - MIN)} where id = ${r.fixtureId}`;
+    const expired = await readRig(r);
+    expect([expired.finished, expired.code?.state, expired.code?.endCause]).toEqual([true, "ended", "expired"]);
+    await sql`update fixtures set status = 'in_play' where id = ${r.fixtureId}`;   // the result reverted (§8.1 trigger clears finished_at)
+    const reverted = await readRig(r);
+    expect([reverted.finished, reverted.code?.state, reverted.code?.endCause], "C5: the code stays ended; the fixture is not finished").toEqual([false, "ended", "expired"]);
   });
 
   it("anti-vacuity: this file read the model and parsed every answer through the strict schema", () => {

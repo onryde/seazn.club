@@ -1511,12 +1511,21 @@ export const StreamPhone = z
          *  clock with a server timestamp. */
         elapsedMs: z.number().int().nonnegative(),
         beat: StreamPhoneBeat,
+        /** T11 (§6.6): the cadence the server last ANSWERED this phone was the far one (POLL_FAR_SECONDS) — the panel's
+         *  "checks in every minute" line. A boolean, never the number: the panel words a cadence, it does not do sums. */
+        farPoll: z.boolean(),
       })
       .strict()
       .nullable(),
     destination: z.object({ id: z.string(), label: z.string() }).strict().nullable(),
     lastTakeover: z.object({ at: z.string(), model: z.string().nullable() }).strict().nullable(),
     auto: z.null(),
+    /** T11 (controller ruling C-1): the fixture's OPEN session has no pairing (it opened before stream codes) — the panel
+     *  renders today's panel for it. False with no open session, or one that has (or had) a phone. */
+    legacy: z.boolean(),
+    /** T11 (C5): the FIXTURE is finished (`finished_at` set). "This match is over" needs this as well as an ended code — a
+     *  reverted result clears it while the expired code stays ended, and Ready may mint again. */
+    finished: z.boolean(),
   })
   .strict();
 export type StreamPhone = z.infer<typeof StreamPhone>;

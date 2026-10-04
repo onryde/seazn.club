@@ -13,7 +13,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   CaptureNotReady, CapturePhoneState, CaptureStartFailed, StreamPhoneBeat, type StreamPhone,
 } from "@/server/api-v1/schemas";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, tunable } from "@/server/relay/config";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, POLL_FAR_SECONDS, tunable } from "@/server/relay/config";
 import { isNotResponding, isPresent, isSilent } from "@/server/relay/domain/pairing";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { codeStatus } from "@/server/relay/domain/stream-code";
@@ -86,7 +86,8 @@ async function phoneOf(fixtureId: string): Promise<{ row: PairingRow | null; hel
  *  - `lastTakeover`: the latest time ANOTHER phone took the slot (§7.5, T2/T4) — read from the pairings, because a
  *    takeover on a slot with no session has no session to carry a `phone_takeover` event. The session's phone re-seated
  *    onto a reissued code (B6 I-2) is the same phone moving, never a takeover;
- *  - `auto`: PR-2's, null.
+ *  - `auto`: PR-2's, null;
+ *  - `legacy` / `finished` (T11): the open session has no pairing (C-1), and the fixture is finished (C5's match-over row).
  */
 export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now: () => Date }): Promise<StreamPhone> {
   requireSessionEditor(auth);
@@ -137,6 +138,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
       lastBeatAt: lastBeatAt.toISOString(),
       elapsedMs: Math.max(0, now.getTime() - lastBeatAt.getTime()),
       beat: beatOf(p.last_beat),
+      farPoll: p.answered_poll_seconds === POLL_FAR_SECONDS,
     };
   }
 
@@ -159,5 +161,8 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     if (t) lastTakeover = { at: new Date(t.at).toISOString(), model: t.model };
   }
 
-  return { code, phone, destination: dest ? { id: dest.id, label: dest.label } : null, lastTakeover, auto: null };
+  return {
+    code, phone, destination: dest ? { id: dest.id, label: dest.label } : null, lastTakeover, auto: null,
+    legacy, finished: fx.finished_at !== null,
+  };
 }
