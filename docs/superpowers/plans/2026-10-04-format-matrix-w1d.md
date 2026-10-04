@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Execution model policy (owner, 2026-10-04: "Let's us Sonnet for all remainings tasks in this session" and "Whole branch review must be Opus").** Every implementer, every task reviewer and every fix agent runs on Sonnet: dispatch each with `model: "sonnet"`. The whole-branch reviews, one at the end of PR-A (Task 16) and one at the end of PR-B (Task 22), run on Opus: dispatch each with `model: "opus"`. Nothing else overrides a model.
+> **Execution model policy (owner, 2026-10-04: "Let's us Sonnet for all remainings tasks in this session" and "Whole branch review must be Opus").** Every implementer, every task reviewer and every fix agent runs on Sonnet: dispatch each with `model: "sonnet"`. The whole-branch reviews, one at the end of PR-A (Task 16) and one at the end of PR-B (Task 22), run on Opus: dispatch each with `model: "opus"`. Nothing else overrides a model. Each commit carries the attribution of the model that wrote it. The policy was given for the owner's current session: if execution runs in another session, re-confirm it with the owner first (AGENTS class 17), because AGENTS.md otherwise says never to override `model:`.
 
 **Goal:** The matrix runs itself. A GitHub workflow runs it weekly and on dispatch, sharded across about 12 jobs, each on a fresh Postgres with `sync:sports`. A visibility guard stops it before it can bill a private repo. Stryker runs weekly on the engine, placement scheduling excepted (rulings 66, 67), against per-group floors that may only rise. The first full truth run is then triaged: every ❌ carries an audit gap ID (or `NEW-W1d-<n>`) and its owning wave, so W2–W7 each start from a measured backlog.
 
@@ -108,7 +108,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
   - Every shell command starts `cd <worktree> && …`, because cwd resets between calls.
   - Never edit the main checkout. **Never `git stash`**: the stash stack is shared.
   - No heredocs. Write commit messages with the Write tool into `$TMPDIR/w1d-msg.txt`, then `git commit -F "$TMPDIR/w1d-msg.txt" -- <paths>`.
-  - Every message ends with a blank line, then `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+  - Every message ends with a blank line, then the `Co-Authored-By:` line the running agent's own system prompt gives (the model that wrote the commit: Sonnet for implementers and fix agents, Opus for the whole-branch review's fixes; never a hard-coded name).
 - **pnpm, never npm install.** A fresh worktree has no `node_modules`, so run `pnpm install --frozen-lockfile` first. Two tasks change the lockfile:
   - Task 10 adds `vitest` as a root devDependency, the same range as the engine's, so it is the same package;
   - Task 15 adds the two Stryker packages to `packages/engine`.
@@ -147,7 +147,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
   - **Never** `git checkout <file>`.
   - Mutate each new guard once. Mutate two guards that cover for each other one at a time.
 - **Budgets are derived, never flat** (class 20). A shard job's `timeout-minutes` comes from `shard-matrix.ts`: `setup + ceil(driven × perCaseCeilingS ÷ workers ÷ 60) + slack`. Each layer's per-case ceiling is read from committed evidence (Task 8), never typed into the workflow.
-- **The repo is public** (R14a; design §6.4). Every CI log and artifact is public.
+- **The repo is public** (R14a; design §6.4). Every CI log and artifact is public. It goes private after W1d (ruling 68, D24), so the runner is switchable now.
   - Synthetic identities only: `delivered+matrix-<runId>@resend.dev`, "Matrix Player N" / "Matrix Team N".
   - Never echo `DATABASE_URL`, a cookie, a magic link or a token.
   - Every text writer goes through `redact()`, and results still refuse on `findSecrets()`.
@@ -186,7 +186,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
 These are the five failure modes most likely to bite a person using this system (the owner reading the weekly summary, a W2 implementer reading their backlog) that no functional test exercises. Each one's pinning test sits in its owning task.
 
 1. **A shard that ran nothing reads as green.** Three ways it happens: a killed step exits 0; a shard dies before writing `results.json`; or a shard that planned 23 cases writes 14 (an abort). Expected: the merge refuses a missing `exit.txt`, an `exit.txt` other than `0`, a missing or empty `results.json`, an `aborted` header, and a shard whose case count is not its stripe's derived size. A run with any refused shard is harness-red. Pinned by `merge.test.ts`, "a shard that died, a partial shard, a stray shard: each refused by name" (Task 4).
-2. **The visibility guard fails open.** Ways it could: a `schedule` payload with no `repository` object; a `gh api` that 403s or prints nothing; `runner.environment` unset; a dispatch input that tries to inject `public`. Expected: the guard reads visibility through `gh api`, treats unreadable as not public, exempts only an exact `self-hosted` runner (no hosted minutes billed), and refuses an injected `public`. The per-PR sample is NOT exempt: on a private repo it fails loudly too. Pinned by `matrix-workflow.test.ts`, "the guard fails closed: unreadable, 403, private, internal, injected public, unset runner" (Task 9), and live by Task 17's injected-`private` dispatch.
+2. **The visibility guard fails open.** (Ruling 68: it fails only when the repo is private AND the runner is `github-hosted`; a `self-hosted` runner passes, and the repo goes private after W1d.) Ways it could: a `schedule` payload with no `repository` object; a `gh api` that 403s or prints nothing; `runner.environment` unset; a dispatch input that tries to inject `public`. Expected: the guard reads visibility through `gh api`, treats unreadable as not public, exempts only an exact `self-hosted` runner (no hosted minutes billed), and refuses an injected `public`. The per-PR sample is NOT exempt: on a private repo it fails loudly too. Pinned by `matrix-workflow.test.ts`, "the guard fails closed: unreadable, 403, private, internal, injected public, unset runner" (Task 9), and live by Task 17's injected-`private` dispatch.
 3. **A state that differs across the three runs for a PRODUCT reason.** The W7 note says mexicano pairing ties break on random person UUIDs. Expected: `judge.ts across` names each differing case with its state per run, and harness-green stays RED per ruling 61. The executor never averages, never re-runs until it agrees, and never classifies a difference away. The difference goes to the owner (Task 17 Step 6). Pinned by `judge.test.ts`, "a case whose state differs in one run of three is named with all three states, and the verdict is not green" (Task 6).
 4. **The per-PR sample blocks an unrelated PR, or passes a real regression.** Ways it could: a stale baseline; a flaky ✅ case; a known red that stays red; a case missing from the sample. Expected: only a ✅/⛔ → anything-else move is a regression. It is re-run once, and only a reproduced regression fails. A baseline case absent from the current run is a refusal, not a pass. Pinned by `judge.test.ts` "regression: known red stays red passes; ✅→❌ fails; ✅→❌→✅ on re-run passes; missing case refused" (Task 6), and `matrix-workflow.test.ts` "the sample re-runs a regressed case once before failing" (Task 9).
 5. **A public log or artifact leaks something.** The candidates: `DATABASE_URL`, a magic link, a cookie, a Playwright trace (it holds cookies and request bodies), or a server log. Expected: no step echoes a secret-shaped env value; uploaded paths are an explicit allow-list (`results.json`, `MATRIX.md`, `exit.txt`, `shots/**/*.png`, `SUMMARY.md`) and never `trace.zip`; `MATRIX_TRACE_ON_TIMEOUT` is never set in a workflow; every new writer goes through `redact()` + `findSecrets()`. Pinned by `matrix-workflow.test.ts` "upload paths are an allow-list; no trace; no step echoes a DB URL or token" (Task 9) and `merge.test.ts` "a secret-shaped string in a shard is refused" (Task 4).
@@ -397,10 +397,10 @@ Three CLIs change:
 **D14 — Stryker lives with the engine, ten groups plus a probe, incremental (rulings 66, 67).**
 - `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` (exact `10.0.0`) become devDependencies of `packages/engine`.
 - `packages/engine/stryker.config.mjs` reads `STRYKER_GROUP`. `packages/engine/stryker.groups.mjs` declares ten groups plus a `probe` group: `competition`, `core`, `modules` (sport, stats, history, officials, import, exports), `draws` (the seven draw generators) and six `sports-*` groups that split `src/sports/` by sport family. A sweep test gives every non-test `.ts` under `packages/engine/src` exactly one home: a group, a named exclusion with its own reason, or the ruling-67 placement exclusion (19 files: build, calendar, repair; "low priority", liftable). `testkit/` is excluded as test helpers. Unclassified files fail the test, and the failure reports their count. The probe is `src/scheduling/roundrobin.ts`.
-- `mutation.yml` runs one job per group, each with `--incremental` and its incremental file cached across weeks, with a derived `timeout-minutes` ≤ 300.
+- `mutation.yml` runs one job per group, each with `--incremental` and its incremental file cached across weeks, with a per-group `timeout-minutes` derived from the dry run (PR-A) and then from measurement (PR-B), capped at 300. One matrix per event: a PR runs `probe`, the schedule and dispatch `all` run the groups, and a dispatch `group` input selects one.
 - Floors are per group in `packages/engine/stryker-floor.json`, checked by `packages/engine/scripts/stryker-floor.ts`. A floor is never lowered: the `--check-file-against HEAD^1` mode runs in `ci.yml` `gates`.
 - Survivors are listed in `SURVIVORS.md` per group. Equivalent mutants are recorded in `packages/engine/stryker-equivalent.json` by `file:line:col mutator → replacement`, never by Stryker's unstable ids.
-- Estimate before measuring, and only an estimate. As a rough proxy, about 33k non-test source lines are in scope; at roughly 0.67 mutants per line that is on the order of 22k mutants. Every job pays one dry run, which is the engine suite with coverage: 5 m 44 s (344 s) on CI. With per-test coverage a mutant runs only its covering tests, taken at 1–10 s in one sandbox (10 s is the pessimistic bound, since the sports kernels sit under replay suites). Concurrency is 3 on `ubuntu-latest` (4 cores, 16 GiB, one vitest worker per sandbox). So a group's job takes about `344 s + mutants × t ÷ 3`. For a group of 4,000 mutants that is 344 + 4,000 × 10 ÷ 3 = 13,677 s = 228 min at the bound and 344 + 4,000 × 2.5 ÷ 3 = 3,677 s = 61 min at 2.5 s, so the first-run `timeout-minutes: 240` is a ceiling and not a prediction. The estimate is then dropped: Task 15 Step 4's dry run gives the true mutant count per group (PR-A), and Task 20's first full run gives the true wall time per group (PR-B). The shard sizes, the timeouts and any further split follow those measurements, never line counts. A group over 200 min measured is split (Task 20 Step 2).
+- Estimate before measuring, and only an estimate. As a rough proxy, about 33k non-test source lines are in scope; at roughly 0.67 mutants per line that is on the order of 22k mutants. Every job pays one dry run, which is the engine suite with coverage: 5 m 44 s (344 s) on CI. With per-test coverage a mutant runs only its covering tests, taken at 1–10 s in one sandbox (10 s is the pessimistic bound, since the sports kernels sit under replay suites). Concurrency is 3 on `ubuntu-latest` (4 cores, 16 GiB, one vitest worker per sandbox). So a group's job takes about `344 s + mutants × t ÷ 3`. For a group of 4,000 mutants that is 344 + 4,000 × 10 ÷ 3 = 13,677 s = 228 min at the bound and 344 + 4,000 × 2.5 ÷ 3 = 3,677 s = 61 min at 2.5 s, so the first-run timeout (from Step 4's estimate, capped at 300) is a ceiling and not a prediction. The estimate is then dropped: Task 15 Step 4's dry run gives the true mutant count per group (PR-A), and Task 20's first full run gives the true wall time per group (PR-B). The shard sizes, the timeouts and any further split follow those measurements, never line counts. A group over 200 min measured is split (Task 20 Step 2).
 - Owner value: mutation sits beside the code it measures, and weekly reruns stay cheap.
 - Rejected:
   - a `tools/mutation` workspace (Stryker's sandbox cannot mutate files outside its cwd);
@@ -458,6 +458,13 @@ Three CLIs change:
 
 - Owner value: "false premise" keeps meaning "we looked and it is not there", and no wave loses a real gap because W1d's scenarios never reached it.
 - Rejected: marking every non-reproduced gap a false premise (it would delete most of W2–W7's backlog on no evidence).
+
+**D24 — The repo goes private after W1d, so the runner is switchable now (ruling 68).**
+- **In PR-A:** every matrix and Stryker job (all four `matrix-truth.yml` jobs and every `mutation.yml` job) takes `runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}`. The visibility guard fails loudly only when the repository is private AND `runner.environment` is `github-hosted`; on a `self-hosted` runner it passes. `runner.environment` reaches the guard script as an input (`RUNNER_ENV`), so a unit test drives it. The test covers all four combinations: public/hosted (pass), public/self-hosted (pass), private/hosted (fail), private/self-hosted (pass). The dispatch input `inject_visibility=private` still fails a hosted job, which is PR-B's live proof (Task 17 Step 1).
+- **Outside W1d, not planned here:** the ephemeral self-hosted runner on Fly Machines is a follow-up between PR-B and the private switch. Then only `vars.MATRIX_RUNNER` changes. This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner. It is recorded in the execution handoff.
+- **The order:** PR-B's dispatches run on GitHub-hosted runners while the repo is public; then the Fly runner follow-up; then the switch to private. `ci.yml` PR jobs go back on the meter at the switch, which is outside the matrix. The per-PR sample calls `matrix-truth.yml`, so it inherits the switchable runner.
+- Owner value: going private cannot silently bill hosted minutes, and the move to a free runner is one variable.
+- Rejected: building the Fly runner in W1d (ruling 68 puts it outside).
 
 **D23 — The matrix drives no placement solver, so the shard jobs carry no placement container and no greedy-fallback guard (ruling 66).**
 - **Evidence at HEAD (read 2026-10-04, review 3).** `buildSchedule(` has two production call sites, both inside `autoSchedule` (`apps/web/src/server/usecases/schedule.ts:1924` directly, and `:2486` through `reflowExisting`, whose only caller is `:1916`). `autoSchedule`'s only caller is `app/api/v1/stages/[id]/schedule/auto/route.ts:19`. The AI solver paths are reached only through the `…/schedule/ai-plan` routes. The matrix's routes are divisions, stages, fixtures and entrants (`stages`, `entrants`, `fixtures`, `start`, `generate`, `rebuild`, `complete`, `americano`, `challenges`, `seed-proposal`, `standings`, `events`, `state`, `finalize`, `lineups`, `withdraw`). None is `schedule/auto` or `ai-plan`, and the browser driver's selectors hold no auto-schedule control. `startDivision` (`:3839`) generates fixtures through `generateStageFixturesUnpublished` and never calls the solver.
@@ -1631,7 +1638,7 @@ describe("regressions (D13; Review Focus 4)", () => {
 - the same for `createDivision` and `postStages`;
 - the negative pair: "a driver refusing `start` surfaces as a plain `RefusedCall`, not `SetupRefused`" (start is the product's act);
 - the end-to-end case: one fake-driver case run through `execute` (the `run-cli.test.ts` deps pattern) whose `addEntrants` refuses. Its `results.json` reason EQUALS `error: SetupRefused: ${original.message}` (the whole string, so a doubled prefix reds), and `harnessFaults` names it `setup-refused`;
-- DENIED (review 3, R3-m3): through the real scenario with a fake driver, a refused `:77` `postStages` surfaces as `SetupRefused`, while `:67`'s gated refusal is still caught as data; Each test counts the calls the fake answered, so a setup that never reached the refusing call fails rather than passing empty.
+- DENIED (review 3, R3-m3): through the real scenario with a fake driver, a refused `:77` `postStages` surfaces as `SetupRefused`, while `:67`'s gated refusal is still caught as data. Each test counts the calls the fake answered, so a setup that never reached the refusing call fails rather than passing empty.
 
 `f(run)` writes the run to a temp file, `ids(list)` writes a JSON id list, and `judgeCli` calls `main(argv)` with stdout/stderr captured.
 
@@ -2119,11 +2126,11 @@ Read these, and copy literally where this task says "as e2e/bench":
 
 Check whether a reusable workflow may declare top-level `concurrency:`. Read GitHub's "Reusing workflows" limitations page via WebFetch, or the `docs.github.com` copy in `node_modules` if one exists. If it may not, move the `concurrency` block onto the `plan` job and record the change.
 
-Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report.
+Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report. Ruling 68 (D24) rests on it: the guard passes only on `self-hosted`.
 
 Record ruling 66 and its evidence rather than a placement recipe. Re-run the solver-route read at HEAD and write the result in the task report:
 - `rtk proxy grep -an "buildSchedule(" apps/web/src/server/usecases/*.ts` lists the call sites, all reached only from the `schedule/auto` and `ai-plan` routes;
-- `rtk proxy grep -an "schedule/auto\|schedule/ai-\|ai-plan" tools/matrix` returns nothing.
+- `rtk proxy grep -an "schedule/auto\|schedule/ai-\|ai-plan\|schedule-auto\|schedule-reflow\|schedule-polish\|board-ai-schedule" tools/matrix` returns nothing (re-pin the four testids against `schedule-board.tsx` first).
 
 The workflow has no placement image, container or `PLACEMENT_*` env, and no greedy-fallback guard (D23). If a matrix path DOES reach the solver, STOP: that is a premise change for the owner, because the container would then be plumbing (ruling 66).
 
@@ -2174,7 +2181,7 @@ describe("the visibility guard (Review Focus 2)", () => {
       expect(stepHeads(t)[0]).toBe(`      - name: ${GUARD}`);
       return stepOf(t, GUARD).script;
     });
-    expect(scripts).toHaveLength(4);
+    expect(scripts).toHaveLength(4);   // matrix-truth.yml's four jobs; mutation.yml's are held equal to them below
     expect(scripts.every((x) => x !== null)).toBe(true);
     expect(new Set(scripts).size).toBe(1);
   });
@@ -2185,16 +2192,31 @@ describe("the visibility guard (Review Focus 2)", () => {
   };
   const cases: { name: string; env: Record<string, string>; gh: "public" | "private" | "fail"; want: number }[] = [
     { name: "public, hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "public", want: 0 },
+    { name: "public, self-hosted (ruling 68)", env: { RUNNER_ENV: "self-hosted", INJECT: "none" }, gh: "public", want: 0 },
     { name: "private, hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "private", want: 1 },
     { name: "unreadable (403), hosted", env: { RUNNER_ENV: "github-hosted", INJECT: "none" }, gh: "fail", want: 1 },
     { name: "public but injected private (the live mutation)", env: { RUNNER_ENV: "github-hosted", INJECT: "private" }, gh: "public", want: 1 },
     { name: "public but injected internal", env: { RUNNER_ENV: "github-hosted", INJECT: "internal" }, gh: "public", want: 1 },
     { name: "private but injected public (cannot loosen)", env: { RUNNER_ENV: "github-hosted", INJECT: "public" }, gh: "private", want: 1 },
     { name: "runner.environment unset", env: { RUNNER_ENV: "", INJECT: "none" }, gh: "public", want: 1 },
-    { name: "self-hosted, private (no hosted minutes)", env: { RUNNER_ENV: "self-hosted", INJECT: "none" }, gh: "private", want: 0 },
+    { name: "private, self-hosted (no hosted minutes; ruling 68)", env: { RUNNER_ENV: "self-hosted", INJECT: "none" }, gh: "private", want: 0 },
   ];
   // review m3: the title names the expected exit from the row itself ($want), never the row index.
   it.each(cases)("$name → exit $want", ({ env, gh, want }) => expect(run(env, gh).status).toBe(want));
+  it("the four visibility × runner combinations of ruling 68 are all present and give the ruled exits", () => {
+    const at = (r: string, g: string) => cases.find((c) => c.env.RUNNER_ENV === r && c.gh === g && c.env.INJECT === "none")!;
+    expect([at("github-hosted", "public").want, at("self-hosted", "public").want, at("github-hosted", "private").want, at("self-hosted", "private").want]).toEqual([0, 0, 1, 0]);
+  });
+  it("every job of matrix-truth.yml and mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes", () => {
+    for (const [file, text] of [["matrix-truth.yml", WF], ["mutation.yml", readFileSync(".github/workflows/mutation.yml", "utf8")]] as const) {
+      const jobs = Object.entries(jobsOf(text));
+      expect(jobs.length, file).toBeGreaterThan(1);   // anti-vacuity
+      for (const [name, t] of jobs) {
+        expect(t, `${file}:${name} runs-on`).toContain("runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}");
+        expect(t, `${file}:${name} timeout-minutes`).toMatch(/timeout-minutes:/);
+      }
+    }
+  });
   it("the guard fails closed: unreadable, 403, private, internal, injected public, unset runner — counted", () => {
     expect(cases.filter((c) => c.want === 1)).toHaveLength(6);
   });
@@ -2234,7 +2256,7 @@ describe("the build and shard jobs carry what bench.yml needed to build and serv
   });
 });
 
-describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
+describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
   const shard = JOBS.shard;
   it("runs the derived matrix, fail-fast off, with the derived timeout", () => {
     expect(shard).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
@@ -2342,20 +2364,34 @@ it("a run that exits non-zero (refused/aborted) is exit 2 with no judge call —
 `no-solver-route.test.ts` pins ruling 66's premise (D23). It is a pure scan, with no network and no DB:
 
 ```ts
-const LIB = "tools/matrix/lib";
+const HM = "tools/matrix";
 const SOLVER_ROUTE = /schedule\/auto|schedule\/ai-|ai-plan/;
-const BOARD_AUTO_CONTROL = /auto-?run|auto-?schedule/i;   // Step 0 narrows or widens this against selectors.ts at HEAD
-it("the pattern matches the real solver routes and not the matrix's own (a positive pair)", () => {
+// The board's real solver controls, from apps/web/src/components/v2/schedule-board.tsx (:1416, :1433, :1456, :1485). The words
+// run schedule-auto, not auto-schedule (review 4, R4-I3), so the pattern is built from the testids themselves.
+const BOARD_SOLVER_CONTROLS = ["schedule-auto", "schedule-reflow", "schedule-polish", "board-ai-schedule"];
+const BOARD_SOLVER_CONTROL = /schedule-(auto|reflow|polish)|board-ai-schedule|autoRun/;
+it("the route pattern matches the real solver routes and not the matrix's own (a positive pair)", () => {
   for (const p of ["/api/v1/stages/x/schedule/auto", "/api/v1/stages/x/schedule/ai-plan", "/schedule/ai-plan/apply"]) expect(SOLVER_ROUTE.test(p), p).toBe(true);
   for (const p of ["/api/v1/stages/x/generate", "/api/v1/divisions/x/start", "/api/v1/stages/x/rebuild"]) expect(SOLVER_ROUTE.test(p), p).toBe(false);
 });
-it("no non-test file under tools/matrix/lib names a solver route or the board's auto-run control (ruling 66)", () => {
-  const files = globSync("**/*.ts", { cwd: LIB }).filter((f) => !/__tests__|\.test\.ts$/.test(f));
-  // anti-vacuity: the scan must have read files, and the two that matter must be among them
+it("the control pattern matches the board's four REAL solver testids, read from the product source (a positive pair)", () => {
+  const board = readFileSync("apps/web/src/components/v2/schedule-board.tsx", "utf8");
+  for (const id of BOARD_SOLVER_CONTROLS) {
+    expect(board, `${id} is no longer in the board: re-read the controls`).toContain(`data-testid="${id}"`);
+    expect(BOARD_SOLVER_CONTROL.test(`[data-testid="${id}"]`), id).toBe(true);
+  }
+  expect(BOARD_SOLVER_CONTROL.test('[data-testid="stage-generate"]')).toBe(false);
+});
+it("no non-test file under tools/matrix names a solver route, and none under lib/browser names a board solver control (ruling 66)", () => {
+  const files = globSync("**/*.ts", { cwd: HM }).filter((f) => !/__tests__|\.test\.ts$|^catalogue\//.test(f));
+  // anti-vacuity: the scan must have read files, and the ones that matter must be among them
   expect(files.length, "zero files scanned is a failure").toBeGreaterThan(0);
-  expect(files).toEqual(expect.arrayContaining(["driver/http-driver.ts", "browser/selectors.ts"]));
-  const hits = files.filter((f) => SOLVER_ROUTE.test(readFileSync(join(LIB, f), "utf8")) || (f === "browser/selectors.ts" && BOARD_AUTO_CONTROL.test(readFileSync(join(LIB, f), "utf8"))));
-  expect(hits, `scanned ${files.length} file(s). A matrix path now reaches the solver: re-decide the placement container as plumbing, and no check may claim to prove scheduling (owner ruling 66)`).toEqual([]);
+  expect(files).toEqual(expect.arrayContaining(["lib/driver/http-driver.ts", "lib/browser/selectors.ts", "lib/browser/pages/stage-rail.ts", "run.ts"]));
+  const browser = files.filter((f) => f.startsWith("lib/browser/"));
+  expect(browser.length, "zero browser files scanned").toBeGreaterThan(1);
+  const text = (f: string) => readFileSync(join(HM, f), "utf8");
+  const hits = [...files.filter((f) => SOLVER_ROUTE.test(text(f))), ...browser.filter((f) => BOARD_SOLVER_CONTROL.test(text(f)))];
+  expect(hits, `scanned ${files.length} file(s), ${browser.length} of them browser. A matrix path now reaches the solver: re-decide the placement container as plumbing, and no check may claim to prove scheduling (owner ruling 66)`).toEqual([]);
 });
 ```
 
@@ -2371,7 +2407,7 @@ Run the vitest template on `ci-wiring.test.ts matrix-workflow.test.ts run-sample
 ```yaml
 name: Matrix truth run
 
-# W1d (owner rulings 60–64, 2026-10-04). The format × sport matrix, sharded:
+# W1d (owner rulings 60–68, 2026-10-04). The format × sport matrix, sharded:
 # L1 (231 cells @1280), L2 (1,731 pair-runs), L3 (937 cases), each shard on its
 # own fresh Postgres with sync:sports. Triggers:
 #  - schedule: weekly, Sat 02:17 UTC — GATED by vars.MATRIX_WEEKLY_ENABLED (D2):
@@ -2425,7 +2461,7 @@ jobs:
   plan:
     name: Plan the shards
     if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 15
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -2470,7 +2506,7 @@ jobs:
   build:
     name: Build once
     needs: [plan]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 30
     env:
       # bench.yml's job-level env (bench.yml:80-106), every key, copied with its
@@ -2502,7 +2538,7 @@ jobs:
   shard:
     name: ${{ matrix.layer }} shard ${{ matrix.k }}/${{ matrix.of }}
     needs: [plan, build]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -2597,7 +2633,7 @@ jobs:
     name: Merge, judge, summarise
     needs: [plan, shard]
     if: ${{ always() && needs.plan.result == 'success' && inputs.scope != 'pr-sample' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}   # ruling 68, D24
     timeout-minutes: 20
     steps:
       - name: Visibility guard (design §6.4; R14a)
@@ -2768,6 +2804,9 @@ All green, with `.testResults[].name` listing exactly these 6 files (review I15:
 | Mutant | Killing test |
 |---|---|
 | In the guard, `[ "$vis" != "public" ]` → `[ "$vis" = "private" ]` | "unreadable (403)" (and "internal") |
+| Make the guard fail on a `self-hosted` runner (delete the early `exit 0`) | "public, self-hosted" and "private, self-hosted" (ruling 68) |
+| Make the guard pass on a `github-hosted` private repo (accept hosted like self-hosted) | "private, hosted" and the four-combination test |
+| One job back to `runs-on: ubuntu-latest` | "every job … runs on the switchable runner" |
 | Delete the `case "$INJECT"` block | "public but injected private" |
 | Change `private\|internal)` to accept `public` | "private but injected public" |
 | Remove `if:` from `plan` | the D2 test |
@@ -2781,6 +2820,8 @@ All green, with `.testResults[].name` listing exactly these 6 files (review I15:
 | Rename a key in `OMITTED_BY_RULING_66` | the same test's `arrayContaining` |
 | Add `/schedule/auto` to a string in `tools/matrix/lib/driver/http-driver.ts` | `no-solver-route.test.ts`, naming the file and ruling 66 |
 | Narrow the scan's glob to a directory with no files | `no-solver-route.test.ts`'s zero-files-scanned failure |
+| Add `scheduleAuto: '[data-testid="schedule-auto"]'` to `lib/browser/selectors.ts` | `no-solver-route.test.ts`, naming the file |
+| Add `getByTestId("schedule-auto")` to `lib/browser/pages/stage-rail.ts` | the same test (the scan covers every browser file, not just selectors) |
 | Remove `NEXT_PUBLIC_SUPABASE_URL` from the build job | "every env key bench.yml sets at job level…" (I13) |
 
 Mutate the guard's three branches one at a time; they partly cover for each other. Each mutant is applied to EVERY job's copy, or the identity test reds first and proves nothing about the guard.
@@ -3235,6 +3276,7 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
   - `packages/engine/stryker.config.mjs`;
   - `packages/engine/stryker.groups.mjs`, and `packages/engine/stryker.groups.d.mts` declaring exactly its five exports, `STRYKER_GROUPS`, `STRYKER_EXCLUDED`, `STRYKER_PLACEMENT_OUT_OF_SCOPE`, `STRYKER_VITEST_WORKERS` and `strykerConcurrency` (review I11d: the engine tsconfig includes `test/**`, and a `.ts` test importing an untyped `.mjs` is TS7016);
   - `packages/engine/stryker-floor.json` (`{"note": "...", "groups": {}}`: empty until PR-B, Task 20);
+  - `packages/engine/stryker-timeouts.json` (`{group: minutes}`, written by Step 4), `packages/engine/scripts/stryker-matrix.mjs` and `packages/engine/test/stryker-matrix.test.ts` (the per-event matrix; review 4, R4-I2);
   - `packages/engine/stryker-equivalent.json` (`{"note": "...", "equivalent": []}`);
   - `packages/engine/scripts/stryker-floor.ts`;
   - `packages/engine/test/stryker-groups.test.ts`;
@@ -3253,12 +3295,12 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
   - **modules:** `src/sport/**/*.ts`, `src/stats/**/*.ts`, `src/history/**/*.ts`, `src/officials/**/*.ts`, `src/import/**/*.ts`, `src/exports/**/*.ts`;
   - **draws:** exact files `src/scheduling/<name>.ts` for `bracket`, `bracket-layout`, `roundrobin`, `swiss`, `americano`, `participants`, `feedgraph` (ruling 67 lists them; they are format code);
   - **the six sports groups** split `src/sports/` by sport family, one directory set each:
-    - `sports-cricket`: `src/sports/cricket/**`;
-    - `sports-football`: `src/sports/football/**`;
-    - `sports-period`: `src/sports/period/**`, `src/sports/hockey/**`, `src/sports/icehockey/**`;
-    - `sports-setbased`: `src/sports/setbased/**`, `src/sports/tennis/**`;
-    - `sports-nested`: `src/sports/nested/**`;
-    - `sports-other`: `src/sports/generic/**`, `src/sports/boardgame/**`, `src/sports/carrom/**`, and the top-level `src/sports/*.ts` (`index.ts`, `squad-state.ts`);
+    - `sports-cricket`: `src/sports/cricket/**/*.ts`;
+    - `sports-football`: `src/sports/football/**/*.ts`;
+    - `sports-period`: `src/sports/period/**/*.ts`, `src/sports/hockey/**/*.ts`, `src/sports/icehockey/**/*.ts`;
+    - `sports-setbased`: `src/sports/setbased/**/*.ts`, `src/sports/tennis/**/*.ts`;
+    - `sports-nested`: `src/sports/nested/**/*.ts`;
+    - `sports-other`: `src/sports/generic/**/*.ts`, `src/sports/boardgame/**/*.ts`, `src/sports/carrom/**/*.ts`, and the top-level `src/sports/*.ts` (`index.ts`, `squad-state.ts`);
   - **probe:** `src/scheduling/roundrobin.ts` only (the PR self-proof, D3). `rest-floor.ts` is placement code and out of scope, so the probe moved to a format file with a co-located test (`roundrobin.test.ts`, checked at HEAD).
 
   The split is by sport family, because each family is one kernel with its own tests. It is an initial split, and Step 4 re-justifies it from the dry run's mutant count per group, never from line counts. A group the dry run shows to be disproportionate is split by file in that step, and the report says which and why.
@@ -3271,7 +3313,7 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
   - `src/scheduling/logger.ts`: holds no logic;
   - `src/scheduling/solver-test-bounds.ts`: a test helper;
   - `src/scheduling/placement-client.ts`: the gRPC client, covered only by integration tests that need the service;
-  - `src/scheduling/payload-fixtures.ts`: test fixtures for the placement payloads, decided from the file itself (opened 2026-10-04). It builds frozen calendar `Assignment`s, golden slots and order dependencies, and only `calendar-*.test.ts`, `repair-domain.test.ts`, `participants-rules.test.ts` (as test input) and the out-of-scope `repair-synthetic-board.ts` import it. It feeds no draw or format code, so it is excluded. If Step 1's sweep finds a production importer in a draws or format file, move it into `draws` and say so in the task report;
+  - `src/scheduling/payload-fixtures.ts`: test fixtures for the placement payloads, decided from the file itself (opened 2026-10-04; ruling 67 conditions the exclusion on it "only building the placement request": it builds no request, it is test fixtures for the calendar and repair tests, which is the stated reason). It builds frozen calendar `Assignment`s, golden slots and order dependencies, and only `calendar-*.test.ts`, `repair-domain.test.ts`, `participants-rules.test.ts` (as test input) and the out-of-scope `repair-synthetic-board.ts` import it. It feeds no draw or format code, so it is excluded. A test pins that no in-scope production file imports it (Step 1); if one ever does, move it into `draws` and say so in the task report;
   - `src/scheduling/generated/**`: generated;
   - `src/testkit/**`: `ruling 67: test helpers, not product`.
   Exclusion keys may be globs. Each carries a reason of at least 10 characters.
@@ -3299,10 +3341,13 @@ Read Stryker's vitest-runner docs for its constraints on `pool`, `isolate` and `
 const universe = () => globSync("src/**/*.ts", { cwd: ENGINE }).filter((f) => !/__tests__|\.test\.ts$|\.d\.ts$/.test(f));
 // path.matchesGlob (node:path, Node 22+): minimatch is not a dependency of the engine or the root (review I11c)
 const inMap = (map: Record<string, string>, f: string) => Object.keys(map).some((e) => matchesGlob(f, e));
+// globSync's `exclude` option receives BASENAMES for files ('cascade.test.ts'), so a path negation never matches there
+// (probed on Node 26.8.2: 24 files, 14 of them tests). Expand the positives, then filter the RESULT (review 4, R4-I1).
+const expand = (globs: string[], only: string[] = globs.filter((g) => !g.startsWith("!"))) => globSync(only, { cwd: ENGINE }).filter((f) => !globs.filter((g) => g.startsWith("!")).some((n) => matchesGlob(f, n.slice(1))));
 it("every non-test .ts under src/ is in exactly one group, a named exclusion, or the ruling-67 placement exclusion; unclassified = 0", () => {
   const files = universe();
   const owners = new Map<string, string[]>();
-  for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of globSync(globs, { cwd: ENGINE, exclude: (x) => globs.filter((n) => n.startsWith("!")).some((n) => matchesGlob(x, n.slice(1))) })) owners.set(f, [...(owners.get(f) ?? []), g]);
+  for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of expand(globs)) owners.set(f, [...(owners.get(f) ?? []), g]);
   const unclassified: string[] = [], doubled: string[] = [];
   let grouped = 0, excluded = 0, placement = 0;
   for (const f of files) {
@@ -3334,6 +3379,15 @@ it("every exclusion names its own reason and globs at least one file, in BOTH ma
   for (const r of Object.values(STRYKER_PLACEMENT_OUT_OF_SCOPE)) expect(r).toMatch(/^ruling 67: placement scheduling, low priority/);
   expect(STRYKER_EXCLUDED["src/testkit/**"]).toMatch(/^ruling 67:/);
 });
+it("no in-scope production file imports payload-fixtures.ts, the file excluded because it feeds only the placement tests (review 4, R4-m4)", () => {
+  const inScope = universe().filter((f) => !inMap(STRYKER_EXCLUDED, f) && !inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, f));
+  expect(inScope.length).toBeGreaterThan(0);
+  expect(inScope.filter((f) => /payload-fixtures/.test(readFileSync(join(ENGINE, f), "utf8")))).toEqual([]);
+});
+it("once any floor exists, every non-probe group has one: a missing entry is a failure, never a skip (review 4, R4-m3)", () => {
+  const floors = JSON.parse(readFileSync(join(ENGINE, "stryker-floor.json"), "utf8")).groups as Record<string, number>;
+  if (Object.keys(floors).length > 0) for (const g of Object.keys(STRYKER_GROUPS).filter((x) => x !== "probe")) expect(floors, g).toHaveProperty(g);
+});
 it("the probe is one exact file with a co-located test, and a draw generator (ruling 66)", () => {
   expect(STRYKER_GROUPS.probe).toEqual(["src/scheduling/roundrobin.ts"]);
   expect(existsSync(join(ENGINE, "src/scheduling/roundrobin.test.ts"))).toBe(true);
@@ -3344,13 +3398,13 @@ it("no group's mutate list reaches a test file (review I11a)", () => {
   let checked = 0, positives = 0;
   for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
     const pos = globs.filter((x) => !x.startsWith("!"));
-    const neg = globs.filter((x) => x.startsWith("!")).map((x) => x.slice(1));
-    const files = globSync(pos, { cwd: ENGINE, exclude: (f) => neg.some((n) => matchesGlob(f, n)) });
-    expect(files.length, `${g} matches no file`).toBeGreaterThanOrEqual(pos.length);   // every positive entry matched at least one file
+    const files = expand(globs);
+    for (const p of pos) expect(globSync([p], { cwd: ENGINE }).length, `${g}: ${p} matches no file`).toBeGreaterThan(0);   // EACH positive entry, not the group's total (review 4, R4-m5)
     checked += files.length; positives += pos.length;
     expect(files.filter((f) => /\.test\.ts$|__tests__/.test(f)), g).toEqual([]);
   }
   // the bound comes from the groups themselves, not a typed number
+  expect(positives).toBeGreaterThan(Object.keys(STRYKER_GROUPS).length);
   expect(checked).toBeGreaterThanOrEqual(positives);
   expect(Object.keys(STRYKER_GROUPS).length).toBeGreaterThan(1);
 });
@@ -3429,18 +3483,23 @@ The tests pin the function against machines whose expected values are worked fro
 
 `stryker-floor.ts` follows the interfaces above, with a D8 exit header.
 
-`mutation.yml`:
-- triggers: `schedule: - cron: "23 3 * * 0"`, `workflow_dispatch` (input `group`: `all` or one `STRYKER_GROUPS` key (the choices are derived from the file, and a test holds them equal); `inject_visibility` as in matrix-truth), and `pull_request` paths `.github/workflows/mutation.yml`, `packages/engine/stryker*`, `packages/engine/scripts/stryker-floor.ts`. A PR runs the `probe` group only.
-- jobs `plan` (guard + `if:` gate on `vars.MATRIX_WEEKLY_ENABLED` + a matrix of every `STRYKER_GROUPS` key except `probe`, read by a `node` one-liner and never typed) and `mutate`. `mutate` runs per group:
+`mutation.yml` (ruling 68: every job `runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}`; top-level `permissions: contents: read`; `plan` `timeout-minutes: 15`):
+- triggers: `schedule: - cron: "23 3 * * 0"`, `workflow_dispatch` (input `group`: `all` or one `STRYKER_GROUPS` key, `probe` included, the choices derived from the file and held equal by a test; `inject_visibility` as in matrix-truth), and `pull_request` paths `.github/workflows/mutation.yml`, `packages/engine/stryker*`, `packages/engine/scripts/stryker-*`.
+- jobs `plan` and `mutate`. `plan` has the guard, the gate `if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'` (the matrix-truth form, so a PR run and a dispatch run while the schedule is disabled, which is PR-A's whole state), and one matrix derivation, `node packages/engine/scripts/stryker-matrix.mjs --event "$EVENT" --group "$GROUP"`, which prints `matrix={"include":[{"group":…,"timeout":…}]}`:
+  - `pull_request` gives `probe` only;
+  - `workflow_dispatch` with `all` gives every key except `probe`; with any other key gives that key alone, `probe` included;
+  - `schedule` gives every key except `probe`;
+  - `timeout` comes from `packages/engine/stryker-timeouts.json` (minutes per group, ≤ 300, written by Step 4 from the dry run and replaced by Task 20 from measurement). A key with no timeout is a refusal, and so is an empty matrix.
+- `mutate` runs per matrix entry, with `timeout-minutes: ${{ matrix.timeout }}`:
   - the guard, checkout, pnpm, node and install;
   - `actions/cache` for `packages/engine/reports/mutation/<group>.incremental.json`, keyed `stryker-<group>-${{ github.sha }}` with restore-keys `stryker-<group>-`;
   - `cd packages/engine && STRYKER_GROUP=<g> pnpm mutation`, writing `EXIT=$?` itself;
-  - `pnpm mutation:floor --check <g> reports/mutation/<g>.json` (skipped when the floor file has no entry for the group yet, which is PR-A's state: it prints "no floor yet: PR-B sets it");
+  - `pnpm mutation:floor --check <g> reports/mutation/<g>.json`. It is skipped for `probe`, and for the other groups only while `stryker-floor.json`'s `groups` is empty (PR-A's state: it prints "no floor yet: PR-B sets it"). Once PR-B commits a floor, a group with no entry is exit 2, a failure (review 4, R4-m3);
   - `--survivors` → `SURVIVORS.md`;
   - upload the `mutation-<group>` artifact (json, SURVIVORS.md).
-- `timeout-minutes: 240` per group for the first run, an estimate (D14). It is replaced in Task 20 by the measured per-group wall time × 1.5, and stays under 360 always. A group whose measured time will not fit is split by file, justified by its measured mutant count and wall time.
+- Timeout cap: ONE value, 300 minutes, everywhere (D14, Step 4, Task 20). A group whose estimate or measurement exceeds 200 is split before its timeout (× 1.5) would pass 300.
 
-The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's, and "mutation.yml's dispatch choices are `all` plus exactly `STRYKER_GROUPS`'s keys, and its job matrix is those keys minus `probe`" (anti-vacuity: more than one group).
+The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; dispatch `league` style unknown key is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list.
 
 - [ ] **Step 4: Dry-run every group, run the probe, and the tests**
 
@@ -3452,7 +3511,7 @@ cd <exec>/packages/engine && for g in $(node -e 'import("./stryker.groups.mjs").
 
 Record, per group, the mutant count Stryker reports and the dry-run wall time. Check the groups:
 - a group whose count is zero is a configuration fault (fix the globs);
-- a group holding a disproportionate share of the total mutants is split by file in this step, and the report says which and why (the count, not a line count);
+- compute `est = ceil((dryRunSeconds + mutants × 10 ÷ concurrency) / 60)` minutes per group (D14's formula, at the pessimistic 10 s per mutant). ANY group with `est > 200` is split by file in this step, before PR-A merges, and the report says which and why (the count, never a line count). Then write `stryker-timeouts.json` with `min(300, ceil(est × 1.5))` per group, the probe's from its real run;
 - the table (group, mutants, dry-run time) goes in the task report and the PR body. It is the evidence Task 20's first full run is compared against.
 
 Then the probe, which is small, runs for real:
@@ -3477,7 +3536,7 @@ Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest r
 | Delete one `STRYKER_PLACEMENT_OUT_OF_SCOPE` key | the sweep: that file is unclassified; `placement` no longer equals the key count |
 | Add a stale exclusion key (a renamed file) | "every exclusion … globs at least one file" |
 | Point the probe at `rest-floor.ts` | "the probe is one exact file with a co-located test" |
-| Drop `!src/competition/**/*.test.ts` | "no group's mutate list reaches a test file" |
+| Drop `!src/competition/**/*.test.ts` | "no group's mutate list reaches a test file" (it goes red only because `expand` filters the result; the `exclude` form could never have gone green) |
 | `strykerConcurrency` returning `cores - 1` | "concurrency = vitest's own bound ÷ …" (16 cores, 8 GiB → 2, not 15) |
 | `strykerConcurrency` ignoring `workersPerSandbox` | the same test's `÷ 3` and `÷ 2` rows |
 
@@ -3507,7 +3566,7 @@ Expected: `compared` equals the slice size (24), and `differ: []`. A difference 
 - [ ] **Step 3: `_INDEX.md`**
 
 - **W1d status row:** "PR-A open: infra (Tasks 1–16); PR-B after the owner merges".
-- **False premises:** add "### Found during W1d planning" with the 22 entries above, plus any found while executing.
+- **False premises:** add "### Found during W1d planning" with every false premise listed above (23 at last count), plus any found while executing.
 - **Recommendations:** the bench carry (D9); D11's recommendation (decline browser workers in favour of shards, items 17 and 18), for the owner; D2's enable step, as the owner's action. D7 needs nothing here: ruling 65 is already recorded (`_INDEX.md:919`).
 - **Close "W1d first tasks":** each item gets `— done in W1d T<N> (<sha>)`, or `— accepted (item 13)`.
 
@@ -3810,7 +3869,7 @@ For each group, record:
 - the wall time;
 - the 10 files with the most survivors.
 
-A group with zero mutants is a configuration fault (the floor checker refuses it): fix the globs. A group that hit its 240-minute timeout is split in two by file, and that group is re-dispatched. The split is justified by the group's MEASURED mutant count and per-file survivor counts from this run, never by line counts. Compare each group's wall time with Task 15 Step 4's dry-run table, and replace `mutation.yml`'s `timeout-minutes` per group with measured wall time × 1.5 (under 360).
+A group with zero mutants is a configuration fault (the floor checker refuses it): fix the globs. A group that hit its timeout is split in two by file (its measured wall time is lost, so Step 4's estimate decides the split), and that group is re-dispatched. A measured wall time over 200 minutes is split too, because × 1.5 would pass the 300 cap. The split is justified by the group's MEASURED mutant count and per-file survivor counts from this run, never by line counts. Compare each group's wall time with Task 15 Step 4's dry-run table, and replace each group's `stryker-timeouts.json` entry with measured wall time × 1.5 (at most 300).
 
 - [ ] **Step 3: Set the floors**
 
@@ -3822,7 +3881,7 @@ Then `--check-file-against origin/main`, which must pass: floors rise from "none
 
 - [ ] **Step 4: Derive the timeouts, and commit the survivors**
 
-Set `mutation.yml`'s per-group `timeout-minutes` = ceil(measured × 1.5), staying ≤ 300, as a `timeout` field of the job matrix, derived exactly like Task 8's. Write `TR/w1d-baseline/MUTATION.md` with:
+Set each group's `stryker-timeouts.json` entry = ceil(measured × 1.5), at most 300. `stryker-matrix.mjs` emits it as the `timeout` field of the job matrix. Write `TR/w1d-baseline/MUTATION.md` with:
 - the per-group table;
 - the run id;
 - the artifact names;
@@ -4005,9 +4064,32 @@ Re-review 3 (0 Critical, 2 Important, 5 Minor) was taken against `04b0c2957`. Bo
 
 ---
 
+## Review response (fix round 4)
+
+Re-review 4 (0 Critical, 3 Important, 9 Minor) was taken against `cff1e7176` and closed round 3. Owner ruling 68 landed after it.
+
+**All 3 Important are fixed:**
+- **R4-I1 (`globSync` `exclude`).** Re-probed on Node 26.8.2: the callback receives basenames for files, so the `!` negations never fired (24 files, 14 of them tests). The sweep and the "no test file" test now use `expand()`, which globs the positives and filters the RESULT with `matchesGlob`. The mutation row says why the old form could never have gone green.
+- **R4-I2 (mutation matrix).** One derivation per event, in `stryker-matrix.mjs`: a PR runs `probe`, the schedule and dispatch `all` run every other group, and a dispatch `group` input selects one (`probe` included). The gate is the matrix-truth form. A spawn test pins each event, plus three mutation rows.
+- **R4-I3 (browser half of the guard).** The pattern is built from the four real testids (`schedule-auto`, `schedule-reflow`, `schedule-polish`, `board-ai-schedule`, re-opened at `schedule-board.tsx:1416,1433,1456,1485`). The scan covers every file under `tools/matrix` for routes and every `lib/browser/**` file for controls. A positive pair reads the testids from the board source. Two mutation rows (selectors, a page object).
+
+**Ruling 68 (new):** D24. Every matrix and Stryker job takes `vars.MATRIX_RUNNER || 'ubuntu-latest'`. The guard already passed on `self-hosted` and failed on hosted-private, and `RUNNER_ENV` is its input. The test now holds all four combinations and the runner literal in every job of both workflows. Three mutation rows. The Fly runner is recorded in the handoff and not planned.
+
+**Minors fixed:**
+- m1: the doubled `describe(` is gone.
+- m2: one cap, 300, everywhere; the split rule is absolute (`est > 200`, from the dry-run formula, before PR-A merges); `stryker-timeouts.json` carries per-group timeouts into the matrix, and Task 20 replaces them from measurement.
+- m3: `--check` is skipped only for `probe` and while the floor file is empty; a test requires every non-probe group to have a floor once any exists.
+- m4: a test pins that no in-scope file imports `payload-fixtures.ts`. m5: the assertion is per positive glob, and the sports globs end `/**/*.ts`.
+- m6: counts are 23 premises and D1–D24. m7: the trailer is "the line the running agent's prompt gives", plus a re-confirm-with-the-owner line.
+- m8: `permissions: contents: read` and `plan` `timeout-minutes: 15` for `mutation.yml`, and a test that every job of both workflows has `timeout-minutes`. m9: the scan covers all of `tools/matrix`, and the stray capital is fixed.
+
+**Disagreements:** none. **New false premises:** none.
+
+---
+
 ## Self-Review
 
-**1. Spec coverage** (the brief, rulings 60–67, item list):
+**1. Spec coverage** (the brief, rulings 60–68, item list):
 
 | Requirement | Where |
 |---|---|
@@ -4035,8 +4117,8 @@ Re-review 3 (0 Critical, 2 Important, 5 Minor) was taken against `04b0c2957`. Bo
 | Item 15 browser items and item 16 cricket routes, sized honestly | Tasks 12, 14 (Step 0 of each re-sizes against the skin) |
 | PR-B: 3 dispatches with the traps; the triage tool and process; a baseline layout without the `w1drv-` prefix; the Stryker floor; enabling the schedule; _INDEX tables; W2 "backlog ready" | Tasks 17–22; D19, D21 |
 | The four test types per task | the table in Global Constraints; each task's steps |
-| A "False premises found" section | 22 entries (20 at planning, 2 in review fix round 1) |
-| D-numbered recommendations with owner value | D1–D22 |
+| A "False premises found" section | 23 entries (20 at planning, 2 in review fix round 1, 1 in review 3) |
+| D-numbered recommendations with owner value | D1–D24 |
 
 **2. Placeholder scan.** Three places say "Step 0 pins" for a number the tree must give:
 - `STEP0_COUNTS` (Task 18);
@@ -4074,3 +4156,5 @@ Plan complete, saved to `docs/superpowers/plans/2026-10-04-format-matrix-w1d.md`
 Batch Tasks 12 and 13 into one dispatch with one review: they are same-shaped carries in disjoint files. Tasks 1–11 are sequential. Tasks 12–15 may run in parallel worktrees only if their file sets stay disjoint (Task 14 and Task 12 both touch `browser-driver.ts`, so they run sequentially).
 
 D7 (the L2 ░ reading) is RULED: owner ruling 65 (2026-10-04). The merge job and every Task 17 judge call use `--planned-not-run allow`, and Task 6 keeps a test that a ░ on a DRIVEN case is still harness-red. No owner question blocks any task.
+
+**Between PR-B and the private switch (ruling 68, not planned here):** a short follow-up builds the ephemeral self-hosted GitHub Actions runner on Fly Machines (its own Fly app and image with Node, Playwright browsers and Postgres, no production secrets). Then only `vars.MATRIX_RUNNER` changes. This supersedes design §6.5's "a VPS or the owner's machine". W1d builds no runner. PR-B's dispatches run on GitHub-hosted runners while the repo is still public.
