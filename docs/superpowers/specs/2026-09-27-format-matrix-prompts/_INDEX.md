@@ -854,7 +854,9 @@ Elsewhere the text is the controller's record.
       owner's "ok": the truth runs are 12 MB, read by 12 CI test files, W1d's baseline, and history already holds
       them, so moving them out buys nothing. They are left out of the image instead.
     - **The package.** The harness lives at `tools/matrix` as `@seazn/matrix`; `tools/` is the home for dev-only
-      harnesses (bench to follow). `tools/*` is a pnpm workspace glob; the harness's manifest declares what it
+      harnesses (bench to follow). Choosing `tools/` over `packages/` was the controller's ruling (CL-R3, revised),
+      not the owner's: the owner asked "tools or package?" and said the bench would follow later, and the
+      controller ruled on that. `tools/*` is a pnpm workspace glob; the harness's manifest declares what it
       really imports. Nothing in `apps/`, `packages/` or `scripts/` may import `tools/**` or `@seazn/matrix`:
       the eslint rule from `scripts/lib/tools-import-guard.mjs` is the coarse layer, and
       `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. Nor may they reach it at
