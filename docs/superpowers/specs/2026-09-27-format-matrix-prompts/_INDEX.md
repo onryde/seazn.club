@@ -866,6 +866,10 @@ Elsewhere the text is the controller's record.
       `scripts/lib`: `main-module.ts`, and `crash-exit.ts`, which `reference:boundary` preloads and
       `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
       `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
+    - **Scans (2026-10-04, controller ruling BT-R2).** #913 silently dropped `tools/matrix` from three scans:
+      `test-email-domain`, `z3-retirement-drift` and the engine's `z3-dependency-retired` (AGENTS class 6). The
+      bench move's PR restored it. All three read all of `tools/` now. Each checks that every workspace there
+      contributes files, and each holds a floor for the bench and the matrix.
     - **Old paths.** The committed evidence still spells `scripts/matrix` and is never rewritten.
       `tools/matrix/lib/harness-path.ts` is the one map from the old paths to the new ones (the directory, and
       the two files that left the harness for `scripts/lib`); the single-sport ratchet's `--against` reads a

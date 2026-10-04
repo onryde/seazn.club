@@ -110,8 +110,20 @@ proves thin — record the pairing here.)
     imported from `tools/`. Today no such code exists.
     `tools/bench/lib/__tests__/workspace.test.ts` holds three things: the
     manifest matches the imports, the wiring runs `tools/bench`, and no
-    wiring file names the old directory. The email and z3 scans that read
-    the bench through `scripts/` now name `tools/bench`.
+    wiring file names the old directory. The matrix reaches the bench by
+    relative path only: its boundary test refuses a bare `@seazn/bench`
+    import, so every import stays on ruling 38's allowlist (controller
+    ruling BT-R3).
+  - **The scans read all of `tools/` (2026-10-04). This is CONTROLLER
+    ruling BT-R2, not an owner ruling.** When #913 moved the matrix,
+    `tools/matrix` silently dropped out of `test-email-domain`,
+    `z3-retirement-drift` and the engine's `z3-dependency-retired`. That
+    is a suppressed check (AGENTS class 6), and nobody noticed. This PR
+    restores it. Each scan's root is now `tools`. Each scan checks that
+    every `tools/*` workspace (a directory with a `package.json`, read from
+    the tree) contributes at least one file. Each also holds a floor for
+    the bench and one for the matrix. A harness moved into `tools/` next
+    is scanned without an edit, and one that drops out reds by name.
   - **Old paths.** Dated status entries, executed prompts, plans, designs
     and session states keep `scripts/bench`, because they are records. So
     does any citation pinned to a SHA or a run, as in format-matrix
