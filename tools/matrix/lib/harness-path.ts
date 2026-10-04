@@ -46,7 +46,7 @@ function within(path: string, dir: string): string | null {
  *  under a historical harness directory maps into HARNESS_DIR; any other path
  *  is returned unchanged. */
 export function livePath(recorded: string): string {
-  if (Object.hasOwn(RELOCATED_FILES, recorded)) return RELOCATED_FILES[recorded]!;
+  if (Object.hasOwn(RELOCATED_FILES, recorded)) return RELOCATED_FILES[recorded];
   for (const dir of HISTORICAL_HARNESS_DIRS) {
     const rest = within(recorded, dir);
     if (rest !== null) return `${HARNESS_DIR}${rest}`;
