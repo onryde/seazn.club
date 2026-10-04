@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The matrix runs itself. A GitHub workflow runs it weekly and on dispatch, sharded across about 12 jobs, each on a fresh Postgres with `sync:sports`. A visibility guard stops it before it can bill a private repo. Stryker runs weekly on the engine's scheduling and competition code against a floor that may only rise. The first full truth run is then triaged: every ❌ carries an audit gap ID (or `NEW-W1d-<n>`) and its owning wave, so W2–W7 each start from a measured backlog.
+> **Execution model policy (owner, 2026-10-04: "Let's us Sonnet for all remainings tasks in this session" and "Whole branch review must be Opus").** Every implementer, every task reviewer and every fix agent runs on Sonnet: dispatch each with `model: "sonnet"`. The whole-branch reviews, one at the end of PR-A (Task 16) and one at the end of PR-B (Task 22), run on Opus: dispatch each with `model: "opus"`. Nothing else overrides a model.
+
+**Goal:** The matrix runs itself. A GitHub workflow runs it weekly and on dispatch, sharded across about 12 jobs, each on a fresh Postgres with `sync:sports`. A visibility guard stops it before it can bill a private repo. Stryker runs weekly on the engine, placement scheduling excepted (rulings 66, 67), against per-group floors that may only rise. The first full truth run is then triaged: every ❌ carries an audit gap ID (or `NEW-W1d-<n>`) and its owning wave, so W2–W7 each start from a measured backlog.
 
 What an organiser gets: the ~150 audit hypotheses become a list of reproduced problems, each owned by one wave, plus a weekly signal when a change breaks a case that used to work.
 
-**Architecture** (owner rulings 60–64, 2026-10-04):
+**Architecture** (owner rulings 60–67, 2026-10-04):
 - **One plan, two PRs** (ruling 62). `workflow_dispatch` fires only a workflow file already on `main`.
   - **PR-A (infra), Tasks 1–16:** the 28 "W1d first tasks" items, sharding, the workflow and its visibility guard, the per-PR sample, the Stryker workflow, and the weekly schedule shipped DISABLED.
   - **PR-B (evidence), Tasks 17–22:** three harness-green dispatches, the triage tooling and the triaged baseline, the Stryker floor, the schedule enabled, the per-wave ❌ tables, and W2 → "backlog ready".
@@ -21,6 +23,7 @@ What an organiser gets: the ~150 audit hypotheses become a list of reproduced pr
 
   There is one recipe and one guard.
 - **No product changes.** Product reds are data (ruling 19). W1d touches `apps/web` and `packages/engine` only for Stryker's config, devDependencies and floor checker, which change no runtime path.
+- **The matrix proves formats and rules, not scheduling** (rulings 66, 67). The shard job has no placement container and no solver-fallback guard, because no matrix path reaches the solver at HEAD (D23). A test pins that premise, so a path that starts reaching it reds. Stryker covers every engine module except the placement files under `src/scheduling/`, which are a named, liftable exclusion.
 
 **Tech Stack:**
 - Node 26 `--experimental-strip-types`: no enums, namespaces or parameter properties; `.ts` import suffixes.
@@ -32,7 +35,7 @@ What an organiser gets: the ~150 audit hypotheses become a list of reproduced pr
 - GitHub Actions: `background:`/`wait:` steps as in `e2e.yml`; `runner.environment`.
 - `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` 10.0.0. Both need Node ≥ 22; the runner's peer is `vitest >=2.0.0` (read from the npm registry 2026-10-04).
 
-**Spec:** `docs/superpowers/specs/2026-09-27-format-matrix-design.md` §2, §6.4, §6.5, §7.3, §7.5 item 2, §8, §9, §10 and §12. The binding scope is owner rulings 16, 19, 20, 21, 39, 46, 47, 48, 55, 56, 58 and **60–64** in `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md` ("Owner rulings"), plus "W1d first tasks" items 1–28.
+**Spec:** `docs/superpowers/specs/2026-09-27-format-matrix-design.md` §2, §6.4, §6.5, §7.3, §7.5 item 2, §8, §9, §10 and §12. The binding scope is owner rulings 16, 19, 20, 21, 39, 46, 47, 48, 55, 56, 58 and **60–67** in `docs/superpowers/specs/2026-09-27-format-matrix-prompts/_INDEX.md` ("Owner rulings"), plus "W1d first tasks" items 1–28.
 - Prompt: `docs/superpowers/specs/2026-09-27-format-matrix-prompts/W1d-ci-truth-run.md`. Where the prompt and rulings 60–64 disagree, the rulings win (False premises 6–8).
 - `_RULES.md`: R5, R10–R14a, R18, R19, R22, R25, R27, R29.
 - `docs/superpowers/TEST-STRATEGY.md`: rules 1–5 and 10, plus the reviewer's four questions.
@@ -87,7 +90,7 @@ Where the spec and the tree disagree, see **False premises found in planning**. 
 | Import guard `scan()`; ROOTS; literals; positive control `perRoot {apps:5, packages:2, scripts:4}` | `scripts/__tests__/tools-import-guard.test.ts:94-177`, `:27`, `:64-73`, `:268-288` |
 | `tsconfig.scripts.json` excludes `*.test.ts`; nodenext | `tsconfig.scripts.json` |
 | ci.yml `gates`: `fetch-depth: 0`; single-sport at `:113`; matrix unit step `:239-257` | `.github/workflows/ci.yml` |
-| e2e.yml recipe: Postgres, db:apply, sync:sports, background build, placement image, chromium, standalone server | `.github/workflows/e2e.yml:353-800` |
+| e2e.yml recipe: Postgres, db:apply, sync:sports, background build, chromium, standalone server (the placement image and container are NOT copied: ruling 66, D23) | `.github/workflows/e2e.yml:353-800` |
 | bench.yml: port 5433, server on 3200, `AUTH_DEV_LINKS: "1"`, no Redis, `NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"` at job level | `.github/workflows/bench.yml:59-213` |
 | Engine vitest: threads, `isolate: false`, memory-bound workers | `packages/engine/vitest.config.ts:40-66` |
 | Engine `tsconfig.json` includes `scripts/**/*.ts` and `test/**/*.ts` | `packages/engine/tsconfig.json` |
@@ -165,7 +168,7 @@ Before building on any line above, the executor pins it again (AGENTS class 5). 
   - 47 (the full L1 grid is W1d's);
   - 56 (`tools/` boundary; evidence stays in `docs/`);
   - 58 as clarified;
-  - **60–64**.
+  - **60–67**.
 
 ### The four test types, as they apply here
 
@@ -225,10 +228,11 @@ Each has file:line evidence. They go to `_INDEX.md` "False premises found" under
 16. **The cited lines for item 15 drifted.** `run.ts:468-469` is now `run.ts:561`, and `lib/pad-proof-set.ts:16` is now `:15`. The meaning holds.
 17. **"A scheduled run's payload carries the repository."** Unverified, and design §6.5 assumed it. The guard does not depend on it: it reads `gh api repos/$GITHUB_REPOSITORY --jq .visibility`. Task 17 Step 5 records what the first scheduled run's `github.event` actually held.
 18. **"The Cloudflare cron worker can fire the weekly run."** It can only `POST ${BASE_URL}${path}` with `x-cron-secret` (`apps/cron-worker/src/call.ts:92-94`). It has no GitHub API target. This was moot after ruling 60; it is recorded so the option is not re-offered.
-19. **Design §7.5's "scheduling, competition and tiebreaker modules" are three directories.** They are two: `tiebreakers.ts` lives in `packages/engine/src/competition/`.
+19. **Design §7.5's "scheduling, competition and tiebreaker modules" are three directories.** They are two: `tiebreakers.ts` lives in `packages/engine/src/competition/`. (Review 3, rulings 66 and 67: "engine scheduling" reads as draw generation, not placement. The Stryker scope is the whole engine except the placement files under `src/scheduling/`.)
 20. **W2 prompt trap 2** ("declared 3/0 loses to the FIH 2/1 the rulebook adopts", SC-P4) contradicts the SC-P4 false premise (`_INDEX.md:1362-1366`) and design §8 ("FIH 2/1 is Pro League only"). It is not W1d's to fix. Task 22 records it beside the W2 backlog for W2's planner.
 21. **(Found in review fix round 1.) "The 11 `RefusedCall` reds in `w1drv-l3` are a harness-seeding shape"** (plan review 1, m7). They are not. All 11 are `POST /api/v1/entrants/<id>/withdraw → 422`, the R4 scenario's withdraw action (P5 → W4), counted at HEAD with Task 6 Step 0's one-liner. They are the product answering a scenario action, so they stay data. The setup-call guard the review proposed is adopted anyway (`SetupRefused`, tagged by phase at the setup seam; D6, review 2 R2-I2), because a refused SETUP call would be a harness fault, and none exists today to witness it.
-22. **(Found in review fix round 1.) "bench.yml builds the placement image with a `type=gha` cache"** (bench.yml:141's comment; ci.yml:594, 1080 and e2e.yml:612 say the same; plan review 1, I13). No workflow at HEAD sets `cache-from:` or `cache-to:`. `rtk proxy grep -an "cache-from:\|cache-to:" .github/workflows/*.yml` matches comments only. What IS load-bearing is `docker/setup-buildx-action@v3` before `build-push-action` (bench.yml:143, e2e.yml:614). Task 9 copies bench's step unchanged and adds buildx, and does not invent a cache the source never had.
+22. **(Found in review fix round 1.) "bench.yml builds the placement image with a `type=gha` cache"** (bench.yml:141's comment; ci.yml:594, 1080 and e2e.yml:612 say the same; plan review 1, I13). No workflow at HEAD sets `cache-from:` or `cache-to:`. `rtk proxy grep -an "cache-from:\|cache-to:" .github/workflows/*.yml` matches comments only. What IS load-bearing is `docker/setup-buildx-action@v3` before `build-push-action` (bench.yml:143, e2e.yml:614). Task 9 copies bench's step unchanged and adds buildx, and does not invent a cache the source never had. **Moot under ruling 66:** the placement image is no longer built in W1d (D23), so neither buildx nor a cache is needed.
+23. **(Found in review 3.) "The greedy-fallback guard proves the solver is reachable and used"** (fix round 2, R2-I1). It proved nothing. The step counted server-log lines and fallback lines, never solver attempts, so with zero solver calls it printed `placement fallbacks: 0` and passed on every run. The matrix drives no solver route (D23), and the guard was vacuous before ruling 66 removed it. Round 2's own Step 0 note ("the task report says plainly whether today's run exercised it") was a disclosure standing in for a check, which TEST-STRATEGY rule 1 does not accept.
 
 ---
 
@@ -309,8 +313,13 @@ Each job is one shard on a fresh Postgres with `sync:sports`, about 12 shards, w
 - **setup refused:** a red reading `error: SetupRefused: …`. The tag is set by PHASE, never by route (review 2, R2-I2). Route shape cannot tell setup from action: DENIED's action is `POST /api/v1/divisions/<id>/stages` (`scenarios/denied.ts:64-77`), which is exactly a setup route elsewhere.
   - `setUpDivision` (`scenarios/common.ts:196`) runs every driver call it makes BEFORE `driver.start` inside one `inSetup(…)` wrapper. Those are `createFromTemplate`, `createCompetition`, `createDivision`, `postStages`, `addEntrants` and `entrantMembers`.
   - The wrapper rethrows a `RefusedCall` as `SetupRefused`, a SUBCLASS of `RefusedCall`. Every existing `instanceof RefusedCall` catch therefore behaves as before, while `run.ts:458`'s `errText` writes the subclass's name into the reason.
+  - **Construction (review 3, R3-m2).** `RefusedCall`'s constructor (`types.ts:236-252`) composes `${method} ${path} → HTTP ${status} ${code}: ${message}` and keeps no raw message. Rebuilding with `new SetupRefused(e.method, e.path, e.status, e.code, e.message, …)` would double that prefix and redact twice. So `SetupRefused.from(e: RefusedCall)` passes the same fields with a `null` message, plus `featureKey` and `extra`, then sets `this.message = e.message` (already redacted) and `this.name = "SetupRefused"`. The e2e test asserts the WHOLE reason equals `error: SetupRefused: ${original.message}`, not just its prefix.
+  - **DENIED's own setup (review 3, R3-m3).** `scenarios/denied.ts` does not use `setUpDivision`, but its `createCompetition` (`:63`), `createDivision` (`:64`), the second `createDivision` (`:76`) and the working-stage `postStages` (`:77`) are setup. `:77` is the shape the route cannot tell apart: it is the same route as the action under test at `:67`. `inSetup` is exported and wraps those four calls. The action at `:67` stays outside it, so its gated refusal is still data.
   - `driver.start` stays OUTSIDE the wrapper. Start is the product's own generate act (STAGE_NOT_READY and the like), so its refusal is data. DENIED does not call `setUpDivision`, so its gated `postStages` stays data.
-  - A refused setup call means the harness asked wrongly (review m7). A RefusedCall anywhere else stays data. All 11 RefusedCall reds in `TR/w1drv-l3` are `POST /api/v1/entrants/<id>/withdraw` (the R4 action; P5 → W4), so they stay data;
+  - A refused setup call means the harness asked wrongly (review m7), with two known limits (review 3, R3-m4). A RefusedCall anywhere else stays data. All 11 RefusedCall reds in `TR/w1drv-l3` are `POST /api/v1/entrants/<id>/withdraw` (the R4 action; P5 → W4), so they stay data;
+  - **Limit 1: a harness mistake read as data.** `start` stays outside the tag, so a harness that asked wrongly AT `start` is labelled data. `TR/w1b-probe/results.json` holds `page_playoff_only|generic|score|LIFECYCLE`, red `POST /divisions/<id>/start → 422 CONFIG_INVALID: page playoffs need exactly 4 entrants, got 8`. That is the harness seeding the wrong roster size, and D6 classes it as data.
+  - **Limit 2: a product defect read as a harness fault.** A catalogue-valid `postStages` body that the product refuses through a defect reads as `setup-refused` and blocks PR-B's harness-green count, and no wave inside W1d can fix a product defect.
+  - **The route for both (Task 18 Step 3).** The triage reads the message of every `start` `CONFIG_INVALID` red before assigning a wave. A `SetupRefused` diagnosed as the product refusing a catalogue-valid body gets a named route: an owner ruling and a `NEW-W1d-<n>`, never "fix the harness";
 - **unplanned ░:** `not_run` without the `planned: true` marker (Task 2);
 - **run-level:** a missing, partial or aborted shard (`merge-shards.ts` refuses).
 
@@ -370,7 +379,7 @@ Three CLIs change:
 
 **D13 — The per-PR sample (R27).**
 - `ci.yml` gains two jobs:
-  - `matrix-rows`: reads the PR body's `Matrix rows:` line and the changed files;
+  - `matrix-rows`: reads the PR body's `Matrix rows:` line LIVE (`gh api repos/$REPO/pulls/$N`, never the event payload: `ci.yml` listens to the default `pull_request` types, so a body edit fires no run, and a re-run replays the ORIGINAL payload with the old body; review 3, R3-m1) and the changed files;
   - `matrix-sample`: calls `matrix-truth.yml` with `scope: pr-sample`.
 - **Rows:** R27 says a PR touching `packages/engine/**` or `apps/web/src/server/usecases/stages.ts` declares its rows. `pr-rows.ts` enforces it:
   - no declaration on such a PR → exit 1, which fails the job;
@@ -385,13 +394,13 @@ Three CLIs change:
   - every PR (most touch only UI copy);
   - failing on the first red (flaky-shaped gates are run again, class 8).
 
-**D14 — Stryker lives with the engine, five groups, incremental.**
+**D14 — Stryker lives with the engine, ten groups plus a probe, incremental (rulings 66, 67).**
 - `@stryker-mutator/core` and `@stryker-mutator/vitest-runner` (exact `10.0.0`) become devDependencies of `packages/engine`.
-- `packages/engine/stryker.config.mjs` reads `STRYKER_GROUP`. `packages/engine/stryker.groups.mjs` declares the five groups (`competition`, `draws`, `build`, `calendar`, `repair`) plus a `probe` group. A test holds every non-test source file of `src/scheduling` and `src/competition` in exactly one group, or in a named exclusion with its reason.
+- `packages/engine/stryker.config.mjs` reads `STRYKER_GROUP`. `packages/engine/stryker.groups.mjs` declares ten groups plus a `probe` group: `competition`, `core`, `modules` (sport, stats, history, officials, import, exports), `draws` (the seven draw generators) and six `sports-*` groups that split `src/sports/` by sport family. A sweep test gives every non-test `.ts` under `packages/engine/src` exactly one home: a group, a named exclusion with its own reason, or the ruling-67 placement exclusion (19 files: build, calendar, repair; "low priority", liftable). `testkit/` is excluded as test helpers. Unclassified files fail the test, and the failure reports their count. The probe is `src/scheduling/roundrobin.ts`.
 - `mutation.yml` runs one job per group, each with `--incremental` and its incremental file cached across weeks, with a derived `timeout-minutes` ≤ 300.
 - Floors are per group in `packages/engine/stryker-floor.json`, checked by `packages/engine/scripts/stryker-floor.ts`. A floor is never lowered: the `--check-file-against HEAD^1` mode runs in `ci.yml` `gates`.
 - Survivors are listed in `SURVIVORS.md` per group. Equivalent mutants are recorded in `packages/engine/stryker-equivalent.json` by `file:line:col mutator → replacement`, never by Stryker's unstable ids.
-- Estimate before measuring: ~15k source lines → on the order of 10k mutants. The engine suite runs 46–57 s locally and 5 m 44 s on CI with coverage. With per-test coverage each mutant runs only its covering tests, so the first run is expected at 1–4 h in total across the groups. Task 20 measures it, and a group over 200 min is split (Task 20 Step 4).
+- Estimate before measuring, and only an estimate. As a rough proxy, about 33k non-test source lines are in scope; at roughly 0.67 mutants per line that is on the order of 22k mutants. Every job pays one dry run, which is the engine suite with coverage: 5 m 44 s (344 s) on CI. With per-test coverage a mutant runs only its covering tests, taken at 1–10 s in one sandbox (10 s is the pessimistic bound, since the sports kernels sit under replay suites). Concurrency is 3 on `ubuntu-latest` (4 cores, 16 GiB, one vitest worker per sandbox). So a group's job takes about `344 s + mutants × t ÷ 3`. For a group of 4,000 mutants that is 344 + 4,000 × 10 ÷ 3 = 13,677 s = 228 min at the bound and 344 + 4,000 × 2.5 ÷ 3 = 3,677 s = 61 min at 2.5 s, so the first-run `timeout-minutes: 240` is a ceiling and not a prediction. The estimate is then dropped: Task 15 Step 4's dry run gives the true mutant count per group (PR-A), and Task 20's first full run gives the true wall time per group (PR-B). The shard sizes, the timeouts and any further split follow those measurements, never line counts. A group over 200 min measured is split (Task 20 Step 2).
 - Owner value: mutation sits beside the code it measures, and weekly reruns stay cheap.
 - Rejected:
   - a `tools/mutation` workspace (Stryker's sandbox cannot mutate files outside its cwd);
@@ -449,6 +458,14 @@ Three CLIs change:
 
 - Owner value: "false premise" keeps meaning "we looked and it is not there", and no wave loses a real gap because W1d's scenarios never reached it.
 - Rejected: marking every non-reproduced gap a false premise (it would delete most of W2–W7's backlog on no evidence).
+
+**D23 — The matrix drives no placement solver, so the shard jobs carry no placement container and no greedy-fallback guard (ruling 66).**
+- **Evidence at HEAD (read 2026-10-04, review 3).** `buildSchedule(` has two production call sites, both inside `autoSchedule` (`apps/web/src/server/usecases/schedule.ts:1924` directly, and `:2486` through `reflowExisting`, whose only caller is `:1916`). `autoSchedule`'s only caller is `app/api/v1/stages/[id]/schedule/auto/route.ts:19`. The AI solver paths are reached only through the `…/schedule/ai-plan` routes. The matrix's routes are divisions, stages, fixtures and entrants (`stages`, `entrants`, `fixtures`, `start`, `generate`, `rebuild`, `complete`, `americano`, `challenges`, `seed-proposal`, `standings`, `events`, `state`, `finalize`, `lineups`, `withdraw`). None is `schedule/auto` or `ai-plan`, and the browser driver's selectors hold no auto-schedule control. `startDivision` (`:3839`) generates fixtures through `generateStageFixturesUnpublished` and never calls the solver.
+- **The server boots without the placement env.** `PLACEMENT_SERVICE_HOST` and `PLACEMENT_SERVICE_SECRET` are read lazily, at `placement-client.ts:748` and `build.ts:2125`.
+- **So:** no placement image build, no container, no `PLACEMENT_*` on the server step, no greedy guard. A guard that counts log lines and "fallbacks: 0" passes on every run when nothing calls the solver. That is a vacuous check (TEST-STRATEGY rule 1), and false premise 23 records it.
+- **The premise becomes a guard (assumptions are guards).** `tools/matrix/__tests__/no-solver-route.test.ts` scans the matrix harness for a solver route and fails, citing ruling 66, if one appears. It reports the number of files scanned, and zero scanned is a failure. If a matrix path ever needs the solver, the container comes back as plumbing, and no check may then claim to prove scheduling.
+- Owner value: the weekly run is faster and cheaper, and nothing in W1d's evidence claims to prove placement.
+- Rejected: keeping the container "because it is cheap" (it adds an image build to the build job and a start-up wait to every shard, for a path the run never takes).
 
 ---
 
@@ -1484,8 +1501,9 @@ Then run scoped tsc and eslint, and commit `feat(matrix): NoLayerForWidth and a 
   - `tools/matrix/parity.ts:58,70` (3 → 2);
   - `tools/matrix/findings-table.ts` (refused 1 → 2, unreadable 3 → 2, and its header);
   - `tools/matrix/draw-counts.ts` (the same);
-  - `tools/matrix/lib/driver/types.ts`: `class SetupRefused extends RefusedCall`, beside `RefusedCall` (`:236`), with `name = "SetupRefused"` set in the constructor body (strip-types rule);
-  - `tools/matrix/lib/scenarios/common.ts`: `inSetup<T>(f: () => Promise<T>): Promise<T>`, wrapping `setUpDivision`'s pre-start calls (D6);
+  - `tools/matrix/lib/driver/types.ts`: `class SetupRefused extends RefusedCall`, beside `RefusedCall` (`:236`), with `name = "SetupRefused"` set in the constructor body (strip-types rule) and a `static from(e: RefusedCall)` that keeps the original message (D6, review 3 R3-m2);
+  - `tools/matrix/lib/scenarios/common.ts`: exported `inSetup<T>(f: () => Promise<T>): Promise<T>`, wrapping `setUpDivision`'s pre-start calls (D6);
+  - `tools/matrix/lib/scenarios/denied.ts`: `inSetup` around `:63`, `:64`, `:76` and `:77` (review 3, R3-m3);
   - `package.json` (`"matrix:judge": …`).
 - Test:
   - `tools/matrix/__tests__/judge.test.ts`, `tools/matrix/__tests__/exit-codes.test.ts` (create);
@@ -1550,11 +1568,13 @@ describe("harnessFaults (D6)", () => {
     const f = harnessFaults(run([{ ...ok("p", "not_run", "no scenario script yet (atom M7)"), planned: true }, ok("q", "not_run", "lost result")]), { plannedNotRun: "allow" });
     expect(f).toEqual([{ caseId: "q", kind: "unplanned-not-run", reason: "lost result" }]);
   });
-  it("the 11 committed RefusedCall reds are data: zero setup-refused over the real w1drv-l3 run, 11 RefusedCall reds checked", () => {
+  it("the 11 committed RefusedCall reds are data: no fault of ANY kind names one of them (11 checked)", () => {
     const real = parseResults(JSON.parse(readFileSync(TR_W1DRV_L3, "utf8")));
     const refused = real.cases.filter((c) => (c.reason ?? "").startsWith("error: RefusedCall:"));
     expect(refused).toHaveLength(11);
-    expect(harnessFaults(real, { plannedNotRun: "allow" }).filter((x) => x.kind === "setup-refused")).toEqual([]);
+    const ids = new Set(refused.map((c) => c.caseId));
+    // ANY kind: a broken RefusedCall exemption would make all 11 'harness-error', and a setup-refused-only filter would stay green (class 4; review 3, R3-m5)
+    expect(harnessFaults(real, { plannedNotRun: "allow" }).filter((x) => ids.has(x.caseId))).toEqual([]);
   });
   it("a planned marker on a case that ran (durationMs > 0 or checks) is a fault under allow too (review 2, R2-m6)", () => {
     const f = harnessFaults(run([{ ...ok("m", "works"), planned: true, durationMs: 1200 }, { ...ok("n", "not_run", "x"), planned: true, durationMs: 0 }]), { plannedNotRun: "allow" });
@@ -1610,7 +1630,8 @@ describe("regressions (D13; Review Focus 4)", () => {
 - positive control: "a driver refusing `addEntrants` surfaces as `SetupRefused`, and is still `instanceof RefusedCall`";
 - the same for `createDivision` and `postStages`;
 - the negative pair: "a driver refusing `start` surfaces as a plain `RefusedCall`, not `SetupRefused`" (start is the product's act);
-- the end-to-end case: one fake-driver case run through `execute` (the `run-cli.test.ts` deps pattern) whose `addEntrants` refuses. Its `results.json` reason starts `error: SetupRefused:`, and `harnessFaults` names it `setup-refused`. Each test counts the calls the fake answered, so a setup that never reached the refusing call fails rather than passing empty.
+- the end-to-end case: one fake-driver case run through `execute` (the `run-cli.test.ts` deps pattern) whose `addEntrants` refuses. Its `results.json` reason EQUALS `error: SetupRefused: ${original.message}` (the whole string, so a doubled prefix reds), and `harnessFaults` names it `setup-refused`;
+- DENIED (review 3, R3-m3): through the real scenario with a fake driver, a refused `:77` `postStages` surfaces as `SetupRefused`, while `:67`'s gated refusal is still caught as data; Each test counts the calls the fake answered, so a setup that never reached the refusing call fails rather than passing empty.
 
 `f(run)` writes the run to a temp file, `ids(list)` writes a JSON id list, and `judgeCli` calls `main(argv)` with stdout/stderr captured.
 
@@ -1741,6 +1762,9 @@ All eight exist at HEAD except the two created here (re-pinned 2026-10-04: `pari
 | In `harnessFaults`, drop `&& !reason.startsWith("error: RefusedCall:")` | "names each class once" (c would be a fault) |
 | Drop the `inSetup` wrapper around `addEntrants` | "a driver refusing `addEntrants` surfaces as `SetupRefused`" |
 | Move `driver.start` inside `inSetup` | "a driver refusing `start` surfaces as a plain `RefusedCall`" |
+| Drop the `RefusedCall` exemption in the harness-error branch | "the 11 committed RefusedCall reds are data" (any kind; review 3, R3-m5) |
+| `SetupRefused.from` rebuilds from `e.message` | the e2e case's whole-reason equality (R3-m2) |
+| Remove `inSetup` from `denied.ts:77` | DENIED's `:77` case (R3-m3) |
 | `SetupRefused` no longer extends `RefusedCall` | "…and is still `instanceof RefusedCall`" |
 | Drop the `marker-on-driven` branch | "a planned marker on a case that ran … is a fault under allow too" |
 | Delete the `setup-refused` branch in `harnessFaults` | "names each class once" (j would read `harness-error`) |
@@ -1776,7 +1800,7 @@ Commit `feat(matrix): judge — harness-green across runs and regression vs base
   - `parseRows(text: string): readonly string[] | "all"`, which throws `UnknownRow` naming the row and the 21 catalogue rows;
   - `planPrSample(rows: readonly string[] | "all", variantFor): CaseSpec[]`. It calls `planW1Driving(variantFor, {})`: the full w1-driving set, with the filter argument explicit (`w1-driving-set.ts:183`; review m2), filtered to `rows`;
   - `baselineL3Path(): string` reads `catalogue/baseline.json`'s `L3` and resolves it against the repo root. It throws when the file is missing.
-  - CLI `ci/pr-rows.ts --body-file <path> --changed-file <path>`. It prints `rows=<csv|all|none>` to stdout (for `$GITHUB_OUTPUT`). Exit 0 decided; 1 the PR touches a declaring path and declares no rows (R27), naming the paths; 2 usage or unreadable.
+  - CLI `ci/pr-rows.ts --body-file <path> --changed-file <path>`. It prints `rows=<csv|all|none>` to stdout (for `$GITHUB_OUTPUT`). Exit 0 decided; 1 the PR touches a declaring path and declares no rows (R27), naming the paths and telling the author to edit the PR body and re-run the job (the job reads the body live); 2 usage or unreadable.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2066,6 +2090,7 @@ The workflow is written failing-first against `ci-wiring.test.ts`'s deliberate c
   - `.github/workflows/matrix-truth.yml`;
   - `tools/matrix/ci/run-sample.ts` (the sample's run → judge → one re-run → judge, as a tested script rather than YAML logic);
   - `tools/matrix/__tests__/matrix-workflow.test.ts`;
+  - `tools/matrix/__tests__/no-solver-route.test.ts` (ruling 66's premise as a guard);
   - `tools/matrix/__tests__/run-sample.test.ts`.
 - Modify:
   - `.github/workflows/ci.yml`: the jobs `matrix-rows` and `matrix-sample`;
@@ -2089,16 +2114,18 @@ The workflow is written failing-first against `ci-wiring.test.ts`'s deliberate c
 - [ ] **Step 0: Read the recipes this copies**
 
 Read these, and copy literally where this task says "as e2e/bench":
-- `e2e.yml:353-700`: env, checkout, pnpm, node, Flyway cache, db:apply, sync:sports, build, placement image, chromium, the placement container (`:670-690`), the server start;
+- `e2e.yml:353-700`: env, checkout, pnpm, node, Flyway cache, db:apply, sync:sports, build, chromium, the server start. NOT the placement image or the placement container (`:670-690`): ruling 66, D23;
 - `bench.yml:59-213`.
 
 Check whether a reusable workflow may declare top-level `concurrency:`. Read GitHub's "Reusing workflows" limitations page via WebFetch, or the `docs.github.com` copy in `node_modules` if one exists. If it may not, move the `concurrency` block onto the `plan` job and record the change.
 
 Confirm that `runner.environment` is a documented runner-context property (values `github-hosted` | `self-hosted`), and record the doc line in the task report.
 
-Read every greedy-fallback `log.warn` in `packages/engine/src/scheduling/build.ts` (`rtk proxy grep -an "greedy" packages/engine/src/scheduling/build.ts`). Widen `PLACEMENT_FALLBACK_RE` until it matches each message, and list each one with its line in the step's comment.
+Record ruling 66 and its evidence rather than a placement recipe. Re-run the solver-route read at HEAD and write the result in the task report:
+- `rtk proxy grep -an "buildSchedule(" apps/web/src/server/usecases/*.ts` lists the call sites, all reached only from the `schedule/auto` and `ai-plan` routes;
+- `rtk proxy grep -an "schedule/auto\|schedule/ai-\|ai-plan" tools/matrix` returns nothing.
 
-Then record which matrix paths reach the solver at all. `buildSchedule`'s production callers are the `schedule*.ts` / `court-candidates.ts` usecases. At HEAD, `tools/matrix/lib/driver/http-driver.ts` calls no `/schedule/` route (checked 2026-10-04). Name the browser pages that do, if any. The fallback guard stays either way, because it is cheap and it is the only thing between a mis-wired secret and a quietly greedy board once a scenario schedules. But the task report says plainly whether today's run exercised it, and never implies that it did.
+The workflow has no placement image, container or `PLACEMENT_*` env, and no greedy-fallback guard (D23). If a matrix path DOES reach the solver, STOP: that is a premise change for the owner, because the container would then be plumbing (ruling 66).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2191,47 +2218,23 @@ describe("the build and shard jobs carry what bench.yml needed to build and serv
     for (const k of benchJobEnv) expect(shardEnv, k).toContain(k);
     for (const k of benchJobEnv) expect(buildEnv, k).toContain(k);
   });
-  it("every env key bench.yml's server step sets is set on the shard job's server step, and none twice (review m11)", () => {
+  // Ruling 66: the matrix drives no solver route, so the server step omits these two keys, by name.
+  const OMITTED_BY_RULING_66 = ["PLACEMENT_SERVICE_HOST", "PLACEMENT_SERVICE_SECRET"];
+  it("every env key bench.yml's server step sets is set on the shard job's server step, except the two ruling-66 omissions, and none twice (review m11)", () => {
     expect(benchServerEnv.length).toBeGreaterThan(3);
+    expect(benchServerEnv).toEqual(expect.arrayContaining(OMITTED_BY_RULING_66));   // the exclusion names keys bench really sets; a rename reds here
     const server = envKeys(stepOf(JOBS.shard, "Start the server").body);
     const shardEnv = envKeys(jobBlock(JOBS.shard.split("\n"), "env"));
-    for (const k of benchServerEnv) expect(server, k).toContain(k);
+    for (const k of benchServerEnv.filter((x) => !OMITTED_BY_RULING_66.includes(x))) expect(server, k).toContain(k);
     for (const k of server) expect(shardEnv, `${k} set at job AND step level`).not.toContain(k);
   });
-  it("the placement container and the server share ONE secret literal (review 2, R2-I1)", () => {
-    const container = /-e PLACEMENT_SERVICE_SECRET=(\S+)/.exec(stepOf(JOBS.shard, "Start the placement service").script ?? "")?.[1];
-    const server = /^\s+PLACEMENT_SERVICE_SECRET: (\S+)$/m.exec(stepOf(JOBS.shard, "Start the server").body)?.[1];
-    expect(container).toBeDefined();
-    expect(server).toBeDefined();
-    expect(container).toBe(server);
-    expect(container).not.toMatch(/\$\{\{/);   // a literal, never a secret expression (R14a)
-  });
-  it("a greedy fallback in the server log reds the shard; a clean log passes; an empty log is refused", () => {
-    const step = stepOf(JOBS.shard, "The solver never fell back to greedy (R2-I1)");
-    const re = /PLACEMENT_FALLBACK_RE: "([^"]+)"/.exec(step.body)![1];
-    const buildTs = readFileSync("packages/engine/src/scheduling/build.ts", "utf8");
-    expect(buildTs.match(new RegExp(re, "g"))?.length ?? 0).toBeGreaterThan(0);   // the pattern names real messages
-    const run = (log: string | null) => {
-      const dir = mkdtempSync(join(tmpdir(), "srv-"));
-      if (log !== null) writeFileSync(join(dir, "server.log"), log);
-      return spawnSync("bash", ["-c", step.script!], { env: { ...process.env, RUNNER_TEMP: dir, PLACEMENT_FALLBACK_RE: re }, encoding: "utf8" }).status;
-    };
-    expect(run('{"level":40,"msg":"buildSchedule: placement service unavailable, falling back to greedy"}\n')).toBe(1);
-    expect(run('{"level":30,"msg":"listening on 3200"}\n')).toBe(0);
-    expect(run("")).toBe(1);
-    expect(run(null)).toBe(1);
-  });
-  it("buildx is set up before the placement image is built, and the build step is bench.yml's, unchanged", () => {
-    const heads = stepHeads(JOBS.build);
-    const buildx = heads.findIndex((h) => h.includes("docker/setup-buildx-action@v3"));
-    expect(buildx).toBeGreaterThan(-1);
-    expect(buildx).toBeLessThan(heads.indexOf("      - name: Build the placement service image"));
-    // trimEnd: stepOf keeps trailing blank lines, and bench.yml:152 is blank where ours is not (review 2, R2-m1)
-    expect(stepOf(JOBS.build, "Build the placement service image").body.trimEnd()).toBe(stepOf(benchJob, "Build the placement service image").body.trimEnd());
+  it("the shard and build jobs carry no placement service at all: the keys are ABSENT, so putting one back is a deliberate act (ruling 66)", () => {
+    for (const k of OMITTED_BY_RULING_66) expect(WF, k).not.toContain(k);
+    expect(WF).not.toMatch(/placement|buildx|docker (load|run|save)|build-push-action|greedy/i);
   });
 });
 
-describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
+describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {describe("the shard job (ruling 64; D4, D12; item 19, 27)", () => {
   const shard = JOBS.shard;
   it("runs the derived matrix, fail-fast off, with the derived timeout", () => {
     expect(shard).toContain("matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}");
@@ -2292,9 +2295,12 @@ describe("ci.yml's per-PR sample (R27, D13)", () => {
   it("matrix-rows declares the rows, matrix-sample calls the truth workflow with scope pr-sample when the filter matches", () => {
     expect(ciJobs["matrix-sample"]).toMatch(/needs: matrix-rows[\s\S]*if: needs\.matrix-rows\.outputs\.run == 'true'[\s\S]*uses: \.\/\.github\/workflows\/matrix-truth\.yml[\s\S]*scope: pr-sample/);
   });
-  it("the PR body reaches pr-rows through env, never inline", () => {
-    expect(stepOf(ciJobs["matrix-rows"], "Rows the PR declares (R27)").body).toMatch(/PR_BODY: \$\{\{ github\.event\.pull_request\.body \}\}/);
-    expect(ci).not.toMatch(/run:[^\n]*github\.event\.pull_request\.body/);
+  it("the PR body is read live through gh api (so a re-run after a body edit sees the edit), never from the event payload, never inline (review 3, R3-m1)", () => {
+    const step = stepOf(ciJobs["matrix-rows"], "Rows the PR declares (R27)");
+    expect(step.script).toMatch(/gh api "repos\/\$REPO\/pulls\/\$PR_NUMBER" --jq '\.body \/\/ ""'/);
+    expect(step.body).toMatch(/REPO: \$\{\{ github\.repository \}\}/);
+    expect(ciJobs["matrix-rows"]).toMatch(/pull-requests: read/);
+    expect(ci).not.toMatch(/github\.event\.pull_request\.body/);   // neither in a run: line nor in env
   });
   it("the staleness step never fails a PR, and runs even when the rows step failed (D1b; review m6)", () => {
     const s = stepOf(ciJobs["matrix-rows"], "Truth-run staleness (D1b, non-blocking)");
@@ -2330,6 +2336,26 @@ it("a reproduced regression is exit 1; the sample never re-runs twice", async ()
 it("a run that exits non-zero (refused/aborted) is exit 2 with no judge call — a broken sample is not a pass", async () => {
   const deps = fakeSampleDeps({ runExits: [3], judgeExits: [] });
   expect(await runSample(deps)).toBe(2);
+});
+```
+
+`no-solver-route.test.ts` pins ruling 66's premise (D23). It is a pure scan, with no network and no DB:
+
+```ts
+const LIB = "tools/matrix/lib";
+const SOLVER_ROUTE = /schedule\/auto|schedule\/ai-|ai-plan/;
+const BOARD_AUTO_CONTROL = /auto-?run|auto-?schedule/i;   // Step 0 narrows or widens this against selectors.ts at HEAD
+it("the pattern matches the real solver routes and not the matrix's own (a positive pair)", () => {
+  for (const p of ["/api/v1/stages/x/schedule/auto", "/api/v1/stages/x/schedule/ai-plan", "/schedule/ai-plan/apply"]) expect(SOLVER_ROUTE.test(p), p).toBe(true);
+  for (const p of ["/api/v1/stages/x/generate", "/api/v1/divisions/x/start", "/api/v1/stages/x/rebuild"]) expect(SOLVER_ROUTE.test(p), p).toBe(false);
+});
+it("no non-test file under tools/matrix/lib names a solver route or the board's auto-run control (ruling 66)", () => {
+  const files = globSync("**/*.ts", { cwd: LIB }).filter((f) => !/__tests__|\.test\.ts$/.test(f));
+  // anti-vacuity: the scan must have read files, and the two that matter must be among them
+  expect(files.length, "zero files scanned is a failure").toBeGreaterThan(0);
+  expect(files).toEqual(expect.arrayContaining(["driver/http-driver.ts", "browser/selectors.ts"]));
+  const hits = files.filter((f) => SOLVER_ROUTE.test(readFileSync(join(LIB, f), "utf8")) || (f === "browser/selectors.ts" && BOARD_AUTO_CONTROL.test(readFileSync(join(LIB, f), "utf8"))));
+  expect(hits, `scanned ${files.length} file(s). A matrix path now reaches the solver: re-decide the placement container as plumbing, and no check may claim to prove scheduling (owner ruling 66)`).toEqual([]);
 });
 ```
 
@@ -2461,28 +2487,16 @@ jobs:
       # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile, as in plan …
       - name: Build the web app (standalone)
         run: npm run build --workspace apps/web
-      - uses: docker/setup-buildx-action@v3
-      - name: Build the placement service image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
       - name: Pack the build
         run: |
           set -euo pipefail
           cp -r apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
           cp -r apps/web/public apps/web/.next/standalone/apps/web/public
           tar -czf web.tgz -C apps/web/.next standalone
-          docker save placement-service:ci | gzip > placement.tgz
       - uses: actions/upload-artifact@v4
         with:
           name: build
-          path: |
-            web.tgz
-            placement.tgz
+          path: web.tgz
           retention-days: 1
 
   shard:
@@ -2533,32 +2547,18 @@ jobs:
         if: matrix.layer != 'L3'
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
-      - name: Start the placement service
-        # The secret is a CI-only literal and must be IDENTICAL to the server step's: a mismatch
-        # answers UNAUTHENTICATED (placement-client.ts:663-665) and build.ts falls back to greedy
-        # with nothing red (bench.yml:134-141, "the false green"). matrix-workflow.test.ts compares
-        # the two literals (review 2, R2-I1).
-        run: |
-          set -euo pipefail
-          gunzip -c placement.tgz | docker load
-          docker run -d --name placement-matrix -p 50051:50051 \
-            -e PLACEMENT_SERVICE_SECRET=ci-matrix-secret \
-            -e PLACEMENT_LOG_LEVEL=WARNING \
-            placement-service:ci
-          # … bench.yml:153-170's 15 s TCP wait, verbatim (container name placement-matrix) …
       - name: Start the server
         env:
-          # bench.yml's "Start server" env (bench.yml:176-195), every key, and no job-level key repeated.
+          # bench.yml's "Start server" env (bench.yml:176-195), every key but the two the solver reads
+          # (omitted by name, ruling 66 and D23), and no job-level key repeated.
           PORT: "3200"
           AUTH_DEV_LINKS: "1"
-          PLACEMENT_SERVICE_HOST: localhost:50051
-          PLACEMENT_SERVICE_SECRET: ci-matrix-secret
           LOG_LEVEL: warn
         run: |
           set -euo pipefail
           tar -xzf web.tgz
           # … bench.yml's health loop on :3200 — reading from ./standalone/apps/web/server.js,
-          #   with its output to "$RUNNER_TEMP/server.log" (the next-but-one step reads it) …
+          #   with its output to "$RUNNER_TEMP/server.log" (kept for diagnosis; never uploaded, Review Focus 5) …
       - name: Run the shard
         env:
           MATRIX_ARGS: ${{ matrix.args }}
@@ -2580,25 +2580,6 @@ jobs:
           echo "$code" > "$dir/exit.txt"
           echo "EXIT=$code"
           exit "$code"
-      - name: The solver never fell back to greedy (R2-I1)
-        if: always()
-        run: |
-          set -euo pipefail
-          log="$RUNNER_TEMP/server.log"
-          lines=$(wc -l < "$log" 2>/dev/null || echo 0)
-          # anti-vacuity: an empty or missing log checked nothing, which is a failure, not a pass
-          if [ "$lines" -eq 0 ]; then echo "::error::server log is empty or missing; the fallback check read nothing"; exit 1; fi
-          hits=$(grep -acE "$PLACEMENT_FALLBACK_RE" "$log" || true)
-          echo "checked $lines server log line(s); placement fallbacks: $hits"
-          if [ "$hits" -ne 0 ]; then
-            grep -aE "$PLACEMENT_FALLBACK_RE" "$log" | head -5
-            echo "::error title=Placement fell back to greedy::the solver was unreachable or refused this server; every board in this shard is greedy"
-            exit 1
-          fi
-        env:
-          # Every greedy-fallback log message in packages/engine/src/scheduling/build.ts, read at Step 0
-          # (e.g. :2150-2153 "buildSchedule: placement service unavailable, falling back to greedy").
-          PLACEMENT_FALLBACK_RE: "falling back to greedy"
       - name: Upload shard results
         uses: actions/upload-artifact@v4
         if: always()
@@ -2737,12 +2718,16 @@ Add these CLI tests to `run-sample.test.ts`. They spawn the REAL `run-sample.ts`
       - name: Rows the PR declares (R27)
         id: rows
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/body.txt"
+          # LIVE read (review 3, R3-m1): editing the body fires no run, and a re-run replays the original event
+          # payload. `// ""` turns a null body into an empty string, which pr-rows refuses as undeclared.
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > "$RUNNER_TEMP/body.txt"
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
           node --experimental-strip-types tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
       - name: Truth-run staleness (D1b, non-blocking)
@@ -2773,10 +2758,10 @@ Add these CLI tests to `run-sample.test.ts`. They spawn the REAL `run-sample.ts`
 Run the vitest template on:
 
 ```
-ci-wiring.test.ts matrix-workflow.test.ts run-sample.test.ts shard-matrix.test.ts strip-types-loadable.test.ts
+ci-wiring.test.ts matrix-workflow.test.ts no-solver-route.test.ts run-sample.test.ts shard-matrix.test.ts strip-types-loadable.test.ts
 ```
 
-All green, with `.testResults[].name` listing exactly these 5 files (review I15: a misspelt positional is silently dropped). The guard's `it.each` must report 8 cases.
+All green, with `.testResults[].name` listing exactly these 6 files (review I15: a misspelt positional is silently dropped). The guard's `it.each` must report 8 cases.
 
 - [ ] **Step 7: Mutate**
 
@@ -2791,10 +2776,11 @@ All green, with `.testResults[].name` listing exactly these 5 files (review I15:
 | `RUN_ID` template back to `${{ matrix.layer }}-s${{ matrix.k }}` | "the run id is built from the matrix's lowercase id" (C1) |
 | `run-sample.ts` reads `--args` again instead of `MATRIX_ARGS` | "a dash-leading MATRIX_ARGS reaches run.ts intact" (C3a) |
 | Drop `--expect` from the judge call | "the run id the workflow builds…" (judge argv) and Task 6's expect refusal |
-| Remove the buildx step | "buildx is set up before the placement image is built" (I13) |
-| Container secret back to `ci-e2e-secret` | "the placement container and the server share ONE secret literal" (R2-I1) |
-| `PLACEMENT_FALLBACK_RE` set to a string build.ts never logs | "a greedy fallback in the server log reds the shard" (pattern check) |
-| Drop the empty-log refusal | the same test's `run("")` |
+| Put `PLACEMENT_SERVICE_HOST` back on the server step | "the shard and build jobs carry no placement service at all" |
+| Drop `PLACEMENT_SERVICE_SECRET` from `OMITTED_BY_RULING_66` | "every env key bench.yml's server step sets…" (the shard lacks a key the test now demands) |
+| Rename a key in `OMITTED_BY_RULING_66` | the same test's `arrayContaining` |
+| Add `/schedule/auto` to a string in `tools/matrix/lib/driver/http-driver.ts` | `no-solver-route.test.ts`, naming the file and ruling 66 |
+| Narrow the scan's glob to a directory with no files | `no-solver-route.test.ts`'s zero-files-scanned failure |
 | Remove `NEXT_PUBLIC_SUPABASE_URL` from the build job | "every env key bench.yml sets at job level…" (I13) |
 
 Mutate the guard's three branches one at a time; they partly cover for each other. Each mutant is applied to EVERY job's copy, or the identity test reds first and proves nothing about the guard.
@@ -3240,14 +3226,14 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
 
 ---
 
-### Task 15: Stryker on the engine's scheduling and competition code (design §7.5 item 2; D14)
+### Task 15: Stryker on the engine, placement scheduling excepted (design §7.5 item 2; rulings 66, 67; D14)
 
-**Why:** Mutation testing is the design's answer to "a green suite whose guards are never killed" (class 3), applied weekly to the engine's two most rule-dense directories.
+**Why:** Mutation testing is the design's answer to "a green suite whose guards are never killed" (class 3), applied weekly to the engine's format and rules code. Ruling 67 sets the scope: every module under `packages/engine/src` plus the draw generators under `src/scheduling/`. The placement files (build, calendar, repair) are a named exclusion a later wave may lift, and `testkit/` is out entirely.
 
 **Files:**
 - Create:
   - `packages/engine/stryker.config.mjs`;
-  - `packages/engine/stryker.groups.mjs`, and `packages/engine/stryker.groups.d.mts` declaring exactly its four exports, `STRYKER_GROUPS`, `STRYKER_EXCLUDED`, `STRYKER_VITEST_WORKERS` and `strykerConcurrency` (review I11d: the engine tsconfig includes `test/**`, and a `.ts` test importing an untyped `.mjs` is TS7016);
+  - `packages/engine/stryker.groups.mjs`, and `packages/engine/stryker.groups.d.mts` declaring exactly its five exports, `STRYKER_GROUPS`, `STRYKER_EXCLUDED`, `STRYKER_PLACEMENT_OUT_OF_SCOPE`, `STRYKER_VITEST_WORKERS` and `strykerConcurrency` (review I11d: the engine tsconfig includes `test/**`, and a `.ts` test importing an untyped `.mjs` is TS7016);
   - `packages/engine/stryker-floor.json` (`{"note": "...", "groups": {}}`: empty until PR-B, Task 20);
   - `packages/engine/stryker-equivalent.json` (`{"note": "...", "equivalent": []}`);
   - `packages/engine/scripts/stryker-floor.ts`;
@@ -3261,22 +3247,35 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
   - `.gitignore` (`packages/engine/reports/mutation/`, `packages/engine/.stryker-tmp/`).
 
 **Interfaces:**
-- `STRYKER_GROUPS: Record<"competition" | "draws" | "build" | "calendar" | "repair" | "probe", string[]>`, as globs relative to `packages/engine`:
-  - **competition:** `src/competition/**/*.ts`, `!src/competition/**/*.test.ts`, `!src/competition/**/__tests__/**` (review I11a: `src/` co-locates its tests, and a glob without the negations would have Stryker mutate test files);
-  - **draws:** `bracket`, `bracket-layout`, `roundrobin`, `swiss`, `americano`, `participants`, `feedgraph`;
-  - **build:** `build`, `build-grid`, `build-objectives`, `constraints`, `candidate-courts`;
-  - **calendar:** `calendar`, `tz`, `court-windows`, `grid-step`, `rest-floor`, `capacity`, `health`;
-  - **repair:** `repair-decompose`, `repair-decompose-cpsat`, `repair-domain`, `repair-minimality`, `repair-synthetic-board`, `conflict-detail`, `report`;
-  - **probe:** `src/scheduling/rest-floor.ts` only (the PR self-proof, D3).
+- `STRYKER_GROUPS: Record<"competition" | "core" | "modules" | "draws" | "sports-cricket" | "sports-football" | "sports-period" | "sports-setbased" | "sports-nested" | "sports-other" | "probe", string[]>`, as globs relative to `packages/engine` (rulings 66, 67). Every directory-glob group ends with `NO_TESTS = ["!src/**/*.test.ts", "!src/**/__tests__/**"]` (review I11a: `src/` co-locates its tests, and a glob without the negations would have Stryker mutate test files):
+  - **competition:** `src/competition/**/*.ts`;
+  - **core:** `src/core/**/*.ts`;
+  - **modules:** `src/sport/**/*.ts`, `src/stats/**/*.ts`, `src/history/**/*.ts`, `src/officials/**/*.ts`, `src/import/**/*.ts`, `src/exports/**/*.ts`;
+  - **draws:** exact files `src/scheduling/<name>.ts` for `bracket`, `bracket-layout`, `roundrobin`, `swiss`, `americano`, `participants`, `feedgraph` (ruling 67 lists them; they are format code);
+  - **the six sports groups** split `src/sports/` by sport family, one directory set each:
+    - `sports-cricket`: `src/sports/cricket/**`;
+    - `sports-football`: `src/sports/football/**`;
+    - `sports-period`: `src/sports/period/**`, `src/sports/hockey/**`, `src/sports/icehockey/**`;
+    - `sports-setbased`: `src/sports/setbased/**`, `src/sports/tennis/**`;
+    - `sports-nested`: `src/sports/nested/**`;
+    - `sports-other`: `src/sports/generic/**`, `src/sports/boardgame/**`, `src/sports/carrom/**`, and the top-level `src/sports/*.ts` (`index.ts`, `squad-state.ts`);
+  - **probe:** `src/scheduling/roundrobin.ts` only (the PR self-proof, D3). `rest-floor.ts` is placement code and out of scope, so the probe moved to a format file with a co-located test (`roundrobin.test.ts`, checked at HEAD).
 
-  Each scheduling entry above is `src/scheduling/<name>.ts`: an exact file, never a glob, so no test file can match it.
-- `STRYKER_EXCLUDED: Record<string, string>` maps file → reason:
-  - `placement-client.ts`: a gRPC client, covered by integration tests that need the service;
-  - `generated/**`: generated;
-  - `index.ts`: re-exports;
-  - `logger.ts`: logging;
-  - `solver-test-bounds.ts`: test support;
-  - `payload-fixtures.ts`: test fixtures.
+  The split is by sport family, because each family is one kernel with its own tests. It is an initial split, and Step 4 re-justifies it from the dry run's mutant count per group, never from line counts. A group the dry run shows to be disproportionate is split by file in that step, and the report says which and why.
+- `STRYKER_PLACEMENT_OUT_OF_SCOPE: Record<string, string>` (ruling 67): the 19 placement files, each an exact `src/scheduling/<name>.ts`, each with the reason `ruling 67: placement scheduling, low priority (a later wave may lift this)`:
+  - **build:** `build`, `build-grid`, `build-objectives`, `constraints`, `candidate-courts`;
+  - **calendar:** `calendar`, `capacity`, `health`, `court-windows`, `tz`, `grid-step`, `rest-floor`;
+  - **repair:** `repair-domain`, `repair-decompose-cpsat`, `repair-decompose`, `repair-synthetic-board`, `repair-minimality`, `conflict-detail`, `report`.
+- `STRYKER_EXCLUDED: Record<string, string>` maps a glob (relative to `packages/engine`) to its OWN reason. Every `src/scheduling/` entry below is named by ruling 67's last bullet:
+  - `src/scheduling/index.ts`: a barrel, re-exports only;
+  - `src/scheduling/logger.ts`: holds no logic;
+  - `src/scheduling/solver-test-bounds.ts`: a test helper;
+  - `src/scheduling/placement-client.ts`: the gRPC client, covered only by integration tests that need the service;
+  - `src/scheduling/payload-fixtures.ts`: test fixtures for the placement payloads, decided from the file itself (opened 2026-10-04). It builds frozen calendar `Assignment`s, golden slots and order dependencies, and only `calendar-*.test.ts`, `repair-domain.test.ts`, `participants-rules.test.ts` (as test input) and the out-of-scope `repair-synthetic-board.ts` import it. It feeds no draw or format code, so it is excluded. If Step 1's sweep finds a production importer in a draws or format file, move it into `draws` and say so in the task report;
+  - `src/scheduling/generated/**`: generated;
+  - `src/testkit/**`: `ruling 67: test helpers, not product`.
+  Exclusion keys may be globs. Each carries a reason of at least 10 characters.
+
 - `stryker-floor.ts` modes:
   - `--check <group> <mutation.json>`: exit 0 when the score ≥ floor; 1 when below (survivors listed); 2 refused (zero mutants, no floor for the group, unreadable);
   - `--set-floor <group> <mutation.json>`: PR-B only; writes `floor = floor(score, 1 dp)`, and refuses lowering;
@@ -3296,29 +3295,64 @@ Read Stryker's vitest-runner docs for its constraints on `pool`, `isolate` and `
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-// stryker-groups.test.ts — every source file in exactly one group or excluded with a reason
-it("every non-test .ts under src/scheduling and src/competition is in exactly one group, or excluded by name", () => {
-  const files = globSync(["src/scheduling/**/*.ts", "src/competition/**/*.ts"], { cwd: ENGINE }).filter((f) => !/__tests__|\.test\.ts$/.test(f));
-  expect(files.length).toBeGreaterThan(35);
+// stryker-groups.test.ts — every engine source file has exactly one home (rulings 66, 67)
+const universe = () => globSync("src/**/*.ts", { cwd: ENGINE }).filter((f) => !/__tests__|\.test\.ts$|\.d\.ts$/.test(f));
+// path.matchesGlob (node:path, Node 22+): minimatch is not a dependency of the engine or the root (review I11c)
+const inMap = (map: Record<string, string>, f: string) => Object.keys(map).some((e) => matchesGlob(f, e));
+it("every non-test .ts under src/ is in exactly one group, a named exclusion, or the ruling-67 placement exclusion; unclassified = 0", () => {
+  const files = universe();
   const owners = new Map<string, string[]>();
-  for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of globSync(globs, { cwd: ENGINE })) owners.set(f, [...(owners.get(f) ?? []), g]);
+  for (const [g, globs] of Object.entries(STRYKER_GROUPS)) if (g !== "probe") for (const f of globSync(globs, { cwd: ENGINE, exclude: (x) => globs.filter((n) => n.startsWith("!")).some((n) => matchesGlob(x, n.slice(1))) })) owners.set(f, [...(owners.get(f) ?? []), g]);
+  const unclassified: string[] = [], doubled: string[] = [];
+  let grouped = 0, excluded = 0, placement = 0;
   for (const f of files) {
-    // path.matchesGlob (node:path, Node 22+): minimatch is not a dependency of the engine or the root (review I11c)
-    const excluded = Object.keys(STRYKER_EXCLUDED).some((e) => matchesGlob(f, `src/scheduling/${e}`) || matchesGlob(f, e));
-    expect({ f, n: excluded ? 0 : owners.get(f)?.length ?? 0, excluded }).toEqual({ f, n: excluded ? 0 : 1, excluded });
+    const homes = (owners.get(f)?.length ?? 0) + (inMap(STRYKER_EXCLUDED, f) ? 1 : 0) + (inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, f) ? 1 : 0);
+    if (homes === 0) unclassified.push(f);
+    if (homes > 1) doubled.push(f);
+    grouped += owners.get(f)?.length ?? 0; excluded += inMap(STRYKER_EXCLUDED, f) ? 1 : 0; placement += inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, f) ? 1 : 0;
   }
+  // the failure message reports the count, so a red names how many files escaped (ruling 67)
+  expect(unclassified, `${unclassified.length} of ${files.length} file(s) unclassified`).toEqual([]);
+  expect(doubled, "files with more than one home").toEqual([]);
+  // anti-vacuity, derived from the maps and never typed: the universe is exactly what was homed, and every class was non-empty
+  expect(files.length).toBe(grouped + excluded + placement);
+  expect(grouped).toBeGreaterThan(0);
+  expect(excluded).toBeGreaterThan(0);
+  expect(placement).toBe(Object.keys(STRYKER_PLACEMENT_OUT_OF_SCOPE).length);   // every placement key is one existing exact file
 });
-it("every exclusion names a reason and a file that exists", () => { /* each key globs ≥ 1 file; each reason ≥ 10 chars */ });
+it("every exclusion names its own reason and globs at least one file, in BOTH maps", () => {
+  const files = universe();
+  for (const [name, map] of [["STRYKER_EXCLUDED", STRYKER_EXCLUDED], ["STRYKER_PLACEMENT_OUT_OF_SCOPE", STRYKER_PLACEMENT_OUT_OF_SCOPE]] as const) {
+    expect(Object.keys(map).length, name).toBeGreaterThan(0);
+    for (const [k, reason] of Object.entries(map)) {
+      expect(reason.length, `${name}[${k}]`).toBeGreaterThanOrEqual(10);
+      // testkit and generated/ hold files the universe filter would keep; a stale key (renamed or deleted file) matches none
+      expect(files.filter((f) => matchesGlob(f, k)).length, `${name}[${k}] matches no file`).toBeGreaterThan(0);
+    }
+  }
+  expect(new Set(Object.values(STRYKER_EXCLUDED)).size, "each exclusion has its OWN reason").toBe(Object.keys(STRYKER_EXCLUDED).length);
+  for (const r of Object.values(STRYKER_PLACEMENT_OUT_OF_SCOPE)) expect(r).toMatch(/^ruling 67: placement scheduling, low priority/);
+  expect(STRYKER_EXCLUDED["src/testkit/**"]).toMatch(/^ruling 67:/);
+});
+it("the probe is one exact file with a co-located test, and a draw generator (ruling 66)", () => {
+  expect(STRYKER_GROUPS.probe).toEqual(["src/scheduling/roundrobin.ts"]);
+  expect(existsSync(join(ENGINE, "src/scheduling/roundrobin.test.ts"))).toBe(true);
+  expect(STRYKER_GROUPS.draws).toContain("src/scheduling/roundrobin.ts");
+  expect(inMap(STRYKER_PLACEMENT_OUT_OF_SCOPE, "src/scheduling/roundrobin.ts")).toBe(false);
+});
 it("no group's mutate list reaches a test file (review I11a)", () => {
-  let checked = 0;
+  let checked = 0, positives = 0;
   for (const [g, globs] of Object.entries(STRYKER_GROUPS)) {
     const pos = globs.filter((x) => !x.startsWith("!"));
     const neg = globs.filter((x) => x.startsWith("!")).map((x) => x.slice(1));
     const files = globSync(pos, { cwd: ENGINE, exclude: (f) => neg.some((n) => matchesGlob(f, n)) });
-    checked += files.length;
+    expect(files.length, `${g} matches no file`).toBeGreaterThanOrEqual(pos.length);   // every positive entry matched at least one file
+    checked += files.length; positives += pos.length;
     expect(files.filter((f) => /\.test\.ts$|__tests__/.test(f)), g).toEqual([]);
   }
-  expect(checked).toBeGreaterThan(35);
+  // the bound comes from the groups themselves, not a typed number
+  expect(checked).toBeGreaterThanOrEqual(positives);
+  expect(Object.keys(STRYKER_GROUPS).length).toBeGreaterThan(1);
 });
 // GB = 1024 ** 3, as vitest.config.ts:42. Each expected value is hand-derived from vitest.config.ts:43-46,
 // bound = max(2, min(cores − 1, floor(mem / 3 GiB))), then divided by the vitest workers ONE sandbox runs
@@ -3348,11 +3382,11 @@ it("a score below the floor fails and lists survivors; at the floor passes", () 
 });
 it("an equivalent mutant listed by file:line:col and mutator is excluded from the denominator", () => { /* 49 killed, 50 survived, 1 equivalent → 49/99 → still < 50 → exit 1; with 2 equivalents listed → 49/98 = 50.0 → 0 */ });
 it("the floor never falls: --check-file-against flags a lowered or removed group", () => {
-  expect(floorDiff({ draws: 50, build: 40 }, { draws: 49.9, build: 40 })).toEqual([{ group: "draws", was: 50, now: 49.9 }]);
+  expect(floorDiff({ draws: 50, competition: 40 }, { draws: 49.9, competition: 40 })).toEqual([{ group: "draws", was: 50, now: 49.9 }]);
   expect(floorDiff({ draws: 50 }, {})).toEqual([{ group: "draws", was: 50, now: null }]);
   expect(floorDiff({}, { draws: 50 })).toEqual([]);   // a new group may be added
 });
-it("no floor for a group is a refusal until PR-B sets one", () => expect(check("repair", report({ killed: 1, survived: 0 }), floors({})).exit).toBe(2));
+it("no floor for a group is a refusal until PR-B sets one", () => expect(check("draws", report({ killed: 1, survived: 0 }), floors({})).exit).toBe(2));
 ```
 
 The `mutation.json` fixture uses Stryker's mutation-testing-elements schema (`files[path].mutants[].status`). Step 0 records the schema version Stryker 10 writes; the fixture matches it. Score = killed + timeout ÷ (all − ignored − equivalents − NoCoverage?) — **Step 0 decides**, from Stryker's own "mutation score" definition (covered vs total). Use Stryker's TOTAL score (NoCoverage counts as surviving) and say so in the floor file's note: an uncovered line is a survivor.
@@ -3362,8 +3396,8 @@ The `mutation.json` fixture uses Stryker's mutation-testing-elements schema (`fi
 `stryker.config.mjs`:
 
 ```js
-// Design §7.5 item 2 (W1d D14): weekly mutation testing of the engine's
-// scheduling and competition code. One group per CI job (STRYKER_GROUP);
+// Design §7.5 item 2 (W1d D14; rulings 66, 67): weekly mutation testing of the
+// engine, placement scheduling excepted. One group per CI job (STRYKER_GROUP);
 // incremental across weeks via the cached incremental file.
 import { availableParallelism, totalmem } from "node:os";
 import { STRYKER_GROUPS, STRYKER_VITEST_WORKERS, strykerConcurrency } from "./stryker.groups.mjs";
@@ -3396,26 +3430,39 @@ The tests pin the function against machines whose expected values are worked fro
 `stryker-floor.ts` follows the interfaces above, with a D8 exit header.
 
 `mutation.yml`:
-- triggers: `schedule: - cron: "23 3 * * 0"`, `workflow_dispatch` (input `group`: all|competition|draws|build|calendar|repair; `inject_visibility` as in matrix-truth), and `pull_request` paths `.github/workflows/mutation.yml`, `packages/engine/stryker*`, `packages/engine/scripts/stryker-floor.ts`. A PR runs the `probe` group only.
-- jobs `plan` (guard + `if:` gate on `vars.MATRIX_WEEKLY_ENABLED` + a matrix of groups) and `mutate`. `mutate` runs per group:
+- triggers: `schedule: - cron: "23 3 * * 0"`, `workflow_dispatch` (input `group`: `all` or one `STRYKER_GROUPS` key (the choices are derived from the file, and a test holds them equal); `inject_visibility` as in matrix-truth), and `pull_request` paths `.github/workflows/mutation.yml`, `packages/engine/stryker*`, `packages/engine/scripts/stryker-floor.ts`. A PR runs the `probe` group only.
+- jobs `plan` (guard + `if:` gate on `vars.MATRIX_WEEKLY_ENABLED` + a matrix of every `STRYKER_GROUPS` key except `probe`, read by a `node` one-liner and never typed) and `mutate`. `mutate` runs per group:
   - the guard, checkout, pnpm, node and install;
   - `actions/cache` for `packages/engine/reports/mutation/<group>.incremental.json`, keyed `stryker-<group>-${{ github.sha }}` with restore-keys `stryker-<group>-`;
   - `cd packages/engine && STRYKER_GROUP=<g> pnpm mutation`, writing `EXIT=$?` itself;
   - `pnpm mutation:floor --check <g> reports/mutation/<g>.json` (skipped when the floor file has no entry for the group yet, which is PR-A's state: it prints "no floor yet: PR-B sets it");
   - `--survivors` → `SURVIVORS.md`;
   - upload the `mutation-<group>` artifact (json, SURVIVORS.md).
-- `timeout-minutes: 240` per group for the first run. Task 20 replaces it with the measured time × 1.5. Under 360 always.
+- `timeout-minutes: 240` per group for the first run, an estimate (D14). It is replaced in Task 20 by the measured per-group wall time × 1.5, and stays under 360 always. A group whose measured time will not fit is split by file, justified by its measured mutant count and wall time.
 
-The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's.
+The guard step is the SAME script as `matrix-truth.yml`. `matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's, and "mutation.yml's dispatch choices are `all` plus exactly `STRYKER_GROUPS`'s keys, and its job matrix is those keys minus `probe`" (anti-vacuity: more than one group).
 
-- [ ] **Step 4: Run the probe group locally (it is small) and the tests**
+- [ ] **Step 4: Dry-run every group, run the probe, and the tests**
+
+Group sizes come from MEASURED data, not from line counts (owner, 2026-10-04). First the dry run, which instruments each group and runs the suite once, giving the mutant count and the dry-run time:
+
+```bash
+cd <exec>/packages/engine && for g in $(node -e 'import("./stryker.groups.mjs").then((m) => console.log(Object.keys(m.STRYKER_GROUPS).join(" ")))'); do ( time STRYKER_GROUP=$g pnpm mutation --dryRunOnly > "$TMPDIR/w1d-t15-dry-$g.log" 2>&1; echo "$g EXIT=$?" ) 2>&1 | tail -4; done
+```
+
+Record, per group, the mutant count Stryker reports and the dry-run wall time. Check the groups:
+- a group whose count is zero is a configuration fault (fix the globs);
+- a group holding a disproportionate share of the total mutants is split by file in this step, and the report says which and why (the count, not a line count);
+- the table (group, mutants, dry-run time) goes in the task report and the PR body. It is the evidence Task 20's first full run is compared against.
+
+Then the probe, which is small, runs for real:
 
 ```bash
 cd <exec>/packages/engine && STRYKER_GROUP=probe pnpm mutation > "$TMPDIR/w1d-t15-probe.log" 2>&1; echo EXIT=$?; tail -30 "$TMPDIR/w1d-t15-probe.log"
 cd <exec>/packages/engine && node --experimental-strip-types scripts/stryker-floor.ts --survivors probe reports/mutation/probe.json --out "$TMPDIR/w1d-probe-SURVIVORS.md"; echo EXIT=$?
 ```
 
-Expected: Stryker completes, with a non-zero mutant count and a score. Record the mutants, the score and the wall time; that wall time and the file's line count give the first per-line rate for Task 20's estimate.
+Expected: Stryker completes, with a non-zero mutant count and a score. Record the mutants, the score and the wall time: the probe's mutants-per-second is the first measured rate, and Task 20's per-group estimate is checked against it.
 
 Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest run --reporter=json --outputFile="$TMPDIR/w1d-t15.json" test/stryker-groups.test.ts test/stryker-floor.test.ts test/runtime-deps.test.ts; echo EXIT=$?` (judged by the template). `runtime-deps` must stay green: devDependencies only.
 
@@ -3425,14 +3472,18 @@ Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest r
 |---|---|
 | `check` treating zero mutants as 100% | its test |
 | `floorDiff` ignoring removed groups | its test |
-| Put `rest-floor.ts` in two groups | the groups test |
+| Put `roundrobin.ts` in two real groups (not the probe) | the sweep's `doubled` list |
+| Delete the `src/testkit/**` exclusion | the sweep: `unclassified` lists the testkit files, with the count |
+| Delete one `STRYKER_PLACEMENT_OUT_OF_SCOPE` key | the sweep: that file is unclassified; `placement` no longer equals the key count |
+| Add a stale exclusion key (a renamed file) | "every exclusion … globs at least one file" |
+| Point the probe at `rest-floor.ts` | "the probe is one exact file with a co-located test" |
 | Drop `!src/competition/**/*.test.ts` | "no group's mutate list reaches a test file" |
 | `strykerConcurrency` returning `cores - 1` | "concurrency = vitest's own bound ÷ …" (16 cores, 8 GiB → 2, not 15) |
 | `strykerConcurrency` ignoring `workersPerSandbox` | the same test's `÷ 3` and `÷ 2` rows |
 
 - [ ] **Step 6: Commit**
 
-Commit `feat(engine): Stryker weekly on scheduling + competition, floor that only rises (W1d D14; design §7.5)`. The lockfile diff is reviewed in the task report: only the two packages and their transitive dependencies.
+Commit `feat(engine): Stryker weekly on the engine minus placement scheduling, floor that only rises (W1d D14; rulings 66, 67; design §7.5)`. The lockfile diff is reviewed in the task report: only the two packages and their transitive dependencies.
 
 ---
 
@@ -3464,7 +3515,7 @@ Expected: `compared` equals the slice size (24), and `differ: []`. A difference 
 
 1. Run the vitest template over EVERY test file this PR touched (the union from Tasks 1–15), plus the engine's two files. Paste the counts.
 2. Run eslint on every changed `.ts`/`.mjs` through `rtk proxy`, and tsc on `tsconfig.tools-tests.json`.
-3. Dispatch the `reviewer` agent on `git diff origin/main...HEAD`, at most 25 findings. Fix every Critical and Important finding inline (the no-new-issues rule), then re-review the fixes.
+3. Dispatch the `reviewer` agent on `git diff origin/main...HEAD` with `model: "opus"` (the whole-branch review; Execution model policy), at most 25 findings. Fix every Critical and Important finding inline (the no-new-issues rule), then re-review the fixes.
 4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D11's recommendation, the line "the merge job judges with `--planned-not-run allow` per owner ruling 65", and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after." It does NOT yet carry `Matrix rows: none — harness infrastructure; engine change is Stryker config only`. Step 5 opens without it on purpose, to see the R27 gate red once, and then adds it. The PR is not ready for review until that line is in the body and `matrix-rows` is green (review 2, R2-m2).
 
 - [ ] **Step 5: Watch the self-proof (D3)**
@@ -3474,7 +3525,7 @@ The PR fires `matrix-truth.yml` (smoke) and `mutation.yml` (probe) through their
 - read the merged `SUMMARY.md` artifact: three layers, 2 shards each, a harness verdict;
 - confirm `merged/L3/results.json` holds 33 cases.
 
-Then the per-PR sample: this PR touches `tools/matrix/**`, so `ci.yml`'s `matrix-sample` runs. It also touches `packages/engine/**` (Task 15's config, devDependencies and script), a declaring path, so PR-A's body must carry `Matrix rows: none — harness infrastructure; engine change is Stryker config only`, or the R27 gate reds by design. That red is the gate's first live witness: open the PR WITHOUT the line, see `matrix-rows` red naming `packages/engine/package.json`, then add the line and see it green. Record both run ids.
+Then the per-PR sample: this PR touches `tools/matrix/**`, so `ci.yml`'s `matrix-sample` runs. It also touches `packages/engine/**` (Task 15's config, devDependencies and script), a declaring path, so PR-A's body must carry `Matrix rows: none — harness infrastructure; engine change is Stryker config only`, or the R27 gate reds by design. That red is the gate's first live witness: open the PR WITHOUT the line, see `matrix-rows` red naming `packages/engine/package.json`, then add the line to the body and RE-RUN the failed job. The job reads the body live (D13, review 3 R3-m1), so the re-run sees the edit, where an event-payload read would replay the old body and stay red. See it green, and record both run ids. A new commit would also work but is not needed.
 
 **Merge gate: STOP here. The owner reviews and merges PR-A.**
 
@@ -3705,6 +3756,7 @@ For each red the rules do not cover:
 1. Read the case's evidence: the reason, the failing checks and the screenshots for L1/L2.
 2. Find the audit row whose mechanism it is.
 3. If none fits, add `NEW-W1d-<n>` to `new-gaps.json`, with the wave that owns its format or sport (§8's fallback rule) and the case ids.
+3a. Read the message of every `POST /divisions/<id>/start` `CONFIG_INVALID` red before assigning a wave (D6 limit 1: the harness may have asked wrongly there, as `w1b-probe`'s `page_playoff_only` 8-entrant case did). A `SetupRefused` red that is the product refusing a catalogue-valid body (D6 limit 2) gets an owner ruling and a `NEW-W1d-<n>`, never "fix the harness".
 4. A red whose cause is a HARNESS defect (D6 should have caught it; if it did not, D6 has a gap) is a STOP: fix it, and Task 17's three dispatches restart.
 
 An L1 red whose reason names hydration or the first control is item 13's revisit trigger (rule T-H): it goes to the owner, not to a wave.
@@ -3758,12 +3810,12 @@ For each group, record:
 - the wall time;
 - the 10 files with the most survivors.
 
-A group with zero mutants is a configuration fault (the floor checker refuses it): fix the globs. A group that hit its 240-minute timeout is split in two by file (line counts in Step 0's anchors), and that group is re-dispatched.
+A group with zero mutants is a configuration fault (the floor checker refuses it): fix the globs. A group that hit its 240-minute timeout is split in two by file, and that group is re-dispatched. The split is justified by the group's MEASURED mutant count and per-file survivor counts from this run, never by line counts. Compare each group's wall time with Task 15 Step 4's dry-run table, and replace `mutation.yml`'s `timeout-minutes` per group with measured wall time × 1.5 (under 360).
 
 - [ ] **Step 3: Set the floors**
 
 ```bash
-cd <evidence>/packages/engine && for g in competition draws build calendar repair; do node --experimental-strip-types scripts/stryker-floor.ts --set-floor $g "$TMPDIR/w1d-mutation/$g/$g.json"; echo "$g EXIT=$?"; done
+cd <evidence>/packages/engine && for g in $(node -e 'import("./stryker.groups.mjs").then((m) => console.log(Object.keys(m.STRYKER_GROUPS).filter((x) => x !== "probe").join(" ")))'); do node --experimental-strip-types scripts/stryker-floor.ts --set-floor $g "$TMPDIR/w1d-mutation/$g/$g.json"; echo "$g EXIT=$?"; done
 ```
 
 Then `--check-file-against origin/main`, which must pass: floors rise from "none".
@@ -3858,7 +3910,7 @@ If it has not fired within 8 days, D1's PR annotation shows it; that is the sign
 - [ ] **Step 4: PR-B**
 
 1. Update the W1d status row: "Done: PR-A `<sha>`, PR-B `<sha>`; baseline `TR/w1d-baseline` (tag `matrix-truth/w1d-baseline`); weekly schedule enabled `<date>`".
-2. Dispatch the reviewer on the whole PR-B diff, then fix and re-review.
+2. Dispatch the reviewer on the whole PR-B diff with `model: "opus"` (the whole-branch review; Execution model policy), then fix (Sonnet) and re-review.
 3. Push and open the PR. Its body carries `Matrix rows: none — evidence, triage catalogue and Stryker floors; no runtime change` (it touches `packages/engine/stryker-floor.json`, a declaring path). It also carries the per-wave counts, ruling 65's reading of ░ (driven cases only), the three run ids and the mutation run id.
 4. Watch CI: `gates` (the lock check prints `3 added`, the floor check passes) and the per-PR sample (now judged against the new baseline).
 
@@ -3886,7 +3938,7 @@ Plan review 1 (3 Critical, 15 Important, 13 Minor; findings in the session's scr
 - **I10** whole-sample re-run, `passes: 2`, measured in Task 7.
 - **I11** negated test globs, memory-derived concurrency, `path.matchesGlob`, `.d.mts`.
 - **I12** witnesses in `packages/engine/test/` or `HM/__tests__/`.
-- **I13** bench's env on the build and shard jobs, buildx, and a key-parity test.
+- **I13** bench's env on the build and shard jobs, and a key-parity test. (Its buildx half is superseded by ruling 66: no placement image is built, D23.)
 - **I14** per ruling 65, `allow` is the ruled behaviour. It is cited in the YAML, and the D7 question is removed from Tasks 16/17 and the handoff. A ░ on a driven case is still a fault (Task 6 test).
 - **I15** re-pinned to `pad-proof.test.ts`, `page-objects.test.ts` and `layers.test.ts`/`run-cli.test.ts`, with file counts stated.
 
@@ -3905,7 +3957,7 @@ Plan review 1 (3 Critical, 15 Important, 13 Minor; findings in the session's scr
 Re-review 2 (0 Critical, 4 Important, 7 Minor) was taken against `653e62ee2`. The reviewer withdrew m5 and m7 and verified false premises 21 and 22.
 
 **All 4 Important are fixed:**
-- **R2-I1 (placement secret).** One literal, `ci-matrix-secret`, sits on both sides. The container step is written out instead of "e2e verbatim", whose `ci-e2e-secret` was the mismatch. Two tests are added: one compares the two literals, and one, "The solver never fell back to greedy", fails the shard when the server log carries build.ts's `falling back to greedy` warning. It also refuses an empty log, and checks its pattern against `build.ts`'s real text. Task 9 Step 0 records whether a matrix path reaches the solver at all. At HEAD `http-driver.ts` calls no `/schedule/` route, so the report must not imply the guard fired.
+- **R2-I1 (placement secret).** One literal, `ci-matrix-secret`, sits on both sides. The container step is written out instead of "e2e verbatim", whose `ci-e2e-secret` was the mismatch. Two tests are added: one compares the two literals, and one, "The solver never fell back to greedy", fails the shard when the server log carries build.ts's `falling back to greedy` warning. It also refuses an empty log, and checks its pattern against `build.ts`'s real text. Task 9 Step 0 records whether a matrix path reaches the solver at all. At HEAD `http-driver.ts` calls no `/schedule/` route, so the report must not imply the guard fired. **Superseded by ruling 66 (fix round 3, R3-I1): the container, the secret literal, both of those tests and the greedy guard are removed (D23).**
 - **R2-I2 (setup refusals).** The route list is gone. `setUpDivision` wraps its pre-`start` calls in `inSetup`, which rethrows a `RefusedCall` as `SetupRefused extends RefusedCall`. The judge reads the `error: SetupRefused:` prefix. Tests:
   - the positive control (`addEntrants`, `createDivision`, `postStages` refused) and the negative pair (`start` refused stays data), through the real `setUpDivision`;
   - an end-to-end case through `execute`;
@@ -3924,12 +3976,43 @@ Re-review 2 (0 Critical, 4 Important, 7 Minor) was taken against `653e62ee2`. Th
 
 ---
 
+## Review response (fix round 3)
+
+Re-review 3 (0 Critical, 2 Important, 5 Minor) was taken against `04b0c2957`. Both Important findings are what owner ruling 66 requires, and ruling 67 then widened the Stryker scope.
+
+**Both Important are fixed:**
+- **R3-I1 (placement container, image build, greedy guard; ruling 66).** Removed: the build job's buildx, image build, `docker save` and `placement.tgz`; the shard's container start, `docker load` and wait; the server's `PLACEMENT_*` env; the greedy guard step; its three tests (the secret literal, the greedy log, buildx); and their three mutation rows. Added:
+  - `OMITTED_BY_RULING_66` in the server-env parity test, which asserts the two keys are named in bench's server env and ABSENT from the workflow. The parity test therefore no longer goes red.
+  - `no-solver-route.test.ts`, which scans `tools/matrix/lib` for a solver route and the board's auto-run control, reports the number of files scanned, fails on zero, requires the two files that matter to be among them, and has a positive pair for the pattern. Mutants are in the Task 9 table.
+  - D23 (the evidence from the review, re-read at HEAD) and false premise 23: the greedy guard was vacuous, because it counted log lines and "fallbacks: 0" passed on every run when nothing called the solver. Step 0 and false premises 19 and 22 are updated.
+- **R3-I2 (Stryker scope; rulings 66, then 67).** The review's 17-file scope is superseded by ruling 67, which puts the whole engine in. Task 15 and D14 now have ten groups plus the `probe`: `competition`, `core`, `modules` (sport, stats, history, officials, import, exports), `draws`, and six `sports-*` groups split by sport family.
+  - **Exclusions.** The 19 placement files are `STRYKER_PLACEMENT_OUT_OF_SCOPE`, each with the reason `ruling 67: placement scheduling, low priority`. `STRYKER_EXCLUDED` holds `index.ts`, `logger.ts`, `solver-test-bounds.ts`, `placement-client.ts`, `payload-fixtures.ts`, `generated/**` and `src/testkit/**`, each with its own reason.
+  - **`payload-fixtures.ts`, decided from the file.** It builds frozen calendar `Assignment`s, golden slots and order dependencies. Its importers are the `calendar-*` and `repair-domain` tests, `participants-rules.test.ts` (as test input) and the out-of-scope `repair-synthetic-board.ts`. It feeds no draw or format code, so it is excluded and NOT put in `draws`.
+  - **The sweep** covers all of `src/**`, reports the unclassified count, and fails on any. Its bounds are derived from the groups and maps: the universe equals grouped + excluded + placement, and each class is non-empty. No line count appears in any test, floor or acceptance criterion (owner, 2026-10-04).
+  - **Sizing.** D14's estimate mentions the line proxy once, as an estimate, then defers to measurement. Task 15 Step 4 dry-runs every group for its mutant count (PR-A), and Task 20 uses the first full run's wall time per group (PR-B), so splits and `timeout-minutes` follow measurements.
+  - The probe moved to `src/scheduling/roundrobin.ts` (co-located test, checked). Task 20's loop reads the group names from `STRYKER_GROUPS`. `mutation.yml`'s matrix and dispatch choices are derived from the same keys, with a test.
+
+**Minors:**
+- **R3-m1 fixed, by the review's second option.** `matrix-rows` reads the PR body live with `gh api repos/$REPO/pulls/$N --jq '.body // ""'` (the job already has `pull-requests: read`), and not through an empty commit. The test, D13, `pr-rows.ts`'s exit-1 message and Task 16 Step 5 are updated: add the line, re-run the failed job, see it green. The sole reason to prefer this over an empty commit is that a re-run then works too.
+- **R3-m2 fixed.** `SetupRefused.from(e)` keeps the original message, and the e2e test asserts the whole reason. **Disagreement on the re-pin:** `errText` is at `run.ts:458` at HEAD (opened and counted with `grep -n`), not `:457`, so the plan's `:458` stays.
+- **R3-m3 fixed.** `inSetup` is exported and wraps `denied.ts:63`, `:64`, `:76` and `:77`, with a fake-driver test that keeps `:67` as data.
+- **R3-m4 fixed.** D6 states both limits, Task 18 Step 3 reads every `start` `CONFIG_INVALID` red, and a catalogue-valid-body refusal gets an owner ruling and a `NEW-W1d-<n>`.
+- **R3-m5 fixed.** The real-run test now asserts that no fault of any kind names one of the 11, and has a mutation row.
+
+**New false premises:** 23 (the greedy guard).
+
+**Execution model policy** (owner, 2026-10-04) is added beside the plan header: Sonnet for every implementer, task reviewer and fix agent; Opus for the two whole-branch reviews (Tasks 16 and 22).
+
+---
+
 ## Self-Review
 
-**1. Spec coverage** (the brief, rulings 60–64, item list):
+**1. Spec coverage** (the brief, rulings 60–67, item list):
 
 | Requirement | Where |
 |---|---|
+| The matrix proves formats and rules, not scheduling: no placement container or greedy guard, a test pins the premise (66) | D23; Task 9 `no-solver-route.test.ts`; false premise 23 |
+| Stryker covers the whole engine except placement scheduling, sharded by group, sized from measured mutant counts and wall time (66, 67) | Task 15; D14; Task 20 |
 | Weekly via the workflow's own `schedule:` + dispatch; no worker or route (60) | Task 9; D2; false premise 18 |
 | A missed week is visible (60) | D1; Task 8 `staleness.ts` + `summary.ts`; Task 9 ci.yml step |
 | Harness-green per §6.5, a 3-run comparison tool, non-zero exit, anti-vacuity (61) | Task 6 `judge.ts across`; Task 17 Step 4; D6 |
