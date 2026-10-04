@@ -153,7 +153,7 @@ describe("declaredTake — the take vocabulary", () => {
     expect(declaredTake(body([...take]), 3)).toBe(engineSlots);
   });
   it("declaredTake's vocabulary is the product's take KINDS, read as text — counted; the engine's `picks` (no template uses it) is refused by name", () => {
-    const text = read("apps/web/src/components/v2/format-templates.ts");
+    const text = read("apps/web/src/lib/format-templates.ts");
     const kinds = new Set([...text.matchAll(/take(?::\s*\[|\.push\()\s*\{\s*kind:\s*"([A-Za-z]+)"/g)].map((m) => m[1]!));
     expect(kinds.size, "take kinds read from the templates").toBeGreaterThan(0);
     expect([...kinds].sort()).toEqual(["bestNth", "rankRange", "roundLosers", "topNPerGroup"]);

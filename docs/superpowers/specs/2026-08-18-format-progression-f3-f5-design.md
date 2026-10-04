@@ -37,7 +37,7 @@ F3 is where the programme's stated purpose is delivered.
 
 | Fact | Evidence |
 |---|---|
-| 14 picker templates | `components/v2/format-templates.ts:48-211` |
+| 14 picker templates | `lib/format-templates.ts:48-211` |
 | 6 multi-stage, **all** `timing: "on_complete"` | `:60, :79, :109, :122, :187, :205` |
 | 8 single-stage, `progression: null` | league, swiss, knockout, double_elim, triple_rr, americano, mexicano, ladder |
 | **Every** template emits `placement: "rank_order"` | `:62, :97, :111, :124, :193, :207` |

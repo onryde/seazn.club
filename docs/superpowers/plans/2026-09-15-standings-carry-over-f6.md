@@ -29,7 +29,7 @@
 |---|---|
 | `apps/web/src/server/usecases/stages.ts` | Shared carry helper; call from `seedNextStage` + `confirmSeedProposal`; propose-time guard in `computeSeedProposal` |
 | `apps/web/src/server/api-v1/schemas.ts` | Drop setup+carry refine |
-| `apps/web/src/components/v2/format-templates.ts` | `StageDraft.progression.carry?` |
+| `apps/web/src/lib/format-templates.ts` | `StageDraft.progression.carry?` |
 | `apps/web/src/components/v2/division-builder.tsx` | Carry control on progression-bearing templates |
 | `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json` | Picker labels/help |
 | `apps/web/src/server/usecases/__tests__/progression-schema.test.ts` | Accept setup+carry |
@@ -235,7 +235,7 @@ EOF
 ### Task 4: Picker control + i18n
 
 **Files:**
-- Modify: `apps/web/src/components/v2/format-templates.ts` (`StageDraft.progression`)
+- Modify: `apps/web/src/lib/format-templates.ts` (`StageDraft.progression`)
 - Modify: `apps/web/src/components/v2/division-builder.tsx`
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`
 - Run: `pnpm i18n:gen-keys` → `apps/web/src/lib/i18n-keys.ts`
@@ -304,7 +304,7 @@ cd /Users/ashokhein/github/seazn.club/.claude/worktrees/f6-carry-over/apps/web &
   src/server/usecases/__tests__/custom-points.test.ts \
   src/server/usecases/__tests__/progression-multi-source.test.ts \
   src/server/usecases/__tests__/carry-setup-path.test.ts \
-  src/components/v2/__tests__/format-templates.test.ts \
+  src/lib/__tests__/format-templates.test.ts \
   --reporter=json --outputFile=/tmp/f6-gate.json
 # 2026-09-15: numFailedTests=0, numPassedTests=77, all .testResults[].name under f6-carry-over worktree
 # carry-setup-path.test.ts is the DB-integration e2e-equivalent for propose→confirm (skipped without DATABASE_URL)

@@ -39,7 +39,7 @@ import { entrantMembersPkeyFrom, entrantMembersPkeyText, wireCodeFor } from "./p
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const STAGES_TS = resolve(REPO, "apps/web/src/server/usecases/stages.ts");
-const FORMAT_TEMPLATES_TS = resolve(REPO, "apps/web/src/components/v2/format-templates.ts");
+const FORMAT_TEMPLATES_TS = resolve(REPO, "apps/web/src/lib/format-templates.ts");
 const ENGINE_AMERICANO_TS = resolve(REPO, "packages/engine/src/scheduling/americano.ts");
 const ENTRANT_MEMBERS_SQL = resolve(REPO, "db/migration/v2-engine/tables/V213__entrant_members.sql");
 const HTTP_TS = resolve(REPO, "apps/web/src/server/api-v1/http.ts");

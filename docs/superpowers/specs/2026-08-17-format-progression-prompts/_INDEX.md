@@ -384,7 +384,7 @@ Runtime consumers: `qualification.ts:95,109,114,190,274-282`;
 `:299-338` (`resolveQualifiers` cross-group cascade, `bestNthOrder`).
 
 Emitters F2 must migrate because the shape they emit is being deleted:
-`components/v2/format-templates.ts:39,72,81,156,198` (all five emit `topN`),
+`lib/format-templates.ts:39,72,81,156,198` (all five emit `topN`),
 `server/templates/catalog/league-playoff.json:31` (`rankRange`),
 `catalog/euro24.json:34` (`bestNth`).
 
@@ -449,7 +449,7 @@ Emitters F2 must migrate because the shape they emit is being deleted:
 - **`mexicano` maps to engine kind `americano`.** Unresolved: deliberate, or
   drift worth closing in F4.
 - **The format picker is hardcoded English — F3 owns closing it.**
-  `STAGE_TEMPLATES` (`components/v2/format-templates.ts`) carries `label` and
+  `STAGE_TEMPLATES` (`lib/format-templates.ts`) carries `label` and
   `help` as plain string literals, rendered as-is by `division-settings.tsx` and
   `division-builder.tsx`. **All 14 templates** (12 pre-existing + L3's
   `ko_plate` and `qualifying_main`) violate the 4-locale rule. L3 added

@@ -4,7 +4,7 @@
 // scripts/__tests__/seed-demo-templates.test.ts.
 // ── stage templates (mirror division-builder) ───────────────────────────────
 // F2 (unified progression field): was `qualification` — mirrors
-// components/v2/format-templates.ts's own conversion field-for-field.
+// apps/web/src/lib/format-templates.ts's own conversion field-for-field.
 // `topN: n` collapses onto `rankRange{from:1,to:n}` (owner ruling 4); the
 // bare `{take: [...]}` (picks) shape becomes a kind-tagged `picks` TakeRule.
 //

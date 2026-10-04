@@ -46,7 +46,7 @@ c. generic on page_playoff. `supportsDraws` excludes only knockout, double_elim 
 
 ## Restriction sites, door by door
 1. Division builder: no sport restriction.
-   - apps/web/src/components/v2/format-templates.ts:65: STAGE_TEMPLATES has 16 entries and no sport field.
+   - apps/web/src/lib/format-templates.ts:65: STAGE_TEMPLATES has 16 entries and no sport field.
    - apps/web/src/components/v2/division-builder.tsx:772: `STAGE_TEMPLATES.map` renders every template for every sport, with no `sportKey` conditional anywhere in the file.
    - apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx:50: `select key, name from sports` returns all 11 sports, unfiltered.
    - apps/web/src/components/v2/division-settings.tsx:822: the same unfiltered list when the format is changed later.

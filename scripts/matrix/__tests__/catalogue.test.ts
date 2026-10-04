@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/components/v2/format-templates.ts";
+import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
 import { builtinModules } from "@seazn/engine/sports";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS,

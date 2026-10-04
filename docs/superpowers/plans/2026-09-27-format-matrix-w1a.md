@@ -23,7 +23,7 @@
 
 | Fact | Where |
 |---|---|
-| `buildTemplateStages` falls back SILENTLY to `STAGE_TEMPLATES[0]` (league) on an unknown key | `apps/web/src/components/v2/format-templates.ts:333-341` |
+| `buildTemplateStages` falls back SILENTLY to `STAGE_TEMPLATES[0]` (league) on an unknown key | `apps/web/src/lib/format-templates.ts:333-341` |
 | format-templates.ts's only import is `import type { TakeRule }`, so it is strip-types loadable | `format-templates.ts:40` |
 | Builder knob defaults are 4 / 5 / 2 / 1, carry defaults to `"none"`, and the template defaults to `"league"` | `apps/web/src/components/v2/division-builder.tsx:288-293` |
 | `PREFERRED_VARIANT` + `pickVariant` (otherwise the first listed) | `division-builder.tsx:56-67` |
@@ -60,7 +60,7 @@ The executor re-pins every line above before building on it (AGENTS class 5). A 
 - **Strip-types rules** (`scripts/bench/lib/__tests__/strip-types-loadable.test.ts` explains why):
   - No `enum`, `namespace` or constructor parameter properties. Error subclasses assign fields in the constructor body.
   - Every relative import carries `.ts`. Engine imports use subpaths (`@seazn/engine/core|sport|sports`).
-- **Boundary** (R3, ruling 17). Direct imports from `scripts/bench/lib/` are limited to `http.ts`, `plan.ts` and `env.ts`. From `apps/web` the only import is `apps/web/src/components/v2/format-templates.ts`. Never `run-suite.ts`, `pack-schema.ts`, `seed.ts`, `seed-plan.ts`, `validate-pack.ts` or `scripts/smoke.ts`. `lib/invariants.ts` and `lib/observed.ts` use `import type` only. This is enforced by `__tests__/boundary.test.ts` (Task 1).
+- **Boundary** (R3, ruling 17). Direct imports from `scripts/bench/lib/` are limited to `http.ts`, `plan.ts` and `env.ts`. From `apps/web` the only import is `apps/web/src/lib/format-templates.ts`. Never `run-suite.ts`, `pack-schema.ts`, `seed.ts`, `seed-plan.ts`, `validate-pack.ts` or `scripts/smoke.ts`. `lib/invariants.ts` and `lib/observed.ts` use `import type` only. This is enforced by `__tests__/boundary.test.ts` (Task 1).
 - **Anti-vacuity** (R13, R25; design §7.3a). Every invariant and every scenario assertion returns `checked`. Zero checked with a would-be pass is a **failure**. A case whose every check abstained is ❌, never ✅. Every rule set's tests state the empty case FIRST.
 - **Expected values are derived, never typed** (R9, AGENTS class 19):
   - Draw reachability comes from `module.supportsDraws`.
@@ -148,7 +148,7 @@ These are the inputs the spec implies but does not test, and the ones most likel
 - Create: `scripts/matrix/__tests__/strip-types-loadable.test.ts`
 
 **Interfaces:**
-- Consumes: `STAGE_TEMPLATES`, `buildTemplateStages`, `clampKnob`, `applyStandingsCarry`, `StageDraft`, `TemplateKnobs` from `apps/web/src/components/v2/format-templates.ts`; `builtinModules` from `@seazn/engine/sports`.
+- Consumes: `STAGE_TEMPLATES`, `buildTemplateStages`, `clampKnob`, `applyStandingsCarry`, `StageDraft`, `TemplateKnobs` from `apps/web/src/lib/format-templates.ts`; `builtinModules` from `@seazn/engine/sports`.
 - Produces (every later task uses these names exactly):
   ```ts
   export const TEMPLATE_ROW_KEYS: readonly ["league","triple_rr","league_ko","groups_ko","group_stepladder","group_playoffs","swiss","swiss_playoff","swiss_knockout","knockout","ko_plate","qualifying_main","double_elim","americano","mexicano","ladder"];
@@ -184,7 +184,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { STAGE_TEMPLATES } from "../../../apps/web/src/components/v2/format-templates.ts";
+import { STAGE_TEMPLATES } from "../../../apps/web/src/lib/format-templates.ts";
 import { builtinModules } from "@seazn/engine/sports";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_PREFERRED_VARIANT, ROW_KEYS, RowBuildDeferred,
@@ -307,7 +307,7 @@ import {
   clampKnob,
   type StageDraft,
   type TemplateKnobs,
-} from "../../../apps/web/src/components/v2/format-templates.ts";
+} from "../../../apps/web/src/lib/format-templates.ts";
 
 export const TEMPLATE_ROW_KEYS = [
   "league", "triple_rr", "league_ko", "groups_ko", "group_stepladder", "group_playoffs",
@@ -411,7 +411,7 @@ import { describe, expect, it } from "vitest";
 const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(MATRIX, "..", "..");
 const ALLOWED_BENCH = new Set(["http.ts", "plan.ts", "env.ts"]);
-const ALLOWED_WEB = new Set(["apps/web/src/components/v2/format-templates.ts"]);
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 

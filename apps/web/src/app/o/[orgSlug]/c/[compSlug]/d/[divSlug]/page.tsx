@@ -48,7 +48,7 @@ import { withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
-import type { StageDraft } from "@/components/v2/format-templates";
+import type { StageDraft } from "@/lib/format-templates";
 import { formatLocked } from "@/lib/format-lock";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";

@@ -20,7 +20,7 @@ const ALLOWED_BENCH = new Set([
   "scripts/bench/lib/ledger.ts", "scripts/bench/lib/drivers/scorer.ts",
   "scripts/bench/lib/drivers/adapters/generic.ts", "scripts/bench/lib/tap-play.ts",
 ]);
-const ALLOWED_WEB = new Set(["apps/web/src/components/v2/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 

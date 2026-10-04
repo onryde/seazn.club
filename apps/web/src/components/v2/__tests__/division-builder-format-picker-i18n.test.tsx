@@ -20,7 +20,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
-import { STAGE_TEMPLATES } from "@/components/v2/format-templates";
+import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";

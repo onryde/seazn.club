@@ -21,7 +21,7 @@ import {
   type StageDraft,
   type StandingsCarry,
   type TemplateKnobs,
-} from "./format-templates";
+} from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { TagChipInput } from "@/components/ui/tag-chip-input";

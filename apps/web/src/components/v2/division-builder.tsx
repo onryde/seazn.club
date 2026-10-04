@@ -15,7 +15,7 @@ import {
   templateHasProgression,
   type StageDraft,
   type StandingsCarry,
-} from "./format-templates";
+} from "@/lib/format-templates";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { routes } from "@/lib/routes";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";

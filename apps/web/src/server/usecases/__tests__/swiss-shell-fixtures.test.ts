@@ -540,7 +540,7 @@ describe.runIf(HAS_DB)("swiss shell fixtures — Unpair", () => {
 // product and `stages.ts`'s engine throw is left as the last line of defence.
 //
 // `swiss` is the ONLY stage kind this covers. `swiss_playoff` /
-// `swiss_knockout` are TEMPLATE keys (components/v2/format-templates.ts), not
+// `swiss_knockout` are TEMPLATE keys (lib/format-templates.ts), not
 // `StageKind` members — both build a `swiss` stage plus a bracket stage, and it
 // is the `swiss` half these reach.
 describe.runIf(HAS_DB)("swiss rounds are declared at create time", () => {

@@ -11,7 +11,7 @@
 // of shipping quietly into the demo.
 import { describe, expect, it } from "vitest";
 import { TEMPLATES } from "../seed-demo-templates.ts";
-import { buildTemplateStages } from "../../apps/web/src/components/v2/format-templates.ts";
+import { buildTemplateStages } from "../../apps/web/src/lib/format-templates.ts";
 
 describe("seed-demo stage templates track the shipped builder templates", () => {
   it("every progression the demo seeds is day-one (timing:'setup'), like every shipped template", () => {

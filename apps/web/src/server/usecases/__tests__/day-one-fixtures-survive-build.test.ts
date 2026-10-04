@@ -24,7 +24,7 @@
 // assertions actually need the service reachable.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { buildTemplateStages, type TemplateKnobs } from "@/components/v2/format-templates";
+import { buildTemplateStages, type TemplateKnobs } from "@/lib/format-templates";
 import { sql } from "@/lib/db";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";

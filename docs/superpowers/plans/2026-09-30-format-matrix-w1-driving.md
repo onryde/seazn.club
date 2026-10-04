@@ -86,8 +86,8 @@ Where the spec and the tree disagree, see **False premises found in planning** b
 | `generateStepladder`: `sl-g0..sl-g(k-2)`, last isFinal | `packages/engine/src/scheduling/bracket.ts:406-437` |
 | `generateDoubleElim`: `gf` isFinal, `gf-reset` isFinal when `bracketReset` | `packages/engine/src/scheduling/bracket.ts:340-360` |
 | Division fixture list serves `ext_key`, `lane`, `is_final`, `third_place` | `apps/web/src/server/usecases/stages.ts:162,222`; `app/api/v1/divisions/[id]/fixtures/route.ts` |
-| Every progression body the builder writes has `timing: "setup"` | `apps/web/src/components/v2/format-templates.ts:13,80,155,168,179,209,234,281` |
-| Take kinds in builder bodies: `rankRange`, `topNPerGroup`, `bestNth`, `roundLosers` | `apps/web/src/components/v2/format-templates.ts:78,121,140,279` |
+| Every progression body the builder writes has `timing: "setup"` | `apps/web/src/lib/format-templates.ts:13,80,155,168,179,209,234,281` |
+| Take kinds in builder bodies: `rankRange`, `topNPerGroup`, `bestNth`, `roundLosers` | `apps/web/src/lib/format-templates.ts:78,121,140,279` |
 | A later "setup" stage needs its own generate (TBD rows). It must exist BEFORE the source completes, else `409 STAGE_COMPLETED_SEEDING_FAILED` | `apps/web/src/server/usecases/stages.ts:2240-2280,3203+,4176+` |
 | `/complete` answers `seed_proposal {id, status}` for the next stage | `apps/web/src/server/usecases/stages.ts:4176+` |
 | `POST /stages/{id}/seed-proposal` (201, recompute) and `POST …/seed-proposal/confirm`; there is **no GET** | `apps/web/src/app/api/v1/stages/[id]/seed-proposal/route.ts`, `…/confirm/route.ts` |
@@ -1291,7 +1291,7 @@ Every new `scripts/matrix/**` test file is picked up by the existing strict CI m
     expect(declaredTake(body, 3)).toBe(engineSlots);
   });
   it("declaredTake's vocabulary matches the product's take KINDS, read as text (the kind-set oracle; count semantics come from expandTake above)", () => {
-    // Reads apps/web/src/components/v2/format-templates.ts as text; asserts the set of `kind: "<x>"` inside take arrays
+    // Reads apps/web/src/lib/format-templates.ts as text; asserts the set of `kind: "<x>"` inside take arrays
     // is exactly {rankRange, topNPerGroup, bestNth, roundLosers}, counted > 0 — a new template take kind reds here first.
     // The engine's TakeRule also has `picks` (packages/engine/src/competition/progression.ts:37), which no template uses,
     // so this text test cannot see it; declaredTake refuses it by name (UnknownTakeKind "picks"), asserted here:

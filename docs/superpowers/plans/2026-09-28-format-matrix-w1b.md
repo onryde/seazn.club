@@ -72,7 +72,7 @@ Where the spec and the tree disagree, see **False premises found in planning** b
 | `titleCase` (variant display name) is NOT exported | `scripts/sync-sports.ts:32-36,78` |
 | Builder variant order `order by is_system desc, name` | `scripts/matrix/lib/seed-org.ts` (`variantKeysInBuilderOrder`) |
 | t20-super8 template: group(4) → group(2, topNPerGroup 2, snake, setup) → knockout(topNPerGroup 2, rank_order, setup) | `apps/web/src/server/templates/catalog/t20-super8.json` |
-| Builder bodies: groups_ko / group_playoffs / group_stepladder / ko_plate | `apps/web/src/components/v2/format-templates.ts` (`buildTemplateStages`), printed 2026-09-28 |
+| Builder bodies: groups_ko / group_playoffs / group_stepladder / ko_plate | `apps/web/src/lib/format-templates.ts` (`buildTemplateStages`), printed 2026-09-28 |
 | `builtinModules` order (wave order) with a comment "Order is not significant" | `packages/engine/src/sports/index.ts:22-35` |
 | boardgame `supportsDraws` returns true for every stage kind | `packages/engine/src/sports/boardgame/boardgame.ts:767-771` |
 | Root `lint` / `typecheck` / `test` are explicit per-workspace chains | `package.json:22,23,25` |

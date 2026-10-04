@@ -16,7 +16,7 @@ import {
   clampKnob,
   type StageDraft,
   type TemplateKnobs,
-} from "../../../apps/web/src/components/v2/format-templates.ts";
+} from "../../../apps/web/src/lib/format-templates.ts";
 
 export const TEMPLATE_ROW_KEYS = [
   "league", "triple_rr", "league_ko", "groups_ko", "group_stepladder", "group_playoffs",
