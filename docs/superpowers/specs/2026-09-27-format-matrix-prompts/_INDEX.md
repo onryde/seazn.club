@@ -923,6 +923,19 @@ Elsewhere the text is the controller's record.
     W2–W7 add scenario scripts. Rejected: (b) shrinking L2 to the drivable runs, which hides the backlog, and (c) the
     literal reading, under which the weekly schedule could never be enabled.
 
+66. **The matrix proves formats and rules, not scheduling** (2026-10-04, W1d plan review 3). Raised by fix round 2's
+    caveat: `http-driver.ts` calls no `/schedule/` route, so the matrix may never reach the placement solver. The
+    owner: "We are here to prove the format and rules, not the scheudling". For W1d:
+    - The shard jobs carry no placement container and no "falling back to greedy" guard, unless a matrix path
+      needs the solver to function. If one does, the container stays as plumbing, and no check claims to prove
+      scheduling.
+    - The Stryker scope is the format and rules code: `src/competition/**` and the draw generators under
+      `src/scheduling/` (bracket, bracket-layout, roundrobin, swiss, americano, participants, feedgraph). The
+      time/court placement groups (build, calendar, repair) are out, and the PR self-proof probe moves to a format
+      file.
+    - Design §7.5 item 2's "engine scheduling" therefore reads as draw generation, not placement. Scheduling quality
+      stays with the bench programme.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
