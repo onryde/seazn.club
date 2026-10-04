@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -43,8 +44,10 @@ const LIVE_TREES = [
   "apps/web/src",
   "apps/web/e2e",
   "scripts",
-  // The scheduler bench, which left scripts/ for tools/ on 2026-10-04.
-  "tools/bench",
+  // Every dev-only harness that left scripts/ (ruling 56): the matrix (#913),
+  // the bench (2026-10-04), and whichever moves in next. The per-workspace
+  // check below reds if one contributes nothing.
+  "tools",
 ] as const;
 
 function gitGrep(args: readonly string[]): string {
@@ -84,12 +87,30 @@ describe("the z3 dependency is unreferenced", () => {
     );
   });
 
-  it("the scan reaches the scheduler bench, which left scripts/ for tools/bench (2026-10-04)", () => {
-    // The bench imports the engine; "scans a tree that holds the code" above
-    // still clears 10 without it, so the bench could fall out unseen.
-    const bench = gitGrep(["-l", "-F", "@seazn/engine"]).split("\n").filter((f) => f.startsWith("tools/bench/"));
-    // The engine prints nothing (no-console), so the count rides on the assertion.
-    expect(bench.length, `${bench.length} bench files import the engine within the scan`).toBeGreaterThan(10);
+  /**
+   * The tools/* workspaces (a directory with a package.json): the dev-only
+   * harnesses ruling 56 moved out of scripts/ — the matrix (#913) and the
+   * bench (2026-10-04). Both import the engine, and "scans a tree that holds
+   * the code" above still clears 10 without them, so either could fall out of
+   * LIVE_TREES unseen. Read from the tree, never typed. The engine prints
+   * nothing (no-console), so each count rides on its assertion message.
+   */
+  const harnesses = readdirSync(`${REPO_ROOT}/tools`).filter((d) => existsSync(`${REPO_ROOT}/tools/${d}/package.json`)).sort();
+
+  it("every tools/* workspace has files in the scan — a harness moved out of scripts/ cannot drop out unseen", () => {
+    const files = execFileSync("git", ["-C", REPO_ROOT, "ls-files", "--", ...LIVE_TREES], { encoding: "utf8" }).split("\n").filter(Boolean);
+    const counts = Object.fromEntries(harnesses.map((h) => [h, files.filter((f) => f.startsWith(`tools/${h}/`)).length]));
+    expect(harnesses.length, `tools/* workspaces: ${harnesses.join(", ")}`).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(counts).filter((h) => counts[h] === 0), `files in the scan per tools/* workspace: ${JSON.stringify(counts)}`).toEqual([]);
+  });
+
+  it("the scan reads into the bench and the matrix: each has more than 10 files importing the engine", () => {
+    const importers = gitGrep(["-l", "-F", "@seazn/engine"]).split("\n");
+    expect(harnesses).toEqual(expect.arrayContaining(["bench", "matrix"]));
+    for (const h of ["bench", "matrix"]) {
+      const n = importers.filter((f) => f.startsWith(`tools/${h}/`)).length;
+      expect(n, `${n} tools/${h} files import the engine within the scan`).toBeGreaterThan(10);
+    }
   });
 
   it("no file imports the z3-solver package", () => {
