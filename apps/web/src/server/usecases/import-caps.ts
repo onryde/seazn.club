@@ -4,7 +4,7 @@
  * This lives apart from `event-import.ts` for one reason: that file opens with
  * `import "server-only"`, which is a webpack alias with no package behind it.
  * Outside Next's build it does not resolve, so every script, worker and test
- * harness in this repo — `scripts/bench` included — could not import the caps
+ * harness in this repo — `tools/bench` included — could not import the caps
  * it has to respect. The bench's answer was a hand-written mirror plus a guard
  * that read `event-import.ts` as TEXT and regex-matched the literal out of it,
  * which is a drift check that a reformat of that one line silently breaks.

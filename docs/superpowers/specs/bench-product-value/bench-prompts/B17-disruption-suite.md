@@ -7,7 +7,7 @@ available). Worktree; one PR.
 ## Scope
 
 Not a pack — a scripted disruption sequence over a fresh suite-8 run,
-`scripts/bench/lib/disrupt.ts` + suite wiring:
+`tools/bench/lib/disrupt.ts` + suite wiring:
 
 1. **Venue blackout → reflow**: after apply + first pool round
    simulated, inject a blackout over one pitch/day (via schedule config
@@ -57,7 +57,7 @@ Product repair/reflow code (findings → §7B fork), packs, other suites.
 ## Verify (verbatim)
 
 ```bash
-npx vitest run --reporter=json --outputFile=/tmp/b17.json scripts/bench
+npx vitest run --reporter=json --outputFile=/tmp/b17.json tools/bench
 jq '{total:.numTotalTests,passed:.numPassedTests,failed:.numFailedTests}' /tmp/b17.json
 rtk proxy npm run lint
 npm run bench:scheduler -- --suite hockey --wipe   # full suite incl. disruption phase

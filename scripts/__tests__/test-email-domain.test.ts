@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -33,7 +33,7 @@ import { join } from "node:path";
  * --- ONE DELIBERATE EXEMPTION: `@bench.invalid` -------------------------
  *
  * Suite 11's claim invites mint `<slug>@bench.invalid`
- * (`scripts/bench/packs/build-packs/suite11.ts:960-968`), and Resend refuses
+ * (`tools/bench/packs/build-packs/suite11.ts:960-968`), and Resend refuses
  * `.invalid` for exactly the same reason it refuses `example.com`. That is
  * allowed to stand, and the allowance is stated here rather than left as a
  * silent hole in the pattern below.
@@ -48,12 +48,16 @@ import { join } from "node:path";
  * above), so these addresses never reach Resend to be refused.
  *
  * If that trade is ever revisited, change it HERE and in `suite11.ts`
- * together — and regenerate `scripts/bench/packs/suite11.json`, which is a
+ * together — and regenerate `tools/bench/packs/suite11.json`, which is a
  * build artifact of that builder and carries the pack hash the bench
  * short-circuits on.
  */
 
-const ROOTS = ["scripts", "apps/web/e2e"] as const;
+// tools: every dev-only harness that left scripts/ (ruling 56) — the matrix
+// (#913), the bench (2026-10-04), and whichever moves in next. The whole
+// directory, so a new one is scanned without an edit here; the per-workspace
+// check below reds if any of them contributes nothing.
+const ROOTS = ["scripts", "tools", "apps/web/e2e"] as const;
 const EXTS = [".ts", ".tsx", ".mts", ".js"] as const;
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -72,9 +76,32 @@ const SELF = join("scripts", "__tests__", "test-email-domain.test.ts");
 
 const FILES = ROOTS.flatMap((r) => walk(r)).filter((f) => f !== SELF);
 
+/** The tools/* workspaces (a directory with a package.json): the dev-only
+ *  harnesses ruling 56 moved out of scripts/. Read from the tree, never typed. */
+const HARNESSES = readdirSync("tools").filter((d) => existsSync(join("tools", d, "package.json"))).sort();
+const harnessFiles = (h: string): string[] => FILES.filter((f) => f.startsWith(join("tools", h) + "/"));
+
 describe("test email addresses", () => {
   it("scans a non-trivial number of files — a zero-file walk would pass vacuously", () => {
     expect(FILES.length).toBeGreaterThan(100);
+  });
+
+  it("every tools/* workspace contributes files to the scan — a harness moved out of scripts/ cannot drop out unseen", () => {
+    // The matrix (#913) and the bench (2026-10-04) each left scripts/ for
+    // tools/, and a walk of scripts/ alone still reads 100+ files, so the count
+    // above could not see either go. Each workspace must be read, by name.
+    const counts = Object.fromEntries(HARNESSES.map((h) => [h, harnessFiles(h).length]));
+    console.info(`test-email-domain: ${FILES.length} files scanned; per tools/* workspace ${JSON.stringify(counts)}`);
+    expect(HARNESSES.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(counts).filter((h) => counts[h] === 0)).toEqual([]);
+  });
+
+  it("the bench and the matrix are each scanned in full — both mint addresses (suite 11's `.invalid`, the matrix's seeded orgs)", () => {
+    expect(HARNESSES).toEqual(expect.arrayContaining(["bench", "matrix"]));
+    expect(harnessFiles("bench").length).toBeGreaterThan(50);
+    expect(harnessFiles("matrix").length).toBeGreaterThan(100);
+    expect(FILES).toContain(join("tools", "bench", "packs", "build-packs", "suite11.ts"));
+    expect(FILES).toContain(join("tools", "matrix", "lib", "seed-org.ts"));
   });
 
   it("mints no address Resend refuses, except the declared `.invalid` one", () => {

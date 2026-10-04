@@ -4,7 +4,7 @@
 // cannot be built closed before the error leaves. The launch itself is
 // proven live (Task 8).
 import { describe, expect, it } from "vitest";
-import type { Session } from "../../../scripts/bench/lib/http.ts";
+import type { Session } from "../../bench/lib/http.ts";
 import { FLOOR_MS, HOLD_ENV, HOLD_MS_DEFAULT, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { BrowserRunClosed, REAL_RUN_DEPS, openBrowserRun, type BrowserRunDeps, type CaseOptions } from "../lib/browser/browser-run.ts";
 import { HoldMismatch, ServedHoldUnreadable, readServedHold } from "../lib/browser/served-hold.ts";

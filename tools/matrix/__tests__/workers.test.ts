@@ -263,7 +263,7 @@ describe("runQueue — rule 10: interleaved completions, crashes, aborts, halts 
 
 // Found live at T11 Step 7 (w1drv-t11-w3): the case-org provision's
 // entitlement bust flips the run's ONE owner to staff for two admin calls and
-// back (scripts/bench/lib/plan.ts bustOrgEntitlements). Workers share that
+// back (tools/bench/lib/plan.ts bustOrgEntitlements). Workers share that
 // owner, so one worker's demotion landed inside another's window and the
 // admin route answered 401 "Staff access required". oneAtATime is the lock
 // that keeps those windows apart. Transitions, empty case first: never

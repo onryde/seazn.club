@@ -7,7 +7,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../../scripts/bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
 import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, literalText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";

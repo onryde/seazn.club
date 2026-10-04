@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { CONSENT_SEED, seedConsent } from "../../../scripts/bench/lib/tap-play.ts";
+import { CONSENT_SEED, seedConsent } from "../../bench/lib/tap-play.ts";
 import { VIEWPORT } from "../lib/browser/viewports.ts";
 import { NoSessionCookie, ONBOARDING_PATH, OnboardingRefused, SESSION_COOKIE, contextCookies, ensureOnboarded, newCaseBrowser } from "../lib/browser/session.ts";
 

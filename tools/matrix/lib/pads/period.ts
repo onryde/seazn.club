@@ -19,7 +19,7 @@
 // periodLabels — the generator's own, one authority — and throws naming both
 // labels on a mismatch. The replay turns the throw into a finding, never a
 // silent wrong tap.
-import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import { periodLabels } from "../streams/period.ts";
 import { judgeKeys, judgeOneRow, type Stamp } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";

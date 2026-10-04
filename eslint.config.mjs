@@ -1,8 +1,9 @@
-// Lint config for the repo-root `scripts/` tree — the bench (`scripts/bench`),
-// smoke, and the seed/sync/openapi generators — and for `tools/`, the dev-only
-// harnesses (`tools/matrix`, @seazn/matrix; ruling 56). The harness is a
-// workspace but has no lint script of its own: it was linted here under
-// scripts/ before the move and keeps exactly the same rules.
+// Lint config for the repo-root `scripts/` tree — smoke, and the
+// seed/sync/openapi generators — and for `tools/`, the dev-only harnesses
+// (`tools/matrix`, @seazn/matrix, and the scheduler bench, `tools/bench`,
+// @seazn/bench; ruling 56). Each harness is a workspace but has no lint script
+// of its own: it was linted here under scripts/ before its move and keeps
+// exactly the same rules.
 //
 // It exists because nothing linted these at all. Root `lint` chained the two
 // WORKSPACES (`apps/web`, `packages/engine`) and `scripts/` is not a workspace,

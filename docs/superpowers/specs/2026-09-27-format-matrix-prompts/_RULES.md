@@ -12,7 +12,7 @@ to it.
 - **R2.** W8, W9, W10 are parallel lanes. A lane starts only after listing its
   file set and proving it disjoint from the wave in flight. A production change
   that forces an edit in the other lane's files → stop and sequence.
-- **R3.** This programme never edits `scripts/bench/lib/suites/run-suite.ts`
+- **R3.** This programme never edits `tools/bench/lib/suites/run-suite.ts`
   or the PackSchema (ruling 17). It may import the bench's small helpers; a
   change to one of those helpers is coordinated with the bench's index first.
 

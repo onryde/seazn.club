@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ORGANISER_VIEWPORT } from "../../../scripts/bench/lib/drivers/scorer.ts";
+import { ORGANISER_VIEWPORT } from "../../bench/lib/drivers/scorer.ts";
 import { BROWSER_WIDTHS, UnknownWidth, VIEWPORT, viewportFor } from "../lib/browser/viewports.ts";
 import { L2_WIDTHS } from "../lib/pairs.ts";
 

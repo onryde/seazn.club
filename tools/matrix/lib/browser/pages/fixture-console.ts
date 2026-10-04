@@ -24,7 +24,7 @@
 //    SEQ_CONFLICT — so both acts reload first, as the bench's
 //    reloadConsoleBeforeAction does (tap-play.ts:456).
 import type { Page } from "playwright";
-import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../../scripts/bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID, organiserStepsFor, type PadPage, type TapStep } from "../../../../bench/lib/drivers/scorer.ts";
 import { executeSteps } from "../../pads/execute.ts";
 import { BadBudget, budgetMs } from "../budget.ts";
 import { actAndAwait } from "../respond.ts";

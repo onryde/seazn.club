@@ -29,6 +29,7 @@
 // "z3" inside PNG bytes — 60 files of pure noise, excluded by path, not by a
 // binary heuristic that would also skip real source.)
 import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = new URL("../../", import.meta.url).pathname;
@@ -56,6 +57,10 @@ const LIVE_TREES = [
   "apps/web/src",
   "apps/web/e2e",
   "scripts",
+  // Every dev-only harness that left scripts/ (ruling 56): the matrix (#913),
+  // the bench (2026-10-04), and whichever moves in next. Both drive the
+  // scheduler. The per-workspace check below reds if one contributes nothing.
+  "tools",
   "proto",
   "services/placement",
   ":!scripts/__tests__/z3-retirement-drift.test.ts",
@@ -319,6 +324,32 @@ describe("z3 retirement — stage C ledger", () => {
     // Generated stubs alone put z3 in `packages/engine/src`; if this ever
     // reads zero, the pathspec drifted and every assertion below is vacuous.
     expect(gitGrep(["-a", "-il", "z3", "--", ...LIVE_TREES]).length).toBeGreaterThan(20);
+  });
+
+  // The tools/* workspaces (a directory with a package.json): the dev-only
+  // harnesses ruling 56 moved out of scripts/ — the matrix (#913) and the
+  // bench (2026-10-04). The hit count above still clears 20 without them, so
+  // either could fall out of LIVE_TREES unseen. Read from the tree, never typed.
+  const harnesses = readdirSync(`${REPO_ROOT}tools`).filter((d) => existsSync(`${REPO_ROOT}tools/${d}/package.json`)).sort();
+  /** Every tracked file the scans read — LIVE_TREES exactly, its exclusions included. */
+  const scanned = (): string[] =>
+    execFileSync("git", ["ls-files", "--", ...LIVE_TREES], { cwd: REPO_ROOT, encoding: "utf8" }).split("\n").filter(Boolean);
+
+  it("every tools/* workspace has files in the scan — a harness moved out of scripts/ cannot drop out unseen", () => {
+    const files = scanned();
+    const counts = Object.fromEntries(harnesses.map((h) => [h, files.filter((f) => f.startsWith(`tools/${h}/`)).length]));
+    console.info(`z3-retirement-drift: ${files.length} files in the scanned trees; per tools/* workspace ${JSON.stringify(counts)}`);
+    expect(harnesses.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(counts).filter((h) => counts[h] === 0)).toEqual([]);
+  });
+
+  it("the bench and the matrix are each in the scan — both drive the scheduler and report its engine", () => {
+    const files = scanned();
+    expect(harnesses).toEqual(expect.arrayContaining(["bench", "matrix"]));
+    expect(files.filter((f) => f.startsWith("tools/bench/")).length).toBeGreaterThan(100);
+    expect(files.filter((f) => f.startsWith("tools/matrix/")).length).toBeGreaterThan(150);
+    expect(files).toContain("tools/bench/lib/schedule.ts");
+    expect(files).toContain("tools/matrix/run.ts");
   });
 
   it("no binary asset reaches the scan — and there are binary assets to exclude", () => {

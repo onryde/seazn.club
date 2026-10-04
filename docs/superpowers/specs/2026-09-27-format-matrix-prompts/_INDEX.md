@@ -14,7 +14,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
-| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review and the final whole-branch review (the controller's, T15-R1) are pending. PR and merge: pending, the owner's decision (ruling 59).** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec`, branch `feat/format-matrix-w1-driving`. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". The branch was rebased onto `main` twice (2026-10-01): every recorded harness SHA is pre-rebase and stays as recorded; `truth-runs/W1-DRIVING-REBASES.md` maps each to its rebased commit and shows the harness unchanged across both. |
+| W1-driving | L3 driving breadth W1a deferred: multi-stage seeding, team rosters, ladder/americano/mexicano, parallel workers, I2 champion rules for DE/stepladder/page-playoff | **Tasks 1–16 done 2026-10-01. Tasks 1–15 each closed on a clean review (Task 15 on re-review 1, Approved, after two fix rounds). Task 16's review: Needs fixes (0 Critical, 1 Important, 7 Minor); fix round 1 landed (T16-R3, T16-R4). Its re-review passed, and the final whole-branch review (the controller's, T15-R1) and its scoped re-review both Approved. MERGED as PR #912, merge commit `c347fedf9` (2026-10-01), and the worktree and branches were removed afterwards. The post-wave cleanup (rulings 55, 56, 58) is PR #913 (`67d6b1a8a`, 2026-10-04): the harness now lives at `tools/matrix`.** Plan `docs/superpowers/plans/2026-09-30-format-matrix-w1-driving.md` (rulings 44–54; the owner's 2026-10-01 decisions are rulings 55–59); prompt `W1-driving.md`. Worktree `format-matrix-w1-driving-exec` and branch `feat/format-matrix-w1-driving` were removed after the merge. **Done-when (ruling 48), on `truth-runs/w1drv-l3/results.json`** (`--set w1-driving --workers 4`, harness `15ed62365`, clean): 937 cases = 743 ✅ + 194 ❌; ⏳ naming W1-driving **0** (⏳ of any wave 0); harness ❌ **0** after triage — the 60 harness reds were three defects, each fixed test first (`9a64ec4cd`, `b1325f721`, `e51bf3699`), and 30 of those cases are ✅ on their re-run. **164 product reds**, each judged on its latest committed run (`truth-runs/w1drv-l3-rerun/`, `truth-runs/w1drv-l3-fr1/`, `truth-runs/w1drv-l3-fr2/`), 0 unfit, 0 unclassified, per wave **W2 62, W4 32, W7 56, W5 11, W3 3** (`truth-runs/w1drv-l3/TRIAGE.md`; before ruling T15-R4 moved the bracket-draw stall to W2: W4 94, W7 56, W5 11, W3 3). HTTP slice on 4 workers: 24/24 ✅, the 378 checks it shares with W1c identical in verdict and count (`truth-runs/w1drv-http-slice/results.json`). **L1 proof at 1280, ×3** (`truth-runs/w1drv-l1/w1drv-l1-t15-r1/results.json`, `-r2`, `-r3`, harness `63bda33e4`): 7 cases each, 6 ✅ and `mexicano\|generic` ❌ (the predicted W7 round-2 self-pair 500); r2 and r3 identical to r1 on every check, and r1 identical to T13's `w1drv-l1-r1` on all 206 checks; per-screen verdicts in `truth-runs/w1drv-l1/README.md`. Model (`truth-runs/w1drv-model/`): swiss\|badminton and swiss\|generic ok at 40 runs, league\|football ok at 20; of the six single-stage rows without model evidence, four ok, and double elim and stepladder each found a NEW product red, committed as MB-007 and MB-008; Task 16's widened-fence run found MB-009 (`w1drv-t16-model-g1`), then both cells ran ok (`w1drv-t16-model-g1c`), and `--regressions` replayed all 8 committed cases as known (`w1drv-t16-model-reg2`). **MB-010 (fix round 1, T16-R3):** with the double-elim generate fence narrowed to the added-entrant branch, the live double-elim cell found Start → Withdraw → Generate 500ing in MB-007's words (`w1drv-t16fr1-model-de`). It is committed as MB-010, and the fence's withdrawn branch now covers double elim on its evidence. Double elim then ran ok 20/20 (`w1drv-t16fr1-model-de2`), and `--regressions` replays all 9 committed cases as known, each under its own id (`w1drv-t16fr1-model-reg`). See "Findings routed (W1-driving)" and "W1d first tasks". The branch was rebased onto `main` twice (2026-10-01): every recorded harness SHA is pre-rebase and stays as recorded; `truth-runs/W1-DRIVING-REBASES.md` maps each to its rebased commit and shows the harness unchanged across both. |
 | W2 | Sport scoring fidelity | not started |
 | W3 | Swiss | not started |
 | W4 | Knockout family | not started |
@@ -544,7 +544,7 @@ a peer session as the other.
     as written; execution is subagent-driven (fresh implementer + reviewer per
     task, whole-branch review at the end).
 23. **Read-only transitive `PackSchema` load accepted** (W1a open question 1):
-    importing `scripts/bench/lib/plan.ts` transitively loads the pack schema
+    importing `tools/bench/lib/plan.ts` transitively loads the pack schema
     for reading; R3 still forbids importing or editing `run-suite.ts` /
     `pack-schema.ts` directly.
 24. **W1a/W1b defaults** (W1a open questions 2–3): the W1b double_elim denied
@@ -662,7 +662,7 @@ a peer session as the other.
     owner answered "1" to the controller's two options.
     - **What it means.** `BrowserDriver` lives in `tools/matrix/lib/driver/`,
       uses the Playwright *library* (the root `playwright` dependency, as
-      `scripts/bench/lib/tap-play.ts` already does), and is selected by the
+      `tools/bench/lib/tap-play.ts` already does), and is selected by the
       matrix runner. L1 and L2 share L3's planner, invariants, `decideState`,
       `results.json` and `MATRIX.md`.
     - **Rejected alternative:** Playwright Test specs under
@@ -677,11 +677,11 @@ a peer session as the other.
 38. **W1c borrows the bench's tap helpers by import** (2026-09-29). Asked
     "import, or copy?", the owner answered "1" (import).
     - **What it means.** `tools/matrix` may import four more bench modules:
-      `scripts/bench/lib/ledger.ts`; the sport-blind exports of
-      `scripts/bench/lib/drivers/scorer.ts` (`TapStep`, `selectorForTapStep`,
+      `tools/bench/lib/ledger.ts`; the sport-blind exports of
+      `tools/bench/lib/drivers/scorer.ts` (`TapStep`, `selectorForTapStep`,
       the chassis testids, `TAP_PACING_MS`, `PadPage`, `organiserStepsFor`);
-      `scripts/bench/lib/drivers/adapters/generic.ts` (`genericAdapter`); and
-      the pure helpers of `scripts/bench/lib/tap-play.ts` (consent seed,
+      `tools/bench/lib/drivers/adapters/generic.ts` (`genericAdapter`); and
+      the pure helpers of `tools/bench/lib/tap-play.ts` (consent seed,
       device-link mint and pad URL, `waitForStartRow`,
       `reloadConsoleBeforeAction`). The private `executeStep` is copied.
       `playMatchByTaps` and `createTapPlayer` are not used: they fix the
@@ -854,17 +854,25 @@ Elsewhere the text is the controller's record.
       owner's "ok": the truth runs are 12 MB, read by 12 CI test files, W1d's baseline, and history already holds
       them, so moving them out buys nothing. They are left out of the image instead.
     - **The package.** The harness lives at `tools/matrix` as `@seazn/matrix`; `tools/` is the home for dev-only
-      harnesses (bench to follow). Choosing `tools/` over `packages/` was the controller's ruling (CL-R3, revised),
+      harnesses (bench to follow; it did on 2026-10-04 as `tools/bench`, `@seazn/bench`, recorded in the bench
+      programme's `_INDEX.md`). Choosing `tools/` over `packages/` was the controller's ruling (CL-R3, revised),
       not the owner's: the owner asked "tools or package?" and said the bench would follow later, and the
       controller ruled on that. `tools/*` is a pnpm workspace glob; the harness's manifest declares what it
       really imports. Nothing in `apps/`, `packages/` or `scripts/` may import `tools/**` or `@seazn/matrix`:
       the eslint rule from `scripts/lib/tools-import-guard.mjs` is the coarse layer, and
       `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. Nor may they reach it at
       runtime: the same test refuses a root `package.json` dependency on a harness, and any string in those trees
-      that names a root script whose command points into `tools/`. Code the gates share with the harness lives in
+      that names a root script whose command points into `tools/`. **Limit:** the guard reads imports, manifests,
+      tsconfigs and root-script names. It does NOT see a `tools/` path passed as a string to `child_process`.
+      Today only a grep holds that line: `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` finds
+      comments, the reference trap fixture and tests. The design fix is W1d first task 28 (owner, 2026-10-04). Code the gates share with the harness lives in
       `scripts/lib`: `main-module.ts`, and `crash-exit.ts`, which `reference:boundary` preloads and
       `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
       `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
+    - **Scans (2026-10-04, controller ruling BT-R2).** #913 silently dropped `tools/matrix` from three scans:
+      `test-email-domain`, `z3-retirement-drift` and the engine's `z3-dependency-retired` (AGENTS class 6). The
+      bench move's PR restored it. All three read all of `tools/` now. Each checks that every workspace there
+      contributes files, and each holds a floor for the bench and the matrix.
     - **Old paths.** The committed evidence still spells `scripts/matrix` and is never rewritten.
       `tools/matrix/lib/harness-path.ts` is the one map from the old paths to the new ones (the directory, and
       the two files that left the harness for `scripts/lib`); the single-sport ratchet's `--against` reads a
@@ -1170,7 +1178,7 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
     stages, because I4 and I5 fail on zero stages.
   - **Bench owner:** the bench preflight runs its catalog queries and
     `GET /api/health` concurrently with `show data_directory`
-    (`scripts/bench/lib/env.ts:244-252`). The matrix runs its own guard first,
+    (`tools/bench/lib/env.ts:244-252`). The matrix runs its own guard first,
     so the matrix makes no foreign write, but the bench on its own is exposed.
   - **The wave that adds the weekly schedule** must delete or invert
     `ci-wiring.test.ts`'s "no scheduled matrix workflow" test.
@@ -2588,3 +2596,10 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     runs itself, weekly and on dispatch, sharded on fresh databases. A weekly run keeps its results as CI artifacts;
     only a triaged baseline is committed to `truth-runs/`. The trigger must NOT be GitHub `schedule:`, which drops
     and delays runs.
+28. **Close the `tools/` import guard's spawn-by-path blind spot** (bench-move review M2, PR `chore/bench-to-tools`;
+    owner 2026-10-04, asked in the controller's session whether to add it to W1d's list: "ok"). The guard reads imports,
+    manifests, tsconfigs and root-script names, but not a `tools/` path passed as a string to `child_process`. Flag
+    string literals passed to `exec`/`execFile`/`spawn`/`fork` and their `Sync` forms under `apps/`, `packages/` and
+    `scripts/` whose path-like tokens resolve into `tools/`. Exempt the reference trap fixture and the guard's own
+    tests by name, never by pattern. Needs a positive control and a non-zero scanned count. W1d builds it because W1d
+    adds scripts that spawn the matrix.

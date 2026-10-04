@@ -29,7 +29,7 @@
 //
 // Every wait is derived from the product's constants (AGENTS class 20;
 // browser-budget.test.ts scans this file for a flat timeout).
-import type { LedgerRow } from "../../../../scripts/bench/lib/ledger.ts";
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { API_ONLY_UI_WAVE, apiOnlyUiPath } from "../api-only-ui.ts";
 import { API_ONLY_ROWS, type ApiOnlyRowKey, type StagePostBody } from "../catalogue.ts";
 import { SLACK_MS, budgetMs } from "../browser/budget.ts";

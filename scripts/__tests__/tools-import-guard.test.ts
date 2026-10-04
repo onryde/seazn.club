@@ -1,5 +1,5 @@
 // Ruling 56 (2026-10-04): tools/ holds the dev-only harnesses (tools/matrix,
-// @seazn/matrix; the bench later). Nothing under apps/ or packages/ — nor
+// @seazn/matrix; tools/bench, @seazn/bench). Nothing under apps/ or packages/ — nor
 // scripts/, which the Fly image type-checks through apps/web's `typecheck` —
 // may import them: tools/ is not in the image (.dockerignore), and a harness
 // is a consumer of the product, never a dependency of it.
@@ -198,12 +198,16 @@ const EDGES: [file: string, spec: string][] = [
   ["packages/y/src/b.ts", "@seazn/matrix/lib/x"],
   ["scripts/c.mjs", "../tools/matrix/model.ts"],
   ["scripts/d.cjs", "../tools"],
+  // The bench (@seazn/bench) is the second harness: by package name and by path.
+  ["apps/x/src/e.ts", "@seazn/bench"],
+  ["scripts/f.ts", "../tools/bench/lib/env.ts"],
 ];
 const DECOYS: [file: string, spec: string][] = [
   ["apps/x/src/ok.ts", "./tools/local"], // apps/x/src/tools, not the repo's
   ["apps/x/src/ok2.ts", "@seazn/matrixx"],
   ["apps/x/src/ok3.ts", "../../../toolsx/a"],
   ["packages/y/src/ok4.ts", "@seazn/engine/competition"],
+  ["scripts/ok5.ts", "@seazn/benchx"],
 ];
 const line = (file: string, spec: string): string =>
   file.endsWith(".cjs") ? "const m = require(" + JSON.stringify(spec) + ");\n"
@@ -264,6 +268,7 @@ describe("tools import guard (ruling 56)", () => {
   it("positive control: every edge shape into tools/ is found — import, re-export, require, dynamic import, a dependency, a tsconfig path — and no decoy is", () => {
     const files: Record<string, string> = {
       "tools/matrix/package.json": JSON.stringify({ name: "@seazn/matrix" }),
+      "tools/bench/package.json": JSON.stringify({ name: "@seazn/bench" }),
       "tools/matrix/run.ts": "import { x } from \"../../apps/x/src/a.ts\";\n", // tools may import the product
       "packages/y/package.json": JSON.stringify({ name: "y", devDependencies: { "@seazn/matrix": "workspace:*" } }),
       "apps/x/package.json": JSON.stringify({ name: "x", dependencies: { z: "link:../../tools/matrix" } }),
@@ -279,7 +284,7 @@ describe("tools import guard (ruling 56)", () => {
     ].sort());
     // Every edge and decoy was read as a specifier: nothing passed by going unread.
     expect(s.specifiers).toBe(EDGES.length + DECOYS.length);
-    expect(s.perRoot).toEqual({ apps: 4, packages: 2, scripts: 2 });
+    expect(s.perRoot).toEqual({ apps: 5, packages: 2, scripts: 4 });
   });
 
   it("the real tree: apps/, packages/ and scripts/ reach nothing under tools/ — every root read, every import judged", () => {
@@ -313,6 +318,7 @@ describe("tools import guard (ruling 56)", () => {
   it("the guard's package list is exactly the tools/* workspaces that exist, and its regex matches each — so a new harness joins the guard or reds here", () => {
     const actual = toolsPackagesIn(REPO);
     expect(actual).toContain("@seazn/matrix");
+    expect(actual).toContain("@seazn/bench");
     expect([...TOOLS_PACKAGES].sort()).toEqual(actual);
     const re = new RegExp(TOOLS_IMPORT_REGEX);
     for (const name of actual) {
@@ -326,7 +332,7 @@ describe("tools import guard (ruling 56)", () => {
     const re = new RegExp(TOOLS_IMPORT_REGEX);
     for (const [, spec] of EDGES) expect(re.test(spec), spec).toBe(true);
     for (const [, spec] of DECOYS) expect(re.test(spec), spec).toBe(false);
-    expect(EDGES.length + DECOYS.length).toBe(8);
+    expect(EDGES.length + DECOYS.length).toBe(11);
   });
 });
 
@@ -342,6 +348,8 @@ const PROBE = [
   `import "../../../../tools/matrix/run.ts";`, // 3: flagged
   `import "./tools/local";`, // 4: decoy
   `import "@seazn/matrixx";`, // 5: decoy
+  `import "@seazn/bench/lib/env.ts";`, // 6: flagged
+  `import "@seazn/benchx";`, // 7: decoy
   "",
 ].join("\n");
 const CONFIGS: [cwd: string, file: string][] = [
@@ -352,7 +360,7 @@ const CONFIGS: [cwd: string, file: string][] = [
 ];
 
 describe("tools import guard: each real eslint config reaches its files", () => {
-  it.each(CONFIGS)("%s: lines 2 and 3 of the probe go red as %s, the decoys do not", (cwd, file) => {
+  it.each(CONFIGS)("%s: lines 2, 3 and 6 of the probe go red as %s, the decoys do not", (cwd, file) => {
     const dir = resolve(REPO, cwd);
     const eslint = join(dir, "node_modules", ".bin", "eslint");
     expect(existsSync(eslint), eslint).toBe(true);
@@ -367,7 +375,7 @@ describe("tools import guard: each real eslint config reaches its files", () => 
     expect(results, r.stderr).toHaveLength(1);
     expect(relative(dir, results[0]!.filePath)).toBe(file);
     const ours = results[0]!.messages.filter((m) => m.ruleId === "@typescript-eslint/no-restricted-imports");
-    expect(ours.map((m) => m.line)).toEqual([2, 3]);
+    expect(ours.map((m) => m.line)).toEqual([2, 3, 6]);
     for (const m of ours) expect(m.message).toContain(TOOLS_IMPORT_MESSAGE);
     // The file was parsed, not ignored: no fatal parse message.
     expect(results[0]!.messages.filter((m) => m.ruleId === null)).toEqual([]);

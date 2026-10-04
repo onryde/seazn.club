@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { selectorForTapStep, type PadLocator, type PadPage, type TapStep } from "../../../scripts/bench/lib/drivers/scorer.ts";
+import { selectorForTapStep, type PadLocator, type PadPage, type TapStep } from "../../bench/lib/drivers/scorer.ts";
 import { BadBudget } from "../lib/browser/budget.ts";
 import { HANDLED_KINDS, executeStep, executeSteps } from "../lib/pads/execute.ts";
 
@@ -44,7 +44,7 @@ const SEND = '[data-testid="pad-send-now"]';
 /** The bench TapStep union's own kinds, read from its declaration only
  *  (scorer.ts has a second `{ readonly kind: … }` union further down). */
 function benchKinds(): string[] {
-  const union = /export type TapStep =([\s\S]*?)\};\s*\n/.exec(src("scripts/bench/lib/drivers/scorer.ts"))?.[1] ?? "";
+  const union = /export type TapStep =([\s\S]*?)\};\s*\n/.exec(src("tools/bench/lib/drivers/scorer.ts"))?.[1] ?? "";
   return [...union.matchAll(/\|\s*\{\s*readonly kind: "(\w+)"/g)].map((m) => m[1]).sort();
 }
 
@@ -141,7 +141,7 @@ describe("the pad executor copy (ruling 38)", () => {
   });
 
   it("the copy's body IS the bench's executeStep body, with TAP_WAIT_TIMEOUT_MS read as the caller's waitMs", () => {
-    const bench = executeBody("scripts/bench/lib/drivers/scorer.ts", /\nasync function executeStep\(page: PadPage, step: TapStep\): Promise<void> \{/)
+    const bench = executeBody("tools/bench/lib/drivers/scorer.ts", /\nasync function executeStep\(page: PadPage, step: TapStep\): Promise<void> \{/)
       .replaceAll("TAP_WAIT_TIMEOUT_MS", "waitMs");
     const copy = executeBody("tools/matrix/lib/pads/execute.ts", /\nexport async function executeStep\(page: PadPage, step: TapStep, waitMs: number\): Promise<void> \{/);
     // Both found, and long enough to be the whole switch (an empty read would compare equal).

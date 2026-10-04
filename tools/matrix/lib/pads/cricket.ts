@@ -23,8 +23,8 @@
 // pass its target before its last over, is refused by name. The adapter keeps
 // one record per fixture (the entrant pair, reset by core.start): which innings
 // comes next, and the first innings' runs, which set the chase's target.
-import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
-import type { LedgerRow } from "../../../../scripts/bench/lib/ledger.ts";
+import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { sportModule } from "../sport-cfg.ts";
 import { declaredAllOut } from "../streams/cricket.ts";
 import type { StreamEvent } from "../streams/types.ts";

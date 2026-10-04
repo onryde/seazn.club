@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RawResult, Session } from "../../../scripts/bench/lib/http.ts";
+import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
 import { DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";

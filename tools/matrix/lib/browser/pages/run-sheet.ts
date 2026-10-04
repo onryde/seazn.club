@@ -15,7 +15,7 @@
 //  - The console (fixture-console.tsx) shows score-start-match (:1029) until
 //    the match starts, then the pad (`score-pad`) and — for an organiser —
 //    Forfeit (:1294) or, once decided, Finalize (:1274).
-import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID } from "../../../../../scripts/bench/lib/drivers/scorer.ts";
+import { FINALIZE_TESTID, FORFEIT_TESTID, START_MATCH_TESTID } from "../../../../bench/lib/drivers/scorer.ts";
 import { DATA, TESTID } from "../selectors.ts";
 import { UnsafeSelectorValue, actBudget, attrEquals, awaitScreen, navBudget, selectorValue, shoot, visit, type DivisionWhere, type PageCtx } from "./ctx.ts";
 import { paths } from "./paths.ts";

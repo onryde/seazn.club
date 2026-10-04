@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { LedgerRow } from "../../../scripts/bench/lib/ledger.ts";
+import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
 import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/pages/ctx.ts";

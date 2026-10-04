@@ -1,5 +1,5 @@
 // Ruling 56 (2026-10-04): tools/ holds the dev-only harnesses — tools/matrix
-// (@seazn/matrix) today, the scheduler bench later. They CONSUME the product;
+// (@seazn/matrix) and tools/bench (@seazn/bench, the scheduler bench). They CONSUME the product;
 // nothing the product builds (apps/, packages/) or the Fly image type-checks
 // (scripts/, through apps/web's `typecheck`) may import them. tools/ is not in
 // the image at all (.dockerignore), so such an import is a build failure there
@@ -24,7 +24,7 @@
 
 /** The package names of the tools/* workspaces. The guard test reds when a
  *  tools/* package.json names a package this list does not. */
-export const TOOLS_PACKAGES = ["@seazn/matrix"];
+export const TOOLS_PACKAGES = ["@seazn/bench", "@seazn/matrix"];
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 

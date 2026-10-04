@@ -1038,7 +1038,7 @@ export type ProgressionInput = z.infer<typeof ProgressionSchema>;
  * `placements` / `rank_overrides` / `carry_deltas` to the usecases that read
  * them. Restating those shapes here would create a second copy of a fact that
  * already has an owner — which is exactly how two shapes of one fact drift
- * apart, and exactly why `scripts/bench/lib/pack-schema.ts:456` deliberately
+ * apart, and exactly why `tools/bench/lib/pack-schema.ts:456` deliberately
  * declined to copy this vocabulary. `z.unknown()` means "this key is real,
  * its shape is someone else's to enforce".
  *

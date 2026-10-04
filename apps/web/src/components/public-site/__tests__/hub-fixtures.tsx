@@ -10,7 +10,7 @@
 // `*.test.tsx` with no `it()` in it fails the WHOLE run with "No test suite
 // found in file", so this one is deliberately outside that glob — the same
 // trick `server/public-site/__tests__/_hub-doc.ts` and
-// `scripts/bench/lib/__tests__/_*.ts` use with a leading underscore.
+// `tools/bench/lib/__tests__/_*.ts` use with a leading underscore.
 //
 // Why not reuse `server/public-site/__tests__/_hub-doc.ts`: that fixture is
 // ONE complete document with every nullable populated on one side and null on

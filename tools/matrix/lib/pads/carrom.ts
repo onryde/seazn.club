@@ -10,7 +10,7 @@
 // one `carrom.board.summary {opponentCoinsLeft, winner}` row at once, with no
 // hold and no `queenTo` key, and the eighth board decide the match. So the
 // generated `queenTo: null` is excused as absent for this one type.
-import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
 /** The engine's carrom event type (carrom.eventSchemas; pinned). */

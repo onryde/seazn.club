@@ -1,0 +1,14 @@
+{
+  "name": "@seazn/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.4",
+    "@seazn/engine": "workspace:*",
+    "pino": "^10.3.1",
+    "playwright": "^1.61.1",
+    "postgres": "^3.4.9",
+    "zod": "^4.4.3"
+  }
+}

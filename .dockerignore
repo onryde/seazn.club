@@ -32,7 +32,7 @@ venv/
 # would fail on it with TS2688.
 apps/cron-worker
 # tools/ holds the dev-only harnesses (ruling 56): tools/matrix (@seazn/matrix)
-# today, the scheduler bench later. Nothing the image builds or type-checks may
+# and tools/bench (@seazn/bench). Nothing the image builds or type-checks may
 # import them: scripts/__tests__/tools-import-guard.test.ts and the eslint rule
 # from scripts/lib/tools-import-guard.mjs hold apps/, packages/ and scripts/ to
 # that. Ignoring the directory also keeps its workspace manifest out of the

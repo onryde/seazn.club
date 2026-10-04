@@ -22,8 +22,8 @@
 // transaction, on the connection the writes use, because postgres.js
 // reconnects silently and a reconnect can land on another server.
 import postgres from "postgres";
-import type { Session } from "../../../scripts/bench/lib/http.ts";
-import type { PlanCandidateInfo } from "../../../scripts/bench/lib/plan.ts";
+import type { Session } from "../../bench/lib/http.ts";
+import type { PlanCandidateInfo } from "../../bench/lib/plan.ts";
 import type { Transport } from "./driver/http-driver.ts";
 import { redact } from "./redact.ts";
 
