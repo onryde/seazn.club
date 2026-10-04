@@ -13,8 +13,8 @@ import { describe, expect, it } from "vitest";
 import { HARNESS_DIR, HISTORICAL_HARNESS_DIRS, RELOCATED_FILES, spellingsOf } from "../lib/harness-path.ts";
 
 const REPO = new URL("../../..", import.meta.url).pathname;
-/** Every matrix CLI (W1c Task 13 added `parity`). */
-const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity"];
+/** Every matrix CLI (W1c Task 13 added `parity`; W1d Task 1 added `lock-append-only`, ruling T1-b). */
+const CLIS = ["run", "render", "gen-catalogue", "single-sport", "model", "parity", "lock-append-only"];
 // `(?:\.\/)?`: `./tools/matrix/run.ts` is the same bare run. Every directory the
 // harness has lived in (lib/harness-path.ts): a plan that ran a CLI bare at its
 // historical path is still a bare run, and still owes its HISTORY pin.
@@ -107,6 +107,8 @@ describe("CLI invocation (carry e)", () => {
       clis++;
     }
     expect(clis).toBe(CLIS.length);
+    // W1d Task 1: the lock gate's CLI, named here and not only through the loop, so a row dropped from CLIS reds.
+    expect(bareRun(bare("--experimental-strip-types").replace("/run.ts", "/lock-append-only.ts"))).toBe(true);
     // `--import <path>` is a flag with a value, which the pattern's `--flag` run does not span.
     expect(BARE.test(["node", "--experimental-strip-types", PRELOAD, "tools/matrix/run.ts"].join(" "))).toBe(false);
     expect(BARE.test("pnpm run matrix:l3 -- --set x")).toBe(false);

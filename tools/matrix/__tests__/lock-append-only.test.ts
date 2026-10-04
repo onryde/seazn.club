@@ -18,6 +18,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const LOCK_PATH = "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/plans.lock.json";
 const CLI = join(REPO, "tools/matrix/lock-append-only.ts");
 const REAL = JSON.parse(readFileSync(join(REPO, LOCK_PATH), "utf8"));
+const SCRIPTS = (JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 const entry = (plan: string) => ({ plan, layered: false, driven: ["a|b|c|LIFECYCLE"], planned: {} });
 
 describe("lockChanges (item 1, D10)", () => {
@@ -196,6 +197,24 @@ describe("lock-append-only CLI", () => {
     // and the same repo with a well-formed argv is judged, not refused
     expect(cli(["--against", "HEAD^1", "--lock", "lock.json"], d).status).toBe(0);
   }, spawnBudget(4));
+  it("a crash inside its own main, run as its package script (the crash-exit preload), exits 3 and says so — never 1 (ruling T1-b)", () => {
+    // JSON.parse reads nested arrays iteratively; canonical() recurses, so this lock parses and then overflows the stack
+    // inside lockChanges — outside every try block the CLI has. The same input is the contrast: without the preload node's
+    // own uncaught-exception exit is 1, which a gate would read as a verdict.
+    const deep = `{"runs":{"a":${"[".repeat(100_000)}${"]".repeat(100_000)}}}`;
+    const d = repo(deep, deep);
+    const words = (SCRIPTS["matrix:lock-check"] ?? "").split(" ");
+    expect(words.slice(0, 4)).toEqual(["node", "--experimental-strip-types", "--import", "./scripts/lib/crash-exit.ts"]);
+    expect(words).toHaveLength(5);
+    expect(words[4]).toBe("tools/matrix/lock-append-only.ts");
+    const abs = (w: string) => (w.startsWith("./") || w.startsWith("tools/") ? join(REPO, w) : w);
+    const viaScript = spawnSync(process.execPath, [...words.slice(1).map(abs), "--against", "HEAD^1", "--lock", "lock.json"], { cwd: d, encoding: "utf8", timeout: SPAWN_MS });
+    expect(viaScript.status, viaScript.stderr.slice(0, 400)).toBe(3);
+    expect(viaScript.stderr).toMatch(/^lock-append-only\.ts: crashed — nothing caught RangeError/m);
+    const bare = cli(["--against", "HEAD^1", "--lock", "lock.json"], d);
+    expect(bare.status).toBe(1);
+    expect(bare.stderr).not.toContain("crashed");
+  }, spawnBudget(2));
   it("the real lock, run the way CI runs it (no --lock): every entry the base commit holds is compared, and exit is 0", () => {
     const baseText = execFileSync("git", ["show", `HEAD:${LOCK_PATH}`], { cwd: REPO, encoding: "utf8" });
     const baseCount = Object.keys(JSON.parse(baseText).runs).length;

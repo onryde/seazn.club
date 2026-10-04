@@ -2703,7 +2703,7 @@ export async function runSample(d: SampleDeps): Promise<number> {
 }
 ```
 
-`d.baseline` is `baselineL3Path()` (Task 7). The real `run`/`judge` deps spawn `node --experimental-strip-types tools/matrix/run.ts …` and `tools/matrix/judge.ts …`, the way `ci-wiring.test.ts` spawns its stand-ins.
+`d.baseline` is `baselineL3Path()` (Task 7). The real `run`/`judge` deps spawn `node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/run.ts …` and `tools/matrix/judge.ts …` (the crash-exit preload on each, as their package scripts spell it), the way `ci-wiring.test.ts` spawns its stand-ins.
 
 Add these CLI tests to `run-sample.test.ts`. They spawn the REAL `run-sample.ts` with the real deps replaced only at the process boundary: `MATRIX_RUN_BIN` / `MATRIX_JUDGE_BIN` point at stand-in scripts that record their argv to a file. That replaces the fake-deps test whose `--run-id` lookup compared a value with itself (review I9).
 - "a dash-leading MATRIX_ARGS reaches run.ts intact": `MATRIX_ARGS="--set pr-sample --rows none --workers 4"`. The recorded run argv starts with exactly those five tokens.

@@ -25,7 +25,8 @@ const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"))
 
 /** [package script, its CLI, an argv its main refuses as usage, that exit,
  *  the arguments the script itself passes after its CLI]. W1c added
- *  matrix:browser and matrix:parity (final review m-11). */
+ *  matrix:browser and matrix:parity (final review m-11); W1d Task 1 added
+ *  matrix:lock-check (ruling T1-b). */
 const CLIS: readonly (readonly [string, string, readonly string[], number, readonly string[]])[] = [
   ["matrix:l3", "tools/matrix/run.ts", ["--bogus"], 2, []],
   ["matrix:browser", "tools/matrix/run.ts", ["--bogus"], 2, ["--driver", "browser"]],
@@ -34,6 +35,7 @@ const CLIS: readonly (readonly [string, string, readonly string[], number, reado
   ["matrix:single-sport", "tools/matrix/single-sport.ts", ["--bogus"], 2, []],
   ["matrix:model", "tools/matrix/model.ts", ["--bogus"], 2, []],
   ["matrix:parity", "tools/matrix/parity.ts", [], 2, []],
+  ["matrix:lock-check", "tools/matrix/lock-append-only.ts", ["--bogus"], 2, []],
 ];
 
 /** The package script's own argv (after `node`), with its CLI swapped for
@@ -69,14 +71,14 @@ const MAINS: readonly (readonly [string, string, number])[] = [
   ["a verdict (exitCode 1)", put("main-verdict.mjs", "process.exitCode = 1;\n"), 1],
 ];
 
-describe("an import-time crash exits 3 in every W1b and W1c CLI (final batch F-6, W1c final review m-11)", { timeout: meter.budget }, () => {
-  it("every W1b and W1c CLI's package script preloads crash-exit.ts, then runs its CLI", () => {
+describe("an import-time crash exits 3 in every W1b, W1c and W1d CLI (final batch F-6, W1c final review m-11, W1d T1-b)", { timeout: meter.budget }, () => {
+  it("every W1b, W1c and W1d CLI's package script preloads crash-exit.ts, then runs its CLI", () => {
     let checked = 0;
     for (const [key, cli, , , tail] of CLIS) {
       expect(scripts[key], key).toBe([`node --experimental-strip-types --import ${PRELOAD} ${cli}`, ...tail].join(" "));
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(8);
   });
 
   it.each(CLIS)("%s's flags: each load failure exits 3, naming the crash; a clean load exits 0; a verdict stays 1", (key, cli, _usage, _code, tail) => {
