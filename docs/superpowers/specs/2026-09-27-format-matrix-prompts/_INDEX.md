@@ -951,6 +951,20 @@ Elsewhere the text is the controller's record.
       that only the integration tests cover; `payload-fixtures.ts` is excluded if it only builds the placement
       request, which fix round 3 checks. All five are excluded by name, with reasons. `generated/**` is excluded too.
 
+68. **The repo goes private after W1d; the matrix runner is switchable now** (2026-10-04). The owner first asked about
+    running the matrix on a Fly.io VM, as a thought rather than a decision, then said "mostl we will keep the private
+    repo only". Two decisions follow from the owner's answer "apply your rec, go private after W1d":
+    - **In W1d PR-A:** every matrix and Stryker job takes `runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}`.
+      The visibility guard fails loudly when the repo is private AND `runner.environment == 'github-hosted'`; on a
+      self-hosted runner it passes. A test proves both directions.
+    - **Before the switch, outside W1d:** a short follow-up builds an ephemeral self-hosted GitHub Actions runner on
+      Fly Machines. It gets its own Fly app, its own image (Node, Playwright browsers, Postgres) and no production
+      secrets. Then only `vars.MATRIX_RUNNER` changes. This supersedes the design §6.5 recommendation's "a VPS or the
+      owner's machine". W1d still builds no runner (W1d prompt, "Decisions owed").
+    - **The order:** W1d's PR-B dispatches run on GitHub-hosted runners while the repo is public. Then the Fly
+      runner follow-up, then the switch to private. PR CI (`ci.yml`) goes back on the meter at the switch; that cost
+      is outside the matrix.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
