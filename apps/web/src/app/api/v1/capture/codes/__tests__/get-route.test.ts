@@ -237,4 +237,16 @@ describe("captureRoute — anything unmapped is the contract's 503 unavailable (
       errors.mockRestore();
     }
   });
+
+  it("an answer captureJson never built still leaves private, no-store: a refusal whose extras the wire refuses escapes to handler()'s own 500, and the route's last pass puts the cache headers on it (T10's mutation sweep: that pass alone was killed by nothing)", async () => {
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const res = await captureRoute(async () => { throw new CaptureRefusalError(409, "replaced", "x", { sid: "s" }); });
+      expect(res.status, "PREMISE: handler() answered it, not captureJson").toBe(500);
+      expect(JSON.stringify(await res.json()), "PREMISE: the refused extras never reach the wire").not.toContain('"sid"');
+      expect([res.headers.get("cache-control"), res.headers.get("pragma")]).toEqual(["private, no-store", "no-cache"]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
 });

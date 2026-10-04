@@ -865,7 +865,9 @@ describe.skipIf(!HAS_DB)("capture model (§11.1.4, rule 10): two phones, the rea
         const setup = await freshReal(tally);
         await fc.asyncModelRun(() => setup, cmds);
       }),
-      { numRuns: RUNS, seed: SEED, verbose: 1 },
+      // CAPTURE_MODEL_SHRINK=0 reports the first failing sequence unshrunk (a mutation sweep needs the kill, not the
+      // minimal case); by default a failure is shrunk, as seed 55's was.
+      { numRuns: RUNS, seed: SEED, verbose: 1, endOnFailure: process.env.CAPTURE_MODEL_SHRINK === "0" },
     );
     const report = tally.report();
     appendFileSync(REPORT, report);
