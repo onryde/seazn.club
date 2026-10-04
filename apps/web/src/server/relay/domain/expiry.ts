@@ -55,6 +55,14 @@ export function runnerDeadlineOf(s: Pick<Session, "createdAt" | "startedAt" | "m
 /** The later of two optional instants; null only when both are. */
 const laterOf = (a: Date | null, b: Date | null): Date | null => (a === null ? b : b === null ? a : a.getTime() >= b.getTime() ? a : b);
 
+/** The warming timeout's ONE clock (A8, capture QR v2 §5.3): `warmingTimeoutMinutes` from warming ENTRY, so provisioning
+ *  time never eats the phone's pre-flight window. The createdAt fallback is load-bearing: a session opened before V430
+ *  has no warming_at. `evaluate` judges a warming session on it, and the tick (stream-sessions.ts `tickSession`, m-5)
+ *  judges a passthrough session that went live with no first ingest recorded on the same clock — one authority. */
+export function warmingTimedOut(s: Pick<Session, "warmingAt" | "createdAt">, now: Date, limits: ExpiryLimits = DEFAULT_LIMITS): boolean {
+  return now.getTime() - (s.warmingAt ?? s.createdAt).getTime() >= limits.warmingTimeoutMinutes * 60_000;
+}
+
 /** ORDER (tested): wall clock > stop grace > warming timeout > stale beat. The
  *  policy names WHAT expired; the runner table (./runner) decides retry vs fail. */
 export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_LIMITS): Expiry {
@@ -92,9 +100,7 @@ export function evaluate(s: Session, now: Date, limits: ExpiryLimits = DEFAULT_L
     return { kind: "none" };
   }
   if (s.state === "warming") {
-    // A8 (capture QR v2 §5.3): from warming ENTRY, so provisioning time never eats the phone's pre-flight window. The
-    // createdAt fallback is load-bearing: a session opened before V430 has no warming_at.
-    if (now.getTime() - (s.warmingAt ?? s.createdAt).getTime() >= limits.warmingTimeoutMinutes * 60_000) return { kind: "warming_timeout" };
+    if (warmingTimedOut(s, now, limits)) return { kind: "warming_timeout" };
     return { kind: "none" };
   }
   // A playing runner owes a beat; so does a REPLACEMENT that is still booting

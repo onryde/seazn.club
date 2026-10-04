@@ -1724,6 +1724,9 @@ describe.skipIf(!HAS_DB)("lazy expiry — every rule fires on a READ, with NO sw
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect(I1_PAST_TIMEOUT_MS, "the premise: only the warming timeout is due").toBeLessThan(MAX_DURATION_MINUTES * 60_000);
     r.tick(I1_PAST_TIMEOUT_MS);
+    // T7 (capture QR v2): the poll is a tick, and a tick ends a warming session whose phone fell SILENT (ask 10, §6.8.3).
+    // The outage this case is about is Cloudflare's, not the phone's: the phone keeps beating, so only the warming timeout is due.
+    await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
     sentry.captureError.mockClear();
     const cur = (await currentSession(r.auth, r.fixtureId, ingestDown(r, new Error("cloudflare input status: HTTP 503"))))!;
     expect(cur).toMatchObject({ state: "warming", failReason: null, ingest: null });

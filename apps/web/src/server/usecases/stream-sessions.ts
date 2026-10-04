@@ -25,7 +25,7 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  MAX_DURATION_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP,
+  MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP,
   SRT_LATENCY_MS, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
@@ -34,7 +34,8 @@ import {
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
 import { InvalidRunnerTransition, machineNameFor, type ExitInfo, type RunnerEffect } from "@/server/relay/domain/runner";
-import { evaluate, runnerDeadlineOf, type Expiry } from "@/server/relay/domain/expiry";
+import { evaluate, runnerDeadlineOf, warmingTimedOut, type Expiry } from "@/server/relay/domain/expiry";
+import { livePhoneLost, warmingPhoneLost } from "@/server/relay/domain/phone-lost";
 import { headroomAfterReservations } from "@/server/relay/domain/credits";
 import { relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
@@ -303,7 +304,7 @@ export interface Actor { userId: string | null; source: "client" | "admin" }
 // ---------------------------------------------------------------------------
 export async function apply(
   sessionId: string,
-  command: Command | ((s: Session) => Command | null),
+  command: Command | ((s: Session, tx: Tx) => Command | null | Promise<Command | null>),
   deps: SessionDeps,
   actor?: Actor,
 ): Promise<Session | null> {
@@ -343,7 +344,9 @@ export async function apply(
     const row = await lockRow(tx, sessionId);
     if (!row) return null;
     const before = toSession(row);
-    const cmd = typeof command === "function" ? command(before) : command;
+    // T7: a command function may READ on this transaction (never the pool — lib/db.ts's nesting guard) to re-take a
+    // decision whose inputs live outside the Session (the tick's phone-lost ends: a beat, a pairing, a sample).
+    const cmd = typeof command === "function" ? await command(before, tx) : command;
     // T5-a: a command function that returns null read the LOCKED row and found nothing to decide (the row moved on) —
     // write nothing, run nothing. The caller that returned null knows why and acts outside the transaction.
     if (cmd === null) return { session: before, effects: [] };
@@ -1553,20 +1556,36 @@ export function holdStatesOf(rows: readonly OpenSessionRow[]): Record<string, Ho
   return out;
 }
 
-export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
-  const { orgId } = await fixtureContext(fixtureId);
-  if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
-  let row = await latestRow(fixtureId);
-  if (!row) return null;
+/** T7 (§6.11): what one tick observed. currentSession builds its projection from this, so the projection stays
+ *  byte-identical to the pre-extraction code (A10). The three observation fields are the block's own locals, moved
+ *  verbatim; `coalescedSince`'s three states (Date, null, undefined = not served) all mean something. */
+export type TickObservation = {
+  session: Session | null;
+  ingestState: StreamSessionCurrent["ingest"];
+  outputObserved: OutputState | null;            // D3: what THIS poll read of the destination; null = read nothing
+  coalescedSince: Date | null | undefined;       // I-1 (B0): a served sample's own since; undefined = not served
+};
 
-  if (!isTerminal(row.state)) await reconcileSession(row.id, deps);      // B: the organiser's poll IS the tick — expiry + one Machine observation
-  row = (await latestRow(fixtureId))!;
+/** T7 (§6.11): who advances a session. The organiser poll's reconcile-and-ingest block, extracted so a phone beat and the
+ *  stream-tick job (W22) advance a session nobody is watching. In order: 1. lazy expiry; 2. the coalesced ingest read
+ *  (`claimIngestPoll`; the sample and its event in ONE tx, B0 R-1); 3. warming → live (the credit); 4. target_rejected;
+ *  5. m-5, then ask 10 (§6.8.3); 6. W19 (§6.8.5). `cause` names the caller in the log line of an end it makes. */
+export async function tickSession(sessionId: string, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<TickObservation> {
+  let row = await readRow(sessionId);
+  if (!row) return { session: null, ingestState: null, outputObserved: null, coalescedSince: undefined };
+
+  if (!isTerminal(row.state)) await reconcileSession(row.id, deps);      // expiry + one Machine observation
+  row = (await readRow(sessionId))!;
 
   // The server-side ingest poll (design §6.4): passthrough warming → live on
   // connected; a rejected destination fails it. The client never decides.
   let ingestState: StreamSessionCurrent["ingest"] = null;
   let outputObserved: OutputState | null = null;   // D3: what THIS poll read of the destination; null when it read nothing
   let coalescedSince: Date | null | undefined;      // I-1 (B0 fix round 1): a served sample's own since; undefined = not served
+  // W19 (§6.8.5 clause 2): THIS tick's fresh read of the phone — a claimed read's own word, or (FP17) a coalesced sample
+  // younger than COALESCED_SAMPLE_MAX_AGE_MS. Undefined = no fresh read to judge on (no input, a failed or no-evidence
+  // read, an older sample): W19 skips this tick and never guesses.
+  let freshIngest: IngestState | undefined;
   if (row.mode === "passthrough" && (row.state === "warming" || row.state === "live")) {
     const input = (await sql.begin((tx) => readFirstInput(tx, row!.id))) as Awaited<ReturnType<typeof readFirstInput>>;
     const inputId = input?.ingestInputId ?? null;
@@ -1596,6 +1615,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
         ingestState = phone === null ? null : { state: phone, protocol: sampledProtocol(sample.protocol) };
         outputObserved = sampledOutput(sample.output_state);
         coalescedSince = sample.since;
+        freshIngest = phone ?? undefined;
       }
     }
     if (read) {
@@ -1606,6 +1626,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       // poll's word forward — never `unknown`, which read as No signal, and never a hold on go-live. With nothing to
       // carry (no poll has read the phone yet) the phone is unseen on this poll: `ingest: null`, as for a failed read.
       const phone: IngestState | null = status.state ?? carriedIngest(prev);
+      freshIngest = status.state ?? undefined;   // a no-evidence read (G-a) is not a fresh word: its carry decides nothing
       ingestState = phone === null ? null : { state: phone, protocol: status.protocol };
       outputObserved = output;
       // Ruling 13: the poll is a SAMPLE every time and an OBSERVED event only when the state word changed — for a poll
@@ -1643,9 +1664,92 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
       // unlocked read above leaves a row these no longer apply to, and a plain apply of either was InvalidTransition, a 500.
       if (output === "rejected") await apply(row.id, (s) => (s.state === "warming" || s.state === "live" ? { type: "target_rejected" } : null), deps);
       else if (row.state === "warming" && phone === "connected") await apply(row.id, connectIfWarming, deps);
-      row = (await latestRow(fixtureId))!;
+      row = (await readRow(sessionId))!;
     }
   }
+
+  // 5–6: the phone-lost ends, judged on what this tick read and re-taken on the LOCKED row.
+  if (!isTerminal(row.state)) row = await endIfPhoneLost(row, freshIngest, deps, cause);
+  return { session: toSession(row), ingestState, outputObserved, coalescedSince };
+}
+
+/** The facts ask 10, W19 and m-5 judge, in ONE statement (one snapshot). The session's phone is its `pairing_id`
+ *  (§6.5: a takeover moves it). T30 (controller ruling): a Revoke & reissue leaves the old code's pairings `current`
+ *  "until they call", so the pairing is current only while it has not ended AND its code is still ACTIVE
+ *  (`c.ended_at is null`) — without that join filter a reissued code's phone would read present forever (witness:
+ *  stream-tick.test.ts "T30: after Revoke & reissue …"). `heard_go_live`: the phone has beaten since the session was
+ *  created, so its cadence is an open session's (§6.8.3). `exec` is apply's tx when re-taken under the row lock. */
+type PhoneFacts = {
+  first_ingest_at: Date | null; phone_beat_at: Date | null; has_current: boolean; last_beat_at: Date | null;
+  answered_poll_seconds: number | null; heard_go_live: boolean; last_connected_at: Date | null;
+};
+async function phoneFactsOf(exec: Tx | typeof sql, sessionId: string): Promise<PhoneFacts | null> {
+  const [f] = await exec<PhoneFacts[]>`
+    select s.first_ingest_at, s.phone_beat_at, c.id is not null as has_current, p.last_beat_at, p.answered_poll_seconds,
+           coalesce(c.id is not null and p.last_beat_at > s.created_at, false) as heard_go_live,
+           (select max(x.sampled_at) from fixture_stream_samples x
+             where x.session_id = s.id and x.source = 'poll' and x.ingest_state = 'connected') as last_connected_at
+      from fixture_stream_sessions s
+      left join fixture_stream_pairings p on p.id = s.pairing_id and p.ended_at is null
+      left join fixture_stream_codes c on c.id = p.code_id and c.ended_at is null
+     where s.id = ${sessionId}`;
+  return f ?? null;
+}
+
+/** Which phone-lost end, if any, a session owes now. `fresh` = this tick's fresh read (undefined: W19 cannot judge).
+ *  - m-5 (controller ruling): a PASSTHROUGH session live with no first ingest recorded is judged by the warming rule —
+ *    expire warming_timeout at warming_at + WARMING_TIMEOUT_MINUTES (`warmingTimedOut`, evaluate's own clock). Composed
+ *    is excluded by name: a composed session never records first ingest (only the passthrough poll writes it), so the
+ *    rule would end every composed broadcast at its warming deadline — and the domain refuses that cell anyway.
+ *  - ask 10 (§6.8.3) and W19 (§6.8.5): the domain's own predicates, with the tunable timings (§6.15). */
+function phoneLostEnd(s: Session, f: PhoneFacts, fresh: IngestState | undefined, now: Date): { command: Command; rule: "m-5" | "ask-10" | "w19" } | null {
+  if (isTerminal(s.state)) return null;
+  if (s.mode === "passthrough" && s.state === "live" && f.first_ingest_at === null && warmingTimedOut(s, now)) {
+    return { command: { type: "expire", expiry: { kind: "warming_timeout" } }, rule: "m-5" };
+  }
+  const silentFloor = tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS);
+  // With no current pairing the cadence is never read (warmingPhoneLost answers before it); the pairing's own values otherwise.
+  if (warmingPhoneLost({
+    state: s.state, firstIngestAt: f.first_ingest_at, hasCurrentPairing: f.has_current,
+    lastBeatAt: f.has_current ? f.last_beat_at : null, answeredPollSeconds: f.answered_poll_seconds ?? 0, heardGoLive: f.heard_go_live,
+  }, now, silentFloor)) return { command: { type: "stop", reason: "phone_lost" }, rule: "ask-10" };
+  if (fresh !== undefined && livePhoneLost({
+    state: s.state, firstIngestAt: f.first_ingest_at, phoneBeatAt: f.phone_beat_at,
+    freshReadConnected: fresh === "connected", lastConnectedSampleAt: f.last_connected_at,
+  }, now, tunable("PHONE_LOST_LIVE_MINUTES", PHONE_LOST_LIVE_MINUTES))) return { command: { type: "stop", reason: "phone_lost" }, rule: "w19" };
+  return null;
+}
+
+/** Steps 5–6 of the tick. Judged first on an UNLOCKED read (the common answer is "nothing", and `apply` takes the org's
+ *  money lock), then RE-TAKEN on the locked row inside `apply`: a beat, a Stop or another tick may have landed between
+ *  the two, and the locked answer is the only one that may end a session (witnesses: "a tick racing a phone BEAT" and
+ *  "two ticks AT ONCE"). A row that moved on answers null and nothing is written. */
+async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: SessionDeps, cause: "poll" | "beat" | "sweep"): Promise<Row> {
+  const facts = await phoneFactsOf(sql, row.id);
+  if (!facts || phoneLostEnd(toSession(row), facts, fresh, deps.now()) === null) return row;
+  let rule: string | null = null;
+  await apply(row.id, async (s, tx) => {
+    const locked = await phoneFactsOf(tx, s.id);
+    const end = locked ? phoneLostEnd(s, locked, fresh, deps.now()) : null;
+    rule = end?.rule ?? null;
+    return end?.command ?? null;
+  }, deps);
+  const after = (await readRow(row.id)) ?? row;
+  if (rule !== null && isTerminal(after.state)) log.info({ sid: row.id, orgId: row.org_id, cause, rule, state: after.state }, "stream session: ended by the tick");
+  return after;
+}
+
+export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
+  const { orgId } = await fixtureContext(fixtureId);
+  if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
+  let row = await latestRow(fixtureId);
+  if (!row) return null;
+
+  // B: the organiser's poll IS a tick (§6.11) — expiry + one Machine observation, the coalesced ingest read, warming →
+  // live, target_rejected and the phone-lost ends. T7 (A10): the projection below is built from what THAT tick observed,
+  // exactly as it was from the block's own locals before the extraction.
+  const { ingestState, outputObserved, coalescedSince } = await tickSession(row.id, deps, "poll");
+  row = (await latestRow(fixtureId))!;
 
   const qr = (await sql.begin(async (tx): Promise<CaptureQrV1 | null> => {
     if (row!.state !== "provisioning" && row!.state !== "warming") return null;

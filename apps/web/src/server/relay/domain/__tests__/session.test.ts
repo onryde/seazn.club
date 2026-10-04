@@ -441,6 +441,23 @@ describe("decide — a composed session's Machine events go through the runner t
     expect(p.effects).toEqual([]);
   });
 
+  it("m-5 (controller ruling): a PASSTHROUGH live session × warming_timeout is failed(no_inbound_timeout), releasing its output and spending nothing; a COMPOSED live one is refused — it never records first ingest, so the rule would end every composed broadcast", () => {
+    const p = decide(S({ state: "live", startedAt: T0, outputUid: "out-1" }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0);
+    expect(p.next).toMatchObject({ state: "failed", failReason: "no_inbound_timeout", endReason: null, endedAt: T0 });
+    expect(p.effects).toEqual([{ type: "release_output" }]);
+    expect(p.events).toEqual([{ type: "SessionEnded", reason: "no_inbound_timeout" }]);
+    expect(() => decide(C({ state: "live", startedAt: T0, runner: { ...BOOTING, state: "playing" } }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0)).toThrow(InvalidTransition);
+    // Every other non-warming state still refuses it, either mode.
+    let refused = 0;
+    for (const state of ["requested", "provisioning", "ending"] as const) {
+      for (const mk of [S, C]) {
+        expect(() => decide(mk({ state }), { type: "expire", expiry: { kind: "warming_timeout" } }, T0), `${state}`).toThrow(InvalidTransition);
+        refused++;
+      }
+    }
+    expect(refused).toBe(6);
+  });
+
   it("a composed session goes live ONLY through callback_playing (one consume); a replacement's callback_playing on a LIVE session consumes nothing", () => {
     const d = decide(C(), { type: "runner", trigger: { type: "callback_playing" } }, T0);
     expect(d.next).toMatchObject({ state: "live", startedAt: T0, runner: { state: "playing" } });
@@ -1312,6 +1329,8 @@ describe("C1 (lane C final review): a passthrough session that holds an output R
     "requested × expire:requested_timeout", "provisioning × expire:provision_timeout",
     "warming × credit_refused", "warming × target_rejected", "warming × expire:warming_timeout",
     "live × target_rejected", "live × complete",
+    // m-5 (controller ruling, capture QR v2 T7): a passthrough live session with no first ingest is judged by the warming rule.
+    "live × expire:warming_timeout",
     "ending × complete", "ending × expire:ending_timeout",
     // M10: a deployment with no relay ends a session from every state that is still up.
     "requested × relay_disabled", "provisioning × relay_disabled", "warming × relay_disabled", "live × relay_disabled",

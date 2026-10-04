@@ -386,7 +386,12 @@ function expire(s: Session, e: Expiry, now: Date, illegal: () => InvalidTransiti
   switch (e.kind) {
     case "none": return identity(s);
     case "warming_timeout":
-      if (s.state !== "warming") throw illegal();
+      // m-5 (controller ruling, capture QR v2 T7): a PASSTHROUGH session that is live with no first ingest recorded is
+      // judged by the warming rule — failed no_inbound_timeout at its warming deadline. `first_ingest_at` is not a
+      // domain field, so the use-case decides WHEN (stream-sessions.ts `tickSession`); the domain admits the cell.
+      // Composed live stays refused: a composed session never records first ingest (only the passthrough poll writes
+      // it), so the same rule would fail EVERY composed broadcast at its warming deadline.
+      if (s.state !== "warming" && !(s.state === "live" && s.mode === "passthrough")) throw illegal();
       // A composed session that never reported playing: tear the Machine down, then fail with the boot reason.
       if (s.mode === "composed" && s.runner.state !== "none") {
         const torn = runner(s, { type: "session_stop" }, now, illegal);
