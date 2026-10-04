@@ -59,7 +59,7 @@ import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import {
   ACTIVE_STATES, TERMINAL_STATES,
-  type SessionDeps, apply, applyExpiry, createSession as organiserStart, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
+  type SessionDeps, type StartActor, apply, applyExpiry, createSession as organiserStart, currentSession, estimateCostMinor, expireTargetHolders, heartbeat,
   holdStatesOf, openStreamStates, reconcileSession, relayCredits, retryRunner, sessionFactsForJob, startBroadcast, stopSession, storageHeadroomMinutes, destroyListedMachine,
 } from "../stream-sessions";
 
@@ -5625,20 +5625,49 @@ describe.skipIf(!HAS_DB)("T6: one start path — the present phone, startCause, 
     expect(await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`).toHaveLength(0);
   });
 
+  it("an assumption made a guard (§6.7.1 'the actor'): a phone or automatic start is attributed to its code's issued_by — one naming anyone else (the organiser included) is refused by name before anything is weighed or written, and so is one with no pairing; the issuer's own is admitted (the positive pair)", async () => {
+    const r = await rig({ credits: 1 });
+    const phone = await pairPresentPhone(r.fixtureId, { at: r.deps.now() });
+    const [{ issued_by: issuedBy }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where id = ${phone.codeId}`;
+    expect(issuedBy, "the differential: the code's issuer is not the organiser this rig signs in as").not.toBe(r.auth.userId);
+    const refused: [string, StartActor][] = [
+      ["a phone start naming the organiser", { userId: r.auth.userId!, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }],
+      ["an automatic start naming the organiser", { userId: r.auth.userId!, orgId: r.auth.orgId, source: "auto", pairingId: phone.pairingId }],
+      ["a phone start with no pairing", { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: null }],
+    ];
+    let checked = 0;
+    for (const [label, actor] of refused) {
+      const err = await startBroadcast(actor, r.fixtureId,
+        { targetId: r.target.id, startCause: actor.source === "auto" ? "automatic" : "operator", phonePresent: true }, r.deps).then(() => null, (e: unknown) => e);
+      expect(err, label).toBeInstanceOf(Error);
+      expect(err, label).not.toBeInstanceOf(HttpError);
+      expect((err as Error).message, label).toMatch(/startBroadcast: an? (phone|auto) start/);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(await sessionsOf(r.auth.orgId)).toBe(0);
+    const { sessionId } = await startBroadcast(
+      { userId: issuedBy, orgId: r.auth.orgId, source: "phone", pairingId: phone.pairingId }, r.fixtureId,
+      { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps);
+    const [row] = await sql<{ created_by: string }[]>`select created_by from fixture_stream_sessions where id = ${sessionId}`;
+    expect(row!.created_by).toBe(issuedBy);
+  });
+
   it("an assumption made a guard: startBroadcast refuses a pairing on ANOTHER fixture's code before anything is weighed or written; the fixture's own pairing is admitted (the positive pair)", async () => {
     const r = await rig({ credits: 1, fixtures: 2 });
     const [a, b] = r.fixtureIds as [string, string];
     const onA = await pairPresentPhone(a, { at: r.deps.now() });
     const onB = await pairPresentPhone(b, { at: r.deps.now() });
+    const [{ issued_by: issuerB }] = await sql<{ issued_by: string }[]>`select issued_by from fixture_stream_codes where id = ${onB.codeId}`;
     const err = await startBroadcast(
-      { userId: r.auth.userId!, orgId: r.auth.orgId, source: "phone", pairingId: onA.pairingId }, b,
+      { userId: issuerB, orgId: r.auth.orgId, source: "phone", pairingId: onA.pairingId }, b,
       { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps).then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(HttpError);
     expect((err as Error).message).toMatch(/is not on fixture/);
     expect(await sessionsOf(r.auth.orgId)).toBe(0);
     await expect(startBroadcast(
-      { userId: r.auth.userId!, orgId: r.auth.orgId, source: "phone", pairingId: onB.pairingId }, b,
+      { userId: issuerB, orgId: r.auth.orgId, source: "phone", pairingId: onB.pairingId }, b,
       { targetId: r.target.id, startCause: "operator", phonePresent: true }, r.deps)).resolves.toMatchObject({ sessionId: expect.any(String) });
   });
 

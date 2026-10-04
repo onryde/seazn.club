@@ -1155,7 +1155,8 @@ export type { StartCause };
 
 /** Capture QR v2 §5.3 (T6): who is starting. `userId` is the person the start is attributed to — the organiser, or for
  *  the phone's and the automatic start the stream code's `issued_by` (the issuer vouches for the phone, the device-link
- *  precedent). `pairingId` is the slot-0 pairing the start rides on, or null when the fixture has none. */
+ *  precedent). `pairingId` is the slot-0 pairing the start rides on; null only for an organiser's start on a fixture with
+ *  none (a phone's or the automatic start always rides one, and is refused by name without it). */
 export interface StartActor {
   userId: string;
   orgId: string;
@@ -1238,11 +1239,22 @@ export async function startBroadcast(
   // An assumption made a guard: every caller reads its pairing FROM this fixture's code, so a pairing on another
   // fixture's code is a caller bug — refused before anything is weighed or written, never a session tied to the wrong
   // phone. Witness: "startBroadcast refuses a pairing from another fixture's code".
-  const pairing = actor.pairingId === null ? null : (await sql<{ code_id: string }[]>`
-    select p.code_id from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
+  const pairing = actor.pairingId === null ? null : (await sql<{ code_id: string; issued_by: string }[]>`
+    select p.code_id, c.issued_by from fixture_stream_pairings p join fixture_stream_codes c on c.id = p.code_id
      where p.id = ${actor.pairingId} and c.fixture_id = ${fixtureId}`)[0] ?? null;
   if (actor.pairingId !== null && pairing === null) {
     throw new Error(`startBroadcast: pairing ${actor.pairingId} is not on fixture ${fixtureId}'s stream code`);
+  }
+  // §6.7.1 "the actor", made a guard (B4 review m-2): a phone's or the automatic start rides the slot's pairing and is
+  // attributed to its stream code's `issued_by`, who vouches for the phone. A caller that names anyone else, or brings
+  // no pairing, is a caller bug — refused by name before anything is weighed or written, so `created_by` and the
+  // action row's actor can only ever be the issuer. Witness: "a phone or automatic start is attributed to its code's
+  // issued_by".
+  if (actor.source !== "organiser") {
+    if (pairing === null) throw new Error(`startBroadcast: a ${actor.source} start rides the slot's pairing, and none was given for fixture ${fixtureId}`);
+    if (actor.userId !== pairing.issued_by) {
+      throw new Error(`startBroadcast: a ${actor.source} start is attributed to its stream code's issuer, not to user ${actor.userId}`);
+    }
   }
   // R5 (Task 14b): a production deployment with no RELAY_DRIVERS has no relay (drivers.ts `disabledRelayDrivers`).
   // Refused with the ingest's own 503 BEFORE anything else — no expiry, no provider call, no monthly grant, no row —
