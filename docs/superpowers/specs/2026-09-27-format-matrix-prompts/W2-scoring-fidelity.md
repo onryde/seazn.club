@@ -93,7 +93,7 @@ sign-off:
 - **Carrom.** Toss and first break. This one is covered by text §5.1.
 
 **4. Generator reach: W2's plan must include a generator-breadth task BEFORE its truth run.** Today, no generator in
-`scripts/matrix/lib/streams/` emits any of these:
+`tools/matrix/lib/streams/` emits any of these:
 
 - any decider: extra time, shoot-out, overtime, GWS, super over, DLS;
 - ~~a cricket tie;~~ struck by ruling 44 (W1-driving builds it: `streams/cricket.ts` `tied`);

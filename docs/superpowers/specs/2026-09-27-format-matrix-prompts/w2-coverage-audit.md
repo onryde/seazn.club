@@ -3,8 +3,8 @@
 - **Date:** 2026-09-30. **Tree:** `feat/format-matrix-w1c` worktree. Read only, nothing driven. Per AGENTS.md class 5, every "engine does X" below comes from reading the code, not from running it.
 - **Question:** is every rule-level possibility the engine declares, for all 11 sports, either a W2 rulebook row or a named gap in the W2 plan?
 - **Plan sources:** `W2-scoring-fidelity.md` (the prompt), `rulebook-W2-sets-cricket.md` (row IDs BD/TT/VB/TN/CR, owner items RB2A-n, edge table M/F/X/C), and `rulebook-W2-goals-boards.md` (row IDs F/H/I/B/C/G, owner items RB2B-n).
-- **Generator source:** `scripts/matrix/lib/streams/*.ts`. The pads replay these streams, and `HARNESS_SCENARIO` (`scenario-catalogue.ts:188`) drives only LIFECYCLE, M1, R4 and F1.
-- **Sport list (confirmed):** `SPORT_KEYS = builtinModules.map(m => m.key)` (`scripts/matrix/lib/catalogue.ts:37`). `builtinModules` (`packages/engine/src/sports/index.ts:23-35`) holds exactly 11 modules: football, cricket, boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis, icehockey, hockey.
+- **Generator source:** `tools/matrix/lib/streams/*.ts`. The pads replay these streams, and `HARNESS_SCENARIO` (`scenario-catalogue.ts:188`) drives only LIFECYCLE, M1, R4 and F1.
+- **Sport list (confirmed):** `SPORT_KEYS = builtinModules.map(m => m.key)` (`tools/matrix/lib/catalogue.ts:37`). `builtinModules` (`packages/engine/src/sports/index.ts:23-35`) holds exactly 11 modules: football, cricket, boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis, icehockey, hockey.
 
 ## Legend
 

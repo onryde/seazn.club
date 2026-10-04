@@ -10,7 +10,7 @@ Decision log and session status. Read `_RULES.md` beside this file first.
 
 | Wave | Scope | State |
 | --- | --- | --- |
-| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `scripts/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
+| W1a | L3 core: lean runner, HttpDriver, 11 stream generators, invariants, MATRIX generator | **Tasks 1–11 done; final review (R21) fix batch landed and re-reviewed 2026-09-28 (27/27 findings fixed, 0 new Critical/Important); CI green at `12029f214` (matrix step 1251/1251). MERGED 2026-09-28 — PR #896, merge `a5f813404`.** Live re-run after the batch: 24/24 ✅ at harness `e96a51ff1` — a pre-rebase SHA; its `tools/matrix` is byte-identical to `61f8e19b7` on the rebased branch (run `fm-w1a-fix-b`, evidence `truth-runs/w1a-slice/`, schema v2), all three canaries red on their own check only — see "W1a session status" below. Worktree `format-matrix-w1a`, branch `feat/format-matrix-w1a`, PR #896 |
 | W1b | Catalogues (atomic cases, applicability, variants, pairs) + reference skeleton | **Tasks 1–16 done: Tasks 1–15 end at `7c42d0ec2`, and Task 16 is the docs commit that writes this row; the final whole-branch review is next. PR and CI: controller's (R-PF10).** Plan `docs/superpowers/plans/2026-09-28-format-matrix-w1b.md`, branch `feat/format-matrix-w1b`. Live: slice 24/24 ✅ (run `w1b-slice-0928a`, `truth-runs/w1b-slice/`); probe 13 cases, 5 ✅ and 8 ❌ — the 7 DENIED cases are red on `denied-put-keeps-stages` (false premise 8 CONFIRMED, → W9), and `page_playoff_only` LIFECYCLE is red on a HARNESS defect, not the product (run `w1b-probe-0928a`, `truth-runs/w1b-probe/`); abandon check (ruling 30): ST-G1 CONFIRMED, judged 4/4 (run `w1b-abandon-0928a`, `truth-runs/w1b-abandon/`); model at HEAD on the 6 slice cells, fences on (`truth-runs/w1b-model-final/`): league\|generic ok, league\|badminton ok, knockout\|generic ok and knockout\|badminton ok, 20/20 runs each with the knockout fences on (final batch F-1 re-run `w1b-model-final-ko`; the first final run's knockout\|badminton, known MB-005 after 2 of 20 runs, was vacuous), swiss\|generic ok (run `w1b-model-final`, 20 runs), swiss\|badminton ok at `--runs 40` (run `w1b-model-final-sb40`, seed -2002771143; fix round 1's seed for this cell, -1180181307, was vacuous at the default 20 runs ("command Correct never ran", run `w1b-model-0929b`) and ok at 40 (run `w1b-model-0929g`)), 0 NEW; `--regressions` 5 known, each replays exactly (run `w1b-model-final-regressions`); MB-001 = #879 (seed 752674687, path `1:2:3:3:3:3:3:3`, run `w1b-model-0929f`). See "W1b session status" and "Findings routed (W1b)". |
 | W1c | Browser layers: page objects, 11 pad adapters, L1/L2 | **Tasks 1–15 done 2026-09-30. Task 14 is the live evidence, and Task 15 is the docs commit that writes this row. Task 14+15 review (2026-09-30): Needs fixes; fix round 1 (`62d91dd48`, `93eb5af0d`), re-review 1 Approved. Final whole-branch review (2026-09-30): Needs fixes, 0 Critical / 2 Important / 19 Minor; the final fix landed (`0532d0cb6`, `e431cbbce`, `80f370e9f`, `d5ce3e871`, `6e857491d`, `975f53b23`). Final re-review: Needs fixes (I-2's own probe still passed); fixed in `f33c1b312` and the docs commit that writes this line. MERGED 2026-09-30 — PR #905, merge `ebf7ec040`.** Plan `docs/superpowers/plans/2026-09-29-format-matrix-w1c.md` (rulings 37–40). Worktree `format-matrix-w1c-exec`, branch `feat/format-matrix-w1c`. Live runs (2026-09-30, harness `b7668c0ff`, clean tree; evidence commit `79a141448`, in `truth-runs/`): HTTP slice 24/24 ✅ (`w1c-http-slice/results.json`); L1 at 1280, three runs of 6/6 ✅ each (`w1c-l1/w1c-l1-r{1,2,3}/results.json`); L2 slice 68 cases = 3 ✅, 7 🚫, 58 ░ (`w1c-l2/results.json`); API-only 5 🚫, each naming its wave, W4 ×3 and W5 ×2 (`w1c-api-only/results.json`); knockout\|badminton width sweep 1/1 ✅ at each of 7 widths (`w1c-sweep-ko/w1c-sweep-ko-<w>/results.json`); pad proof over 7 runs, 1280 × 4 (r4 a fresh-id rerun) and 320 × 3: 11/11 ✅ in six. In 1280 r3, 10 ✅ and cricket ❌: flake finding F-PP-1, one tap-wait timeout on `pad-ledger-as-generated`, cause unexplained, → W1d (`w1c-padproof/w1c-pp-<w>-r<n>/results.json`). Owner ruling 43 (2026-09-30) accepts the knockout sweep cell and the API-only set as planned 🚫. Parity against the HTTP slice: 0 differences for L1 r1, r2 and r3 (102 common checks each) and for L2 (46). Per-screen verdicts: `w1c-l1/README.md`, `w1c-l2/README.md`, `w1c-sweep-ko/README.md`, `w1c-padproof/README.md`. New product findings: N-1 (→ W4) and N-4 (→ W10), plus soft N-2, N-3 and N-5. See "W1c session status", "Findings routed (W1c)" and "W2 checklist". |
 | W1d | CI (weekly + dispatch, visibility guard) + first full truth run | not started |
@@ -73,7 +73,7 @@ PostHog and Sentry keys blanked; `show data_directory` equal to
 - **Committed evidence (then; superseded by `fm-w1a-fix-b` above):**
   `truth-runs/w1a-slice/results.json` was run `fm-w1a-a2` at harness
   `f013af525`; `MATRIX.md` is its render, and
-  `scripts/matrix/__tests__/committed-matrix.test.ts` keeps the two equal (R10).
+  `tools/matrix/__tests__/committed-matrix.test.ts` keeps the two equal (R10).
 - **Smoke** `fm-w1a-smoke` (harness `22ac77387`): `league|generic|score|LIFECYCLE`
   → ✅, 11 applied checks, 143 items.
 - **Baseline slice** `fm-w1a-a` / `fm-w1a-b` (harness `22ac77387`):
@@ -128,7 +128,7 @@ PostHog and Sentry keys blanked; `show data_directory` equal to
 
 ## W1b counts (design §6.2)
 
-Every value is quoted from `scripts/matrix/catalogue/counts.json` (schema v1)
+Every value is quoted from `tools/matrix/catalogue/counts.json` (schema v1)
 as committed at `7c42d0ec2`, and each formula is that file's own text,
 verbatim. The drop split is quoted from `drop-list.json` and the floors from
 `floors.json`, beside it. `gen-catalogue.ts --check` keeps all five generated
@@ -252,7 +252,7 @@ Rebuild never run, a vacuous cell the model did not then judge.
   - `w1b-model-fr2/` — fix round 2: `0929h` replays 5 known, each exactly;
     `0929i` finds only known failures on both knockout cells.
 
-**Regressions committed** (`scripts/matrix/catalogue/regressions.json`, all
+**Regressions committed** (`tools/matrix/catalogue/regressions.json`, all
 `open`, found 2026-09-29). A replay is known only when the cell, the check and
 `match` (tested against the product's own answer) all agree.
 
@@ -660,7 +660,7 @@ a peer session as the other.
       controller offered was to leave visuals to W1c.
 37. **W1c: `BrowserDriver` runs inside the matrix runner** (2026-09-29). The
     owner answered "1" to the controller's two options.
-    - **What it means.** `BrowserDriver` lives in `scripts/matrix/lib/driver/`,
+    - **What it means.** `BrowserDriver` lives in `tools/matrix/lib/driver/`,
       uses the Playwright *library* (the root `playwright` dependency, as
       `scripts/bench/lib/tap-play.ts` already does), and is selected by the
       matrix runner. L1 and L2 share L3's planner, invariants, `decideState`,
@@ -676,7 +676,7 @@ a peer session as the other.
       L3 without editing `e2e.yml`, which runs only on a push to `main`.
 38. **W1c borrows the bench's tap helpers by import** (2026-09-29). Asked
     "import, or copy?", the owner answered "1" (import).
-    - **What it means.** `scripts/matrix` may import four more bench modules:
+    - **What it means.** `tools/matrix` may import four more bench modules:
       `scripts/bench/lib/ledger.ts`; the sport-blind exports of
       `scripts/bench/lib/drivers/scorer.ts` (`TapStep`, `selectorForTapStep`,
       the chassis testids, `TAP_PACING_MS`, `PadPage`, `organiserStepsFor`);
@@ -838,11 +838,31 @@ Elsewhere the text is the controller's record.
     db?" and given the controller's recommendation (stay in code; the matrix catalogue reads the file, so a DB list
     would make case counts differ per environment): "apply rec". No DB table. The cleanup (move the file out of
     `components/v2`, single-source `TakeRuleSchema`) is owed after this wave and is outside W1-driving's scope.
+    - **Landed 2026-10-04** (the cleanup PR, branch `chore/matrix-cleanup`). The file is
+      `apps/web/src/lib/format-templates.ts`, its test `apps/web/src/lib/__tests__/format-templates.test.ts`; every
+      importer moved with it, with no re-export shim (`2a12391f4`). `TakeRuleSchema` is tied to the engine's
+      `TakeRule` at compile time in both directions — `TakeRuleSchemaMatchesEngine` and
+      `TakeRuleSchemaMatchesEngineFields` in `server/api-v1/schemas.ts` — and
+      `server/api-v1/__tests__/take-rule-schema.test.ts` parses every template's take rules at runtime (builder
+      grid, format families and the catalog JSON; `b85b1ea14`).
 56. **The matrix harness gets a boundary, not a separate repo** (2026-10-01). The controller's record (T16-R4): the
     harness moves to its own workspace package, behind an import guard, with its evidence moved out and a
     `.dockerignore` entry. It is NOT a separate repo. The owner raised the concern ("I a thinking as we are making
     bigger monolithic") and answered the recommendation with "Ok". The runtime image already excludes the harness
     (`Dockerfile:88-105` copies only the standalone build). Timing: the same post-W1-driving cleanup as ruling 55.
+    - **Amended 2026-10-04: the evidence STAYS.** Recorded from the controller's cleanup brief, which carries the
+      owner's "ok": the truth runs are 12 MB, read by 12 CI test files, W1d's baseline, and history already holds
+      them, so moving them out buys nothing. They are left out of the image instead.
+    - **The package.** The harness lives at `tools/matrix` as `@seazn/matrix`; `tools/` is the home for dev-only
+      harnesses (bench to follow). `tools/*` is a pnpm workspace glob; the harness's manifest declares what it
+      really imports. Nothing in `apps/`, `packages/` or `scripts/` may import `tools/**` or `@seazn/matrix`:
+      the eslint rule from `scripts/lib/tools-import-guard.mjs` is the coarse layer, and
+      `scripts/__tests__/tools-import-guard.test.ts` resolves every import exactly. `.dockerignore` lists `tools/`
+      and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
+    - **Old paths.** The committed evidence still spells `scripts/matrix` and is never rewritten.
+      `tools/matrix/lib/harness-path.ts` is the one map from the old directory to the new one; the single-sport
+      ratchet's `--against` reads a pre-move base through it. The paths elsewhere in this index were updated to
+      `tools/matrix` in the same PR, so a path here names today's file.
 57. **The W9 stage delete stays with W9** (2026-10-01). The owner: "W9 is fine". A refused format change deletes the
     division's stages first: `replaceStages` deletes at `stages.ts:543`, before `createStages`' `requireFeature`
     gates. This is read-derived: the controller read it on `main` `58e8103e3`, and no committed run drives it. It
@@ -850,6 +870,9 @@ Elsewhere the text is the controller's record.
 58. **No CI live-matrix proposal** (2026-10-01). Offered a W1d proposal for a live matrix job in CI (sharded, judged
     against the committed `results.json`, triggered on a `main` push or by hand), the owner: "no". Not logged as a
     W1d item.
+    - **Clarified 2026-10-04.** The "no" meant "do not log a separate proposal": W1d already covers CI truth runs.
+      The owner's 2026-10-01 answer "a", confirmed verbatim: "the matrix runs itself: weekly and on dispatch,
+      sharded on fresh databases". W1d's design note is item 27 of "W1d first tasks" below.
 59. **The W1-driving PR is raised after the reviews approve** (2026-10-01). The owner: "raise pr after review
     approve". Push `feat/format-matrix-w1-driving` and open the PR once Task 16's review and the final whole-branch
     review are approved, rebasing onto `main` first if it is behind, with a scoped re-verify. The merge is the
@@ -1257,7 +1280,7 @@ a check means or where a finding goes are listed here. SHAs are post-rebase (the
   cases of the time (MB-001..005) are league and knockout cells. They draw exactly what they drew, which a test
   pins by sampling.
 - **2026-10-01** — **T15-R9's check is named:** `r4-not-seated-later` (`notSeatedLater`,
-  `scripts/matrix/lib/scenarios/r4-withdrawal.ts`). It is the americano-kinds sibling of the swiss
+  `tools/matrix/lib/scenarios/r4-withdrawal.ts`). It is the americano-kinds sibling of the swiss
   `r4-not-paired-later` and the ladder `r4-not-challenged-later`. The coverage table's kept-playing signature
   covers it on americano and mexicano R4. It reds americano 11/11 and mexicano 3/11 on `w1drv-l3-fr2`.
 - **2026-10-01** — **DRIVING_WAVE (PF-10): nothing left to decide at close.** The Task 13 dispatch deleted
@@ -1370,9 +1393,9 @@ Record each audit gap that fails to hold, with who found it.
 "False premises found in planning"). Each was found by reading, and 8 and 11
 were hypotheses that Task 15 then drove live. Line numbers are at the branch
 base `64e009f2d`, the tree the plan was written against. Outside
-`scripts/matrix/` no cited line has moved since (the only other cited file the
+`tools/matrix/` no cited line has moved since (the only other cited file the
 branch changed is the root `package.json`, cited without a line). The
-`scripts/matrix/` cites have moved: for example, I1's `late_entry` is at
+`tools/matrix/` cites have moved: for example, I1's `late_entry` is at
 `invariants.ts:40` at `7c42d0ec2`.
 
 1. **"fast-check is already a dependency — no setup is owed"**
@@ -1390,16 +1413,16 @@ branch changed is the root `package.json`, cited without a line). The
    `SPORT_RULES` (badminton `setTo` 11–30, `:227-233`). Task 5 takes its
    classes from `SPORT_RULES` and validates each through the engine.
 3. **Design §7.5: checking every invariant after every step would catch
-   #879.** I1 abstains on `late_entry` (`scripts/matrix/lib/invariants.ts:32`;
+   #879.** I1 abstains on `late_entry` (`tools/matrix/lib/invariants.ts:32`;
    the plan said `:31`), I4 fails by construction mid-sequence, and I2 needs a
    completed stage. Task 2 added I7 (no pair over `legs`) and the `stepSafe`
    subset.
 4. **W1b prompt: "Routed gaps: none".** W1a routed four deferrals to "W1b":
-   `scripts/matrix/lib/scenarios/common.ts:90`, `:92` and `:94`, and
-   `scripts/matrix/lib/catalogue.ts:101`. Task 3 closed the last (API-only row
+   `tools/matrix/lib/scenarios/common.ts:90`, `:92` and `:94`, and
+   `tools/matrix/lib/catalogue.ts:101`. Task 3 closed the last (API-only row
    bodies), and ruling 28 re-routed the other three to W1-driving.
 5. **A "⛔ refused" state exists in the harness.** `CASE_STATES` listed it
-   (`scripts/matrix/lib/results.ts:16`), but `decideState` could never return
+   (`tools/matrix/lib/results.ts:16`), but `decideState` could never return
    it (`:117-128`; `:121-133` at `7c42d0ec2`). Task 9 gave it a producer, a
    mandated refusal.
 6. **"Order is not significant"** (`packages/engine/src/sports/index.ts:22`).
@@ -1474,7 +1497,7 @@ branch changed is the root `package.json`, cited without a line). The
   was unreachable. A walkover shape was added (6 entrants, the target has
   played 3 of 5): the briefed shape is REFUTED, the walkover shape CONFIRMED.
 - **`strip-types-loadable.test.ts` needs no edit per new module.** It walks
-  `scripts/matrix/` for every shipped `.ts` and has no module list. Task 1
+  `tools/matrix/` for every shipped `.ts` and has no module list. Task 1
   found it; the briefs of Tasks 4, 6 and 14 repeated the premise, and each task
   ran the test unedited.
 - **`single-sport.test.ts` was red from Task 14 (`2f9bd556f`) until Task 15
@@ -1835,7 +1858,7 @@ probes `w1b-fr1-ko-0929a`/`0929b`, and `w1b-model-final` (with `-sb40` and
   rosters).
 - **`page_playoff_only` LIFECYCLE red is a HARNESS defect, not a product ❌.**
   LIFECYCLE seeds a fixed 8 entrants
-  (`scripts/matrix/lib/scenarios/lifecycle.ts:9`); a page playoff needs
+  (`tools/matrix/lib/scenarios/lifecycle.ts:9`); a page playoff needs
   exactly 4, and the product refuses Start with a named 422 CONFIG_INVALID
   ("page playoffs need exactly 4 entrants, got 8"). A first-stage page
   playoff's allowed path is therefore still undriven live. → **W1-driving** (a
@@ -2019,7 +2042,7 @@ product changes (D4).
   branch ran. Record it as a check or note → **W1d**.
 - **Void is never driven in any browser run.** "Void last entry" is only noted as greyed → **W1d**.
 - **`committed-matrix` was missing from the wave's earlier review gates** (`c609f9cd4`..`0f3deface`), so its CI red
-  went unseen until Task 14. The final review ran it: 2692/2692 over `scripts/matrix/__tests__`. Its two Important findings, I-1 and I-2,
+  went unseen until Task 14. The final review ran it: 2692/2692 over `tools/matrix/__tests__`. Its two Important findings, I-1 and I-2,
   are fixed in `0532d0cb6`.
 
 ## Findings routed (W1-driving)
@@ -2033,12 +2056,12 @@ W1-driving: product reds are recorded and routed (rulings 19, 48). Evidence path
 - **Predicted** means the fake or the plan says so and no committed run has shown it.
 
 **Source of the counts.** The per-case table at the end of this section is generated by
-`scripts/matrix/findings-table.ts` (T16-R4 m-6) from `truth-runs/w1drv-l3/TRIAGE.md`'s "Every ❌" table: every
+`tools/matrix/findings-table.ts` (T16-R4 m-6) from `truth-runs/w1drv-l3/TRIAGE.md`'s "Every ❌" table: every
 row whose final class is product. Each row's failing checks are read from the committed `results.json` of the run
 TRIAGE judges it on. The script refuses any row that is not red on its judged run, or whose run's `harnessCommit`
 differs from TRIAGE's. It read 61 results files and 164 rows, and refused none. `findings-table.test.ts` pins this
 table as its output, byte for byte. To re-run it:
-`node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/findings-table.ts
+`node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/findings-table.ts
 <TRIAGE.md> <truth-runs dir> --out <file.md>`.
 
 **Per wave** (re-derived by script; ruling T15-R4 moved P1 from W4 to W2, and Task 16 applied it to TRIAGE):
@@ -2146,7 +2169,7 @@ table as its output, byte for byte. To re-run it:
   - None is on a W4 row. Each is a note, not a red. The family wave decides whether the product's listed order is
     a rule.
 - **An unplayed `gf-reset` → W6: read-derived and latent, with 0 cases.** No catalogue row sets `bracketReset`, so
-  no run can reach it. That is read-derived: neither `scripts/matrix/lib/catalogue.ts` nor `format-templates.ts`
+  no run can reach it. That is read-derived: neither `tools/matrix/lib/catalogue.ts` nor `format-templates.ts`
   names it. The "0 of 74 double-elim stages" count is DB-derived, from the T15 triage database, and was never
   committed. The product never voids `gf-reset`, so a double elim with `bracketReset` would never complete (Task 9's
   read).
@@ -2414,7 +2437,7 @@ sign-off:
 - **Carrom.** Toss and first break. This one is covered by text §5.1.
 
 **4. Generator reach: W2's plan must include a generator-breadth task BEFORE its truth run.** Today, no generator in
-`scripts/matrix/lib/streams/` emits any of these:
+`tools/matrix/lib/streams/` emits any of these:
 
 - any decider: extra time, shoot-out, overtime, GWS, super over, DLS;
 - ~~a cricket tie;~~ struck by ruling 44 (W1-driving builds it: `streams/cricket.ts` `tied`);
@@ -2553,3 +2576,7 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     the new withdrawn-trigger failure `known: MB-007` and exited 0; MB-010 was found only by reading its commands.
     "A fence guards only what a committed case shows, else the bug reports NEW" does not hold for such pairs: make
     the matcher (or the exploring run's report) distinguish cases by their shown trigger, not only cell/check/match.
+27. **CI truth runs: artifacts weekly, a triaged baseline committed** (ruling 58, clarified 2026-10-04). The matrix
+    runs itself, weekly and on dispatch, sharded on fresh databases. A weekly run keeps its results as CI artifacts;
+    only a triaged baseline is committed to `truth-runs/`. The trigger must NOT be GitHub `schedule:`, which drops
+    and delays runs.
