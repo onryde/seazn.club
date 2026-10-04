@@ -1,0 +1,14 @@
+{
+  "name": "@seazn/matrix",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@seazn/engine": "workspace:*",
+    "fast-check": "^3",
+    "playwright": "^1.61.1",
+    "postgres": "^3.4.9",
+    "typescript": "6.0.3",
+    "zod": "^4.4.3"
+  }
+}

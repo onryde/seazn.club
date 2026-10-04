@@ -28,10 +28,12 @@
     // app's own "@/…" alias.
     "paths": { "@/*": ["./apps/web/src/*"] }
   },
-  "include": ["scripts/**/*.ts"],
+  // tools/ (the dev-only harnesses — tools/matrix, ruling 56) runs the same
+  // way and was type-checked here under scripts/ before the move.
+  "include": ["scripts/**/*.ts", "tools/**/*.ts"],
   // vitest test files under scripts/__tests__ run under vitest, not
   // `node --experimental-strip-types` — they don't belong to this config's
   // node-module-semantics purpose, and can't type-resolve `vitest` from here
   // anyway (no root-level vitest install; it's per-workspace only).
-  "exclude": ["scripts/**/*.test.ts"]
+  "exclude": ["scripts/**/*.test.ts", "tools/**/*.test.ts"]
 }

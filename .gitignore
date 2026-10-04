@@ -24,7 +24,7 @@ sim-failures/
 # `git add -f` when a bench PR needs to show its own proof run, not by
 # removing this entry.
 bench-report/
-# Format × sport matrix L3 output (W1a, scripts/matrix/run.ts's default
+# Format × sport matrix L3 output (W1a, tools/matrix/run.ts's default
 # --report-dir): <runId>/results.json + MATRIX.md from a local live run.
 matrix-report/
 

@@ -5,7 +5,8 @@
   "type": "module",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "tools/*"
   ],
   "packageManager": "pnpm@10.34.5",
   "engines": {
@@ -14,13 +15,13 @@
   "scripts": {
     "bench:scheduler": "node --experimental-strip-types scripts/bench/bench.ts",
     "bench:build-packs": "node --experimental-strip-types scripts/bench/packs/build-packs/_tiny.ts",
-    "matrix:l3": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/run.ts",
-    "matrix:browser": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/run.ts --driver browser",
-    "matrix:render": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/render.ts",
-    "matrix:catalogue": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/gen-catalogue.ts",
-    "matrix:single-sport": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/single-sport.ts",
-    "matrix:model": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/model.ts",
-    "matrix:parity": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/matrix/parity.ts",
+    "matrix:l3": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/run.ts",
+    "matrix:browser": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/run.ts --driver browser",
+    "matrix:render": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/render.ts",
+    "matrix:catalogue": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/gen-catalogue.ts",
+    "matrix:single-sport": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/single-sport.ts",
+    "matrix:model": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/model.ts",
+    "matrix:parity": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts tools/matrix/parity.ts",
     "dev": "npm run dev --workspace apps/web",
     "build": "npm run build --workspace apps/web",
     "start": "npm run start --workspace apps/web",
@@ -39,7 +40,7 @@
     "sim": "npm run sim --workspace packages/engine",
     "sim:replay": "npm run sim:replay --workspace packages/engine --",
     "engine:boundary": "node --experimental-strip-types scripts/engine-boundary.ts",
-    "reference:boundary": "node --experimental-strip-types --import ./scripts/matrix/lib/crash-exit.ts scripts/reference-boundary.ts",
+    "reference:boundary": "node --experimental-strip-types --import ./tools/matrix/lib/crash-exit.ts scripts/reference-boundary.ts",
     "db:apply": "bash scripts/flyway.sh migrate",
     "db:info": "bash scripts/flyway.sh info",
     "db:validate": "bash scripts/flyway.sh validate",
@@ -55,7 +56,7 @@
     "check:rls": "node --experimental-strip-types scripts/check-rls.ts",
     "check:build-chunks": "node --experimental-strip-types scripts/check-build-chunks.ts",
     "backfill:pass-credit-redemptions": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/backfill-pass-credit-redemptions.ts",
-    "lint:scripts": "eslint scripts"
+    "lint:scripts": "eslint scripts tools"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.14.4",
