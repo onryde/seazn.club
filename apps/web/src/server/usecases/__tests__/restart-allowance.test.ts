@@ -232,21 +232,38 @@ function modelStep(m: Model, step: Step): { refused: boolean } {
   return { refused: false };
 }
 
-/** A session attempt: Go live, then (mostly) video, then (mostly) Stop — so a run of ≤ 6 attempts can reach a 4th
- *  restart. A 4th restart needs FIVE sessions with video and four stops: 14 steps at the least. */
-const attempt = fc.tuple(
-  fc.oneof({ arbitrary: fc.constant(true), weight: 5 }, { arbitrary: fc.constant(false), weight: 1 }),
-  fc.oneof({ arbitrary: fc.constant(true), weight: 5 }, { arbitrary: fc.constant(false), weight: 1 }),
+/** A session attempt: Go live, then video and then Stop, each kept `keep` times in `keep + 1`. A 4th restart needs FIVE
+ *  sessions with video and four stops: 14 steps at the least. */
+const attemptOf = (keep: number) => fc.tuple(
+  fc.oneof({ arbitrary: fc.constant(true), weight: keep }, { arbitrary: fc.constant(false), weight: 1 }),
+  fc.oneof({ arbitrary: fc.constant(true), weight: keep }, { arbitrary: fc.constant(false), weight: 1 }),
 ).map(([video, stop]): Step[] => ["goLive", ...(video ? ["ingest" as const] : []), ...(stop ? ["stop" as const] : [])]);
-const sequence = fc.array(attempt, { minLength: 1, maxLength: 6 }).map((xs) => xs.flat().slice(0, 16));
+/** B4 review m-1: free-form runs alone reach a 4th restart about once in twelve draws, so a passing count could rest on
+ *  the hand example. Two runs in three are therefore LONG (5–6 attempts, each nineteen in twenty complete), and the
+ *  drawn runs that reach a 4th are counted on their own. */
+const freeForm = fc.array(attemptOf(5), { minLength: 1, maxLength: 6 });
+const long = fc.array(attemptOf(19), { minLength: 5, maxLength: 6 });
+const STEP_CAP = 16;
+const sequence = fc.oneof({ arbitrary: freeForm, weight: 1 }, { arbitrary: long, weight: 2 }).map((xs) => xs.flat().slice(0, STEP_CAP));
 const FOURTH: Step[] = ["goLive", "ingest", "stop", "goLive", "ingest", "stop", "goLive", "ingest", "stop", "goLive", "ingest", "stop", "goLive", "ingest"];
+const NUM_RUNS = 12;
+/** At least this many DRAWN runs (never the example) reach a 4th restart. Seed 20261001 draws 6. */
+const MIN_DRAWN_FOURTH = 3;
+/** AGENTS.md #20: the budget is the run's own worst case — every run at the step cap — at a per-step allowance about
+ *  2.5× the ~0.19 s a real step measured (Go live, a fresh read, or Stop, plus the ledger count after it). */
+const STEP_BUDGET_MS = 500;
 
 describe.skipIf(!HAS_DB)("W23 as a SEQUENCE (rule 10)", () => {
-  it("no drawn {goLive, ingest, stop} sequence breaks W23: after every step the consume rows equal the model's paid count; some runs reach a 4th restart", async () => {
+  it("no drawn {goLive, ingest, stop} sequence breaks W23: after every step the consume rows equal the model's paid count; DRAWN runs, not only the hand example, reach a 4th restart", async () => {
     let runs = 0;
     let steps = 0;
     let reachedFourth = 0;
+    let drawnFourth = 0;
     await fc.assert(fc.asyncProperty(sequence, async (seq) => {
+      // fast-check runs `examples` first: the first run IS the hand example (asserted, so the count below cannot
+      // silently include it).
+      const drawn = runs >= 1;
+      if (!drawn) expect(seq, "the first run is the hand example").toEqual(FOURTH);
       const r = await rig({ credits: 10 });
       const m: Model = { active: null, anchored: false, counted: 0, paid: 0, fourth: false };
       let live: string | null = null;
@@ -266,10 +283,12 @@ describe.skipIf(!HAS_DB)("W23 as a SEQUENCE (rule 10)", () => {
         steps++;
       }
       if (m.fourth) reachedFourth++;
+      if (m.fourth && drawn) drawnFourth++;
       runs++;
-    }), { numRuns: 12, seed: 20261001, examples: [[FOURTH]] });
-    expect(runs).toBeGreaterThan(0);
+    }), { numRuns: NUM_RUNS, seed: 20261001, examples: [[FOURTH]] });
+    expect(runs).toBe(NUM_RUNS);
     expect(steps).toBeGreaterThan(0);
     expect(reachedFourth, "runs that reached a 4th restart").toBeGreaterThan(0);
-  });
+    expect(drawnFourth, "DRAWN runs that reached a 4th restart").toBeGreaterThanOrEqual(MIN_DRAWN_FOURTH);
+  }, NUM_RUNS * STEP_CAP * STEP_BUDGET_MS);
 });
