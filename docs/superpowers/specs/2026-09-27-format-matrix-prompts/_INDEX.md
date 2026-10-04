@@ -865,8 +865,7 @@ Elsewhere the text is the controller's record.
       that names a root script whose command points into `tools/`. **Limit:** the guard reads imports, manifests,
       tsconfigs and root-script names. It does NOT see a `tools/` path passed as a string to `child_process`.
       Today only a grep holds that line: `git grep -E 'tools/(bench|matrix)' -- apps packages scripts` finds
-      comments, the reference trap fixture and tests. The design fix is an owner decision (bench `_INDEX.md`,
-      2026-10-04). Code the gates share with the harness lives in
+      comments, the reference trap fixture and tests. The design fix is W1d first task 28 (owner, 2026-10-04). Code the gates share with the harness lives in
       `scripts/lib`: `main-module.ts`, and `crash-exit.ts`, which `reference:boundary` preloads and
       `packages/reference`'s test spawns (the cleanup review's I-1, fixed by lifting it). `.dockerignore` lists
       `tools/` and `docs/superpowers/specs/**/truth-runs/` (`scripts/__tests__/dockerignore.test.ts`).
@@ -2597,3 +2596,10 @@ I-2 fix is `f33c1b312`, and its docs minors are the commit after it.
     runs itself, weekly and on dispatch, sharded on fresh databases. A weekly run keeps its results as CI artifacts;
     only a triaged baseline is committed to `truth-runs/`. The trigger must NOT be GitHub `schedule:`, which drops
     and delays runs.
+28. **Close the `tools/` import guard's spawn-by-path blind spot** (bench-move review M2, PR `chore/bench-to-tools`;
+    owner 2026-10-04, asked in the controller's session whether to add it to W1d's list: "ok"). The guard reads imports,
+    manifests, tsconfigs and root-script names, but not a `tools/` path passed as a string to `child_process`. Flag
+    string literals passed to `exec`/`execFile`/`spawn`/`fork` and their `Sync` forms under `apps/`, `packages/` and
+    `scripts/` whose path-like tokens resolve into `tools/`. Exempt the reference trap fixture and the guard's own
+    tests by name, never by pattern. Needs a positive control and a non-zero scanned count. W1d builds it because W1d
+    adds scripts that spawn the matrix.

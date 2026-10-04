@@ -121,8 +121,9 @@ proves thin — record the pairing here.)
     comments, the reference trap fixture, and tests (the guard's, the
     dockerignore test's and the scans'). Without `-E` the alternation is
     literal and the grep finds nothing. This gap dates from #913 and
-    covers the matrix too. The design fix is an owner decision; it is not
-    made here.
+    covers the matrix too. The design fix is not made here: the owner
+    routed it to W1d (format-matrix `_INDEX.md`, "W1d first tasks" item 28,
+    2026-10-04).
   - **The scans read all of `tools/` (2026-10-04). This is CONTROLLER
     ruling BT-R2, not an owner ruling.** When #913 moved the matrix,
     `tools/matrix` silently dropped out of `test-email-domain`,
