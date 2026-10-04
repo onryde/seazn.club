@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import postgres from "postgres";
 import { INVARIANTS } from "./lib/invariants.ts";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 import { redact } from "./lib/redact.ts";
 import { parseResults } from "./lib/results.ts";
 import { DataDirMismatch, requireOwnDataDir } from "./lib/seed-org.ts";

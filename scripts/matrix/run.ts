@@ -108,7 +108,7 @@ import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 import { routeTo } from "./lib/routing.ts";
 import {
   API_ONLY_BROWSER_SET, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,

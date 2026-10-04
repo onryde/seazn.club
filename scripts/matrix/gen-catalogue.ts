@@ -21,7 +21,7 @@ import { parseArgs } from "node:util";
 import { ROW_KEYS, SPORT_KEYS } from "./lib/catalogue.ts";
 import { planL3, rowCounts, scenarioCounts, type DropKind } from "./lib/applicability.ts";
 import { computeCounts } from "./lib/counts.ts";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 import { L2_WIDTHS, planL2 } from "./lib/pairs.ts";
 import { ATOMIC, LIFECYCLE_ID, l2Atomic, l3Atomic, loadRegressions } from "./lib/scenario-catalogue.ts";
 import { buildSportVariants } from "./lib/variants.ts";

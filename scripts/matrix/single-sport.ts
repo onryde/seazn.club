@@ -88,7 +88,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type * as TS from "typescript";
 import { builtinModules } from "@seazn/engine/sports";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 
 // The registry straight from the engine (final batch F-6): read through
 // lib/catalogue.ts, the R26 gate's load depended on a v2 UI module it

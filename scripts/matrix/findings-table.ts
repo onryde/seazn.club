@@ -25,7 +25,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 import { redact } from "./lib/redact.ts";
 import { parseResults } from "./lib/results.ts";
 

@@ -801,7 +801,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
       return [...seen].map((f) => relative(REPO, f));
     };
     const gate = closure(CLI);
-    expect(gate, "the walker saw the gate's own import").toContain("scripts/matrix/lib/main-module.ts");
+    expect(gate, "the walker saw the gate's own import").toContain("scripts/lib/main-module.ts");
     expect(gate.filter((f) => f.startsWith("apps/")), "the R26 gate loads a UI module").toEqual([]);
     // The pair: the same walker sees the UI edge where it exists.
     expect(closure(resolve(REPO, "scripts/matrix/lib/catalogue.ts")).filter((f) => f.startsWith("apps/")).length).toBeGreaterThan(0);

@@ -17,7 +17,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parseArgs } from "node:util";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 import { DuplicateId, WidthSuffixMismatch, WrongDriver, compareRuns, headerLine, parityVerdict, renderParity, type ParityReport } from "./lib/parity.ts";
 import { redact } from "./lib/redact.ts";
 import { parseResults, type AnyRunResults } from "./lib/results.ts";

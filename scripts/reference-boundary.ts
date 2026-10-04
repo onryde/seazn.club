@@ -37,7 +37,7 @@ import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as TS from "typescript";
-import { isMainModule } from "./matrix/lib/main-module.ts";
+import { isMainModule } from "./lib/main-module.ts";
 
 // `typescript` through require, not import: vite's transform chokes on the
 // ~9 MB CJS bundle and a test importing this module then fails to collect (as

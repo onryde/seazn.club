@@ -59,7 +59,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ROW_KEYS, SPORT_KEYS, builderDefaultVariant, cellId, type RowKey } from "./lib/catalogue.ts";
-import { isMainModule } from "./lib/main-module.ts";
+import { isMainModule } from "../lib/main-module.ts";
 import { productMessageOf, type OrganiserDriver } from "./lib/driver/types.ts";
 import { newModelState } from "./lib/model/commands.ts";
 import { runCell, type CellReport } from "./lib/model/run-cell.ts";

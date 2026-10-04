@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { isMainModule } from "../lib/main-module.ts";
+import { isMainModule } from "../../lib/main-module.ts";
 import { REGRESSIONS_PATH } from "../lib/scenario-catalogue.ts";
 import { SPAWN_MS, SpawnMeter } from "./spawn-budget.ts";
 
