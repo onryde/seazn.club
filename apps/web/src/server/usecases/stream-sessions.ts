@@ -1739,6 +1739,61 @@ async function endIfPhoneLost(row: Row, fresh: IngestState | undefined, deps: Se
   return after;
 }
 
+/** T7b (§6.11, W22): one stream-tick pass's answer. Written out LITERALLY, never inferred: the cron Worker reads
+ *  `data.failed` as its failure counter (R3), and apps/cron-worker/test/drift.test.ts finds that field by reading this
+ *  module's source for a `failed: number` declaration. `deferred` (the budget ran out) is NOT a failure: the next
+ *  firing, five minutes on, reaches those sessions. */
+export type StreamTickResult = { ticked: number; ended: number; failed: number; deferred: number };
+
+/** T7b: the pass stops STARTING ticks once this much wall-clock time has gone. The cron Worker abandons a job at 60 s
+ *  (JOB_TIMEOUT_MS, apps/cron-worker/src/call.ts) and records a timeout; stopping here leaves the tick in flight 15 s to
+ *  finish, so an overrun reads `deferred` instead. stream-tick/route.test.ts pins it below the Worker's figure. */
+export const STREAM_TICK_BUDGET_MS = 45_000;
+
+/** T7b (§6.11, W22): the stream-tick job's pass — `tickSession` on every OPEN session (ACTIVE_STATES, the one definition
+ *  `openStreamStates` and the sweep use), across every org, oldest first, so a phone that dies with no panel open is still
+ *  ended (ask 10, W19, m-5) within one firing. Each session is ticked inside its own try/catch: a throw adds 1 to `failed`
+ *  and is logged, and never stops the next. A terminal result adds 1 to `ended` — "open when selected, terminal after its
+ *  tick", so with two firings overlapping both may count one end; the END itself happens once (the locked re-check).
+ *  Sessions not started before the wall-clock budget is spent are counted in `deferred`.
+ *  TEST-ONLY options: `orgIds` scopes the selection (an empty list is refused — `org_id in ()` silently read as "no
+ *  filter" would tick every org) and `wallClock` scripts the budget's clock. The cron route passes neither. */
+export async function tickOpenSessions(
+  deps: SessionDeps,
+  opts: { orgIds?: readonly string[]; wallClock?: () => number } = {},
+): Promise<StreamTickResult> {
+  const orgIds = opts.orgIds === undefined ? undefined : [...opts.orgIds];
+  if (orgIds !== undefined && orgIds.length === 0) {
+    throw new Error("stream tick: orgIds is empty — omit it to tick every organisation, or name at least one");
+  }
+  const wallClock = opts.wallClock ?? Date.now;
+  const started = wallClock();
+  const open = await sql<{ id: string }[]>`
+    select id from fixture_stream_sessions
+     where state in ${sql([...ACTIVE_STATES])} ${orgIds ? sql`and org_id in ${sql(orgIds)}` : sql``}
+     order by created_at, id`;
+  const out: StreamTickResult = { ticked: 0, ended: 0, failed: 0, deferred: 0 };
+  for (let i = 0; i < open.length; i++) {
+    if (wallClock() - started >= STREAM_TICK_BUDGET_MS) {
+      out.deferred = open.length - i;
+      break;
+    }
+    const sid = open[i]!.id;
+    try {
+      const t = await tickSession(sid, deps, "sweep");
+      out.ticked++;
+      if (t.session && isTerminal(t.session.state)) out.ended++;
+    } catch (err) {
+      // Logged, not reported to Sentry per session: the Worker raises the job's one event from `failed` (R3), throttled
+      // to one an hour (R2); an event per session per firing would be twelve an hour for one stuck row.
+      out.failed++;
+      log.error({ sid, err: err instanceof Error ? err.message : String(err) }, "stream tick: a session's tick threw");
+    }
+  }
+  log.info({ ...out, open: open.length, scoped: orgIds !== undefined }, "stream tick");
+  return out;
+}
+
 export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
   const { orgId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");

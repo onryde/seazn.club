@@ -65,7 +65,7 @@ describe("R3 failure counters ↔ the usecases' return types", () => {
         checked++;
       }
     }
-    expect(checked, "counters checked").toBe(6);
+    expect(checked, "counters checked").toBe(7);   // T7b: + stream-tick's data.failed
   });
 });
 

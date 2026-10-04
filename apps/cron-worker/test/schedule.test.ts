@@ -1,21 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { JOBS, TRIGGER_CRON, dueJobs, triggersOf, type Job } from "../src/schedule";
+import { JOBS, STREAM_TICK_CRON, TRIGGER_CRON, dueJobs, firstSlotOfHour, triggersOf, type Job } from "../src/schedule";
 
 // Expected values come from the spec's table (§4) and the 2026-10-01 rulings
 // (§13), never from JOBS itself.
 const at = (iso: string) => new Date(iso);
 const ids = (d: Date, cron = TRIGGER_CRON, jobs: readonly Job[] = JOBS) => dueJobs(d, cron, jobs).map((j) => j.id);
 const HOURLY = ["registrations", "billing-events", "funnel-remind"];
-const FAST = "*/5 * * * *";
-// R4 fixture: the shape capture-QR v2's stream-tick will add. One row, its own trigger.
-const TICK: Job = {
-  id: "stream-tick",
-  path: "/api/cron/stream-tick",
-  trigger: FAST,
-  due: { kind: "every" },
-  retry: false,
-  manual: true,
-};
+/** Capture QR v2 §6.11 (W22): the stream-tick trigger, every 5 minutes. Typed from the spec, never read from JOBS. */
+const EVERY_5 = "*/5 * * * *";
+/** A well-formed trigger no row names. */
+const UNKNOWN = "*/7 * * * *";
 
 describe("dueJobs on the hourly trigger", () => {
   it("runs only the every-firing jobs at an ordinary hour", () => {
@@ -64,19 +58,24 @@ describe("dueJobs on the hourly trigger", () => {
 
 describe("dueJobs is keyed on the firing trigger (R4)", () => {
   it("a trigger no row names selects nothing", () => {
-    expect(ids(at("2026-09-28T08:05:00Z"), FAST)).toEqual([]);
+    expect(ids(at("2026-09-28T08:05:00Z"), UNKNOWN)).toEqual([]);
     expect(ids(at("2026-09-28T08:17:00Z"), "")).toEqual([]);
   });
 
-  it("a second trigger runs ONLY its own rows: never news-digest or an hourly row, even at Monday 08:05", () => {
-    const withTick = [...JOBS, TICK];
-    expect(ids(at("2026-09-28T08:05:00Z"), FAST, withTick)).toEqual(["stream-tick"]);
-    expect(ids(at("2026-09-28T08:17:00Z"), TRIGGER_CRON, withTick)).toEqual([...HOURLY, "news-digest"]);
+  it("the stream-tick row is in the table exactly once, on the spec's */5 trigger (W22)", () => {
+    expect(STREAM_TICK_CRON).toBe(EVERY_5);
+    expect(JOBS.filter((j) => j.id === "stream-tick")).toEqual([
+      { id: "stream-tick", path: "/api/cron/stream-tick", trigger: EVERY_5, due: { kind: "every" }, retry: false, manual: true, failureCounts: ["data.failed"] },
+    ]);
   });
 
-  it("triggersOf lists each distinct trigger once; today only the hourly one (spec §3)", () => {
-    expect(triggersOf()).toEqual(["17 * * * *"]);
-    expect(triggersOf([...JOBS, TICK])).toEqual(["17 * * * *", FAST]);
+  it("a second trigger runs ONLY its own rows: never news-digest or an hourly row, even at Monday 08:05", () => {
+    expect(ids(at("2026-09-28T08:05:00Z"), EVERY_5)).toEqual(["stream-tick"]);
+    expect(ids(at("2026-09-28T08:17:00Z"), TRIGGER_CRON)).toEqual([...HOURLY, "news-digest"]);
+  });
+
+  it("triggersOf lists each distinct trigger once: the hourly one and stream-tick's (spec §6.11: 4 of the account's 5 once both envs deploy)", () => {
+    expect(triggersOf()).toEqual(["17 * * * *", EVERY_5]);
   });
 });
 
@@ -86,8 +85,8 @@ describe("JOBS table", () => {
     expect(new Set(JOBS.map((j) => j.path)).size).toBe(JOBS.length);
   });
 
-  it("retry is off for exactly news-digest (P3/D7) and relay-sweep (R1); every job may be run by hand (R1, R2)", () => {
-    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest"]);
+  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1) and stream-tick (its next firing is the retry); every job may be run by hand (R1, R2)", () => {
+    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick"]);
     expect(JOBS.filter((j) => !j.manual)).toEqual([]);
   });
 
@@ -113,6 +112,46 @@ describe("JOBS table", () => {
       "billing-events": ["data.failed", "data.alerted"],
       "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
       "billing-grant": ["data.failed"],
+      // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing).
+      "stream-tick": ["data.failed"],
     });
+  });
+});
+
+describe("firstSlotOfHour (R2 option S: one Sentry event per job per UTC hour)", () => {
+  it("every trigger the table uses is one it can judge (anti-vacuity: at least the two triggers)", () => {
+    let checked = 0;
+    for (const t of triggersOf()) {
+      expect(() => firstSlotOfHour(t, at("2026-09-28T08:00:00Z")), t).not.toThrow();
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(2);
+  });
+
+  it("the hourly trigger fires once an hour, so every firing is its hour's first", () => {
+    let checked = 0;
+    for (let m = 0; m < 60; m++) {
+      expect(firstSlotOfHour(TRIGGER_CRON, new Date(Date.UTC(2026, 8, 28, 8, m))), `:${m}`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(60);
+  });
+
+  it("*/5: only the :00 slot is the hour's first — minutes 0..4 true, 5..59 false, keyed on UTC", () => {
+    const truths: number[] = [];
+    for (let m = 0; m < 60; m++) if (firstSlotOfHour(EVERY_5, new Date(Date.UTC(2026, 8, 28, 8, m, 30)))) truths.push(m);
+    expect(truths).toEqual([0, 1, 2, 3, 4]);
+    // A late invocation of the :00 slot is handed :00 as its scheduledTime, so the slot, not the wall clock, decides.
+    expect(firstSlotOfHour(EVERY_5, at("2026-09-28T08:05:00Z"))).toBe(false);
+    expect(firstSlotOfHour(EVERY_5, at("2026-09-28T09:00:00Z"))).toBe(true);
+  });
+
+  it("any other trigger shape is refused by name — a guard, not a guess", () => {
+    let refused = 0;
+    for (const t of ["0 9 * * 1", "17 */2 * * *", "*/0 * * * *", "*/60 * * * *", "*/5 9 * * *", ""]) {
+      expect(() => firstSlotOfHour(t, at("2026-09-28T08:00:00Z")), JSON.stringify(t)).toThrow(/firstSlotOfHour/);
+      refused++;
+    }
+    expect(refused).toBe(6);
   });
 });

@@ -9,6 +9,9 @@
 //
 // Sports: every case but the sport sweep rides seedOrg's `generic` division — the tick reads no sport (relay is
 // sport-agnostic); the sweep at the end runs W19 and ask 10 on every sport the catalog holds to prove it.
+//
+// T7b (W22): `tickOpenSessions`, the stream-tick job's pass, is at the end — several sessions, each in its own org, on ONE
+// deps (one clock, one fake ingest), scoped to their orgs by the test-only `orgIds` (the cron route passes none).
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -24,16 +27,19 @@ import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
 import { reissueStreamCode } from "../stream-codes";
-import { type SessionDeps, createSession, currentSession, heartbeat, tickSession } from "../stream-sessions";
+import {
+  type SessionDeps, STREAM_TICK_BUDGET_MS, createSession, currentSession, heartbeat, tickOpenSessions, tickSession,
+} from "../stream-sessions";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 // A pass-through seam on the org money lock `apply` takes first (A7): a race test parks a phone beat there, between the
-// tick's unlocked judgement and its locked decision. Null = pass straight through.
-const hook = vi.hoisted(() => ({ onLockOrg: null as null | (() => Promise<void>) }));
+// tick's unlocked judgement and its locked decision; the stream-tick pass's failure case throws there for ONE org. It is
+// handed the org being locked. Null = pass straight through.
+const hook = vi.hoisted(() => ({ onLockOrg: null as null | ((orgId: string) => Promise<void>) }));
 vi.mock("../stream-credits", async (importOriginal) => {
   const real = await importOriginal<typeof import("../stream-credits")>();
-  return { ...real, lockOrg: async (...a: Parameters<typeof real.lockOrg>) => { if (hook.onLockOrg) await hook.onLockOrg(); return real.lockOrg(...a); } };
+  return { ...real, lockOrg: async (...a: Parameters<typeof real.lockOrg>) => { if (hook.onLockOrg) await hook.onLockOrg(a[1]); return real.lockOrg(...a); } };
 });
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -55,7 +61,26 @@ const LOST_MS = PHONE_LOST_LIVE_MINUTES * MIN;
  *  on the far cadence (pairPresentPhone), so this is the spec's figure for it. */
 const ASK10_SILENT_MS = Math.max(PHONE_SILENT_FLOOR_SECONDS, POLL_FAR_SECONDS + PHONE_SILENT_SLACK_SECONDS) * 1000;
 
-async function rig(o: { mode?: "passthrough" | "composed"; sport?: string; connectAfterMs?: number } = {}) {
+/** One frozen, tickable clock and the fakes that read it: the deps every session of a rig (or a fleet) shares. */
+function clockedDeps(connectAfterMs = CONNECT_AFTER_MS) {
+  let now = Date.now();
+  // Every provider call the fake makes, as the adapter would record it (Review Focus 3: counted on the recorder).
+  const calls: ProviderCallRecord[] = [];
+  const ingest = new FakeIngest({ clock: () => now, connectAfterMs, recorder: { record: (c) => { calls.push(c); } } });
+  ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
+  const runner = new FakeRunner();
+  const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
+  return {
+    ingest, runner, deps, calls,
+    tick: (ms: number) => { now += ms; },
+    /** Bring the clock up to the wall clock, never back: the pairing and the session are written on it, as they always were. */
+    catchUp: () => { now = Math.max(now, Date.now()); },
+  };
+}
+type Clocked = ReturnType<typeof clockedDeps>;
+
+/** A fresh org with one fixture, a present phone and a session created on `c`'s deps. */
+async function seedSession(c: Clocked, o: { mode?: "passthrough" | "composed"; sport?: string } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const { fixtureId, divisionId } = await startedDivisionWithFixture(auth);
@@ -67,24 +92,20 @@ async function rig(o: { mode?: "passthrough" | "composed"; sport?: string; conne
   await invalidateOrgEntitlements(auth.orgId);
   await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "unit", idempotencyKey: randomUUID() });
   const target = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "T", streamKey: "k", watchUrl: "https://www.youtube.com/watch?v=tick" });
-  let now = Date.now();
-  // Every provider call the fake makes, as the adapter would record it (Review Focus 3: counted on the recorder).
-  const calls: ProviderCallRecord[] = [];
-  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: o.connectAfterMs ?? CONNECT_AFTER_MS, recorder: { record: (c) => { calls.push(c); } } });
-  ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
-  const runner = new FakeRunner();
-  const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
-  const paired = await pairPresentPhone(fixtureId, { at: deps.now() });
-  const { sessionId } = await createSession(auth, fixtureId, { mode: o.mode ?? "passthrough", targetId: target.id }, deps);
+  c.catchUp();
+  const paired = await pairPresentPhone(fixtureId, { at: c.deps.now() });
+  const { sessionId } = await createSession(auth, fixtureId, { mode: o.mode ?? "passthrough", targetId: target.id }, c.deps);
   const [{ ingest_input_id: inputId }] = await sql<{ ingest_input_id: string }[]>`
     select ingest_input_id from fixture_stream_inputs where session_id = ${sessionId} and slot = 0`;
   const row = async () => (await sql<{
     state: string; fail_reason: string | null; end_reason: string | null; first_ingest_at: Date | null; fixture_id: string | null;
   }[]>`select state, fail_reason, end_reason, first_ingest_at, fixture_id from fixture_stream_sessions where id = ${sessionId}`)[0]!;
-  return {
-    auth, orgId: auth.orgId, fixtureId, divisionId, sessionId, inputId, ingest, runner, deps, calls, paired, row,
-    tick: (ms: number) => { now += ms; },
-  };
+  return { auth, orgId: auth.orgId, fixtureId, divisionId, sessionId, inputId, paired, row };
+}
+
+async function rig(o: { mode?: "passthrough" | "composed"; sport?: string; connectAfterMs?: number } = {}) {
+  const c = clockedDeps(o.connectAfterMs);
+  return { ...(await seedSession(c, o)), ...c };
 }
 type Rig = Awaited<ReturnType<typeof rig>>;
 
@@ -429,5 +450,159 @@ describe.skipIf(!HAS_DB)("another sport: the tick reads no sport — W19 and ask
       checked++;
     }
     expect(checked).toBe(sports.length);
+  });
+});
+
+/** W22: several sessions, each in its own org, on ONE deps — one clock, one fake ingest, one runner — as one stream-tick
+ *  pass meets them. `orgIds` is the test-only scope (the cron route passes none, route.test.ts pins it). */
+function fleet(connectAfterMs = CONNECT_AFTER_MS) {
+  const c = clockedDeps(connectAfterMs);
+  const sessions: Awaited<ReturnType<typeof seedSession>>[] = [];
+  return {
+    ...c,
+    add: async (o: { sport?: string } = {}) => { const s = await seedSession(c, o); sessions.push(s); return s; },
+    scope: () => ({ orgIds: sessions.map((s) => s.orgId) }),
+  };
+}
+const warmingDeadline = async (sid: string) =>
+  (await sql<{ warming_at: Date }[]>`select warming_at from fixture_stream_sessions where id = ${sid}`)[0]!.warming_at.getTime() + WARMING_TIMEOUT_MINUTES * MIN;
+const ZERO = { ticked: 0, ended: 0, failed: 0, deferred: 0 };
+
+describe.skipIf(!HAS_DB)("tickOpenSessions (W22, T7b): the stream-tick job's pass over every open session", () => {
+  it("the EMPTY case: a scope with no session at all answers all zeros and reads no provider", async () => {
+    const f = fleet();
+    const lonely = await seedOrg();
+    expect(await tickOpenSessions(f.deps, { orgIds: [lonely.auth.orgId] })).toEqual(ZERO);
+    await settle();
+    expect(f.calls, "no provider read").toEqual([]);
+  });
+
+  it("an EMPTY orgIds list is refused by name — it never reads as 'no filter', which would tick every org", async () => {
+    const f = fleet();
+    await expect(tickOpenSessions(f.deps, { orgIds: [] })).rejects.toThrow(/orgIds is empty/);
+  });
+
+  it("a W19-due live session (another sport) and a warming session past its deadline: both ticked, both ended — phone_lost and no_inbound_timeout — and a second pass finds nothing open", async () => {
+    const [sport] = (await sql<{ key: string }[]>`select key from sports where key <> 'generic' order by key limit 1`).map((x) => x.key);
+    expect(sport, "PREMISE: the catalog is synced").toBeTruthy();
+    const f = fleet();
+    const gone = await f.add({ sport });
+    const stuck = await f.add();
+    f.ingest.setState(stuck.inputId, "disconnected");   // the second phone never sends
+    f.tick(CONNECT_AFTER_MS);
+    expect((await tickSession(gone.sessionId, f.deps, "beat")).session?.state, "PREMISE: the first went live").toBe("live");
+    f.ingest.setState(gone.inputId, "disconnected");
+    f.tick(LOST_MS);
+    expect(f.deps.now().getTime(), "PREMISE: the warming one is past its deadline").toBeGreaterThanOrEqual(await warmingDeadline(stuck.sessionId));
+    expect(await tickOpenSessions(f.deps, f.scope())).toEqual({ ticked: 2, ended: 2, failed: 0, deferred: 0 });
+    expect(await gone.row()).toMatchObject({ state: "completed", end_reason: "phone_lost", fail_reason: null });
+    expect(await stuck.row()).toMatchObject({ state: "failed", fail_reason: "no_inbound_timeout" });
+    expect(await ends(gone.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    expect(await ends(stuck.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    expect(await netSpend(gone.sessionId), "W19: the one consume, no refund").toBe(-1);
+    expect(await netSpend(stuck.sessionId), "never live: nothing spent").toBe(0);
+    // The sequence: the next firing.
+    f.tick(5 * MIN);
+    expect(await tickOpenSessions(f.deps, f.scope()), "the second pass: both terminal, neither selected").toEqual(ZERO);
+    expect(await ends(gone.sessionId)).toEqual({ transitions: 1, ended: 1 });
+  });
+
+  it("two passes AT ONCE (an overlapping firing): each session ends exactly once, with one end event and one consume", async () => {
+    const f = fleet();
+    const gone = await f.add();
+    const stuck = await f.add();
+    f.ingest.setState(stuck.inputId, "disconnected");
+    f.tick(CONNECT_AFTER_MS);
+    expect((await tickSession(gone.sessionId, f.deps, "beat")).session?.state, "PREMISE: live").toBe("live");
+    f.ingest.setState(gone.inputId, "disconnected");
+    f.tick(LOST_MS);
+    const both = await Promise.all([tickOpenSessions(f.deps, f.scope()), tickOpenSessions(f.deps, f.scope())]);
+    expect(both.map((r) => r.failed), "neither pass threw on the other's end").toEqual([0, 0]);
+    expect(both.map((r) => r.ticked + r.failed + r.deferred), "each pass accounted for both").toEqual([2, 2]);
+    expect(await ends(gone.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    expect(await ends(stuck.sessionId)).toEqual({ transitions: 1, ended: 1 });
+    expect(await netSpend(gone.sessionId)).toBe(-1);
+    expect(await netSpend(stuck.sessionId)).toBe(0);
+  });
+
+  it("a session whose tick THROWS is counted in failed, and the pass goes on to tick the next (oldest first)", async () => {
+    const f = fleet();
+    const first = await f.add();
+    const bad = await f.add();
+    const last = await f.add();
+    for (const s of [first, bad, last]) f.ingest.setState(s.inputId, "disconnected");
+    f.tick((await warmingDeadline(last.sessionId)) - f.deps.now().getTime());   // every one at or past its deadline
+    hook.onLockOrg = async (orgId) => { if (orgId === bad.orgId) throw new Error("injected: the org lock failed"); };
+    let r;
+    try {
+      r = await tickOpenSessions(f.deps, f.scope());
+    } finally {
+      hook.onLockOrg = null;
+    }
+    expect(r).toEqual({ ticked: 2, ended: 2, failed: 1, deferred: 0 });
+    expect((await first.row()).state).toBe("failed");
+    expect((await bad.row()).state, "the throwing one is left as it was, for the next firing").toBe("warming");
+    expect((await last.row()).state, "the one AFTER the throw was still ticked").toBe("failed");
+  });
+
+  it("an ENDED session is never ticked: not counted, and no provider read for it", async () => {
+    const f = fleet();
+    const done = await f.add();
+    f.ingest.setState(done.inputId, "disconnected");
+    f.tick((await warmingDeadline(done.sessionId)) - f.deps.now().getTime());
+    expect((await tickSession(done.sessionId, f.deps, "sweep")).session?.state, "PREMISE: ended before the pass").toBe("failed");
+    const open = await f.add();
+    await settle();
+    const before = f.calls.length;
+    expect(await tickOpenSessions(f.deps, f.scope())).toEqual({ ticked: 1, ended: 0, failed: 0, deferred: 0 });
+    await settle();
+    expect(f.calls.slice(before).filter((c) => c.sessionId === done.sessionId), "no read of the ended one").toEqual([]);
+    expect(f.calls.slice(before).filter((c) => c.sessionId === open.sessionId).length, "PREMISE: the open one WAS read").toBeGreaterThan(0);
+  });
+
+  it("T35: a session whose fixture was DELETED is ticked like any other — not counted as failed", async () => {
+    const f = fleet();
+    const orphan = await f.add();
+    f.tick(CONNECT_AFTER_MS);
+    expect((await tickSession(orphan.sessionId, f.deps, "beat")).session?.state, "PREMISE: live").toBe("live");
+    await sql`delete from fixtures where id = ${orphan.fixtureId}`;
+    expect((await orphan.row()).fixture_id, "PREMISE: V410 set it null").toBeNull();
+    f.tick(STREAM_POLL_MS);
+    expect(await tickOpenSessions(f.deps, f.scope())).toEqual({ ticked: 1, ended: 0, failed: 0, deferred: 0 });
+    expect((await orphan.row()).state).toBe("live");
+  });
+
+  it("the wall-clock budget: once it is SPENT the pass starts no further tick and counts the rest deferred — never failed", async () => {
+    const f = fleet();
+    const a = await f.add();
+    const b = await f.add();
+    const c = await f.add();
+    // A scripted wall clock. The pass looks once at its start, then once before each session it would start.
+    const scripted = (reads: number[]) => {
+      let looks = 0;
+      return { wallClock: () => reads[Math.min(looks++, reads.length - 1)]!, looks: () => looks };
+    };
+    const B = STREAM_TICK_BUDGET_MS;
+    // Which sessions a pass READ from the provider: a warming passthrough tick claims its first read, so a ticked session
+    // shows one inputStatus call under its id, and a deferred one none. This is also what pins OLDEST FIRST.
+    const readBy = async (from: number) => {
+      await settle();
+      const ids = new Set(f.calls.slice(from).filter((x) => x.operation === "inputStatus").map((x) => x.sessionId));
+      return [a, b, c].filter((s) => ids.has(s.sessionId)).map((s) => s.sessionId);
+    };
+    await settle();
+    let from = f.calls.length;
+    // Start 0; before a: B/2 (ticked); before b: exactly B (spent) — b and c deferred.
+    const spent = scripted([0, B / 2, B]);
+    expect(await tickOpenSessions(f.deps, { ...f.scope(), wallClock: spent.wallClock })).toEqual({ ticked: 1, ended: 0, failed: 0, deferred: 2 });
+    expect(spent.looks(), "PREMISE: start, before a, before b — and no look after it stopped").toBe(3);
+    expect(await readBy(from), "the OLDEST was the one ticked; the deferred two were never read").toEqual([a.sessionId]);
+    // The pair: 1 ms short of the budget before b, so b is ticked; spent before c, the one deferred. (a's read is still
+    // inside its claim window — the clock has not moved — so a coalesces and only b reads.)
+    from = f.calls.length;
+    const short = scripted([0, 0, B - 1, B]);
+    expect(await tickOpenSessions(f.deps, { ...f.scope(), wallClock: short.wallClock })).toEqual({ ticked: 2, ended: 0, failed: 0, deferred: 1 });
+    expect(await readBy(from), "b read; c, the newest, deferred").toEqual([b.sessionId]);
+    for (const s of [a, b, c]) expect((await s.row()).state, "no pass ended anything (none was due)").toBe("warming");
   });
 });
