@@ -10,22 +10,19 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ROW_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { BrowserDriver } from "../lib/driver/browser-driver.ts";
 import type { FillerName } from "../lib/driver/mixed.ts";
-import { expectedGate } from "../lib/format-gates-copy.ts";
 import type { CaseIdentity, LayerCase } from "../lib/layers.ts";
 import type { L2Run } from "../lib/pairs.ts";
-import { renderMatrix } from "../lib/render-matrix.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
 import { runSlice, type BrowserRun, type PlanLayers, type RunDeps } from "../run.ts";
 import { FakeLeagueDriver } from "./fake-driver.ts";
+import { deps, fakeBrowserRun } from "./run-deps.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const ALL_GATES: readonly string[] = [...new Set(ROW_KEYS.flatMap((r) => { const g = expectedGate(stagesForRow(r)); return g === null ? [] : [g]; }))];
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -33,37 +30,6 @@ afterEach(() => { vi.restoreAllMocks(); });
 function silence(): void {
   vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-}
-
-interface Deps extends RunDeps { orgs: string[] }
-/** The run's seams, faked: a league fake per case, an org per case (`failOrgAt`:
- *  the 1-based case whose org provision throws — a case that ends red). */
-function deps(over: Partial<RunDeps> = {}, o: { failOrgAt?: number } = {}): Deps {
-  const orgs: string[] = [];
-  const d: Deps = {
-    orgs,
-    env: { BENCH_EXPECTED_DATA_DIR: "/tmp/pg", SMOKE_BASE: "http://localhost:3999" },
-    harnessCommit: async () => "abc1234",
-    preflight: async () => ({ ok: true, refusals: [] }),
-    openDb: async () => ({
-      userIdForEmail: async () => "u1",
-      variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
-      chooseTopPublicPlan: async () => "pro",
-      planGrants: async () => [...ALL_GATES],
-      planLimit: async () => null,
-      dispose: async () => undefined,
-    }),
-    signIn: async () => ({ cookies: {} }),
-    prepareCaseOrg: async (_ctx, i) => {
-      orgs.push(i.slug);
-      if (o.failOrgAt === orgs.length) throw new Error("org provision refused");
-      return { orgId: `org-${i.slug}`, orgSlug: i.slug, denied: [...(i.deny ?? [])] };
-    },
-    driverFor: (_b, _s, orgId) => new FakeLeagueDriver(orgId),
-    render: renderMatrix,
-    ...over,
-  };
-  return d;
 }
 
 /** A layered plan, as run-cli.test.ts builds one: the cases are the test's own. */
@@ -74,25 +40,6 @@ const specOf = (row: string): CaseSpec => ({ ...identity(row, "LIFECYCLE"), scen
 const driven = (row: string, layer: "L1" | "L2" = "L1", width: 1280 | 390 = 1280, run: L2Run | null = null): LayerCase => ({ spec: specOf(row), layer, width, noPath: null, notRun: null, run });
 const noPath = (row: string, layer: "L1" | "L2" = "L1", width: 1280 | 390 = 1280, run: L2Run | null = null): LayerCase => ({ spec: null, identity: identity(row, "LIFECYCLE"), layer, width, noPath: { wave: "W4", reason: "API-only (W4)" }, notRun: null, run });
 const notRun = (row: string, scenario: string, layer: "L1" | "L2" = "L1", width: 1280 | 390 = 1280, run: L2Run | null = null): LayerCase => ({ spec: null, identity: identity(row, scenario), layer, width, noPath: null, notRun: `no scenario script yet (atom ${scenario})`, run });
-
-/** A browser run whose case drivers are league fakes. `fillersAt(i)` is what the
- *  i-th case's driver reports — and only once it has made a call, so a read taken
- *  before the scenario ran (a stale read) sees nothing, exactly like the real
- *  ledger that BrowserDriver.fillers reads. */
-function fakeBrowser(fillersAt: (i: number) => Readonly<Partial<Record<FillerName, number>>> = () => ({})): { run: BrowserRun; opened: () => number } {
-  let n = 0;
-  const run: BrowserRun = {
-    caseDriver: async (co) => {
-      const i = n++;
-      const driver = new FakeLeagueDriver(co.orgId);
-      Object.defineProperty(driver, "fillers", { get: () => (driver.callCount > 0 ? fillersAt(i) : {}) });
-      const checks = (): CheckResult[] => [{ id: "browser-probe", kind: "assertion", verdict: "pass", checked: 1, reason: `driver ${i}`, evidence: [] }];
-      return { driver: Object.assign(driver, { checks }), close: async () => undefined };
-    },
-    close: async () => undefined,
-  };
-  return { run, opened: () => n };
-}
 
 const resultsOf = (dir: string, runId: string): RunResults => parseResults(JSON.parse(readFileSync(join(dir, runId, "results.json"), "utf8"))) as RunResults;
 const dirFor = () => mkdtempSync(join(tmpdir(), "fm-"));
@@ -108,7 +55,7 @@ async function runWith(d: RunDeps, argv: string[], id: string): Promise<RunResul
 
 describe("the planned marker (item 3): recordPlanned writes it, a driven case never does", () => {
   it("recordPlanned marks every case it writes; a driven case never carries the marker", async () => {
-    const fb = fakeBrowser();
+    const fb = fakeBrowserRun();
     const results = await runWith(deps({ planCases: planOf("L1", [driven("league"), noPath("page_playoff_only"), notRun("league", "M7")]), openBrowserRun: async () => fb.run }), ["--driver", "browser"], "pm1");
     const by = byId(results);
     expect(results.cases).toHaveLength(3);
@@ -123,12 +70,12 @@ describe("the planned marker (item 3): recordPlanned writes it, a driven case ne
   });
 
   it("empty and all-planned plans: a plan with nothing planned writes no marker, and a plan of only planned cases marks every one (a second run on the same deps is the same)", async () => {
-    const fb = fakeBrowser();
+    const fb = fakeBrowserRun();
     const allDriven = await runWith(deps({ planCases: planOf("L1", [driven("league"), driven("knockout")]), openBrowserRun: async () => fb.run }), ["--driver", "browser"], "pm2a");
     expect(allDriven.cases).toHaveLength(2);
     expect(allDriven.cases.filter((c) => c.planned !== undefined)).toHaveLength(0);
     // Only planned cases: no browser is opened at all (run-cli.test.ts, the API-only set), and each case is marked.
-    const none = fakeBrowser();
+    const none = fakeBrowserRun();
     const d = deps({ planCases: planOf("L1", [noPath("page_playoff_only"), noPath("stepladder_only"), notRun("league", "M7")]), openBrowserRun: async () => none.run });
     for (const id of ["pm2b", "pm2c"]) {
       const allPlanned = await runWith(d, ["--driver", "browser"], id);
@@ -144,7 +91,7 @@ describe("the L2 run (item 4): n, covers and l3Gap are recorded from the committ
     const cells = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
     const want = file.runs.filter((r) => cells.has(`${r.row}|${r.sport}`));
     const idOf = (r: L2Run) => `${r.row}|${r.sport}|${r.preset}|${r.scenario}${r.bound === null ? "" : `|${r.bound}`}@${r.width}`;
-    const fb = fakeBrowser();
+    const fb = fakeBrowserRun();
     const results = await runWith(deps({ openBrowserRun: async () => fb.run }), ["--driver", "browser", "--layer", "L2"], "l2a");
     expect(want.length).toBeGreaterThan(0);
     expect(results.cases).toHaveLength(want.length);
@@ -171,7 +118,7 @@ describe("the L2 run (item 4): n, covers and l3Gap are recorded from the committ
   it("l3Gap round-trips as a reason where the file has none (every committed run's gap is null today): driven-works, driven-red, 🚫 and ░ all keep their own run", async () => {
     const run = (n: number, covers: L2Run["covers"], l3Gap: string | null): L2Run => ({ n, scenario: "M1", row: "league", sport: "generic", preset: "score", bound: null, width: 390, covers, l3Gap });
     const runs = { works: run(11, ["row", "sport"], null), red: run(12, ["sport"], "no M5 harness script (cricket tie stream)"), no_path: run(13, ["row"], null), not_run: run(14, ["row", "sport"], "the only coverage of this pair") };
-    const fb = fakeBrowser();
+    const fb = fakeBrowserRun();
     const plan = planOf("L2", [driven("league", "L2", 390, runs.works), driven("knockout", "L2", 390, runs.red), noPath("page_playoff_only", "L2", 390, runs.no_path), notRun("swiss", "M7", "L2", 390, runs.not_run)]);
     // The second driven case's org provision throws: it ends red, and still records its run.
     const results = await runWith(deps({ planCases: plan, openBrowserRun: async () => fb.run }, { failOrgAt: 2 }), ["--driver", "browser"], "l2b");
@@ -196,7 +143,7 @@ describe("the L2 run (item 4): n, covers and l3Gap are recorded from the committ
       if (line.startsWith("[1/") && !line.includes("crashed")) throw new Error("stdout closed");
       return true;
     });
-    const fb = fakeBrowser();
+    const fb = fakeBrowserRun();
     const dir = dirFor();
     expect(await runSlice(deps({ planCases: planOf("L2", [driven("league", "L2", 390, crashRun), driven("knockout", "L2", 390, { ...crashRun, n: 22, covers: ["row"], l3Gap: null })]), openBrowserRun: async () => fb.run }), ["--driver", "browser", "--run-id", "l2e", "--report-dir", dir])).toBe(0);
     const r = resultsOf(dir, "l2e");
@@ -208,7 +155,7 @@ describe("the L2 run (item 4): n, covers and l3Gap are recorded from the committ
 
   it("a case that is not an L2 case records no l2: L1 cases, an L1-layer case that carries a run, and an HTTP run's cases", async () => {
     const stray: L2Run = { n: 99, scenario: "M1", row: "league", sport: "generic", preset: "score", bound: null, width: 390, covers: ["row"], l3Gap: null };
-    const fb = fakeBrowser();
+    const fb = fakeBrowserRun();
     const l1 = await runWith(deps({ planCases: planOf("L1", [driven("league"), noPath("page_playoff_only"), driven("knockout", "L1", 1280, stray)]), openBrowserRun: async () => fb.run }), ["--driver", "browser"], "l2c");
     expect(l1.cases).toHaveLength(3);
     expect(l1.cases.filter((c) => c.l2 !== undefined)).toHaveLength(0);
@@ -223,7 +170,7 @@ describe("the setup fillers (item 21): a browser case records the ones it ran; a
 
   it("a browser case records the setup fillers it ran, each case its own (non-zero names only); a case that ran none writes no field", async () => {
     const per: Readonly<Partial<Record<FillerName, number>>>[] = [{ setMembers: 3, putLineup: 1 }, {}, { setMembers: 0, challenge: 2 }];
-    const fb = fakeBrowser((i) => per[i]!);
+    const fb = fakeBrowserRun({ fillersAt: (i) => per[i]! });
     const r = await runWith(deps({ planCases: planOf("L1", three), openBrowserRun: async () => fb.run }), ["--driver", "browser"], "fl1");
     expect(r.cases.map((c) => c.fillers)).toEqual([{ setMembers: 3, putLineup: 1 }, undefined, { challenge: 2 }]);
     expect("fillers" in r.cases[1]!).toBe(false);
@@ -241,7 +188,7 @@ describe("the setup fillers (item 21): a browser case records the ones it ran; a
   });
 
   it("a case that ended red keeps the fillers it ran before it threw (reading them must not replace the case's own outcome)", async () => {
-    const fb = fakeBrowser(() => ({ setMembers: 2 }));
+    const fb = fakeBrowserRun({ fillersAt: () => ({ setMembers: 2 }) });
     const s = SCENARIOS.LIFECYCLE;
     const real = s.run.bind(s);
     let seen = 0;
@@ -269,7 +216,7 @@ describe("the setup fillers (item 21): a browser case records the ones it ran; a
 
 describe("the one-sided check on the evidence this file reads (a helper that parsed nothing would pass every test above)", () => {
   it("the results a run wrote parse through the strict schema with the new fields present", async () => {
-    const fb = fakeBrowser(() => ({ setMembers: 1 }));
+    const fb = fakeBrowserRun({ fillersAt: () => ({ setMembers: 1 }) });
     const r = await runWith(deps({ planCases: planOf("L1", [driven("league"), noPath("page_playoff_only")]), openBrowserRun: async () => fb.run }), ["--driver", "browser"], "pm9");
     const all: CaseResult[] = r.cases;
     expect(all.some((c) => c.planned === true)).toBe(true);
