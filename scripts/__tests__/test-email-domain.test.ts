@@ -33,7 +33,7 @@ import { join } from "node:path";
  * --- ONE DELIBERATE EXEMPTION: `@bench.invalid` -------------------------
  *
  * Suite 11's claim invites mint `<slug>@bench.invalid`
- * (`scripts/bench/packs/build-packs/suite11.ts:960-968`), and Resend refuses
+ * (`tools/bench/packs/build-packs/suite11.ts:960-968`), and Resend refuses
  * `.invalid` for exactly the same reason it refuses `example.com`. That is
  * allowed to stand, and the allowance is stated here rather than left as a
  * silent hole in the pattern below.
@@ -48,12 +48,13 @@ import { join } from "node:path";
  * above), so these addresses never reach Resend to be refused.
  *
  * If that trade is ever revisited, change it HERE and in `suite11.ts`
- * together — and regenerate `scripts/bench/packs/suite11.json`, which is a
+ * together — and regenerate `tools/bench/packs/suite11.json`, which is a
  * build artifact of that builder and carries the pack hash the bench
  * short-circuits on.
  */
 
-const ROOTS = ["scripts", "apps/web/e2e"] as const;
+// tools/bench: the bench, which left scripts/ for tools/ on 2026-10-04.
+const ROOTS = ["scripts", "tools/bench", "apps/web/e2e"] as const;
 const EXTS = [".ts", ".tsx", ".mts", ".js"] as const;
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -75,6 +76,15 @@ const FILES = ROOTS.flatMap((r) => walk(r)).filter((f) => f !== SELF);
 describe("test email addresses", () => {
   it("scans a non-trivial number of files — a zero-file walk would pass vacuously", () => {
     expect(FILES.length).toBeGreaterThan(100);
+  });
+
+  it("scans the bench, whose suite 11 builder mints the declared `.invalid` addresses — wherever it lives", () => {
+    // The bench left scripts/ for tools/bench (2026-10-04). A walk of scripts/
+    // alone still reads 100+ files, so the count above cannot see it go.
+    const bench = FILES.filter((f) => f.startsWith(join("tools", "bench") + "/"));
+    console.info(`test-email-domain: ${FILES.length} files scanned, ${bench.length} of them the bench's`);
+    expect(bench.length).toBeGreaterThan(50);
+    expect(FILES).toContain(join("tools", "bench", "packs", "build-packs", "suite11.ts"));
   });
 
   it("mints no address Resend refuses, except the declared `.invalid` one", () => {

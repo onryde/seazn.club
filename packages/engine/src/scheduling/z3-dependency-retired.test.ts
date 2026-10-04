@@ -43,6 +43,8 @@ const LIVE_TREES = [
   "apps/web/src",
   "apps/web/e2e",
   "scripts",
+  // The scheduler bench, which left scripts/ for tools/ on 2026-10-04.
+  "tools/bench",
 ] as const;
 
 function gitGrep(args: readonly string[]): string {
@@ -80,6 +82,14 @@ describe("the z3 dependency is unreferenced", () => {
     expect(gitGrep(["-l", "-F", "buildSchedule"]).split("\n").filter(Boolean).length).toBeGreaterThan(
       10,
     );
+  });
+
+  it("the scan reaches the scheduler bench, which left scripts/ for tools/bench (2026-10-04)", () => {
+    // The bench imports the engine; "scans a tree that holds the code" above
+    // still clears 10 without it, so the bench could fall out unseen.
+    const bench = gitGrep(["-l", "-F", "@seazn/engine"]).split("\n").filter((f) => f.startsWith("tools/bench/"));
+    // The engine prints nothing (no-console), so the count rides on the assertion.
+    expect(bench.length, `${bench.length} bench files import the engine within the scan`).toBeGreaterThan(10);
   });
 
   it("no file imports the z3-solver package", () => {

@@ -56,6 +56,8 @@ const LIVE_TREES = [
   "apps/web/src",
   "apps/web/e2e",
   "scripts",
+  // The scheduler bench, which left scripts/ for tools/ on 2026-10-04.
+  "tools/bench",
   "proto",
   "services/placement",
   ":!scripts/__tests__/z3-retirement-drift.test.ts",
@@ -319,6 +321,19 @@ describe("z3 retirement — stage C ledger", () => {
     // Generated stubs alone put z3 in `packages/engine/src`; if this ever
     // reads zero, the pathspec drifted and every assertion below is vacuous.
     expect(gitGrep(["-a", "-il", "z3", "--", ...LIVE_TREES]).length).toBeGreaterThan(20);
+  });
+
+  it("the scheduler bench is in the scan wherever it lives — it left scripts/ for tools/bench (2026-10-04)", () => {
+    // The bench is a scheduling harness: it reads the placement result and
+    // reports its engine. The count above still clears 20 without it, so it
+    // could fall out of LIVE_TREES unseen.
+    const trees = LIVE_TREES.filter((p) => !p.startsWith(":!"));
+    const bench = execFileSync("git", ["ls-files", "--", ...trees], { cwd: REPO_ROOT, encoding: "utf8" })
+      .split("\n")
+      .filter((f) => f.startsWith("tools/bench/"));
+    console.info(`z3-retirement-drift: ${bench.length} bench files in the scanned trees`);
+    expect(bench.length).toBeGreaterThan(100);
+    expect(bench).toContain("tools/bench/lib/schedule.ts");
   });
 
   it("no binary asset reaches the scan — and there are binary assets to exclude", () => {
