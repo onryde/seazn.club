@@ -83,6 +83,8 @@ function subEvent(
     status?: Stripe.Subscription.Status;
     customer?: string | null;
     metadata?: Record<string, string>;
+    /** Stripe livemode flag — drives warn vs error on an unknown stamp. */
+    livemode?: boolean;
   },
 ): Stripe.Event {
   return {
@@ -94,6 +96,7 @@ function subEvent(
         status: over.status ?? "past_due",
         customer: over.customer ?? null,
         metadata: over.metadata ?? {},
+        livemode: over.livemode ?? false,
         trial_end: null,
         cancel_at_period_end: false,
         currency: "usd",
@@ -257,6 +260,62 @@ describe.skipIf(!HAS_DB)("webhook → an org that MOVED groups", () => {
     const after = await readGroup(landed.subId);
     expect(after.status).toBe("active");
     expect(after.plan_key).toBe("pro");
+  });
+});
+
+// Regression: extracting `log.error` / `log.warn` into a local and calling
+// it unbound throws TypeError "Cannot read properties of undefined (reading
+// 'Symbol(pino.msgPrefix)')" — which aborted the Stripe webhook with 500
+// exactly on the CI/stg "unknown stamp" path the livemode downgrade was for.
+describe.skipIf(!HAS_DB)("webhook → unknown stamp logs without aborting", () => {
+  async function unknownStampThenStoredRung(livemode: boolean) {
+    const stripeSubId = "sub_unkstamp_" + uniq();
+    const group = await seedGroup({ stripeSubId });
+    // Stamp names a group that does not exist — log, then fall through to (b).
+    await processStripeEvent(
+      subEvent("customer.subscription.updated", {
+        id: stripeSubId,
+        livemode,
+        metadata: { subscription_id: randomUUID() },
+      }),
+    );
+    return group;
+  }
+
+  it("test-mode (livemode=false): warns and still writes via stored sub id", async () => {
+    const warn = vi.spyOn(log, "warn");
+    const error = vi.spyOn(log, "error");
+    try {
+      const group = await unknownStampThenStoredRung(false);
+      expect((await readGroup(group.subId)).status).toBe("past_due");
+      expect(warn.mock.calls.flat().join(" ")).toMatch(
+        /subscription stamped with unknown group/,
+      );
+      expect(error.mock.calls.flat().join(" ")).not.toMatch(
+        /subscription stamped with unknown group/,
+      );
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it("live (livemode=true): errors and still writes via stored sub id", async () => {
+    const warn = vi.spyOn(log, "warn");
+    const error = vi.spyOn(log, "error");
+    try {
+      const group = await unknownStampThenStoredRung(true);
+      expect((await readGroup(group.subId)).status).toBe("past_due");
+      expect(error.mock.calls.flat().join(" ")).toMatch(
+        /subscription stamped with unknown group/,
+      );
+      expect(warn.mock.calls.flat().join(" ")).not.toMatch(
+        /subscription stamped with unknown group/,
+      );
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 });
 
