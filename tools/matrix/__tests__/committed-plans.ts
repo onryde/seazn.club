@@ -62,6 +62,9 @@ export function reDecide(cases: readonly CaseResultV2[]): { checked: number; ski
 
 /** A plan's cases, keyed without the variant (the DB's builder default, which
  *  the planner reads live) and, for a plain run, without the run's one width. */
+/** A case as judgeRun reads it: a v2 case, plus on a v3 run recordPlanned's marker (W1d item 3). */
+export type JudgedCase = CaseResultV2 & { readonly planned?: true };
+
 export interface ExpectedPlan {
   readonly plan: string;
   readonly layered: boolean;
@@ -115,8 +118,15 @@ export function livePlan(plan: string): ExpectedPlan {
  *  stored as exactly the plan's 🚫/░ (state and reason) with no check; a case
  *  the plan DRIVES is never stored as planned (class 6); no case is missing,
  *  repeated or outside the plan; a plain run is one width. The counts are the
- *  plan's by construction: `driven` + `planned` = the run's cases. */
-export function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { driven: number; planned: number; wrong: string[] } {
+ *  plan's by construction: `driven` + `planned` = the run's cases.
+ *
+ *  W1d item 3: a run written since recordPlanned marks its planned cases
+ *  (`planned: true`) is judged by the marker as well — a SECOND witness beside
+ *  I-2's `durationMs === 0` shape, never a replacement, so committed evidence
+ *  with no marker is judged exactly as before. */
+export function judgeRun(cases: readonly JudgedCase[], plan: ExpectedPlan): { driven: number; planned: number; wrong: string[] } {
+  // A run that marks ANY case is expected to mark every planned one.
+  const marked = cases.some((c) => c.planned !== undefined);
   const keyOf = (id: string): string => (plan.layered ? noVariant(id) : noWidth(noVariant(id)));
   const wrong: string[] = [];
   const seen = new Set<string>();
@@ -132,8 +142,19 @@ export function judgeRun(cases: readonly CaseResultV2[], plan: ExpectedPlan): { 
     if (p !== undefined) {
       planned++;
       if (c.state !== p.state || c.reason !== p.reason) wrong.push(`${c.caseId}: the plan records ${p.state} "${p.reason}", stored ${c.state} "${c.reason}"`);
+      // W1d item 3, first refusal: in a marked run, a planned case without the
+      // planned shape recordPlanned writes (the marker, no time, no check).
+      if (marked && !(c.planned === true && c.durationMs === 0 && c.checks.length === 0)) {
+        wrong.push(`${c.caseId}: the plan records it planned, stored without the planned shape (planned=${c.planned}, ${c.durationMs} ms, ${c.checks.length} check(s))`);
+      }
     } else if (plan.driven.has(key)) {
       driven++;
+      // W1d item 3, second refusal: a driven case stored as planned. Not gated on
+      // `marked` — a single stray marker is exactly the case this catches, and I-2's
+      // shape below cannot see it while the case keeps its time and checks.
+      if (c.planned === true) {
+        wrong.push(`${c.caseId}: the plan DRIVES this case, stored with planned: true — a driven result recorded as planned (class 6)`);
+      }
       // Final review I-2: only recordPlanned writes not_run, and it writes 🚫/⏳
       // with no time spent and nothing counted. A driven case always spends
       // time in prepareCaseOrg, so that shape on a driven case is a lost result

@@ -107,6 +107,7 @@ import { ROW_KEYS, RowBuildDeferred, SPORT_KEYS, builderDefaultVariant, stagesFo
 import { expectedGates, type GateStage } from "./lib/format-gates-copy.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS } from "./lib/driver/http-driver.ts";
 import { NoOrganiserPath, RefusedCall, type OrganiserDriver } from "./lib/driver/types.ts";
+import type { FillerName } from "./lib/fillers.ts";
 import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { routeTo } from "./lib/routing.ts";
@@ -115,10 +116,11 @@ import {
   type LayerCase, type PlannedLayerCase,
 } from "./lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
+import type { L2Run } from "./lib/pairs.ts";
 import { PROBE_SET, probePlanner } from "./lib/probe-set.ts";
 import { BaseNotUrl, baseScrubber, redact } from "./lib/redact.ts";
 import { renderMatrix } from "./lib/render-matrix.ts";
-import { decideState, writeResults, type CaseResult, type CheckResult, type Layer, type RunAbort, type RunResults } from "./lib/results.ts";
+import { decideState, writeResults, type CaseResult, type CheckResult, type L2Record, type Layer, type RunAbort, type RunResults } from "./lib/results.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
 import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
@@ -192,7 +194,12 @@ export interface CaseDriverOptions {
   evidenceId: string;
 }
 /** One case's driver and the close that releases its browser context. */
-export interface CaseBrowserDriver { driver: OrganiserDriver & { checks(): CheckResult[] }; close(): Promise<void> }
+export interface CaseBrowserDriver {
+  /** `fillers` (W1d item 21): the setup filler the driver ran, by name — BrowserDriver's
+   *  own getter (driver/browser-driver.ts). Optional, so a driver that counts none writes none. */
+  driver: OrganiserDriver & { checks(): CheckResult[]; readonly fillers?: Readonly<Partial<Record<FillerName, number>>> };
+  close(): Promise<void>;
+}
 /** One browser per run: a driver per case, then one close. */
 export interface BrowserRun {
   caseDriver(o: CaseDriverOptions): Promise<CaseBrowserDriver>;
@@ -638,7 +645,22 @@ class BrowserOpenFailed extends Error {
 /** One case the runner DRIVES: its spec, the layer it records, and its browser
  *  and width — null over HTTP. A plain run gives every case the CLI's width
  *  (D9); a layered plan gives each its own (W1c Task 12). */
-interface DrivenCase { spec: CaseSpec; layer: Layer; browser: { run: BrowserRun; width: BrowserWidth } | null }
+interface DrivenCase { spec: CaseSpec; layer: Layer; run: L2Run | null; browser: { run: BrowserRun; width: BrowserWidth } | null }
+
+/** W1d item 4: the committed l2-pairs.json run an L2 case IS, as results.json
+ *  records it — its `n`, what it `covers`, and the `l3Gap` reason. Only a
+ *  layer-L2 case that carries a run writes one, whatever state it ends in. */
+function l2Of(layer: Layer, run: L2Run | null): { l2?: L2Record } {
+  return layer === "L2" && run !== null ? { l2: { n: run.n, covers: [...run.covers], l3Gap: run.l3Gap } } : {};
+}
+
+/** W1d item 21: the setup filler a browser case's driver ran — only the names
+ *  it counted at least once, and no field at all when none (or when the driver
+ *  keeps no count). */
+function fillersOf(counts: Readonly<Partial<Record<FillerName, number>>> | undefined): { fillers?: Partial<Record<FillerName, number>> } {
+  const ran = Object.entries(counts ?? {}).filter(([, n]) => n > 0);
+  return ran.length === 0 ? {} : { fillers: Object.fromEntries(ran) };
+}
 
 async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number): Promise<{ result: CaseResult; refusal: CallRefusal | null }> {
   const { spec } = item;
@@ -653,6 +675,7 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
   let caseBrowser: CaseBrowserDriver | null = null;
   let counts = { calls: 0, fixtures: 0, events: 0 };
   let notes: string[] = [];
+  let fillers: { fillers?: Partial<Record<FillerName, number>> } = {};
   try {
     const org = await deps.prepareCaseOrg(
       { base: run.base, session: run.session, userId: run.userId, plan: run.plan },
@@ -707,6 +730,10 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     // Every case's context is closed, whatever the scenario did; a failed
     // close is warned, never allowed to replace the case's own outcome.
     if (caseBrowser !== null) {
+      // W1d item 21: the filler it ran, read once the scenario is over (or threw)
+      // and before the close — and, like every read here, never allowed to
+      // replace the case's own outcome.
+      try { fillers = fillersOf(caseBrowser.driver.fillers); } catch (k) { warn(`matrix: case ${spec.caseId}: its driver's setup filler could not be read — ${errText(k)}`); }
       try { await caseBrowser.close(); } catch (e) { warn(`matrix: case ${spec.caseId}: closing its browser failed — ${errText(e)}`); }
     }
   }
@@ -717,6 +744,8 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     state, reason: redact(reason), checks, counts, durationMs: Date.now() - t0, notes,
     // D9: the layer, driver and width the case ran at.
     ...(b === null ? { layer: item.layer, driver: "http", width: null } as const : { layer: item.layer, driver: "browser", width: b.width } as const),
+    // W1d items 4 and 21: the pair-run an L2 case is, and the setup filler a browser case ran.
+    ...l2Of(item.layer, item.run), ...fillers,
   };
   return { result, refusal };
 }
@@ -731,6 +760,10 @@ function recordPlanned(c: PlannedLayerCase): CaseResult {
     caseId: layerCaseId(c), row: id.row, sport: id.sport, variant: id.variant, scenario: id.scenario, canary: false,
     state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
     layer: c.layer, driver: "browser", width: c.width,
+    // W1d item 3: the marker that says this case was planned, never run — so a
+    // reader no longer infers it from `durationMs === 0` (I-2's heuristic). And
+    // item 4: a ░ L2 case still names its pair-run.
+    planned: true, ...l2Of(c.layer, c.run),
   };
 }
 
@@ -761,26 +794,28 @@ export function canaryVerdict(key: string, c: CaseResult | undefined): number {
  *  case's error red, so this is a harness defect) is recorded red at its own
  *  plan index — every other worker's case keeps its result. Never for the
  *  environment (abortsRun) nor for a planned case: those abort the run. */
-function crashResult(spec: CaseSpec, layer: Layer, width: BrowserWidth | null, e: unknown): CaseResult {
+function crashResult(spec: CaseSpec, layer: Layer, run: L2Run | null, width: BrowserWidth | null, e: unknown): CaseResult {
   const { state, reason } = decideState({ checks: [], deferred: null, error: `crashed — ${errText(e)}`, mandated: null, noPath: null });
   return {
     caseId: atWidth(spec.caseId, width), row: spec.row, sport: spec.sport, variant: spec.variant, scenario: spec.scenario, canary: spec.canary,
     state, reason: redact(reason), checks: [], counts: { calls: 0, fixtures: 0, events: 0 }, durationMs: 0, notes: [],
     ...(width === null ? { layer, driver: "http", width: null } as const : { layer, driver: "browser", width } as const),
+    // An L2 case that crashed is still the pair-run it was (W1d item 4).
+    ...l2Of(layer, run),
   };
 }
 
 /** One item of a run, in plan order: a case the runner drives at its layer
  *  and width (null over HTTP), or a layered plan's 🚫/░ case, recorded. */
 type RunItem =
-  | { readonly kind: "driven"; readonly spec: CaseSpec; readonly layer: Layer; readonly width: BrowserWidth | null }
+  | { readonly kind: "driven"; readonly spec: CaseSpec; readonly layer: Layer; readonly run: L2Run | null; readonly width: BrowserWidth | null }
   | { readonly kind: "planned"; readonly case: PlannedLayerCase };
 
 /** A plain plan's specs all run at the CLI's width (null over HTTP; D9); a
  *  layered plan places each of its cases itself. */
 function runItems(planner: CasePlanner | LayeredPlanner, variantFor: (sport: string) => string, width: BrowserWidth | null): RunItem[] {
-  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : layerOfWidth(width), width }));
-  const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, width: c.width } : { kind: "planned", case: c }));
+  if (!isLayered(planner)) return planner.plan(variantFor).map((spec) => ({ kind: "driven", spec, layer: width === null ? "L3" : layerOfWidth(width), run: null, width }));
+  const items = planner.layered(variantFor).map((c: LayerCase): RunItem => (c.spec !== null ? { kind: "driven", spec: c.spec, layer: c.layer, run: c.run, width: c.width } : { kind: "planned", case: c }));
   if (items.length === 0) throw new NothingPlanned(planner.label);
   const seen = new Set<string>();
   const dupes = new Set<string>();
@@ -894,7 +929,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
         // Outside runCase's try: a browser that cannot open aborts the run (above).
         try { browser = { run: await browserFor(), width: item.width }; } catch (e) { throw new BrowserOpenFailed(e); }
       }
-      const ran = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir }, { spec: item.spec, layer: item.layer, browser }, i);
+      const ran = await runCase(deps, { base, session, userId, plan, runId: cli.runId, reportDir: dir }, { spec: item.spec, layer: item.layer, run: item.run, browser }, i);
       if (ran.refusal !== null) refusals.set(ran.result.caseId, ran.refusal);
       return progress(i, ran.result);
     };
@@ -907,7 +942,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
       // run's abort, never given a result: its request may still land.
       if (e instanceof TurnDeadlineExceeded && item.kind === "driven") timedOut.abort ??= { turn: e.label, deadlineMs: e.ms, caseId: item.spec.caseId, worker: null, inFlight: [] };
       if (abortsRun(e) || item.kind === "planned") throw e;
-      return progress(i, crashResult(item.spec, item.layer, item.width, e));
+      return progress(i, crashResult(item.spec, item.layer, item.run, item.width, e));
     };
     // Found live (w1drv-t11-w3b, -w8): requesting a sign-in link deletes the
     // owner's unused ones (apps/web/src/lib/login-link.ts), so workers signing

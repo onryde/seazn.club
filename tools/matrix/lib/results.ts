@@ -15,9 +15,15 @@
 // writeResults writes v3 only. The browser widths are the harness's declared
 // set — 1280 (ruling 39) and L2_WIDTHS — read from the leaf widths.ts (W1c
 // Task 4), so this module no longer loads pairs.ts and the catalogue for them.
+//
+// W1d Task 2: the strict v3 schemas gain OPTIONAL fields — per case `planned`
+// (item 3), `l2` (item 4) and `fillers` (item 21); per run `shard`, `shards`
+// (Task 4's stripe and merge) and `scope` (item 2) — so every committed run
+// still parses and every malformed value is refused on its field.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { FILLER, type FillerName } from "./fillers.ts";
 import { baseScrubber, findSecrets, mapStrings } from "./redact.ts";
 import { BROWSER_WIDTHS } from "./widths.ts";
 import { MAX_WORKERS } from "./workers.ts";
@@ -25,6 +31,10 @@ import { MAX_WORKERS } from "./workers.ts";
 // Re-exported so every existing `from "./results.ts"` import keeps working.
 export { BROWSER_WIDTHS } from "./widths.ts";
 export type { BrowserWidth } from "./widths.ts";
+
+/** The most shards a run may be striped into, and a merge may join (W1d Task 4's
+ *  `--shard k/N` and merge-shards read it): the header refuses a larger count. */
+export const MAX_SHARDS = 64;
 
 export const LAYERS = ["L1", "L2", "L3"] as const;
 export type Layer = (typeof LAYERS)[number];
@@ -70,9 +80,38 @@ export interface CaseResultV2 {
 /** A v3 case (D9): the v2 fields, plus the layer that ran it, its driver and
  *  its browser width — null over HTTP, one of BROWSER_WIDTHS in a browser. */
 export interface CaseResult extends CaseResultV2 {
+  /** Read by W1d Task 4's merge, which refuses a case whose layer differs from
+   *  its run's — so this field is load-bearing, not a record nobody reads. */
   layer: Layer;
   driver: DriverKind;
   width: number | null;
+  /** W1d item 3: written, as `true`, by run.ts recordPlanned on every 🚫/░ case
+   *  it records without running; a driven case never carries it. Absent on every
+   *  run before the field, which committed-matrix judges by I-2's shape instead. */
+  planned?: true;
+  /** W1d item 4: the committed l2-pairs.json run an L2 case IS (its `n`, the
+   *  `covers` it is the only coverage of, and the `l3Gap` reason when L3 cannot
+   *  drive the pair), written for a driven and a planned L2 case alike. */
+  l2?: L2Record;
+  /** W1d item 21: the setup filler (ruling 47) a BROWSER case ran over HTTP,
+   *  by name, each counted at least once — so a report can say which setup
+   *  did not go through the UI. Absent when none ran, and on every HTTP case. */
+  fillers?: Partial<Record<FillerName, number>>;
+}
+
+/** An L2 case's run, as results.json records it (CaseResult.l2). */
+export interface L2Record {
+  n: number;
+  covers: string[];
+  l3Gap: string | null;
+}
+
+/** W1d Task 4: a run that is one stripe of a plan — shard `index` of `of`, over a
+ *  plan of `planSize` items. Written by `--shard k/N`; never beside `shards`. */
+export interface ShardHeader {
+  index: number;
+  of: number;
+  planSize: number;
 }
 
 /** The catalogue grid AS IT WAS when the run was made (T11 review M4, final
@@ -110,6 +149,17 @@ export interface RunResults {
    *  carry 6. run.ts always writes it; v3 evidence written before the field
    *  (Task 8's walkthrough-a) has none, so it is optional to READ. */
   plan?: string;
+  /** W1d item 2 (PF-8): what the plan covered — "<layer> (<scope>)", e.g.
+   *  "L1 (slice)" or "L1 (grid)" — because `--layer L1` meant the slice in W1c
+   *  and will mean the grid after W1d, and `plan` keeps its string so every
+   *  frozen lock entry still matches. Written by W1d Task 3's scope selection;
+   *  absent before it. */
+  scope?: string;
+  /** W1d Task 4: this run is one stripe of its plan. Never beside `shards`. */
+  shard?: ShardHeader;
+  /** W1d Task 4: this run is the merge of that many shard runs (2..MAX_SHARDS).
+   *  Never beside `shard`. */
+  shards?: number;
   /** W1-driving Task 11 (ruling 46): how many in-process workers RAN the
    *  cases, each on its own sign-in — never more than the cases, so a
    *  `--workers 8` run of three cases records 3 (fix round 1 m-1). Written
@@ -173,12 +223,22 @@ const CaseSchemaV2 = z.strictObject(caseFieldsV2);
 
 const BROWSER_WIDTH_SET: ReadonlySet<number> = new Set(BROWSER_WIDTHS);
 
+/** W1d item 4: the l2-pairs.json run an L2 case is (L2Record). `covers` is at
+ *  least one atom, `n` a 1-based run number, `l3Gap` null or the gap's reason. */
+const L2RecordSchema = z.strictObject({ n: z.number().int().min(1), covers: z.array(z.string().min(1)).min(1), l3Gap: z.string().min(1).nullable() });
+
 /** D9: http ⇒ width null; browser ⇒ width is one of BROWSER_WIDTHS. */
 const CaseSchemaV3 = z.strictObject({
   ...caseFieldsV2,
+  /** Read by W1d Task 4's merge (each case's layer must equal its run's): load-bearing, not a record nobody reads. */
   layer: z.enum(LAYERS),
   driver: z.enum(DRIVER_KINDS),
   width: z.number().int().nullable(),
+  planned: z.literal(true).optional(),
+  l2: L2RecordSchema.optional(),
+  // partialRecord, never record: in zod 4 `z.record(z.enum(…), …)` is EXHAUSTIVE
+  // and would refuse a run that ran one filler (W1d review I2).
+  fillers: z.partialRecord(z.enum(FILLER), z.number().int().min(1)).optional(),
 }).superRefine((c, ctx) => {
   if (c.driver === "http" && c.width !== null) {
     ctx.addIssue({ code: "custom", path: ["width"], message: `case ${c.caseId}: an http case carries width null, got ${c.width}` });
@@ -208,6 +268,10 @@ export const RunResultsSchemaV3 = z.strictObject({
   layer: z.enum(LAYERS),
   driver: z.enum(DRIVER_KINDS),
   plan: z.string().min(1).optional(),
+  scope: z.string().min(1).optional(),
+  shard: z.strictObject({ index: z.number().int().min(1), of: z.number().int().min(2).max(MAX_SHARDS), planSize: z.number().int().min(1) })
+    .refine((s) => s.index <= s.of, "a shard's index is within 1..of").optional(),
+  shards: z.number().int().min(2).max(MAX_SHARDS).optional(),
   workers: z.number().int().min(1).max(MAX_WORKERS).optional(),
   aborted: z.strictObject({
     turn: z.string().min(1),
@@ -218,7 +282,7 @@ export const RunResultsSchemaV3 = z.strictObject({
   }).refine((a) => (a.caseId === null) !== (a.worker === null), "an abort names the case whose turn it was or the worker whose sign-in it was — exactly one")
     .refine((a) => new Set(a.inFlight).size === a.inFlight.length && (a.caseId === null || !a.inFlight.includes(a.caseId)), "an abort lists each in-flight case once, and never the case whose turn it was").optional(),
   cases: z.array(CaseSchemaV3),
-});
+}).refine((r) => !(r.shard !== undefined && r.shards !== undefined), "a run is a shard or a merge, never both");
 
 /** Discriminated on schemaVersion, so a refused file is judged by its OWN
  *  version's schema: a v3 case's bad width is reported as that, never drowned

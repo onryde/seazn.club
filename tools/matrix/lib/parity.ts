@@ -166,6 +166,9 @@ function compareChecks(caseId: string, h: AnyCase, b: AnyCase, diffs: ParityRow[
 /** A 🚫/░ case as run.ts recordPlanned writes it: planned, never driven. */
 const PLANNED_STATES: ReadonlySet<string> = new Set(["no_path", "not_run"]);
 
+/** W1d item 3: recordPlanned's own marker. A v2 case predates it, so it never has one. */
+const markedPlanned = (c: AnyCase): boolean => "planned" in c && c.planned === true;
+
 /** Every browser case against the HTTP case it pairs with; then every HTTP
  *  case no browser case paired with (outsidePlan). Rows are in that order. */
 export function compareRuns(http: AnyRunResults, browser: AnyRunResults): ParityReport {
@@ -181,13 +184,17 @@ export function compareRuns(http: AnyRunResults, browser: AnyRunResults): Parity
   let checks = 0;
   for (const b of browser.cases) {
     const key = httpKeyOf(b);
+    // Exempt only in recordPlanned's exact shape — 🚫/░ with no check — and then
+    // for either of its two witnesses: the marker it writes (W1d item 3), which
+    // holds even when the key MAPS (an API-only row's planned 🚫 is LIFECYCLE,
+    // a scripted scenario), or, in old evidence with no marker, a key that maps
+    // to no script. Anything else (a PADPROOF run, a mapping hole, a marked case
+    // in a state recordPlanned never writes) stays compared or a missing row.
+    if (PLANNED_STATES.has(b.state) && b.checks.length === 0 && (markedPlanned(b) || "unmapped" in key)) {
+      notDriven.push({ caseId: b.caseId, state: b.state });
+      continue;
+    }
     if ("unmapped" in key) {
-      // Exempt only in recordPlanned's exact shape: no script, 🚫/░, no check.
-      // Anything else (a PADPROOF run, a mapping hole) stays a missing row.
-      if (PLANNED_STATES.has(b.state) && b.checks.length === 0) {
-        notDriven.push({ caseId: b.caseId, state: b.state });
-        continue;
-      }
       diffs.push({ caseId: b.caseId, kind: "missing", id: null, http: ABSENT, browser: `${b.state} — ${key.unmapped}` });
       continue;
     }

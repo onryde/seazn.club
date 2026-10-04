@@ -254,6 +254,14 @@ describe("every shipped tools/matrix module loads under --experimental-strip-typ
     expect(missing).toEqual([]);
   });
 
+  // W1d Task 2: the filler-name leaf results.ts and driver/mixed.ts both read.
+  const W1D_T2 = ["lib/fillers.ts"];
+  it("W1d Task 2's modules are all in the walk", () => {
+    const missing = W1D_T2.filter((rel) => !MODULES.includes(join(MATRIX, rel)));
+    expect(W1D_T2.length).toBe(1);
+    expect(missing).toEqual([]);
+  });
+
   // Playwright's evaluateAll sends a function's SOURCE TEXT to the page. Under
   // strip-only mode that text is the stripped source, so it must compile as
   // plain JS on its own, outside its module — rebuilt here from toString().

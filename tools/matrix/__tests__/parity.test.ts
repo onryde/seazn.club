@@ -18,7 +18,7 @@ import { padProofPlanner } from "../lib/pad-proof-set.ts";
 import { loadL2Pairs } from "../lib/pairs.ts";
 import {
   BROWSER_ONLY_PREFIXES, DuplicateId, WidthSuffixMismatch, WrongDriver,
-  compareRuns, headerLine, isBrowserOnly, parityVerdict, renderParity, type ParityReport,
+  compareRuns, headerLine, httpKeyOf, isBrowserOnly, parityVerdict, renderParity, type ParityReport,
 } from "../lib/parity.ts";
 import { CASE_STATES, parseResults, type AnyRunResults, type CaseResult, type CheckResult, type DriverKind, type Verdict } from "../lib/results.ts";
 import { SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
@@ -240,6 +240,58 @@ describe("compareRuns", () => {
     const r = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280), planned]));
     expect(r.notDriven).toEqual([]);
     expect(r.diffs.map((d) => [d.kind, d.caseId])).toEqual([["missing", planned.caseId]]);
+  });
+
+  // W1d item 3 (m-6): recordPlanned writes `planned: true`, and parity keys on
+  // it first. The LIFECYCLE mapping alone read an API-only row's planned 🚫 —
+  // whose scenario IS scripted, so its key maps — as a "missing" HTTP case.
+  describe("the planned marker (W1d item 3)", () => {
+    const API_ONLY = "page_playoff_only|generic|score|LIFECYCLE";
+    const reason = "W4: no organiser control builds page_playoff_only";
+    const plannedRow = (over: Partial<CaseResult> = {}) => browserCase(API_ONLY, 1280, { state: "no_path", reason, checks: [], ...over });
+
+    it("a browser case carrying planned: true is notDriven even when its key maps; the same case without the marker is a `missing` row", () => {
+      const http = runOf("http", [httpCase(A)]);
+      const marked = compareRuns(http, runOf("browser", [browserCase(A, 1280), plannedRow({ planned: true })]));
+      expect(marked).toEqual({ compared: 1, checks: COMMON().length, diffs: [], notDriven: [{ caseId: `${API_ONLY}@1280`, state: "no_path" }], outsidePlan: [] });
+      // The control: a mapped key is the only difference, so this is the shape the marker exists for.
+      expect(httpKeyOf(plannedRow())).toEqual({ key: API_ONLY });
+      const unmarked = compareRuns(http, runOf("browser", [browserCase(A, 1280), plannedRow()]));
+      expect(unmarked.notDriven).toEqual([]);
+      expect(unmarked.diffs).toEqual([{ caseId: `${API_ONLY}@1280`, kind: "missing", id: null, http: "absent", browser: "no_path" }]);
+    });
+
+    it("a case with no checks, ░, and NO marker on an unmapped key is still notDriven (old evidence keeps its meaning)", () => {
+      const old = browserCase("swiss|generic|score|X7", 375, { state: "not_run", reason: "no scenario script yet (atom X7)", checks: [] });
+      expect("planned" in old).toBe(false);
+      expect(httpKeyOf(old)).toHaveProperty("unmapped");
+      const r = compareRuns(runOf("http", [httpCase(A)]), runOf("browser", [browserCase(A, 1280), old]));
+      expect({ compared: r.compared, diffs: r.diffs, notDriven: r.notDriven }).toEqual({ compared: 1, diffs: [], notDriven: [{ caseId: old.caseId, state: "not_run" }] });
+    });
+
+    it("the marker exempts only recordPlanned's exact shape: a marked case with a check, or in a state recordPlanned never writes, is compared (a suppressed red is not a quiet one)", () => {
+      const http = runOf("http", [httpCase(A)]);
+      const cases: [string, Partial<CaseResult>][] = [
+        ["a check", { planned: true, checks: [chk("life-loop-bounded")] }],
+        ["a works state", { planned: true, state: "works", reason: "1 checks, 2 items" }],
+        ["a red state", { planned: true, state: "red", reason: "error: boom" }],
+      ];
+      let checked = 0;
+      for (const [what, over] of cases) {
+        const r = compareRuns(http, runOf("browser", [browserCase(A, 1280), plannedRow(over)]));
+        expect(r.notDriven, what).toEqual([]);
+        expect(r.diffs.map((d) => [d.kind, d.caseId]), what).toEqual([["missing", `${API_ONLY}@1280`]]);
+        checked++;
+      }
+      expect(checked).toBe(cases.length);
+    });
+
+    it("a marked ⛔/░ mix beside driven cases: every marked case is listed, none compared, and the count of each is exact", () => {
+      // Both keys MAP (LIFECYCLE is scripted) and neither is in the HTTP run, so only the marker keeps them out of `diffs`.
+      const marked = [["no_path", "page_playoff_only"], ["not_run", "stepladder_only"]].map(([state, row]) => browserCase(`${row}|generic|score|LIFECYCLE`, 1280, { state: state as CaseResult["state"], reason: `r-${row}`, checks: [], planned: true }));
+      const r = compareRuns(runOf("http", [httpCase(A), httpCase(B)]), runOf("browser", [browserCase(A, 1280), browserCase(B, 1280), ...marked]));
+      expect({ compared: r.compared, diffs: r.diffs, notDriven: r.notDriven.map((n) => n.state) }).toEqual({ compared: 2, diffs: [], notDriven: ["no_path", "not_run"] });
+    });
   });
 
   it("a MAPPED case that hit no_path at runtime is compared: against HTTP works it is one state row (m-3: no absent-check rows beside it)", () => {

@@ -10,6 +10,7 @@
 // Pure: no browser, no HTTP. BrowserDriver asks `wantsBrowser` before each
 // organiser action, `record`s the path it took, and returns `coverage()` among
 // its checks.
+import { FILLER, type FillerName } from "../fillers.ts";
 import type { CheckResult } from "../results.ts";
 import { WAVE_ID, type Route } from "../routing.ts";
 
@@ -24,10 +25,11 @@ function assertType(a: string): asserts a is ActionType {
   if (!DECLARED.has(a)) throw new Error(`mixed: '${a}' is not an action type (declared: ${ACTION_TYPES.join(", ")})`);
 }
 
-/** Ruling 47: setup filler — HTTP by design in every layer, never an organiser
- *  action type (no browser turn is owed), recorded so a report shows it ran. */
-export const FILLER = ["setMembers", "putLineup", "entrantMembers", "confirmSeedProposal", "recomputeSeedProposal", "challenge", "americanoView"] as const;
-export type FillerName = (typeof FILLER)[number];
+// Ruling 47's setup-filler names live in the leaf ../fillers.ts (results.ts
+// reads them too, and importing this module from there would close a cycle);
+// re-exported so every importer of them from here is unchanged.
+export { FILLER };
+export type { FillerName };
 const FILLERS: ReadonlySet<string> = new Set(FILLER);
 
 /** O-1 (W1c Task 8 review): action types whose browser turn is used up only
