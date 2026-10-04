@@ -476,6 +476,27 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     // 2. The claim decides who holds the slot, and nothing else.
     let mine: PairingRow | null = callerCurrent ? holder : null;
     if (claim.result === "accept" && holder === null) mine = await insertMine();
+    if (claim.result === "accept" && holder !== null && holder.code_id !== resolved.codeId) {
+      // B6 review I-2 (T1/T5 × C-2): the HOLDER rescanned — the open session's phone, its pairing on an older (reissued)
+      // code, claiming on THIS one (the Revoke copy tells operators to scan the new QR). It keeps the slot, and its
+      // pairing AND the open session move onto this code, so the phone lives entirely on the code it scanned: after the
+      // session ends it is this code's current pairing (T20 `waiting`, never `replaced`), and its start reads it here.
+      // The new row carries the old one's beat state; the old one ends `replaced`, handing over through replaced_by.
+      const [moved] = await tx<PairingRow[]>`
+        insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at,
+                                             answered_poll_seconds, last_beat, not_ready, start_failed, mode, app_version, phone_state)
+        select org_id, ${resolved.codeId}, slot, phone, ${body.claim}, device_model, ${now}, last_beat_at,
+               answered_poll_seconds, last_beat, not_ready, start_failed, mode, app_version, phone_state
+          from fixture_stream_pairings where id = ${holder.id}
+        returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
+      await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced', replaced_by = ${moved!.id} where id = ${holder.id}`;
+      if (open && open.pairing_id === holder.id) {
+        await lockOpen();
+        await tx`update fixture_stream_sessions set pairing_id = ${moved!.id} where id = ${open.id}`;
+        open.pairing_id = moved!.id;   // no event: T1 names none, and the old row's replaced_by is the audit trail
+      }
+      mine = moved!;
+    }
     if (claim.result === "takeover") {
       await tx`update fixture_stream_pairings set ended_at = ${now}, end_cause = 'replaced' where id = ${holder!.id}`;
       mine = await insertMine();

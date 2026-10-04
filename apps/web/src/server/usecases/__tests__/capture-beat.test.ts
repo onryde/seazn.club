@@ -21,8 +21,9 @@ import {
   DEAD_PHONE_TAKEOVER_SECONDS, HOT_THERMAL_STATUS, LOW_BATTERY_PERCENT, NOT_RESPONDING_BEATS, PHONE_BEAT_RETENTION_HOURS,
   POLL_NEAR_SECONDS, POLL_STARTING_SECONDS,
 } from "@/server/relay/config";
-import { getCode, postBeat } from "../capture-phone";
-import { reissueStreamCode } from "../stream-codes";
+import { getCode, postBeat, postStart } from "../capture-phone";
+import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
+import { stopSession } from "../stream-sessions";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -322,6 +323,101 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     expect(b.code_id).toBe(newCodeId);
     expect((await session(S)).pairing_id).toBe(b.id);
     await expect(postBeat(old.code, old.tok, oldBody(A, { sid: S, state: "armed" }), r.deps, r.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
+  });
+
+  // B6 review I-2 (controller ruling): the organiser's Revoke copy tells operators to scan the new QR, so the session's
+  // phone rescanning mid-broadcast is the instructed path. Its claim on the NEW code is T1 (it holds the slot); the
+  // pairing AND the open session move onto the new code, so the phone then lives entirely on the code it scanned. After
+  // the organiser's Stop (T20: the pairing stays) it hears `over S stopped`, then `waiting` — never `replaced` — and its
+  // start follows the normal rules.
+  it("I-2: the session's phone RESCANS the new QR after a reissue — its pairing and the session move onto the new code; after the organiser's Stop it hears `over S stopped` then `waiting`, never `replaced`; its start then opens a fresh session", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const A = phoneId("a");
+    await claimNew(r, A);
+    const S = await r.start(A);
+    const before = await pairingOf(r, A);
+    const fresh = await reissueStreamCode(r.auth, r.fixtureId);
+    const viaNew = { code: fresh.qr.code, tok: fresh.qr.tok };
+    const [{ id: newCodeId }] = await sql<{ id: string }[]>`select id from fixture_stream_codes where code = ${viaNew.code}`;
+    r.tick(SEC);
+    expect(await beat(r, A, { code: viaNew.code, claim: "new" }, viaNew), "T1: the holder's rescan").toMatchObject({ state: "go-live", sid: S });
+    const rows = await pairings(r);
+    const moved = current(rows);
+    expect(moved.map((p) => [p.phone, p.code_id]), "ONE current pairing, A's, on the NEW code").toEqual([[A, newCodeId]]);
+    const old = rows.find((p) => p.id === before.id)!;
+    expect([old.ended_at !== null, old.end_cause, old.replaced_by], "the old pairing hands over to the new one").toEqual([true, "replaced", moved[0]!.id]);
+    expect((await session(S)).pairing_id, "the session follows the phone").toBe(moved[0]!.id);
+    expect(await beat(r, A, { code: viaNew.code, sid: S, state: "armed" }, viaNew)).toMatchObject({ state: "go-live", sid: S });
+    // The organiser's Stop (T20): the broadcast ends, the pairing STAYS.
+    await stopSession(r.auth, r.fixtureId, S, r.deps);
+    if ((await session(S)).state === "ending") await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = now() where id = ${S}`;
+    expect((await session(S)).state).toBe("completed");
+    expect(await beat(r, A, { code: viaNew.code, sid: S, state: "armed" }, viaNew), "T20/T9").toMatchObject({ state: "over", sid: S, endReason: "stopped" });
+    expect(await beat(r, A, { code: viaNew.code }, viaNew), "T20: back to paired-waiting").toMatchObject({ state: "waiting" });
+    expect(current(await pairings(r)).map((p) => p.phone), "the organiser's Stop never touches a pairing").toEqual([A]);
+    // Its start follows the normal rules: the current phone, no open session, a pre-pick → 200, a fresh session.
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
+    const { sid } = await postStart(viaNew.code, viaNew.tok, { phone: A }, r.deps, r.now());
+    expect(sid).not.toBe(S);
+    // C1b for the old code is unchanged for a phone that does NOT rescan — capture-beat's C1b case above; here the old
+    // code no longer serves A at all: its open session is the fresh one, created after the old code ended.
+    await expect(postBeat(r.code, r.tok, body(r, A, { sid, state: "armed" }), r.deps, r.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
+  });
+
+  // B6 review M-6, spec §5.2: "ENDED(code_ended) is written lazily when a call from the pairing is refused 401" — the
+  // C1-refused phone's pairing on THAT code ends, once. A wrong tok proves no pairing and ends nothing; the C1b phone (the
+  // open session's, the session created before the code ended) is not refused by C1 — C3 only narrows its calls — so a
+  // refused claim or start from it ends nothing, and its beats keep being served.
+  it("M-6: a pairing on an ENDED code that C1 refuses is ENDED(code_ended) lazily, once; a wrong tok ends nothing; the open session's phone is never ended by its refused claim or start on the old code", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const [A, B] = [phoneId("a"), phoneId("b")];
+    await claimNew(r, A);
+    const old = { code: r.code, tok: r.tok };
+    await reissueStreamCode(r.auth, r.fixtureId);
+    r.tick(SEC);
+    await expect(postBeat(old.code, "not-the-tok", body(r, A), r.deps, r.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
+    expect((await pairingOf(r, A)).ended_at, "a wrong tok proves no pairing: nothing ends").toBeNull();
+    await expect(postBeat(old.code, old.tok, body(r, A), r.deps, r.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
+    const ended = await pairingOf(r, A);
+    expect([ended.end_cause, ended.ended_at?.getTime()], "C1 refused A: its pairing is ENDED(code_ended) at the server clock").toEqual(["code_ended", r.now().getTime()]);
+    r.tick(SEC);
+    await expect(getCode(old.code, old.tok, { slot: 0, phone: A }, r.deps, r.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
+    expect((await pairingOf(r, A)).ended_at?.getTime(), "a second refusal writes nothing").toBe(ended.ended_at!.getTime());
+
+    // The C1b phone: B holds an open session created BEFORE its code ended.
+    const r2 = await captureRig({ connectAfterMs: NEVER });
+    await claimNew(r2, B);
+    const S = await r2.start(B);
+    const old2 = { code: r2.code, tok: r2.tok };
+    await reissueStreamCode(r2.auth, r2.fixtureId);
+    r2.tick(SEC);
+    await expect(postBeat(old2.code, old2.tok, body(r2, B, { claim: "new" }), r2.deps, r2.now())).rejects.toMatchObject({ status: 401 });
+    await expect(postStart(old2.code, old2.tok, { phone: B }, r2.deps, r2.now())).rejects.toMatchObject({ status: 401 });
+    expect((await pairingOf(r2, B)).ended_at, "C3 narrows the C1b phone's calls; C1 does not refuse it — nothing ends").toBeNull();
+    expect(checked(await postBeat(old2.code, old2.tok, body(r2, B, { sid: S, state: "armed" }), r2.deps, r2.now())), "its beats are still served")
+      .toMatchObject({ state: "go-live", sid: S });
+
+    // The open session's phone is exempt only for a code that ended AFTER its session was created (C1b's second
+    // conjunct): C paired on a code, the code was reissued, C paired on the NEW code and started there — its call through
+    // the OLD code is refused by C1, and that old pairing ends `code_ended`.
+    const r3 = await captureRig({ connectAfterMs: NEVER });
+    const C = phoneId("c");
+    await claimNew(r3, C);
+    const old3 = { code: r3.code, tok: r3.tok };
+    const fresh3 = await reissueStreamCode(r3.auth, r3.fixtureId);
+    const via3 = { code: fresh3.qr.code, tok: fresh3.qr.tok };
+    r3.tick(SEC);
+    await beat(r3, C, { code: via3.code, claim: "new" }, via3);
+    await saveStreamSettings(r3.auth, r3.fixtureId, { targetId: r3.target.id });
+    const { sid: S3 } = await postStart(via3.code, via3.tok, { phone: C }, r3.deps, r3.now());
+    const before3 = await pairings(r3);
+    expect(current(before3).filter((p) => p.phone === C), "PREMISE: C holds a pairing on each code").toHaveLength(2);
+    await expect(postBeat(old3.code, old3.tok, body(r3, C, { code: old3.code, claim: "new" }), r3.deps, r3.now())).rejects.toMatchObject({ status: 401, code: "code_ended" });
+    const [{ id: oldCodeId }] = await sql<{ id: string }[]>`select id from fixture_stream_codes where code = ${old3.code}`;
+    const after3 = await pairings(r3);
+    expect(after3.filter((p) => p.code_id === oldCodeId).map((p) => p.end_cause), "the session was created after the old code ended: not C1b").toEqual(["code_ended"]);
+    expect(current(after3).map((p) => p.code_id), "its pairing on the new code, the session's, stands").not.toContain(oldCodeId);
+    expect((await session(S3)).pairing_id).toBe(current(after3)[0]!.id);
   });
 
   it("the beat's own refusals: a wrong tok 401, a slot other than 0 422 invalid, a body naming another code 422 invalid", async () => {

@@ -225,13 +225,20 @@ export async function resolveStreamCode(
     endedAt = now;
     status = "ended";
   }
-  const serves = codeServes({
-    status,
-    callerIsOpenSessionPhone: open !== undefined && phone !== null && open.phone === phone,
-    sessionCreatedBeforeEnd: open !== undefined && endedAt !== null && open.created_at.getTime() < endedAt.getTime(),
-    call,
-  });
-  if (!serves) throw codeEnded();
+  const callerIsOpenSessionPhone = open !== undefined && phone !== null && open.phone === phone;
+  const sessionCreatedBeforeEnd = open !== undefined && endedAt !== null && open.created_at.getTime() < endedAt.getTime();
+  const serves = codeServes({ status, callerIsOpenSessionPhone, sessionCreatedBeforeEnd, call });
+  if (!serves) {
+    // §5.2: "ENDED(code_ended) is written lazily when a call from the pairing is refused 401" (B6 review M-6). Only a
+    // call whose tok VERIFIED speaks for a pairing, and only one C1 refuses: the C1b phone (its open session created
+    // before the code ended) is served by C1 — C3 merely narrows its calls — so its refused claim or start ends nothing.
+    if (status === "ended" && phone !== null && !(callerIsOpenSessionPhone && sessionCreatedBeforeEnd)) {
+      await sql`
+        update fixture_stream_pairings set ended_at = ${now}, end_cause = 'code_ended'
+         where code_id = ${row.id} and phone = ${phone} and ended_at is null`;
+    }
+    throw codeEnded();
+  }
   return { codeId: row.id, orgId: row.org_id, fixtureId: row.fixture_id, status: status as ResolvedCode["status"], issuedBy: row.issued_by };
 }
 
