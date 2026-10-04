@@ -936,6 +936,17 @@ Elsewhere the text is the controller's record.
     - Design §7.5 item 2's "engine scheduling" therefore reads as draw generation, not placement. Scheduling quality
       stays with the bench programme.
 
+67. **The Stryker scope is the whole engine except placement scheduling** (2026-10-04; it amends ruling 66's Stryker
+    bullet). The owner: "Only scheduling is low priority, other than all include". The controller's reading:
+    - **In scope:** every engine module under `packages/engine/src`, which is competition, core, sport, sports,
+      stats, history, officials, import and exports, plus the draw generators under `src/scheduling/`. Those are
+      bracket, bracket-layout, roundrobin, swiss, americano, participants and feedgraph; they are format code.
+    - **Out of W1d's floor:** the placement files under `src/scheduling/`, meaning the build, calendar and repair
+      groups. They are low priority, not banned: a named exclusion that a later wave may lift.
+    - **Out entirely:** `testkit/`, which is test helpers. That is the controller's call; testkit is not product.
+    - **Size, as the controller measured it on `dfe8132da`:** about 33k non-test lines, of which `sports/` is 21.5k.
+      The weekly mutation job is sharded by group to fit the job limits.
+
 ## Recommendations (mine — not rulings)
 
 - A guard-only W0 before the real fixes — **declined** by ruling 3.
