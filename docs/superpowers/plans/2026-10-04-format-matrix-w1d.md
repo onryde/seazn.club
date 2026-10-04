@@ -2098,11 +2098,12 @@ The workflow is written failing-first against `ci-wiring.test.ts`'s deliberate c
   - `.github/workflows/matrix-truth.yml`;
   - `tools/matrix/ci/run-sample.ts` (the sample's run → judge → one re-run → judge, as a tested script rather than YAML logic);
   - `tools/matrix/__tests__/matrix-workflow.test.ts`;
+  - `tools/matrix/__tests__/workflow-text.ts` (the text-parser helpers, review 7 m5);
   - `tools/matrix/__tests__/no-solver-route.test.ts` (ruling 66's premise as a guard);
   - `tools/matrix/__tests__/run-sample.test.ts`.
 - Modify:
   - `.github/workflows/ci.yml`: the jobs `matrix-rows` and `matrix-sample`;
-  - `tools/matrix/__tests__/ci-wiring.test.ts:244-252`: the deliberate change;
+  - `tools/matrix/__tests__/ci-wiring.test.ts:244-252`: the deliberate change, and the MOVE of `indentOf`, `stepOf` and `jobBlock` out to `workflow-text.ts` (imported back);
   - `package.json`: `"matrix:sample": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/run-sample.ts"`.
 
 **Interfaces:**
@@ -2873,7 +2874,7 @@ Commit `feat(ci): matrix-truth.yml — sharded weekly/dispatch truth run with vi
 cd <exec> && rtk proxy node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json > "$TMPDIR/w1d-t10-before.txt"; echo EXIT=$?; grep -ac "error TS" "$TMPDIR/w1d-t10-before.txt"; grep -ao "^[^(]*" "$TMPDIR/w1d-t10-before.txt" | sort | uniq -c
 ```
 
-Expected: about 8 errors (5 in `scenarios.test.ts`, 3 in `scripts/__tests__`) and **zero under `apps/web`**. Bundler resolution is the claim D9 rests on. If ANY `apps/web` file errors, STOP and report the list: D9's premise is false, and the owner chooses between excluding those three tests and fixing app types.
+Expected: about 8 errors at HEAD (5 in `scenarios.test.ts`, 3 in `scripts/__tests__`), plus any in the test files and `workflow-text.ts` that Tasks 1–9 added (scoped tsc there covered non-test files only, so they have never been type-checked; fix those in this task, review 7, m2), and **zero under `apps/web`**. Bundler resolution is the claim D9 rests on. If ANY `apps/web` file errors, STOP and report the list: D9's premise is false, and the owner chooses between excluding those three tests and fixing app types.
 
 `tools-tests-typecheck.test.ts`:
 
@@ -2918,7 +2919,7 @@ It reuses that `describe`'s `lines`/`isComment`/`jobAt` helpers. Move them to th
 
 Open each error line and fix the test's types. Do not change what a test asserts (class 4): a `TS2554` (wrong arg count) means the test calls a helper whose signature moved; follow the helper. Add the `.d.mts` for `scripts/lib/tools-import-guard.mjs`, declaring exactly what the `.mjs` exports (read it: 47 lines).
 
-Then run `pnpm add -D -w vitest@^4.1.11`. The lockfile diff must ADD only a root importer entry pointing at the same resolved `vitest` version the engine uses; a second vitest version is a STOP. Then add the gates step.
+Then run `pnpm add -D -w vitest@^4.1.11`. The lockfile diff must ADD only a root importer entry pointing at the same resolved `vitest` version the engine uses; a second vitest version is a STOP. Then add the gates step, appended AFTER Task 1's lock-check step (never directly after `reference:boundary`, which Task 1's test pins; review 7, m1).
 
 - [ ] **Step 4: Pass, mutate, commit**
 
@@ -3151,7 +3152,7 @@ Commit `fix(matrix): harness minors — parity quiet, scan spellings, browser wo
   - `tools/matrix/lib/browser/pages/stage-rail.ts:64` (record the fold result);
   - `tools/matrix/lib/browser/pages/fixture-console.ts` (`voidLastUi`);
   - `tools/matrix/lib/driver/{types,http-driver,browser-driver,mixed}.ts` (`voidLast`);
-  - `tools/matrix/lib/selectors.ts` (the void-last selector, read from the console's markup);
+  - `tools/matrix/lib/browser/selectors.ts` (the void-last selector, read from the console's markup);
   - `tools/matrix/run.ts` (`SETS`).
 - Create:
   - `tools/matrix/lib/scenarios/void-proof.ts`;
@@ -3284,7 +3285,7 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
 - Modify:
   - `packages/engine/package.json` (devDependencies `@stryker-mutator/core` `10.0.0` and `@stryker-mutator/vitest-runner` `10.0.0`; scripts `"mutation": "stryker run stryker.config.mjs"` and `"mutation:floor": "node --experimental-strip-types scripts/stryker-floor.ts"`);
   - `pnpm-lock.yaml`;
-  - `.github/workflows/ci.yml` (a gates step, `pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1`);
+  - `.github/workflows/ci.yml` (the gates floor step below, appended after Tasks 1 and 10's steps), and `tools/matrix/__tests__/ci-wiring.test.ts` (its pin);
   - `.gitignore` (`packages/engine/reports/mutation/`, `packages/engine/.stryker-tmp/`).
 
 **Interfaces:**
@@ -3320,7 +3321,10 @@ Expected: EXIT 0 or 1 per set. 1 is a red case, which is data (ruling 19): read 
 - `stryker-floor.ts` modes:
   - `--check <group> <mutation.json>`: exit 0 when the score ≥ floor; 1 when below (survivors listed); 2 refused (zero mutants, no floor for the group, unreadable);
   - `--set-floor <group> <mutation.json>`: PR-B only; writes `floor = floor(score, 1 dp)`, and refuses lowering;
-  - `--check-file-against <ref>`: exit 1 when any group's floor in the working file is LOWER than at `<ref>`, or a group was removed.
+  - `--check-file-against <ref>`: exit 1 when any group's floor in the working file is LOWER than at `<ref>`, or a group was removed. The empty cases are stated (review 7, R7-I1):
+    - `stryker-floor.json` ABSENT at `<ref>` (`git show` says the path does not exist there) means "no floors yet": exit 0, printing `no floors at <ref>: nothing to compare`. This is PR-A's own first run, where `HEAD^1` is `main`, which lacks the file;
+    - the file absent in the WORKING TREE is exit 2, always. PR-A commits it (as `{"groups": {}}`), so a missing file is a deletion, and after PR-B a deleted floor file must never read as "no floors" (the fail-closed rule of round 4);
+    - an unreadable `<ref>`, a `git show` failure other than "path does not exist", or malformed JSON on either side is exit 2.
 - `--survivors <group> <mutation.json> --out SURVIVORS.md` lists file:line:col mutator → replacement for each Survived/NoCoverage mutant not in `stryker-equivalent.json`.
 
 - [ ] **Step 0: Versions and runtime**
@@ -3482,6 +3486,34 @@ The tests pin the function against machines whose expected values are worked fro
 
 `stryker-floor.ts` follows the interfaces above, with a D8 exit header.
 
+**The `ci.yml` floor gate (review 7, R7-I1).** Add the step to `gates`, appended AFTER the last step Tasks 1 and 10 added (the lock-check step, then the tools-tests type-check step if Task 10 has landed), never directly after `reference:boundary` (Task 1's test pins that the lock step is the line after it). `gates` already has `fetch-depth: 0`, so `HEAD^1` resolves:
+
+```yaml
+      # D14 (W1d): a Stryker floor never falls. HEAD^1 as for the lock gate. Absent at HEAD^1
+      # (PR-A's own first run) means "no floors yet": the CLI exits 0 for it.
+      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1
+```
+
+In `ci-wiring.test.ts`, in the line style of Task 10's type-check case (same `lines`/`isComment`/`jobAt` helpers):
+
+```ts
+it("the Stryker floor gate runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d D14)", () => {
+  const STEP = "      - run: pnpm --filter @seazn/engine mutation:floor --check-file-against HEAD^1";
+  const at = lines.indexOf(STEP);
+  expect(at).toBeGreaterThan(0);
+  expect(lines.filter((l) => l.includes("mutation:floor") && !isComment(l))).toEqual([STEP]);
+  expect(lines[at + 1]).toMatch(/^ {6}(- |#)/);   // no key beneath it (`if:`, `continue-on-error:`, `env:`)
+  expect(jobAt(at)).toBe("  gates:");
+});
+```
+
+`packages/engine/test/stryker-floor.test.ts` also tests the CLI's empty cases by spawning it in a temp git repo (a repo with one commit, a `packages/engine/stryker-floor.json` copy, `cwd` set so the CLI finds it):
+- the file absent at the ref, a working file of `{"groups": {}}` or with floors: exit 0, output names "no floors";
+- the file present at the ref and LOWER in the working file: exit 1; equal or higher: exit 0;
+- the working file deleted while the ref has it: exit 2; the working file deleted while the ref lacks it: exit 2 too;
+- a nonexistent ref: exit 2; malformed JSON at the ref: exit 2.
+Each case counts that the CLI actually compared (the diff list's length is printed), so a CLI that exits 0 without reading fails the "lower" case.
+
 `mutation.yml` (ruling 68: every job `runs-on: ${{ vars.MATRIX_RUNNER || 'ubuntu-latest' }}`; top-level `permissions: contents: read`; `plan` `timeout-minutes: 15`):
 - triggers: `schedule: - cron: "23 3 * * 0"`, `workflow_dispatch` (input `group`: `all` or one `STRYKER_GROUPS` key, `probe` included, the choices derived from the file and held equal by a test; `inject_visibility` as in matrix-truth), and `pull_request` paths `.github/workflows/mutation.yml`, `packages/engine/stryker*`, `packages/engine/scripts/stryker-*`.
 - jobs `plan` and `mutate`. `plan` has the guard, the gate `if: github.event_name != 'schedule' || vars.MATRIX_WEEKLY_ENABLED == 'true'` (the matrix-truth form, so a PR run and a dispatch run while the schedule is disabled, which is PR-A's whole state), and one matrix derivation, `node packages/engine/scripts/stryker-matrix.mjs --event "$EVENT" --group "$GROUP"`, which prints `matrix={"include":[{"group":…,"timeout":…}]}`:
@@ -3559,14 +3591,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GROUP: ${{ matrix.group }}   # job level: every step below reads $GROUP (step env does not carry over)
     steps:
       - name: Visibility guard (design §6.4; R14a)
         # … the same env block and script …
       - uses: actions/checkout@v5
       # … pnpm/action-setup, setup-node 26, pnpm install --frozen-lockfile, actions/cache (see above) …
       - name: Run Stryker
-        env:
-          GROUP: ${{ matrix.group }}
         run: |
           set +e
           cd packages/engine && STRYKER_GROUP="$GROUP" pnpm mutation
@@ -3627,12 +3659,21 @@ describe("mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved her
     expect(opts).toEqual(["all", ...Object.keys(STRYKER_GROUPS)]);
     expect(opts.length).toBeGreaterThan(2);
   });
+  it("mutation.yml's guard is the first step of every job, with matrix-truth's script (the identical-script claim for the second workflow)", () => {
+    const want = stepOf(JOBS.plan, GUARD).script;
+    expect(want).not.toBeNull();
+    expect(Object.keys(MJOBS).length).toBeGreaterThan(1);
+    for (const [name, t] of Object.entries(MJOBS)) {
+      expect(stepHeads(t)[0], name).toBe(`      - name: ${GUARD}`);
+      expect(stepOf(t, GUARD).script, name).toBe(want);
+    }
+  });
 });
 ```
 
-Mutation rows for these (Step 5): `RUNNER_ENV: self-hosted` literal in one job's guard env; delete `fail-fast: false` from `mutate`; delete `if: always()` from `Survivors` or the upload step; one `mutation.yml` job back to `runs-on: ubuntu-latest`; add a group to `stryker.groups.mjs` only.
+Their mutation rows are in Step 5's table.
 
-`matrix-workflow.test.ts` gains "mutation.yml's every job starts with the identical guard", comparing against matrix-truth's. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; an unknown key such as `nosuch` is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list. The new `describe("mutation.yml and the runner wiring")` in `matrix-workflow.test.ts` imports `STRYKER_GROUPS` from `packages/engine/stryker.groups.mjs` (through its `.d.mts`) and pins the `RUNNER_ENV` line, `fail-fast: false`, `if: always()` and the dispatch choices.
+`matrix-workflow.test.ts` gains the identical-guard test above. A new `packages/engine/test/stryker-matrix.test.ts` SPAWNS `stryker-matrix.mjs` per event and compares with `STRYKER_GROUPS` and `stryker-timeouts.json`: `pull_request` gives exactly `["probe"]`; `schedule` and dispatch `all` give every non-probe key (more than one); dispatch `probe` gives `["probe"]`; an unknown key such as `nosuch` is exit 2; every entry has a timeout in (0, 300]. Mutation rows: change the `pull_request` branch to `all`; ignore `--group`; drop the timeout lookup. Add `stryker-matrix.mjs` and `stryker-timeouts.json` to Task 15's Create list. The new `describe("mutation.yml and the runner wiring")` in `matrix-workflow.test.ts` imports `STRYKER_GROUPS` from `packages/engine/stryker.groups.mjs` (through its `.d.mts`) and pins the `RUNNER_ENV` line, `fail-fast: false`, `if: always()` and the dispatch choices.
 
 - [ ] **Step 4: Dry-run every group, run the probe, and the tests**
 
@@ -3663,6 +3704,15 @@ Run the engine tests: `cd <exec>/packages/engine && ./node_modules/.bin/vitest r
 | Mutant | Killing test |
 |---|---|
 | `check` treating zero mutants as 100% | its test |
+| Delete the `mutation:floor` step from `gates`, or add `continue-on-error: true` under it | the `ci-wiring` case "the Stryker floor gate runs in the gates job, exactly once…" |
+| Treat a file absent at the ref as exit 2 | the CLI case "absent at the ref" (PR-A's own run would go red) |
+| Treat a working file that is absent as exit 0 | the CLI case "working file deleted" (fail-open after PR-B) |
+| `RUNNER_ENV: self-hosted` literal in one job's guard env | "every guard step of BOTH workflows takes RUNNER_ENV from runner.environment" |
+| Delete `fail-fast: false` from `mutate` | "the mutate job does not cancel its siblings" (R5-I1) |
+| Delete `if: always()` from `Survivors` or the upload step | the same test |
+| One `mutation.yml` job back to `runs-on: ubuntu-latest` | "every job of matrix-truth.yml AND mutation.yml runs on the switchable runner" |
+| Add a group to `stryker.groups.mjs` only | "the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys" |
+| Change one `mutation.yml` guard line | "mutation.yml's guard is the first step of every job, with matrix-truth's script" |
 | `floorDiff` ignoring removed groups | its test |
 | Put `roundrobin.ts` in two real groups (not the probe) | the sweep's `doubled` list |
 | Delete the `src/testkit/**` exclusion | the sweep: `unclassified` lists the testkit files, with the count |
@@ -3708,7 +3758,7 @@ Expected: `compared` equals the slice size (24), and `differ: []`. A difference 
 
 - [ ] **Step 4: Scoped gate, reviewer, push, PR**
 
-1. Run the vitest template over EVERY test file this PR touched (the union from Tasks 1–15), plus the engine's two files. Paste the counts.
+1. Run the vitest template over EVERY test file this PR touched (the union from Tasks 1–15), plus the engine's four Task 15 files (`stryker-groups`, `stryker-floor`, `stryker-matrix`, `runtime-deps`). Paste the counts.
 2. Run eslint on every changed `.ts`/`.mjs` through `rtk proxy`, and tsc on `tsconfig.tools-tests.json`.
 3. Dispatch the `reviewer` agent on `git diff origin/main...HEAD` with `model: "opus"` (the whole-branch review; Execution model policy), at most 25 findings. Fix every Critical and Important finding inline (the no-new-issues rule), then re-review the fixes.
 4. Push `feat/format-matrix-w1d-infra` and open the PR. The body carries the 28-item map, the D-list, D11's recommendation, the line "the merge job judges with `--planned-not-run allow` per owner ruling 65", and "Merge gate: the owner merges PR-A (ruling 62); PR-B is cut from main after." It does NOT yet carry `Matrix rows: none — harness infrastructure; engine change is Stryker config only`. Step 5 opens without it on purpose, to see the R27 gate red once, and then adds it. The PR is not ready for review until that line is in the body and `matrix-rows` is green (review 2, R2-m2).
@@ -4248,6 +4298,16 @@ Re-review 6 (0 Critical, 1 Important, 7 Minor) was taken against `b53c5cd53`.
 - **R6-I1 fixed.** The `mutation.yml` / `stryker.groups.mjs` blocks (the two-file `runs-on` test, the `RUNNER_ENV`, `fail-fast`, `if: always()` and choices tests) and their mutation rows moved from Task 9 to Task 15 Step 3 and Step 5. Task 9 keeps a `runs-on` / `timeout-minutes` check on `matrix-truth.yml` alone. Task 15 Step 4 runs `matrix-workflow.test.ts` too, and `stryker-matrix.test.ts` (m1) with its three mutation rows.
 - **Scan of every task for the same shape** (a test or command in Task N that reads a file first created in a later task). Method: every file named in a `Create` list of every task (by basename) was searched for in all EARLIER tasks, once on read/import/spawn/`pnpm`/`node` lines and once on every line inside a code fence. Result: only the three Task 9 mentions above (`mutation.yml`, at the `runs-on` test, the describe body and the choices test). One prose hit in Task 7 names `shards.json` (Task 8) as a figure to check later, and reads nothing. Not covered by the scan: files named only in prose, and files a task reads that are Modify targets of a later task, which already exist.
 - **m1** done. **m2** the precondition states that `gh variable list` shows repo-level variables only, adds the org and environment lists, and makes the post-dispatch log check the authority; the "guard is open" STOP now excludes the self-hosted log line. **m3** D24 wording. **m4** the skeleton comment moved off the option line, and the test strips trailing comments and says it is order-sensitive. **m5** the status row now says rulings 60–68. **m6** the `if: always()` choice is marked deliberate. **m7** the `--out` path is written once.
+- **Disagreements:** none. **New false premises:** none.
+
+---
+
+## Review response (fix round 7)
+
+Re-review 7 (0 Critical, 1 Important, 7 Minor) was taken against `26c0b5226`. Its independent forward-reference scan (53 created files, 22 tasks) found no other test or command that reads a later task's file.
+
+- **R7-I1 fixed.** Task 15 now writes the `ci.yml` floor step (exact YAML, appended after the Task 1 lock step and Task 10's type-check step, never after `reference:boundary`), pins it in `ci-wiring.test.ts` (once, in `gates`, no key beneath it), and has mutation rows for deleting it and for `continue-on-error`. `--check-file-against` states its empty cases: absent at the ref is "no floors yet" (exit 0, PR-A's own first run); absent in the working tree is exit 2 always (fail-closed after PR-B); an unreadable ref or malformed JSON is exit 2. CLI tests spawn it in a temp git repo for each case, and two more mutation rows cover the two directions.
+- **m1** both Task 10 and Task 15 say where the gates step goes. **m2** Task 10's error count allows for the test files Tasks 1–9 added. **m3** the Task 14 selectors path. **m4** Task 16's four engine files. **m5** `workflow-text.ts` and the helper move are in Task 9's file lists. **m6** the identical-guard test is written, and the moved mutation rows are in Step 5's table. **m7** `GROUP` is job-level env in the skeleton.
 - **Disagreements:** none. **New false premises:** none.
 
 ---
