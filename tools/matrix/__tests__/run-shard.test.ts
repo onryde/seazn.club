@@ -111,6 +111,16 @@ describe("--shard k/N: the stripe the runner runs, and the header it writes", ()
     expect(ids(runIn(dir, "ok2"))).toEqual([FIVE[1]]);
   });
 
+  it("the empty plan: unsharded it is exit 1 (zero cases, results written); with --shard it is ShardEmpty (exit 2, nothing written) — a shard of nothing is never a shard", async () => {
+    const io = capture();
+    const dir = dirFor();
+    expect(await runSlice(deps({ planCases: plainPlan(0) }), ["--run-id", "e0", "--report-dir", dir])).toBe(1);
+    expect(existsSync(resultsPath(dir, "e0"))).toBe(true);
+    expect(await runSlice(deps({ planCases: plainPlan(0) }), ["--shard", "1/2", "--run-id", "e1", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/ShardEmpty: shard 1\/2 of a plan of 0 items holds none/);
+    expect(existsSync(resultsPath(dir, "e1"))).toBe(false);
+  });
+
   it("--shard with --canary is a usage refusal (exit 2) before anything touches the DB", async () => {
     const io = capture();
     const d = deps();
