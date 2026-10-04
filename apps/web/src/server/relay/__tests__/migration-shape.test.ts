@@ -822,6 +822,18 @@ describe.skipIf(!HAS_DB)("V430__capture_stream_codes.sql — the constraints are
     expect(cols).toEqual(["code_id", "pairing_id", "phone_beat", "phone_beat_at", "warming_at"].map((c) => ({ column_name: c, is_nullable: "YES", column_default: null })));
   });
 
+  it("fixture_stream_sessions.ingest_read_failed (B7 re-review, the outage gap): boolean NOT NULL default false — a new session starts with no failed read, and null is refused", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, "requested");
+    const [row] = await sql<{ ingest_read_failed: unknown }[]>`select ingest_read_failed from fixture_stream_sessions where id = ${sid}`;
+    expect(row).toEqual({ ingest_read_failed: false });
+    const [col] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'ingest_read_failed'`;
+    expect(col).toEqual({ data_type: "boolean", is_nullable: "NO", column_default: "false" });
+    await expect(sql`update fixture_stream_sessions set ingest_read_failed = null where id = ${sid}`).rejects.toMatchObject({ code: "23502" });
+  });
+
   it("the drop and the rename (R3): qr_issued_first_at is GONE, credentials_served_first_at and credentials_served_count are present, the pre-rename names are absent", async () => {
     const cols = await sql<{ column_name: string }[]>`
       select column_name from information_schema.columns

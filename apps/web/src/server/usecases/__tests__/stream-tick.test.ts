@@ -938,6 +938,68 @@ describe.skipIf(!HAS_DB)("W24 (§6.12, T9): current's countdown agrees with the 
     expect([kept?.state, kept?.endReason ?? null], "the old deadline passes: nothing ends").toEqual(["warming", null]);
   });
 
+  it("the outage gap (B7 re-review): a LONE tab whose polls coalesce onto the beating phone's claimed reads during a Cloudflare outage holds the warming countdown exactly as a claimed failed read does — with a fresh sample to serve and with none — and shows the timeout again once a claimed read answers; the tick agrees at the deadline", async () => {
+    const r = await rig({ connectAfterMs: 60 * MIN });   // the phone never connects: FakeIngest reads it disconnected
+    const [{ warming_at }] = await sql<{ warming_at: Date }[]>`select warming_at from fixture_stream_sessions where id = ${r.sessionId}`;
+    const W = warming_at.getTime();
+    const deadline = W + WARMING_TIMEOUT_MINUTES * MIN;
+    const to = (t: number) => r.tick(t - r.deps.now().getTime());
+    // The session's phone beats, and every beat ticks the session (§6.11), so its tick can claim the interval's read.
+    const beat = async (t: number) => {
+      to(t);
+      await sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;
+      await tickSession(r.sessionId, r.deps, "beat");
+    };
+    const poll = async (t: number) => {
+      to(t);
+      await sql`update fixture_stream_pairings set last_beat_at = ${r.deps.now()} where id = ${r.paired.pairingId}`;   // still beating
+      return (await currentSession(r.auth, r.fixtureId, r.deps))!;
+    };
+    const flag = async () => (await sql<{ f: boolean }[]>`select ingest_read_failed as f from fixture_stream_sessions where id = ${r.sessionId}`)[0]!.f;
+    const steps: string[] = [];
+
+    // Before the outage: the tab's own claimed read answers `disconnected`, past the warming hold → the timeout shows.
+    await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+    const before = await poll(W + 115_000);
+    expect(before.countdown, "before the outage").toMatchObject({ kind: "warming", reason: "no_inbound_timeout" });
+    expect(r.deps.now().getTime() + before.countdown!.remainingMs).toBe(deadline);
+    expect(await flag(), "a claimed read that answered").toBe(false);
+
+    const outage = vi.spyOn(r.ingest as IngestProvider, "inputStatus").mockRejectedValue(new Error("cloudflare: 503"));
+    try {
+      await beat(W + 120_000);   // the beat's tick claims the read (the tab's claim is 5 s old) and it throws
+      const fresh = await poll(W + 121_000);   // coalesced: the 1:55 sample is 6 s old, young enough to serve
+      expect([fresh.countdown, fresh.ingest], "coalesced, a fresh sample to serve: held, and served as the failed read").toEqual([null, null]);
+      expect(await flag(), "the beat's claimed read threw").toBe(true);
+      steps.push("coalesced-fresh-sample");
+      const own = await poll(W + 126_000);     // the tab's own claim, failing too
+      expect(own.countdown, "the tab's own failed read: held (N1)").toBeNull();
+      steps.push("claimed");
+      await beat(W + 130_000);
+      const stale = await poll(W + 131_000);   // coalesced: no sample young enough
+      expect(stale.countdown, "coalesced, nothing to serve: held").toBeNull();
+      steps.push("coalesced-no-sample");
+    } finally {
+      outage.mockRestore();
+    }
+
+    // The outage ends: the beat's claimed read answers, the flag clears, and the tab's coalesced poll shows the timeout.
+    await beat(W + 180_000);
+    const after = await poll(W + 181_000);
+    expect(after.countdown, "after the outage (coalesced)").toMatchObject({ kind: "warming", reason: "no_inbound_timeout" });
+    expect(await flag(), "a claimed read answered again").toBe(false);
+    expect(r.deps.now().getTime() + after.countdown!.remainingMs, "it names the warming deadline").toBe(deadline);
+    steps.push("recovered");
+    // The iff at the deadline, the phone beating throughout: 1 s before it, still warming; at it, the timeout ends it.
+    await beat(deadline - 1000);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state, "1 s before").toBe("warming");
+    to(deadline);
+    await sql`update fixture_stream_sessions set ingest_polled_at = null where id = ${r.sessionId}`;
+    const end = (await tickSession(r.sessionId, r.deps, "sweep")).session;
+    expect([end?.state, end?.failReason ?? end?.endReason], "the deadline").toEqual(["failed", "no_inbound_timeout"]);
+    expect(steps, "every leg ran").toEqual(["coalesced-fresh-sample", "claimed", "coalesced-no-sample", "recovered"]);
+  });
+
   it("ask 10 reads no ingest word: under every read condition a warming session whose phone stops beating ends phone_lost at its silence deadline, and the same session whose phone beats does not (the pair) — so no read gate touches it", async () => {
     const cases: Hold[] = [
       { label: "disconnected", served: "disconnected" },

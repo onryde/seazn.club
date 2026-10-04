@@ -1911,6 +1911,14 @@ Amends §6.12's Waiting row and W24. Recorded 2026-10-04. These are controller r
   the last beat + §6.9's silence threshold, `phone_lost`. The earlier of that and the warming timeout is shown. A tie
   goes to the timeout, because the tick expires a session before it judges ask 10. The panel's copy for a warming
   `phone_lost` countdown is owed by T11 and is not chosen here.
+- **The outage gap is closed (B7 re-review, gap 1).** A poll that coalesces onto a claimed status read that THREW answers
+  as that read did: nothing served, and the warming countdown held (N1). V430's `ingest_read_failed` carries it, written
+  by the claimed read only when it changes. Before it, a lone tab whose polls coalesced onto the beating phone's claims
+  showed a timeout countdown that N1 held, so it reached 0:00 and nothing ended.
+- **A passthrough `live` session with no first ingest shows no countdown, by design (B7 re-review, gap 2: m-5).** No
+  producer makes one for a session with a phone: passthrough enters `live` only through `ingest_connected`, and both
+  `first_ingest_at` writes precede it. Phone-less rows keep today's rules (C-1). An inert countdown branch would be worse
+  than none.
 
 **No spec text changes for these:**
 

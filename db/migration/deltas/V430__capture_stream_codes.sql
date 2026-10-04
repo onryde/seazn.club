@@ -101,6 +101,9 @@ alter table fixture_stream_sessions
   add column phone_beat  jsonb null,
   add column phone_beat_at timestamptz null,
   add column warming_at  timestamptz null,
+  -- Whether the latest CLAIMED ingest status read threw (B7 re-review, the outage gap): a poll that coalesces onto that
+  -- claim answers as the read did, so the panel's warming countdown is held there too (N1). Written only on a change.
+  add column ingest_read_failed boolean not null default false,
   drop column qr_issued_first_at;
 alter table fixture_stream_sessions rename column credentials_revealed_first_at to credentials_served_first_at;
 alter table fixture_stream_sessions rename column credentials_reveal_count to credentials_served_count;

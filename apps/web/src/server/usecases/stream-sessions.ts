@@ -80,6 +80,7 @@ interface Row {
   output_uid: string | null;   // C1: the domain's proof an output exists to release (Session.outputUid)
   start_cause: Session["startCause"];   // capture QR v2 §5.3 (V430)
   warming_at: string | null;            // A8 (V430): the warming timeout's anchor
+  ingest_read_failed: boolean;          // V430 (B7 re-review, the outage gap): the latest CLAIMED status read threw
 }
 /** A FUNCTION, not a module-scope fragment: building a `sql` fragment opens the pooled client, and `next build`
  *  evaluates this module (through the daily sweep's cron route) to collect route config in a process with no
@@ -88,7 +89,8 @@ interface Row {
 const cols = () => sql`id, fixture_id, org_id, mode, state, desired_state, fail_reason, end_reason, theme_id, overlay_delay_ms,
   target_id, machine_id, last_heartbeat, heartbeat_at, beat_window_at, started_at, ended_at, ending_at, max_duration_minutes,
   runner_retries, runner_attempts, runner_state, runner_name, runner_stop_requested_at,
-  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at`;
+  runner_exit_code, runner_oom_killed, runner_requested_stop, created_by, created_at, output_uid, start_cause, warming_at,
+  ingest_read_failed`;
 
 const d = (s: string | null): Date | null => (s ? new Date(s) : null);
 
@@ -1587,7 +1589,8 @@ export type TickObservation = {
   freshIngest: IngestState | undefined;
   /** W24 (controller ruling 2026-10-04): THIS tick's STATUS read threw (N1). The warming timeout's own observation is
    *  held by exactly that (`heldByUnknownIngest`), so the warming countdown reads it. An outputs read that threw is not
-   *  it: the timeout's observation never reads the outputs. False when this tick made no read (coalesced, no input). */
+   *  it: the timeout's observation never reads the outputs. A coalesced tick answers as the claimed read it defers to
+   *  (`ingest_read_failed`, B7 re-review's outage gap). False when no read was made or deferred to (no input). */
   phoneReadFailed: boolean;
 };
 
@@ -1630,9 +1633,18 @@ export async function tickSession(sessionId: string, deps: SessionDeps, cause: "
         } catch (err) {
           reportIngestReadFailure(err, { sessionId: row.id, orgId: row.org_id, inputUid: inputId, site: "poll" });
         }
+        // The outage gap (B7 re-review): whether this claimed STATUS read threw, for the polls that coalesce onto it.
+        // Written only when it changes, so a healthy session's polls add no write.
+        if (phoneReadFailed !== row.ingest_read_failed) {
+          await sql`update fixture_stream_sessions set ingest_read_failed = ${phoneReadFailed} where id = ${row.id}`;
+        }
       }
     }
-    if (coalesced) {
+    if (coalesced && row.ingest_read_failed) {
+      // The outage gap (B7 re-review): the claimed read this poll defers to THREW. It answers as that read did, nothing
+      // served and nothing fresh, so the warming countdown is held here exactly as on the claimer's own poll (N1).
+      phoneReadFailed = true;
+    } else if (coalesced) {
       // I-1: no provider call — the view is the latest poll sample's, when it is recent enough to be this interval's
       // reading. Nothing is recorded and nothing is decided: the poll that read decided on what it read. D3's `since`
       // is computed exactly as for a read (events, clamps, this response's clock), from the sampled word — and, B0 fix
