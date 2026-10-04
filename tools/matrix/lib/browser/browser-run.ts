@@ -6,7 +6,7 @@
 // Its shapes are run.ts's BrowserRun / CaseDriverOptions, met structurally:
 // this module never imports the runner.
 import type { Browser } from "playwright";
-import type { Session } from "../../../../scripts/bench/lib/http.ts";
+import type { Session } from "../../../bench/lib/http.ts";
 import { BrowserDriver, REAL_PAGES, type BrowserPages, type PadRegistry } from "../driver/browser-driver.ts";
 import { PAD_ADAPTERS } from "../pads/index.ts";
 import { HttpDriver, type Transport } from "../driver/http-driver.ts";

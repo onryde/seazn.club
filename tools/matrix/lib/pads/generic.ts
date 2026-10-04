@@ -3,7 +3,7 @@
 // generic.tsx:417 declares DRAW_TILE_ID and :512 builds the tile. Step 0 item 4
 // (2026-09-30) saw the tile offered only with allowDraws on, and it wrote
 // `generic.result {isDraw: true}`, exactly that key, at once.
-import { genericAdapter } from "../../../../scripts/bench/lib/drivers/adapters/generic.ts";
+import { genericAdapter } from "../../../bench/lib/drivers/adapters/generic.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
 /** generic.tsx:417 (text-pinned in pad-adapters.test.ts). */

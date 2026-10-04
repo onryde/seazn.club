@@ -62,7 +62,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: postgres
-        # Host port 5433, NOT 5432. `scripts/bench/lib/env.ts`'s DEV_DB_PORT
+        # Host port 5433, NOT 5432. `tools/bench/lib/env.ts`'s DEV_DB_PORT
         # guard refuses any DATABASE_URL resolving to 5432 outright — that port
         # is the owner's shared local dev database, and the bench always owns a
         # throwaway one. The container still listens on 5432 internally.
@@ -181,7 +181,7 @@ jobs:
           # PORT (`server.js`: `parseInt(process.env.PORT, 10) || 3000`).
           PORT: "3200"
           # The bench's ONLY auth path is the magic link, and it consumes the
-          # dev-exposed `login_url` (`scripts/bench/lib/http.ts`). A production
+          # dev-exposed `login_url` (`tools/bench/lib/http.ts`). A production
           # build exposes that field only when this flag is set — see
           # `mayExposeDevLink()` in `apps/web/src/lib/dev-links.ts`, whose own
           # comment names "a production-mode harness" as the intended opt-in.
@@ -218,7 +218,7 @@ jobs:
       # green that proves nothing.
       - name: Run the bench
         run: |
-          node --experimental-strip-types scripts/bench/bench.ts \
+          node --experimental-strip-types tools/bench/bench.ts \
             --suite "${{ inputs.suite || '_tiny' }}" \
             --engine "${{ inputs.engine || 'optimized' }}" \
             --base http://localhost:3200

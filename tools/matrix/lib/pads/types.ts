@@ -7,8 +7,8 @@
 // (fix round 1, I-1: a fallback is JUDGED, never waved through).
 // pad-adapters.test.ts holds every registered adapter to that, from the
 // generator's own output.
-import type { TapAdapter, TapAdapterContext } from "../../../../scripts/bench/lib/drivers/scorer.ts";
-import type { LedgerRow } from "../../../../scripts/bench/lib/ledger.ts";
+import type { TapAdapter, TapAdapterContext } from "../../../bench/lib/drivers/scorer.ts";
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StreamEvent } from "../streams/types.ts";
 
 /** A judge's answer: ok, or not ok with `note` saying what differs. */

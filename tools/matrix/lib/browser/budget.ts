@@ -4,7 +4,7 @@
 // holdMsFromEnv to the product's own resolveHoldMs input by input; it also
 // refuses a numeric `timeout:` anywhere in lib/browser, lib/pads and
 // browser-driver.ts.
-import { TAP_PACING_MS } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { TAP_PACING_MS } from "../../../bench/lib/drivers/scorer.ts";
 
 export const HOLD_MS_DEFAULT = 10_000;   // queue.ts HOLD_MS_DEFAULT (text-pinned)
 export const MIN_HOLD_MS = 500;         // queue.ts MIN_HOLD_MS (text-pinned; not exported there)

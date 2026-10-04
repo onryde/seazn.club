@@ -12,7 +12,7 @@
 // `boardgame.result {method, winner}` row — keys exactly [method, winner] for
 // both a checkmate and a draw by agreement. The draw tile asks no sheet, and
 // with no chip it writes no method, so the chip is part of the route.
-import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
 /** boardgame.tsx:109 RESULT_TYPE, an event the engine's boardgame module declares (pinned). */

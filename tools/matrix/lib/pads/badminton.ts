@@ -7,7 +7,7 @@
 // Step 0 (2026-09-30, 320 and 1280) saw one tap route write one
 // `badminton.game.summary {home, away}` row at once, with no hold and no extra
 // key. So one event is one row.
-import { START_MATCH_TESTID, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
 /** badminton.tsx:909 (text-pinned in pad-adapters.test.ts). */

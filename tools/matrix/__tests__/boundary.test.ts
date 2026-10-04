@@ -10,15 +10,15 @@ import { describe, expect, it } from "vitest";
 
 const MATRIX = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(MATRIX, "..", "..");
-// Full repo-relative paths, never basenames: scripts/bench/lib/drivers/http.ts
+// Full repo-relative paths, never basenames: tools/bench/lib/drivers/http.ts
 // is a different module that a basename check would wave through as "http.ts".
 const ALLOWED_BENCH = new Set([
-  "scripts/bench/lib/http.ts", "scripts/bench/lib/plan.ts", "scripts/bench/lib/env.ts",
+  "tools/bench/lib/http.ts", "tools/bench/lib/plan.ts", "tools/bench/lib/env.ts",
   // Ruling 38 (2026-09-29): the tap vocabulary, the ledger reader, the generic adapter and the
   // consent/device-link helpers are imported, not copied. scorer.ts and tap-play.ts reach
   // pack-schema through simulate.ts — a second transitive load ruling 38 accepts by name.
-  "scripts/bench/lib/ledger.ts", "scripts/bench/lib/drivers/scorer.ts",
-  "scripts/bench/lib/drivers/adapters/generic.ts", "scripts/bench/lib/tap-play.ts",
+  "tools/bench/lib/ledger.ts", "tools/bench/lib/drivers/scorer.ts",
+  "tools/bench/lib/drivers/adapters/generic.ts", "tools/bench/lib/tap-play.ts",
 ]);
 const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/match-rules.ts"]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
@@ -37,7 +37,7 @@ function shipped(dir: string, out: string[] = []): string[] {
 // quote, backtick included), and the bare side-effect `import "x";`. The third
 // has no `from`, so the first alternative cannot see it — and a side-effect
 // import of seed.ts is exactly what this gate exists to stop (found by
-// mutation: without the third alternative, `import "../../../scripts/bench/lib/seed.ts";`
+// mutation: without the third alternative, `import "../../bench/lib/seed.ts";`
 // stayed green; without the backtick, `` import(`…/seed.ts`) `` did).
 //
 // ASSUMES SEMICOLON-TERMINATED STATEMENTS (the repo style; not enforced by a
@@ -88,7 +88,7 @@ describe("tools/matrix import boundary", () => {
       expect(FORBIDDEN.some((bad) => spec.includes(bad)), `${spec}`).toBe(false);
       if (!spec.startsWith(".")) continue;
       const target = relative(REPO, resolve(dirname(file), spec));
-      if (target.startsWith("scripts/bench/")) expect(ALLOWED_BENCH.has(target), target).toBe(true);
+      if (target.startsWith("tools/bench/")) expect(ALLOWED_BENCH.has(target), target).toBe(true);
       if (target.startsWith("apps/web/")) expect(ALLOWED_WEB.has(target), target).toBe(true);
     }
   });
@@ -139,7 +139,7 @@ describe("ruling 38: what the matrix may take from the bench", () => {
   // chain is pinned by its importer, so any NEW way into seed.ts — or into any
   // other forbidden file — reds; routed to the controller for a ruling.
   const TRANSITIVE_FORBIDDEN = ["run-suite", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
-  const KNOWN_TRANSITIVE: Readonly<Record<string, readonly string[]>> = { "scripts/bench/lib/seed.ts": ["scripts/bench/lib/plan.ts"] };
+  const KNOWN_TRANSITIVE: Readonly<Record<string, readonly string[]>> = { "tools/bench/lib/seed.ts": ["tools/bench/lib/plan.ts"] };
   /** Within `files`, the ones that value-import `target`. */
   const importersOf = (files: ReadonlySet<string>, target: string) => [...files]
     .filter((f) => importsOf(f).some((i) => !i.typeOnly && i.spec.startsWith(".") && resolve(dirname(f), i.spec) === resolve(REPO, target)))
@@ -160,8 +160,8 @@ describe("ruling 38: what the matrix may take from the bench", () => {
   // that load, this reds and the ruling-38 comment is re-read.
   it("pack-schema is reached through simulate.ts, the chain ruling 38 accepts by name", () => {
     const files = closure(MODULES);
-    expect(importersOf(files, "scripts/bench/lib/pack-schema.ts")).toContain("scripts/bench/lib/simulate.ts");
-    expect(importersOf(files, "scripts/bench/lib/simulate.ts")).toContain("scripts/bench/lib/drivers/scorer.ts");
+    expect(importersOf(files, "tools/bench/lib/pack-schema.ts")).toContain("tools/bench/lib/simulate.ts");
+    expect(importersOf(files, "tools/bench/lib/simulate.ts")).toContain("tools/bench/lib/drivers/scorer.ts");
   });
 
   // So the L3 path never loads a browser. Two checks. This one is DIRECT and
@@ -222,8 +222,8 @@ describe("ruling 38: what the matrix may take from the bench", () => {
   // with the chain that reaches it: a new module that loads playwright, by any
   // number of hops, reds here. Routed to the controller.
   const KNOWN_PLAYWRIGHT_LOADS: Readonly<Record<string, readonly string[]>> = {
-    "model.ts": ["model.ts -> run.ts -> ../../scripts/bench/lib/env.ts"],
-    "run.ts": ["run.ts -> ../../scripts/bench/lib/env.ts"],
+    "model.ts": ["model.ts -> run.ts -> ../bench/lib/env.ts"],
+    "run.ts": ["run.ts -> ../bench/lib/env.ts"],
   };
   it("exactly the known non-browser modules load playwright anywhere in their value-import closure, each by its recorded chain", () => {
     let checked = 0;

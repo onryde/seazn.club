@@ -1,6 +1,6 @@
 // Every tools/matrix module must LOAD under `node --experimental-strip-types`.
 //
-// Copied from the bench's own gate (scripts/bench/lib/__tests__/strip-types-
+// Copied from the bench's own gate (tools/bench/lib/__tests__/strip-types-
 // loadable.test.ts), which exists because the bench shipped a whole wave
 // unrunnable. The harness runs as `node --experimental-strip-types`, and
 // strip-only mode can DELETE type annotations but cannot SYNTHESISE code. So a

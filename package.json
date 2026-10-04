@@ -13,8 +13,8 @@
     "node": ">=26"
   },
   "scripts": {
-    "bench:scheduler": "node --experimental-strip-types scripts/bench/bench.ts",
-    "bench:build-packs": "node --experimental-strip-types scripts/bench/packs/build-packs/_tiny.ts",
+    "bench:scheduler": "node --experimental-strip-types tools/bench/bench.ts",
+    "bench:build-packs": "node --experimental-strip-types tools/bench/packs/build-packs/_tiny.ts",
     "matrix:l3": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/run.ts",
     "matrix:browser": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/run.ts --driver browser",
     "matrix:render": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/render.ts",

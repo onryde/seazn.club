@@ -14,8 +14,8 @@
 // Every wait is derived (AGENTS class 20; browser-budget.test.ts scans this
 // file for a flat timeout): a tap's own bound is one step's budget, and the
 // ledger is polled for as long as the event's taps plus one hold window cost.
-import type { LedgerRow } from "../../../../scripts/bench/lib/ledger.ts";
-import { TAP_WAIT_TIMEOUT_MS, type PadPage, type TapAdapterContext, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
+import { TAP_WAIT_TIMEOUT_MS, type PadPage, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import { TAP_PACE_MS, budgetMs } from "../browser/budget.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import { executeStep } from "./execute.ts";

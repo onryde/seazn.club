@@ -127,7 +127,7 @@ const runStep = (o: Parameters<typeof runNamedStep>[2]) => runNamedStep(STEP_NAM
 
 describe("matrix CI wiring", () => {
   it("a DB-free step runs tools/matrix with the JSON reporter, right after the bench step", () => {
-    const bench = ci.indexOf("scripts/bench\n");
+    const bench = ci.indexOf("tools/bench\n");
     const matrix = ci.indexOf("--outputFile=vitest-results-matrix.json --testTimeout=30000 tools/matrix");
     expect(bench).toBeGreaterThan(0);
     expect(matrix).toBeGreaterThan(bench);

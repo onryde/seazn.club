@@ -7,8 +7,8 @@
 // re-runs the next-stage progression (usecases/stages.ts:4140 completeStage →
 // progressCompletedStage), which computes a NEW draft seed proposal and marks
 // the previous draft stale (stages.ts:4942-4944).
-import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../../scripts/bench/lib/http.ts";
-import { fetchFixtureLedger, type LedgerRow } from "../../../../scripts/bench/lib/ledger.ts";
+import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
+import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
 import { START, type StreamEvent } from "../streams/types.ts";
 import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";

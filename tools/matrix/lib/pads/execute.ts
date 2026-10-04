@@ -1,4 +1,4 @@
-// COPIED from scripts/bench/lib/drivers/scorer.ts:232-268 (private there; ruling 38). Keep in step by hand; pad-execute.test.ts pins the kind list.
+// COPIED from tools/bench/lib/drivers/scorer.ts:232-268 (private there; ruling 38). Keep in step by hand; pad-execute.test.ts pins the kind list.
 //
 // Three changes, and only these (pad-execute.test.ts compares this body with
 // the bench's, the first change normalised away):
@@ -10,7 +10,7 @@
 //  (c) a waitMs that is not a finite number of ms above 0 is refused first
 //      (Playwright reads a 0 timeout as no bound at all).
 // The selectors are the bench's own selectorForTapStep (imported, ruling 38).
-import { selectorForTapStep, type PadPage, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { selectorForTapStep, type PadPage, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import { assertWaitMs } from "../browser/budget.ts";
 
 export const HANDLED_KINDS: readonly TapStep["kind"][] = Object.freeze(["tile", "choice", "number", "confirm", "testid", "half", "chip", "offeredChip", "releaseHold", "text"] as const);

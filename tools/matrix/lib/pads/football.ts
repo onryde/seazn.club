@@ -14,7 +14,7 @@
 //    the minute has no tap; replay.ts judgeFallback, since e3ebd230c).
 //  - period → HT, then period → FT, each write one `football.period {phase}`
 //    row at once; FT decided the fixture. No lineup was demanded.
-import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import { judgeKeys, judgeOneRow } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 

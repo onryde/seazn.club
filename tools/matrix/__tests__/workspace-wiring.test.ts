@@ -37,7 +37,8 @@ const workspaces = globs
  * workspace itself, or a directory above it — so the Dockerfile never COPYs their manifest
  * (apps/cron-worker: ruled A2 of the Cloudflare cron plan, because the builder stage never installs
  * its devDependencies and `turbo run typecheck` inside the image would fail on it; tools/*: the
- * dev-only harnesses, ruling 56, ignored as the whole `tools/` directory). Read from the file,
+ * dev-only harnesses, tools/bench and tools/matrix, ruling 56, ignored as the whole `tools/`
+ * directory). Read from the file,
  * never a list typed here.
  */
 const dockerignored = new Set(
@@ -66,9 +67,11 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     expect(workspaces.length).toBeGreaterThan(2);
     expect(workspaces).toContain("packages/reference");
     expect(workspaces).toContain("packages/engine");
-    // Ruling 56: the matrix harness is the tools/matrix workspace (@seazn/matrix).
+    // Ruling 56: the matrix harness is the tools/matrix workspace (@seazn/matrix), and the scheduler
+    // bench followed it to tools/bench (@seazn/bench).
     expect(globs).toContain("tools/*");
     expect(workspaces).toContain("tools/matrix");
+    expect(workspaces).toContain("tools/bench");
   });
   it("the Dockerfile COPYs every workspace manifest BEFORE pnpm install --frozen-lockfile", () => {
     const docker = read("Dockerfile").split("\n");
@@ -87,11 +90,12 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
   });
   it("the ONLY workspaces the Dockerfile may skip are ones `.dockerignore` lists, and they must not be COPYed either", () => {
     // Anti-vacuity and anti-widening: the exemption set is exactly the Cloudflare cron Worker and the
-    // matrix harness (ruling 56: tools/ is dev-only and ignored as a whole). A third dockerignored
-    // workspace, or either leaving `.dockerignore`, fails here and needs a conscious edit.
-    expect(imageExempt).toEqual(["apps/cron-worker", "tools/matrix"]);
-    // Each by the line the ruling names: the Worker by its own path, the harness by the tools/ directory.
-    expect(imageExempt.map((w) => [w, ignoredBy(w)])).toEqual([["apps/cron-worker", "apps/cron-worker"], ["tools/matrix", "tools"]]);
+    // two dev-only harnesses, the scheduler bench and the matrix (ruling 56: tools/ is dev-only and
+    // ignored as a whole). A fourth dockerignored workspace, or any of them leaving `.dockerignore`,
+    // fails here and needs a conscious edit.
+    expect(imageExempt).toEqual(["apps/cron-worker", "tools/bench", "tools/matrix"]);
+    // Each by the line the ruling names: the Worker by its own path, each harness by the tools/ directory.
+    expect(imageExempt.map((w) => [w, ignoredBy(w)])).toEqual([["apps/cron-worker", "apps/cron-worker"], ["tools/bench", "tools"], ["tools/matrix", "tools"]]);
     const docker = read("Dockerfile");
     for (const w of imageExempt) {
       expect(ignoredBy(w), `${w} is not under a line of .dockerignore`).toBeDefined();

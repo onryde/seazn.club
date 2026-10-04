@@ -8,7 +8,7 @@
 // runner's to report as an ABORT, never a case red. session.test.ts proves the
 // wiring against a structural fake Browser; the launch is proven live (Task 8).
 import { chromium, type Browser, type Page } from "playwright";
-import { CONSENT_SEED, seedConsent } from "../../../../scripts/bench/lib/tap-play.ts";
+import { CONSENT_SEED, seedConsent } from "../../../bench/lib/tap-play.ts";
 import type { BrowserWidth } from "../widths.ts";
 import { viewportFor } from "./viewports.ts";
 

@@ -8,8 +8,8 @@
 // directions, a tolerated key only as a plausible id) and the budget module's
 // own constants, never from replay.ts.
 import { describe, expect, it } from "vitest";
-import { SEND_NOW_TESTID, TAP_WAIT_TIMEOUT_MS, selectorForTapStep, type PadLocator, type PadPage, type TapAdapterContext, type TapStep } from "../../../scripts/bench/lib/drivers/scorer.ts";
-import type { LedgerRow } from "../../../scripts/bench/lib/ledger.ts";
+import { SEND_NOW_TESTID, TAP_WAIT_TIMEOUT_MS, selectorForTapStep, type PadLocator, type PadPage, type TapAdapterContext, type TapStep } from "../../bench/lib/drivers/scorer.ts";
+import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS, budgetMs } from "../lib/browser/budget.ts";
 import { compareRow, replayEvents, type ReplayDeps } from "../lib/pads/replay.ts";
 import type { MatrixPadAdapter } from "../lib/pads/types.ts";

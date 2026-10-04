@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { RawResult, Session } from "../../../scripts/bench/lib/http.ts";
+import type { RawResult, Session } from "../../bench/lib/http.ts";
 import type { Transport } from "../lib/driver/http-driver.ts";
 import { slugify as productSlugify, uniqueSlug as productUniqueSlug } from "../../../apps/web/src/server/usecases/slugs.ts";
 import {

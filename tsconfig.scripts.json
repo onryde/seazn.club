@@ -28,8 +28,9 @@
     // app's own "@/…" alias.
     "paths": { "@/*": ["./apps/web/src/*"] }
   },
-  // tools/ (the dev-only harnesses — tools/matrix, ruling 56) runs the same
-  // way and was type-checked here under scripts/ before the move.
+  // tools/ (the dev-only harnesses — tools/matrix and tools/bench, ruling 56)
+  // runs the same way and was type-checked here under scripts/ before each
+  // harness moved.
   "include": ["scripts/**/*.ts", "tools/**/*.ts"],
   // vitest test files under scripts/__tests__ run under vitest, not
   // `node --experimental-strip-types` — they don't belong to this config's

@@ -41,7 +41,7 @@ describe("harness-path: where the harness lives, and where it used to (ruling 56
       // Not the harness: a sibling whose name only starts with matrix, the bench, the web app, today's path.
       [`${OLD}-legacy/a.ts`, `${OLD}-legacy/a.ts`],
       [`${OLD}x/a.ts`, `${OLD}x/a.ts`],
-      ["scripts/bench/lib/env.ts", "scripts/bench/lib/env.ts"],
+      ["tools/bench/lib/env.ts", "tools/bench/lib/env.ts"],
       ["apps/web/src/lib/format-templates.ts", "apps/web/src/lib/format-templates.ts"],
       ["tools/matrix/run.ts", "tools/matrix/run.ts"],
       [`x/${OLD}/run.ts`, `x/${OLD}/run.ts`],

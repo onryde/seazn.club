@@ -6,7 +6,7 @@
 // pad stores, equal; and every key it stamps itself, of the shape it stamps.
 // deepEqual moved here from replay.ts so that the adapters and the replay
 // compare values the same way, and the adapters never load the replay.
-import type { LedgerRow } from "../../../../scripts/bench/lib/ledger.ts";
+import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StreamEvent } from "../streams/types.ts";
 import type { FallbackJudgement } from "./types.ts";
 

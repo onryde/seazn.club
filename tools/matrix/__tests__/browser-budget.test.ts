@@ -7,7 +7,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { HOLD_MS_DEFAULT as PRODUCT_HOLD_MS_DEFAULT, HOLD_MS_ENV_VAR, resolveHoldMs } from "../../../apps/web/src/components/v2/scorepad/queue.ts";
-import { TAP_PACING_MS } from "../../../scripts/bench/lib/drivers/scorer.ts";
+import { TAP_PACING_MS } from "../../bench/lib/drivers/scorer.ts";
 import { BadBudget, FLOOR_MS, HOLD_ENV, HOLD_MS_DEFAULT, MIN_HOLD_MS, SLACK_MS, TAP_PACE_MS, budgetMs, holdMsFromEnv } from "../lib/browser/budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");

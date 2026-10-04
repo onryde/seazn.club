@@ -11,7 +11,7 @@
 // `tennis.set_summary {home, away}` row at once, with no hold and no `tb` key.
 // So one event is one row. A tie-break-shaped set is refused by name: its sheet
 // asks two more numbers the generated summary does not carry.
-import { START_MATCH_TESTID, type TapStep } from "../../../../scripts/bench/lib/drivers/scorer.ts";
+import { START_MATCH_TESTID, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
 /** tennis.tsx:704 (text-pinned in pad-adapters.test.ts). */
