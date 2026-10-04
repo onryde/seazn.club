@@ -1,34 +1,40 @@
 // Capture QR v2 §11.1.4 (T10) — the capture surface as a MODEL (TEST-STRATEGY rule 10), with fast-check's `fc.commands`.
 // Two phones (A and B), one fixture per run, the REAL use-cases (postBeat, postStart, getCode, createSession,
-// stopSession, tickSession, tickOpenSessions, reissueStreamCode, ensureStreamCode via the rig) on the FAKE drivers and an
-// injected clock. The fake ingest never connects on its own (connectAfterMs is a day): video arrives only when the model
-// says so, through FakeIngest.setState (A26, FP8).
+// stopSession, tickSession, tickOpenSessions, reissueStreamCode, ensureStreamCode via the rig, removeStreamTarget,
+// createStreamTarget, saveStreamSettings, recordPurchase, and the fixture's status write through V430's trigger) on the
+// FAKE drivers and an injected clock. The fake ingest never connects on its own (connectAfterMs outlasts any run): video
+// arrives only when the model says so, through FakeIngest.setState (A26, FP8), which also scripts `unknown` (M-3).
 //
 // The model is the brief's — { current, open: {sid, live, holder}, stopRecords } — plus what the phones themselves know
-// (the code each last scanned, the stop each last delivered) and W23's counter. Each command predicts its answer FROM THE
-// SPEC (§5.5's T1–T8 rows, C1/C1b/C3, T12/T13/T15, T20/T21, T23/T24/T24a, W5, W23), runs the real call, compares, and
-// moves the model. A session the TICK ends (ask 10, W19, the warming timeout, max duration) is the one thing the model
+// (the code each last scanned, the stop each last delivered), W23's counter and window, the org's balance, the fixture's
+// finish (C2) and the destinations (T36). Each command predicts its answer FROM THE SPEC (§5.5's T1–T8 rows, C1/C1b/C2–C5,
+// T12–T15, T20/T21, T23/T24/T24a, T28, T33/T34, T36, W5, W23, §6.7.1's admission order), runs the real call, compares,
+// and moves the model. A session the TICK ends (ask 10, W19, the warming timeout, max duration) is the one thing the model
 // does not predict step by step — it cannot, without re-implementing the clocks under test — so such an end is accepted
-// only when invariant 10 (and its siblings) proves it was owed at that instant.
+// only when invariant 10 (and its siblings) proves it was owed at that instant; and M-4 proves the converse for W19: an
+// end owed at a tick, on a read the tick claimed, is made at that tick.
 //
-// After EVERY primitive step the eleven invariants are checked against the database (§11.1.4's ten; #11 is W23's):
+// After EVERY primitive step twelve invariants are checked against the database (§11.1.4's ten; #11 is W23's, #12 money):
 //   1. at most one current pairing per code and slot;          2. at most one open session per fixture;
 //   3. `cred` is served only to the open session's phone;      4. a live slot changes phone only through T4, its
 //      conjunction true;                                        5. no stop closes a sid other than the one named;
 //   6. a code never answers 401 to its open session's phone;   7. at most one consume per session, and only with video;
-//   8. go-live ⇒ no ingest yet, live ⇒ ingest;                 9. a stop from a phone that is not current never ends a
-//      sid the current phone holds (T24a);                     10. phone_lost only when owed (T25a / ask 10);
-//   11. the fixture's consume rows equal W23's count from the rule text (T6b's rule).
+//   8. go-live ⇒ no ingest yet, live ⇒ ingest — on the beat's and the descriptor's ANSWERS (I-3) and on the rows;
+//   9. a stop from a phone that is not current never ends a sid the current phone holds (T24a);
+//  10. phone_lost only when owed (T25a / ask 10), and never on an `unknown` read (m-3);
+//  11. the fixture's consume rows equal W23's count from the rule text (T6b's rule);
+//  12. the org's balance equals the rule text's: the month's allowance + bought − paid lives (T14, W23's waiver, T28).
 // #7 as the spec words it ("at most one consume per fixture per 24 h") is superseded by W23 — a 4th restart inside the
 // window pays — so #7 is checked per session here and the per-window rule is #11.
 //
 // Anti-vacuity: every action and every outcome is counted over the DRAWN runs (there are no examples in the property),
-// and a zero fails. The ten counters the brief names, plus paidRestarts, must each be > 0. The seed comes from
-// CAPTURE_MODEL_SEED (default fixed) and is written, with the tally, to CAPTURE_MODEL_REPORT (default: the OS tmpdir).
+// and a zero fails. The counters the brief names, plus paidRestarts and the fix round's (go-live/live answers, no-credit
+// refusals, free restarts at zero, owed W19 ends made), must each be > 0. The seed comes from CAPTURE_MODEL_SEED (default
+// fixed) and is written, with the tally, to CAPTURE_MODEL_REPORT (default: the OS tmpdir).
 //
 // ONE SPORT, on purpose (rule 6): nothing on this surface reads the sport (capture-start.test.ts pins the cricket row).
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import fc from "fast-check";
@@ -38,14 +44,16 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { CaptureBeat, CaptureBeatAnswer, CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import {
-  DEAD_PHONE_TAKEOVER_SECONDS, FREE_RESTARTS_PER_WINDOW, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS,
-  PHONE_SILENT_SLACK_SECONDS, WARMING_TIMEOUT_MINUTES,
+  CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, DEAD_PHONE_TAKEOVER_SECONDS, FREE_RESTARTS_PER_WINDOW,
+  PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { getCode, postBeat, postStart } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
+import { creditBalance, ensureMonthlyStreamGrant, recordPurchase, streamMonthlyRate } from "../stream-credits";
 import { createSession, stopSession, tickOpenSessions, tickSession } from "../stream-sessions";
+import { createStreamTarget, removeStreamTarget } from "../stream-targets";
 import { captureRig, phoneId, type CaptureRig } from "./_capture-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -78,8 +86,9 @@ const MAX_COMMANDS = 50;
  *  local database; 100 ms for every command a run may draw leaves 5× headroom on the worst case and moves with RUNS. */
 const STEP_BUDGET_MS = 100;
 const REPORT = process.env.CAPTURE_MODEL_REPORT ?? `${tmpdir()}/capture-model-report.txt`;
-/** The fake never connects on its own: only `ingestConnect` (FakeIngest.setState) brings video. */
-const NEVER_MS = 24 * 60 * MIN;
+/** The fake never connects on its own: only `ingestConnect` (FakeIngest.setState) brings video. Its clock rule connects an
+ *  UNSCRIPTED input once this has passed since creation, so it must outlast the longest run: 50 draws of the 25 h step. */
+const NEVER_MS = 400 * 24 * 60 * MIN;
 const ACTIVE = ACTIVE_STATES as readonly string[];
 /** §6.8.5 / §6.5: the spec's two windows, from its constants. */
 const LOST_MS = PHONE_LOST_LIVE_MINUTES * MIN;
@@ -88,6 +97,12 @@ const DEAD_MS = DEAD_PHONE_TAKEOVER_SECONDS * SEC;
 const silentMs = (cadenceSeconds: number) => Math.max(PHONE_SILENT_FLOOR_SECONDS, cadenceSeconds + PHONE_SILENT_SLACK_SECONDS) * SEC;
 /** A fresh poll read needs the claim window AND the coalesced sample's age bound behind it (B0: 2 × STREAM_POLL_MS). */
 const FRESH_READ_MS = 2 * STREAM_POLL_MS;
+/** C2 (§5.1): a finished fixture's code expires this long after the finish, when no session is open. */
+const GRACE_MS = CODE_GRACE_AFTER_FINISH_MINUTES * MIN;
+/** §5.2 / W23: the reuse window, from its anchor consume. */
+const REUSE_MS = CREDIT_REUSE_HOURS * 60 * MIN;
+/** windowEdge: Go live this far (halved) inside the window's end, the video this far later — past it. */
+const EDGE_MS = MIN;
 
 type P = "A" | "B";
 const PHONES: readonly P[] = ["A", "B"];
@@ -99,7 +114,7 @@ type Model = {
   current: P | null;
   /** The fixture's open session: its sid, whether it has video (first ingest), the phone holding it (its pairing's,
    *  while that pairing stands), the code index that pairing is on, and the code index active when it was created. */
-  open: { sid: string; live: boolean; holder: P | null; pairIdx: number; bornIdx: number; startedBy: "organiser" | "operator" } | null;
+  open: { sid: string; live: boolean; holder: P | null; pairIdx: number; bornIdx: number; startedBy: "organiser" | "operator"; target: number } | null;
   /** A phone's Stop not yet delivered (A8: a Stop before the first frame sends no beat; the record rides the next call). */
   stopRecords: Map<P, string>;
   /** The stop each phone last delivered (a retry re-sends it). */
@@ -110,19 +125,37 @@ type Model = {
   codes: number;
   sessions: { sid: string; video: boolean }[];
   /** W23 (§6.7.4), from the rule text: the first live pays and anchors; then three counted restarts are free and the
-   *  fourth pays and re-anchors. */
-  w23: { anchored: boolean; counted: number; paid: number };
+   *  fourth pays and re-anchors. The window is §5.2's: CREDIT_REUSE_HOURS from the anchor consume's ledger row (its
+   *  `created_at`, the DATABASE clock — read back from the row the model predicted, since no model can know it first). A
+   *  video after the window closed pays and re-anchors (M-1). */
+  w23: { anchorAt: number | null; counted: number; paid: number };
+  /** The org's match credits, from the rule text: the plan's monthly allowance plus the drawn pack, −1 per paid live, +delta
+   *  per purchase; a free restart costs nothing (T14 / W23's balance waiver). */
+  balance: number;
+  /** C2 (§5.1): when the fixture finished (the injected clock), null while it is not finished (C5 clears it). */
+  finishedAt: number | null;
+  /** C2's write: the ACTIVE code has been found expired and ENDED. It stays ended (C5); only a reissue mints past it. */
+  expired: boolean;
+  /** The destination the organiser names (§6.7.3's pre-pick, an index into Real.targets), and the archived ones (T36). */
+  pick: number;
+  archived: Set<number>;
+  /** The injected clock (the rig's), for the commands' preconditions. */
+  now: () => number;
 };
 
 const COUNT_KEYS = [
   "takeovers", "lateStopsDelivered", "lateStopsIgnoredHeld", "credsServed", "phoneLostLive", "phoneLostWarming",
   "consumes", "refusedClaims", "oneCurrent", "oneOpen", "paidRestarts",
+  // I-3: #8 on the answers it names. I-2: T14's gate and W23's balance waiver. M-4: an owed W19 end made at the tick.
+  "goLiveAnswers", "liveAnswers", "noCreditRefusals", "freeAtZero", "owedLostMade",
 ] as const;
 type CountKey = (typeof COUNT_KEYS)[number];
 const ACTIONS = [
   "claimNew", "claimResume", "beat", "get", "phoneStop", "localStop", "goLive", "restart", "operatorStart",
   "ingestConnect", "ingestDrop", "advance", "gone", "tick", "cronTick", "orgStop", "reissue", "rescan", "lateStopRace",
   "lateStopOwn", "deadTakeover", "oldCodeCall",
+  // I-2: §11.1.4's four, the repick that keeps a run going after an archive, and T28's window edge. M-3: the unknown word.
+  "finish", "revertResult", "archiveDestination", "buyCredit", "repick", "windowEdge", "ingestUnknown",
 ] as const;
 type Action = (typeof ACTIONS)[number];
 /** Every outcome the model can name. Each must be reached by the drawn runs. */
@@ -136,6 +169,10 @@ const OUTCOMES = [
   "start:200", "start:already_live", "start:replaced", "start:401",
   "video:first-paid", "video:free-restart", "video:paid-restart",
   "end:phone_lost-live", "end:phone_lost-warming", "end:no_inbound_timeout", "orgStop:stopped", "rescan:I-2",
+  // I-2 — C2/T33/T34/C4/C5, T36, T14/T28, and M-1's closed window.
+  "beat:T34-deferred", "beat:T33-401", "reissue:200", "reissue:422", "revert:active", "revert:expired-stays",
+  "archive:archived", "archive:held-refused", "start:no_destination", "goLive:target_not_found",
+  "goLive:no_credits", "start:no_credit", "buy:applied", "video:window-closed-paid", "video:T28-no_credits",
 ] as const;
 type Outcome = (typeof OUTCOMES)[number] | "end:max_duration";
 
@@ -163,7 +200,11 @@ type Real = {
   phones: Record<P, string>;
   codes: { code: string; tok: string }[];
   /** What the model scripted on each input (unscripted = disconnected, the fake never connects by itself). */
-  scripted: Map<string, "connected" | "disconnected">;
+  scripted: Map<string, "connected" | "disconnected" | "unknown">;
+  /** The org's destinations, in the order the model made them (Model.pick indexes this). */
+  targets: string[];
+  /** The fixture's status before `finish`, which `revertResult` restores. */
+  priorStatus: string | null;
   everConnected: Set<string>;
   tally: Tally;
 };
@@ -177,6 +218,9 @@ type SRow = {
   phone_beat_at: Date | null; end_reason: string | null; fail_reason: string | null; max_duration_minutes: number;
   pairing_id: string | null; holder: string | null; holder_code: string | null; holder_beat_at: Date | null;
   input_id: string | null; last_connected_at: Date | null; consumes: number;
+  /** The poll's claim stamp (a read inside STREAM_POLL_MS of it is coalesced), and the latest poll sample's word and time —
+   *  what a coalesced read serves (M-2, M-3). */
+  ingest_polled_at: Date | null; sample_word: string | null; sample_at: Date | null;
 };
 type Snap = { sessions: SRow[]; current: { phone: string; last_beat_at: Date; answered_poll_seconds: number } | null };
 
@@ -188,7 +232,10 @@ async function snapshot(x: Real): Promise<Snap> {
            (select i.ingest_input_id from fixture_stream_inputs i where i.session_id = s.id order by i.slot limit 1) as input_id,
            (select max(x.sampled_at) from fixture_stream_samples x
              where x.session_id = s.id and x.source = 'poll' and x.ingest_state = 'connected') as last_connected_at,
-           (select count(*)::int from org_stream_credits c where c.org_id = s.org_id and c.session_id = s.id and c.reason = 'consume') as consumes
+           (select count(*)::int from org_stream_credits c where c.org_id = s.org_id and c.session_id = s.id and c.reason = 'consume') as consumes,
+           s.ingest_polled_at,
+           (select x.ingest_state from fixture_stream_samples x where x.session_id = s.id and x.source = 'poll' order by x.sampled_at desc limit 1) as sample_word,
+           (select max(x.sampled_at) from fixture_stream_samples x where x.session_id = s.id and x.source = 'poll') as sample_at
       from fixture_stream_sessions s
       left join fixture_stream_pairings p on p.id = s.pairing_id and p.ended_at is null
       left join fixture_stream_codes k on k.id = p.code_id
@@ -202,6 +249,36 @@ async function snapshot(x: Real): Promise<Snap> {
 }
 const phoneOf = (x: Real, id: string | null): P | null => (id === null ? null : PHONES.find((p) => x.phones[p] === id) ?? null);
 
+/** M-3 / m-3: the only word that may end a live slot (W19) or hand it over (T4) is `disconnected` — never `unknown`. A fresh
+ *  read is the script's word (a read the tick CLAIMED) or a poll sample young enough to be served coalesced; true when
+ *  either could have said it. */
+function couldReadDisconnected(x: Real, s: SRow, now: number): boolean {
+  if ((x.scripted.get(s.input_id ?? "") ?? "disconnected") === "disconnected") return true;
+  return s.sample_word === "disconnected" && s.sample_at !== null && now - s.sample_at.getTime() < FRESH_READ_MS;
+}
+/** M-2 / M-4: a tick at `now` CLAIMS its read — nothing coalesces it — so the word it reads is the script's. */
+const claimsRead = (s: SRow, now: number) => s.ingest_polled_at === null || now - s.ingest_polled_at.getTime() >= STREAM_POLL_MS;
+/** M-4: W19 (§6.8.5) is OWED at `now` and the tick will read the word that proves it: a live session with a phone (C-1),
+ *  no beat and no connected sample for PHONE_LOST_LIVE_MINUTES, the script `disconnected`, and the read claimed. */
+function w19Owed(x: Real, s: SRow, now: number): boolean {
+  return s.state === "live" && s.first_ingest_at !== null && s.pairing_id !== null
+    && now - (s.phone_beat_at ?? s.first_ingest_at).getTime() >= LOST_MS
+    && now - (s.last_connected_at ?? s.first_ingest_at).getTime() >= LOST_MS
+    && (x.scripted.get(s.input_id ?? "") ?? "disconnected") === "disconnected" && claimsRead(s, now);
+}
+/** C2 (§5.1), from the rule text: the ACTIVE code at `now`. `due` is C2's evaluation finding it expired (finished GRACE
+ *  ago or more, no session open): the call that finds it writes the end, and is refused. */
+function activeStatus(m: Readonly<Model>, now: number): "active" | "finishing" | "due" | "expired" {
+  if (m.expired) return "expired";
+  if (m.finishedAt === null) return "active";
+  return m.open === null && now - m.finishedAt >= GRACE_MS ? "due" : "finishing";
+}
+/** W23 (§6.7.4), from the rule text: free while the anchor's window is open and fewer than three restarts have counted. */
+function restartFree(m: Readonly<Model>, now: number): { windowOpen: boolean; free: boolean } {
+  const windowOpen = m.w23.anchorAt !== null && now - m.w23.anchorAt < REUSE_MS;
+  return { windowOpen, free: windowOpen && m.w23.counted < FREE_RESTARTS_PER_WINDOW };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // One primitive step: run it, reconcile the tick's ends, compare the model with the database, check the invariants
 // ---------------------------------------------------------------------------------------------------------------------
@@ -214,12 +291,14 @@ type StepInfo = {
   calls: { phone: P; viaIdx: number; kind: CallKind; status: number; holderPre: boolean; pairIdxPre: number | null }[];
   claimNewBy: P | null;                       // #4: the only legal way a live slot changes phone
   ignoredHeld: string | null;                 // #9
+  answers: { sid: string; state: string; via: "beat" | "get" }[];   // #8 (I-3): the answers that name a session
+  owedLost: string[];                         // M-4: sids W19 owes an end at this tick
   now: Date;
 };
 
 async function step(m: Model, x: Real, body: (info: StepInfo, pre: Snap) => Promise<void>): Promise<void> {
   const pre = await snapshot(x);
-  const info: StepInfo = { named: new Set(), predictedEnds: new Map(), created: null, calls: [], claimNewBy: null, ignoredHeld: null, now: x.r.now() };
+  const info: StepInfo = { named: new Set(), predictedEnds: new Map(), created: null, calls: [], claimNewBy: null, ignoredHeld: null, answers: [], owedLost: [], now: x.r.now() };
   await body(info, pre);
   info.now = x.r.now();
   const post = await snapshot(x);
@@ -235,7 +314,8 @@ async function checkTickEnd(x: Real, s: SRow, now: Date): Promise<Outcome> {
     // input not connected.
     const beatAge = t - (s.phone_beat_at ?? s.first_ingest_at).getTime();
     const videoAge = t - (s.last_connected_at ?? s.first_ingest_at).getTime();
-    expect([beatAge >= LOST_MS, videoAge >= LOST_MS, x.scripted.get(s.input_id ?? "") !== "connected"], `#10: ${s.id} ended phone_lost live with beat ${beatAge} ms, video ${videoAge} ms`).toEqual([true, true, true]);
+    // M-3: the read W19 judged said `disconnected` — an `unknown` (m-3) or a connected input never ends it.
+    expect([beatAge >= LOST_MS, videoAge >= LOST_MS, couldReadDisconnected(x, s, t)], `#10: ${s.id} ended phone_lost live with beat ${beatAge} ms, video ${videoAge} ms, script ${x.scripted.get(s.input_id ?? "")}, sample ${s.sample_word}`).toEqual([true, true, true]);
     x.tally.count("phoneLostLive");
     return "end:phone_lost-live";
   }
@@ -276,7 +356,8 @@ async function reconcile(m: Model, x: Real, info: StepInfo, pre: Snap, post: Sna
     if (!was || !ACTIVE.includes(was.state) || ACTIVE.includes(s.state)) continue;
     const predicted = info.predictedEnds.get(s.id);
     if (predicted !== undefined) {
-      expect(s.end_reason, `the spec's end for ${s.id}`).toBe(predicted);
+      if (predicted.startsWith("fail:")) expect([s.state, s.fail_reason], `the spec's failure for ${s.id}`).toEqual(["failed", predicted.slice(5)]);
+      else expect(s.end_reason, `the spec's end for ${s.id}`).toBe(predicted);
     } else {
       expect(["stopped", "operator_stopped"], `#5: ${s.id} was stopped (${s.end_reason}) by a step that did not name it`).not.toContain(s.end_reason);
       t.outcome(await checkTickEnd(x, s, info.now));
@@ -325,7 +406,7 @@ async function reconcile(m: Model, x: Real, info: StepInfo, pre: Snap, post: Sna
     const n = info.now.getTime();
     expect([
       n - was.holder_beat_at!.getTime() >= DEAD_MS,
-      x.scripted.get(was.input_id ?? "") !== "connected",
+      couldReadDisconnected(x, s, n),   // the claim's fresh read is recorded on the post row (M-3: never `unknown`)
       n - (was.last_connected_at ?? was.first_ingest_at).getTime() >= DEAD_MS,
     ], `#4: ${s.id}'s live slot changed phone without T4's conjunction`).toEqual([true, true, true]);
   }
@@ -340,6 +421,25 @@ async function reconcile(m: Model, x: Real, info: StepInfo, pre: Snap, post: Sna
   if (info.created !== null) {
     expect(post.sessions.find((s) => s.id === info.created)?.first_ingest_at, "#8: go-live ⇒ no ingest yet").toBeNull();
   }
+  // #8 on the ANSWERS it names (I-3): a beat's `go-live S` and a descriptor's `warming` ⇒ S has no ingest yet; a `live S`
+  // (beat or descriptor) ⇒ S has ingest. Each answer is read against the rows as the step left them, which is what the
+  // answer was built from (§6.3.3 step 6).
+  for (const a of info.answers) {
+    const row = post.sessions.find((s) => s.id === a.sid);
+    expect(row, `#8: the ${a.via} answer ${a.state} names a session of this fixture`).toBeDefined();
+    if (a.state === "go-live" || a.state === "warming") {
+      expect(row!.first_ingest_at, `#8: a ${a.via} answering ${a.state} ${a.sid} ⇒ no ingest yet`).toBeNull();
+      if (a.state === "go-live") t.count("goLiveAnswers");
+    } else if (a.state === "live") {
+      expect(row!.first_ingest_at, `#8: a ${a.via} answering live ${a.sid} ⇒ ingest`).not.toBeNull();
+      t.count("liveAnswers");
+    }
+  }
+  // M-4 (§6.8.5 "when it fires"): an end W19 owed at this tick, on a read the tick claimed, was MADE at this tick.
+  for (const sid of info.owedLost) {
+    expect(ACTIVE.includes(post.sessions.find((s) => s.id === sid)?.state ?? "missing"), `M-4: W19 was owed for ${sid} at this tick and it is still open`).toBe(false);
+    t.count("owedLostMade");
+  }
 
   // #9 (T24a): the held sid is not ended by the stop that named it.
   if (info.ignoredHeld !== null) {
@@ -351,6 +451,8 @@ async function reconcile(m: Model, x: Real, info: StepInfo, pre: Snap, post: Sna
   const consumedBefore = pre.sessions.reduce((n, s) => n + s.consumes, 0);
   if (consumes > consumedBefore) t.count("consumes");
   expect(consumes, "#11: the fixture's consume rows are W23's count").toBe(m.w23.paid);
+  // #12 (I-2, money): the org's balance is the rule text's — allowance + pack − paid lives + purchases.
+  expect(await creditBalance(sql, x.r.auth.orgId), "#12: the org's match credits are the rule text's").toBe(m.balance);
 
   t.invariantChecks++;
 }
@@ -379,12 +481,28 @@ function beatBody(x: Real, code: string, phone: string, over: Record<string, unk
   });
 }
 
-/** C1/C1b/C3 (§6.3): whether code `idx` serves phone p a call of this kind. A claim and a start: the active code only. A
- *  beat or a GET: also an ended code, to the open session's phone, when the session was created before that code ended. */
-function served(m: Model, p: P, idx: number, kind: CallKind): boolean {
-  if (idx === m.codes - 1) return true;
+/** C1/C1b/C3 (§6.3): whether code `idx` serves phone p a call of this kind at `now`. The ACTIVE code serves everything
+ *  while it is active or finishing (C1a; T34: an open session defers C2's expiry). Once C2 ends it (due or expired) it is an
+ *  ENDED code — and C1b, which would serve the open session's phone, never applies: C2 ends a code only with no session
+ *  open, and nothing opens on an ended code (W5 and T15 both need its current phone). A reissued code: a beat or a GET from
+ *  the open session's phone, when the session was created before that code ended. */
+function served(m: Model, p: P, idx: number, kind: CallKind, now: number): boolean {
+  if (idx === m.codes - 1) {
+    const st = activeStatus(m, now);
+    if (st === "active" || st === "finishing") return true;
+    expect(m.open, "C2 ends the active code only with no session open, and none can open on an ended code").toBeNull();
+    return false;
+  }
   if (kind === "claimNew" || kind === "start") return false;
   return m.open !== null && m.open.holder === p && idx >= m.open.bornIdx;
+}
+
+/** C2's write at a call that finds the active code due: it ENDS (expired), so the active code has no current phone. */
+function expireIfDue(m: Model, idx: number, now: number): boolean {
+  if (idx !== m.codes - 1) return false;
+  const st = activeStatus(m, now);
+  if (st === "due") { m.expired = true; m.current = null; }
+  return st === "due" || st === "expired";
 }
 
 /** A refused 401: the phone forgets the code. */
@@ -409,7 +527,10 @@ async function phoneCall(m: Model, x: Real, p: P, kind: "new" | "resume" | null,
     const sid = o.ended ? m.open!.sid : X === null && holdsOpen ? m.open!.sid : null;
     const callKind: CallKind = kind === "new" ? "claimNew" : kind === "resume" ? "claimResume" : "beat";
     const name = kind === "new" ? "claimNew" : kind === "resume" ? "claimResume" : "beat";
-    const isServed = served(m, p, viaIdx, callKind);
+    const now = x.r.now().getTime();
+    const isServed = served(m, p, viaIdx, callKind, now);
+    // T34: the code is past its grace with a session open — expiry deferred, the call answered as before.
+    const deferred = isServed && viaIdx === active && activeStatus(m, now) === "finishing" && now - m.finishedAt! >= GRACE_MS;
     if (kind === "new" && pre.current !== null && phoneOf(x, pre.current.phone) !== p) t.count("oneCurrent");
     const got = await outcomeOf(postBeat(c.code, c.tok, beatBody(x, c.code, x.phones[p], {
       claim: kind, sid, stopped: X, device: kind === "new" ? { model: `model-${p}` } : null,
@@ -417,6 +538,7 @@ async function phoneCall(m: Model, x: Real, p: P, kind: "new" | "resume" | null,
     }), x.r.deps, x.r.now()));
     info.calls.push({ phone: p, viaIdx, kind: callKind, status: statusOf(got), holderPre: holdsOpen, pairIdxPre: m.open?.pairIdx ?? null });
     if (!isServed) {
+      if (expireIfDue(m, viaIdx, now)) t.outcome("beat:T33-401");   // T33: finish + grace, nothing open
       forget(m, p, got, `C1/C3: ${name} through an ended code`);
       t.outcome(kind === "resume" ? "claimResume:401" : "beat:401");
       if (kind !== null) t.count("refusedClaims");
@@ -424,6 +546,8 @@ async function phoneCall(m: Model, x: Real, p: P, kind: "new" | "resume" | null,
     }
     expect("ok" in got, `${name} is served: ${"refused" in got ? got.refused.code : ""}`).toBe(true);
     const answer = CaptureBeatAnswer.parse((got as { ok: unknown }).ok);
+    if (answer.state === "go-live" || answer.state === "live") info.answers.push({ sid: answer.sid, state: answer.state, via: "beat" });
+    if (deferred) t.outcome("beat:T34-deferred");
     if (kind === "new") m.scanned.set(p, viaIdx);
     if (viaIdx !== active) t.outcome("beat:c1b-served");
 
@@ -436,17 +560,23 @@ async function phoneCall(m: Model, x: Real, p: P, kind: "new" | "resume" | null,
     // §5.5's holder: the open session's phone while its pairing stands, else the current pairing on the caller's code.
     const H: P | null = open?.holder ?? (viaIdx === active ? m.current : null);
     const preSession = open === null ? null : pre.sessions.find((s) => s.id === open!.sid)!;
-    const deadPre = open !== null && preSession !== null && preSession.holder_beat_at !== null
-      && x.r.now().getTime() - preSession.holder_beat_at.getTime() >= DEAD_MS
-      && x.scripted.get(preSession.input_id ?? "") !== "connected"
-      && x.r.now().getTime() - (preSession.last_connected_at ?? preSession.first_ingest_at ?? x.r.now()).getTime() >= DEAD_MS;
+    const deadClocks = open !== null && preSession !== null && preSession.holder_beat_at !== null
+      && now - preSession.holder_beat_at.getTime() >= DEAD_MS
+      && now - (preSession.last_connected_at ?? preSession.first_ingest_at ?? x.r.now()).getTime() >= DEAD_MS;
+    const deadPre = deadClocks && couldReadDisconnected(x, preSession!, now);
+    // M-2: the claim's read is CLAIMED (nothing coalesces it), so it reads the script — and the script says
+    // `disconnected`: all three conjuncts are known true before the call, and T4 is OWED, not merely allowed.
+    const deadOwed = deadClocks && (x.scripted.get(preSession!.input_id ?? "") ?? "disconnected") === "disconnected" && claimsRead(preSession!, now);
 
     type Row = "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7" | "T8";
     let row: Row;
     if (kind === "new") {
       if (H === null || H === p) row = "T1";
-      else if (open?.live) row = answer.state === "taken" ? "T3" : "T4";
-      else row = "T2";
+      else if (open?.live) {
+        if (deadOwed) expect(answer.state, "M-2: T4 is owed — the live slot's phone is dead on a claimed read (A14)").not.toBe("taken");
+        // Otherwise a coalesced sample decides the second conjunct, and the answer says which it decided.
+        row = answer.state === "taken" ? "T3" : "T4";
+      } else row = "T2";
       if (row === "T4") expect(deadPre, "T4: a live slot is taken over only when its phone is dead (A14)").toBe(true);
     } else if (kind === "resume") row = H === null || H === p ? "T5" : "T6";
     else row = H === p ? "T8" : "T7";
@@ -514,13 +644,15 @@ async function get(m: Model, x: Real, p: P): Promise<void> {
   await step(m, x, async (info, pre) => {
     const idx = m.scanned.get(p)!;
     const c = x.codes[idx]!;
-    const isServed = served(m, p, idx, "get");
+    const now = x.r.now().getTime();
+    const isServed = served(m, p, idx, "get", now);
     const holdsOpen = m.open !== null && m.open.holder === p;
     const got = await outcomeOf(getCode(c.code, c.tok, { slot: 0, phone: x.phones[p] }, x.r.deps, x.r.now()));
     info.calls.push({ phone: p, viaIdx: idx, kind: "get", status: statusOf(got), holderPre: holdsOpen, pairIdxPre: m.open?.pairIdx ?? null });
-    if (!isServed) { forget(m, p, got, "C1/C3: a GET through an ended code"); x.tally.outcome("get:401"); return; }
+    if (!isServed) { expireIfDue(m, idx, now); forget(m, p, got, "C1/C3: a GET through an ended code"); x.tally.outcome("get:401"); return; }
     expect("ok" in got, `GET is served: ${"refused" in got ? got.refused.code : ""}`).toBe(true);
     const d = (got as { ok: Record<string, unknown> }).ok;
+    if ((d.state === "live" || d.state === "warming") && typeof d.sid === "string") info.answers.push({ sid: d.sid, state: d.state, via: "get" });
     const state = m.open === null ? null : pre.sessions.find((s) => s.id === m.open!.sid)!.state;
     const owed = holdsOpen && (state === "warming" || state === "live" || state === "ending");
     expect("cred" in d, `#3: cred to ${p} (${owed ? "the open session's phone" : "not the open session's phone"})`).toBe(owed);
@@ -528,7 +660,8 @@ async function get(m: Model, x: Real, p: P): Promise<void> {
   });
 }
 
-/** W5 (§6.6): the organiser's Go live — admitted only on a PRESENT current phone of the active code. */
+/** W5 (§6.6): the organiser's Go live on the destination the organiser names — admitted only on a PRESENT current phone of
+ *  the active code, then §6.7.1's order: the balance gate (waived for a free restart, W23), then the destination (T36). */
 async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
   let result: "200" | "refused" = "refused";
   await step(m, x, async (info, pre) => {
@@ -536,7 +669,7 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
     let refusal: string | null = null;
     let sid: string | null = null;
     try {
-      sid = (await createSession(x.r.auth, x.r.fixtureId, { mode: "passthrough", targetId: x.r.target.id }, x.r.deps)).sessionId;
+      sid = (await createSession(x.r.auth, x.r.fixtureId, { mode: "passthrough", targetId: x.targets[m.pick]! }, x.r.deps)).sessionId;
     } catch (e) {
       if (!(e instanceof HttpError)) throw e;
       refusal = e.code ?? `${e.status}`;
@@ -560,8 +693,22 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
       t.outcome("goLive:phone_not_paired");
       return;
     }
+    const { free } = restartFree(m, x.r.now().getTime());
+    if (m.balance < 1 && !free) {
+      expect(refusal, "T14: no credit and not a free restart").toBe("no_credits");
+      t.count("noCreditRefusals");
+      t.outcome("goLive:no_credits");
+      return;
+    }
+    if (m.archived.has(m.pick)) {
+      // admit's target_not_found carries no code: the 404 itself.
+      expect(refusal, "T36: the named destination is archived").toBe("404");
+      t.outcome("goLive:target_not_found");
+      return;
+    }
     expect(refusal, "W5: a present phone is admitted").toBeNull();
-    m.open = { sid: sid!, live: false, holder: m.current, pairIdx: m.codes - 1, bornIdx: m.codes - 1, startedBy: "organiser" };
+    if (m.balance < 1) t.count("freeAtZero");   // W23's balance waiver: a free restart at an empty balance
+    m.open = { sid: sid!, live: false, holder: m.current, pairIdx: m.codes - 1, bornIdx: m.codes - 1, startedBy: "organiser", target: m.pick };
     m.sessions.push({ sid: sid!, video: false });
     info.created = sid;
     result = "200";
@@ -570,16 +717,18 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
   return result;
 }
 
-/** T12 → T13 → T15 (§6.3.4): the phone's own start, through the code it last scanned. */
+/** T12 → T13 → T15 (§6.3.4): the phone's own start, through the code it last scanned, on the saved pre-pick. After T12
+ *  and T13: no usable pre-pick → 409 no_destination (T36), then §6.7.1's balance gate → 402 no_credit (T14). */
 async function operatorStart(m: Model, x: Real, p: P): Promise<void> {
   await step(m, x, async (info) => {
     const t = x.tally;
     const idx = m.scanned.get(p)!;
     const c = x.codes[idx]!;
+    const now = x.r.now().getTime();
     const holdsOpen = m.open !== null && m.open.holder === p;
     const got = await outcomeOf(postStart(c.code, c.tok, { phone: x.phones[p] }, x.r.deps, x.r.now()));
     info.calls.push({ phone: p, viaIdx: idx, kind: "start", status: statusOf(got), holderPre: holdsOpen, pairIdxPre: m.open?.pairIdx ?? null });
-    if (!served(m, p, idx, "start")) { forget(m, p, got, "C3: a start through an ended code"); t.outcome("start:401"); return; }
+    if (!served(m, p, idx, "start", now)) { expireIfDue(m, idx, now); forget(m, p, got, "C3: a start through an ended code"); t.outcome("start:401"); return; }
     const H = m.open?.holder ?? m.current;
     const refused = "refused" in got ? [got.refused.status, got.refused.code, got.refused.extras] : null;
     if (H !== p) {
@@ -589,10 +738,18 @@ async function operatorStart(m: Model, x: Real, p: P): Promise<void> {
       expect(refused, "T13: names the running session and who started it").toEqual([409, "already_live", { sid: m.open.sid, startedBy: m.open.startedBy }]);
       t.count("oneOpen");
       t.outcome("start:already_live");
+    } else if (m.archived.has(m.pick)) {
+      expect(refused, "T36: the pre-pick is archived, so it reads as none").toEqual([409, "no_destination", undefined]);
+      t.outcome("start:no_destination");
+    } else if (m.balance < 1 && !restartFree(m, now).free) {
+      expect(refused, "T14: no credit and not a free restart").toEqual([402, "no_credit", undefined]);
+      t.count("noCreditRefusals");
+      t.outcome("start:no_credit");
     } else {
       expect(refused, "T15").toBeNull();
+      if (m.balance < 1) t.count("freeAtZero");
       const ok = CaptureStartOk.parse((got as { ok: unknown }).ok);
-      m.open = { sid: ok.sid, live: false, holder: p, pairIdx: idx, bornIdx: idx, startedBy: "operator" };
+      m.open = { sid: ok.sid, live: false, holder: p, pairIdx: idx, bornIdx: idx, startedBy: "operator", target: m.pick };
       m.sessions.push({ sid: ok.sid, video: false });
       info.created = ok.sid;
       t.outcome("start:200");
@@ -600,9 +757,11 @@ async function operatorStart(m: Model, x: Real, p: P): Promise<void> {
   });
 }
 
-/** The phone's video reaches the ingest (FakeIngest.setState), and a fresh poll reads it: the session has video. */
+/** The phone's video reaches the ingest (FakeIngest.setState), and a fresh poll reads it: the session has video. The FIRST
+ *  video of a session is where money moves (W23 / T14 / T28), predicted from the rule text at the instant of the live. */
 async function ingestConnect(m: Model, x: Real): Promise<void> {
-  await step(m, x, async (_info, pre) => {
+  await step(m, x, async (info, pre) => {
+    const t = x.tally;
     const sid = m.open!.sid;
     const input = pre.sessions.find((s) => s.id === sid)!.input_id!;
     x.r.ingest.setState(input, "connected");
@@ -610,18 +769,44 @@ async function ingestConnect(m: Model, x: Real): Promise<void> {
     x.everConnected.add(input);
     x.r.tick(FRESH_READ_MS);
     await tickSession(sid, x.r.deps, "poll");
-    const [row] = await sql<{ state: string; first_ingest_at: Date | null }[]>`select state, first_ingest_at from fixture_stream_sessions where id = ${sid}`;
+    const [row] = await sql<{ state: string; first_ingest_at: Date | null; fail_reason: string | null }[]>`
+      select state, first_ingest_at, fail_reason from fixture_stream_sessions where id = ${sid}`;
+    const s = m.sessions.find((v) => v.sid === sid)!;
+    const now = x.r.now().getTime();
+    const { windowOpen, free } = restartFree(m, now);
+    const owed = !s.video && !free;               // this live must pay a credit
+    if (row!.state === "failed" && row!.fail_reason === "no_credits") {
+      // T28: admitted (free, or on a credit since spent), and at the live the restart is no longer free and the balance is
+      // empty. The poll wrote first ingest before the credit was decided, so the session reached video (§6.7.4 counts it).
+      expect([owed, m.balance < 1], "T28: failed(no_credits) only when the live owes a credit and none is held").toEqual([true, true]);
+      info.predictedEnds.set(sid, "fail:no_credits");
+      m.open = null;
+      s.video = true;
+      if (windowOpen) m.w23.counted++;
+      t.outcome("video:T28-no_credits");
+      return;
+    }
     if (!ACTIVE.includes(row!.state)) return;   // the tick's expiry came first: the reconcile proves it owed
     expect(row!.first_ingest_at, "a fresh connected read records first ingest").not.toBeNull();
-    const s = m.sessions.find((v) => v.sid === sid)!;
+    expect(owed && m.balance < 1, "T28: a live owed a credit with none held went live").toBe(false);
     m.open!.live = true;
     if (s.video) return;
     s.video = true;
-    // W23 from the rule text: the first live pays and anchors; three counted restarts are free; the fourth pays.
+    // W23 from the rule text: the first live pays and anchors; three counted restarts are free; the fourth pays and
+    // re-anchors; a live after the window closed pays and re-anchors (M-1).
     const w = m.w23;
-    if (!w.anchored) { w.anchored = true; w.paid++; w.counted = 0; x.tally.outcome("video:first-paid"); }
-    else if (w.counted >= FREE_RESTARTS_PER_WINDOW) { w.paid++; w.counted = 0; x.tally.count("paidRestarts"); x.tally.outcome("video:paid-restart"); }
-    else { w.counted++; x.tally.outcome("video:free-restart"); }
+    if (free) { w.counted++; t.outcome("video:free-restart"); return; }
+    const kind = w.anchorAt === null ? "video:first-paid" : windowOpen ? "video:paid-restart" : "video:window-closed-paid";
+    w.paid++;
+    w.counted = 0;
+    m.balance--;
+    // The new anchor is this consume ROW's created_at (the database clock), read back from the row the model predicted.
+    const [anchor] = await sql<{ created_at: Date }[]>`
+      select created_at from org_stream_credits where session_id = ${sid} and reason = 'consume'`;
+    expect(anchor, "the paid live wrote its consume row").toBeDefined();
+    w.anchorAt = anchor!.created_at.getTime();
+    if (kind === "video:paid-restart") t.count("paidRestarts");
+    t.outcome(kind);
   });
 }
 
@@ -633,9 +818,22 @@ async function ingestDrop(m: Model, x: Real): Promise<void> {
   });
 }
 
+/** M-3: Cloudflare answers `unknown` for the session's input (a read blip). Nothing may end or hand over on it (m-3). */
+async function ingestUnknown(m: Model, x: Real): Promise<void> {
+  await step(m, x, async (_info, pre) => {
+    const input = pre.sessions.find((s) => s.id === m.open!.sid)!.input_id!;
+    x.r.ingest.setState(input, "unknown");
+    x.scripted.set(input, "unknown");
+  });
+}
+
 const advance = (m: Model, x: Real, ms: number) => step(m, x, async () => { x.r.tick(ms); });
-const tick = (m: Model, x: Real) => step(m, x, async () => { await tickSession(m.open!.sid, x.r.deps, "poll"); });
-const cronTick = (m: Model, x: Real) => step(m, x, async () => { await tickOpenSessions(x.r.deps, { orgIds: [x.r.auth.orgId] }); });
+/** M-4: the tick is told which sessions W19 owes an end NOW, and the reconcile proves each was ended at this tick. */
+const owedAt = (x: Real, info: StepInfo, pre: Snap) => {
+  for (const s of pre.sessions) if (w19Owed(x, s, x.r.now().getTime())) info.owedLost.push(s.id);
+};
+const tick = (m: Model, x: Real) => step(m, x, async (info, pre) => { owedAt(x, info, pre); await tickSession(m.open!.sid, x.r.deps, "poll"); });
+const cronTick = (m: Model, x: Real) => step(m, x, async (info, pre) => { owedAt(x, info, pre); await tickOpenSessions(x.r.deps, { orgIds: [x.r.auth.orgId] }); });
 
 /** T20 (M-7): the organiser's Stop — the named session ends `stopped`; no pairing moves. */
 async function orgStop(m: Model, x: Real): Promise<void> {
@@ -649,13 +847,85 @@ async function orgStop(m: Model, x: Real): Promise<void> {
   });
 }
 
-/** T30/C-2: a new code; the old one ends; no pairing moves, and the open session keeps its phone. */
+/** T30/C-2: a new code; the old one ends; no pairing moves, and the open session keeps its phone. C4: refused on a
+ *  finished fixture. After C5 the expired code stays ended, and this mints past it. */
 async function reissue(m: Model, x: Real): Promise<void> {
   await step(m, x, async () => {
-    const shown = await reissueStreamCode(x.r.auth, x.r.fixtureId);
-    x.codes.push({ code: shown.qr.code, tok: shown.qr.tok });
+    const got = await reissueStreamCode(x.r.auth, x.r.fixtureId).then((shown) => ({ shown }), (e: unknown) => ({ e }));
+    if (m.finishedAt !== null) {
+      expect("e" in got && got.e instanceof HttpError && [got.e.status, got.e.code], "C4: no mint on a finished fixture").toEqual([422, "fixture_finished"]);
+      x.tally.outcome("reissue:422");
+      return;
+    }
+    if ("e" in got) throw got.e;
+    x.codes.push({ code: got.shown.qr.code, tok: got.shown.qr.tok });
     m.codes++;
     m.current = null;
+    m.expired = false;
+    x.tally.outcome("reissue:200");
+  });
+}
+
+/** The result is recorded: the fixture's status moves to a finished one and V430's trigger stamps `finished_at` (the
+ *  producer every writer goes through; stream-codes.test.ts's `finish`). The stamp is the DATABASE clock, so it is then
+ *  moved to the injected clock WITHOUT naming `status` (the trigger fires only on a status write). */
+async function finish(m: Model, x: Real): Promise<void> {
+  await step(m, x, async () => {
+    const [f] = await sql<{ status: string }[]>`select status from fixtures where id = ${x.r.fixtureId}`;
+    x.priorStatus = f!.status;
+    await sql`update fixtures set status = 'cancelled' where id = ${x.r.fixtureId}`;
+    const [stamped] = await sql<{ finished_at: Date | null }[]>`select finished_at from fixtures where id = ${x.r.fixtureId}`;
+    expect(stamped!.finished_at, "V430: a status write to a finished status stamps finished_at").not.toBeNull();
+    await sql`update fixtures set finished_at = ${x.r.now()} where id = ${x.r.fixtureId}`;
+    m.finishedAt = x.r.now().getTime();
+  });
+}
+
+/** C5: the result is reverted — the prior status restored, and the trigger clears `finished_at`. A code not yet ended is
+ *  plain ACTIVE again; one C2 already ended stays ended. */
+async function revertResult(m: Model, x: Real): Promise<void> {
+  await step(m, x, async () => {
+    await sql`update fixtures set status = ${x.priorStatus!} where id = ${x.r.fixtureId}`;
+    const [f] = await sql<{ finished_at: Date | null }[]>`select finished_at from fixtures where id = ${x.r.fixtureId}`;
+    expect(f!.finished_at, "V430: reverting the status clears finished_at (C5)").toBeNull();
+    m.finishedAt = null;
+    x.tally.outcome(m.expired ? "revert:expired-stays" : "revert:active");
+  });
+}
+
+/** D2 / T36: Remove the pre-picked destination in Directory — an archive, refused while a session holds it. */
+async function archiveDestination(m: Model, x: Real): Promise<void> {
+  await step(m, x, async () => {
+    const held = m.open !== null && m.open.target === m.pick;
+    const got = await removeStreamTarget(x.r.auth, x.r.auth.orgId, x.targets[m.pick]!).then(() => null, (e: unknown) => e);
+    if (held) {
+      expect(got instanceof HttpError && [got.status, got.code], "D2: a destination a session holds is not removed").toEqual([409, "TARGET_IN_USE"]);
+      x.tally.outcome("archive:held-refused");
+      return;
+    }
+    expect(got, "D2: an unheld destination is archived").toBeNull();
+    m.archived.add(m.pick);
+    x.tally.outcome("archive:archived");
+  });
+}
+
+/** The organiser adds a destination and picks it (§6.7.3's picker writes the pre-pick on change). */
+async function repick(m: Model, x: Real): Promise<void> {
+  await step(m, x, async () => {
+    const saved = await createStreamTarget(x.r.auth, x.r.auth.orgId, { kind: "youtube", label: `Club ${x.targets.length + 1}`, streamKey: `yt-${randomUUID()}` });
+    await saveStreamSettings(x.r.auth, x.r.fixtureId, { targetId: saved.id });
+    x.targets.push(saved.id);
+    m.pick = x.targets.length - 1;
+  });
+}
+
+/** A Stripe purchase lands: the webhook's ledger writer, with its own event id. */
+async function buyCredit(m: Model, x: Real, delta: number): Promise<void> {
+  await step(m, x, async () => {
+    const r = await recordPurchase({ orgId: x.r.auth.orgId, delta, stripeEventId: `evt_capture_model_${randomUUID()}` });
+    expect(r.applied, "a new event id is applied").toBe(true);
+    m.balance += delta;
+    x.tally.outcome("buy:applied");
   });
 }
 
@@ -702,19 +972,32 @@ const cmd = {
   goLive: () => new Cmd("goLive", "goLive", () => true, async (m, x) => { await goLive(m, x); }),
   /** The organiser's Go live after an end (W23's restart), as an INTENT: stop what is open, make sure the active code has a
    *  present phone, Go live — and, `video`, let the phone's video arrive. Each part is its own checked step. */
-  restart: (who: P, video: boolean, by: "organiser" | "operator" = "organiser") => new Cmd(`restart(${who}${video ? ",video" : ""},${by})`, "restart", () => true, async (m, x) => {
+  /** `fix`: the organiser clears what would refuse the restart first — buys a credit when it is not free and none is held
+   *  (T14), picks a destination when the pick is archived (T36). Without it the start meets that gate, as predicted. */
+  restart: (who: P, video: boolean, by: "organiser" | "operator" = "organiser", fix = true) => new Cmd(`restart(${who}${video ? ",video" : ""},${by}${fix ? "" : ",nofix"})`, "restart",
+    (m) => m.finishedAt === null && !m.expired, async (m, x) => {
     if (m.open !== null) await orgStop(m, x);
     if (by === "operator") {
       // The phone's own start (T15): it must hold the active code's slot and carry no undelivered Stop.
       if (m.current !== who || m.stopRecords.has(who)) await phoneCall(m, x, who, "new");
+    } else if (m.current === null) await phoneCall(m, x, who, "new");
+    else {
+      const cur = (await snapshot(x)).current!;
+      if (x.r.now().getTime() - cur.last_beat_at.getTime() >= silentMs(cur.answered_poll_seconds)) await phoneCall(m, x, m.current, null);
+    }
+    const blocked = m.archived.has(m.pick) || (m.balance < 1 && !restartFree(m, m.now()).free);
+    if (blocked && !fix) {
+      if (by === "operator") await operatorStart(m, x, who);
+      else await goLive(m, x);
+      expect(m.open, "restart: a start the gates refuse opens nothing").toBeNull();
+      return;
+    }
+    if (m.archived.has(m.pick)) await repick(m, x);
+    if (m.balance < 1 && !restartFree(m, m.now()).free) await buyCredit(m, x, 1);
+    if (by === "operator") {
       await operatorStart(m, x, who);
       expect(m.open?.startedBy, "restart: the current phone's own start is admitted").toBe("operator");
     } else {
-      if (m.current === null) await phoneCall(m, x, who, "new");
-      else {
-        const cur = (await snapshot(x)).current!;
-        if (x.r.now().getTime() - cur.last_beat_at.getTime() >= silentMs(cur.answered_poll_seconds)) await phoneCall(m, x, m.current, null);
-      }
       expect(await goLive(m, x), "restart: a present phone, nothing open — Go live is admitted").toBe("200");
     }
     if (video) await ingestConnect(m, x);
@@ -736,9 +1019,45 @@ const cmd = {
   cronTick: () => new Cmd("cronTick", "cronTick", () => true, cronTick),
   orgStop: () => new Cmd("orgStop", "orgStop", (m) => m.open !== null, orgStop),
   reissue: () => new Cmd("reissue", "reissue", () => true, reissue),
+  /** M-3 as an INTENT, `gone`'s twin: Cloudflare's read blips to `unknown` and — `ms` — the clock runs on past W19's
+   *  window and the stream-tick job runs. On a live session W19 must NOT fire on that read (m-3); #10 proves it. */
+  ingestUnknown: (ms: number) => new Cmd(`ingestUnknown(${ms / SEC}s)`, "ingestUnknown", (m) => m.open !== null, async (m, x) => {
+    await ingestUnknown(m, x);
+    if (ms === 0) return;
+    await advance(m, x, ms);
+    await cronTick(m, x);
+  }),
+  /** I-2: the result is recorded — and, `wait`, the clock runs past C2's grace (an INTENT of two checked steps). */
+  finish: (wait: boolean) => new Cmd(`finish(${wait ? "wait" : ""})`, "finish", (m) => m.finishedAt === null, async (m, x) => {
+    await finish(m, x);
+    if (!wait) return;
+    await advance(m, x, GRACE_MS + MIN);
+    // The slot's phone then beats: T34 when a session is still open (expiry deferred), T33 when none is (401).
+    const p = m.open?.holder ?? m.current;
+    if (p !== null && m.scanned.has(p)) await phoneCall(m, x, p, null);
+  }),
+  revertResult: () => new Cmd("revertResult", "revertResult", (m) => m.finishedAt !== null, revertResult),
+  archiveDestination: () => new Cmd("archiveDestination", "archiveDestination", (m) => !m.archived.has(m.pick), archiveDestination),
+  repick: () => new Cmd("repick", "repick", (m) => m.archived.has(m.pick), repick),
+  buyCredit: (delta: number) => new Cmd(`buyCredit(${delta})`, "buyCredit", () => true, (m, x) => buyCredit(m, x, delta)),
+  /** T28 as an INTENT (§6.7.4 × §5.2): a free restart admitted just inside the reuse window, its video arriving just after
+   *  the window closed. At the live it is no longer free: it pays — or, with nothing held, fails no_credits. Each part is
+   *  its own checked step; ingestConnect predicts which. */
+  windowEdge: () => new Cmd("windowEdge", "windowEdge",
+    (m) => m.finishedAt === null && !m.expired && restartFree(m, m.now()).free && m.now() < m.w23.anchorAt! + REUSE_MS - EDGE_MS,
+    async (m, x) => {
+      if (m.open !== null) await orgStop(m, x);
+      if (m.archived.has(m.pick)) await repick(m, x);
+      await advance(m, x, m.w23.anchorAt! + REUSE_MS - EDGE_MS / 2 - m.now());
+      if (m.current === null) await phoneCall(m, x, "A", "new");
+      else await phoneCall(m, x, m.current, null);
+      expect(await goLive(m, x), "windowEdge: a present phone and a free restart — Go live is admitted").toBe("200");
+      await advance(m, x, EDGE_MS);
+      await ingestConnect(m, x);
+    }),
   /** I-2 as an INTENT: the organiser revokes the QR under a running session (unless already reissued since its phone
    *  paired) and the session's phone scans the new one. */
-  rescan: () => new Cmd("rescan", "rescan", (m) => holderOpen(m) !== null && !m.stopRecords.has(m.open!.holder!), async (m, x) => {
+  rescan: () => new Cmd("rescan", "rescan", (m) => holderOpen(m) !== null && !m.stopRecords.has(m.open!.holder!) && m.finishedAt === null && !m.expired, async (m, x) => {
     const h = m.open!.holder!;
     if (m.open!.pairIdx === m.codes - 1) await reissue(m, x);
     const before = x.tally.outcomes.get("claimNew:T1-rescan")!;
@@ -806,6 +1125,17 @@ const sel = fc.constantFrom<Sel>("A", "B", "holder", "other");
 const phone = fc.constantFrom<P>("A", "B");
 /** A phone that lost the answer to its stop re-sends it: rarely. */
 const resend = fc.oneof({ arbitrary: fc.constant(false), weight: 4 }, { arbitrary: fc.constant(true), weight: 1 });
+/** Who starts a restart: mostly the organiser's Go live, sometimes the phone's own start (T15). */
+const starter = fc.oneof({ arbitrary: fc.constant("organiser" as const), weight: 2 }, { arbitrary: fc.constant("operator" as const), weight: 1 });
+/** A blocked restart is cleared first — mostly; otherwise the start meets T14's or T36's gate. */
+const fix = fc.oneof({ arbitrary: fc.constant(true), weight: 2 }, { arbitrary: fc.constant(false), weight: 1 });
+/** The clock's steps: inside the silences (5 s, 35 s), past ask 10 and A14 (2 min), past W19 and the warming timeout
+ *  (16 min), past C2's grace (2 h + 1 min), and past the reuse window (25 h, M-1). */
+const step$ = fc.oneof(
+  { arbitrary: fc.constantFrom(5 * SEC, 35 * SEC, 2 * MIN, 16 * MIN), weight: 8 },
+  { arbitrary: fc.constant(GRACE_MS + MIN), weight: 1 },
+  { arbitrary: fc.constant(REUSE_MS + 60 * MIN), weight: 1 },
+);
 /** Weighted by repetition (fc.commands draws its arbitraries uniformly). */
 const ALL: fc.Arbitrary<Cmd>[] = [
   ...Array.from({ length: 3 }, () => fc.tuple(sel, resend).map(([s, r]) => cmd.claimNew(s, r))),
@@ -817,12 +1147,13 @@ const ALL: fc.Arbitrary<Cmd>[] = [
   ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.goLive)),
   ...Array.from({ length: 3 }, () => fc.tuple(
     phone, fc.oneof({ arbitrary: fc.constant(true), weight: 2 }, { arbitrary: fc.constant(false), weight: 1 }),
-    fc.oneof({ arbitrary: fc.constant("organiser" as const), weight: 2 }, { arbitrary: fc.constant("operator" as const), weight: 1 }),
-  ).map(([p, v, by]) => cmd.restart(p, v, by))),
+    starter,
+    fix,
+  ).map(([p, v, by, f]) => cmd.restart(p, v, by, f))),
   ...Array.from({ length: 2 }, () => sel.map(cmd.operatorStart)),
   fc.constant(null).map(cmd.ingestConnect),
   ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.ingestDrop)),
-  ...Array.from({ length: 3 }, () => fc.constantFrom(5 * SEC, 35 * SEC, 2 * MIN, 16 * MIN).map(cmd.advance)),
+  ...Array.from({ length: 3 }, () => step$.map(cmd.advance)),
   ...Array.from({ length: 3 }, () => fc.constantFrom(2 * MIN, 16 * MIN).map(cmd.gone)),
   ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.tick)),
   fc.constant(null).map(cmd.cronTick),
@@ -833,36 +1164,54 @@ const ALL: fc.Arbitrary<Cmd>[] = [
   fc.constant(null).map(cmd.lateStopOwn),
   ...Array.from({ length: 3 }, () => fc.constantFrom<"beat" | "get" | "start" | "resume">("beat", "get", "start", "resume").map(cmd.oldCodeCall)),
   fc.constant(null).map(cmd.deadTakeover),
+  // I-2 and M-3.
+  fc.boolean().map(cmd.finish),
+  ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.revertResult)),
+  fc.constant(null).map(cmd.archiveDestination),
+  fc.constant(null).map(cmd.repick),
+  fc.constantFrom(1, 2).map(cmd.buyCredit),
+  ...Array.from({ length: 2 }, () => fc.constant(null).map(cmd.windowEdge)),
+  ...Array.from({ length: 2 }, () => fc.constantFrom(0, 16 * MIN).map(cmd.ingestUnknown)),
 ];
 /** W23 needs FIVE sessions with video in one run for a paid restart, which a free-form run reaches only sometimes (the
  *  T6b review's m-1): one run in three draws from this mix, the same commands with restarts-with-video weighted up. */
-const RESTART_HEAVY: fc.Arbitrary<Cmd>[] = [...ALL, ...Array.from({ length: 10 }, () => phone.map((p) => cmd.restart(p, true)))];
+const RESTART_HEAVY: fc.Arbitrary<Cmd>[] = [...ALL, ...Array.from({ length: 10 }, () => fc.tuple(phone, starter, fix).map(([p, b, f]) => cmd.restart(p, true, b, f)))];
 const COMMANDS = fc.oneof(
   { arbitrary: fc.commands(ALL, { maxCommands: MAX_COMMANDS, size: "max" }), weight: 2 },
   { arbitrary: fc.commands(RESTART_HEAVY, { maxCommands: MAX_COMMANDS, size: "max" }), weight: 1 },
 );
 
-async function freshReal(tally: Tally): Promise<{ model: Model; real: Real }> {
-  const r = await captureRig({ credits: 40, connectAfterMs: NEVER_MS });
+/** One run's world. The rig's org has no subscription row, so it resolves to COMMUNITY (`_rig.ts` seedOrg's convention):
+ *  the smallest monthly allowance (V426), so a ≤ 50-command run can spend down to nothing (I-2: 40 bought credits were
+ *  never exhausted). `pack` bought credits (drawn 0–2) sit on top of the month's allowance, which is granted here — the
+ *  grant every Go live ensures, made once up front so the model starts from a known balance. The allowance is the
+ *  catalogue's declaration (`streamMonthlyRate`), never a number typed here; the guard below holds it small. */
+async function freshReal(tally: Tally, pack: number): Promise<{ model: Model; real: Real }> {
+  const r = await captureRig({ credits: pack, connectAfterMs: NEVER_MS });
   await saveStreamSettings(r.auth, r.fixtureId, { targetId: r.target.id });
+  const allowance = await streamMonthlyRate(r.auth.orgId);
+  expect(allowance, "community's monthly allowance is small enough to spend down in a run").toBeLessThanOrEqual(2);
+  await ensureMonthlyStreamGrant(r.auth.orgId);
   const real: Real = {
     r, phones: { A: phoneId("a"), B: phoneId("b") }, codes: [{ code: r.code, tok: r.tok }],
-    scripted: new Map(), everConnected: new Set(), tally,
+    scripted: new Map(), everConnected: new Set(), tally, targets: [r.target.id], priorStatus: null,
   };
   const model: Model = {
     current: null, open: null, stopRecords: new Map(), delivered: new Map(), scanned: new Map(), codes: 1, sessions: [],
-    w23: { anchored: false, counted: 0, paid: 0 },
+    w23: { anchorAt: null, counted: 0, paid: 0 }, balance: allowance + pack, finishedAt: null, expired: false,
+    pick: 0, archived: new Set(), now: () => r.now().getTime(),
   };
+  expect(await creditBalance(sql, r.auth.orgId), "the run starts from the allowance plus the pack").toBe(model.balance);
   return { model, real };
 }
 
-describe.skipIf(!HAS_DB)("capture model (§11.1.4, rule 10): two phones, the real use-cases, eleven invariants after every step", () => {
-  it("capture model: eleven invariants hold over every generated sequence; every action, outcome and counter is reached by DRAWN runs", async () => {
+describe.skipIf(!HAS_DB)("capture model (§11.1.4, rule 10): two phones, the real use-cases, twelve invariants after every step", () => {
+  it("capture model: twelve invariants hold over every generated sequence; every action, outcome and counter is reached by DRAWN runs", async () => {
     const tally = new Tally();
     await fc.assert(
-      fc.asyncProperty(COMMANDS, async (cmds) => {
+      fc.asyncProperty(fc.integer({ min: 0, max: 2 }), COMMANDS, async (pack, cmds) => {
         tally.runs++;
-        const setup = await freshReal(tally);
+        const setup = await freshReal(tally, pack);
         await fc.asyncModelRun(() => setup, cmds);
       }),
       // CAPTURE_MODEL_SHRINK=0 reports the first failing sequence unshrunk (a mutation sweep needs the kill, not the
@@ -884,7 +1233,7 @@ describe.skipIf(!HAS_DB)("capture model (§11.1.4, rule 10): two phones, the rea
 
   it("pinned: A's late stop must not end B's live broadcast — A's `new` with stopped: X is taken and A's `resume` with it replaced, X live under B both times", async () => {
     const tally = new Tally();
-    const setup = await freshReal(tally);
+    const setup = await freshReal(tally, 2);
     const { model: m, real: x } = setup;
     await fc.asyncModelRun(() => setup, [
       cmd.claimNew("A"), cmd.goLive(), cmd.localStop(), cmd.claimNew("B"), cmd.ingestConnect(),
@@ -900,7 +1249,7 @@ describe.skipIf(!HAS_DB)("capture model (§11.1.4, rule 10): two phones, the rea
 
   it("regression (seed 55, shrunk): a rescan whose claim names the sid re-seats the phone AND ticks the session — the warming timeout owed after 16 silent minutes is written then", async () => {
     const tally = new Tally();
-    const setup = await freshReal(tally);
+    const setup = await freshReal(tally, 2);
     await fc.asyncModelRun(() => setup, [cmd.restart("A", false), cmd.advance(16 * MIN), cmd.rescan()]);
     expect([tally.outcomes.get("claimNew:T1-rescan"), tally.outcomes.get("end:no_inbound_timeout")]).toEqual([1, 1]);
     expect(setup.model.open).toBeNull();
@@ -908,7 +1257,7 @@ describe.skipIf(!HAS_DB)("capture model (§11.1.4, rule 10): two phones, the rea
 
   it("pinned, its positive pair: with no B, A re-pairs carrying stopped: X and X ends operator_stopped", async () => {
     const tally = new Tally();
-    const setup = await freshReal(tally);
+    const setup = await freshReal(tally, 2);
     const { model: m } = setup;
     await fc.asyncModelRun(() => setup, [cmd.claimNew("A"), cmd.goLive(), cmd.localStop(), cmd.claimNew("A")]);
     expect([tally.outcomes.get("claimNew:T1-accept"), tally.outcomes.get("lateStop:applied-current"), tally.counts.lateStopsDelivered]).toEqual([2, 1, 1]);
