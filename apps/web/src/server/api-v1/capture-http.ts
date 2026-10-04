@@ -6,7 +6,9 @@
 //    descriptor carries live ingest credentials, and a cached refusal would outlive the state it describes.
 // The `code` is the contract's closed `CaptureRefusalCode` list, so a refusal the phone cannot key its copy on does not
 // compile.
+import * as Sentry from "@sentry/nextjs";
 import { HttpError, handler } from "@/lib/http";
+import { log } from "@/server/logger";
 import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRefusalCode } from "./capture-schemas";
@@ -51,8 +53,11 @@ export function captureRefusal(e: CaptureRefusalError): Response {
 /**
  * Run a phone route inside `handler()` (request context, Sentry and the logger for anything unmapped) and map the
  * capture refusals to bare bodies: a `CaptureRefusalError`, and the rate limiter's `HttpError(429)` → `rate_limited`
- * (its headers, e.g. `Retry-After`, ride along when the error carries them). Whatever comes out — a 2xx, a refusal or
- * an unmapped 500 — leaves with the capture cache headers.
+ * (its headers, e.g. `Retry-After`, ride along when the error carries them). ANYTHING else — an assumption guard's
+ * HttpError, a race's 404, a bug — is the contract's `503 {code: unavailable}` with a fixed message (B6 review M-5): the
+ * phone keys its copy on `code` and counts a 503 as no evidence (descriptor contract `refusal`), and no internal text
+ * reaches a caller holding only a tok. It is captured and logged here, as `handler()` would have. Whatever comes out
+ * leaves with the capture cache headers.
  */
 export async function captureRoute(fn: () => Promise<Response>): Promise<Response> {
   const res = await handler(async () => {
@@ -63,7 +68,9 @@ export async function captureRoute(fn: () => Promise<Response>): Promise<Respons
       if (e instanceof HttpError && e.status === 429) {
         return captureJson(429, { code: "rate_limited", message: e.message }, e.headers);
       }
-      throw e;
+      Sentry.captureException(e);
+      log.error({ err: e }, "capture: unmapped error answered 503 unavailable");
+      return captureJson(503, { code: "unavailable", message: "the server could not answer; try again" });
     }
   });
   for (const [k, v] of Object.entries(NO_STORE)) res.headers.set(k, v);

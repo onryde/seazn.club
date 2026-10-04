@@ -9,7 +9,7 @@
 // (`captureRefusal`): only already_live carries extras.
 //
 // Expected values come from the spec's tables (§6.7.2, the contract's refusal union), never from capture-phone.ts.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
@@ -177,8 +177,14 @@ describe.skipIf(!HAS_DB)("postStart — the phone's own start (§6.3.4, T12–T1
     expect(stranger.body).not.toHaveProperty("sid");
   });
 
-  it("no pre-pick, an ARCHIVED pre-pick → 409 no_destination; nothing written", async () => {
+  // B6 review M-2: the pick's `archived_at is null` is NOT an equivalent filter — without it the answer is the same, but
+  // the refused start reaches the one start path, which reads the provider's storage and writes a snapshot row.
+  it("no pre-pick, an ARCHIVED pre-pick → 409 no_destination; nothing written — and the provider is asked NOTHING (no storage read, no snapshot row); the same pick un-archived does both", async () => {
     const r = await captureRig();
+    const limit = 100_000_000 + Math.floor(Math.random() * 1_000_000);   // marks THIS rig's snapshot rows (the table has no org)
+    r.ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: limit, videoCount: 0 };
+    const reads = vi.spyOn(r.ingest, "storageUsage");
+    const snapshots = async () => (await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where limit_minutes = ${limit}`)[0]!.n;
     const A = phoneId("a");
     await claim(r, A);
     expect(await refused(start(r, A))).toEqual({ status: 409, body: { code: "no_destination", message: expect.any(String) } });
@@ -186,6 +192,12 @@ describe.skipIf(!HAS_DB)("postStart — the phone's own start (§6.3.4, T12–T1
     await sql`update org_stream_targets set archived_at = now() where id = ${r.target.id}`;
     expect((await refused(start(r, A))).body.code).toBe("no_destination");
     expect(await sessionsOf(r.fixtureId)).toEqual([]);
+    expect({ storageReads: reads.mock.calls.length, snapshotRows: await snapshots() }, "a refused pick reaches no provider").toEqual({ storageReads: 0, snapshotRows: 0 });
+    // The positive pair: the probe can see both — the same pick, un-archived, starts and does each.
+    await sql`update org_stream_targets set archived_at = null where id = ${r.target.id}`;
+    await start(r, A);
+    expect(reads.mock.calls.length, "PREMISE: a start reads storage").toBeGreaterThan(0);
+    expect(await snapshots(), "PREMISE: a start writes a snapshot with this rig's limit").toBeGreaterThan(0);
   });
 
   it("target_in_use (the pre-pick is held by ANOTHER match) → 409 no_destination; nothing written here", async () => {

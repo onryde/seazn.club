@@ -420,6 +420,20 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     expect((await session(S3)).pairing_id).toBe(current(after3)[0]!.id);
   });
 
+  // §10.2's row "After a takeover, only the new one does" (B6 review M-3): the descriptor's `cred` follows the session's
+  // pairing, so a T2 takeover in warming moves it from A to B at once.
+  it("M-3: after a T2 takeover in warming, only the NEW phone gets cred; the old one gets the same session shape without it", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const [A, B] = [phoneId("a"), phoneId("b")];
+    await claimNew(r, A);
+    const S = await r.start(A);
+    const get = (phone: string) => getCode(r.code, r.tok, { slot: 0, phone }, r.deps, r.now());
+    const credOf = async (phone: string) => { const d = await get(phone); expect(d).toMatchObject({ state: "warming", sid: S }); return Object.hasOwn(d, "cred"); };
+    expect([await credOf(A), await credOf(B)], "before: A holds the session").toEqual([true, false]);
+    expect(await claimNew(r, B), "T2 in warming").toMatchObject({ state: "go-live", sid: S });
+    expect([await credOf(A), await credOf(B)], "after B's takeover: only B").toEqual([false, true]);
+  });
+
   it("the beat's own refusals: a wrong tok 401, a slot other than 0 422 invalid, a body naming another code 422 invalid", async () => {
     const r = await captureRig();
     const A = phoneId("a");
@@ -431,6 +445,28 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
 });
 
 describe.skipIf(!HAS_DB)("postBeat — the stops (§6.8.2, T21–T24a, G0-g)", () => {
+  // B6 review M-1: a real passthrough DRAINS through `ending`; the fake completes at once, so the session is put back in
+  // `ending` by hand after the REAL T21. Then only the descriptor's ended-pairing filter withholds `cred`; the pair proves
+  // the inputs are still readable, so the absence is the filter's.
+  it("M-1: after T21 ended its pairing, the stopping phone gets NO cred while its session is still ending; the same pairing un-ended gets it again", async () => {
+    const r = await captureRig({ connectAfterMs: NEVER });
+    const A = phoneId("a");
+    await claimNew(r, A);
+    const S = await r.start(A);
+    const credOf = async () => {
+      const d = await getCode(r.code, r.tok, { slot: 0, phone: A }, r.deps, r.now());
+      expect(d, "the session shape, ending").toMatchObject({ state: "ending", sid: S });
+      return Object.hasOwn(d, "cred");
+    };
+    expect(await beat(r, A, { sid: S, state: "ended", endReason: "operator-stopped" })).toMatchObject({ state: "over", sid: S });
+    const p = await pairingOf(r, A);
+    expect(p.end_cause, "T21 ended the pairing").toBe("operator_stopped");
+    await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'stopped', fail_reason = null, ended_at = null, ending_at = now(), output_released_at = null where id = ${S}`;
+    expect(await credOf(), "the pairing T21 ended earns no cred").toBe(false);
+    await sql`update fixture_stream_pairings set ended_at = null, end_cause = null where id = ${p.id}`;
+    expect(await credOf(), "PREMISE: the same ending session with the pairing standing serves cred").toBe(true);
+  });
+
   it("T21: the session's phone's `ended` beat is the operator's Stop — stop(operator_stopped), its pairing ENDED(operator_stopped), event phone_stop; it hears `over S stopped`; its next beat is `replaced` (a rescan is owed)", async () => {
     const r = await captureRig({ connectAfterMs: NEVER });
     const A = phoneId("a");

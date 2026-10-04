@@ -8,10 +8,13 @@
 //   - the origin in the answer is never read off a forged `X-Forwarded-Host` (§6.4).
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the route reads no sport (capture-get.test.ts pins the one sport row).
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+import { ZodError } from "zod";
 import { sql } from "@/lib/db";
-import { CaptureRefusalError, captureJson, captureRefusal } from "@/server/api-v1/capture-http";
+import { HttpError } from "@/lib/errors";
+import { log } from "@/server/logger";
+import { CaptureRefusalError, captureJson, captureRefusal, captureRoute } from "@/server/api-v1/capture-http";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { CaptureDescriptor, CaptureRefusal } from "@/server/api-v1/capture-schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
@@ -102,14 +105,41 @@ describe.skipIf(!HAS_DB)("GET /api/v1/capture/codes/{code}", () => {
     expect(await read(await call("NOT_A_CODE!", { auth: null }))).toMatchObject({ status: 401, ...NO_STORE, body: { code: "code_ended" } });
   });
 
-  it("an UNMAPPED failure (a terminal row with no single end reason) is still a no-store answer — the cache headers ride every exit", async () => {
+  it("an UNMAPPED failure (a terminal row with no single end reason) is the contract's 503 {code: unavailable} — no internal text, logged, no-store (B6 review M-5)", async () => {
     const r = await captureRig();
     const mine = phoneId("mine");
     const sid = await r.start(mine);
     // Both an end and a fail reason: wireEndReason refuses it by name (TerminalWithoutReason), which nothing maps.
     await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', fail_reason = 'no_credits', ended_at = now() where id = ${sid}`;
-    const a = await read(await call(r.code, { auth: `Bearer ${r.tok}`, query: `?phone=${encodeURIComponent(mine)}` }));
-    expect(a).toMatchObject({ status: 500, ...NO_STORE });
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const a = await read(await call(r.code, { auth: `Bearer ${r.tok}`, query: `?phone=${encodeURIComponent(mine)}` }));
+      expect(a).toMatchObject({ status: 503, ...NO_STORE, body: { code: "unavailable" } });
+      expect(CaptureRefusal.parse(a.body)).toEqual(a.body);
+      expect(Object.keys(a.body).sort()).toEqual(["code", "message"]);
+      expect(JSON.stringify(a.body), "no internal text reaches the phone").not.toMatch(/TerminalWithoutReason|end_reason|fail_reason|no_credits/i);
+      expect(errors, "still logged").toHaveBeenCalledTimes(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("phone: absent is waiting (200); present it is the contract's 16–64 characters — empty, 15 and 65 characters are 422 {code: invalid}, no-store; 16 and 64 are served (B6 review M-4)", async () => {
+    const r = await captureRig();
+    expect((await read(await call(r.code, { auth: `Bearer ${r.tok}` }))).body.state).toBe("waiting");
+    let checked = 0;
+    for (const phone of ["", "x".repeat(15), "x".repeat(65)]) {
+      const a = await read(await call(r.code, { auth: `Bearer ${r.tok}`, query: `?phone=${phone}` }));
+      expect(a, `phone of ${phone.length}`).toMatchObject({ status: 422, ...NO_STORE, body: { code: "invalid" } });
+      expect(CaptureRefusal.parse(a.body)).toEqual(a.body);
+      checked++;
+    }
+    for (const phone of ["x".repeat(16), "x".repeat(64)]) {
+      const a = await read(await call(r.code, { auth: `Bearer ${r.tok}`, query: `?phone=${phone}` }));
+      expect(a, `phone of ${phone.length}`).toMatchObject({ status: 200, body: { state: "waiting" } });
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 
   it("slot: omitted is 0 (200); 1 and a non-number are 422 {code: invalid}, no-store (T41)", async () => {
@@ -149,9 +179,9 @@ describe.skipIf(!HAS_DB)("the spec documents what the route answers", () => {
     expect(op.security).toEqual([{ captureTok: [] }]);
     expect(Object.hasOwn(op.responses["200"]!.content["application/json"].schema.properties ?? {}, "ok")).toBe(false);
     expect(op.responses["400"]).toBeUndefined();
-    const observed = ["200", "401", "404", "422"];
+    const observed = ["200", "401", "404", "422", "503"];
     for (const s of observed) expect(op.responses[s], s).toBeDefined();
-    expect(observed.length).toBe(4);
+    expect(observed.length).toBe(5);
   });
 });
 
@@ -169,5 +199,42 @@ describe("captureRefusal — the wire's extras rule (R5)", () => {
     expect(await live.json()).toEqual({ code: "already_live", message: "live", sid: "s", startedBy: "operator" });
     expect(live.headers.get("cache-control")).toBe("private, no-store");
     expect(() => captureRefusal(new CaptureRefusalError(409, "replaced", "x", { sid: "s" }))).toThrow(/only already_live/);
+  });
+});
+
+describe("captureRoute — anything unmapped is the contract's 503 unavailable (B6 review M-5)", () => {
+  it("an assumption guard's HttpError, a race's 404, a ZodError and a plain Error each answer 503 {code: unavailable} with a fixed message, logged; a capture refusal and the limiter's 429 are unchanged", async () => {
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const unmapped: unknown[] = [
+        new HttpError(409, "no phone is paired and answering", "phone_not_paired"),
+        new HttpError(404, "fixture not found"),
+        new ZodError([]),
+        new Error("relation seazn_club.secret_table does not exist"),
+      ];
+      const messages = new Set<string>();
+      let checked = 0;
+      for (const e of unmapped) {
+        const res = await captureRoute(async () => { throw e; });
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(res.status, String(e)).toBe(503);
+        expect(res.headers.get("cache-control")).toBe("private, no-store");
+        expect(CaptureRefusal.parse(body)).toEqual(body);
+        expect(body.code).toBe("unavailable");
+        expect(JSON.stringify(body)).not.toMatch(/paired|fixture not found|secret_table/);
+        messages.add(String(body.message));
+        checked++;
+      }
+      expect(checked).toBe(unmapped.length);
+      expect([...messages], "one fixed message, whatever the cause").toHaveLength(1);
+      expect(errors).toHaveBeenCalledTimes(unmapped.length);
+      const refusal = await captureRoute(async () => { throw new CaptureRefusalError(409, "replaced", "not current"); });
+      expect([refusal.status, await refusal.json()]).toEqual([409, { code: "replaced", message: "not current" }]);
+      const limited = await captureRoute(async () => { throw new HttpError(429, "slow down", undefined, undefined, { "Retry-After": "7" }); });
+      expect([limited.status, limited.headers.get("retry-after"), ((await limited.json()) as { code: string }).code]).toEqual([429, "7", "rate_limited"]);
+      expect(errors, "a mapped refusal logs nothing").toHaveBeenCalledTimes(unmapped.length);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
