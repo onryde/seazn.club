@@ -261,14 +261,16 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(l2.runs.length).toBe(planL2({ variants: VARIANTS }).runs.length);
   });
 
-  it("counts: L1 = cells × 2; L2 = the pair file's runs; L3 = the sum of its declared parts, each part checked against another file", () => {
+  it("counts: L1 = cells × 1 width (1280, ruling 39); L2 = the pair file's runs; L3 = the sum of its declared parts, each part checked against another file", () => {
     const c = parsed<CountsFile>("counts.json");
     const l2 = parsed<L2File>("l2-pairs.json");
     const floors = parsed<Floors>("floors.json");
     const d = parsed<DropList>("drop-list.json");
     const v = parsed<VariantsFile>("variants.json");
     expect(c.grid).toEqual({ rows: ROW_KEYS.length, sports: SPORT_KEYS.length, cells: CELLS });
-    expect(c.l1.value).toBe(CELLS * 2);
+    // Ruling 39: L1 runs at 1280 only, so a cell is one case — never the 462 (cells × 2) this file once froze.
+    expect(c.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS });
+    expect(c.l1.value).toBe(231);
     expect(c.l2.value).toBe(l2.runs.length);
     expect(c.l2.pairTargets).toBe(l2.targets.rowScenario + l2.targets.sportScenario);
     expect(c.l2.l3GapRuns).toBe(l2.runs.filter((r) => r.l3Gap !== null).length);
@@ -343,6 +345,15 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(got.generator).toEqual([]);
     expect(got.scorable.length).toBeGreaterThan(0);
     console.info(`committed-catalogue: ${judged} variant cases folded — ${got.scorable.length} scorable, ${got.engine.length} engine-unscorable, ${got.generator.length} generator-unsupported`);
+  });
+
+  it("the GENERATOR's L1 is one case per cell (ruling 39): counts.ts computes the value counts.json carries, from the catalogue's cells — never cells × 2", () => {
+    // counts.json alone cannot kill a counts.ts regression (CI's matrix:catalogue check is the only other witness), so the generator is run here.
+    const out = computeCounts({ l3: PLAN, l2: planL2({ variants: VARIANTS }), variants: VARIANTS, regressions: [] });
+    expect(out.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS });
+    expect(out.l1.value).toBe(231);
+    expect(out.l1).toEqual(parsed<CountsFile>("counts.json").l1);
+    expect(out.l1.value).not.toBe(CELLS * 2);
   });
 
   it("an unscorable reason counts.ts cannot classify is refused by name, never guessed; the engine's cfg refusal counts as engine (every arm reached)", () => {

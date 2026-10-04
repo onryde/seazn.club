@@ -12,7 +12,10 @@
 // `--driver browser --layer L1|L2` (W1c Task 12, ruling 39) runs a LAYERED
 // plan (lib/layers.ts): L1 is the slice at 1280 only; L2 is the committed
 // l2-pairs.json runs, each at its own width — the scripted ones driven, the
-// rest recorded 🚫/░ with no driver, org or check. `--set width-sweep` and
+// rest recorded 🚫/░ with no driver, org or check. `--scope grid` (W1d Task 3,
+// ruling 64) widens either layer to the FULL grid — L1: every one of the 231
+// catalogue cells at 1280; L2: all 1,731 runs of l2-pairs.json; `--scope slice`
+// is the default and means what `--layer` always did. `--set width-sweep` and
 // `--set api-only-browser` are layered too. The browser opens at the first
 // driven browser case, so a plan that only records opens none.
 //
@@ -25,7 +28,8 @@
 // (lib/w1-driving-set.ts). `--set w1-driving` is the one named set that also
 // takes `--only` and `--scenario`.
 //   pnpm run matrix:browser -- --width W   (the same flags; W one of BROWSER_WIDTHS)
-//   pnpm run matrix:browser -- --layer L1|L2 [--only row|sport] [--scenario KEY (L1)]
+//   pnpm run matrix:browser -- --layer L1|L2 [--scope slice|grid] [--only row|sport] [--scenario KEY (L1)]
+//     (--scope grid takes no --only/--scenario: the grid is the whole grid)
 //
 // pnpm 10 passes that `--` through into argv — for matrix:browser AFTER the
 // script's own `--driver browser`, so mid-list (measured, W1c Task 6 fix
@@ -51,6 +55,8 @@
 //      --driver, --driver browser without --width, a --width outside
 //      BROWSER_WIDTHS, or a --width on an http run; --layer other than L1/L2,
 //      without --driver browser, beside --set or --canary, L2 with --scenario;
+//      --scope without --layer or other than slice|grid, or --scope grid with
+//      --only/--scenario (GridTakesNoFilter);
 //      a layered plan given any --width but its own — L1 and api-only-browser
 //      take 1280 only, L2 and width-sweep none; a layered set over http); a
 //      layered plan with no case (NothingPlanned) or with one result id twice
@@ -112,8 +118,8 @@ import { evaluateInvariants } from "./lib/invariants.ts";
 import { isMainModule } from "../../scripts/lib/main-module.ts";
 import { routeTo } from "./lib/routing.ts";
 import {
-  API_ONLY_BROWSER_SET, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
-  type LayerCase, type PlannedLayerCase,
+  API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, LAYER_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, atWidth, identityOf, layerCaseId, layerOfWidth, w1DrivingL1Planner, widthSweepPlanner,
+  type LayerCase, type LayerScope, type PlannedLayerCase,
 } from "./lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "./lib/pad-proof-set.ts";
 import type { L2Run } from "./lib/pairs.ts";
@@ -454,7 +460,7 @@ export interface CallRefusal { method: string; path: string; status: number; cod
 export interface ErrorRed { caseId: string; error: string; refusal: CallRefusal | null }
 export interface RunSummary { vacuous: string[]; errorReds: ErrorRed[] }
 
-const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)`;
+const USAGE = `usage: run.ts [--base URL] [--run-id ID] [--report-dir DIR] [--workers N] [--driver http|browser] [--width ${BROWSER_WIDTHS.join("|")}] [--layer L1|L2] [--scope slice|grid] [--only row|sport] [--scenario KEY] | [--canary KEY] | [--set NAME] (--set ${W1_DRIVING_SET} also takes --only/--scenario)`;
 
 /** D10 (ruling 52): browser workers are not this wave's — one chromium per
  *  run, one context per case, one case at a time. */
@@ -464,11 +470,12 @@ const say = (s: string): void => { process.stdout.write(`${redact(s)}\n`); };
 const warn = (s: string): void => { process.stderr.write(`${redact(s)}\n`); };
 const errText = (e: unknown): string => (e instanceof Error ? `${e.name}: ${e.message}` : String(e));
 
-/** `driver` and `widthArg` (W1c Task 6), `layer` (Task 12). The width is
+/** `driver` and `widthArg` (W1c Task 6), `layer` (Task 12), `scope` (W1d Task 3:
+ *  what `--layer` covers — absent is the slice, the W1c meaning). The width is
  *  kept as typed until the plan is chosen: a plain browser run needs one
  *  (resolved by plainBrowserWidth), a layered plan sets its own and refuses
  *  any other (layeredWidthRefusal). */
-interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; widthArg: string | undefined; workers: number }
+interface Cli { base: string | undefined; runId: string; reportDir: string; only: string | undefined; scenario: string | undefined; canary: string | undefined; set: string | undefined; driver: "http" | "browser"; layer: "L1" | "L2" | undefined; scope?: LayerScope; widthArg: string | undefined; workers: number }
 
 /** `--workers` (W1-driving T11): digits only, then 1..MAX_WORKERS — the same
  *  bound runQueue refuses by name (WorkersOutOfRange), checked here first so
@@ -488,12 +495,22 @@ function parseWorkers(v: string | undefined): { workers: number } | { usage: str
  *  the set from its case ids. parseCli has already refused every combination
  *  this does not name (--set or --canary beside a filter or a layer). The
  *  driver and width are recorded apart (D9). */
-export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario">): string {
+export function planOf(cli: Pick<Cli, "set" | "canary" | "layer" | "only" | "scenario" | "scope">): string {
   const filters = [...(cli.only === undefined ? [] : [`--only ${cli.only}`]), ...(cli.scenario === undefined ? [] : [`--scenario ${cli.scenario}`])];
   // Only --set w1-driving takes filters (Task 12); for every other set they are refused, so this is `--set NAME`.
   if (cli.set !== undefined) return [`--set ${cli.set}`, ...filters].join(" ");
   if (cli.canary !== undefined) return `--canary ${cli.canary}`;
-  return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}`, ...filters].join(" ");
+  // W1d Task 3: a grid run says so. A slice run (the default, or --scope slice)
+  // keeps the string it always had, so every committed lock entry still matches.
+  return [cli.layer === undefined ? "slice" : `--layer ${cli.layer}${cli.scope === "grid" ? " --scope grid" : ""}`, ...filters].join(" ");
+}
+
+/** The scope a `--layer` run records in results.json (W1d item 2, PF-8):
+ *  "<layer> (<scope>)", so a reader never guesses whether `--layer L1` meant the
+ *  slice or the grid. A run that chose no `--layer` has no scope: its `plan`
+ *  names it. */
+export function scopeOf(cli: Pick<Cli, "layer" | "scope">): string | undefined {
+  return cli.layer === undefined ? undefined : `${cli.layer} (${cli.scope ?? "slice"})`;
 }
 
 /** The driver the command line asked for, or the usage refusal. A width is a
@@ -535,12 +552,12 @@ export function withoutBareDashes(argv: readonly string[]): string[] {
 }
 
 function parseCli(argv: string[]): Cli | { usage: string } {
-  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string; workers?: string };
+  let values: { base?: string; "run-id"?: string; "report-dir"?: string; only?: string; scenario?: string; canary?: string; set?: string; driver?: string; width?: string; layer?: string; scope?: string; workers?: string };
   try {
     ({ values } = parseArgs({ args: withoutBareDashes(argv), options: {
       base: { type: "string" }, "run-id": { type: "string" }, "report-dir": { type: "string" },
       only: { type: "string" }, scenario: { type: "string" }, canary: { type: "string" }, set: { type: "string" },
-      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, workers: { type: "string" },
+      driver: { type: "string" }, width: { type: "string" }, layer: { type: "string" }, scope: { type: "string" }, workers: { type: "string" },
     } }));
   } catch (e) {
     return { usage: e instanceof Error ? e.message : String(e) };
@@ -563,6 +580,14 @@ function parseCli(argv: string[]): Cli | { usage: string } {
     if (values.layer === "L2" && values.scenario !== undefined) return { usage: "--layer L2 plans the committed l2-pairs.json runs; it takes no --scenario" };
     layer = values.layer;
   }
+  // W1d Task 3 (ruling 64): --scope chooses what a --layer covers. It has no
+  // meaning beside --set or --canary (each names its own plan), so it takes --layer.
+  let scope: LayerScope | undefined;
+  if (values.scope !== undefined) {
+    if (values.scope !== "slice" && values.scope !== "grid") return { usage: `--scope must be slice or grid, got ${values.scope}` };
+    if (layer === undefined) return { usage: "--scope picks a --layer's scope; it takes --layer (a --set or --canary plan has none)" };
+    scope = values.scope;
+  }
   // W1-driving Task 12: the w1-driving set takes --only/--scenario, never --canary.
   if (values.set === W1_DRIVING_SET && values.canary !== undefined) return { usage: `--set ${W1_DRIVING_SET} takes --only and --scenario; it takes no --canary` };
   if (values.set !== undefined && values.set !== W1_DRIVING_SET && (values.only !== undefined || values.scenario !== undefined || values.canary !== undefined)) {
@@ -574,7 +599,7 @@ function parseCli(argv: string[]): Cli | { usage: string } {
   const slugged = (values["run-id"] ?? `w1a-${Date.now().toString(36)}`).toLowerCase().replace(/[^a-z0-9-]+/g, "-");
   const runId = slugged.length > RUN_ID_MAX ? "" : slugged.replace(/^-+|-+$/g, "");
   if (runId === "") return { usage: `--run-id must slug to 1-${RUN_ID_MAX} characters of [a-z0-9-]` };
-  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, widthArg: values.width, workers: w.workers };
+  return { base: values.base, runId, reportDir: values["report-dir"] ?? "matrix-report", only: values.only, scenario: values.scenario, canary: values.canary, set: values.set, driver: how.driver, layer, ...(scope === undefined ? {} : { scope }), widthArg: values.width, workers: w.workers };
 }
 
 /** PF4: `vacuous` is every case that is neither an error red nor deferred and
@@ -994,6 +1019,7 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
   // The grid is snapshotted into the results (T11 review M4), so MATRIX.md
   // renders from results.json alone however the catalogue moves later.
   const grid = { rows: [...ROW_KEYS], sports: [...SPORT_KEYS] };
+  const scope = scopeOf(cli);
   // writeResults scans, THEN writes the run's base as LOCAL_BASE (final batch
   // FB-1); MATRIX.md renders what it wrote, so the two files agree.
   const results: RunResults = {
@@ -1001,6 +1027,8 @@ async function execute(deps: RunDeps, cli: Cli, base: string, planner: CasePlann
     // A layered plan names its layer; a plain one is its width's (layerOfWidth:
     // 1280 L1, a phone width L2), L3 over HTTP.
     layer: isLayered(planner) ? planner.layer : width === null ? "L3" : layerOfWidth(width), driver: cli.driver, plan: planOf(cli),
+    // W1d item 2 (T3): which plan `--layer` meant, beside `plan` (which keeps its string).
+    ...(scope === undefined ? {} : { scope }),
     // Ruling 46: written only when more than one worker RAN (m-1: a --workers 8
     // run of one case ran one), so a one-worker run's header is today's.
     ...(lanes.opened > 1 ? { workers: lanes.opened } : {}),
@@ -1052,7 +1080,8 @@ export async function runSlice(deps: RunDeps, argv: string[]): Promise<number> {
     // Own keys only: `toString` or `__proto__` would otherwise name a "set".
     if (cli.set !== undefined && !Object.prototype.hasOwnProperty.call(SETS, cli.set)) throw new UnknownSet(cli.set);
     // W1c Task 12: --layer chooses a layered plan (parseCli refused it beside --set).
-    const choose = deps.planCases ?? (cli.layer !== undefined ? LAYER_PLANNERS[cli.layer] : cli.set === undefined ? slicePlanner : SETS[cli.set]);
+    // W1d Task 3: --scope grid picks the full-grid planner of that layer; the slice is the default.
+    const choose = deps.planCases ?? (cli.layer !== undefined ? (cli.scope === "grid" ? LAYER_GRID_PLANNERS : LAYER_PLANNERS)[cli.layer] : cli.set === undefined ? slicePlanner : SETS[cli.set]);
     planner = choose({ only: cli.only, scenario: cli.scenario, canary: cli.canary, set: cli.set });
   } catch (e) {
     warn(`matrix: ${errText(e)}`);

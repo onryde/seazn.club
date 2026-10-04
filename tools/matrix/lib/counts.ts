@@ -96,7 +96,8 @@ export function computeCounts(input: {
     schemaVersion: 1,
     grid: { rows: ROW_KEYS.length, sports: SPORT_KEYS.length, cells },
     catalogue: { parents: PARENTS.length, atomic: ATOMIC.length, atomicL3: l3Atomic().length, atomicL2: l2Atomic().length },
-    l1: { formula: "cells × 2 widths (1280, 320)", value: cells * 2 },
+    // Ruling 39: L1 runs at 1280 only, so a cell is ONE case. (This said "cells × 2 widths (1280, 320)" = 462 until W1d Task 3.)
+    l1: { formula: "cells × 1 width (1280; ruling 39)", value: cells },
     l2: {
       formula: "runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs",
       value: input.l2.runs.length,

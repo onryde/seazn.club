@@ -37,7 +37,7 @@ import type { Session } from "../../bench/lib/http.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
-import { EXIT, NOTES_CAP, PlanStageCapTooLow, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
+import { EXIT, NOTES_CAP, PlanStageCapTooLow, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, planOf, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanLayers, type RunDeps } from "../run.ts";
 import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeLeagueDriver } from "./fake-driver.ts";
@@ -2075,6 +2075,156 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     expect(raw.cases.length).toBe(PAD_SPORTS.length);
     expect(raw.plan).toBe(`--set ${PAD_PROOF_SET}`);
   });
+});
+
+// W1d Task 3 (ruling 64, item 2): `--scope`. `--layer L1` meant "the slice at
+// 1280" in W1c and still does by default; `--scope grid` is the full grid. The
+// planner is chosen by the flag, `plan` keeps today's string for a slice run (so
+// every frozen lock entry still matches) and names the grid otherwise, and the
+// run's results.json records the scope in its own header field — through the
+// REAL runSlice, parseCli and planners (the field's only writer), read back
+// through the schema, never from a fixture on both ends (T2-SEAM, class 1).
+describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () => {
+  /** The fake DB answering the OFFLINE builder order for every sport: a grid run reads all eleven, and deps()'
+   *  own fake knows generic and badminton only. `reads` is the sports whose order the run asked for. */
+  function gridDeps(): { d: Deps; reads: string[]; opened: () => number } {
+    const base = deps();
+    const reads: string[] = [];
+    let opened = 0;
+    const d = deps({
+      openBrowserRun: async () => { opened++; return fakeBrowserRun().run; },
+      openDb: async () => ({ ...(await base.openDb()), variantKeysInBuilderOrder: async (s: string) => { reads.push(s); return [...offlineVariantOrder(s)]; } }),
+    });
+    return { d, reads, opened: () => opened };
+  }
+  const CELLS = ROW_KEYS.length * SPORT_KEYS.length;
+  const RAW_RUNS = (JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: { row: string; sport: string }[] }).runs;
+  const SLICE_CELLS = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
+  const SLICE_RUNS = RAW_RUNS.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
+
+  it("usage: --scope needs --layer (and so refuses --set and --canary), takes slice or grid only, and the grid takes no filter and no other width — each refused (exit 2) before anything runs", async () => {
+    const cases: [string[], RegExp, boolean][] = [
+      [["--driver", "browser", "--scope", "grid"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--scope", "grid"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--driver", "browser", "--set", "width-sweep", "--scope", "grid"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--driver", "browser", "--canary", "M1", "--scope", "slice"], /--scope picks a --layer's scope; it takes --layer/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", "banana"], /--scope must be slice or grid, got banana/, true],
+      [["--driver", "browser", "--layer", "L2", "--scope", "Grid"], /--scope must be slice or grid, got Grid/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", ""], /--scope must be slice or grid, got \n/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", "grid", "--only", "league|generic"], /--layer L1 --scope grid runs the whole grid; it takes no --only/, false],
+      [["--driver", "browser", "--layer", "L1", "--scope", "grid", "--scenario", "M1"], /--layer L1 --scope grid runs the whole grid; it takes no --scenario/, false],
+      [["--driver", "browser", "--layer", "L2", "--scope", "grid", "--only", "swiss|badminton"], /--layer L2 --scope grid runs the whole grid; it takes no --only/, false],
+      [["--driver", "browser", "--layer", "L2", "--scope", "grid", "--scenario", "M1"], /--layer L2 plans the committed l2-pairs\.json runs; it takes no --scenario/, true],
+      [["--driver", "browser", "--layer", "L1", "--scope", "grid", "--width", "320"], /--layer L1 --scope grid runs at 1280 only \(ruling 39\); got --width 320/, true],
+      [["--driver", "browser", "--layer", "L2", "--scope", "grid", "--width", "390"], /--layer L2 --scope grid takes no --width \(the plan sets each case's width\); got --width 390/, true],
+      [["--layer", "L1", "--scope", "grid"], /--layer runs a browser layer; it takes --driver browser/, true],
+    ];
+    let checked = 0;
+    for (const [argv, want, usage] of cases) {
+      const io = capture();
+      const { d, opened } = gridDeps();
+      expect(await runSlice(d, [...argv, "--run-id", "sc1", "--report-dir", dirFor()]), argv.join(" ")).toBe(2);
+      expect(d.order, argv.join(" ")).toEqual([]);
+      expect(opened(), argv.join(" ")).toBe(0);
+      expect(io.err(), argv.join(" ")).toMatch(want);
+      if (usage) expect(io.err(), argv.join(" ")).toMatch(/usage: run\.ts/);
+      else expect(io.err(), argv.join(" ")).not.toMatch(/usage: run\.ts/);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("the usage line names the flag", async () => {
+    const io = capture();
+    expect(await runSlice(gridDeps().d, ["--driver", "browser", "--scope", "grid", "--run-id", "sc2", "--report-dir", dirFor()])).toBe(2);
+    expect(io.err()).toMatch(/usage: run\.ts .*\[--layer L1\|L2\] \[--scope slice\|grid\]/);
+  });
+
+  it("planOf: a grid run says so; a slice run, with or without --scope slice, keeps today's string (every frozen lock entry still matches)", () => {
+    const base = { set: undefined, canary: undefined, only: undefined, scenario: undefined };
+    expect(planOf({ ...base, layer: "L1", scope: "grid" })).toBe("--layer L1 --scope grid");
+    expect(planOf({ ...base, layer: "L2", scope: "grid" })).toBe("--layer L2 --scope grid");
+    // The second call: the default is unchanged.
+    expect(planOf({ ...base, layer: "L1" })).toBe("--layer L1");
+    expect(planOf({ ...base, layer: "L1", scope: "slice" })).toBe("--layer L1");
+    expect(planOf({ ...base, layer: "L2", scope: "slice" })).toBe("--layer L2");
+    expect(planOf({ ...base, layer: "L1", only: "swiss|generic" })).toBe("--layer L1 --only swiss|generic");
+    expect(planOf({ ...base, layer: undefined })).toBe("slice");
+    expect(planOf({ ...base, layer: undefined, set: "width-sweep" })).toBe("--set width-sweep");
+  });
+
+  it("the scope is written through the real run: results.json says WHICH plan --layer meant (L1/L2 × slice/grid), the run's plan keeps its string, and a run with no --layer records none", async () => {
+    const rows: { argv: string[]; plan: string; scope: string | undefined; layer: "L1" | "L2" | "L3"; cases: number }[] = [
+      { argv: ["--driver", "browser", "--layer", "L1"], plan: "--layer L1", scope: "L1 (slice)", layer: "L1", cases: SLICE_ROWS.length * SLICE_SPORTS.length },
+      { argv: ["--driver", "browser", "--layer", "L1", "--scope", "slice"], plan: "--layer L1", scope: "L1 (slice)", layer: "L1", cases: SLICE_ROWS.length * SLICE_SPORTS.length },
+      { argv: ["--driver", "browser", "--layer", "L2"], plan: "--layer L2", scope: "L2 (slice)", layer: "L2", cases: SLICE_RUNS.length },
+      { argv: ["--driver", "browser", "--layer", "L2", "--scope", "slice"], plan: "--layer L2", scope: "L2 (slice)", layer: "L2", cases: SLICE_RUNS.length },
+      { argv: ["--driver", "browser", "--layer", "L1", "--scope", "grid"], plan: "--layer L1 --scope grid", scope: "L1 (grid)", layer: "L1", cases: CELLS },
+      { argv: ["--driver", "browser", "--layer", "L2", "--scope", "grid"], plan: "--layer L2 --scope grid", scope: "L2 (grid)", layer: "L2", cases: RAW_RUNS.length },
+      // No --layer: the plan string alone names the plan, and no scope is written.
+      { argv: ["--only", "league|generic", "--scenario", "LIFECYCLE"], plan: "slice --only league|generic --scenario LIFECYCLE", scope: undefined, layer: "L3", cases: 1 },
+      { argv: ["--driver", "browser", "--set", WIDTH_SWEEP_SET], plan: `--set ${WIDTH_SWEEP_SET}`, scope: undefined, layer: "L2", cases: L2_WIDTHS.length },
+    ];
+    let checked = 0;
+    for (const row of rows) {
+      capture();
+      const dir = dirFor();
+      const { d } = gridDeps();
+      expect(await runSlice(d, [...row.argv, "--run-id", "sc3", "--report-dir", dir]), row.argv.join(" ")).toBe(0);
+      const raw = JSON.parse(readFileSync(join(dir, "sc3", "results.json"), "utf8")) as Record<string, unknown> & { cases: unknown[] };
+      // What the file holds, key by key, then what the schema reads back from it.
+      expect(raw.plan, row.argv.join(" ")).toBe(row.plan);
+      expect("scope" in raw, row.argv.join(" ")).toBe(row.scope !== undefined);
+      expect(raw.scope, row.argv.join(" ")).toBe(row.scope);
+      const parsed = runIn(dir, "sc3");
+      expect(parsed.scope, row.argv.join(" ")).toBe(row.scope);
+      expect(parsed.plan, row.argv.join(" ")).toBe(row.plan);
+      expect(parsed.layer, row.argv.join(" ")).toBe(row.layer);
+      expect(parsed.cases, row.argv.join(" ")).toHaveLength(row.cases);
+      checked++;
+    }
+    expect(checked).toBe(rows.length);
+  });
+
+  it("--layer L1 --scope grid, through the real planner and runner: 231 cells at 1280, the 53 with no organiser path recorded 🚫 and never driven, every sport's variant order read once", async () => {
+    capture();
+    const dir = dirFor();
+    const { d, reads, opened } = gridDeps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "g1", "--report-dir", dir])).toBe(0);
+    const r = runIn(dir, "g1");
+    expect(r.cases).toHaveLength(CELLS);
+    expect(CELLS).toBe(231);
+    expect(r.cases.every((c) => c.layer === "L1" && c.width === 1280 && c.caseId.endsWith("@1280"))).toBe(true);
+    expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(CELLS);
+    expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((s) => `${row}|${s}`)));
+    const planned = r.cases.filter((c) => c.planned === true);
+    expect(planned).toHaveLength(53);
+    expect(planned.every((c) => c.state === "no_path" && (API_ONLY_ROWS as readonly string[]).includes(c.row))).toBe(true);
+    // Every other case was handed to a driver: it is not marked planned, and its state is the scenario's.
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(CELLS - 53);
+    expect(r.cases.filter((c) => c.planned === undefined).every((c) => c.state !== "no_path" && c.state !== "not_run")).toBe(true);
+    expect([...reads].sort()).toEqual([...SPORT_KEYS].sort());
+    expect(reads).toHaveLength(SPORT_KEYS.length);
+    expect(opened()).toBe(1);
+  }, 120_000);
+
+  it("--layer L2 --scope grid, through the real planner and runner: 1,731 runs at their own widths — 62 driven, 164 🚫, 1,505 ░ — each recording the pair-run it is", async () => {
+    capture();
+    const dir = dirFor();
+    const { d, reads } = gridDeps();
+    expect(await runSlice(d, ["--driver", "browser", "--layer", "L2", "--scope", "grid", "--run-id", "g2", "--report-dir", dir])).toBe(0);
+    const r = runIn(dir, "g2");
+    expect(r.cases).toHaveLength(RAW_RUNS.length);
+    expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
+    expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(164);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1505);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1505);
+    // Only the driven runs' sports were asked for: a planned run posts nothing.
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.length).toBeLessThan(SPORT_KEYS.length + 1);
+  }, 120_000);
 });
 
 // W1-driving Task 11 (ruling 46, D10): --workers N. Review Focus 4 — each

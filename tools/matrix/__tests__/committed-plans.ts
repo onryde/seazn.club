@@ -10,7 +10,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { decideState, parseResults, type CaseResultV2 } from "../lib/results.ts";
-import { API_ONLY_BROWSER_SET, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
+import { API_ONLY_BROWSER_SET, LAYER_GRID_PLANNERS, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, l1Planner, l2Planner, layerCaseId, w1DrivingL1Planner, widthSweepPlanner, type LayerCase } from "../lib/layers.ts";
 import { PAD_PROOF_SET, padProofPlanner } from "../lib/pad-proof-set.ts";
 import { PROBE_SET, probePlanner } from "../lib/probe-set.ts";
 import { planCanaryCase, planSliceCases } from "../lib/slice.ts";
@@ -108,8 +108,11 @@ export function livePlan(plan: string): ExpectedPlan {
     if (set === W1_DRIVING_SET) return fromSpecs(plan, w1DrivingPlanner(filters).plan(anyVariant).map((c) => c.caseId));
   }
   if (words[0] === "--canary" && words[1] !== undefined) return fromSpecs(plan, [planCanaryCase(anyVariant, words[1]).caseId]);
-  if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, l1Planner(filters).layered(anyVariant));
-  if (words[0] === "--layer" && words[1] === "L2") return fromLayered(plan, l2Planner(filters).layered(anyVariant));
+  // W1d Task 3: `--scope grid` is the full grid; a bare `--layer L1` stays the slice, so every
+  // committed entry is judged exactly as before. The grid takes no filter.
+  const grid = flag("--scope") === "grid";
+  if (words[0] === "--layer" && words[1] === "L1") return fromLayered(plan, (grid ? LAYER_GRID_PLANNERS.L1({}) : l1Planner(filters)).layered(anyVariant));
+  if (words[0] === "--layer" && words[1] === "L2") return fromLayered(plan, (grid ? LAYER_GRID_PLANNERS.L2({}) : l2Planner(filters)).layered(anyVariant));
   if (words[0] === "slice") return fromSpecs(plan, planSliceCases(anyVariant, filters).map((c) => c.caseId));
   throw new Error(`committed-plans: no planner for the recorded plan "${plan}"`);
 }

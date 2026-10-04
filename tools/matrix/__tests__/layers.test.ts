@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, cellId, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import {
-  API_ONLY_BROWSER_SET, L1_WIDTH, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
+  API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
   layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
 import { NotApiOnlyRow, apiOnlyUiPath } from "../lib/api-only-ui.ts";
@@ -219,6 +219,26 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(l2Planner({}).sports).toEqual(drivenSports);
     expect(l2Planner({}).layer).toBe("L2");
     expect(l2Planner({}).acceptsWidth).toBeNull();
+  });
+});
+
+describe("LAYER_PLANNERS is unchanged by the full grid (W1d Task 3, ruling 64): the slice stays the default", () => {
+  it("L1 still plans the slice's 6 cells at 1280 and L2 the slice's committed runs; the grid is a SEPARATE table beside it", () => {
+    const l1 = LAYER_PLANNERS.L1({}).layered(v);
+    expect(l1).toHaveLength(SLICE_ROWS.length * SLICE_SPORTS.length);
+    expect(l1).toHaveLength(6);
+    expect(l1.every((c) => c.width === 1280 && c.layer === "L1" && c.spec !== null)).toBe(true);
+    const l2 = LAYER_PLANNERS.L2({}).layered(v);
+    expect(l2).toHaveLength(SLICE_RUNS.length);
+    expect(l2.length).toBeLessThan(RAW.runs.length);
+    // Each table holds its own planners; the second call (the default) is the slice's.
+    expect(LAYER_PLANNERS.L1).toBe(l1Planner);
+    expect(LAYER_PLANNERS.L2).toBe(l2Planner);
+    expect(LAYER_GRID_PLANNERS.L1).not.toBe(LAYER_PLANNERS.L1);
+    expect(LAYER_GRID_PLANNERS.L2).not.toBe(LAYER_PLANNERS.L2);
+    expect(Object.isFrozen(LAYER_PLANNERS) && Object.isFrozen(LAYER_GRID_PLANNERS)).toBe(true);
+    expect(LAYER_PLANNERS.L1({}).label).toBe("--layer L1");
+    expect(LAYER_PLANNERS.L2({}).label).toBe("--layer L2");
   });
 });
 
