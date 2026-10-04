@@ -21,7 +21,6 @@ import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { parseCaptureQr } from "@/lib/capture-qr";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
@@ -34,15 +33,15 @@ import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRec
 import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
-import { inputEnvelopesHex, pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
-  PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, QR_PREFERRED_DEFAULT, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
-  RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SRT_LATENCY_MS, STALE_HEARTBEAT_SECONDS,
-  TOKEN_GRACE_MINUTES, WARMING_TIMEOUT_MINUTES,
+  PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
+  RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
+  WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
@@ -449,51 +448,29 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(c.runner.created[0]!.deadlineAt.getTime()).not.toBe(wallClock);
   });
 
-  it("current while warming: qr carries BOTH credential sets, preferred, slot, sid, exp (R-A; r7/r8); a non-zero slot row projects ITS slot; a missing row projects null", async () => {
-    const r = await rig({ credits: 1 });
+  // Capture QR v2 §6.13 (W4, T11): the organiser never sees credentials. The v1 QR builder and its transaction are gone
+  // from `current`, so a poll — warming, with the slot row and its sealed credentials in place — carries no `qr` key, and
+  // moves neither served counter (V430's `credentials_served_*` now count descriptor serves alone, §17.3).
+  it("W4: current while warming carries NO qr key and no credential, and three polls move neither served counter", async () => {
+    // The input stays unconnected for the whole test (the old De case's rig): the warming window the old QR was served in.
+    const r = await rig({ credits: 1, connectAfterMs: 10 * 60_000 });
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
-    expect(cur.qr).not.toBeNull();
-    const qr = cur.qr!;
-    expect(qr.v).toBe(1);
-    expect(qr.sid).toBe(sessionId);
-    expect(qr.slot).toBe(0);
-    expect(qr.preferred).toBe(QR_PREFERRED_DEFAULT);
-    expect(qr.cred.srt.latencyMs).toBe(SRT_LATENCY_MS);
-    const row = await r.row(sessionId);
-    // A6: relayTokenExpiry(session) = the wall clock + TOKEN_GRACE_MINUTES — from the row's created_at and the declarations.
-    const expectedExp = Math.floor((new Date(row.created_at).getTime() + (MAX_DURATION_MINUTES + TOKEN_GRACE_MINUTES) * 60_000) / 1000);
-    expect(qr.exp).toBe(expectedExp);
-    const [inp] = await sql<{ ingest_srt_url: string; ingest_rtmps_url: string }[]>`
-      select ingest_srt_url, ingest_rtmps_url from fixture_stream_inputs where session_id = ${sessionId}`;
-    expect(qr.cred.srt.url).toBe(inp!.ingest_srt_url);
-    expect(qr.cred.rtmps.url).toBe(inp!.ingest_rtmps_url);
-    expect(qr.cred.srt.passphrase).toMatch(/^[0-9a-f]{24}$/);
-    expect(qr.cred.rtmps.streamKey).toMatch(/^[0-9a-f]{24}$/);
-    // A9: the at-rest read goes through the rig (this file may not name a *_enc column).
-    const env = await inputEnvelopesHex(sessionId);
-    expect(env.rtmps).not.toContain(Buffer.from(qr.cred.rtmps.streamKey).toString("hex"));
-    expect(env.srt).not.toContain(Buffer.from(qr.cred.srt.passphrase).toString("hex"));
-    await sql`update fixture_stream_inputs set slot = 3 where session_id = ${sessionId}`;
-    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.qr!.slot).toBe(3);
-    await sql`delete from fixture_stream_inputs where session_id = ${sessionId}`;
-    const gone = (await currentSession(r.auth, r.fixtureId, r.deps))!;
-    expect(gone.qr).toBeNull();
-    expect(gone.state).toBe("warming");
-  });
-
-  // Lane D amendment D5 (class 1 — a fixture on both ends proves the fixture). THIS is the seam: the payload the REAL
-  // builder (currentSession's qr) hands the Phone tab, through the phone's parser. It crosses the wire as JSON, so the
-  // parse is of the serialised text, exactly what the QR encodes. Capture QR v2 PR-1 T1 removed the v1 JSON contract
-  // (W4), so the contract's required-key levels went with it; the v1 builder and parseCaptureQr live until T11, and so
-  // does this round trip.
-  it("D5: the REAL builder's qr round-trips through the phone's v1 parser — parseCaptureQr accepts its JSON verbatim", async () => {
-    const r = await rig({ credits: 1 });
-    await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    const qr = (await currentSession(r.auth, r.fixtureId, r.deps))!.qr;
-    expect(qr, "the warming projection carries a qr").not.toBeNull();
-    const wire = JSON.parse(JSON.stringify(qr)) as unknown;
-    expect(parseCaptureQr(wire, r.deps.now())).toEqual({ ok: true, payload: qr });
+    const [inp] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_inputs where session_id = ${sessionId}`;
+    expect(inp!.n, "PREMISE: the slot row (the old builder's input) exists").toBe(1);
+    const served = async () => (await sql<{ first: Date | null; count: number }[]>`
+      select credentials_served_first_at as first, credentials_served_count as count from fixture_stream_sessions where id = ${sessionId}`)[0]!;
+    const before = await served();
+    let polls = 0;
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) r.tick(5000);   // the organiser's next poll
+      const cur = (await currentSession(r.auth, r.fixtureId, r.deps))!;
+      expect(cur.state, "PREMISE: still warming").toBe("warming");
+      expect(Object.keys(cur)).not.toContain("qr");
+      expect(JSON.stringify(cur)).not.toMatch(/srt:\/\/|rtmps:\/\/|passphrase|streamKey/);
+      polls++;
+    }
+    expect(polls).toBe(3);
+    expect(await served(), "a poll is not a serve").toEqual(before);
   });
 
   it("double start → 409 active_session carrying the existing id (r1: admit, and the partial index as the race backstop)", async () => {
@@ -685,20 +662,21 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
   });
 
   // I-1 (lane-close review): the Phone tab read only the balance, so at 0 it sold a pack for a restart the server admits
-  // free (§5.2, `admit`'s waived balance gate). The projection now carries `restartFree` — the SAME authority admission
+  // free (§5.2, `admit`'s waived balance gate). The projection now carries `restart` (T11 retired the derived boolean;
+  // `restart?.free` is its reading) — the SAME authority admission
   // asks (`reuseWindowOpen`, on the same clock) — and each of its answers below is checked against what `createSession`
   // then actually does, so the fact the panel shows and the gate the server applies cannot disagree. The window is the
   // DECLARED one (config.ts CREDIT_REUSE_HOURS), a minute inside and a minute past. The scenario is the review's: the paid
   // session went live, then the free restart's phone never connected and it failed `no_inbound_timeout` — at balance 0.
-  it("I-1: restartFree — false before any consume, true once this fixture's consume stands; after a failed (no_inbound_timeout) restart at balance 0 it is true a minute inside the window and false a minute past it — and createSession agrees both ways", async () => {
+  it("I-1: restart.free — false (no window) before any consume, true once this fixture's consume stands; after a failed (no_inbound_timeout) restart at balance 0 it is true a minute inside the window and false a minute past it — and createSession agrees both ways", async () => {
     const r = await rig({ credits: 1 });
     const first = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     const warming = (await currentSession(r.auth, r.fixtureId, r.deps))!;
     expect(warming).toMatchObject({ id: first.sessionId, state: "warming" });
-    expect(warming.restartFree, "the empty case: nothing consumed on this fixture yet").toBe(false);
+    expect(warming.restart, "the empty case: nothing consumed on this fixture yet — no window").toBeNull();
     r.tick(STREAM_POLL_MS);   // the organiser's NEXT poll (I-1: polls inside one interval share one read); the fake connects at 3 s
     const live = (await currentSession(r.auth, r.fixtureId, r.deps))!;
-    expect(live).toMatchObject({ state: "live", creditUsed: true, restartFree: true });
+    expect(live).toMatchObject({ state: "live", creditUsed: true, restart: { windowOpen: true, free: true } });
     await stopSession(r.auth, r.fixtureId, first.sessionId, r.deps);
     expect(await creditBalance(sql, r.auth.orgId), "premise: the restart below runs AT zero").toBe(0);
 
@@ -715,15 +693,15 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(failed).toMatchObject({ id: second.sessionId, state: "failed", failReason: "no_inbound_timeout", balance: 0 });
     // The differential against D3's fact: THIS session used no credit, yet its restart is free — the paid one's window.
     expect(failed.creditUsed).toBe(false);
-    expect(failed.restartFree, "a minute inside the window").toBe(true);
+    expect(failed.restart?.free, "a minute inside the window").toBe(true);
 
     await redate(CREDIT_REUSE_HOURS * 60 + 1);
     const past = (await currentSession(r.auth, r.fixtureId, r.deps))!;
-    expect(past.restartFree, "a minute past the window").toBe(false);
+    expect(past.restart, "a minute past the window: no window").toBeNull();
     await expect(createSession(r.auth, r.fixtureId, body(r.target.id), r.deps), "…and admission agrees: at 0 it is refused").rejects.toMatchObject({ status: 402, code: "no_credits" });
 
     await redate(CREDIT_REUSE_HOURS * 60 - 1);
-    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.restartFree).toBe(true);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.restart?.free).toBe(true);
     const third = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
     expect(third.sessionId, "…and admission agrees: inside the window at 0 it is admitted").toBeTruthy();
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from org_stream_credits where org_id = ${r.auth.orgId} and reason = 'consume'`;
@@ -2293,38 +2271,6 @@ describe.skipIf(!HAS_DB)("the admission snapshot, the cost estimate, and every t
     const [beat] = await sql<{ ingest_reason: string | null }[]>`
       select ingest_reason from fixture_stream_samples where source = 'heartbeat' and session_id = ${sessionId} order by id desc limit 1`;
     expect(beat!.ingest_reason).toBeNull();                                // stated, not forgotten — see the writer's comment
-  });
-
-  it("De: a REVEAL counts and a POLL does not — two reveals with polls between them → count 2, and neither first_at moves", async () => {
-    // A LIVE session serves no QR, so no reveal can count on it. The plan's rig connects 3 s after creation, which took this
-    // session live on its first 5 s poll and the second reveal never landed; here the input stays unconnected for the whole
-    // test — the warming window the claim is about.
-    const r = await rig({ credits: 1, connectAfterMs: 10 * 60_000 });
-    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
-    // V430 (capture QR v2 R3): the reveal pair is `credentials_served_*`, and the QR's serve stamp
-    // is gone (the stream code's `first_shown_at` supersedes it, spec §6.13).
-    const facts = () => sql<{ credentials_served_first_at: Date | null; credentials_served_count: number }[]>`
-      select credentials_served_first_at, credentials_served_count from fixture_stream_sessions where id = ${sessionId}`;
-    const first = (await currentSession(r.auth, r.fixtureId, r.deps, { reveal: true }))!;
-    expect(first.qr).not.toBeNull();
-    const [a] = await facts();
-    expect(a!.credentials_served_count).toBe(1);
-    expect(a!.credentials_served_first_at, "the first reveal stamps first-at").toBeInstanceOf(Date);
-    // Now the organiser's tab just sits there polling. Ten minutes of 5-second polls is
-    // ~120 projections; three proves the shape. Before this split every one of them
-    // counted as a reveal, and the De test pinned that — which is how the drift became
-    // uncatchable. The QR is still SERVED on each (the tab renders it).
-    for (let i = 0; i < 3; i++) {
-      r.tick(5000);
-      expect((await currentSession(r.auth, r.fixtureId, r.deps))!.qr, "a poll still serves the QR").not.toBeNull();
-    }
-    const [mid] = await facts();
-    expect(mid!.credentials_served_count, "a poll is not a reveal").toBe(1);
-    r.tick(5000);
-    await currentSession(r.auth, r.fixtureId, r.deps, { reveal: true });   // the organiser taps Copy
-    const [b] = await facts();
-    expect(b!.credentials_served_count).toBe(2);
-    expect(b!.credentials_served_first_at).toEqual(a!.credentials_served_first_at);
   });
 
   it("C1: the balance is readable with NO session — a credited org is not shown the buy card", async () => {

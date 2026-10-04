@@ -158,7 +158,7 @@ describe.skipIf(!HAS_DB)("W23: three free restarts per reuse window — on the l
     expect(await r.consumes()).toBe(2);
   });
 
-  it("AGREEMENT: at every step of the boundary sequence, admission's waiver, consumeForSession's decision, current.restart.free and the derived current.restartFree are all equal — five steps compared", async () => {
+  it("AGREEMENT: at every step of the boundary sequence, admission's waiver, consumeForSession's decision and current.restart.free are all equal — five steps compared (T11 retired the derived restartFree)", async () => {
     const r = await rig({ credits: 3 });
     await r.stop(await r.start().then(async (sid) => { await r.video(); return sid; }));
     const spy = vi.mocked(admit);
@@ -173,7 +173,7 @@ describe.skipIf(!HAS_DB)("W23: three free restarts per reuse window — on the l
       await r.video();
       const consumeFree = (await r.consumes()) === before;
       expect(view.restart, `restart ${restart}: a window is open`).not.toBeNull();
-      const answers = { admission: waived, consume: consumeFree, restart: view.restart!.free, restartFree: view.restartFree };
+      const answers = { admission: waived, consume: consumeFree, restart: view.restart!.free };
       expect(new Set(Object.values(answers)).size, `restart ${restart}: ${JSON.stringify(answers)}`).toBe(1);
       seen.push(waived);
       compared++;
@@ -183,7 +183,7 @@ describe.skipIf(!HAS_DB)("W23: three free restarts per reuse window — on the l
     expect(seen, "W23's text, step by step").toEqual([true, true, true, false, true]);
   });
 
-  it("THE WINDOW CLOSES: CREDIT_REUSE_HOURS after the anchor, restart is null, restartFree false, and a Go live pays as today", async () => {
+  it("THE WINDOW CLOSES: CREDIT_REUSE_HOURS after the anchor, restart is null, and a Go live pays as today", async () => {
     const r = await rig({ credits: 2 });
     const s0 = await r.start();
     await r.video();
@@ -192,7 +192,6 @@ describe.skipIf(!HAS_DB)("W23: three free restarts per reuse window — on the l
     r.tick(CREDIT_REUSE_HOURS * 3_600_000);
     const closed = await r.current();
     expect(closed.restart).toBeNull();
-    expect(closed.restartFree).toBe(false);
     await r.start();
     await r.video();
     expect(await r.consumes()).toBe(2);
@@ -236,12 +235,11 @@ describe.skipIf(!HAS_DB)("W23: three free restarts per reuse window — on the l
     expect(await ask(r.fixtureId), "the consume left with its session").toEqual(CLOSED);
   });
 
-  it("the EMPTY case: before any consume there is no window — restart null, restartFree false — and the first live pays", async () => {
+  it("the EMPTY case: before any consume there is no window — restart null — and the first live pays", async () => {
     const r = await rig({ credits: 1 });
     const sid = await r.start();
     const warming = await r.current();
     expect(warming.restart).toBeNull();
-    expect(warming.restartFree).toBe(false);
     await r.video();
     expect(await r.consumes()).toBe(1);
     await r.stop(sid);

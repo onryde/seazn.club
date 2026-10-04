@@ -9,18 +9,15 @@
 // symbol decodes EXACTLY. There is no tolerance window: a size that does not decode is a red.
 //
 // No sport is read anywhere on this path: a QR encodes a string, so one payload per call site is the sweep.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import jsQR from "jsqr";
 import QRCode from "qrcode";
 import sharp from "sharp";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { CaptureQrV1 } from "@/lib/capture-qr";
+import { CaptureQrV2, captureQrV2Text } from "@/lib/capture-qr";
 import { routes } from "@/lib/routes";
-import { qrText } from "@/lib/stream-session-view";
-import { MAX_DURATION_MINUTES, QR_PREFERRED_DEFAULT, SRT_LATENCY_MS } from "@/server/relay/config";
-import { relayTokenExpiry } from "@/server/relay/tokens";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { endOfLocalDay, mintDeviceLinkSecret } from "@/server/usecases/device-links";
 import { renderScorerSheetPdf } from "@/server/scorer-sheet-pdf";
@@ -59,26 +56,15 @@ async function decode(svg: string, px: number): Promise<string | null> {
   return jsQR(new Uint8ClampedArray(data.buffer, data.byteOffset, data.length), info.width, info.height)?.data ?? null;
 }
 
-/** The capture payload as `stream-sessions.ts` builds it (`currentQr`, :1419-1423): the contract's shape (`lib/capture-
- *  qr`, parsed so a shape drift fails here), the relay's own latency, preferred protocol and token expiry, and
- *  Cloudflare's credential lengths — a 32-hex SRT stream id and 65-character secrets — serialised by the panel's own
- *  `qrText`. The contract's checked-in fixture is 352 bytes, too short to stand for the real one. */
+/** The capture payload v2 (spec 2026-10-01 §6.2, W3) as the panel shows it: the contract's shape (`lib/capture-qr`'s
+ *  CaptureQrV2, parsed so a shape drift fails here) — a 12-character code over §6.2's alphabet and a 16-byte tok in
+ *  base64url, as `stream-codes.ts` mints them — serialised by the panel's own `captureQrV2Text`. Every field is fixed
+ *  length (slot 0 in PR-1), so every real payload is this length: there is no longer a "realistic" length to reach. */
 function streamPayloadFixture(): string {
-  const secret = (a: string, b: string) => `${a.repeat(32)}k${b.repeat(32)}`;
-  const qr = CaptureQrV1.parse({
-    v: 1,
-    sid: randomUUID(),
-    slot: 0,
-    cred: {
-      srt: { url: "srt://live.cloudflare.com:778", streamId: "f256e6ea9341d51eea64c9454659e576", passphrase: secret("a", "b"), latencyMs: SRT_LATENCY_MS },
-      rtmps: { url: "rtmps://live.cloudflare.com:443/live/", streamKey: secret("c", "d") },
-    },
-    preferred: QR_PREFERRED_DEFAULT,
-    exp: Math.floor(relayTokenExpiry({ createdAt: new Date(), startedAt: null, maxDurationMinutes: MAX_DURATION_MINUTES }).getTime() / 1000),
-  });
-  expect(qr.cred.srt.passphrase.length).toBe(65);
-  expect(qr.cred.rtmps.streamKey.length).toBe(65);
-  return qrText(qr);
+  const alphabet = "0123456789abcdefghjkmnpqrstvwxyz";
+  const code = Array.from(randomBytes(12), (b) => alphabet[b % alphabet.length]).join("");
+  const qr = CaptureQrV2.parse({ v: 2, code, slot: 0, tok: randomBytes(16).toString("base64url") });
+  return captureQrV2Text(qr);
 }
 
 /** The Remote scoring link as `device-link-panel.tsx` builds it (`${origin}/score/${secret}`), over a REAL secret. */
@@ -112,7 +98,7 @@ describe("the three payloads are the REAL ones, at their real length (ruling I-1
   it("each payload is at least as long as the symbol version a real one needs — a length floor per row", () => {
     // [name, payload, the version a real payload reaches at EC H]
     const rows: [string, string, number][] = [
-      ["stream capture", STREAM_PAYLOAD, 22], // ≈ 431 B (spec §7: ≈ 435)
+      ["stream capture", STREAM_PAYLOAD, 8], // 69 B: QR v2's four keys, every field fixed length (capture QR v2 §6.2)
       ["check-in", CHECKIN, 16], // ≈ 229 B: an HS256 JWT over { fid }, iat and exp (review I-1: 229-232)
       ["Remote scoring", DLINK, 8], // 71 B: `dl_` + 43 base64url characters
     ];
@@ -130,8 +116,9 @@ describe("the three payloads are the REAL ones, at their real length (ruling I-1
 });
 
 describe("renderSeaznQr's symbol (spec §7, D7)", () => {
-  it("the stream payload is realistic in size — the test would be vacuous on a short string", () => {
-    expect(STREAM_PAYLOAD.length).toBeGreaterThanOrEqual(400);
+  it("the stream payload is the v2 one at its fixed length — 69 B, the four keys, no credential", () => {
+    expect(STREAM_PAYLOAD.length).toBe(69);
+    expect(Object.keys(JSON.parse(STREAM_PAYLOAD))).toEqual(["v", "code", "slot", "tok"]);
   });
 
   it("encodes at the declared EC level: the viewBox is the H symbol's size plus the quiet zone — and differs from the M size", () => {
@@ -312,11 +299,15 @@ describe("renderSeaznQr's symbol (spec §7, D7)", () => {
     expect(checked).toBe(2);
   });
 
-  it("the sheet's painted figures ARE the rule applied to its own `available` figures, for today's v22 payload", () => {
+  // T11 owns §6.2's size gate: the v2 payload (69 B) is a v8 symbol, 49 modules and the quiet zone — 57 — so the sheet's
+  // painted figures move with it. The premise is QRCode's own, never seaznQrModules' alone.
+  it("the sheet's painted figures ARE the rule applied to its own `available` figures, for the v2 payload (v8)", () => {
     const row = readFileSync(THEMES_PATH, "utf8").split("\n").find((l) => l.startsWith("| QR size |"))!;
     const modules = seaznQrModules(STREAM_PAYLOAD);
-    expect(modules, "premise: today's capture payload is v22 — 105 modules and the quiet zone").toBe(113);
-    expect(row).toContain(`${modules} for today's v22 payload`);
+    const symbol = QRCode.create(STREAM_PAYLOAD, { errorCorrectionLevel: "H" });
+    expect([symbol.version, symbol.modules.size], "premise: the v2 payload is a v8 symbol at EC H — 49 modules").toEqual([8, 49]);
+    expect(modules, "…and the quiet zone").toBe(49 + 2 * SEAZN_QR_QUIET_MODULES);
+    expect(row).toContain(`${modules} for the v2 payload (v8)`);
     // [painted, available, DPR, the floor in device px per module]
     const figures: [RegExp, RegExp, number, number][] = [
       [/\*\*([\d.]+) CSS px at 1280\*\*/, /min\((\d+)px, available\)/, 1, 3],
@@ -392,7 +383,12 @@ describe("renderSeaznQr — the data URL the three call sites paint (the icon fe
       checked++;
     }
     expect(checked).toBe(3);
-    expect(new Set(qrs.map((q) => q.modules)).size, "three payloads, three symbol sizes").toBe(3);
+    // The v2 capture payload (69 B) and the Remote scoring link (71 B) are both v8 since T11, so the sizes are two, not
+    // three — the check-in symbol (v16) is the one that tells a shared count from a per-payload one.
+    expect(new Set(qrs.map((q) => q.modules)).size, "the payloads' own distinct symbol sizes").toBe(
+      new Set(texts.map((t) => QRCode.create(t, { errorCorrectionLevel: "H" }).modules.size)).size,
+    );
+    expect(new Set(qrs.map((q) => q.modules)).size, "PREMISE: at least two sizes to tell apart").toBeGreaterThanOrEqual(2);
   });
 
   it("a failed icon fetch still paints the QR — logo-less, the plain symbol — and the next QR tries the fetch again", async () => {

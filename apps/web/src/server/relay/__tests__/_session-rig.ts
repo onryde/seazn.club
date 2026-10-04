@@ -40,17 +40,6 @@ export async function targetEnvelope(targetId: string): Promise<Buffer> {
   return Buffer.from(row.env);
 }
 
-/** A session's first input's two sealed credential envelopes as stored, hex-encoded — for Task 10's at-rest assertion
- *  in stream-sessions.test.ts (outside server/relay/**, so it may not name the columns: A9). Throws on a missing row
- *  or a null envelope, for the same reason `targetEnvelope` does. */
-export async function inputEnvelopesHex(sessionId: string): Promise<{ srt: string; rtmps: string }> {
-  const [row] = await sql<{ srt: string | null; rtmps: string | null }[]>`
-    select encode(ingest_srt_key_enc, 'hex') as srt, encode(ingest_rtmps_key_enc, 'hex') as rtmps
-      from fixture_stream_inputs where session_id = ${sessionId} order by slot asc limit 1`;
-  if (!row || row.srt === null || row.rtmps === null) throw new Error(`no sealed input for session ${sessionId}`);
-  return { srt: row.srt, rtmps: row.rtmps };
-}
-
 /** Re-seal a SAVED target's destination to `rtmp` without the allowlist — the state a target is in when the
  *  allowlist SHRINKS after it was saved (lane C A20: LinkedIn was dropped 2026-09-28). createStreamTarget can never
  *  write this, which is the point: only the provision-time re-check stands between it and a dial. */

@@ -9,7 +9,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { z } from "zod";
 import * as S from "../schemas";
-import { CaptureQrV1 } from "@/lib/capture-qr";
 import { buildOpenApiDocument, ROUTES } from "../openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "../key-scopes";
 import { ACTIVE_STATES, TERMINAL_STATES, type FailReason } from "@/server/relay/domain/session";
@@ -95,9 +94,15 @@ describe("relay wire enums equal their declarations", () => {
     expect(S.StreamFailReason.options.filter((r) => (S.StreamEndReason.options as readonly string[]).includes(r))).toEqual([]);
   });
 
-  it("the QR schema is RE-EXPORTED, never re-typed: schemas.ts's CaptureQrV1 IS lib/capture-qr.ts's", () => {
-    expect(S.CaptureQrV1).toBe(CaptureQrV1);
-    expect(S.StreamSessionCurrent.shape.qr.unwrap()).toBe(CaptureQrV1);
+  // Capture QR v2 §6.13 (W4, T11): the v1 QR and the derived free-restart boolean are gone from the wire — the organiser
+  // never sees credentials, and `restart` (W23) is the one restart field. The EXACT key set is pinned, so neither can
+  // come back (nor a new field arrive) without this list moving; and schemas.ts re-exports no capture QR schema at all.
+  it("W4 + A9: StreamSessionCurrent's exact key set — no `qr`, `restart` the one restart field — and no QR schema re-exported", () => {
+    expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
+      "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureId",
+      "health", "id", "ingest", "mode", "output", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
+    ]);
+    expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
   });
 
   it("the four inferred types the Task 9 brief promised are EXPORTED, each exactly its schema's z.infer (review minor 6)", () => {
@@ -242,12 +247,12 @@ describe("relay request schemas refuse what they must", () => {
     expect(S.RelayHeartbeat.safeParse({}).success).toBe(false);
   });
 
-  it("StreamSessionCurrent is strict, and its qr is the v1 payload or null — never a default object", () => {
+  it("StreamSessionCurrent is strict — a v1 `qr` riding along is refused", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, output: null, qr: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
+      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, endReason: null, creditUsed: false,
-      restartFree: false, startCause: "organiser", restart: null, countdown: null,
+      startCause: "organiser", restart: null, countdown: null,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
     // T9 (W24): countdown is REQUIRED (null when there is none) and closed — a kind the panel has no copy for, a
@@ -290,7 +295,7 @@ describe("relay request schemas refuse what they must", () => {
     }
     expect(causes).toBe(3);
     // T6b (A9(a)): restart is REQUIRED — null (no window open) or the allowance, strict, its count a whole non-negative
-    // number and its limit a positive one. restartFree stays beside it, derived.
+    // number and its limit a positive one. (T11 retired the derived boolean beside it.)
     const withoutRestart: Record<string, unknown> = { ...current };
     delete withoutRestart.restart;
     expect(S.StreamSessionCurrent.safeParse(withoutRestart).success, "absent").toBe(false);
@@ -330,14 +335,9 @@ describe("relay request schemas refuse what they must", () => {
     delete withoutCreditUsed.creditUsed;
     expect(S.StreamSessionCurrent.safeParse(withoutCreditUsed).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, creditUsed: 1 }).success).toBe(false);
-    // I-1: restartFree likewise — an absent field would read as "not free" and force the chooser on a free restart.
-    const withoutRestartFree: Record<string, unknown> = { ...current };
-    delete withoutRestartFree.restartFree;
-    expect(S.StreamSessionCurrent.safeParse(withoutRestartFree).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: "yes" }).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, restartFree: true }).success, "the positive pair").toBe(true);
+    // T11 (W4): the retired field is refused, not ignored — a server that still sent it would fail the parse.
+    expect(S.StreamSessionCurrent.safeParse({ ...current, qr: null }).success, "qr: null").toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, streamKey: "k" }).success).toBe(false);
-    expect(S.StreamSessionCurrent.safeParse({ ...current, qr: {} }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, failReason: "storage_exhausted" }).success).toBe(false);
     expect(S.StreamSessionCurrent.safeParse({ ...current, balance: 1.5 }).success).toBe(false);
   });

@@ -41,7 +41,7 @@ import { streamUrlSchema } from "../../lib/stream-url.ts";
 // Streaming R1 (Task 9) — the capture QR's ONE schema (design §7.6), re-exported
 // in the relay block below, never re-typed. Relative + explicit `.ts`, same
 // reason as stream-url.ts above; lib/capture-qr.ts imports zod and nothing else.
-import { CaptureQrV1, CaptureQrV2 } from "../../lib/capture-qr.ts";
+import { CaptureQrV2 } from "../../lib/capture-qr.ts";
 // Capture QR v2 (PR-1 T1) — the phone↔web contract's zod twins (docs/contracts/capture-*.json), re-exported, never
 // re-typed. Relative + explicit `.ts`, same reason as above; capture-schemas.ts imports zod and nothing else.
 export {
@@ -1326,12 +1326,11 @@ export type FixtureStream = z.infer<typeof FixtureStream>;
 
 // ---------------------------------------------------------------------------
 // Streaming R1 — relay sessions (design §6.3 / §6.4 / §7.6). Every shape a
-// route or the panel exchanges lives here; the QR payload's schema is
-// lib/capture-qr.ts (client-safe — the panel renders it) and is RE-EXPORTED,
-// never re-typed (imported at the top of this file with the other relative
-// `.ts` imports the standalone OpenAPI generator needs).
+// route or the panel exchanges lives here. The QR payload's schema is
+// lib/capture-qr.ts (client-safe — the panel renders it), imported at the top of
+// this file with the other relative `.ts` imports the standalone OpenAPI
+// generator needs; capture QR v2 §6.13 (W4, T11) removed the v1 payload.
 // ---------------------------------------------------------------------------
-export { CaptureQrV1 };
 
 export const StreamMode = z.enum(["passthrough", "composed"]);
 export type StreamMode = z.infer<typeof StreamMode>;
@@ -1421,8 +1420,6 @@ export const StreamSessionCurrent = z
     /** D3: null for a composed session, and whenever the server's poll did not read the destination (not warming/live,
      *  or the provider read failed) — never a default object. */
     output: StreamOutput.nullable(),
-    /** Present only while provisioning/warming and only when the slot row exists — else null, never a default object. */
-    qr: CaptureQrV1.nullable(),
     balance: z.number().int(),
     startedAt: z.string().nullable(),
     endedAt: z.string().nullable(),
@@ -1434,15 +1431,10 @@ export const StreamSessionCurrent = z
      *  A restart inside the reuse window consumed nothing, and a refund linked to the session nets its consume out —
      *  both read false, so the "1 credit used" chip is never a false money claim (lane D D3). */
     creditUsed: z.boolean(),
-    /** I-1 (lane-close review): true iff a new start on THIS fixture would cost nothing right now — a consume of this
-     *  fixture still stands inside the reuse window (§5.2 "a restart after a failure is the same match") AND fewer than
-     *  three restarts have been counted since it (W23). Computed through the one authority admission asks
-     *  (`restartAllowance`), so the Phone tab never sells a pack for a restart the server would admit at balance 0. A
-     *  fixture fact, not this session's: it reads false once the window's free restarts are used, even inside it. */
-    restartFree: z.boolean(),
     /** W23 (capture QR v2 T6b, A9(a)): the fixture's free-restart allowance in its reuse window — null while no window is
-     *  open (never a default object). `restartFree` above is derived from the SAME read (`restart !== null &&
-     *  restart.free`) until T11 moves its readers here and retires it. */
+     *  open (never a default object). `free` is admission's own answer (`restartAllowance`, I-1): a new start on THIS
+     *  fixture would cost nothing right now, so the Phone tab never sells a pack for a restart the server would admit at
+     *  balance 0. A fixture fact, not this session's. T11 retired the derived boolean that stood beside it; this is the one field. */
     restart: StreamRestartAllowance.nullable(),
     /** Capture QR v2 §5.3 (T6): who started this session — the organiser's Go live, the phone operator's start, or
      *  the automatic start. V430's start_cause; set at creation and never changed. */

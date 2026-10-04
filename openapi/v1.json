@@ -38456,7 +38456,7 @@
     },
     "/api/v1/fixtures/{id}/stream-sessions/current": {
       "get": {
-        "summary": "The fixture's latest relay session as the organiser sees it (state, health, the QR payload while warming) — null when none exists",
+        "summary": "The fixture's latest relay session as the organiser sees it (state, health, the phone-lost countdown, the restart allowance) — null when none exists. Carries no credential. A `reveal` query parameter (the removed v1 QR's) is 400",
         "tags": [
           "fixtures"
         ],
@@ -38470,18 +38470,6 @@
               "type": "string",
               "format": "uuid"
             }
-          },
-          {
-            "name": "reveal",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "1"
-              ]
-            },
-            "description": "`1` marks this read a credential REVEAL (the QR first shown, or Copy tapped) and counts it; absent, the read is a poll and counts nothing; any other value is 400"
           }
         ],
         "responses": {
@@ -38682,110 +38670,6 @@
                                 }
                               ]
                             },
-                            "qr": {
-                              "anyOf": [
-                                {
-                                  "type": "object",
-                                  "properties": {
-                                    "v": {
-                                      "type": "number",
-                                      "const": 1
-                                    },
-                                    "sid": {
-                                      "type": "string",
-                                      "format": "uuid",
-                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                    },
-                                    "slot": {
-                                      "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
-                                    "cred": {
-                                      "type": "object",
-                                      "properties": {
-                                        "srt": {
-                                          "type": "object",
-                                          "properties": {
-                                            "url": {
-                                              "type": "string",
-                                              "minLength": 1
-                                            },
-                                            "streamId": {
-                                              "type": "string",
-                                              "minLength": 1
-                                            },
-                                            "passphrase": {
-                                              "type": "string",
-                                              "minLength": 1
-                                            },
-                                            "latencyMs": {
-                                              "type": "integer",
-                                              "exclusiveMinimum": 0,
-                                              "maximum": 9007199254740991
-                                            }
-                                          },
-                                          "required": [
-                                            "url",
-                                            "streamId",
-                                            "passphrase",
-                                            "latencyMs"
-                                          ],
-                                          "additionalProperties": false
-                                        },
-                                        "rtmps": {
-                                          "type": "object",
-                                          "properties": {
-                                            "url": {
-                                              "type": "string",
-                                              "minLength": 1
-                                            },
-                                            "streamKey": {
-                                              "type": "string",
-                                              "minLength": 1
-                                            }
-                                          },
-                                          "required": [
-                                            "url",
-                                            "streamKey"
-                                          ],
-                                          "additionalProperties": false
-                                        }
-                                      },
-                                      "required": [
-                                        "srt",
-                                        "rtmps"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    "preferred": {
-                                      "type": "string",
-                                      "enum": [
-                                        "srt",
-                                        "rtmps"
-                                      ]
-                                    },
-                                    "exp": {
-                                      "type": "integer",
-                                      "exclusiveMinimum": 0,
-                                      "maximum": 9007199254740991
-                                    }
-                                  },
-                                  "required": [
-                                    "v",
-                                    "sid",
-                                    "slot",
-                                    "cred",
-                                    "preferred",
-                                    "exp"
-                                  ],
-                                  "additionalProperties": false
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
                             "balance": {
                               "type": "integer",
                               "minimum": -9007199254740991,
@@ -38869,9 +38753,6 @@
                               ]
                             },
                             "creditUsed": {
-                              "type": "boolean"
-                            },
-                            "restartFree": {
                               "type": "boolean"
                             },
                             "restart": {
@@ -39002,7 +38883,6 @@
                             "health",
                             "ingest",
                             "output",
-                            "qr",
                             "balance",
                             "startedAt",
                             "endedAt",
@@ -39011,7 +38891,6 @@
                             "fixtureDecided",
                             "endReason",
                             "creditUsed",
-                            "restartFree",
                             "restart",
                             "startCause",
                             "countdown"
@@ -39052,25 +38931,6 @@
                       "since": "example",
                       "elapsedMs": 0
                     },
-                    "qr": {
-                      "v": 1,
-                      "sid": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                      "slot": 0,
-                      "cred": {
-                        "srt": {
-                          "url": "example",
-                          "streamId": "example",
-                          "passphrase": "example",
-                          "latencyMs": 1
-                        },
-                        "rtmps": {
-                          "url": "example",
-                          "streamKey": "example"
-                        }
-                      },
-                      "preferred": "srt",
-                      "exp": 1
-                    },
                     "balance": -9007199254740991,
                     "startedAt": "example",
                     "endedAt": "example",
@@ -39083,7 +38943,6 @@
                     "fixtureDecided": true,
                     "endReason": "stopped",
                     "creditUsed": true,
-                    "restartFree": true,
                     "restart": {
                       "windowOpen": true,
                       "used": 0,
@@ -39513,110 +39372,6 @@
                             }
                           ]
                         },
-                        "qr": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "v": {
-                                  "type": "number",
-                                  "const": 1
-                                },
-                                "sid": {
-                                  "type": "string",
-                                  "format": "uuid",
-                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                                },
-                                "slot": {
-                                  "type": "integer",
-                                  "minimum": 0,
-                                  "maximum": 9007199254740991
-                                },
-                                "cred": {
-                                  "type": "object",
-                                  "properties": {
-                                    "srt": {
-                                      "type": "object",
-                                      "properties": {
-                                        "url": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "streamId": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "passphrase": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "latencyMs": {
-                                          "type": "integer",
-                                          "exclusiveMinimum": 0,
-                                          "maximum": 9007199254740991
-                                        }
-                                      },
-                                      "required": [
-                                        "url",
-                                        "streamId",
-                                        "passphrase",
-                                        "latencyMs"
-                                      ],
-                                      "additionalProperties": false
-                                    },
-                                    "rtmps": {
-                                      "type": "object",
-                                      "properties": {
-                                        "url": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        },
-                                        "streamKey": {
-                                          "type": "string",
-                                          "minLength": 1
-                                        }
-                                      },
-                                      "required": [
-                                        "url",
-                                        "streamKey"
-                                      ],
-                                      "additionalProperties": false
-                                    }
-                                  },
-                                  "required": [
-                                    "srt",
-                                    "rtmps"
-                                  ],
-                                  "additionalProperties": false
-                                },
-                                "preferred": {
-                                  "type": "string",
-                                  "enum": [
-                                    "srt",
-                                    "rtmps"
-                                  ]
-                                },
-                                "exp": {
-                                  "type": "integer",
-                                  "exclusiveMinimum": 0,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": [
-                                "v",
-                                "sid",
-                                "slot",
-                                "cred",
-                                "preferred",
-                                "exp"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
                         "balance": {
                           "type": "integer",
                           "minimum": -9007199254740991,
@@ -39700,9 +39455,6 @@
                           ]
                         },
                         "creditUsed": {
-                          "type": "boolean"
-                        },
-                        "restartFree": {
                           "type": "boolean"
                         },
                         "restart": {
@@ -39833,7 +39585,6 @@
                         "health",
                         "ingest",
                         "output",
-                        "qr",
                         "balance",
                         "startedAt",
                         "endedAt",
@@ -39842,7 +39593,6 @@
                         "fixtureDecided",
                         "endReason",
                         "creditUsed",
-                        "restartFree",
                         "restart",
                         "startCause",
                         "countdown"
@@ -39878,25 +39628,6 @@
                       "since": "example",
                       "elapsedMs": 0
                     },
-                    "qr": {
-                      "v": 1,
-                      "sid": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                      "slot": 0,
-                      "cred": {
-                        "srt": {
-                          "url": "example",
-                          "streamId": "example",
-                          "passphrase": "example",
-                          "latencyMs": 1
-                        },
-                        "rtmps": {
-                          "url": "example",
-                          "streamKey": "example"
-                        }
-                      },
-                      "preferred": "srt",
-                      "exp": 1
-                    },
                     "balance": -9007199254740991,
                     "startedAt": "example",
                     "endedAt": "example",
@@ -39909,7 +39640,6 @@
                     "fixtureDecided": true,
                     "endReason": "stopped",
                     "creditUsed": true,
-                    "restartFree": true,
                     "restart": {
                       "windowOpen": true,
                       "used": 0,

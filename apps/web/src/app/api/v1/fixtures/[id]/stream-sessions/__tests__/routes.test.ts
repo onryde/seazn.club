@@ -4,9 +4,10 @@
 //   - the envelope: 201 { sessionId }, the projection, the idempotent second stop, `null` when there is no session;
 //   - every typed refusal reaches the WIRE with its machine-readable extra (lane C A21), and each extra the wire carries
 //     is documented on that route × status in the OpenAPI spec (truthful envelopes);
-//   - `?reveal=1` is the only thing that moves the reveal counters (a poll is not a reveal — De), and any other value
-//     is a 400, never a silent poll (the house `assertOneOf` rule);
-//   - `current` serves ingest credentials, so it is no-store on every status (Task 11 review I2);
+//   - `?reveal` is GONE (capture QR v2 §6.13, W4, T11): the old reveal value and every other are a 400 that counts nothing,
+//     and `current` carries no QR — never a silent poll that a stale tab could mistake for a reveal;
+//   - `current` is no-store on every status (Task 11 review I2; it served ingest credentials until W4, and the
+//     organiser's projection stays per-caller);
 //   - the Machine is told to call back at THIS request's base URL (the create route's `defaultDeps(baseUrl(req))`);
 //   - API keys are refused at the door on all three (NEVER_KEY_ROUTES — a money route), and it is THAT refusal, not the
 //     usecase's own "signed-in organiser" 403 that shares its status.
@@ -234,53 +235,57 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     expect(after.body.data).toMatchObject({ id: made.body.data!.sessionId, state: "completed", endReason: "stopped", failReason: null });
   });
 
-  // Task 11 review m3: `?reveal=` is a member check (api-v1/http.ts `assertOneOf`). A value that is not `1` used to be
-  // a silent poll — an audit counter for credential disclosure that under-counts `?reveal=true` is the "worst of the
-  // three behaviours" that rule exists for. Now it is a 400 that names the accepted value, and it counts nothing.
-  it("?reveal=1 — and nothing else — moves the reveal counters: a poll serves the QR without counting; any other value is 400 and counts nothing", async () => {
+  // Capture QR v2 §6.13 (W4, T11): the v1 QR and its `?reveal` flag are removed. A tab still sending it (an old bundle) gets
+  // a 400 that names the parameter — never a silent poll — and nothing is counted: `credentials_served_*` now count
+  // descriptor serves alone (§17.3). The read without it is the organiser's projection, with no `qr` key at all.
+  it("W4: `?reveal` with the old value 1 — and any other reveal value — is 400 VALIDATION and counts nothing; current without it is 200 with NO qr; the spec documents no reveal parameter", async () => {
     const o = await organiser();
     const { sessionId } = (await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).body.data!;
-    // V430 renamed the counter `credentials_served_count` (capture QR v2 R3); until T11 it counts these reveals.
-    const reveals = async () => (await sql<{ n: number }[]>`select credentials_served_count as n from fixture_stream_sessions where id = ${sessionId}`)[0]!.n;
-    const steps: [string, number, number][] = [
-      ["", 200, 0], ["", 200, 0], ["?reveal=1", 200, 1],
-      ["?reveal=true", 400, 1], ["?reveal=0", 400, 1], ["?reveal=", 400, 1], ["?reveal=1&reveal=true", 200, 2],
-      ["", 200, 2], ["?reveal=1", 200, 3],
+    const served = async () => (await sql<{ n: number }[]>`select credentials_served_count as n from fixture_stream_sessions where id = ${sessionId}`)[0]!.n;
+    const before = await served();
+    const q = (...pairs: [string, string][]) => `?${new URLSearchParams(pairs)}`;
+    const steps: [string, number][] = [
+      ["", 200], [q(["reveal", "1"]), 400], [q(["reveal", "true"]), 400], [q(["reveal", "0"]), 400], [q(["reveal", ""]), 400],
+      [q(["reveal", "1"], ["reveal", "true"]), 400], ["", 200],
     ];
     let checked = 0;
-    for (const [query, status, expected] of steps) {
+    for (const [query, status] of steps) {
       const r = await current(o.fixtureId, query);
-      expect(r.status, query).toBe(status);
-      if (status === 200) expect(r.body.data!.qr, `${query}: the QR is served while warming`).not.toBeNull();
-      else expect(r.body.error, query).toMatchObject({ code: "VALIDATION" });
-      expect(await reveals(), `after GET current${query}`).toBe(expected);
+      expect(r.status, query || "(none)").toBe(status);
+      if (status === 200) {
+        expect(r.body.data, "PREMISE: the session is there").toMatchObject({ id: sessionId, state: "warming" });
+        expect(Object.keys(r.body.data!), "no qr key at all").not.toContain("qr");
+      } else {
+        expect(r.body.error, query).toMatchObject({ code: "VALIDATION" });
+        expect(r.body.error?.message, query).toMatch(/reveal/);
+      }
+      expect(await served(), `after GET current${query}`).toBe(before);
       checked += 1;
     }
     expect(checked).toBe(steps.length);
-    // Truthful envelope: the spec's `reveal` admits exactly the one value the route does (openapi.ts documents a 400 on
-    // EVERY operation, so the 400 itself needs no route-specific row).
-    type Op = { parameters?: { name: string; schema?: { enum?: string[] } }[] };
+    type Op = { parameters?: { name: string }[] };
     const op = (buildOpenApiDocument() as { paths: Record<string, Record<string, Op>> }).paths["/api/v1/fixtures/{id}/stream-sessions/current"]!.get!;
-    expect(op.parameters?.find((p) => p.name === "reveal")?.schema?.enum).toEqual(["1"]);
+    expect((op.parameters ?? []).map((p) => p.name)).not.toContain("reveal");
   });
 
-  // Task 11 review I2: `current` carries the QR's SRT/RTMPS ingest credentials while a session warms. An edge that cached
-  // one 200 would hand them to the next caller whoever they are — so no-store, varying on both credentials the route
-  // reads (the session cookie; an API key's Authorization, refused at the door), on EVERY status it answers.
-  it("GET current is private, no-store and varies on Cookie + Authorization — on the 200 with credentials, the 200 with null, the 400 and the 403", async () => {
+  // Task 11 review I2: `current` carried the QR's SRT/RTMPS ingest credentials while a session warmed (until W4, T11), and
+  // it is still one organiser's projection. An edge that cached one 200 would hand it to the next caller — so no-store,
+  // varying on both credentials the route reads (the session cookie; an API key's Authorization, refused at the door), on
+  // EVERY status it answers.
+  it("GET current is private, no-store and varies on Cookie + Authorization — on the 200 with a session, the 200 with null, the 400 and the 403", async () => {
     const o = await organiser();
     const answers: [string, Awaited<ReturnType<typeof currentRaw>>][] = [];
     answers.push(["200 null (no session)", await currentRaw(o.fixtureId)]);
     expect((await create(o.fixtureId, { mode: "passthrough", targetId: o.target.id })).status).toBe(201);
-    answers.push(["200 with the QR", await currentRaw(o.fixtureId, "?reveal=1")]);
-    answers.push(["400 bad reveal", await currentRaw(o.fixtureId, "?reveal=yes")]);
+    answers.push(["200 with a session", await currentRaw(o.fixtureId)]);
+    answers.push(["400 a reveal", await currentRaw(o.fixtureId, `?${new URLSearchParams({ reveal: "1" })}`)]);
     await override(o.auth.orgId, "api.access", true);
     await override(o.auth.orgId, "api.write", true);
     const { secret } = await createApiKey(o.auth, { name: `cache-${randomUUID().slice(0, 6)}`, scopes: ["manage"] });
     answers.push(["403 an API key", await currentRaw(o.fixtureId, "", { authorization: `Bearer ${secret}` })]);
     expect(answers.map(([, r]) => r.status)).toEqual([200, 200, 400, 403]);
-    const withQr = (await answers[1]![1].clone().json()) as Envelope<StreamSessionCurrent>;
-    expect(withQr.data!.qr, "the 200 really carries the ingest credentials").not.toBeNull();
+    const withSession = (await answers[1]![1].clone().json()) as Envelope<StreamSessionCurrent>;
+    expect(withSession.data, "the 200 really carries a session").not.toBeNull();
     let checked = 0;
     for (const [label, r] of answers) {
       expect(r.headers.get("cache-control"), label).toMatch(/(^|,\s*)no-store(\s*,|$)/);
@@ -593,7 +598,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
     const bearer = { authorization: `Bearer ${secret}` };
     const calls: [string, () => Promise<{ status: number; body: Envelope }>][] = [
       ["create", () => create(o.fixtureId, { mode: "passthrough", targetId: o.target.id }, bearer)],
-      ["current", () => current(o.fixtureId, "?reveal=1", bearer)],
+      ["current", () => current(o.fixtureId, "", bearer)],
       ["stop", () => stop(o.fixtureId, randomUUID(), bearer)],
     ];
     let checked = 0;

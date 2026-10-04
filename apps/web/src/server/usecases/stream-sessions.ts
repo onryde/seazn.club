@@ -19,14 +19,13 @@ import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
-import type { CaptureQrV1 } from "@/lib/capture-qr";
 import { checkDestination } from "@/lib/stream-destinations";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, QR_PREFERRED_DEFAULT, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
-  RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, SRT_LATENCY_MS, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
+  CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
+  RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, tunable,
 } from "@/server/relay/config";
 import {
   ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, decide, eventRowsOf, holdStateOf, isTerminal,
@@ -1865,7 +1864,7 @@ export async function tickOpenSessions(
   return out;
 }
 
-export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps, opts: { reveal?: boolean } = {}): Promise<StreamSessionCurrent | null> {
+export async function currentSession(auth: AuthCtx, fixtureId: string, deps: SessionDeps): Promise<StreamSessionCurrent | null> {
   const { orgId } = await fixtureContext(fixtureId);
   if (orgId !== auth.orgId) throw new HttpError(404, "fixture not found");
   let row = await latestRow(fixtureId);
@@ -1876,40 +1875,6 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   // exactly as it was from the block's own locals before the extraction.
   const { ingestState, outputObserved, coalescedSince, freshIngest, phoneReadFailed } = await tickSession(row.id, deps, "poll");
   row = (await latestRow(fixtureId))!;
-
-  const qr = (await sql.begin(async (tx): Promise<CaptureQrV1 | null> => {
-    if (row!.state !== "provisioning" && row!.state !== "warming") return null;
-    const input = await readFirstInput(tx, row!.id);
-    if (!input || !input.srt || !input.rtmps) return null;   // the empty case: null, not a default
-    // De. The serve stamp this used to coalesce here is gone (V430, capture QR v2 R3): the
-    // stream code's `first_shown_at` supersedes it (spec §6.13), so a QR serve writes nothing.
-    // The REVEAL counters are a different fact: a reveal is the organiser's own act of
-    // disclosing the credentials — the tab showing them for the first time this session,
-    // or a tap on Copy — and the caller says so with `reveal`. A POLL IS NOT A REVEAL.
-    // The Phone tab polls `current` every STREAM_POLL_MS (5 s) and WARMING_TIMEOUT_MINUTES
-    // is 10, so counting every projection banks ~120 "reveals" for one disclosure: a
-    // number that scales with how long warming took, is not comparable between sessions,
-    // and reports credentials revealed ~100× more often than they were, under a column
-    // name that says otherwise. Every downstream read (the `_INDEX.md` inventory, any
-    // future admin view) inherits that lie.
-    // The lock this transaction already holds is what makes the increment safe: two
-    // concurrent reveals cannot lose a count. first-at is coalesced and never moves.
-    // V430 renamed the pair `credentials_served_*` (R3). Until T11 removes `?reveal=1` they count
-    // these organiser reveals; from T8a they ALSO count descriptor serves (spec §17.3).
-    await lockRow(tx, row!.id);
-    if (opts.reveal) {
-      await tx`update fixture_stream_sessions
-                  set credentials_served_first_at = coalesce(credentials_served_first_at, ${deps.now()}),
-                      credentials_served_count = credentials_served_count + 1
-                where id = ${row!.id}`;
-    }
-    return {
-      v: 1, sid: row!.id, slot: input.slot,
-      cred: { srt: { ...input.srt, latencyMs: SRT_LATENCY_MS }, rtmps: { ...input.rtmps } },
-      preferred: QR_PREFERRED_DEFAULT,
-      exp: Math.floor(relayTokenExpiry({ createdAt: new Date(row!.created_at), startedAt: d(row!.started_at), maxDurationMinutes: row!.max_duration_minutes }).getTime() / 1000),
-    };
-  })) as CaptureQrV1 | null;
 
   const [target] = await sql<{ id: string; kind: StreamSessionCurrent["target"]["kind"]; label: string }[]>`
     select id, kind, label from org_stream_targets where id = ${row.target_id}`;
@@ -1964,7 +1929,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
   return {
     id: row.id, fixtureId, mode: row.mode, state: row.state, desiredState: row.desired_state, failReason: row.fail_reason,
     health: row.heartbeat_at ? { fps: hb?.fps ?? null, bitrateKbps: hb?.bitrateKbps ?? null, lastBeatAt: new Date(row.heartbeat_at).toISOString() } : null,
-    ingest: ingestState, output, qr,
+    ingest: ingestState, output,
     balance: await creditBalance(sql, row.org_id),
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
@@ -1975,9 +1940,8 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     creditUsed: spend!.net < 0,
     // I-1 + W23 (T6b, A9(a)): admission's own question, on admission's own clock (startBroadcast asks `restartAllowance`
     // with deps.now()), so the tab's "free restart" and the gate that waives the balance cannot disagree. `restart` is the
-    // allowance (null while no window is open); `restartFree` is DERIVED from the same call until T11 retires it.
+    // allowance (null while no window is open) — the one restart field since T11 retired the derived boolean beside it.
     restart: allowance.windowOpen ? allowance : null,
-    restartFree: allowance.windowOpen && allowance.free,
     startCause: row.start_cause,
     countdown,
   };

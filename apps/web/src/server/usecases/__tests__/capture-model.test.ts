@@ -280,7 +280,7 @@ function activeStatus(m: Readonly<Model>, now: number): "active" | "finishing" |
   return m.open === null && now - m.finishedAt >= GRACE_MS ? "due" : "finishing";
 }
 /** W23 (§6.7.4), from the rule text: free while the anchor's window is open and fewer than three restarts have counted. */
-function restartFree(m: Readonly<Model>, now: number): { windowOpen: boolean; free: boolean } {
+function restartOf(m: Readonly<Model>, now: number): { windowOpen: boolean; free: boolean } {
   const windowOpen = m.w23.anchorAt !== null && now - m.w23.anchorAt < REUSE_MS;
   return { windowOpen, free: windowOpen && m.w23.counted < FREE_RESTARTS_PER_WINDOW };
 }
@@ -710,7 +710,7 @@ async function goLive(m: Model, x: Real): Promise<"200" | "refused"> {
       t.outcome("goLive:phone_not_paired");
       return;
     }
-    const { free } = restartFree(m, x.r.now().getTime());
+    const { free } = restartOf(m, x.r.now().getTime());
     if (m.balance < 1 && !free) {
       expect(refusal, "T14: no credit and not a free restart").toBe("no_credits");
       t.count("noCreditRefusals");
@@ -758,7 +758,7 @@ async function operatorStart(m: Model, x: Real, p: P): Promise<void> {
     } else if (m.archived.has(m.pick)) {
       expect(refused, "T36: the pre-pick is archived, so it reads as none").toEqual([409, "no_destination", undefined]);
       t.outcome("start:no_destination");
-    } else if (m.balance < 1 && !restartFree(m, now).free) {
+    } else if (m.balance < 1 && !restartOf(m, now).free) {
       expect(refused, "T14: no credit and not a free restart").toEqual([402, "no_credit", undefined]);
       t.count("noCreditRefusals");
       t.outcome("start:no_credit");
@@ -790,7 +790,7 @@ async function ingestConnect(m: Model, x: Real): Promise<void> {
       select state, first_ingest_at, fail_reason from fixture_stream_sessions where id = ${sid}`;
     const s = m.sessions.find((v) => v.sid === sid)!;
     const now = x.r.now().getTime();
-    const { windowOpen, free } = restartFree(m, now);
+    const { windowOpen, free } = restartOf(m, now);
     const owed = !s.video && !free;               // this live must pay a credit
     if (row!.state === "failed" && row!.fail_reason === "no_credits") {
       // T28: admitted (free, or on a credit since spent), and at the live the restart is no longer free and the balance is
@@ -1022,7 +1022,7 @@ const cmd = {
       const cur = (await snapshot(x)).current!;
       if (x.r.now().getTime() - cur.last_beat_at.getTime() >= silentMs(cur.answered_poll_seconds)) await phoneCall(m, x, m.current, null);
     }
-    const blocked = m.archived.has(m.pick) || (m.balance < 1 && !restartFree(m, m.now()).free);
+    const blocked = m.archived.has(m.pick) || (m.balance < 1 && !restartOf(m, m.now()).free);
     if (blocked && !fix) {
       if (by === "operator") await operatorStart(m, x, who);
       else await goLive(m, x);
@@ -1030,7 +1030,7 @@ const cmd = {
       return;
     }
     if (m.archived.has(m.pick)) await repick(m, x);
-    if (m.balance < 1 && !restartFree(m, m.now()).free) await buyCredit(m, x, 1);
+    if (m.balance < 1 && !restartOf(m, m.now()).free) await buyCredit(m, x, 1);
     if (by === "operator") {
       await operatorStart(m, x, who);
       expect(m.open?.startedBy, "restart: the current phone's own start is admitted").toBe("operator");
@@ -1094,7 +1094,7 @@ const cmd = {
   /** m-c (B7 re-review): `broke` is drawn only at an empty balance, where the live MUST fail no_credits — that leg was the
    *  rarer one, reached only when a free-form draw happened to find the balance spent. */
   windowEdge: (broke: boolean) => new Cmd(`windowEdge${broke ? "(broke)" : ""}`, "windowEdge",
-    (m) => (!broke || m.balance < 1) && m.finishedAt === null && !m.expired && restartFree(m, m.now()).free && m.now() < m.w23.anchorAt! + REUSE_MS - EDGE_MS,
+    (m) => (!broke || m.balance < 1) && m.finishedAt === null && !m.expired && restartOf(m, m.now()).free && m.now() < m.w23.anchorAt! + REUSE_MS - EDGE_MS,
     async (m, x) => {
       if (m.open !== null) await orgStop(m, x);
       if (m.archived.has(m.pick)) await repick(m, x);
@@ -1197,7 +1197,7 @@ const cmd = {
   /** m-c: T14 as an INTENT — with nothing held and no free restart, the phone's own start meets the balance gate without
    *  a credit bought first: 402 no_credit. Drawn only in that state; the restart's own prediction checks the answer. */
   noCreditStart: (who: P) => new Cmd(`noCreditStart(${who})`, "noCreditStart",
-    (m) => canRestart(m) && m.balance < 1 && !restartFree(m, m.now()).free && !m.archived.has(m.pick),
+    (m) => canRestart(m) && m.balance < 1 && !restartOf(m, m.now()).free && !m.archived.has(m.pick),
     (m, x) => cmd.restart(who, false, "operator", false).run(m, x)),
 };
 
